@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local install destination (binaries live here after install.sh)
+# ~/.browser-bridge/ is outside the repo, but guard against accidental copies
+/browser-bridge
+*.dSYM/
+
+# Test scratch
+/tmp/
