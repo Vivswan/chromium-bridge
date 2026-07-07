@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Browser Bridge</title>
+  <style>
+    :root { font-family: -apple-system, system-ui, sans-serif; color: #1a1a1a; }
+    body { width: 320px; margin: 0; padding: 12px; font-size: 13px; }
+    h1 { font-size: 14px; margin: 0 0 8px; }
+    .status { display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+              padding: 6px 8px; border-radius: 6px; background: #f4f4f4; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.ok { background: #2e8b57; }
+    .dot.bad { background: #d9534f; }
+    .pending { background: #fff8e1; border: 1px solid #f0c674; padding: 8px;
+               border-radius: 6px; margin-bottom: 10px; }
+    .pending .glob { font-family: ui-monospace, monospace; word-break: break-all; }
+    .row { display: flex; gap: 6px; }
+    button { flex: 1; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px;
+             background: #fff; cursor: pointer; font-size: 12px; }
+    button.primary { background: #2e8b57; color: #fff; border-color: #2e8b57; }
+    button.danger { color: #d9534f; border-color: #d9534f; }
+    .list { max-height: 200px; overflow-y: auto; margin-top: 6px; }
+    .item { display: flex; align-items: center; justify-content: space-between;
+            padding: 4px 6px; border-bottom: 1px solid #eee; }
+    .item code { font-size: 11px; }
+    .muted { color: #888; font-size: 11px; }
+    .empty { color: #888; padding: 6px 0; }
+  </style>
+</head>
+<body>
+  <h1>Browser Bridge</h1>
+  <div class="status">
+    <span id="dot" class="dot bad"></span>
+    <span id="status-text">checking…</span>
+  </div>
+
+  <div id="pending" class="pending" style="display:none">
+    <div>A new site wants access:</div>
+    <div class="glob" id="pending-glob"></div>
+    <div class="row" style="margin-top:6px">
+      <button id="deny" class="danger">Deny</button>
+      <button id="allow" class="primary">Allow</button>
+    </div>
+  </div>
+
+  <div>Allowed sites</div>
+  <div id="list" class="list"></div>
+  <div id="empty" class="empty">No sites allowed yet.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

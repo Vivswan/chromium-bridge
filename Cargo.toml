@@ -1,0 +1,18 @@
+[package]
+name = "browser-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Bridge ZCode (MCP) to your real Chrome via an extension + native messaging host"
+
+[[bin]]
+name = "browser-bridge"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"

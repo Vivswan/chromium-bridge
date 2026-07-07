@@ -1,0 +1,178 @@
+//! Localhost TCP IPC between the MCP server (long-lived) and the native-host
+//! subprocess (spawned fresh by Chrome on each connectNative).
+//!
+//! - MCP server binds `127.0.0.1:0` (random ephemeral port), writes the
+//!   chosen port + a per-run secret to a lock file under the user's runtime
+//!   directory. The secret guards against another local user's stray process
+//!   connecting (single-user machine, but cheap defense).
+//! - Native host reads the lock file on startup and connects; presents the
+//!   secret as the first NDJSON line ("hello").
+
+use std::fs;
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+/// Per-process runtime info the MCP server publishes for the native host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockFile {
+    pub port: u16,
+    /// Random token the native host must echo back on connect. Not a strong
+    /// secret (the lock file is 0600) but stops accidental connections.
+    pub secret: String,
+    /// PID of the MCP server process that owns the socket, for diagnostics.
+    pub pid: u32,
+}
+
+impl LockFile {
+    /// Path of the lock file. Lives in a per-user runtime dir. We prefer
+    /// `$XDG_RUNTIME_DIR` if set (often /run/user/<uid> on Linux), else fall
+    /// back to a directory under the user's home on macOS where we can rely
+    /// on 0700 home perms.
+    pub fn path() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+            return PathBuf::from(xdg).join("browser-bridge.lock");
+        }
+        // macOS: use ~/Library/Application Support/browser-bridge/run.lock
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let mut p = PathBuf::from(home);
+        p.push("Library/Application Support/browser-bridge");
+        let _ = fs::create_dir_all(&p);
+        p.join("run.lock")
+    }
+
+    pub fn write(&self) -> io::Result<()> {
+        let path = Self::path();
+        let mut tmp = path.clone();
+        tmp.set_extension("lock.tmp");
+        let bytes = serde_json::to_vec(self)?;
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(&bytes)?;
+            f.flush()?;
+        }
+        // Atomic replace so a concurrent native host never reads a half-write.
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    pub fn read() -> io::Result<Option<Self>> {
+        match fs::read(Self::path()) {
+            Ok(bytes) => {
+                let lf: LockFile = serde_json::from_slice(&bytes).map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("lockfile decode: {e}"))
+                })?;
+                Ok(Some(lf))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn remove() {
+        let _ = fs::remove_file(Self::path());
+    }
+}
+
+/// Server side: bind a random localhost port, return the listener and the
+/// lock-file contents to publish. The caller is responsible for `write()`ing
+/// the lock file (and removing it on shutdown).
+pub fn listen() -> io::Result<(TcpListener, LockFile)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let secret = generate_secret();
+    let lf = LockFile { port, secret, pid: std::process::id() };
+    Ok((listener, lf))
+}
+
+fn generate_secret() -> String {
+    // 128 bits of entropy from the OS RNG. We avoid pulling in `rand` by
+    // reading /dev/urandom directly (macOS and Linux both expose it).
+    let mut buf = [0u8; 16];
+    if let Ok(mut f) = fs::File::open("/dev/urandom") {
+        if f.read_exact(&mut buf).is_ok() {
+            return hex_encode(&buf);
+        }
+    }
+    // Fallback: mix in time + pid + a stack address. Not cryptographic, but
+    // this is only the connect-back token for a 0600 lock file on a
+    // single-user machine.
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u128)
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let stack = &t as *const _ as u128;
+    hex_encode(&t.wrapping_add(pid).wrapping_add(stack).to_le_bytes())
+        .chars()
+        .take(32)
+        .collect::<String>()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Client side (native host): read the lock file, connect, and send the
+/// "hello" line containing the secret. Times out after 2 s so a stale lock
+/// file fails fast instead of hanging Chrome's port.
+pub fn connect() -> io::Result<TcpStream> {
+    let lf = LockFile::read()?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "browser-bridge lock file not found — is the MCP server running?",
+        )
+    })?;
+    let addr = format!("127.0.0.1:{}", lf.port);
+    let stream = match TcpStream::connect_timeout(
+        &addr.parse().map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidInput, format!("addr parse: {e}"))
+        })?,
+        Duration::from_secs(2),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            // The lock file may be stale (server crashed). Remove it so the
+            // next server start wins cleanly; then surface the error.
+            LockFile::remove();
+            return Err(e);
+        }
+    };
+    // Send hello with the secret as the first NDJSON line.
+    let hello = serde_json::json!({ "hello": lf.secret });
+    let mut line = serde_json::to_vec(&hello).unwrap();
+    line.push(b'\n');
+    {
+        use std::io::Write;
+        let _ = (&stream).write_all(&line);
+        let _ = (&stream).flush();
+    }
+    Ok(stream)
+}
+
+/// Validate an inbound hello line received on a freshly-accepted server
+/// connection. Returns true if the secret matches the lock file.
+pub fn validate_hello(hello_value: &serde_json::Value) -> bool {
+    let want = match LockFile::read() {
+        Ok(Some(lf)) => lf.secret,
+        _ => return false,
+    };
+    hello_value
+        .get("hello")
+        .and_then(|v| v.as_str())
+        .map(|s| s == want)
+        .unwrap_or(false)
+}

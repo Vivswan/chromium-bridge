@@ -1,0 +1,57 @@
+/* Styles for the high-risk confirmation toast injected by content.js.
+   Critical layout is also inlined in ensureToastHost(); this file polishes
+   the look and is best-effort (some pages may block extension CSS). */
+
+.zcb-toast-card {
+  pointer-events: auto;
+  background: #ffffff;
+  color: #1a1a1a;
+  border: 1px solid #d0d0d0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 12px 14px;
+  width: 280px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  animation: zcb-slide-in 0.12s ease-out;
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+}
+.zcb-toast-card.zcb-toast-out {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.zcb-toast-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: #2e8b57;
+}
+.zcb-toast-q {
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+.zcb-toast-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.zcb-toast-actions button {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+.zcb-toast-actions .zcb-toast-allow {
+  background: #2e8b57;
+  color: #fff;
+  border-color: #2e8b57;
+}
+.zcb-toast-actions .zcb-toast-deny {
+  color: #d9534f;
+  border-color: #d9534f;
+}
+@keyframes zcb-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
