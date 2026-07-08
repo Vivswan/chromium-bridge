@@ -199,8 +199,15 @@
     if (rects.length === 0) return false;
     const style = getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden") return false;
-    if (el.getAttribute("aria-hidden") === "true") return false;
     if (parseFloat(style.opacity) === 0) return false;
+    // aria-hidden hides the element AND its entire subtree. An element may be
+    // visibly styled itself but still hidden from the a11y tree because an
+    // ancestor is aria-hidden — walk up to catch that case.
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      if (cur.getAttribute && cur.getAttribute("aria-hidden") === "true") return false;
+      cur = cur.parentElement;
+    }
     return true;
   }
 

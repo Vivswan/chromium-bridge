@@ -135,6 +135,29 @@ Then:
   shows the current MCP server's port + pid. If it's stale (server crashed),
   the native host removes it on next failed connect.
 
+## Testing
+
+Two independent test suites (95 assertions total), run together with
+`./tests/run_all.sh`:
+
+**Protocol layer** — `tests/e2e.py` (45 assertions). Drives the real release
+binary as subprocesses: MCP server over JSON-RPC/stdio, `--native-host` mode
+with real Native-Messaging framing, and a mock extension over the localhost
+TCP bridge. Verifies the wire protocols (NM framing, MCP handshake, tools/list,
+every tool's request/response round-trip, error codes).
+
+**DOM layer** — `tests/dom_test.ts` (50 assertions). **Injects the real
+`extension/content.js` into a headless Chrome page** via the DevTools
+Protocol and exercises every content-script op against a real DOM: snapshot
+(refs/roles/names/visibility), click (verifies real onclick fires), fill
+(native setter + framework change events), eval (masking + serialization +
+error handling), storage_get (JWT masking), and the high-risk Toast flow.
+This is the suite that caught a real bug in `isVisible` (aria-hidden subtree
+not filtered) during development.
+
+Requirements: Rust (cargo) for the build, Python 3, and (for DOM tests) bun +
+Chrome. `run_all.sh` skips DOM tests gracefully if bun/Chrome are missing.
+
 ## Project layout
 
 ```
@@ -155,6 +178,11 @@ browser-bridge/
 │   ├── toast.css
 │   ├── popup.html / popup.js
 │   └── icons/
+├── tests/
+│   ├── e2e.py            # protocol-layer tests (real subprocesses)
+│   ├── dom_test.ts       # DOM-layer tests (bun + headless Chrome CDP)
+│   ├── fixtures/page.html
+│   └── run_all.sh        # runs both suites
 ├── install.sh
 └── zcode-mcp-config.json
 ```

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Browser Bridge DOM Test Fixture</title>
+  <style>
+    /* Hidden element — snapshot must filter it out. */
+    .hidden { display: none; }
+    /* aria-hidden element — also filtered. */
+    .ax-hidden { }
+  </style>
+</head>
+<body>
+  <h1>Test Fixture</h1>
+
+  <!-- Interactive elements the snapshot should find. -->
+  <input id="search" type="text" aria-label="Search box" placeholder="type here">
+  <button id="go" type="submit" onclick="window.__clickCount = (window.__clickCount||0)+1">Search</button>
+  <a id="link1" href="/somewhere">A link</a>
+
+  <!-- A checkbox + radio for role coverage. -->
+  <input id="cb" type="checkbox" aria-label="Agree">
+  <input id="rb" type="radio" name="x" aria-label="Option A">
+
+  <!-- Password field — page_text must mask its value. -->
+  <input id="pw" type="password" value="supersecret">
+
+  <!-- Labelled-by input (accessible-name via aria-labelledby). -->
+  <span id="lbl">Email address</span>
+  <input id="email" type="text" aria-labelledby="lbl">
+
+  <!-- Wrapped-in-label input (accessible-name via <label>). -->
+  <label>Username <input id="user" type="text"></label>
+
+  <!-- Hidden elements — must NOT appear in snapshot. -->
+  <button id="hidden-btn" class="hidden" style="display:none">Invisible</button>
+  <div aria-hidden="true">
+    <button id="ax-hidden-btn">Ax Hidden</button>
+  </div>
+
+  <!-- Click counting for verifying real DOM click triggers. -->
+  <button id="plain-btn" onclick="window.__plainClicks = (window.__plainClicks||0)+1">Plain</button>
+
+  <!-- Fill target that records input/change events (framework-change detection). -->
+  <input id="fill-target" type="text">
+  <div id="event-log"></div>
+  <script>
+    (function () {
+      var log = document.getElementById("event-log");
+      var t = document.getElementById("fill-target");
+      ["input", "change"].forEach(function (ev) {
+        t.addEventListener(ev, function () {
+          log.dataset[ev] = (parseInt(log.dataset[ev] || "0", 10)) + 1;
+        });
+      });
+    })();
+    // localStorage with a JWT (storage_get must mask) and a plain value.
+    localStorage.setItem("token",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c");
+    localStorage.setItem("plain", "hello world");
+    localStorage.setItem("hexid", "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8");
+    sessionStorage.setItem("stoken", "eyJhbGciOiJIUzI1NiJ9.sigpart.sigpart2");
+  </script>
+</body>
+</html>
