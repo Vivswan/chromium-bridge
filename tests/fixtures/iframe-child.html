@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>iframe child</title>
+</head>
+<body>
+  <h2>Child Frame</h2>
+  <!-- This button lives inside the iframe's document. The main page's
+       content.js only injects into the top frame (no all_frames), so this
+       button should NOT appear in the main page's snapshot, and a
+       page_click targeting it via the main page must fail. -->
+  <button id="iframe-btn" onclick="window.parent.__iframeClicked=true">
+    In iframe
+  </button>
+</body>
+</html>

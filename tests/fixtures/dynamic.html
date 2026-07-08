@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Dynamic Insertion Fixture</title>
+</head>
+<body>
+  <h1>Dynamic Test</h1>
+
+  <!-- Two initial interactive elements — snapshot #1 should find both. -->
+  <button id="btn-a" onclick="window.__aClicks=(window.__aClicks||0)+1">Button A</button>
+  <input id="inp-a" type="text" aria-label="Field A">
+
+  <div id="container"></div>
+
+  <script>
+    // Test-controlled dynamic insertion. Returns the new button's ref candidate.
+    window.__addButton = function () {
+      var c = document.getElementById("container");
+      var b = document.createElement("button");
+      b.id = "dyn-btn";
+      b.textContent = "Dynamic";
+      b.setAttribute("onclick", "window.__dynClicks=(window.__dynClicks||0)+1");
+      c.appendChild(b);
+      return true;
+    };
+  </script>
+</body>
+</html>

@@ -93,9 +93,15 @@
   function assignRef(el) {
     // Reuse an existing ref if the element already has one from a prior
     // snapshot (keeps refs stable across calls when the page hasn't
-    // changed).
+    // changed). When reusing, we MUST advance refCounter past the reused
+    // number — otherwise a subsequently-inserted element (no prior ref)
+    // would get e1, e2... and collide with the reused refs. This bug shows
+    // up on re-snapshot of a page where some elements are new (SPA case).
     let ref = el.getAttribute(REF_ATTR);
-    if (!ref) {
+    if (ref) {
+      const reused = parseInt(ref.slice(1), 10);
+      if (!Number.isNaN(reused) && reused > refCounter) refCounter = reused;
+    } else {
       refCounter += 1;
       ref = `e${refCounter}`;
       el.setAttribute(REF_ATTR, ref);

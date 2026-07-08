@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Shadow DOM Fixture</title>
+</head>
+<body>
+  <h1>Shadow DOM Test</h1>
+
+  <!-- A normal button outside any shadow root — snapshot SHOULD find it. -->
+  <button id="plain">Plain Button</button>
+
+  <!-- Open shadow root host. TreeWalker(document.body) does not cross the
+       shadow boundary, so #shadow-btn should NOT appear in snapshot. -->
+  <div id="open-host"></div>
+
+  <!-- Closed shadow root host. Completely unreachable from JS outside the
+       root; also NOT in snapshot. -->
+  <div id="closed-host"></div>
+
+  <script>
+    (function () {
+      var openHost = document.getElementById("open-host");
+      var openRoot = openHost.attachShadow({ mode: "open" });
+      openRoot.innerHTML =
+        '<button id="shadow-btn" onclick="window.__shadowClicked=true">In Open Shadow</button>';
+
+      var closedHost = document.getElementById("closed-host");
+      var closedRoot = closedHost.attachShadow({ mode: "closed" });
+      closedRoot.innerHTML =
+        '<button id="closed-shadow-btn">In Closed Shadow</button>';
+
+      // Expose for assertions (open root is reachable; closed is not).
+      window.__openRoot = openRoot;
+      window.__closedHostHasShadow = !!closedHost.shadowRoot; // false for closed
+    })();
+  </script>
+</body>
+</html>

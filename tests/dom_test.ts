@@ -20,10 +20,15 @@ import * as path from "path";
 
 const REPO = path.resolve(import.meta.dir, "..");
 const CONTENT_JS = path.join(REPO, "extension", "content.js");
-const FIXTURE = path.join(REPO, "tests", "fixtures", "page.html");
+const FIXTURES_DIR = path.join(REPO, "tests", "fixtures");
 const CHROME =
   process.env.CHROME_BIN ||
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+/** Resolve a fixture filename to its file:// URL. */
+function fixtureUrl(name: string): string {
+  return "file://" + path.join(FIXTURES_DIR, name);
+}
 
 // ─── assertion helpers (same style as tests/e2e.py) ────────────────────────
 let _pass = 0;
@@ -54,7 +59,7 @@ class Chrome {
         "--no-default-browser-check",
         "--remote-debugging-port=" + port,
         "--remote-allow-origins=*",
-        "file://" + FIXTURE,
+        "about:blank",
       ],
       stdout: "ignore",
       stderr: "ignore",
@@ -146,6 +151,15 @@ class Page {
     });
   }
   /** Evaluate an expression in the page, return the value (must be JSON via returnByValue). */
+  /** Navigate the page to a URL. Enables switching fixtures per test. */
+  async navigate(url: string, settleMs = 400): Promise<void> {
+    await this.send("Page.enable", {});
+    await this.send("Page.navigate", { url });
+    // Give inline scripts time to run. CDP doesn't expose a clean "load done"
+    // without listening to events; a short settle is reliable for our static
+    // fixtures.
+    await new Promise((r) => setTimeout(r, settleMs));
+  }
   async evaluate(expr: string): Promise<any> {
     const r = await this.send("Runtime.evaluate", {
       expression: expr,
@@ -309,13 +323,23 @@ async function runAllTests(page: Page): Promise<void> {
   await test_storage_get(page);
   await test_high_risk_toast(page);
   await test_ping(page);
+  await test_shadow_dom(page);
+  await test_iframe(page);
+  await test_dynamic_reload_snapshot(page);
 }
 
-/** Re-inject content.js fresh for each test so refCounter / refMap reset. */
-async function freshLoad(page: Page, opts: { evalMask?: boolean } = {}): Promise<void> {
-  // Reload the page to wipe all DOM mutations (toasts, data-zcb-ref attrs, onclick counts).
-  await page.send("Page.reload", { ignoreCache: true });
-  await new Promise((r) => setTimeout(r, 400)); // let inline script run
+/** Re-inject content.js fresh for each test so refCounter / refMap reset.
+ * `fixture` selects which HTML file to load (default page.html). */
+async function freshLoad(
+  page: Page,
+  opts: { evalMask?: boolean; fixture?: string } = {}
+): Promise<void> {
+  const name = opts.fixture || "page.html";
+  const url = fixtureUrl(name);
+  // Navigate (or reload) to wipe all DOM mutations (toasts, data-zcb-ref
+  // attrs, onclick counts). Navigate works for about:blank→fixture and
+  // also reloads if already on the same URL.
+  await page.navigate(url);
   await injectStub(page, opts);
   await loadContentJs(page);
 }
@@ -561,6 +585,118 @@ async function test_ping(page: Page): Promise<void> {
   await freshLoad(page);
   const resp = await invoke(page, "ping", {});
   check(resp.pong === true, "ping returns {pong:true}");
+}
+
+// ── test: shadow DOM (content-script limitation) ──────────────────────────
+async function test_shadow_dom(page: Page): Promise<void> {
+  console.log("\n[test] shadow DOM — snapshot does not cross shadow boundary");
+  await freshLoad(page, { fixture: "shadow.html" });
+
+  // Sanity: the fixture set up the shadow roots as expected.
+  const openHasBtn = await page.evaluate(
+    `!!window.__openRoot && !!window.__openRoot.querySelector("#shadow-btn")`
+  );
+  check(openHasBtn, "fixture: open shadow root has #shadow-btn");
+  const closedHostShadow = await page.evaluate("window.__closedHostHasShadow");
+  check(closedHostShadow === false, "fixture: closed shadow root unreachable via .shadowRoot");
+
+  // snapshot must find the plain top-level button but NOT the shadow buttons.
+  const resp = await invoke(page, "page_snapshot", {});
+  check(!resp.__error, "snapshot runs without error");
+  const plainFound = resp.nodes.some((n: any) => n.selector && n.selector.includes("#plain"));
+  check(plainFound, "snapshot finds the plain (non-shadow) button");
+  const shadowBtnFound = resp.nodes.some((n: any) => n.name === "In Open Shadow");
+  check(!shadowBtnFound, "open shadow button NOT in snapshot (TreeWalker boundary)");
+  const closedShadowBtnFound = resp.nodes.some((n: any) => n.name === "In Closed Shadow");
+  check(!closedShadowBtnFound, "closed shadow button NOT in snapshot");
+
+  // Clicking the plain button via its ref still works (content.js otherwise
+  // functional on the top frame).
+  const plainNode = resp.nodes.find((n: any) => n.selector && n.selector.includes("#plain"));
+  const clickResp = await invoke(page, "page_click", { ref: plainNode.ref });
+  check(!clickResp.__error, "click plain button via ref works");
+}
+
+// ── test: iframe (content-script top-frame-only limitation) ────────────────
+async function test_iframe(page: Page): Promise<void> {
+  console.log("\n[test] iframe — top-frame snapshot excludes iframe content");
+  await freshLoad(page, { fixture: "iframe.html" });
+
+  // Wait for the iframe to actually load.
+  for (let i = 0; i < 20; i++) {
+    const ready = await page.evaluate("window.__iframeReady === true");
+    if (ready) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const iframeReady = await page.evaluate("window.__iframeReady === true");
+  check(iframeReady, "iframe finished loading");
+
+  const resp = await invoke(page, "page_snapshot", {});
+  check(!resp.__error, "snapshot runs without error");
+
+  // Top-frame button IS in snapshot.
+  const topFound = resp.nodes.some((n: any) => n.selector && n.selector.includes("#top-btn"));
+  check(topFound, "snapshot finds top-frame #top-btn");
+
+  // Iframe button is NOT in snapshot (content.js not injected into iframe).
+  const iframeBtnFound = resp.nodes.some((n: any) => n.name === "In iframe");
+  check(!iframeBtnFound, "iframe button NOT in top-frame snapshot (no all_frames)");
+
+  // page_click targeting the iframe button via selector must fail (it's in a
+  // different document; querySelector on the top document returns null).
+  const badClick = await invoke(page, "page_click", { selector: "#iframe-btn" });
+  check(!!badClick.__error, "click on iframe-resident selector fails as expected");
+}
+
+// ── test: dynamic insertion + re-snapshot ref stability ────────────────────
+async function test_dynamic_reload_snapshot(page: Page): Promise<void> {
+  console.log("\n[test] dynamic insertion — re-snapshot + ref stability");
+  await freshLoad(page, { fixture: "dynamic.html" });
+
+  // Snapshot #1: two interactive elements (button#btn-a + input#inp-a).
+  const snap1 = await invoke(page, "page_snapshot", {});
+  check(!snap1.__error, "snapshot #1 runs");
+  const btnA1 = snap1.nodes.find((n: any) => n.selector && n.selector.includes("#btn-a"));
+  const inpA1 = snap1.nodes.find((n: any) => n.selector && n.selector.includes("#inp-a"));
+  check(!!btnA1 && !!inpA1, "snapshot #1 found #btn-a and #inp-a");
+  const count1 = snap1.refCount;
+  const btnARef = btnA1.ref;
+  check(/^e\d+$/.test(btnARef), "snapshot #1 assigned an 'e' ref to #btn-a: " + btnARef);
+
+  // Insert a new button dynamically.
+  const added = await page.evaluate("window.__addButton()");
+  check(added === true, "dynamic button inserted");
+
+  // Snapshot #2: should now include the new button.
+  const snap2 = await invoke(page, "page_snapshot", {});
+  check(!snap2.__error, "snapshot #2 runs");
+  const count2 = snap2.refCount;
+  check(count2 === count1 + 1, "snapshot #2 refCount grew by 1 (" + count1 + "→" + count2 + ")");
+
+  // CRITICAL: #btn-a's ref must be STABLE across snapshots (assignRef reuses
+  // the data-zcb-ref attribute).
+  const btnA2 = snap2.nodes.find((n: any) => n.selector && n.selector.includes("#btn-a"));
+  check(
+    !!btnA2 && btnA2.ref === btnARef,
+    "#btn-a ref stable across snapshots (" + btnARef + " → " + btnA2?.ref + ")"
+  );
+
+  // The new button got a ref.
+  const dynBtn = snap2.nodes.find((n: any) => n.selector && n.selector.includes("#dyn-btn"));
+  check(!!dynBtn, "snapshot #2 includes the dynamically inserted #dyn-btn");
+
+  // Both refs must still be clickable (refMap → DOM resolution).
+  const before = await page.evaluate("window.__aClicks || 0");
+  const clickA = await invoke(page, "page_click", { ref: btnARef });
+  check(!clickA.__error, "click #btn-a via its (stable) ref works");
+  const after = await page.evaluate("window.__aClicks || 0");
+  check(after === before + 1, "stable-ref click actually fired onclick (" + before + "→" + after + ")");
+
+  const beforeDyn = await page.evaluate("window.__dynClicks || 0");
+  const clickDyn = await invoke(page, "page_click", { ref: dynBtn.ref });
+  check(!clickDyn.__error, "click #dyn-btn via its new ref works");
+  const afterDyn = await page.evaluate("window.__dynClicks || 0");
+  check(afterDyn === beforeDyn + 1, "new-ref click actually fired onclick");
 }
 
 main().catch((e) => {

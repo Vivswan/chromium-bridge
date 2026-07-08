@@ -137,7 +137,7 @@ Then:
 
 ## Testing
 
-Two independent test suites (95 assertions total), run together with
+Two independent test suites (119 assertions total), run together with
 `./tests/run_all.sh`:
 
 **Protocol layer** — `tests/e2e.py` (45 assertions). Drives the real release
@@ -146,14 +146,16 @@ with real Native-Messaging framing, and a mock extension over the localhost
 TCP bridge. Verifies the wire protocols (NM framing, MCP handshake, tools/list,
 every tool's request/response round-trip, error codes).
 
-**DOM layer** — `tests/dom_test.ts` (50 assertions). **Injects the real
+**DOM layer** — `tests/dom_test.ts` (74 assertions). **Injects the real
 `extension/content.js` into a headless Chrome page** via the DevTools
 Protocol and exercises every content-script op against a real DOM: snapshot
 (refs/roles/names/visibility), click (verifies real onclick fires), fill
 (native setter + framework change events), eval (masking + serialization +
-error handling), storage_get (JWT masking), and the high-risk Toast flow.
-This is the suite that caught a real bug in `isVisible` (aria-hidden subtree
-not filtered) during development.
+error handling), storage_get (JWT masking), the high-risk Toast flow, plus
+shadow-DOM/iframe limitations and dynamic-insertion + re-snapshot ref
+stability (SPA case). This suite has caught two real bugs in content.js:
+`isVisible` missing aria-hidden ancestors, and `assignRef` reusing refs that
+collided with newly-inserted elements' refs on re-snapshot.
 
 Requirements: Rust (cargo) for the build, Python 3, and (for DOM tests) bun +
 Chrome. `run_all.sh` skips DOM tests gracefully if bun/Chrome are missing.
