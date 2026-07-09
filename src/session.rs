@@ -112,7 +112,22 @@ impl Session {
         let (tx, rx) = mpsc::channel::<BridgeResp>();
         self.pending.lock().unwrap().insert(id, tx);
 
-        // Send. If no connection yet, error with a clear hint.
+        // If the native host hasn't connected yet, wait briefly for it. The
+        // extension's service worker reconnects on a ~2s timer; right after
+        // ZCode spawns a fresh MCP server, the first tool call can arrive
+        // before the host has re-established its bridge connection. Waiting
+        // here (rather than failing instantly) makes startup robust.
+        if self.writer.lock().unwrap().is_none() {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+            while std::time::Instant::now() < deadline {
+                if self.writer.lock().unwrap().is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
+
+        // Send. If still no connection, error with a clear hint.
         {
             let mut guard = self.writer.lock().unwrap();
             let writer = guard.as_mut().ok_or_else(|| {

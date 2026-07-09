@@ -24,13 +24,35 @@ pub fn run() -> i32 {
             return 1;
         }
     };
+    // Take over from any prior MCP server instance. ZCode may spawn a fresh
+    // server per session; if the previous one is still alive, the native host
+    // will keep talking to IT (it doesn't follow lock-file changes), so the
+    // new server's tool calls report "extension not connected". Kill the old
+    // instance first so the native host's TCP connection drops, forcing the
+    // extension to reconnect against our new lock.
+    if let Ok(Some(prev)) = ipc::LockFile::read() {
+        if prev.pid != lock.pid && pid_is_alive(prev.pid) {
+            eprintln!("[mcp] supplanting prior MCP server pid {}", prev.pid);
+            // SIGTERM → old server's stdin loop ends → it removes the lock and
+            // exits → its TCP listener closes → native host gets EOF → SW
+            // onDisconnect → reconnect spawns a fresh host → reads OUR lock.
+            unsafe { libc_kill(prev.pid, 15); } // SIGTERM
+            // Give it a moment to die and clean up its lock.
+            for _ in 0..50 {
+                if !pid_is_alive(prev.pid) { break; }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            // Remove any stale lock the old instance didn't clean up.
+            ipc::LockFile::remove();
+        }
+    }
     if let Err(e) = lock.write() {
         eprintln!("[mcp] failed to write lock file: {e}");
         return 1;
     }
     eprintln!(
-        "[mcp] bridge listening on 127.0.0.1:{} (pid {})",
-        lock.port, lock.pid
+        "[mcp] bridge listening on 127.0.0.1:{} (pid {}) lock at {}",
+        lock.port, lock.pid, ipc::LockFile::path().display()
     );
 
     let session = Session::new();
@@ -158,4 +180,31 @@ fn install_signal_cleanup<F: Fn() + Send + 'static>(_f: F) {
     // A stale lock file is harmless: the native host tolerates a failed
     // connect (it surfaces an error to the extension). Keeping this hook
     // point for a future minimal signal handler.
+}
+
+/// Whether a process with the given pid is alive. Used by the takeover logic.
+fn pid_is_alive(pid: u32) -> bool {
+    // kill(pid, 0) with signal 0 checks existence without sending a signal.
+    // Returns 0 if the process exists (and we can signal it).
+    #[cfg(unix)]
+    unsafe {
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        kill(pid as i32, 0) == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// Send SIGTERM to a pid (Unix). Used to supplant a stale MCP server instance.
+#[cfg(unix)]
+unsafe fn libc_kill(pid: u32, sig: i32) {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    let _ = kill(pid as i32, sig);
 }
