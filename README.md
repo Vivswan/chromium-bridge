@@ -27,6 +27,11 @@ approve.
   - [0009 page_snapshot_precise 用 chrome.debugger](./docs/adr/0009-page-snapshot-precise-debugger.md)
   - [0010 Cookie/Storage 只读访问](./docs/adr/0010-cookie-storage-readonly.md)
   - [0011 配置通过独立 Options 页管理](./docs/adr/0011-options-page-for-settings.md)
+  - [0012 扩展改用 TypeScript + esbuild 构建](./docs/adr/0012-typescript-esbuild-extension-build.md)
+  - [0013 CI 与工具链](./docs/adr/0013-ci-and-toolchain.md)
+  - [0014 分级日志与类型化错误](./docs/adr/0014-leveled-logging.md)
+
+开发与贡献:[开发指南](./docs/development.md) · [贡献指南](./CONTRIBUTING.md)
 
 ```
 ZCode ──stdio MCP──▶ browser-bridge (MCP server, Rust)
@@ -206,6 +211,11 @@ a content-script approximation of the accessibility tree; `page_snapshot_precise
 is available as an explicit debugger-based fallback for complex ARIA/shadow DOM
 cases. Cookie/storage access is read-only and masked.
 
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the workflow and
+[docs/development.md](./docs/development.md) for the build/test/release loop.
+
 ## License
 
-Private / unlicensed for now.
+[Apache-2.0](./LICENSE). Copyright the browser-bridge contributors.
