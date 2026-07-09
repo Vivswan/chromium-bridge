@@ -1,8 +1,12 @@
 # ADR-0001:用 Rust 单二进制 + 子命令分发
 
-- **状态**:Accepted
+- **状态**:Accepted(依赖清单部分由 [ADR-0014](./0014-leveled-logging.md) 修订)
 - **日期**:2026-07-07
 - **决策者**:用户 + ZCode
+
+> **修订note**:本 ADR 原文称唯一依赖是 `serde`/`serde_json`。工程化整改后另加了
+> `libc`(信号处理)与 `thiserror`(类型化错误),见 [ADR-0014](./0014-leveled-logging.md)。
+> 单二进制、手写协议、不用 tokio 的核心决策不变。
 
 ## 背景
 
