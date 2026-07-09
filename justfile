@@ -67,3 +67,17 @@ ci: fmt-check lint test-rust ext-typecheck ext-lint ext-format-check ext-build t
 # Install locally (build + copy binary + host manifest)
 install:
     ./install.sh
+
+# ---- versioning / release -------------------------------------------------
+
+# Propagate the Cargo.toml version into the extension manifest + package files
+sync-version:
+    ./scripts/sync-version.sh
+
+# Verify the crate and extension versions agree
+check-version:
+    ./scripts/check-version.sh
+
+# Pre-release gate: versions consistent + full CI green
+release: check-version ci
+    @echo "Release checks passed. Now tag the release, e.g.: git tag v$(./scripts/check-version.sh | awk '/Cargo.toml/{print $2}')"
