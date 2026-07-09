@@ -255,9 +255,7 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> (Value, bool) {
         "page_fill" => {
             let value = sarg(args, "value");
             let mut payload = ref_or_selector(args);
-            payload["value"] = json!(mask_if_password_hint(&value));
-            // Send the real value too, under a private key the extension uses.
-            payload["__value"] = json!(value);
+            payload["value"] = json!(value);
             call(session, "page_fill", None, payload)
         }
         "page_text" => call(session, "page_text", None, json!({})),
@@ -383,11 +381,4 @@ fn ref_or_selector(args: &Value) -> Value {
         payload.insert("selector".into(), json!(s));
     }
     Value::Object(payload)
-}
-
-/// We don't actually know it's a password here; the extension decides. We
-/// just return the value as-is for the "masked for logs" copy and let the
-/// extension receive the real one. (Kept as a hook for future log masking.)
-fn mask_if_password_hint(value: &str) -> String {
-    value.to_string()
 }

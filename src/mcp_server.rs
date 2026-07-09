@@ -16,6 +16,17 @@ pub fn run() -> i32 {
     install_stderr_panic_hook();
     crate::protocol::ignore_sigpipe();
 
+    // Handle termination signals gracefully so we always remove the lock file
+    // on the way out (a stale lock is harmless but confuses diagnostics, and a
+    // supplanted server should clean up after itself). This must run BEFORE we
+    // spawn any worker threads: it blocks SIGTERM/SIGINT process-wide, and only
+    // threads created afterwards inherit that blocked mask — otherwise the
+    // kernel could deliver the signal to an unmasked worker and terminate us
+    // before the handler thread runs.
+    install_signal_cleanup(|| {
+        ipc::LockFile::remove();
+    });
+
     // 1. Bind the bridge socket and publish the lock file.
     let (listener, lock) = match ipc::listen() {
         Ok(x) => x,
@@ -37,8 +48,8 @@ pub fn run() -> i32 {
             // exits → its TCP listener closes → native host gets EOF → SW
             // onDisconnect → reconnect spawns a fresh host → reads OUR lock.
             unsafe {
-                libc_kill(prev.pid, 15);
-            } // SIGTERM
+                libc_kill(prev.pid, libc::SIGTERM);
+            }
               // Give it a moment to die and clean up its lock.
             for _ in 0..50 {
                 if !pid_is_alive(prev.pid) {
@@ -86,14 +97,6 @@ pub fn run() -> i32 {
     let mut reader = BufReader::new(stdin.lock());
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
-
-    // Install a shutdown hook to remove the lock file so it doesn't go stale.
-    let lock_path = ipc::LockFile::path();
-    let cleanup = move || {
-        let _ = std::fs::remove_file(&lock_path);
-    };
-    // Best-effort cleanup on Ctrl-C / SIGTERM (Rust default handler aborts).
-    install_signal_cleanup(cleanup);
 
     loop {
         let msg = match mcp_read(&mut reader) {
@@ -184,24 +187,43 @@ fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
     }
 }
 
-fn install_signal_cleanup<F: Fn() + Send + 'static>(_f: F) {
-    // We avoid pulling in a signal-handling crate. The lock file is also
-    // removed on the normal stdin-EOF exit path, which covers clean shutdown.
-    // A stale lock file is harmless: the native host tolerates a failed
-    // connect (it surfaces an error to the extension). Keeping this hook
-    // point for a future minimal signal handler.
+/// Block SIGTERM/SIGINT process-wide and run `f` on a dedicated thread when
+/// one arrives, then exit. Blocking the signals here (and letting a single
+/// thread `sigwait` for them) sidesteps async-signal-safety limits: the
+/// cleanup runs in ordinary thread context, so it may touch the filesystem
+/// freely. Callers MUST invoke this before spawning worker threads so those
+/// threads inherit the blocked mask.
+fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
+    #[cfg(unix)]
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        // Block in the current (main) thread; threads spawned later inherit it.
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+
+        thread::spawn(move || {
+            let mut sig: std::os::raw::c_int = 0;
+            // Wait until one of the blocked signals is delivered.
+            let _ = libc::sigwait(&set, &mut sig);
+            eprintln!("[mcp] received signal {sig}, cleaning up and exiting");
+            f();
+            std::process::exit(0);
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = f;
+    }
 }
 
 /// Whether a process with the given pid is alive. Used by the takeover logic.
+/// `kill(pid, 0)` checks existence without delivering a signal.
 fn pid_is_alive(pid: u32) -> bool {
-    // kill(pid, 0) with signal 0 checks existence without sending a signal.
-    // Returns 0 if the process exists (and we can signal it).
     #[cfg(unix)]
     unsafe {
-        extern "C" {
-            fn kill(pid: i32, sig: i32) -> i32;
-        }
-        kill(pid as i32, 0) == 0
+        libc::kill(pid as i32, 0) == 0
     }
     #[cfg(not(unix))]
     {
@@ -213,8 +235,5 @@ fn pid_is_alive(pid: u32) -> bool {
 /// Send SIGTERM to a pid (Unix). Used to supplant a stale MCP server instance.
 #[cfg(unix)]
 unsafe fn libc_kill(pid: u32, sig: i32) {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
-    let _ = kill(pid as i32, sig);
+    libc::kill(pid as i32, sig);
 }

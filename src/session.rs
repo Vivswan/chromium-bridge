@@ -64,37 +64,42 @@ impl Session {
         *self.writer.lock().unwrap() = Some(writer);
 
         // Spawn the reader: each BridgeResp routes to its pending sender.
+        // On disconnect it clears the shared writer so the next `call` waits
+        // for a fresh host to reconnect instead of writing into a dead socket.
         let pending = self.pending.clone();
-        thread::spawn(move || loop {
-            let resp: Option<BridgeResp> = match bridge_read(&mut reader) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[session] bridge read error: {e}");
-                    break;
+        let writer_slot = self.writer.clone();
+        thread::spawn(move || {
+            loop {
+                let resp: Option<BridgeResp> = match bridge_read(&mut reader) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[session] bridge read error: {e}");
+                        break;
+                    }
+                };
+                let resp = match resp {
+                    Some(r) => r,
+                    None => {
+                        eprintln!("[session] native host disconnected");
+                        break;
+                    }
+                };
+                // The first line after hello is a real response. (Hello itself
+                // was consumed above and is a Value, not a BridgeResp, so it
+                // can't reach here.)
+                let tx = pending.lock().unwrap().remove(&resp.id);
+                if let Some(tx) = tx {
+                    let _ = tx.send(resp);
+                } else {
+                    eprintln!("[session] no pending caller for id {}", resp.id);
                 }
-            };
-            let resp = match resp {
-                Some(r) => r,
-                None => {
-                    eprintln!("[session] native host disconnected");
-                    break;
-                }
-            };
-            // The first line after hello is a real response. (Hello itself
-            // was consumed above and is a Value, not a BridgeResp, so it
-            // can't reach here.)
-            let tx = pending.lock().unwrap().remove(&resp.id);
-            if let Some(tx) = tx {
-                let _ = tx.send(resp);
-            } else {
-                eprintln!("[session] no pending caller for id {}", resp.id);
             }
+            // Reader ended (disconnect / error): drop the writer so callers
+            // block-and-wait for the next host connection rather than writing
+            // into a dead socket.
+            *writer_slot.lock().unwrap() = None;
         });
 
-        // If the reader ends (disconnect), clear the writer so callers don't
-        // write into a dead socket. We can't easily know when the thread
-        // exits, so callers also tolerate write errors. (A more robust
-        // design would track connection liveness explicitly; deferred.)
         Ok(())
     }
 
@@ -165,10 +170,5 @@ impl Session {
                 Err("extension connection lost while waiting for response".into())
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn is_connected(&self) -> bool {
-        self.writer.lock().unwrap().is_some()
     }
 }

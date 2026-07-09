@@ -303,7 +303,7 @@
 
   async function fill(args) {
     const el = resolveTarget(args);
-    const value = args.__value ?? args.value ?? "";
+    const value = args.value ?? "";
     // Use the native setter path so frameworks (React, Vue) pick it up.
     await setNativeValue(el, value);
     return { filled: args.ref || args.selector };

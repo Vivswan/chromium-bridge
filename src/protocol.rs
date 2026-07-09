@@ -289,17 +289,6 @@ pub fn install_stderr_panic_hook() {
 pub fn ignore_sigpipe() {
     #[cfg(unix)]
     unsafe {
-        // libc::SIG_IGN = 1
-        libc_signal_ignore(13 /* SIGPIPE */);
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
-}
-
-#[cfg(unix)]
-unsafe fn libc_signal_ignore(sig: i32) {
-    // Avoid pulling in the libc crate; call the syscall via raw extern.
-    // signal(sig, SIG_IGN) where SIG_IGN = 1 (the standard sentinel pointer).
-    extern "C" {
-        fn signal(signum: i32, handler: usize) -> usize;
-    }
-    let _ = signal(sig, 1);
 }
