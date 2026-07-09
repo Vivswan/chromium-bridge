@@ -8,7 +8,7 @@ use std::thread;
 use serde_json::{json, Value};
 
 use crate::ipc;
-use crate::protocol::{mcp_read, mcp_write, install_stderr_panic_hook, JsonRpc};
+use crate::protocol::{install_stderr_panic_hook, mcp_read, mcp_write, JsonRpc};
 use crate::session::Session;
 use crate::tools;
 
@@ -36,10 +36,14 @@ pub fn run() -> i32 {
             // SIGTERM → old server's stdin loop ends → it removes the lock and
             // exits → its TCP listener closes → native host gets EOF → SW
             // onDisconnect → reconnect spawns a fresh host → reads OUR lock.
-            unsafe { libc_kill(prev.pid, 15); } // SIGTERM
-            // Give it a moment to die and clean up its lock.
+            unsafe {
+                libc_kill(prev.pid, 15);
+            } // SIGTERM
+              // Give it a moment to die and clean up its lock.
             for _ in 0..50 {
-                if !pid_is_alive(prev.pid) { break; }
+                if !pid_is_alive(prev.pid) {
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
             // Remove any stale lock the old instance didn't clean up.
@@ -52,7 +56,9 @@ pub fn run() -> i32 {
     }
     eprintln!(
         "[mcp] bridge listening on 127.0.0.1:{} (pid {}) lock at {}",
-        lock.port, lock.pid, ipc::LockFile::path().display()
+        lock.port,
+        lock.pid,
+        ipc::LockFile::path().display()
     );
 
     let session = Session::new();
@@ -170,7 +176,11 @@ fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             Some(JsonRpc::ok(id, result))
         }
         // Unknown method → JSON-RPC method-not-found.
-        _ => Some(JsonRpc::err(id, -32601, format!("method not found: {method}"))),
+        _ => Some(JsonRpc::err(
+            id,
+            -32601,
+            format!("method not found: {method}"),
+        )),
     }
 }
 

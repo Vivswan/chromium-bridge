@@ -21,7 +21,7 @@
 2. **Toast UI**:页面右上角注入卡片,显示"Browser Bridge / Click 'xxx'?" + Allow/Deny 按钮
 3. **超时**:30 秒不响应自动 Deny(防止工具调用永久挂起)
 4. **免确认窗口**:用户 Allow 后,60 秒内同 origin + 同动作类型不再弹(避免连续确认烦人)
-5. **关闭高危域名标签**:在 background 的 `tab_close` 里判断(阶段二补充,当前 tab_close 未做高危判断)
+5. **关闭标签**:在 background 的 `tab_close` 里先向目标页面发送确认 Toast,用户允许后才关闭
 
 ## 考虑过的替代方案
 

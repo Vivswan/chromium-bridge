@@ -64,8 +64,10 @@ echo "[install] building release…"
 # ---- install binary -------------------------------------------------------
 
 mkdir -p "$INSTALL_DIR"
-cp "$HERE/target/release/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
-chmod 0755 "$INSTALL_DIR/$BINARY_NAME"
+TMP_BIN="$INSTALL_DIR/$BINARY_NAME.tmp.$$"
+cp "$HERE/target/release/$BINARY_NAME" "$TMP_BIN"
+chmod 0755 "$TMP_BIN"
+mv -f "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
 echo "[install] binary installed at $INSTALL_DIR/$BINARY_NAME"
 
 # ---- host manifest --------------------------------------------------------

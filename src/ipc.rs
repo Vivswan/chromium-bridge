@@ -90,7 +90,11 @@ pub fn listen() -> io::Result<(TcpListener, LockFile)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let secret = generate_secret();
-    let lf = LockFile { port, secret, pid: std::process::id() };
+    let lf = LockFile {
+        port,
+        secret,
+        pid: std::process::id(),
+    };
     Ok((listener, lf))
 }
 
@@ -108,7 +112,7 @@ fn generate_secret() -> String {
     // single-user machine.
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u128)
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
     let pid = std::process::id() as u128;
     let stack = &t as *const _ as u128;
@@ -138,9 +142,9 @@ pub fn connect() -> io::Result<TcpStream> {
     })?;
     let addr = format!("127.0.0.1:{}", lf.port);
     let stream = match TcpStream::connect_timeout(
-        &addr.parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("addr parse: {e}"))
-        })?,
+        &addr
+            .parse()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("addr parse: {e}")))?,
         Duration::from_secs(2),
     ) {
         Ok(s) => s,

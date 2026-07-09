@@ -29,10 +29,10 @@
 - **G4 MCP 集成**:作为标准 MCP server 接入 ZCode,工具集稳定可组合
 - **G5 单二进制分发**:整个后端编译成一个 Rust 二进制,部署 = 拷贝一个文件
 
-### 2.2 非目标(v0.1 明确不做)
-- ❌ **不实现 `page_eval`**(v0.1 范围)。v0.1 不实现任意 JS 执行;阶段二已补,带高危确认通道 + 返回值脱敏。详见 [ADR-0008](./adr/0008-page-eval-confirmation-channel.md)(取代早期的 [ADR-0005](./adr/0005-page-eval-disabled-by-default.md))
-- ❌ **不读 Cookie/Storage**。攻击面太大,留到后续阶段。详见范围边界
-- ❌ **不用 chrome.debugger 做精确 snapshot**。会强制弹 infobar 横幅,违背 G2。当前用 content script 近似。详见 [ADR-0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md)
+### 2.2 非目标 / 已延后能力
+- ✅ **`page_eval` 已补齐**:早期 v0.1 不实现任意 JS 执行;阶段二已补,带高危确认通道 + 返回值脱敏。详见 [ADR-0008](./adr/0008-page-eval-confirmation-channel.md)(取代早期的 [ADR-0005](./adr/0005-page-eval-disabled-by-default.md))
+- ✅ **Cookie/Storage 只读已补齐**:阶段三补了 `cookie_get` / `storage_get`,严格只读且输出脱敏。详见 [ADR-0010](./adr/0010-cookie-storage-readonly.md)
+- ✅ **精确 snapshot 已补齐**:`page_snapshot_precise` 显式使用 chrome.debugger,调用前提示用户,调用期间会短暂显示 infobar。默认 `page_snapshot` 仍用 content script 近似。详见 [ADR-0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) 和 [ADR-0009](./adr/0009-page-snapshot-precise-debugger.md)
 - ❌ **不做录制/回放、批量任务编排**。这是阶段三的玩法层
 - ❌ **不支持非 Chrome 浏览器**。v0.1 只针对 macOS 上的 Google Chrome
 
@@ -69,7 +69,7 @@
 - `tab_list` — 列出所有标签页(id/title/url/active)
 - `tab_focus` — 激活指定标签页
 - `tab_open(url)` — 打开新标签(域名受白名单约束)
-- `tab_close(tabId)` — 关闭标签(高危域名需 Toast 确认)
+- `tab_close(tabId)` — 关闭 http(s) 标签前在页面内弹 Toast 确认
 
 ### FR-2 页面读取
 - `page_snapshot` — 返回交互元素的 a11y 风格树,每个节点有稳定 `ref`、role、accessible name、兜底 selector
@@ -81,7 +81,7 @@
 - `page_click(ref|selector)` — 点击;submit/链接类触发 Toast 确认
 - `page_fill(ref|selector, value)` — 填表;用 native setter 触发框架(React/Vue)的 change 检测;密码字段脱敏记录
 - `page_scroll(direction|pixels)` — 滚动
-- `page_wait_for(selector|text|nav, timeoutMs)` — 等待条件
+- `page_wait_for(selector|text|nav, timeoutMs)` — 等待 selector/text,或等待页面 load 完成
 - `page_eval(code)` — **高危**:执行任意 JS。每次调用弹放大版 Toast 显示完整代码;同源 60s 免确认;返回值默认脱敏(JWT/长hex/长数字/敏感关键字),可在 popup 关闭。用 `new Function` 在全局作用域执行,支持 await/return。详见 [ADR-0008](./adr/0008-page-eval-confirmation-channel.md)
 
 ### FR-4 安全控制

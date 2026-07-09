@@ -34,12 +34,14 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "tab_open",
-            description: "Open a URL in a new tab. The host domain must be in the user's allowlist.",
+            description:
+                "Open a URL in a new tab. The host domain must be in the user's allowlist.",
             input_schema: schema(&["url"], &[("url", "string", "Absolute URL to open")]),
         },
         Tool {
             name: "tab_close",
-            description: "Close a tab. Closing a tab on a sensitive domain requires user confirmation.",
+            description:
+                "Close an http(s) tab after showing a user-confirmation prompt in that page.",
             input_schema: schema(&["tabId"], &[("tabId", "integer", "Tab id from tab_list")]),
         },
         Tool {
@@ -59,7 +61,11 @@ pub fn all() -> Vec<Tool> {
             input_schema: schema(
                 &[],
                 &[
-                    ("ref", "string", "Element ref from page_snapshot, e.g. \"e3\""),
+                    (
+                        "ref",
+                        "string",
+                        "Element ref from page_snapshot, e.g. \"e3\"",
+                    ),
                     ("selector", "string", "CSS selector fallback"),
                 ],
             ),
@@ -80,7 +86,8 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_text",
-            description: "Return the visible text content of the active tab (sensitive fields masked).",
+            description:
+                "Return the visible text content of the active tab (sensitive fields masked).",
             input_schema: schema(&[], &[]),
         },
         Tool {
@@ -90,12 +97,17 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_scroll",
-            description: "Scroll the active tab. Pass `direction` (up|down|top|bottom) or `pixels`.",
+            description:
+                "Scroll the active tab. Pass `direction` (up|down|top|bottom) or `pixels`.",
             input_schema: schema(
                 &[],
                 &[
                     ("direction", "string", "One of: up, down, top, bottom"),
-                    ("pixels", "integer", "Number of pixels to scroll (positive = down)"),
+                    (
+                        "pixels",
+                        "integer",
+                        "Number of pixels to scroll (positive = down)",
+                    ),
                 ],
             ),
         },
@@ -103,11 +115,15 @@ pub fn all() -> Vec<Tool> {
             name: "page_wait_for",
             description:
                 "Wait until a condition is met on the active tab, or until timeout. One of: \
-                 `selector` exists, `text` appears, or `nav` (navigation) completes.",
+                 `selector` exists, `text` appears, or `nav` waits for page load completion.",
             input_schema: schema(
                 &[],
                 &[
-                    ("selector", "string", "Wait for this selector to match an element"),
+                    (
+                        "selector",
+                        "string",
+                        "Wait for this selector to match an element",
+                    ),
                     ("text", "string", "Wait for this text to appear in the page"),
                     ("nav", "boolean", "Wait for a navigation event"),
                     ("timeoutMs", "integer", "Max wait in ms (default 30000)"),
@@ -126,7 +142,10 @@ pub fn all() -> Vec<Tool> {
                  events, reading framework state, SPA routing, canvas/WebGL, etc.). Code runs in \
                  the page's global scope, wrapped as `async`, so you can `await` and `return` a \
                  value. Async results are awaited. Errors are returned as {name, message}.",
-            input_schema: schema(&["code"], &[("code", "string", "JavaScript code to execute")]),
+            input_schema: schema(
+                &["code"],
+                &[("code", "string", "JavaScript code to execute")],
+            ),
         },
         Tool {
             name: "page_snapshot_precise",
@@ -141,7 +160,11 @@ pub fn all() -> Vec<Tool> {
                  unchanged. Use this when page_snapshot misses elements or roles look wrong.",
             input_schema: schema(
                 &[],
-                &[("frameId", "string", "Optional: limit to a specific frame's tree")],
+                &[(
+                    "frameId",
+                    "string",
+                    "Optional: limit to a specific frame's tree",
+                )],
             ),
         },
         Tool {
@@ -156,7 +179,11 @@ pub fn all() -> Vec<Tool> {
             input_schema: schema(
                 &[],
                 &[
-                    ("url", "string", "Return cookies that would be sent to this URL"),
+                    (
+                        "url",
+                        "string",
+                        "Return cookies that would be sent to this URL",
+                    ),
                     ("domain", "string", "Match this domain and its subdomains"),
                     ("name", "string", "Exact cookie name to match"),
                 ],
@@ -174,7 +201,11 @@ pub fn all() -> Vec<Tool> {
                 &[],
                 &[
                     ("type", "string", "\"local\" (default) or \"session\""),
-                    ("key", "string", "Specific key to read; omit for all entries"),
+                    (
+                        "key",
+                        "string",
+                        "Specific key to read; omit for all entries",
+                    ),
                 ],
             ),
         },
@@ -254,7 +285,10 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> (Value, bool) {
             }
             payload.insert(
                 "timeoutMs".into(),
-                json!(args.get("timeoutMs").and_then(|v| v.as_i64()).unwrap_or(30000)),
+                json!(args
+                    .get("timeoutMs")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(30000)),
             );
             call(session, "page_wait_for", None, Value::Object(payload))
         }
@@ -267,7 +301,12 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> (Value, bool) {
             if let Some(f) = args.get("frameId").and_then(|v| v.as_str()) {
                 payload.insert("frameId".into(), json!(f));
             }
-            call(session, "page_snapshot_precise", None, Value::Object(payload))
+            call(
+                session,
+                "page_snapshot_precise",
+                None,
+                Value::Object(payload),
+            )
         }
         "cookie_get" => {
             let mut payload = serde_json::Map::new();
@@ -313,7 +352,10 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> (Value, bool) {
             }
             (json!([{ "type": "text", "text": data.to_string() }]), false)
         }
-        Err(e) => (json!([{ "type": "text", "text": format!("Error: {e}") }]), true),
+        Err(e) => (
+            json!([{ "type": "text", "text": format!("Error: {e}") }]),
+            true,
+        ),
     }
 }
 
@@ -322,7 +364,10 @@ fn call(session: &Session, op: &str, tab_id: Option<i64>, args: Value) -> Result
 }
 
 fn sarg(args: &Value, key: &str) -> String {
-    args.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn iarg(args: &Value, key: &str) -> i64 {

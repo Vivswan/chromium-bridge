@@ -1,10 +1,9 @@
 //! browser-bridge — bridge ZCode (MCP) to your real Chrome.
 //!
 //! One binary, two modes selected by argv:
-//!   - (no args)   : MCP server (default). Run under ZCode's mcp.servers.
-//!   - --native-host : Chrome-spawned bridge subprocess. Chrome launches this
-//!                     via the native messaging host manifest; it should never
-//!                     be invoked by hand.
+//! - (no args): MCP server (default). Run under ZCode's mcp.servers.
+//! - --native-host: Chrome-spawned bridge subprocess. Chrome launches this
+//!   via the native messaging host manifest; it should never be invoked by hand.
 
 mod ipc;
 mod mcp_server;

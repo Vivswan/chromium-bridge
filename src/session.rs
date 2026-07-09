@@ -52,10 +52,7 @@ impl Session {
         // Validate the hello line (auth) before trusting the connection.
         let mut reader = BufReader::new(stream.try_clone()?);
         let first: Option<Value> = bridge_read(&mut reader)?;
-        let hello_ok = first
-            .as_ref()
-            .map(|v| ipc::validate_hello(v))
-            .unwrap_or(false);
+        let hello_ok = first.as_ref().map(ipc::validate_hello).unwrap_or(false);
         if !hello_ok {
             eprintln!("[session] rejected inbound connection: bad/missing hello");
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "bad hello"));
@@ -105,7 +102,12 @@ impl Session {
     /// Returns the response data on success, or an error string.
     pub fn call(&self, op: &str, tab_id: Option<i64>, args: Value) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let req = BridgeReq { id, op: op.to_string(), tab_id, args };
+        let req = BridgeReq {
+            id,
+            op: op.to_string(),
+            tab_id,
+            args,
+        };
 
         // Register the one-shot receiver BEFORE sending, to avoid a race
         // where the response arrives before we're listening.

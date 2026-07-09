@@ -321,6 +321,7 @@ async function runAllTests(page: Page): Promise<void> {
   await test_eval_unmasked(page);
   await test_eval_error_and_serialize(page);
   await test_storage_get(page);
+  await test_wait_for_nav(page);
   await test_high_risk_toast(page);
   await test_ping(page);
   await test_shadow_dom(page);
@@ -551,6 +552,16 @@ async function test_storage_get(page: Page): Promise<void> {
   // sessionStorage.
   const sessResp = await invoke(page, "storage_get", { type: "session", key: "stoken" });
   check(sessResp.found === true, "sessionStorage accessible");
+}
+
+// ── test: page_wait_for(nav) ───────────────────────────────────────────────
+async function test_wait_for_nav(page: Page): Promise<void> {
+  console.log("\n[test] page_wait_for — nav/load condition");
+  await freshLoad(page);
+  const resp = await invoke(page, "page_wait_for", { nav: true, timeoutMs: 1000 });
+  check(!resp.__error, "nav wait returns without timeout");
+  check(resp.nav === true, "nav wait result marks nav:true");
+  check(resp.readyState === "complete", "nav wait sees complete readyState");
 }
 
 // ── test: high-risk Toast (page_click on submit) ──────────────────────────

@@ -44,9 +44,8 @@ pub fn nm_read_frame<R: Read>(r: &mut R) -> io::Result<Option<Value>> {
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
-    let value = serde_json::from_slice(&buf).map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("nm json decode: {e}"))
-    })?;
+    let value = serde_json::from_slice(&buf)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("nm json decode: {e}")))?;
     Ok(Some(value))
 }
 
@@ -168,9 +167,8 @@ pub fn mcp_read<R: io::BufRead>(r: &mut R) -> io::Result<Option<JsonRpc>> {
         // Instead we recurse once to skip.
         return mcp_read(r);
     }
-    let msg: JsonRpc = serde_json::from_slice(&line).map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("mcp json decode: {e}"))
-    })?;
+    let msg: JsonRpc = serde_json::from_slice(&line)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("mcp json decode: {e}")))?;
     Ok(Some(msg))
 }
 
@@ -217,16 +215,28 @@ pub struct BridgeResp {
 impl BridgeResp {
     #[allow(dead_code)]
     pub fn ok(id: u64, data: Value) -> Self {
-        BridgeResp { id, ok: true, data: Some(data), error: None }
+        BridgeResp {
+            id,
+            ok: true,
+            data: Some(data),
+            error: None,
+        }
     }
     #[allow(dead_code)]
     pub fn err(id: u64, msg: impl Into<String>) -> Self {
-        BridgeResp { id, ok: false, data: None, error: Some(msg.into()) }
+        BridgeResp {
+            id,
+            ok: false,
+            data: None,
+            error: Some(msg.into()),
+        }
     }
 }
 
 /// Read/write bridge messages as NDJSON lines over a TCP stream.
-pub fn bridge_read<R: io::BufRead, T: for<'de> Deserialize<'de>>(r: &mut R) -> io::Result<Option<T>> {
+pub fn bridge_read<R: io::BufRead, T: for<'de> Deserialize<'de>>(
+    r: &mut R,
+) -> io::Result<Option<T>> {
     let mut line = Vec::new();
     let n = r.read_until(b'\n', &mut line)?;
     if n == 0 {
@@ -239,7 +249,10 @@ pub fn bridge_read<R: io::BufRead, T: for<'de> Deserialize<'de>>(r: &mut R) -> i
         return bridge_read(r);
     }
     let msg = serde_json::from_slice(&line).map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("bridge json decode: {e}"))
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("bridge json decode: {e}"),
+        )
     })?;
     Ok(Some(msg))
 }
@@ -277,7 +290,7 @@ pub fn ignore_sigpipe() {
     #[cfg(unix)]
     unsafe {
         // libc::SIG_IGN = 1
-        let _ = libc_signal_ignore(13 /* SIGPIPE */);
+        libc_signal_ignore(13 /* SIGPIPE */);
     }
 }
 
@@ -290,4 +303,3 @@ unsafe fn libc_signal_ignore(sig: i32) {
     }
     let _ = signal(sig, 1);
 }
-
