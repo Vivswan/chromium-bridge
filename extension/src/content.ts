@@ -10,7 +10,9 @@
 // a11y tree — see the project README for why we don't use chrome.debugger
 // (the infobar) in v0.1.
 
-import type { Settings, ContentMsg } from "./types";
+import type { ContentMsg } from "./shared/types";
+import { getSetting } from "./shared/settings";
+import { maskString, maskSensitive } from "./shared/masking";
 
 declare global {
   interface Window {
@@ -583,56 +585,6 @@ declare global {
   // Mask sensitive-looking values. Recursive. See ADR-0008 for the pattern
   // catalogue. Designed to stop tokens/cookies/secrets from reaching the AI
   // context (and logs) — at the cost of occasionally masking benign data.
-  function maskSensitive(value: any): any {
-    if (value === null || value === undefined) return value;
-    const t = typeof value;
-    if (t === "string") return maskString(value);
-    if (t === "number") return maskNumber(value);
-    if (t === "boolean") return value;
-    if (Array.isArray(value)) return value.map(maskSensitive);
-    if (t === "object") {
-      const out: any = {};
-      for (const k of Object.keys(value)) {
-        out[maskKeyName(k)] = maskSensitive(value[k]);
-      }
-      return out;
-    }
-    return value;
-  }
-
-  const SENSITIVE_KEY = /(token|cookie|password|passwd|secret|api[_-]?key|auth|cred|session)/i;
-
-  function maskKeyName(key: string) {
-    return SENSITIVE_KEY.test(key) ? "••••" + key.slice(-2) : key;
-  }
-
-  function maskString(s: string) {
-    if (s.length < 8) return s;
-    let out = s;
-    // JWT (eyJ... . ... . ...)
-    out = out.replace(/ey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "••••[jwt]");
-    // Long hex (>=32): secrets, hashes, API keys
-    out = out.replace(/\b[a-fA-F0-9]{32,}\b/g, "••••[hex]");
-    // Long digit runs (>=12): card numbers, account ids
-    out = out.replace(/\b\d{12,}\b/g, "••••[num]");
-    // Bearer / key-like patterns
-    out = out.replace(
-      /(?:bearer|token|password|secret|api[_-]?key)\s*[:=]\s*\S+/gi,
-      "••••[redacted]"
-    );
-    // If the whole string looks like a credential, mask fully
-    if (SENSITIVE_KEY.test(s) && s.length >= 8 && !/\s/.test(s)) {
-      return "••••[sensitive]";
-    }
-    return out;
-  }
-
-  function maskNumber(n: number): any {
-    // Long integers (>=12 digits): card-like, big ids
-    if (Number.isInteger(n) && Math.abs(n) >= 1e11) return "••••[num]";
-    return n;
-  }
-
   // Read the mask toggle from storage. Default true (mask on).
   let _maskCache = true;
   let _maskLoaded = false;
@@ -644,35 +596,6 @@ declare global {
         _maskCache = r.evalMask !== false;
         _maskLoaded = true;
         resolve(_maskCache);
-      });
-    });
-  }
-
-  // Default values for the configurable settings managed by the options page.
-  // KEEP IN SYNC with options.js DEFAULTS and background.js DEFAULTS. The
-  // content script only consumes the subset relevant to in-page behavior.
-  const DEFAULTS: Pick<
-    Settings,
-    | "pageEvalEnabled"
-    | "confirmHighRiskClick"
-    | "confirmGraceMs"
-    | "clickToastTimeoutMs"
-    | "evalToastTimeoutMs"
-  > = {
-    pageEvalEnabled: true,
-    confirmHighRiskClick: true,
-    confirmGraceMs: 60000,
-    clickToastTimeoutMs: 30000,
-    evalToastTimeoutMs: 45000,
-  };
-
-  // Read a single setting with its default. Not cached (these are read once
-  // per action, and storage reads are cheap + async).
-  function getSetting(key: keyof typeof DEFAULTS): Promise<any> {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(key, (r) => {
-        const v = r[key];
-        resolve(v === undefined ? DEFAULTS[key] : v);
       });
     });
   }

@@ -14,33 +14,18 @@
 // State kept in chrome.storage.local (survives SW restarts):
 //   - allowlist: string[] of origin globs like "https://example.com/*"
 
-import type { Settings, BridgeReq } from "./types";
+import type { BridgeReq } from "./shared/types";
+import { getSetting } from "./shared/settings";
+import { maskCookieValue } from "./shared/masking";
+import {
+  originGlobOf,
+  hostFromOriginGlob,
+  normalizeCookieDomain,
+  matchesAny,
+  globToPermissionPattern,
+} from "./shared/allowlist";
 
 const NATIVE_HOST = "com.browser_bridge.host";
-
-// Default values for the configurable settings managed by the options page.
-// KEEP IN SYNC with options.js DEFAULTS and content.js DEFAULTS.
-const DEFAULTS: Settings = {
-  pageEvalEnabled: true,
-  evalMask: true,
-  confirmHighRiskClick: true,
-  warnPreciseSnapshot: true,
-  confirmGraceMs: 60000,
-  clickToastTimeoutMs: 30000,
-  evalToastTimeoutMs: 45000,
-  disabledTools: [],
-  allowAllSites: false,
-};
-
-// Read a setting with its default. Resolves a single key.
-function getSetting(key: keyof Settings): Promise<any> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(key, (r) => {
-      const v = r[key];
-      resolve(v === undefined ? DEFAULTS[key] : v);
-    });
-  });
-}
 
 // ---- native port lifecycle ------------------------------------------------
 
@@ -461,22 +446,6 @@ async function cookieGet(maybeTabId: number | undefined, args: any) {
   return { cookies: out, count: out.length };
 }
 
-// Mask a cookie value. Same pattern catalogue as content.js maskString
-// (ADR-0008): JWT, long hex, long numbers, credential-like strings.
-function maskCookieValue(v: any): any {
-  if (typeof v !== "string") return v;
-  if (v.length < 8) return v;
-  let out = v;
-  out = out.replace(/ey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "••••[jwt]");
-  out = out.replace(/\b[a-fA-F0-9]{32,}\b/g, "••••[hex]");
-  out = out.replace(/\b\d{12,}\b/g, "••••[num]");
-  out = out.replace(
-    /(?:bearer|token|password|secret|api[_-]?key)\s*[:=]\s*\S+/gi,
-    "••••[redacted]"
-  );
-  return out;
-}
-
 // ---- target tab resolution ------------------------------------------------
 
 async function resolveTargetTab(maybeTabId: number | undefined): Promise<chrome.tabs.Tab> {
@@ -525,31 +494,6 @@ async function setAllowlist(list: string[]) {
   await chrome.storage.local.set({ [STORAGE_KEY]: list });
 }
 
-function originGlobOf(url: string | undefined) {
-  try {
-    const u = new URL(url!);
-    return `${u.protocol}//${u.host}/*`;
-  } catch (_) {
-    return null;
-  }
-}
-
-function hostFromOriginGlob(glob: string) {
-  try {
-    return new URL(glob.replace(/\*$/, "")).host.toLowerCase();
-  } catch (_) {
-    return null;
-  }
-}
-
-function normalizeCookieDomain(domain: any): string | null {
-  if (typeof domain !== "string") return null;
-  let d = domain.trim().toLowerCase();
-  if (!d || d.includes("://") || d.includes("/") || d.includes("*")) return null;
-  while (d.startsWith(".")) d = d.slice(1);
-  return d || null;
-}
-
 async function ensureDomainAllowed(domain: any) {
   const host = normalizeCookieDomain(domain);
   if (!host) throw new Error(`invalid cookie domain: ${domain}`);
@@ -563,23 +507,6 @@ async function ensureDomainAllowed(domain: any) {
       `cookie domain not allowed by user: ${domain}. Use a URL for the active allowlisted origin, or approve that exact host first.`
     );
   }
-}
-
-function matchesAny(glob: string, list: string[]) {
-  return list.some((pattern) => simpleMatch(pattern, glob));
-}
-
-// Minimal glob match: supports trailing * only. Good enough for "host/*".
-function simpleMatch(pattern: string, target: string) {
-  if (pattern === target) return true;
-  if (pattern.endsWith("/*")) {
-    const base = pattern.slice(0, -2); // drop "/*"
-    return target === base || target.startsWith(base + "/");
-  }
-  if (pattern.endsWith("*")) {
-    return target.startsWith(pattern.slice(0, -1));
-  }
-  return false;
 }
 
 async function ensureAllowed(url: string | undefined) {
@@ -714,11 +641,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true; // async
   }
 });
-
-function globToPermissionPattern(glob: string): string | null {
-  if (typeof glob !== "string" || !glob) return null;
-  return glob.endsWith("/*") ? glob : glob + "*";
-}
 
 // ---- startup ---------------------------------------------------------------
 

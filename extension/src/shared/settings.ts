@@ -1,0 +1,30 @@
+// Single source of truth for the configurable settings and their defaults.
+//
+// Previously DEFAULTS was copy-pasted into background.ts, content.ts, and
+// options.ts with "KEEP IN SYNC" comments. Now all three import from here.
+// esbuild inlines this into each bundle, so there is no runtime cost.
+
+import type { Settings } from "./types";
+
+export const DEFAULTS: Settings = {
+  pageEvalEnabled: true,
+  evalMask: true,
+  confirmHighRiskClick: true,
+  warnPreciseSnapshot: true,
+  confirmGraceMs: 60000,
+  clickToastTimeoutMs: 30000,
+  evalToastTimeoutMs: 45000,
+  disabledTools: [], // string[] of tool/op names that are blocked
+  allowAllSites: false,
+};
+
+// Read one setting from chrome.storage.local, falling back to its default.
+// Not cached: settings are read once per action and storage reads are cheap.
+export function getSetting<K extends keyof Settings>(key: K): Promise<Settings[K]> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(key as string, (r) => {
+      const v = r[key as string];
+      resolve(v === undefined ? DEFAULTS[key] : (v as Settings[K]));
+    });
+  });
+}
