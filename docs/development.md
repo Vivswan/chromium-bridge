@@ -14,6 +14,7 @@ release process. For *why* the project is structured the way it is, see
 | bun | DOM-layer tests | runs `tests/dom_test.ts` |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
 | [`just`](https://github.com/casey/just) | task runner (optional) | every recipe is a plain command you can also run by hand |
+| [`shellcheck`](https://www.shellcheck.net/) | linting the shell scripts (optional) | `just lint-scripts`; CI gates it |
 
 ## Layout
 
@@ -25,8 +26,13 @@ extension/
   build.mjs          esbuild driver
   manifest.json, *.html, toast.css, icons/   static assets, copied into dist/
 tests/               e2e.py (protocol), dom_test.ts (DOM), ext_test.js (smoke)
-scripts/             check-version.sh, sync-version.sh
+scripts/             lib.sh (shared helpers) + check-version.sh, sync-version.sh
 ```
+
+Shell scripts (`install.sh`, `scripts/*.sh`, `tests/run_all.sh`) share
+`scripts/lib.sh` (sourced) for cargo discovery and version parsing — edit the
+candidate list or parsing in one place. They're `shellcheck`-clean (CI gates
+it; `just lint-scripts` locally).
 
 ## Common tasks
 

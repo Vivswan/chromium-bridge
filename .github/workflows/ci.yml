@@ -56,6 +56,14 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./scripts/check-version.sh
 
+  scripts:
+    name: Shell scripts (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # shellcheck is preinstalled on GitHub's ubuntu runners.
+      - run: shellcheck install.sh scripts/*.sh tests/run_all.sh
+
   e2e:
     name: Protocol e2e (Python)
     runs-on: ubuntu-latest

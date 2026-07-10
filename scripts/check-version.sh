@@ -7,16 +7,14 @@
 # version to the others.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-cargo_ver() { grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/'; }
-json_ver() { grep -m1 '"version"' "$1" | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'; }
+CARGO="$(bb_cargo_version)"
+MANIFEST="$(bb_json_version "$BB_ROOT/extension/manifest.json")"
+PKG="$(bb_json_version "$BB_ROOT/extension/package.json")"
 
-CARGO="$(cargo_ver)"
-MANIFEST="$(json_ver "$ROOT/extension/manifest.json")"
-PKG="$(json_ver "$ROOT/extension/package.json")"
-
-printf 'Cargo.toml            %s\n' "$CARGO"
+printf 'Cargo.toml               %s\n' "$CARGO"
 printf 'extension/manifest.json  %s\n' "$MANIFEST"
 printf 'extension/package.json   %s\n' "$PKG"
 

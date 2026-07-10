@@ -7,25 +7,20 @@
 #   - Python 3 for tests/e2e.py
 #   - bun + Chrome for tests/dom_test.ts (set CHROME_BIN to override the path)
 #
-# Each layer is independent; failures in one still let the others run so you
-# see all problems in one pass.
+# Each layer is independent; failures in one still let the others run so you see
+# all problems in one pass — hence no `set -e` (we collect failures in FAILED).
 
-set -u
+set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/.." && pwd)"
+# shellcheck source=scripts/lib.sh
+source "$HERE/../scripts/lib.sh"
+REPO="$BB_ROOT"
 FAILED=0
 
-# ── locate cargo (PATH, then Homebrew) ─────────────────────────────────────
-CARGO=""
-for c in cargo /opt/homebrew/bin/cargo "$HOME/.cargo/bin/cargo"; do
-  if command -v "$c" >/dev/null 2>&1; then CARGO="$(command -v "$c")"; break; fi
-done
-if [[ -z "$CARGO" ]]; then
-  echo "error: cargo not found" >&2; exit 2
-fi
-# Make rustc discoverable to cargo subprocesses.
-export PATH="$(dirname "$CARGO"):$PATH"
+# Locate cargo (sets BB_CARGO, prepends its dir to PATH for rustc discovery).
+bb_find_cargo
+CARGO="$BB_CARGO"
 
 echo "═══ browser-bridge test suite ═══"
 echo "(1/4) build release binary"

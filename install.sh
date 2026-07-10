@@ -20,30 +20,15 @@ INSTALL_DIR="$HOME/.browser-bridge"
 BINARY_NAME="browser-bridge"
 NM_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 
+# shellcheck source=scripts/lib.sh
+source "$HERE/scripts/lib.sh"
+
 # ---- find cargo -----------------------------------------------------------
-
-CARGO=""
-CARGO_DIR=""
-for candidate in cargo /opt/homebrew/bin/cargo "$HOME/.cargo/bin/cargo"; do
-  if command -v "$candidate" >/dev/null 2>&1; then
-    CARGO="$(command -v "$candidate")"
-    # Remember the dir so we can add it to PATH for the build subprocess
-    # (cargo shells out to rustc; rustc must be on PATH).
-    CARGO_DIR="$(dirname "$CARGO")"
-    break
-  fi
-done
-if [[ -z "$CARGO" ]]; then
-  echo "error: cargo not found. Install Rust (https://rustup.rs) or fix PATH." >&2
-  exit 1
-fi
+# Sets BB_CARGO and prepends its dir to PATH (so the rustc it shells out to is
+# discoverable). Must be a plain call, not a subshell.
+bb_find_cargo
+CARGO="$BB_CARGO"
 echo "[install] using cargo: $CARGO ($("$CARGO" --version))"
-
-# Make sure rustc is discoverable for cargo's subprocesses. Prepend the dir
-# containing cargo (Homebrew ships rustc alongside cargo) to PATH.
-if [[ -n "$CARGO_DIR" ]] && [[ ":$PATH:" != *":$CARGO_DIR:"* ]]; then
-  export PATH="$CARGO_DIR:$PATH"
-fi
 
 # ---- parse args -----------------------------------------------------------
 

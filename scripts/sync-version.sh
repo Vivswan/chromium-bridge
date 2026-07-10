@@ -6,20 +6,22 @@
 # (or ./scripts/sync-version.sh) and commit the result.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CARGO="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
+# shellcheck source=scripts/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+CARGO="$(bb_cargo_version)"
 echo "Cargo.toml version: $CARGO"
 
 # extension/manifest.json — replace the "version": "..." string in place.
 # ("manifest_version" is a distinct key and is not matched by "version".)
-MANIFEST="$ROOT/extension/manifest.json"
+MANIFEST="$BB_ROOT/extension/manifest.json"
 tmp="$(mktemp)"
 sed -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]+(\")/\1${CARGO}\2/" "$MANIFEST" >"$tmp"
 mv "$tmp" "$MANIFEST"
 echo "updated extension/manifest.json"
 
 # extension/package.json + package-lock.json — npm keeps both in sync.
-( cd "$ROOT/extension" && npm version "$CARGO" --no-git-tag-version --allow-same-version >/dev/null )
+(cd "$BB_ROOT/extension" && npm version "$CARGO" --no-git-tag-version --allow-same-version >/dev/null)
 echo "updated extension/package.json + package-lock.json"
 
-"$ROOT/scripts/check-version.sh"
+"$BB_ROOT/scripts/check-version.sh"

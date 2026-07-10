@@ -21,6 +21,10 @@ fmt-check:
 lint:
     cargo clippy --all-targets -- -D warnings
 
+# Lint shell scripts (needs shellcheck)
+lint-scripts:
+    shellcheck install.sh scripts/*.sh tests/run_all.sh
+
 # Rust unit tests
 test-rust:
     cargo test
@@ -66,7 +70,7 @@ test-browser: ext-build
 test: test-rust test-e2e
 
 # Everything CI runs (browser tests are separate — see test-browser)
-ci: fmt-check lint test-rust ext-typecheck ext-lint ext-format-check ext-test ext-build test-e2e
+ci: fmt-check lint lint-scripts test-rust ext-typecheck ext-lint ext-format-check ext-test ext-build test-e2e
 
 # Install locally (build + copy binary + host manifest)
 install:
