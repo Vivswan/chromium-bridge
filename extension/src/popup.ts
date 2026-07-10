@@ -1,4 +1,4 @@
-// popup.js — runs when the user clicks the extension icon. Handles two jobs:
+// popup.ts — runs when the user clicks the extension icon. Handles two jobs:
 //   1. Show connection status + current allowlist (with revoke).
 //   2. If background asked the user to approve a new origin (badge "!" + a
 //      `pendingAllow` entry in storage), show the approve/deny UI. Approving
@@ -6,8 +6,8 @@
 //      this must happen in the popup (a user-gesture context), since service
 //      workers cannot request permissions.
 
-function $(id: string): any {
-  return document.getElementById(id);
+function $<T extends HTMLElement = HTMLElement>(id: string): T {
+  return document.getElementById(id) as T;
 }
 
 async function refreshStatus() {
@@ -21,19 +21,19 @@ async function refreshStatus() {
 
 async function refreshList() {
   const resp = await send({ type: "get_allowlist" });
-  const list = resp?.list || [];
+  const list = (resp?.list as string[]) || [];
   $("empty").style.display = list.length ? "none" : "block";
   $("list").innerHTML = list
     .map(
-      (g: any) =>
+      (g) =>
         `<div class="item"><code>${escapeHtml(g)}</code>` +
         `<button class="danger" data-glob="${escapeAttr(g)}">Revoke</button></div>`
     )
     .join("");
   // Wire revoke buttons.
-  document.querySelectorAll<HTMLElement>(".item button").forEach((b) => {
+  document.querySelectorAll<HTMLButtonElement>(".item button").forEach((b) => {
     b.onclick = async () => {
-      const glob = b.getAttribute("data-glob");
+      const glob = b.getAttribute("data-glob")!;
       await send({ type: "remove_allow", glob });
       refreshList();
     };
@@ -41,18 +41,21 @@ async function refreshList() {
 }
 
 async function refreshPending() {
-  const { pendingAllow } = await chrome.storage.local.get("pendingAllow");
+  const { pendingAllow } = (await chrome.storage.local.get("pendingAllow")) as {
+    pendingAllow?: { id?: string; glob?: string };
+  };
   if (pendingAllow && pendingAllow.id && pendingAllow.glob) {
+    const { id, glob } = pendingAllow;
     $("pending").style.display = "block";
-    $("pending-glob").textContent = pendingAllow.glob;
-    $("allow").onclick = () => resolvePending(pendingAllow.id, pendingAllow.glob, true);
-    $("deny").onclick = () => resolvePending(pendingAllow.id, pendingAllow.glob, false);
+    $("pending-glob").textContent = glob;
+    $("allow").onclick = () => resolvePending(id, glob, true);
+    $("deny").onclick = () => resolvePending(id, glob, false);
   } else {
     $("pending").style.display = "none";
   }
 }
 
-async function resolvePending(id: any, glob: any, allow: any) {
+async function resolvePending(id: string, glob: string, allow: boolean) {
   if (allow) {
     // Request host permission at the same time as recording the allow. The
     // origin glob looks like "https://example.com/*"; convert to a match
@@ -66,7 +69,7 @@ async function resolvePending(id: any, glob: any, allow: any) {
         $("pending").style.display = "none";
         return;
       }
-    } catch (e: any) {
+    } catch (e) {
       console.warn("[bb] permissions.request failed", e);
     }
   }
@@ -81,23 +84,21 @@ function globToPattern(glob: string) {
   return glob.endsWith("/*") ? glob : glob + "*";
 }
 
-function send(msg: any): Promise<any> {
+function send(msg: object): Promise<Record<string, unknown> | undefined> {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(msg, (resp) => resolve(resp));
   });
 }
 
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
 function escapeHtml(s: string) {
-  return s.replace(
-    /[&<>"']/g,
-    (c) =>
-      (
-        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }) as Record<
-          string,
-          string
-        >
-      )[c]
-  );
+  return s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
 function escapeAttr(s: string) {
   return escapeHtml(s);

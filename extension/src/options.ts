@@ -1,25 +1,28 @@
-// options.js — the extension's options page. Reads/writes chrome.storage.local.
+// options.ts — the extension's options page. Reads/writes chrome.storage.local.
 //
 // All settings live in chrome.storage.local as flat keys. Defaults MUST stay in
-// sync with the DEFAULTS objects in background.js and content.js — any key added
+// sync with the DEFAULTS objects in background.ts and content.ts — any key added
 // here must be added there too.
 
+import type { Settings } from "./shared/types";
 import { DEFAULTS } from "./shared/settings";
 import { TOOLS } from "./shared/ops";
 
-function $(id: string): any {
-  return document.getElementById(id);
+// Elements are declared in options.html; `$` asserts presence (the page owns
+// its own DOM). Pass a subtype when you need element-specific fields.
+function $<T extends HTMLElement = HTMLElement>(id: string): T {
+  return document.getElementById(id) as T;
 }
 
 // ---- load / save settings -------------------------------------------------
 
-async function loadSettings(): Promise<any> {
+async function loadSettings(): Promise<Settings> {
   const keys = Object.keys(DEFAULTS);
   const stored = await chrome.storage.local.get(keys);
   return { ...DEFAULTS, ...stored };
 }
 
-async function saveSetting(key: string, value: any) {
+async function saveSetting(key: string, value: unknown) {
   await chrome.storage.local.set({ [key]: value });
   flashToast("已保存");
 }
@@ -41,8 +44,8 @@ function renderBool(key: string) {
   const input = $(key);
   const warn = $(`${key}-warn`);
   const card = $(`card-${key}`);
-  input.addEventListener("change", (e: any) => {
-    const checked = e.target.checked;
+  input.addEventListener("change", (e: Event) => {
+    const checked = (e.target as HTMLInputElement).checked;
     if (warn) warn.style.display = checked ? "none" : "block";
     if (card) card.classList.toggle("danger", !!warn && !checked);
     saveSetting(key, checked);
@@ -57,8 +60,9 @@ function wireAllowAllSites() {
   const input = $("allowAllSites");
   const warn = $("allowAllSites-warn");
   const card = $("card-allowAllSites");
-  input.addEventListener("change", async (e: any) => {
-    const checked = e.target.checked;
+  input.addEventListener("change", async (e: Event) => {
+    const target = e.target as HTMLInputElement;
+    const checked = target.checked;
     if (checked) {
       // Request the all-urls host permission. This must happen inside the
       // change handler (a user-gesture context) — MV3 forbids requesting
@@ -68,7 +72,7 @@ function wireAllowAllSites() {
       });
       if (!granted) {
         // User declined the OS prompt → roll back.
-        e.target.checked = false;
+        target.checked = false;
         flashToast("未授权 <所有网址>,已保持逐站点审批");
         return;
       }
@@ -87,8 +91,8 @@ function wireAllowAllSites() {
 
 function renderNumber(key: string) {
   const input = $(key);
-  input.addEventListener("change", (e: any) => {
-    const v = parseInt(e.target.value, 10);
+  input.addEventListener("change", (e: Event) => {
+    const v = parseInt((e.target as HTMLInputElement).value, 10);
     if (Number.isNaN(v)) return;
     saveSetting(key, v);
   });
@@ -96,7 +100,7 @@ function renderNumber(key: string) {
 
 // ---- render: tools grid ---------------------------------------------------
 
-function renderToolsGrid(disabledTools: any) {
+function renderToolsGrid(disabledTools: string[]) {
   const grid = $("tools-grid");
   const disabled = new Set(Array.isArray(disabledTools) ? disabledTools : []);
   grid.innerHTML = TOOLS.map((t) => {
@@ -109,12 +113,12 @@ function renderToolsGrid(disabledTools: any) {
       `</label>`
     );
   }).join("");
-  grid.querySelectorAll("input[type=checkbox]").forEach((cb: any) => {
+  grid.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
     cb.addEventListener("change", async () => {
-      const all = grid.querySelectorAll("input[type=checkbox]");
-      const next: any[] = [];
-      all.forEach((c: any) => {
-        if (!c.checked) next.push(c.getAttribute("data-op"));
+      const all = grid.querySelectorAll<HTMLInputElement>("input[type=checkbox]");
+      const next: string[] = [];
+      all.forEach((c) => {
+        if (!c.checked) next.push(c.getAttribute("data-op")!);
       });
       await saveSetting("disabledTools", next);
     });
@@ -125,7 +129,7 @@ function renderToolsGrid(disabledTools: any) {
 
 async function refreshAllowlist() {
   const resp = await send({ type: "get_allowlist" });
-  const list = resp?.list || [];
+  const list = (resp?.list as string[]) || [];
   const box = $("site-list");
   if (list.length === 0) {
     box.innerHTML = `<div class="empty">还没有允许任何站点。</div>`;
@@ -133,14 +137,14 @@ async function refreshAllowlist() {
   }
   box.innerHTML = list
     .map(
-      (g: any) =>
+      (g) =>
         `<div class="item"><code>${escapeHtml(g)}</code>` +
         `<button class="danger" data-glob="${escapeAttr(g)}">移除</button></div>`
     )
     .join("");
-  box.querySelectorAll("button").forEach((b: any) => {
+  box.querySelectorAll<HTMLButtonElement>("button").forEach((b) => {
     b.onclick = async () => {
-      const glob = b.getAttribute("data-glob");
+      const glob = b.getAttribute("data-glob")!;
       await send({ type: "remove_allow", glob });
       refreshAllowlist();
       flashToast("已移除");
@@ -152,7 +156,7 @@ async function refreshAllowlist() {
 // chrome.permissions.request outside a user-gesture action context, so the
 // actual host permission is requested on first visit via ensureAllowed().
 function wireAddSite() {
-  const input = $("new-site");
+  const input = $<HTMLInputElement>("new-site");
   const btn = $("add-site");
   async function add() {
     const v = input.value.trim();
@@ -176,35 +180,34 @@ function wireAddSite() {
       refreshAllowlist();
       flashToast("已添加");
     } else {
-      flashToast((resp && resp.error) || "添加失败");
+      flashToast((resp?.error as string) || "添加失败");
     }
   }
   btn.onclick = add;
-  input.addEventListener("keydown", (e: any) => {
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter") add();
   });
 }
 
 // ---- helpers --------------------------------------------------------------
 
-function send(msg: any): Promise<any> {
+function send(msg: object): Promise<Record<string, unknown> | undefined> {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(msg, (resp) => resolve(resp));
   });
 }
-function escapeHtml(s: any) {
-  return String(s).replace(
-    /[&<>"']/g,
-    (c) =>
-      (
-        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }) as Record<
-          string,
-          string
-        >
-      )[c]
-  );
+
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+function escapeHtml(s: string) {
+  return String(s).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
-function escapeAttr(s: any) {
+function escapeAttr(s: string) {
   return escapeHtml(s);
 }
 
@@ -219,8 +222,8 @@ function escapeAttr(s: any) {
     "evalMask",
     "confirmHighRiskClick",
     "warnPreciseSnapshot",
-  ]) {
-    const input = $(key);
+  ] as (keyof Settings)[]) {
+    const input = $<HTMLInputElement>(key);
     input.checked = s[key] !== false;
     const warn = $(`${key}-warn`);
     if (warn) warn.style.display = input.checked ? "none" : "block";
@@ -235,7 +238,7 @@ function escapeAttr(s: any) {
   {
     const held = await chrome.permissions.contains({ origins: ["<all_urls>"] });
     const effective = s.allowAllSites === true && held;
-    const input = $("allowAllSites");
+    const input = $<HTMLInputElement>("allowAllSites");
     input.checked = effective;
     // Persist the effective value in case they had drifted.
     if (effective !== (s.allowAllSites === true)) {
@@ -249,9 +252,13 @@ function escapeAttr(s: any) {
   }
 
   // Number fields.
-  for (const key of ["confirmGraceMs", "clickToastTimeoutMs", "evalToastTimeoutMs"]) {
-    const input = $(key);
-    input.value = s[key];
+  for (const key of [
+    "confirmGraceMs",
+    "clickToastTimeoutMs",
+    "evalToastTimeoutMs",
+  ] as (keyof Settings)[]) {
+    const input = $<HTMLInputElement>(key);
+    input.value = String(s[key]);
     renderNumber(key);
   }
 
