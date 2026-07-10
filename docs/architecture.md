@@ -140,11 +140,19 @@ interface BridgeResp {
 | 源文件(`src/`) | 产物(`dist/`) | 职责 |
 |------|------|------|
 | `manifest.json`(静态,拷入 dist) | `manifest.json` | MV3;permissions=[tabs,scripting,storage,nativeMessaging];**无静态 host_permissions**(全走 optional 按需申请) |
-| `background.ts` | `background.js` | SW:native port 管理 + 自动重连 + 请求分发到 content script + 白名单 + screenshot 代理 + **page_snapshot_precise**(chrome.debugger + CDP 链路) + **cookie_get**(chrome.cookies API) |
-| `content.ts` | `content.js` | DOM 遍历(snapshot)/click/fill/scroll/wait + Toast UI + 脱敏;**page_eval**(Function 构造器执行 + 序列化 + 脱敏 + 放大版 Toast);**storage_get**(页面 localStorage/sessionStorage);**动态注入**(非 manifest content_scripts) |
+| `background.ts` | `background.js` | SW **入口**(约 20 行):注册 onMessage 路由 + 启动时 connectNative。真实逻辑在 `src/background/*`(见下) |
+| `content.ts` | `content.js` | content script **入口**(约 30 行):重注入 guard + onMessage 监听 → `handle`。真实逻辑在 `src/content/*`(见下) |
 | `options.ts` + `options.html` | `options.js` + `options.html` | 独立 Options 配置页(详见 [ADR-0011](./adr/0011-options-page-for-settings.md)) |
 | `popup.ts` + `popup.html` | `popup.js` + `popup.html` | 授权 UI:显示连接状态、白名单(可撤销)、待授权请求的 Allow/Deny |
 | `toast.css`(静态,拷入 dist) | `toast.css` | 高危确认 Toast 样式 |
+
+**模块化结构**:两个巨型文件已拆成内聚模块,esbuild 会把 import 重新打包回单个 IIFE,运行时行为不变(靠 dom_test 77 / smoke / e2e 验证)。
+
+- `src/shared/`(两端共用,纯逻辑,有单元测试)— `types`(桥接/消息/设置类型)、`settings`(DEFAULTS + getSetting)、`masking`(脱敏 pattern 目录)、`allowlist`(glob 匹配/域名归一)、`ops`(工具目录,单测校验与 `tools.rs` 一致)
+- `src/background/` — `port`(native 端口生命周期)、`dispatch`(BridgeReq 路由 + 工具禁用门)、`tabs`(目标 tab 解析/注入 + tab_* 工具)、`precise`(page_snapshot_precise / CDP)、`cookies`(cookie_get)、`allowlist-store`(存储白名单 + 授权流)、`messages`(runtime.onMessage 路由)
+- `src/content/` — `refs`(封装的 ref 状态)、`snapshot`(a11y 树)、`actions`(click/fill/text/screenshot/scroll)、`wait`、`eval`、`storage`、`toast`、`handle`(op 分发)
+
+依赖是无环 DAG:`shared/*` → `background/allowlist-store` → `tabs` → `precise`/`cookies` → `dispatch` → `port` → `messages`;content 侧 `shared/*`/`util` → `refs`/`snapshot` → `toast` → `actions`/`eval` → `handle`。单元测试(`src/shared/*.test.ts`,bun)覆盖纯模块,含一条跨语言守卫(op 列表须与 `tools.rs` 一致)。
 
 ### 4.3 安装产物(`~/.browser-bridge/` + Chrome 目录)
 
