@@ -23,7 +23,7 @@ export async function setAllowlist(list: string[]) {
   await chrome.storage.local.set({ [STORAGE_KEY]: list });
 }
 
-export async function ensureDomainAllowed(domain: any) {
+export async function ensureDomainAllowed(domain: string) {
   const host = normalizeCookieDomain(domain);
   if (!host) throw new Error(`invalid cookie domain: ${domain}`);
   // Global bypass: if the user opted into "allow all sites", skip the

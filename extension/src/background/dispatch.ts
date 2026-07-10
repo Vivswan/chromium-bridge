@@ -2,14 +2,14 @@
 // run here in the SW; page-level ops are forwarded to the target tab's content
 // script (injecting it first).
 
-import type { BridgeReq } from "../shared/types";
+import type { BridgeReq, PageResponse } from "../shared/types";
 import { getSetting } from "../shared/settings";
 import { ensureAllowed } from "./allowlist-store";
 import { resolveTargetTab, injectIfNeeded, tabList, tabFocus, tabOpen, tabClose } from "./tabs";
 import { snapshotPrecise } from "./precise";
 import { cookieGet } from "./cookies";
 
-export async function dispatch(req: BridgeReq): Promise<any> {
+export async function dispatch(req: BridgeReq): Promise<unknown> {
   const { op, args } = req;
 
   // Tool enable/disable gate: if the op is in the user's disabledTools list,
@@ -22,16 +22,17 @@ export async function dispatch(req: BridgeReq): Promise<any> {
     }
   }
 
-  // Tab-level ops handled directly here (no content script needed).
+  // Tab-level ops handled directly here (no content script needed). The `!`
+  // assertions reflect the Rust side's JSON-schema validation of required args.
   switch (op) {
     case "tab_list":
       return await tabList();
     case "tab_focus":
-      return await tabFocus(args.tabId);
+      return await tabFocus(args.tabId!);
     case "tab_open":
-      return await tabOpen(args.url);
+      return await tabOpen(args.url!);
     case "tab_close":
-      return await tabClose(args.tabId);
+      return await tabClose(args.tabId!);
     case "page_snapshot_precise":
       // Handled in SW via chrome.debugger; does NOT go through content.js.
       return await snapshotPrecise(req.tabId, args);
@@ -45,7 +46,11 @@ export async function dispatch(req: BridgeReq): Promise<any> {
   await ensureAllowed(tab.url);
   await injectIfNeeded(tab.id!);
   // content.js listens for these and replies.
-  const resp: any = await chrome.tabs.sendMessage(tab.id!, { op, args, tabId: tab.id });
+  const resp = (await chrome.tabs.sendMessage(tab.id!, {
+    op,
+    args,
+    tabId: tab.id,
+  })) as PageResponse;
   if (resp && resp.__error) throw new Error(resp.__error);
   return resp;
 }

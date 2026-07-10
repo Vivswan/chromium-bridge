@@ -5,9 +5,36 @@
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach. See ADR-0009.
 
+import type { OpArgs, PageResponse } from "../shared/types";
 import { getSetting } from "../shared/settings";
 import { ensureAllowed } from "./allowlist-store";
 import { resolveTargetTab, injectIfNeeded } from "./tabs";
+
+// The subset of the CDP payloads we actually read (not the full protocol).
+interface AXValueLike {
+  value?: unknown;
+}
+interface AXNode {
+  ignored?: boolean;
+  backendDOMNodeId?: number;
+  role?: AXValueLike;
+  name?: AXValueLike;
+}
+interface AXTreeResult {
+  nodes?: AXNode[];
+}
+interface ResolveNodeResult {
+  object?: { objectId?: string };
+}
+interface NodeDescriptor {
+  tag?: string;
+  id?: string;
+  name?: string;
+  value?: string;
+}
+interface CallFunctionResult {
+  result?: { value?: NodeDescriptor };
+}
 
 // URLs the debugger cannot attach to. Filter before calling attach.
 const NON_DEBUGGABLE = [
@@ -40,12 +67,16 @@ function dbgDetach(tabId: number) {
     chrome.debugger.detach({ tabId }, () => resolve());
   });
 }
-function dbgSend(tabId: number, method: string, params: any = {}): Promise<any> {
+function dbgSend<T = unknown>(
+  tabId: number,
+  method: string,
+  params: Record<string, unknown> = {}
+): Promise<T> {
   return new Promise((resolve, reject) => {
     chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
       const err = chrome.runtime.lastError;
       if (err) reject(new Error(err.message));
-      else resolve(result);
+      else resolve(result as T);
     });
   });
 }
@@ -73,13 +104,13 @@ const PRECISE_INTERACTIVE_ROLES = new Set([
   "slider",
 ]);
 
-function axValue(v: any): any {
+function axValue(v: AXValueLike | undefined): unknown {
   // AXValue shapes: {type:"string", value:"..."} or plain value.
   if (v && typeof v === "object" && "value" in v) return v.value;
   return v;
 }
 
-export async function snapshotPrecise(maybeTabId: number | undefined, _args: any) {
+export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpArgs) {
   const tab = await resolveTargetTab(maybeTabId);
   await ensureAllowed(tab.url);
 
@@ -93,7 +124,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: any
   // they actively cancel within the timeout. Skippable via settings.
   const warnPrecise = await getSetting("warnPreciseSnapshot");
   await injectIfNeeded(tab.id!);
-  let proceed: any = true; // default: proceed (skip warning)
+  let proceed: boolean | PageResponse = true; // default: proceed (skip warning)
   if (warnPrecise) {
     proceed = await chrome.tabs
       .sendMessage(tab.id!, {
@@ -104,19 +135,19 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: any
       })
       .catch(() => true /* content script missing → proceed anyway */);
   }
-  if (proceed === false || (proceed && proceed.__cancelled)) {
+  if (proceed === false || (proceed && (proceed as PageResponse).__cancelled)) {
     return { cancelled: true };
   }
-  if (proceed && proceed.__error) {
+  if (proceed && (proceed as PageResponse).__error) {
     // Info toast failed (e.g. restricted page); proceed without warning.
-    console.warn("[bb] info toast failed:", proceed.__error);
+    console.warn("[bb] info toast failed:", (proceed as PageResponse).__error);
   }
 
   // Attach. On "another debugger attached" we surface a helpful error.
   try {
     await dbgAttach(tab.id!);
-  } catch (e: any) {
-    const msg = String(e.message || e);
+  } catch (e) {
+    const msg = String((e as Error).message || e);
     if (/another debugger/i.test(msg)) {
       throw new Error(
         "该标签页已打开 DevTools,page_snapshot_precise 无法附加。请关闭 DevTools 后重试。"
@@ -127,16 +158,16 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: any
 
   // From here on we MUST detach on every exit path.
   try {
-    const tree = await dbgSend(tab.id!, "Accessibility.getFullAXTree", {});
-    const nodes = (tree && tree.nodes) || [];
+    const tree = await dbgSend<AXTreeResult>(tab.id!, "Accessibility.getFullAXTree", {});
+    const nodes = tree.nodes ?? [];
 
     // Filter: only interactive, non-ignored nodes with a DOM handle.
-    const candidates = nodes.filter((n: any) => {
+    const candidates = nodes.filter((n) => {
       if (n.ignored) return false;
       if (!n.backendDOMNodeId) return false; // virtual nodes (markers, root)
       const role = axValue(n.role);
       if (!role) return false;
-      if (!PRECISE_INTERACTIVE_ROLES.has(role)) return false;
+      if (!PRECISE_INTERACTIVE_ROLES.has(role as string)) return false;
       return true;
     });
 
@@ -149,15 +180,15 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: any
     for (const n of candidates) {
       idx += 1;
       const ref = `p${idx}`;
-      let descriptor: any;
+      let descriptor: NodeDescriptor;
       try {
-        const resolved = await dbgSend(tab.id!, "DOM.resolveNode", {
+        const resolved = await dbgSend<ResolveNodeResult>(tab.id!, "DOM.resolveNode", {
           backendNodeId: n.backendDOMNodeId,
         });
-        const objectId = resolved && resolved.object && resolved.object.objectId;
+        const objectId = resolved.object?.objectId;
         if (!objectId) continue;
         // Tag the element AND read back a selector/id hint in one call.
-        const callRes = await dbgSend(tab.id!, "Runtime.callFunctionOn", {
+        const callRes = await dbgSend<CallFunctionResult>(tab.id!, "Runtime.callFunctionOn", {
           objectId,
           functionDeclaration:
             "function(ref) {" +
@@ -170,10 +201,10 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: any
           arguments: [{ value: ref }],
           returnByValue: true,
         });
-        descriptor = (callRes && callRes.result && callRes.result.value) || {};
-      } catch (e: any) {
+        descriptor = callRes.result?.value ?? {};
+      } catch (e) {
         // Node may have been removed between getFullAXTree and resolve.
-        console.warn("[bb] precise: skip node", ref, e.message);
+        console.warn("[bb] precise: skip node", ref, (e as Error).message);
         continue;
       }
       out.push({
@@ -200,7 +231,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: any
 function truncateUrl(u: string | undefined) {
   return (u || "").slice(0, 80);
 }
-function truncateAx(s: any): any {
+function truncateAx(s: unknown): unknown {
   if (typeof s !== "string") return s;
   return s.length > 120 ? s.slice(0, 120) + "…" : s;
 }

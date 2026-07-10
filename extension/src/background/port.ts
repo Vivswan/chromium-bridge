@@ -2,6 +2,7 @@
 // and Chrome kills the host process whenever the port closes, so we reconnect
 // automatically on startup and after any disconnect.
 
+import type { BridgeReq } from "../shared/types";
 import { dispatch } from "./dispatch";
 
 const NATIVE_HOST = "com.browser_bridge.host";
@@ -52,8 +53,9 @@ function scheduleReconnect() {
   }, 2000);
 }
 
-function onNativeMessage(msg: any) {
-  // Each message is a BridgeReq: { id, op, tabId?, args }.
+function onNativeMessage(msg: BridgeReq) {
+  // Each message is a BridgeReq: { id, op, tabId?, args }. Guard defensively —
+  // it crosses the native-messaging boundary.
   if (!msg || typeof msg.id === "undefined" || !msg.op) {
     console.warn("[bb] malformed BridgeReq", msg);
     return;
@@ -64,7 +66,7 @@ function onNativeMessage(msg: any) {
   );
 }
 
-function sendResponse(id: any, ok: boolean, data?: any, error?: string) {
+function sendResponse(id: number | string, ok: boolean, data?: unknown, error?: string) {
   if (!port) return; // host gone; nothing to do
   try {
     port.postMessage({ id, ok, data, error: ok ? undefined : error });

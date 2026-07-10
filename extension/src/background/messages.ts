@@ -2,10 +2,11 @@
 // (allowlist approve/add/remove/list, connection status) and the content
 // script's screenshot proxy. Registering this module installs the listener.
 
+import type { RuntimeMsg } from "../shared/types";
 import { getAllowlist, resolvePendingAllow, addAllow, removeAllow } from "./allowlist-store";
 import { isNativeConnected } from "./port";
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: RuntimeMsg, _sender, sendResponse) => {
   if (msg?.type === "resolve_allow") {
     resolvePendingAllow(msg.id, msg.allow).then((r) => sendResponse(r));
     return true; // async
@@ -33,7 +34,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === "capture_visible_tab") {
     // Content scripts can't call chrome.tabs.captureVisibleTab; proxy here.
-    chrome.tabs.captureVisibleTab(undefined as any, { format: "png" }, (dataUrl) => {
+    // The (options, callback) overload captures the active tab of the current
+    // window — no windowId needed.
+    chrome.tabs.captureVisibleTab({ format: "png" }, (dataUrl) => {
       if (chrome.runtime.lastError) {
         sendResponse({ error: chrome.runtime.lastError.message });
       } else {

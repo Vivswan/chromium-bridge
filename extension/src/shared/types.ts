@@ -25,7 +25,7 @@ export interface BridgeReq {
   id: number | string;
   op: string;
   tabId?: number;
-  args: any;
+  args: OpArgs;
 }
 
 // The response posted back to the native host over the Port.
@@ -37,8 +37,9 @@ export interface BridgeResp {
 }
 
 // Arguments an op may carry. Every field is optional — each handler reads the
-// ones it needs (and validates them at runtime). Covers both content-script and
-// tab-level ops.
+// ones it needs (and validates them at runtime; the Rust side enforces the
+// required ones per each tool's JSON schema). Covers both content-script ops
+// and the tab-level / cookie ops handled in the service worker.
 export interface OpArgs {
   ref?: string;
   selector?: string;
@@ -52,6 +53,12 @@ export interface OpArgs {
   type?: string;
   key?: string;
   message?: string;
+  // tab-level / cookie ops (service worker)
+  tabId?: number;
+  url?: string;
+  domain?: string;
+  name?: string;
+  frameId?: string;
 }
 
 // The { op, args } envelope content.ts receives via chrome.runtime.onMessage.
@@ -60,3 +67,22 @@ export interface ContentMsg {
   args: OpArgs;
   tabId?: number;
 }
+
+// The reply a content-script op sends back. Ops return varied payloads, so the
+// known control fields are typed and the rest is left open.
+export interface PageResponse {
+  __error?: string;
+  __cancelled?: boolean;
+  approved?: boolean;
+  [key: string]: unknown;
+}
+
+// Messages the service worker receives from the popup / options page and the
+// content-script screenshot proxy (chrome.runtime.onMessage).
+export type RuntimeMsg =
+  | { type: "resolve_allow"; id: string; allow: boolean }
+  | { type: "get_allowlist" }
+  | { type: "add_allow"; glob: string }
+  | { type: "remove_allow"; glob: string }
+  | { type: "get_status" }
+  | { type: "capture_visible_tab" };

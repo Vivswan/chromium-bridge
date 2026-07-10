@@ -1,6 +1,7 @@
 // Tab resolution, content-script injection, and the tab-level tools
 // (tab_list / tab_focus / tab_open / tab_close).
 
+import type { PageResponse } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 
 export async function resolveTargetTab(maybeTabId: number | undefined): Promise<chrome.tabs.Tab> {
@@ -75,10 +76,10 @@ async function confirmTabClose(tab: chrome.tabs.Tab) {
   }
   await ensureAllowed(tab.url);
   await injectIfNeeded(tab.id);
-  const resp: any = await chrome.tabs.sendMessage(tab.id, {
+  const resp = (await chrome.tabs.sendMessage(tab.id, {
     op: "_confirm_toast",
     args: { message: `Close tab "${tab.title || tab.url}"?` },
-  });
+  })) as PageResponse;
   if (resp && resp.__error) throw new Error(resp.__error);
   if (!resp || resp.approved !== true) {
     throw new Error("user denied tab_close");
