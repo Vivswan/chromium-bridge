@@ -8,7 +8,7 @@ NPM := npm --prefix extension
 
 .PHONY: help build fmt fmt-check lint lint-scripts test-rust test-e2e \
 	ext-deps ext-build ext-typecheck ext-lint ext-format-check ext-test \
-	test-browser test ci install sync-version check-version release
+	test-browser test-integration test ci install sync-version check-version release
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) \
@@ -56,6 +56,9 @@ ext-test: ## Unit-test the extension's shared modules (bun; no browser)
 test-browser: ext-build ## DOM + smoke tests (needs bun + Chrome; builds first)
 	cd tests && bun dom_test.ts
 	bun tests/ext_test.ts
+
+test-integration: build ext-build ## Real E2E integration (opt-in; real binary + Chrome + extension)
+	BB_REAL_E2E=1 bun tests/integration_e2e.ts
 
 test: test-rust test-e2e ## All tests that run without a browser
 

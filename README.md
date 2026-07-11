@@ -167,8 +167,8 @@ Then:
 
 ## Testing
 
-Two independent test suites, run together with
-`./tests/run_all.sh`:
+Independent suites across two languages (see [tests/README.md](./tests/README.md)
+for why), run together with `./tests/run_all.sh`:
 
 **Protocol layer** — `tests/e2e.py` (45 assertions). Drives the real release
 binary as subprocesses: MCP server over JSON-RPC/stdio, `--native-host` mode
@@ -188,8 +188,19 @@ stability (SPA case). This suite has caught two real bugs in content.js:
 `isVisible` missing aria-hidden ancestors, and `assignRef` reusing refs that
 collided with newly-inserted elements' refs on re-snapshot.
 
-Requirements: Rust (cargo) for the build, Python 3, and (for DOM tests) bun +
-Chrome. `run_all.sh` skips DOM tests gracefully if bun/Chrome are missing.
+**Smoke** — `tests/ext_test.ts` (bun + puppeteer). Launches real Chrome with
+`extension/dist/` loaded and checks the MV3 service worker boots.
+
+**Real integration** (opt-in) — `tests/integration_e2e.ts`. Closes the seam the
+others mock: the real MCP server ↔ real extension round-trip over native
+messaging (MCP client → binary → native host → extension → `chrome.tabs` →
+back). Run with `BB_REAL_E2E=1 bun tests/integration_e2e.ts` (or
+`just test-integration`); macOS + Chrome, non-headless. See
+[tests/README.md](./tests/README.md) for the language split and details.
+
+Requirements: Rust (cargo) for the build, Python 3, and (for the browser
+suites) bun + Chrome. `run_all.sh` skips browser tests gracefully if bun/Chrome
+are missing.
 
 ## Project layout
 

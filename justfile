@@ -64,6 +64,11 @@ test-browser: ext-build
     cd tests && bun dom_test.ts
     bun tests/ext_test.ts
 
+# Real end-to-end integration (opt-in; real binary + real Chrome + extension).
+# For full isolation, quit Chrome first or set CHROME_BIN to a separate Chromium.
+test-integration: build ext-build
+    BB_REAL_E2E=1 bun tests/integration_e2e.ts
+
 # ---- aggregates -----------------------------------------------------------
 
 # All tests that run without a browser
