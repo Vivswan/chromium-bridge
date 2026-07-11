@@ -2,7 +2,7 @@
 # Propagate the crate version (Cargo.toml, the source of truth) into the
 # extension manifest and package files, then verify consistency.
 #
-# Usage: bump the version in Cargo.toml, then run `just sync-version`
+# Usage: bump the version in Cargo.toml, then run `make sync-version`
 # (or ./scripts/sync-version.sh) and commit the result.
 set -euo pipefail
 

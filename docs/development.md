@@ -13,9 +13,8 @@ release process. For *why* the project is structured the way it is, see
 | Python 3 | protocol e2e tests | stdlib only |
 | bun | DOM-layer tests | runs `tests/dom_test.ts` |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
-| [`just`](https://github.com/casey/just) | task runner (optional) | every recipe is a plain command you can also run by hand |
-| `make` | task runner (optional) | `Makefile` mirrors the justfile; use whichever you have (`make help`) |
-| [`shellcheck`](https://www.shellcheck.net/) | linting the shell scripts (optional) | `just lint-scripts`; CI gates it |
+| `make` | task runner (optional) | `Makefile` collects every dev task; `make help` lists them. Each recipe is a plain command you can also run by hand |
+| [`shellcheck`](https://www.shellcheck.net/) | linting the shell scripts (optional) | `make lint-scripts`; CI gates it |
 
 ## Layout
 
@@ -33,24 +32,23 @@ scripts/             lib.sh (shared helpers) + check-version.sh, sync-version.sh
 Shell scripts (`install.sh`, `scripts/*.sh`, `tests/run_all.sh`) share
 `scripts/lib.sh` (sourced) for cargo discovery and version parsing — edit the
 candidate list or parsing in one place. They're `shellcheck`-clean (CI gates
-it; `just lint-scripts` locally).
+it; `make lint-scripts` locally).
 
 ## Common tasks
 
-With `just` (or `make` — the `Makefile` mirrors these recipes 1:1, e.g.
-`make ci`, `make test`, `make help`):
+With `make` (`make help` lists every target):
 
 ```sh
-just build          # cargo build --release
-just test           # rust unit tests + protocol e2e
-just test-browser   # build the extension, then DOM + smoke tests (needs bun + Chrome)
-just ci             # everything CI runs, minus the browser job
-just ext-build      # bundle the extension (src/ → dist/)
-just fmt            # cargo fmt
-just install        # build + install binary + host manifest
+make build          # cargo build --release
+make test           # rust unit tests + protocol e2e
+make test-browser   # build the extension, then DOM + smoke tests (needs bun + Chrome)
+make ci             # everything CI runs, minus the browser job
+make ext-build      # bundle the extension (src/ → dist/)
+make fmt            # cargo fmt
+make install        # build + install binary + host manifest
 ```
 
-Without `just`, the equivalents:
+Or run the underlying commands directly:
 
 ```sh
 cargo build --release
@@ -116,10 +114,10 @@ BB_LOG=error browser-bridge          # quiet
 ```sh
 # 1. bump the version in Cargo.toml
 # 2. propagate it to the extension manifest + package files
-just sync-version        # ./scripts/sync-version.sh
+make sync-version        # ./scripts/sync-version.sh
 # 3. update CHANGELOG.md (move [Unreleased] items under the new version)
 # 4. gate on a clean tree
-just release             # check-version + full ci
+make release             # check-version + full ci
 # 5. tag
 git tag vX.Y.Z && git push --tags
 ```

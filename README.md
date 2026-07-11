@@ -195,7 +195,7 @@ collided with newly-inserted elements' refs on re-snapshot.
 others mock: the real MCP server ↔ real extension round-trip over native
 messaging (MCP client → binary → native host → extension → `chrome.tabs` →
 back). Run with `BB_REAL_E2E=1 bun tests/integration_e2e.ts` (or
-`just test-integration`); macOS + Chrome, non-headless. See
+`make test-integration`); macOS + Chrome, non-headless. See
 [tests/README.md](./tests/README.md) for the language split and details.
 
 Requirements: Rust (cargo) for the build, Python 3, and (for the browser

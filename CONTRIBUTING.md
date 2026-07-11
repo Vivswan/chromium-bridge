@@ -15,12 +15,10 @@ for preserving the safety model.
 
 1. Branch off `main`.
 2. Make your change with a matching test where practical.
-3. Run the full gate locally (`just` or `make` — the Makefile mirrors the
-   justfile):
+3. Run the full gate locally (`make help` lists all targets):
    ```sh
-   just ci            # rust fmt/clippy/test + extension typecheck/lint/format/build + protocol e2e
-   just test-browser  # DOM + smoke tests (needs bun + Chrome)
-   # or: make ci && make test-browser
+   make ci            # rust fmt/clippy/test + extension typecheck/lint/format/build + protocol e2e
+   make test-browser  # DOM + smoke tests (needs bun + Chrome)
    ```
 4. Keep commits focused; write a clear message explaining the *why*.
 5. Open a PR. CI (`.github/workflows/ci.yml`) must be green.
@@ -51,7 +49,7 @@ A new tool touches both sides (see architecture.md §10):
 
 ## Versioning
 
-`Cargo.toml` is the source of truth. Bump it, run `just sync-version`, and update
+`Cargo.toml` is the source of truth. Bump it, run `make sync-version`, and update
 `CHANGELOG.md`. CI fails if the crate and extension versions drift.
 
 ## License

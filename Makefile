@@ -1,6 +1,6 @@
-# browser-bridge developer tasks — a `make` mirror of the justfile, so you can
-# work without installing `just`. Keep the two in sync when adding a task.
+# browser-bridge developer tasks. `make help` lists them.
 # Requires: cargo, python3. Optional: bun + Chrome (browser tests), shellcheck.
+# Every recipe is a plain command you can also run by hand (see docs/development.md).
 
 NPM := npm --prefix extension
 

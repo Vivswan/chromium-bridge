@@ -1,8 +1,14 @@
-# ADR-0013:统一工具链与 CI(justfile + GitHub Actions + 版本单源)
+# ADR-0013:统一工具链与 CI(任务入口 + GitHub Actions + 版本单源)
 
-- **状态**:Accepted
+- **状态**:Accepted(任务入口部分后续修订:justfile → Makefile-only)
 - **日期**:2026-07-10
 - **决策者**:用户 + AI 助手
+
+> **修订note**:本 ADR 原采用 **justfile** 作为任务入口,并曾为此加了一个 1:1 镜像的
+> `Makefile`(供无 `just` 环境使用)。两个任务运行器手工同步、存在漂移风险,后续**收敛为
+> 只保留 `Makefile`**(零安装、无需 `cargo install just`),`justfile` 已删除。下文凡提
+> `justfile` / `just <recipe>` 均改由 `Makefile` / `make <target>` 提供,recipe 名称与聚合
+> (`make ci` 等)不变;CI、门禁、版本同步等其余决策不受影响。
 
 ## 背景
 

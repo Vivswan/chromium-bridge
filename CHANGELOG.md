@@ -10,7 +10,7 @@ Engineering-standardization overhaul (no user-facing behavior change to the
 tools themselves; the extension now ships from a build step).
 
 ### Added
-- Unified `justfile` task runner (`build`, `fmt`, `lint`, `test`, `ci`,
+- Unified `Makefile` task runner (`build`, `fmt`, `lint`, `test`, `ci`,
   `ext-*`, `install`).
 - Rust unit tests for the protocol framing, bridge envelope, lock file, tool
   schemas, and error display.

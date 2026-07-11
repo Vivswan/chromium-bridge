@@ -29,8 +29,7 @@ npm run test:smoke             # smoke   — bun + Chrome (BB_EXT_DIR overrides 
 ```
 
 The browser suites read the **built** bundle, so build the extension first
-(`npm --prefix ../extension run build`); `run_all.sh` / `just` / `make` do this
-for you.
+(`npm --prefix ../extension run build`); `run_all.sh` and `make` do this for you.
 
 ## Types
 
@@ -57,7 +56,7 @@ and restoring any existing one), and drives a `tab_list` call all the way to
 `chrome.tabs.query` and back.
 
 ```sh
-BB_REAL_E2E=1 bun integration_e2e.ts     # or: just test-integration
+BB_REAL_E2E=1 bun integration_e2e.ts     # or: make test-integration
 ```
 
 - **Opt-in** (skips unless `BB_REAL_E2E=1`), macOS + Google Chrome only, and
