@@ -29,7 +29,14 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.path.join(REPO, "target", "release", "browser-bridge")
-LOCK = os.path.expanduser("~/Library/Application Support/browser-bridge/run.lock")
+# Mirror the binary's LockFile::path() (src/ipc.rs): prefer $XDG_RUNTIME_DIR
+# (Linux/CI), else the macOS Application Support path.
+_XDG = os.environ.get("XDG_RUNTIME_DIR")
+LOCK = (
+    os.path.join(_XDG, "browser-bridge.lock")
+    if _XDG
+    else os.path.expanduser("~/Library/Application Support/browser-bridge/run.lock")
+)
 
 _passed = 0
 _failed = 0
@@ -57,12 +64,20 @@ def ensure_binary():
                            os.path.join(REPO, "Cargo.toml")], env=env)
 
 
-def wait_lock(timeout=5):
+def wait_lock(proc=None, timeout=8):
+    """Wait for the lock file and return its contents. If `proc` is given,
+    require the lock to belong to it (lock["pid"] == proc.pid) — this ignores a
+    stale lock from a previous test's server that hasn't finished exiting, which
+    would otherwise point us at a dead port. Tolerates transient read errors."""
     t0 = time.time()
     while time.time() - t0 < timeout:
-        if os.path.exists(LOCK):
+        try:
             with open(LOCK) as f:
-                return json.load(f)
+                lf = json.load(f)
+            if proc is None or lf.get("pid") == proc.pid:
+                return lf
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
         time.sleep(0.05)
     return None
 
@@ -156,7 +171,7 @@ def test_mcp_handshake_and_tools():
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     try:
-        lf = wait_lock()
+        lf = wait_lock(mcp)
         check(lf is not None, "lock file written on startup")
         c = McpClient(mcp)
         init = c.initialize()
@@ -203,7 +218,7 @@ def test_tab_list_round_trip():
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     try:
-        lf = wait_lock()
+        lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
 
         def responder(req):
@@ -246,7 +261,7 @@ def test_page_eval_round_trip():
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     try:
-        lf = wait_lock()
+        lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
 
         captured = {}
@@ -295,7 +310,7 @@ def test_page_snapshot_precise_round_trip():
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     try:
-        lf = wait_lock()
+        lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
         captured = {}
 
@@ -352,7 +367,7 @@ def test_cookie_get_round_trip():
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     try:
-        lf = wait_lock()
+        lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
         captured = {}
 
@@ -408,7 +423,7 @@ def test_storage_get_round_trip():
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     try:
-        lf = wait_lock()
+        lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
         captured = {}
 
@@ -457,7 +472,7 @@ def test_native_host_mode():
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     try:
-        lf = wait_lock()
+        lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
         # Launch --native-host the way Chrome would. Pass a fake origin as argv[1].
         # Binary mode (no text=True) since NM framing is raw bytes.

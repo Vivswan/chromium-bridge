@@ -106,4 +106,6 @@ jobs:
       - name: Extension smoke test
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        run: bun tests/ext_test.ts
+        # The smoke test needs a non-headless browser (MV3 SW reliability), so
+        # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
+        run: xvfb-run -a bun tests/ext_test.ts
