@@ -35,9 +35,11 @@ jobs:
       - name: Verify tag matches Cargo version
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${TAG#v}"          # strip leading v
+          CORE="${VER%%-*}"       # strip any -dev/-rc pre-release suffix
           CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          echo "tag=$TAG cargo=$CARGO_VER"
-          [ "${TAG#v}" = "$CARGO_VER" ] || { echo "tag ${TAG#v} != Cargo version $CARGO_VER"; exit 1; }
+          echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
+          [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
 
       - name: Build binary
         run: cargo build --release
@@ -70,3 +72,5 @@ jobs:
             ${{ steps.pkg.outputs.name }}.tar.gz.sha256
           fail_on_unmatched_files: true
           generate_release_notes: true
+          # any tag with a suffix (v0.1.0-dev, -rc.1, …) is a prerelease
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
