@@ -399,7 +399,16 @@ fn build_storage_get(args: &Value) -> Value {
     Value::Object(payload)
 }
 
-pub fn dispatch(session: &Session, name: &str, args: &Value) -> (Value, bool) {
+/// The result of dispatching one tool call: the MCP content blocks, whether it
+/// is an error, and — on error — the stable taxonomy code (contracts/errors.json)
+/// so the caller can record it in the audit trail without re-parsing the text.
+pub struct Outcome {
+    pub content: Value,
+    pub is_error: bool,
+    pub error_code: Option<&'static str>,
+}
+
+pub fn dispatch(session: &Session, name: &str, args: &Value) -> Outcome {
     let result = match HANDLERS.iter().find(|h| h.name == name) {
         Some(h) => call(session, name, None, (h.build_payload)(args)),
         None => Err(CallError::UnknownTool(name.to_string())),
@@ -411,25 +420,31 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> (Value, bool) {
             // block so the model sees the picture directly.
             if name == "page_screenshot" {
                 if let Some(png_b64) = data.get("image").and_then(|v| v.as_str()) {
-                    return (
-                        json!([{
+                    return Outcome {
+                        content: json!([{
                             "type": "image",
                             "data": png_b64,
                             "mimeType": "image/png"
                         }]),
-                        false,
-                    );
+                        is_error: false,
+                        error_code: None,
+                    };
                 }
             }
-            (json!([{ "type": "text", "text": data.to_string() }]), false)
+            Outcome {
+                content: json!([{ "type": "text", "text": data.to_string() }]),
+                is_error: false,
+                error_code: None,
+            }
         }
-        Err(e) => (
+        Err(e) => Outcome {
             // Prefix the stable cross-process code (contracts/errors.json) so
             // clients can branch programmatically, while the text stays
             // human-readable. isError stays true.
-            json!([{ "type": "text", "text": format!("Error [{}]: {e}", e.code()) }]),
-            true,
-        ),
+            content: json!([{ "type": "text", "text": format!("Error [{}]: {e}", e.code()) }]),
+            is_error: true,
+            error_code: Some(e.code()),
+        },
     }
 }
 
