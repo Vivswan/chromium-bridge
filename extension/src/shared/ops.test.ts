@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { OP_NAMES, TOOLS } from "./ops";
+import { OP_NAMES, TOOL_META, TOOLS } from "./ops";
 
 describe("ops catalogue", () => {
   test("op names are unique", () => {
@@ -28,5 +28,33 @@ describe("ops catalogue", () => {
     );
     expect(OP_NAMES).toEqual(names);
     for (const t of TOOLS) expect(t.desc).toBe(labels[t.op]);
+  });
+
+  // TOOL_META is generated from the same contract; assert the policy metadata
+  // (risk / scope / permission / confirmation) matches tool-for-tool.
+  test("TOOL_META matches contracts/tools.json (the source)", () => {
+    const contract = JSON.parse(
+      readFileSync(resolve(import.meta.dir, "../../../contracts/tools.json"), "utf8")
+    ) as {
+      tools: {
+        name: string;
+        risk: string;
+        scope: string;
+        permission: string;
+        confirmation: string;
+      }[];
+    };
+
+    // Same set of ops, no extras on either side.
+    expect(Object.keys(TOOL_META).sort()).toEqual(contract.tools.map((t) => t.name).sort());
+
+    for (const t of contract.tools) {
+      expect(TOOL_META[t.name]).toEqual({
+        risk: t.risk,
+        scope: t.scope,
+        permission: t.permission,
+        confirmation: t.confirmation,
+      });
+    }
   });
 });
