@@ -170,11 +170,24 @@ fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             let params = msg.params.clone().unwrap_or(Value::Null);
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+            // Correlate every invocation with a per-call request id and record a
+            // structured audit event (tool, outcome, taxonomy code, duration).
+            let req_id = next_request_id();
+            let started = std::time::Instant::now();
             // Tool errors are returned as a *successful* RPC with isError=true
             // in the result (per MCP spec); only protocol errors use the
             // error field.
-            let (content, is_error) = tools::dispatch(session, name, &args);
-            let result = json!({ "content": content, "isError": is_error });
+            let out = tools::dispatch(session, name, &args);
+            let req_s = req_id.to_string();
+            let dur_s = started.elapsed().as_millis().to_string();
+            crate::log::audit(&[
+                ("req", req_s.as_str()),
+                ("tool", name),
+                ("outcome", if out.is_error { "error" } else { "ok" }),
+                ("code", out.error_code.unwrap_or("-")),
+                ("dur_ms", dur_s.as_str()),
+            ]);
+            let result = json!({ "content": out.content, "isError": out.is_error });
             Some(JsonRpc::ok(id, result))
         }
         // Unknown method → JSON-RPC method-not-found.
@@ -215,6 +228,14 @@ fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
     {
         let _ = f;
     }
+}
+
+/// A monotonic per-call request id, used to correlate audit lines with the
+/// tool invocation they describe. Process-wide; starts at 1.
+fn next_request_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Whether a process with the given pid is alive. Used by the takeover logic.
