@@ -1,0 +1,52 @@
+name: Security-relevant change
+description: Propose a change that touches the security model (NOT for reporting vulnerabilities)
+labels: ["type:security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Reporting a vulnerability?** Do NOT use this — use a private
+        [security advisory](https://github.com/whg517/browser-bridge/security/advisories/new).
+
+        Use this for a *change* that affects permissions, credential access,
+        confirmation, allowlist, masking, bridge auth, or `page_eval`.
+  - type: textarea
+    id: change
+    attributes:
+      label: The change
+      description: What capability/permission/logic changes, and why.
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What does it touch?
+      multiple: true
+      options:
+        - New / broader Chrome or host permission
+        - New sensitive-data read
+        - New write capability
+        - Confirmation logic
+        - Allowlist logic
+        - Masking logic
+        - Native-messaging auth / lock file / run secret
+        - Outbound network or IPC
+        - Widens page_eval
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Trust-boundary impact
+      description: Which boundary moves, and how it stays enforced. (see docs/security/trust-boundaries.md)
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Review checklist
+      options:
+        - label: Tool risk matrix updated
+        - label: Threat model updated (if a boundary moved)
+        - label: ADR added (if a decision was made)
+        - label: Negative security test added

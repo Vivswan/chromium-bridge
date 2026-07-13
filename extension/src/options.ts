@@ -1,8 +1,8 @@
 // options.ts — the extension's options page. Reads/writes chrome.storage.local.
 //
-// All settings live in chrome.storage.local as flat keys. Defaults MUST stay in
-// sync with the DEFAULTS objects in background.ts and content.ts — any key added
-// here must be added there too.
+// All settings live in chrome.storage.local as flat keys. DEFAULTS is the single
+// source of truth in shared/settings.ts — background/content/options all import
+// it; add a new setting there (and to the Settings type), not in three places.
 
 import type { Settings } from "./shared/types";
 import { DEFAULTS } from "./shared/settings";

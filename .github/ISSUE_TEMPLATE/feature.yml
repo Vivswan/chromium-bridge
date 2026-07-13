@@ -1,0 +1,39 @@
+name: Feature / change request
+description: Propose a new tool, capability, or change
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do that you can't today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Rust MCP server
+        - Native host / bridge
+        - Extension (background/content)
+        - Protocol
+        - Installer / release
+        - Docs / CI
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security
+      options:
+        - label: This adds a new tool, permission, credential read, or write capability (if so, file a "Security-relevant change" instead / additionally)
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

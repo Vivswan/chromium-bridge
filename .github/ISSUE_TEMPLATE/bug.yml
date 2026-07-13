@@ -1,0 +1,41 @@
+name: Bug report
+description: Something isn't working
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Actual vs expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Binary (`browser-bridge --help`) + extension version"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: macOS version, Chrome version, CPU arch (arm64/x64), MCP client
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Relevant `BB_LOG=debug` stderr. **Redact any tokens/cookies/secrets.**"
+      render: text

@@ -1,0 +1,14 @@
+# Default owner for everything.
+* @whg517
+
+# Security-critical surfaces — call out explicitly so changes here are obvious
+# in review (see SECURITY.md).
+/src/ipc.rs @whg517
+/src/protocol.rs @whg517
+/extension/src/background/allowlist-store.ts @whg517
+/extension/src/content/eval.ts @whg517
+/extension/src/content/toast.ts @whg517
+/extension/manifest.json @whg517
+/install.sh @whg517
+/SECURITY.md @whg517
+/docs/security/ @whg517
