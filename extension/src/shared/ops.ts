@@ -2,7 +2,8 @@
 // Edit the contract, then run `make gen` (or `node scripts/gen-ops.mjs`).
 //
 // The tool catalogue, JS side: op names + Chinese UI labels for the options
-// page. tools.rs is verified against the same contract in `cargo test`.
+// page, plus policy metadata (risk / scope / permission / confirmation).
+// tools.rs is verified against the same contract in `cargo test`.
 
 export interface ToolInfo {
   op: string;
@@ -29,3 +30,110 @@ export const TOOLS: ToolInfo[] = [
 
 // All op names, for enumeration / consistency checks.
 export const OP_NAMES: string[] = TOOLS.map((t) => t.op);
+
+// Policy metadata, mirrored from the contract. Consumed by the policy layer
+// (background/policy.ts) — kept as plain data so it stays import-side-effect-free.
+export type Risk = "critical" | "high" | "low" | "medium";
+export type Scope = "page" | "tab";
+export type Permission = "cookies" | "debugger" | "scripting" | "tabs";
+export type Confirmation = "every-call" | "high-risk" | "none" | "page-toast" | "warn";
+
+export interface ToolMeta {
+  risk: Risk;
+  scope: Scope;
+  permission: Permission;
+  confirmation: Confirmation;
+}
+
+export const TOOL_META: Record<string, ToolMeta> = {
+  tab_list: {
+    risk: "low",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  tab_focus: {
+    risk: "low",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  tab_open: {
+    risk: "medium",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  tab_close: {
+    risk: "high",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "page-toast",
+  },
+  page_snapshot: {
+    risk: "low",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "none",
+  },
+  page_click: {
+    risk: "high",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "high-risk",
+  },
+  page_fill: {
+    risk: "high",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "none",
+  },
+  page_text: {
+    risk: "medium",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "none",
+  },
+  page_screenshot: {
+    risk: "medium",
+    scope: "page",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  page_scroll: {
+    risk: "low",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "none",
+  },
+  page_wait_for: {
+    risk: "low",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "none",
+  },
+  page_eval: {
+    risk: "critical",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "every-call",
+  },
+  page_snapshot_precise: {
+    risk: "medium",
+    scope: "page",
+    permission: "debugger",
+    confirmation: "warn",
+  },
+  cookie_get: {
+    risk: "high",
+    scope: "tab",
+    permission: "cookies",
+    confirmation: "none",
+  },
+  storage_get: {
+    risk: "high",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "none",
+  },
+};
