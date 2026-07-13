@@ -1,11 +1,36 @@
 # RFC-0002:工具注册表 / Command 模式(Rust)
 
-- **状态**:Proposed(设计提案,尚未实现)
-- **日期**:2026-07-13
-- **相关**:[architecture.md §4.1](../architecture.md)、[contracts/tools.json](../../contracts/tools.json)、[contracts/capabilities.json](../../contracts/capabilities.json)
+- **状态**:Implemented(已落地)
+- **日期**:2026-07-13(提案)/ 2026-07-14(落地)
+- **相关**:[architecture.md §4.1](../architecture.md)、[contracts/tools.json](../../contracts/tools.json)、[contracts/capabilities.json](../../contracts/capabilities.json)、[src/tools.rs](../../src/tools.rs)
 
-> 本文是**设计提案**,不是实现记录。目标是让 `src/tools.rs` 不再是"一个大 match",
-> 而是一个可扩展的工具注册表,新增工具时改动局部化、契约一致性可编译期/测试期保证。
+> 本文最初是**设计提案**;下方"Implementation notes"记录了实际落地的形态。
+> 目标是让 `src/tools.rs` 不再是"一个大 match",而是一个可扩展的工具注册表,
+> 新增工具时改动局部化、契约一致性可编译期/测试期保证。
+
+## Implementation notes(落地记录)
+
+[`src/tools.rs`](../../src/tools.rs) 已按本 RFC 的动机重构:那个大的 `match name { ... }`
+被换成了一张 **`HANDLERS` 注册表**——每个工具是一条 `Handler { name, build_payload }` 记录,
+`build_payload` 是一个**纯函数**(`fn(&Value) -> Value`),负责把(schema 形状的)MCP 参数
+翻成该 op 的参数对象;响应格式化集中在 `dispatch` 里。
+
+相对提案里的 `ToolHandler` trait + `Box<dyn>`,落地选择了**更轻量的函数表**形态(等价于
+Alternatives 的折中):
+
+- **单一分发注册表**:`dispatch` 按 `name` 查 `HANDLERS`,未知工具走统一的 unknown-tool 分支,
+  不再有逐工具的 match 臂。
+- **元数据与行为就近**:工具的 schema 定义(`name` 等)与 `build_payload` 都以数据驱动方式列在
+  同一文件,新增工具 = 加一条 schema + 一条 `Handler` + 一个 `build_payload` 函数。
+- **纯函数可测**:`build_payload` 不触网,可脱离 `Session` 单测其参数塑形。
+- **契约守卫(测试)**:
+  - `registry_covers_catalogue` 断言 `HANDLERS` 覆盖 [contracts/tools.json](../../contracts/tools.json)
+    的工具目录(注册表与契约不漂移)。
+  - `build_payload_shapes` 断言各工具的 payload 塑形符合预期。
+
+**与提案的差异 / 尚未落地**:未引入 `ToolHandler` trait 与开放的 `Box<dyn>` 注册(函数表已满足
+当前需求且更省样板);能力门 `ensure_capability`(依赖 [RFC-0001](0001-connection-state-machine.md)
+的握手能力集)随其握手阶段一并留待后续。本文其余小节保留原始提案设计。
 
 ## Problem(问题)
 

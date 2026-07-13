@@ -1,11 +1,33 @@
 # RFC-0001:显式化连接状态机
 
-- **状态**:Proposed(设计提案,尚未实现)
-- **日期**:2026-07-13
-- **相关**:[architecture.md §5.2](../architecture.md)、[ADR-0002](../adr/0002-three-process-architecture-localhost-tcp.md)、[contracts/errors.json](../../contracts/errors.json)、[contracts/protocol-version.json](../../contracts/protocol-version.json)
+- **状态**:Implemented(已落地,首个阶段)
+- **日期**:2026-07-13(提案)/ 2026-07-14(落地)
+- **相关**:[architecture.md §5.2](../architecture.md)、[ADR-0002](../adr/0002-three-process-architecture-localhost-tcp.md)、[contracts/errors.json](../../contracts/errors.json)、[contracts/protocol-version.json](../../contracts/protocol-version.json)、[src/session.rs](../../src/session.rs)
 
-> 本文是**设计提案**,不是实现记录。目标是把当前隐式散落在 `session.rs` /
-> 扩展 `background/port` 里的连接生命周期,收敛为一个显式、可测试的状态机。
+> 本文最初是**设计提案**;下方"Implementation notes"记录了实际落地的范围。
+> 目标是把当前隐式散落在 `session.rs` / 扩展 `background/port` 里的连接生命周期,
+> 收敛为一个显式、可测试的状态机。
+
+## Implementation notes(落地记录)
+
+首个阶段在 [`src/session.rs`](../../src/session.rs) 落地了本 RFC 的**核心竞态修复**——
+即 Alternatives 里的 **B(先只加 generation id)**,作为分阶段推进的第一步:
+
+- **每连接 generation id**:`Session` 为每次 `attach_connection` 分配一个单调递增的
+  generation,并与 writer 一同存放。
+- **写者防抢占(writer-clobber 修复)**:reader 线程在连接断开时,**只有当当前
+  generation 与自己持有的 generation 相同**才清空共享 writer。这修掉了重连竞态——
+  旧连接的 reader 在新连接已就绪后 EOF 退出时,不会再误清掉新连接的 writer。
+- **按 generation 快速排空 pending**:in-flight 请求按 generation 打标;断开时属于该
+  generation 的 pending 立即以 `CallError::Disconnected` 结束,而**不再干等 120s 超时**。
+- **错误码映射**:连接层失败继续对着 [`contracts/errors.json`](../../contracts/errors.json)
+  归一(`NOT_CONNECTED` / 断开类失败),与 §11.1 的错误分类一致。
+- **测试守卫**:相关行为由 `session.rs` 的单元/集成测试覆盖。
+
+**尚未落地(留待后续阶段)**:完整的五态显式枚举(`Connecting`/`Ready`/`Reconnecting`/
+`Failed` 状态机对象)、握手阶段的 `protocolVersion` + `capabilities[]` 协商与
+`PROTOCOL_MISMATCH` 快速失败(见 §11.2 与 [protocol-version.json](../../contracts/protocol-version.json))。
+本文其余小节保留原始提案设计,作为后续阶段的目标。
 
 ## Problem(问题)
 

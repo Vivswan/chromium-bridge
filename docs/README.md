@@ -9,20 +9,22 @@
 |------|------|------|
 | [requirements.md](./requirements.md) | 需求:目标、用户故事、功能/非功能需求、范围边界、阶段划分 | 所有人(先读这个) |
 | [architecture.md](./architecture.md) | 架构:组件、数据流、协议、安全模型、关键约束、技术选型 | 实现者、评审者 |
+| [cli.md](./cli.md) | CLI 子命令与故障排查:`doctor`/`status` 只读自检、"server not reachable" 解读 | 使用者、排查者 |
 | [adr/](./adr/) | 架构决策记录(ADR):每一个"为什么这么选"的可追溯记录 | 评审者、未来改动者 |
-| [rfc/](./rfc/) | 设计提案(RFC):尚未实现、待评审的演进设计 | 评审者、未来改动者 |
+| [rfc/](./rfc/) | 设计提案(RFC):演进设计,先评审再落地(状态见下方 RFC 索引) | 评审者、未来改动者 |
 
 > 跨进程契约(工具目录、错误分类、能力、协议版本)的单一信源在
 > [`contracts/`](../contracts/README.md)。
 
 ## RFC 索引
 
-RFC(Request For Comments)是**尚未实现**的设计提案,先评审再落地;与 ADR(已定决策)区分。
+RFC(Request For Comments)是先评审再落地的设计提案,与 ADR(已定决策)区分。
+落地后不删除,改状态为 `Implemented` 并在文内补 "Implementation notes" 记录实际范围。
 
 | # | 标题 | 状态 |
 |---|------|------|
-| [0001](./rfc/0001-connection-state-machine.md) | 显式化连接状态机 | Proposed |
-| [0002](./rfc/0002-tool-registry.md) | 工具注册表 / Command 模式 | Proposed |
+| [0001](./rfc/0001-connection-state-machine.md) | 显式化连接状态机 | Implemented(首阶段) |
+| [0002](./rfc/0002-tool-registry.md) | 工具注册表 / Command 模式 | Implemented |
 
 ## 怎么读
 
