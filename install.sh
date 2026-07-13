@@ -9,9 +9,12 @@
 #   ./install.sh --extension-id ABCD... Override the pinned ID (e.g. a Web Store
 #                                       build with a different ID).
 #
-# Prereqs: Rust toolchain. We look for cargo in the usual spots (PATH, then
-# Homebrew's /opt/homebrew/bin) so this works even on shells where Homebrew
-# isn't on PATH.
+# Two modes, auto-detected:
+#   - source checkout (Cargo.toml present): builds the binary (Rust) + the
+#     extension (Node/npm), then installs.
+#   - prebuilt release tarball (no Cargo.toml): installs the shipped binary +
+#     extension/dist directly — no Rust or Node needed.
+# macOS + Google Chrome.
 
 set -euo pipefail
 
@@ -26,16 +29,6 @@ NM_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 # ever change that key, update this to match (or pass --extension-id).
 PINNED_EXTENSION_ID="fignfifoniblkonapihmkfakmlgkbkcf"
 
-# shellcheck source=scripts/lib.sh
-source "$HERE/scripts/lib.sh"
-
-# ---- find cargo -----------------------------------------------------------
-# Sets BB_CARGO and prepends its dir to PATH (so the rustc it shells out to is
-# discoverable). Must be a plain call, not a subshell.
-bb_find_cargo
-CARGO="$BB_CARGO"
-echo "[install] using cargo: $CARGO ($("$CARGO" --version))"
-
 # ---- parse args -----------------------------------------------------------
 
 EXTENSION_ID="$PINNED_EXTENSION_ID"
@@ -47,33 +40,41 @@ if [[ "${1:-}" == "--extension-id" ]]; then
   fi
 fi
 
-# ---- build ----------------------------------------------------------------
+# ---- source vs prebuilt ---------------------------------------------------
+# Source checkout (Cargo.toml present) → build the binary + extension.
+# Prebuilt release tarball (no Cargo.toml) → use the shipped browser-bridge and
+# extension/dist as-is; no Rust/Node needed.
 
-echo "[install] building release…"
-"$CARGO" build --release --manifest-path "$HERE/Cargo.toml"
+if [[ -f "$HERE/Cargo.toml" ]]; then
+  # shellcheck source=scripts/lib.sh
+  source "$HERE/scripts/lib.sh"
+  bb_find_cargo # sets BB_CARGO + puts its dir on PATH (plain call, not subshell)
+  echo "[install] source mode — building with $BB_CARGO"
+  "$BB_CARGO" build --release --manifest-path "$HERE/Cargo.toml"
+  BIN_SRC="$HERE/target/release/$BINARY_NAME"
 
-# ---- build the extension bundle -------------------------------------------
-
-# The extension is authored in TypeScript and bundled to extension/dist/ with
-# esbuild; dist/ is the load-unpacked target. Needs Node + npm.
-if command -v npm >/dev/null 2>&1; then
-  echo "[install] building extension bundle (esbuild)…"
-  if [[ ! -d "$HERE/extension/node_modules" ]]; then
-    npm --prefix "$HERE/extension" install
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "error: npm not found — needed to build the extension in source mode." >&2
+    echo "       Install Node.js (https://nodejs.org) and re-run." >&2
+    exit 1
   fi
+  echo "[install] building extension bundle (esbuild)…"
+  [[ -d "$HERE/extension/node_modules" ]] || npm --prefix "$HERE/extension" install
   npm --prefix "$HERE/extension" run build
-  echo "[install] extension bundle at $HERE/extension/dist"
+  DIST_DIR="$HERE/extension/dist"
 else
-  echo "warning: npm not found — cannot build the extension bundle." >&2
-  echo "         Install Node.js (https://nodejs.org) then re-run, or build" >&2
-  echo "         manually: cd extension && npm install && npm run build" >&2
+  echo "[install] prebuilt mode — using shipped binary + extension (no build)"
+  BIN_SRC="$HERE/$BINARY_NAME"
+  DIST_DIR="$HERE/extension/dist"
+  [[ -f "$BIN_SRC" ]] || { echo "error: prebuilt binary not found at $BIN_SRC" >&2; exit 1; }
+  [[ -d "$DIST_DIR" ]] || { echo "error: extension/dist not found at $DIST_DIR" >&2; exit 1; }
 fi
 
 # ---- install binary -------------------------------------------------------
 
 mkdir -p "$INSTALL_DIR"
 TMP_BIN="$INSTALL_DIR/$BINARY_NAME.tmp.$$"
-cp "$HERE/target/release/$BINARY_NAME" "$TMP_BIN"
+cp "$BIN_SRC" "$TMP_BIN"
 chmod 0755 "$TMP_BIN"
 mv -f "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
 echo "[install] binary installed at $INSTALL_DIR/$BINARY_NAME"
@@ -115,7 +116,7 @@ NEXT STEPS  (no extension-ID copying — it's pinned to $EXTENSION_ID)
 ────────────────────────────────────────────────────────────────────
 1. Load the extension:
    - Open chrome://extensions → enable "Developer mode" (top right)
-   - "Load unpacked" → select: $HERE/extension/dist
+   - "Load unpacked" → select: $DIST_DIR
    (Verify the ID under the name is $EXTENSION_ID — the manifest already
     trusts it, so nothing to patch.)
 

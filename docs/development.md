@@ -118,9 +118,12 @@ make sync-version        # ./scripts/sync-version.sh
 # 3. update CHANGELOG.md (move [Unreleased] items under the new version)
 # 4. gate on a clean tree
 make release             # check-version + full ci
-# 5. tag
+# 5. tag — pushing a v* tag triggers .github/workflows/release.yml, which
+#    builds per-arch macOS tarballs (binary + built extension + install.sh) and
+#    publishes them to GitHub Releases.
 git tag vX.Y.Z && git push --tags
 ```
 
 CI (`.github/workflows/ci.yml`) enforces version consistency on every push, so
-a forgotten `sync-version` fails the build.
+a forgotten `sync-version` fails the build. The release workflow also refuses to
+run if the tag doesn't match the Cargo version.

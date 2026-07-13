@@ -1,0 +1,72 @@
+name: Release
+
+# Tag a version to publish prebuilt tarballs (binary + built extension +
+# installer) so users don't need Rust/Node:  git tag v0.1.0 && git push --tags
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write # create the GitHub Release + upload assets
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-13
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify tag matches Cargo version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$TAG cargo=$CARGO_VER"
+          [ "${TAG#v}" = "$CARGO_VER" ] || { echo "tag ${TAG#v} != Cargo version $CARGO_VER"; exit 1; }
+
+      - name: Build binary
+        run: cargo build --release
+
+      - name: Build extension bundle
+        run: |
+          npm ci
+          npm run build
+        working-directory: extension
+
+      - name: Package tarball
+        id: pkg
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          NAME="browser-bridge-${TAG}-macos-${{ matrix.arch }}"
+          mkdir -p "$NAME/extension"
+          cp target/release/browser-bridge "$NAME/"
+          cp -r extension/dist "$NAME/extension/dist"
+          cp install.sh mcp-config.example.json LICENSE README.md "$NAME/"
+          tar czf "$NAME.tar.gz" "$NAME"
+          shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            ${{ steps.pkg.outputs.name }}.tar.gz
+            ${{ steps.pkg.outputs.name }}.tar.gz.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true

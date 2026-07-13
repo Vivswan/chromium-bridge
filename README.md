@@ -87,19 +87,35 @@ skill layer for common workflows are still future work.
 
 ## Install
 
-Prereqs: Rust toolchain (Homebrew Rust works; `install.sh` finds cargo on
-PATH or at `/opt/homebrew/bin/cargo`) and Node.js + npm (to bundle the
-TypeScript extension with esbuild).
+macOS + Google Chrome. Two ways:
+
+### Prebuilt (no Rust/Node) — recommended
+
+Download the tarball for your Mac from the
+[latest release](https://github.com/whg517/browser-bridge/releases/latest)
+(`…-macos-arm64` for Apple Silicon, `…-macos-x64` for Intel), then:
+
+```sh
+tar xzf browser-bridge-*-macos-*.tar.gz
+cd browser-bridge-*-macos-*
+./install.sh
+```
+
+`install.sh` auto-detects the prebuilt tarball and installs the shipped binary +
+extension directly — no toolchain needed.
+
+### From source
+
+Prereqs: Rust toolchain (`install.sh` finds cargo on PATH or at
+`/opt/homebrew/bin/cargo`) and Node.js + npm.
 
 ```sh
 ./install.sh
 ```
 
-This builds the Rust binary, installs it to `~/.browser-bridge/`, **bundles the
-extension** (`extension/src/*.ts` → `extension/dist/` via esbuild), and writes
-the native messaging host manifest to
-`~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.browser_bridge.host.json`
-(with an empty `allowed_origins` placeholder).
+Either way, `install.sh` installs the binary to `~/.browser-bridge/` and writes
+the native messaging host manifest (`com.browser_bridge.host.json`) with the
+**pinned extension ID** already trusted.
 
 Then:
 
