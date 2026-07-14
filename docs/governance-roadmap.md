@@ -787,17 +787,20 @@ PR 模板中必须出现：
 
 建议增加：
 
-* Dependabot 或 Renovate
+* Dependabot 或 Renovate — ✅ 已落地(`.github/dependabot.yml`)
 * `cargo audit`
-* `cargo deny`
+* `cargo deny` — ✅ 已落地(`deny.toml` + CI)
 * npm dependency audit
-* license allowlist
-* SBOM
-* GitHub Actions 固定到 commit SHA
-* release artifact checksum
+* license allowlist — ✅ 由 `cargo deny` 的 licenses 段覆盖
+* SBOM — ✅ 已落地:`.github/workflows/sbom.yml` 在 release 发布后,由 syft 从提交的
+  锁文件(`Cargo.lock` + `extension/package-lock.json`)生成 CycloneDX JSON
+  (`browser-bridge.cdx.json`)并作为资产附加到 GitHub Release。该工作流与 `release.yml`
+  解耦(触发于 `release: published`),因此 SBOM 工具异常不会阻塞二进制发布。
+* GitHub Actions 固定到 commit SHA — ✅ 已落地(所有 Action 固定到 SHA)
+* release artifact checksum — ✅ 已落地(`.tar.gz.sha256`)
 * release provenance/attestation
 
-当前 Actions 使用 `actions/checkout@v4`、`actions/setup-node@v4` 等浮动 major tag。
+治理后 Actions 已固定到 commit SHA(见各 workflow),Dependabot 负责自动更新这些 SHA。
 
 治理后应类似：
 
