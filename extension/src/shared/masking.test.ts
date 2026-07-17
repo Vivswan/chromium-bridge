@@ -20,6 +20,24 @@ describe("maskPatterns", () => {
   test("redacts bearer/token key patterns", () => {
     expect(maskPatterns("token=supersecretvalue")).toBe("••••[redacted]");
   });
+  test("redacts long opaque base64url-style tokens (letter + digit, >=32)", () => {
+    // 40-char high-entropy token, not pure hex, no separators.
+    const tok = "aB3dE6fH9jK2mN5pQ8rS1tU4vW7xY0zA3bC6dE9f";
+    expect(maskPatterns(tok)).toBe("••••[token]");
+    // Embedded in surrounding text, only the token is masked.
+    expect(maskPatterns(`id ${tok} end`)).toBe("id ••••[token] end");
+  });
+  test("leaves long all-letter words (no digit) alone", () => {
+    const word = "abcdefghijklmnopqrstuvwxyzabcdefghijklmn"; // 40 letters, no digit
+    expect(maskPatterns(word)).toBe(word);
+  });
+  test("token rule stays linear on adversarial input (no ReDoS)", () => {
+    // "a-a-a-..." was quadratic under the old nested-lookahead pattern. It has
+    // a letter but no digit, so it must return unchanged, and must return fast
+    // (bun's test timeout catches a hang).
+    const adversarial = "a-".repeat(40000) + "a"; // 80001 chars
+    expect(maskPatterns(adversarial)).toBe(adversarial);
+  });
   test("leaves ordinary text alone", () => {
     expect(maskPatterns("hello world")).toBe("hello world");
   });
@@ -57,6 +75,10 @@ describe("maskCookieValue (pattern-only, no full-mask)", () => {
     // Same input that maskString fully masks stays pattern-only here.
     expect(maskCookieValue("session_tokenvalue")).toBe("session_tokenvalue");
     expect(maskString("session_tokenvalue")).toBe("••••[sensitive]");
+  });
+  test("masks a long opaque session-token cookie via the catalogue", () => {
+    const tok = "aB3dE6fH9jK2mN5pQ8rS1tU4vW7xY0zA3bC6dE9f";
+    expect(maskCookieValue(tok)).toBe("••••[token]");
   });
 });
 
