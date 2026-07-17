@@ -23,9 +23,11 @@ JavaScript in your pages. The guardrails that keep that safe:
 - **Approve every site.** A new origin triggers a popup prompt; nothing runs on
   a site you haven't approved (which also grants the host permission the content
   script needs).
-- **Confirm high-risk actions.** Submit-button clicks, link navigations, tab
-  close, and **every `page_eval`** pop an on-page confirmation you must approve
-  (with a short same-origin grace window).
+- **Confirm high-risk actions.** Submit-button clicks and link navigations pop
+  an on-page confirmation you must approve; a repeat of the same action on the
+  same origin within a short grace window skips the re-prompt. Tab close and
+  **every `page_eval`** are excluded from that grace window and re-prompt on
+  every call.
 - **Read-only credentials.** Cookies and storage can be *read* (always masked —
   JWTs, long hex, long digit runs), never written. There is no `cookie_set` /
   `storage_set` by design.
@@ -228,7 +230,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md) ·
 
 | | Supported |
 |---|---|
-| **macOS** | Apple Silicon (arm64) prebuilt. Intel via Rosetta 2 or from source. |
+| **macOS** | Apple Silicon (arm64) prebuilt. Intel builds from source (Rosetta 2 runs x86_64 on Apple Silicon, not the arm64 build on Intel). |
 | **Linux** | x64 prebuilt; any Chromium-based browser. |
 | **Windows** | x64 prebuilt (native, no admin). |
 | **Browser** | Any Chromium-based browser, Manifest V3 |
