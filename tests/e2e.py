@@ -141,10 +141,23 @@ class McpClient:
         return self.recv()
 
 
+def connect_bridge(lf, timeout=5):
+    """Connect to the bridge the way the native host would: a Unix-domain
+    socket on Unix (lf["endpoint"] is its path), loopback TCP on Windows
+    (lf["endpoint"] is "127.0.0.1:<port>")."""
+    if os.name == "nt":
+        host, port = lf["endpoint"].rsplit(":", 1)
+        return socket.create_connection((host, int(port)), timeout=timeout)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect(lf["endpoint"])
+    return s
+
+
 def mock_extension(lf, responder):
     """Connect to the bridge socket as the extension would, answer requests
     using `responder(req) -> dict`."""
-    s = socket.create_connection(("127.0.0.1", lf["port"]), timeout=5)
+    s = connect_bridge(lf)
     s.sendall((json.dumps({"hello": lf["secret"]}) + "\n").encode())
     buf = bytearray()
 
@@ -221,7 +234,8 @@ def test_stale_lock_is_replaced():
     print("\n[test] stale lock file is replaced on startup")
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
     with open(LOCK, "w", encoding="utf-8") as f:
-        json.dump({"port": 9, "secret": "0" * 32, "pid": 4294967295}, f)
+        json.dump({"endpoint": "/nonexistent/browser-bridge/run.sock",
+                   "secret": "0" * 32, "pid": 4294967295}, f)
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True, encoding="utf-8")
     try:

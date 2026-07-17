@@ -1,80 +1,114 @@
-//! Localhost TCP IPC between the MCP server (long-lived) and the native-host
-//! subprocess (spawned fresh by Chrome on each connectNative).
+//! IPC between the MCP server (long-lived) and the native-host subprocess
+//! (spawned fresh by Chrome on each connectNative).
 //!
-//! - MCP server binds `127.0.0.1:0` (random ephemeral port), writes the
-//!   chosen port + a per-run secret to a lock file under the user's runtime
-//!   directory. The secret guards against another local user's stray process
-//!   connecting (single-user machine, but cheap defense).
-//! - Native host reads the lock file on startup and connects; presents the
-//!   secret as the first NDJSON line ("hello").
+//! - On Unix the MCP server listens on a 0600 Unix-domain socket inside a
+//!   private 0700 runtime directory, and writes the socket path + a per-run
+//!   secret to a lock file next to it. A filesystem socket has no listening
+//!   port for other processes to reach, and its 0600 mode plus the private
+//!   directory keep other users out.
+//! - On Windows (no std Unix-domain sockets) the server keeps a loopback TCP
+//!   socket on an ephemeral port, published the same way in the lock file.
+//! - The native host reads the lock file on startup and connects; it presents
+//!   the secret as the first NDJSON line ("hello").
 
 use std::fs;
 #[cfg(unix)]
 use std::io::Read;
 use std::io::{self, Write};
-use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+
+#[cfg(windows)]
+use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(windows)]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+/// The bridge listener and stream types, unified across platforms so the rest
+/// of the crate is transport-agnostic: a Unix-domain socket on Unix, a loopback
+/// TCP socket on Windows.
+#[cfg(unix)]
+pub type BridgeListener = UnixListener;
+#[cfg(unix)]
+pub type BridgeStream = UnixStream;
+#[cfg(windows)]
+pub type BridgeListener = TcpListener;
+#[cfg(windows)]
+pub type BridgeStream = TcpStream;
+
 /// Per-process runtime info the MCP server publishes for the native host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockFile {
-    pub port: u16,
-    /// Random token the native host must echo back on connect. Not a strong
-    /// secret (the lock file is 0600) but stops accidental connections.
+    /// How the native host reaches the server. On Unix this is the filesystem
+    /// path of the 0600 Unix-domain socket; on Windows it is the loopback
+    /// endpoint `127.0.0.1:<port>`.
+    pub endpoint: String,
+    /// Random token the native host must echo back on connect. The lock file
+    /// and (on Unix) the socket are 0600, so this guards against another local
+    /// user's stray process connecting.
     pub secret: String,
     /// PID of the MCP server process that owns the socket, for diagnostics.
     pub pid: u32,
 }
 
-impl LockFile {
-    /// Path of the lock file in a per-user runtime/data directory.
-    pub fn path() -> PathBuf {
-        #[cfg(windows)]
-        {
-            let base = std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("USERPROFILE")
-                        .map(PathBuf::from)
-                        .map(|p| p.join("AppData/Local"))
-                })
-                .unwrap_or_else(std::env::temp_dir);
-            let dir = base.join("browser-bridge");
-            let _ = fs::create_dir_all(&dir);
-            dir.join("run.lock")
-        }
+/// Per-user runtime/data directory holding the lock file and (on Unix) the
+/// bridge socket. Created 0700 on Unix so no other user can enter it.
+fn runtime_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("USERPROFILE")
+                    .map(PathBuf::from)
+                    .map(|p| p.join("AppData/Local"))
+            })
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join("browser-bridge");
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
 
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-                let dir = PathBuf::from(xdg).join("browser-bridge");
-                ensure_private_dir(&dir);
-                return dir.join("run.lock");
-            }
+    #[cfg(target_os = "macos")]
+    {
+        let dir = if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+            PathBuf::from(xdg).join("browser-bridge")
+        } else {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            let mut p = PathBuf::from(home);
-            p.push("Library/Application Support/browser-bridge");
-            ensure_private_dir(&p);
-            p.join("run.lock")
-        }
+            PathBuf::from(home).join("Library/Application Support/browser-bridge")
+        };
+        ensure_private_dir(&dir);
+        dir
+    }
 
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            let dir = if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-                PathBuf::from(xdg).join("browser-bridge")
-            } else if let Some(xdg_cache) = std::env::var_os("XDG_CACHE_HOME") {
-                PathBuf::from(xdg_cache).join("browser-bridge")
-            } else if let Some(home) = std::env::var_os("HOME") {
-                PathBuf::from(home).join(".cache/browser-bridge")
-            } else {
-                std::env::temp_dir().join(format!("browser-bridge-{}", unsafe { libc::geteuid() }))
-            };
-            ensure_private_dir(&dir);
-            dir.join("run.lock")
-        }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+            PathBuf::from(xdg).join("browser-bridge")
+        } else if let Some(xdg_cache) = std::env::var_os("XDG_CACHE_HOME") {
+            PathBuf::from(xdg_cache).join("browser-bridge")
+        } else if let Some(home) = std::env::var_os("HOME") {
+            PathBuf::from(home).join(".cache/browser-bridge")
+        } else {
+            std::env::temp_dir().join(format!("browser-bridge-{}", unsafe { libc::geteuid() }))
+        };
+        ensure_private_dir(&dir);
+        dir
+    }
+}
+
+/// Path of the Unix-domain socket the server binds. Unix-only: Windows uses TCP.
+#[cfg(unix)]
+fn socket_path() -> PathBuf {
+    runtime_dir().join("run.sock")
+}
+
+impl LockFile {
+    /// Path of the lock file in the per-user runtime directory.
+    pub fn path() -> PathBuf {
+        runtime_dir().join("run.lock")
     }
 
     pub fn write(&self) -> io::Result<()> {
@@ -131,6 +165,8 @@ impl LockFile {
     }
 
     pub fn remove() {
+        #[cfg(unix)]
+        let _ = fs::remove_file(socket_path());
         let _ = fs::remove_file(Self::path());
     }
 }
@@ -144,16 +180,34 @@ fn ensure_private_dir(path: &std::path::Path) {
     }
 }
 
-/// Server side: bind a random localhost port, return the listener and the
-/// lock-file contents to publish. The caller is responsible for `write()`ing
-/// the lock file (and removing it on shutdown).
-pub fn listen() -> io::Result<(TcpListener, LockFile)> {
+/// Server side: bind the bridge socket and return the listener plus the
+/// lock-file contents to publish. The caller `write()`s the lock file and
+/// removes it on shutdown.
+#[cfg(unix)]
+pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sock = socket_path();
+    // A leftover socket from a crashed server makes bind fail with EADDRINUSE;
+    // unlink it first. Binding recreates it fresh.
+    let _ = fs::remove_file(&sock);
+    let listener = UnixListener::bind(&sock)?;
+    fs::set_permissions(&sock, fs::Permissions::from_mode(0o600))?;
+    let lf = LockFile {
+        endpoint: sock.to_string_lossy().into_owned(),
+        secret: generate_secret(),
+        pid: std::process::id(),
+    };
+    Ok((listener, lf))
+}
+
+#[cfg(windows)]
+pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
-    let secret = generate_secret();
     let lf = LockFile {
-        port,
-        secret,
+        endpoint: format!("127.0.0.1:{port}"),
+        secret: generate_secret(),
         pid: std::process::id(),
     };
     Ok((listener, lf))
@@ -223,40 +277,58 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-/// Client side (native host): read the lock file, connect, and send the
-/// "hello" line containing the secret. Times out after 2 s so a stale lock
-/// file fails fast instead of hanging Chrome's port.
-pub fn connect() -> io::Result<TcpStream> {
-    let lf = LockFile::read()?.ok_or_else(|| {
+fn read_lock_or_err() -> io::Result<LockFile> {
+    LockFile::read()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             "browser-bridge lock file not found — is the MCP server running?",
         )
-    })?;
-    let addr = format!("127.0.0.1:{}", lf.port);
-    let stream = match TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("addr parse: {e}")))?,
-        Duration::from_secs(2),
-    ) {
+    })
+}
+
+/// Send the hello line (the secret) as the first NDJSON frame on a freshly
+/// connected client stream.
+fn send_hello(stream: &BridgeStream, secret: &str) {
+    let hello = serde_json::json!({ "hello": secret });
+    let mut line = serde_json::to_vec(&hello).unwrap();
+    line.push(b'\n');
+    let mut s = stream;
+    let _ = s.write_all(&line);
+    let _ = s.flush();
+}
+
+/// Client side (native host): read the lock file and connect. On a stale lock
+/// (server crashed) the connect fails fast and the lock is removed so the next
+/// server start wins cleanly.
+#[cfg(unix)]
+pub fn connect() -> io::Result<BridgeStream> {
+    let lf = read_lock_or_err()?;
+    let stream = match UnixStream::connect(&lf.endpoint) {
         Ok(s) => s,
         Err(e) => {
-            // The lock file may be stale (server crashed). Remove it so the
-            // next server start wins cleanly; then surface the error.
             LockFile::remove();
             return Err(e);
         }
     };
-    // Send hello with the secret as the first NDJSON line.
-    let hello = serde_json::json!({ "hello": lf.secret });
-    let mut line = serde_json::to_vec(&hello).unwrap();
-    line.push(b'\n');
-    {
-        use std::io::Write;
-        let _ = (&stream).write_all(&line);
-        let _ = (&stream).flush();
-    }
+    send_hello(&stream, &lf.secret);
+    Ok(stream)
+}
+
+#[cfg(windows)]
+pub fn connect() -> io::Result<BridgeStream> {
+    let lf = read_lock_or_err()?;
+    let addr = lf
+        .endpoint
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("addr parse: {e}")))?;
+    let stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+        Ok(s) => s,
+        Err(e) => {
+            LockFile::remove();
+            return Err(e);
+        }
+    };
+    send_hello(&stream, &lf.secret);
     Ok(stream)
 }
 
@@ -281,13 +353,13 @@ mod tests {
     #[test]
     fn lockfile_serde_roundtrip() {
         let lf = LockFile {
-            port: 5000,
+            endpoint: "/tmp/browser-bridge/run.sock".into(),
             secret: "deadbeef".into(),
             pid: 42,
         };
         let bytes = serde_json::to_vec(&lf).unwrap();
         let back: LockFile = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(back.port, 5000);
+        assert_eq!(back.endpoint, "/tmp/browser-bridge/run.sock");
         assert_eq!(back.secret, "deadbeef");
         assert_eq!(back.pid, 42);
     }
@@ -308,5 +380,12 @@ mod tests {
     #[test]
     fn lock_path_has_expected_filename() {
         assert_eq!(LockFile::path().file_name().unwrap(), "run.lock");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_sits_beside_the_lock_file() {
+        assert_eq!(socket_path().file_name().unwrap(), "run.sock");
+        assert_eq!(socket_path().parent(), LockFile::path().parent());
     }
 }
