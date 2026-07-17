@@ -27,7 +27,6 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufReader, BufWriter};
-use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -45,7 +44,7 @@ use crate::protocol::{bridge_read, bridge_write, BridgeReq, BridgeResp};
 /// whatever currently occupies the slot before touching it.
 struct Conn {
     generation: u64,
-    writer: BufWriter<TcpStream>,
+    writer: BufWriter<ipc::BridgeStream>,
 }
 
 /// Pending request callbacks keyed by `BridgeReq.id`. Each entry carries the
@@ -120,7 +119,7 @@ impl Session {
     /// Take ownership of a freshly-accepted connection from the native host.
     /// Replaces any previous connection (the old one is dropped/closed).
     /// Spawns a reader thread that dispatches BridgeResp by id.
-    pub fn attach_connection(&self, stream: TcpStream) -> io::Result<()> {
+    pub fn attach_connection(&self, stream: ipc::BridgeStream) -> io::Result<()> {
         // Validate the hello line (auth) before trusting the connection.
         let mut reader = BufReader::new(stream.try_clone()?);
         let first: Option<Value> = bridge_read(&mut reader)?;
