@@ -223,18 +223,28 @@ export class CdpBackend implements PageBackend {
     // it directly, which is the whole point of CDP mode.
     const expression = `(async () => {\n${code}\n})()`;
     const res: EvaluateResponse = await session.rawEvaluate(expression, { awaitPromise: true });
-    if (res.exceptionDetails) {
-      const ex = res.exceptionDetails.exception;
-      const description = ex?.description || res.exceptionDetails.text || "Error";
-      return {
-        __evalError: true,
-        name: ex?.className || "Error",
-        message: description.split("\n")[0],
-        stack: truncate(description, 2000),
-      };
-    }
-    const value = res.result?.value;
-    const mask = (await getSetting("evalMask")) !== false;
-    return mask ? maskSensitive(value) : value;
+    return evalResponseToPayload(res, (await getSetting("evalMask")) !== false);
   }
+}
+
+// Format a raw Runtime.evaluate response for page_eval egress. EVERY egress
+// path — the success value and the exception name/message/stack — passes the
+// same mask gate: exceptions used to bypass it, so a page could carry a secret
+// out by throwing it (`throw new Error(localStorage.authToken)`). Exported for
+// tests.
+export function evalResponseToPayload(res: EvaluateResponse, mask: boolean): unknown {
+  let payload: unknown;
+  if (res.exceptionDetails) {
+    const ex = res.exceptionDetails.exception;
+    const description = ex?.description || res.exceptionDetails.text || "Error";
+    payload = {
+      __evalError: true,
+      name: ex?.className || "Error",
+      message: description.split("\n")[0],
+      stack: truncate(description, 2000),
+    };
+  } else {
+    payload = res.result?.value;
+  }
+  return mask ? maskSensitive(payload) : payload;
 }
