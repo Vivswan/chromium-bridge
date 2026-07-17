@@ -1,6 +1,6 @@
-# Operations: running and operating browser-bridge
+# Operations: running and operating chromium-bridge
 
-> This doc covers how to operate browser-bridge at runtime: the two binary
+> This doc covers how to operate chromium-bridge at runtime: the two binary
 > modes, read-only diagnostics, logging/audit, the lock file, and native host
 > reconnect. Full subcommand usage and "server not reachable" troubleshooting
 > are in [cli.md](./cli.md) (not repeated here); component boundaries are in
@@ -8,7 +8,7 @@
 
 ## The two binary modes
 
-`browser-bridge` is a single binary with subcommand dispatch (see [ADR-0001](./adr/0001-use-rust-single-binary.md)):
+`chromium-bridge` is a single binary with subcommand dispatch (see [ADR-0001](./adr/0001-use-rust-single-binary.md)):
 
 - **MCP server** (no arguments): the default mode, spawned by the MCP client. Listens on
   localhost TCP, holds session state, dispatches tools. stdout carries MCP JSON-RPC.
@@ -22,7 +22,7 @@ single stray write would corrupt the frame stream
 
 ## Read-only diagnostics: doctor / status
 
-`browser-bridge doctor` (alias `status`) is a **read-only** self-check: it does not listen
+`chromium-bridge doctor` (alias `status`) is a **read-only** self-check: it does not listen
 on a port, does not write the lock file, and does not spawn child processes. It only probes
 and prints the environment and connectivity conclusions (version/platform, lock file
 port/pid, MCP server reachability, whether the native host manifest is in place). It does
