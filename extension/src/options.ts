@@ -189,6 +189,127 @@ function wireAddSite() {
   });
 }
 
+// ---- render: enrollment (ADR-0021 pairing ceremony) -------------------------
+
+// Shape of the background's getEnrollmentStatus() reply.
+interface EnrollmentStatusView {
+  required: boolean;
+  state: "unpaired" | "pending" | "pinned" | "compromised";
+  blocked: boolean;
+  fingerprint?: string;
+  pinnedAt?: number;
+  lastVerifiedAt?: number;
+  compromisedReason?: string;
+  lastError?: string;
+  paused?: boolean;
+}
+
+async function refreshEnrollment() {
+  const st = (await send({ type: "get_enrollment" })) as EnrollmentStatusView | undefined;
+  const panel = $("enroll-panel");
+  if (!st) {
+    panel.innerHTML = `<div class="enroll-err">无法获取配对状态(后台未响应)。</div>`;
+    return;
+  }
+  const parts: string[] = [];
+  const btns: { id: string; label: string; cls: string; msg: string; confirm?: string }[] = [];
+
+  if (st.state === "pinned") {
+    parts.push(`<div class="enroll-state ok">已配对,公钥已固定。</div>`);
+    parts.push(`<div class="fp">${escapeHtml(st.fingerprint || "")}</div>`);
+    const meta: string[] = [];
+    if (st.pinnedAt) meta.push(`固定于 ${new Date(st.pinnedAt).toLocaleString()}`);
+    meta.push(
+      st.lastVerifiedAt
+        ? `上次手动验证:${new Date(st.lastVerifiedAt).toLocaleString()}`
+        : "尚未手动验证过"
+    );
+    parts.push(`<div class="enroll-meta">${escapeHtml(meta.join(" · "))}</div>`);
+    btns.push({
+      id: "enroll-verify",
+      label: "立即验证(弹 Touch ID)",
+      cls: "primary",
+      msg: "enroll_verify",
+    });
+    btns.push({
+      id: "enroll-revoke",
+      label: "解除配对",
+      cls: "danger",
+      msg: "enroll_revoke",
+      confirm: "确定解除配对?桥接会保持阻断,直到重新完成配对。",
+    });
+  } else if (st.state === "pending") {
+    parts.push(`<div class="enroll-state bad">等待批准:对比指纹。</div>`);
+    parts.push(`<div class="fp">${escapeHtml(st.fingerprint || "")}</div>`);
+    parts.push(
+      `<div class="enroll-meta">与终端里 <code>browser-bridge pair</code> 打印的指纹逐字符对比;` +
+        `任何差异都说明回应挑战的不是你刚配对的那个主机。</div>`
+    );
+    btns.push({
+      id: "enroll-approve",
+      label: "指纹一致,批准",
+      cls: "primary",
+      msg: "enroll_approve",
+    });
+    btns.push({ id: "enroll-reject", label: "指纹不符,拒绝", cls: "danger", msg: "enroll_reject" });
+  } else if (st.state === "compromised") {
+    parts.push(`<div class="enroll-state bad">验证失败,桥接已阻断。</div>`);
+    parts.push(`<div class="enroll-err">${escapeHtml(st.compromisedReason || "")}</div>`);
+    parts.push(
+      `<div class="enroll-meta">回应验证的不是被固定的那把钥匙。先弄清原因(是不是自己 revoke 过、` +
+        `重装过主机),再解除配对并重新运行 <code>browser-bridge pair</code>。</div>`
+    );
+    btns.push({
+      id: "enroll-revoke",
+      label: "解除配对(之后可重新配对)",
+      cls: "danger",
+      msg: "enroll_revoke",
+      confirm: "解除配对会清除当前固定的公钥与失败记录。确定?",
+    });
+  } else {
+    // unpaired
+    const blockedNote = st.required
+      ? "桥接请求当前被拒绝,直到完成配对。"
+      : "「要求主机配对」当前关闭,桥接未做主机验证。";
+    parts.push(`<div class="enroll-state ${st.required ? "bad" : ""}">未配对。</div>`);
+    parts.push(`<div class="enroll-meta">${escapeHtml(blockedNote)}</div>`);
+    btns.push({
+      id: "enroll-pair",
+      label: "开始配对(弹 Touch ID)",
+      cls: "primary",
+      msg: "enroll_pair",
+    });
+  }
+
+  if (st.lastError) {
+    parts.push(`<div class="enroll-err">${escapeHtml(st.lastError)}</div>`);
+  }
+  parts.push(
+    `<div class="enroll-actions">` +
+      btns
+        .map(
+          (b) =>
+            `<button class="${escapeAttr(b.cls)}" id="${escapeAttr(b.id)}">${escapeHtml(b.label)}</button>`
+        )
+        .join("") +
+      `</div>`
+  );
+  panel.innerHTML = parts.join("");
+
+  for (const b of btns) {
+    $(b.id).onclick = async () => {
+      if (b.confirm && !window.confirm(b.confirm)) return;
+      const resp = await send({ type: b.msg });
+      if (resp && resp.ok === false && resp.error) {
+        flashToast(String(resp.error));
+      }
+      // Proof/error frames arrive asynchronously; the 2s poll below picks up
+      // the state they produce.
+      refreshEnrollment();
+    };
+  }
+}
+
 // ---- helpers --------------------------------------------------------------
 
 function send(msg: object): Promise<Record<string, unknown> | undefined> {
@@ -220,6 +341,7 @@ function escapeAttr(s: string) {
   // while UNCHECKED via their `<key>-warn` element; benign toggles like
   // groupTabs simply have no `-warn` element, so no styling fires.
   for (const key of [
+    "requireEnrollment",
     "pageEvalEnabled",
     "evalMask",
     "confirmHighRiskClick",
@@ -292,6 +414,11 @@ function escapeAttr(s: string) {
   // Allowlist.
   await refreshAllowlist();
   wireAddSite();
+
+  // Enrollment panel. Proof/error frames land in the background asynchronously
+  // (a Touch ID prompt can take a while), so poll while the page is open.
+  await refreshEnrollment();
+  setInterval(refreshEnrollment, 2000);
 })();
 
 export {};

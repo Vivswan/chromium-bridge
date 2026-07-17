@@ -42,6 +42,20 @@
 
     /* Number-input rows, grouped in a panel */
     .panel { border: 1px solid var(--line); border-radius: 10px; padding: 6px 14px; }
+
+    /* Enrollment (pairing) panel */
+    #enroll-panel { padding: 12px 14px; }
+    .fp { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all;
+          background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px;
+          padding: 10px 12px; margin: 8px 0; letter-spacing: 0.02em; }
+    .enroll-state { font-weight: 600; }
+    .enroll-state.bad { color: var(--danger); }
+    .enroll-state.ok { color: var(--brand); }
+    .enroll-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .enroll-err { color: var(--danger-dark); font-size: 12px; margin-top: 8px; font-weight: 600;
+                  word-break: break-word; }
+    .enroll-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
     .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; flex-wrap: wrap;
            border-bottom: 1px solid var(--line-soft); }
     .row:last-child { border-bottom: none; }
@@ -116,6 +130,15 @@
 
   <!-- ===== 安全 ===== -->
   <h2>安全</h2>
+  <div class="card" id="card-requireEnrollment">
+    <input type="checkbox" id="requireEnrollment" />
+    <div class="body">
+      <div class="title">要求主机配对(Secure Enclave 注册)</div>
+      <div class="desc">开启时,只有完成一次配对仪式并固定了主机公钥后,桥接请求才会被执行(ADR-0021)。配对能阻止静默配对——恶意的 <code>claude mcp add</code> 或任何未经你批准的主机都无法驱动浏览器;配合下方「立即验证」也能发现主机被替换。它<b>不能</b>阻止已配对之后同用户进程的静默替换(那需要每操作 Touch ID,是另一个未实现的可选层级)。仅 macOS 支持;在其他系统上开启此项会使桥接一直保持阻断。</div>
+      <div class="warn" id="requireEnrollment-warn" style="display:none">⚠ 关闭后,任何能写 MCP 配置的本地进程都可能在你不知情时建立并使用桥接。</div>
+    </div>
+  </div>
+
   <div class="card" id="card-pageEvalEnabled">
     <input type="checkbox" id="pageEvalEnabled" />
     <div class="body">
@@ -166,6 +189,13 @@
       <div class="title">精确 snapshot 前提示</div>
       <div class="desc">调用 page_snapshot_precise(走 chrome.debugger)前在页面弹出信息提示。Chrome 顶部会短暂显示「调试中」横幅(ADR-0009)。</div>
     </div>
+  </div>
+
+  <!-- ===== 主机配对 ===== -->
+  <h2>主机配对(Secure Enclave)</h2>
+  <div class="sub">流程:先在终端运行 <code>browser-bridge pair</code>(会弹 Touch ID,并打印公钥指纹),然后点击下方「开始配对」,再次通过 Touch ID 后,这里会显示主机的指纹。<b>逐字符对比两处指纹,一致才批准</b>;批准后公钥被固定。之后的每次重连不再重复验证——每次验证都需要 Touch ID,而 MV3 每几分钟就重连一次,逐次验证不可用(ADR-0021)。怀疑主机被替换时,用「立即验证」手动发起一次检查。</div>
+  <div class="panel" id="enroll-panel">
+    <div class="row"><span class="unit">加载中…</span></div>
   </div>
 
   <!-- ===== 标签页 ===== -->

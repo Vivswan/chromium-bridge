@@ -12,11 +12,25 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 
 async function refreshStatus() {
   const status = await send({ type: "get_status" });
+  const enroll = (await send({ type: "get_enrollment" })) as
+    { state?: string; blocked?: boolean } | undefined;
   const dot = $("dot");
-  dot.className = "dot " + (status?.nativeConnected ? "ok" : "bad");
-  $("status-text").textContent = status?.nativeConnected
-    ? "Connected to bridge"
-    : "Not connected (is your MCP client running?)";
+  const connected = Boolean(status?.nativeConnected);
+  let text: string;
+  if (enroll?.blocked) {
+    // Enrollment gate is closed: connected or not, no bridge op will run.
+    text =
+      enroll.state === "pending"
+        ? "Blocked: approve the host fingerprint in Settings"
+        : enroll.state === "compromised"
+          ? "Blocked: host key verification failed (see Settings)"
+          : "Blocked: host pairing required (see Settings)";
+    dot.className = "dot bad";
+  } else {
+    text = connected ? "Connected to bridge" : "Not connected (is your MCP client running?)";
+    dot.className = "dot " + (connected ? "ok" : "bad");
+  }
+  $("status-text").textContent = text;
 }
 
 async function refreshList() {
