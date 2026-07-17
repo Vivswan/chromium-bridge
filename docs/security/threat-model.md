@@ -30,8 +30,11 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 
 - **Single-user machine.** The bridge is a 0600 Unix-domain socket (no
   listening port) in a 0700 per-user directory, gated by a kernel peer-UID
-  check and an HMAC challenge-response over a per-run secret; the model assumes
-  no hostile local user with the same UID. (See
+  check, kernel-attested executable identity, and an HMAC challenge-response
+  over a per-run secret; the model assumes no hostile local user with the same
+  UID. Attestation additionally rejects a *different* same-user binary, but
+  cannot stop a same-user attacker who re-runs *our own* binary (see threat #4
+  and [ADR-0020](../adr/0020-kernel-attested-peer-identity.md)). (See also
   [ADR-0019](../adr/0019-authenticated-ipc.md).)
 - **The MCP client is trusted.** A malicious client the user themselves
   installed is out of scope — it already has whatever the user granted it. The
@@ -63,9 +66,19 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    responses.
    → On Unix there is **no listening port**: the bridge is a 0600 Unix-domain
    socket in a 0700 directory. Every connection is gated by a **kernel peer-UID
-   check** (rejecting other users) and an **HMAC-SHA256 challenge-response** in
-   which the per-run secret never crosses the wire and a fresh nonce defeats
-   replay. See [ADR-0019](../adr/0019-authenticated-ipc.md).
+   check** (rejecting other users), **kernel-attested executable identity**
+   (Linux/macOS: the peer's on-disk binary must hash-match ours, so a *different*
+   same-user program is rejected before it can authenticate), and an
+   **HMAC-SHA256 challenge-response** in which the per-run secret never crosses
+   the wire and a fresh nonce defeats replay. Attestation is mutual (host and
+   server attest each other). See
+   [ADR-0019](../adr/0019-authenticated-ipc.md) and
+   [ADR-0020](../adr/0020-kernel-attested-peer-identity.md). **Not covered:** a
+   same-user attacker who re-executes *our own* binary is byte-identical to the
+   legitimate host, so neither the hash nor a code signature can tell them apart;
+   only browser/extension-side pairing can, which is tracked separately. On macOS
+   the check is also best-effort until a running-image-bound `SecCode` check
+   replaces the path re-open (see ADR-0020).
 
 5. **A malformed/oversized message crashes or corrupts the bridge.**
    → Native-messaging framing is length-checked (64 MB inbound clamp, 1 MB
@@ -75,8 +88,11 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 
 ## Explicit non-goals
 
-- Defending against a compromised OS account or a hostile process running as the
-  same user beyond the bridge-secret check.
+- Defending against a compromised OS account, or a same-user attacker who runs
+  *our own* binary. Peer-UID and executable attestation reject other users and
+  other binaries, but a same-user process executing the genuine binary is
+  byte-identical to the legitimate host and remains out of scope for the IPC
+  layer (see threat #4).
 - Defending against a malicious MCP client the user configured.
 - Multi-user / shared-machine isolation.
 - Remote attackers (there is no remote attack surface).
