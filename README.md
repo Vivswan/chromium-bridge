@@ -157,10 +157,24 @@ site, click the Browser Bridge toolbar icon and approve it.
 
 ---
 
-## What you can do — 15 tools
+## What you can do — 16 tools
 
 Grouped from the single source of truth,
 [`contracts/tools.json`](./contracts/tools.json):
+
+### Browsers
+| Tool | Does | Risk |
+|------|------|------|
+| `list_browsers` | List the browsers connected to the bridge (label + open-tab count) | low |
+
+Several browsers can be connected at once (on macOS/Linux each gets its own
+native host and label, e.g. `chrome` and `brave`). Every other tool takes an
+optional `browser` argument to pick one. With a single browser connected no
+argument is needed; with several, an unaddressed call fails with a clear
+error rather than guessing which logged-in browser to act in. Windows
+manifests launch the binary with no arguments, so Windows browsers all share
+one unlabeled slot for now. See
+[ADR-0022](./docs/adr/0022-multi-browser-label-routing.md).
 
 ### Tabs
 | Tool | Does | Risk |
@@ -224,7 +238,10 @@ MCP client ──stdio MCP──▶ browser-bridge (MCP server, Rust)
   bridge socket, published via a lock file.
 - **`--native-host`** — launched *by Chrome* via the host manifest. A thin
   bridge translating Chrome's native-messaging frames (4-byte LE length + JSON)
-  to NDJSON on the socket.
+  to NDJSON on the socket. On macOS/Linux each installed browser launches its
+  own host with its own `--label` (baked into that browser's
+  `run-host-<browser>.sh` wrapper), so one server can hold several browsers
+  at once and address them by name.
 
 Why two processes? Chrome spawns the native host; the MCP client spawns the
 server — they aren't parent/child, so they need an IPC. The native host stays
