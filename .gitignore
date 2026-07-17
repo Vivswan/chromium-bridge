@@ -5,6 +5,14 @@
 # Rust build artifacts
 /target/
 
+# cargo-fuzz build artifacts, fuzzer-generated corpus, and crash reproducers.
+# The fuzz crate (fuzz/Cargo.toml + fuzz/fuzz_targets/) and its lockfile ARE
+# tracked; only the machine-generated outputs are ignored.
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+
 # Extension build output
 /extension/dist/
 

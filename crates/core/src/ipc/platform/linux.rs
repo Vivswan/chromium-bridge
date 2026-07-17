@@ -30,6 +30,18 @@ pub(crate) fn pid_identity(pid: u32) -> io::Result<String> {
     exe_hash_of_pid(pid)
 }
 
+/// The full client identity of an arbitrary process named by pid: its image
+/// hash plus its signing Team ID. Linux code signing is not part of the base
+/// system, so there is no Team ID to read here and the anchor is always the
+/// hash; `team_id` is therefore always `None`. Carries the same pid-reuse race
+/// as [`pid_identity`].
+pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientIdentity> {
+    Ok(super::super::ClientIdentity {
+        hash: exe_hash_of_pid(pid)?,
+        team_id: None,
+    })
+}
+
 /// SHA256 (lowercase hex) of a running process's on-disk executable, named by
 /// pid. We hash `/proc/<pid>/exe`, the kernel's magic symlink to the actual
 /// executable inode: it follows to the real backing file even if the path was

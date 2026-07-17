@@ -43,7 +43,7 @@
 //! Pending entries belonging to other connections survive.
 
 use std::collections::HashMap;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{BufReader, BufWriter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -59,6 +59,13 @@ use crate::protocol::{bridge_read, bridge_write, BridgeReq, BridgeResp};
 /// (single-browser installs, pre-label wrappers). Keeps one-browser setups
 /// working with zero configuration.
 pub const DEFAULT_LABEL: &str = "default";
+
+/// Maximum number of concurrent *distinct* browser labels the session holds, a
+/// DoS bound on the browser leg. A reconnect under an existing label replaces
+/// its slot (it does not grow the set) and is always allowed; only a NEW label
+/// beyond the cap is refused. Enforced atomically at the single insert point
+/// (see [`Session::attach_browser`]).
+pub(crate) const MAX_BROWSERS: usize = 16;
 
 /// A live, authenticated connection to one browser's native host, paired with
 /// the generation id that owns it. Storing the generation alongside the writer
@@ -186,58 +193,79 @@ impl Session {
         }
     }
 
-    /// Take ownership of a freshly-accepted connection from a native host.
-    /// Authenticates it (HMAC challenge-response), then registers it under the
-    /// label the handshake carried. A previous connection under the SAME label
-    /// is replaced (dropped/closed); connections under other labels are
-    /// untouched. Spawns a reader thread that dispatches BridgeResp by id.
-    pub fn attach_connection(&self, stream: ipc::BridgeStream) -> io::Result<()> {
-        // Authenticate with the HMAC challenge-response before trusting the
-        // connection or installing the writer. The same buffered reader/writer
-        // carry the handshake and then the session, so no frame is lost. The
-        // label is part of the signed response, so it is only honored here,
-        // after the MAC verified.
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let mut writer = BufWriter::new(stream);
-        let label = match ipc::server_handshake(&mut reader, &mut writer) {
-            Ok(label) => label.unwrap_or_else(|| DEFAULT_LABEL.to_string()),
-            Err(e) => {
-                log_warn!("session", "rejected inbound connection: {e}");
-                return Err(e);
-            }
-        };
-        self.attach_authenticated(label, reader, writer);
-        Ok(())
+    /// Take ownership of a freshly-accepted, already-authenticated connection
+    /// from a native host and register it under the browser `label` the
+    /// handshake carried. A previous connection under the SAME label is
+    /// replaced (dropped/closed); connections under other labels are untouched.
+    /// Spawns a reader thread that dispatches `BridgeResp` by id.
+    ///
+    /// Returns `false` when the distinct-browser cap ([`MAX_BROWSERS`]) is
+    /// already reached and `label` is new: the cap is checked ATOMICALLY with
+    /// the insert (one lock acquisition), so concurrent new-label attaches
+    /// cannot each observe room and collectively exceed it. On refusal the
+    /// reader/writer are dropped here (the socket closes and the native host
+    /// reconnects); the caller has already sent the peer `Accepted`, so a
+    /// browser that lost the cap race is dropped rather than breaching the cap
+    /// -- a benign, self-healing degradation at a pathological browser count.
+    ///
+    /// The caller (the broker accept path) performs the HMAC handshake and the
+    /// `AttachRequest::Browser` role read on the same buffered halves before
+    /// handing them here, so no frame is lost and the label is honored only
+    /// after the MAC verified.
+    pub(crate) fn attach_browser(
+        &self,
+        label: String,
+        reader: BufReader<ipc::BridgeStream>,
+        writer: BufWriter<ipc::BridgeStream>,
+    ) -> bool {
+        self.attach_authenticated(label, reader, writer, Some(MAX_BROWSERS))
     }
 
     /// Register an already-authenticated connection under `label` and spawn
-    /// its reader. Split from [`attach_connection`] so the registry semantics
-    /// (replace-same-label, per-entry generation guard) are testable over a
-    /// socketpair without a lock file or handshake.
+    /// its reader. `cap` bounds the number of distinct browser labels
+    /// (`None` = unbounded, used by the registry unit tests). The cap check,
+    /// the generation allocation, and the insert all happen under ONE lock so
+    /// the cap invariant cannot be raced. Returns whether the connection was
+    /// attached. Split out so the registry semantics (replace-same-label,
+    /// per-entry generation guard, cap) are testable over a socketpair without
+    /// a lock file or handshake.
     fn attach_authenticated(
         &self,
         label: String,
         mut reader: BufReader<ipc::BridgeStream>,
         writer: BufWriter<ipc::BridgeStream>,
-    ) {
-        // Allocate this connection's generation before publishing the writer, so
-        // the writer and its owning generation are installed together.
-        let my_gen = self.next_gen.fetch_add(1, Ordering::SeqCst);
+        cap: Option<usize>,
+    ) -> bool {
+        // Atomic section: enforce the cap, allocate the generation, and install
+        // the writer under a single lock acquisition. An existing same-label
+        // entry (older connection to the same browser) is replaced regardless
+        // of the cap; a new label beyond the cap is refused. Replacing here
+        // drops the old writer; its reader will observe the disconnect and,
+        // thanks to the generation guard below, leave THIS entry alone.
+        let my_gen = {
+            let mut guard = self.conns.lock().unwrap();
+            if let Some(max) = cap {
+                if !guard.contains_key(&label) && guard.len() >= max {
+                    log_warn!(
+                        "session",
+                        "browser cap ({max}) reached; refusing new browser label '{label}'"
+                    );
+                    return false; // reader/writer dropped here -> socket closes
+                }
+            }
+            let my_gen = self.next_gen.fetch_add(1, Ordering::SeqCst);
+            guard.insert(
+                label.clone(),
+                Conn {
+                    generation: my_gen,
+                    writer,
+                },
+            );
+            my_gen
+        };
         log_info!(
             "session",
             "native host '{label}' connected and authenticated (generation {my_gen})"
-        );
-
-        // Store the writer half together with its generation, keyed by label.
-        // An existing same-label entry (older connection to the same browser)
-        // is dropped here; its reader will observe the disconnect and, thanks
-        // to the generation guard below, leave THIS entry alone.
-        self.conns.lock().unwrap().insert(
-            label.clone(),
-            Conn {
-                generation: my_gen,
-                writer,
-            },
         );
 
         // Spawn the reader: each BridgeResp routes to its pending sender. The
@@ -329,6 +357,7 @@ impl Session {
             // Senders drop here (locks already released), unblocking callers.
             drop(drained);
         });
+        true
     }
 
     /// The labels of all currently-connected browsers, sorted. Used by the
@@ -647,7 +676,9 @@ mod tests {
             let (srv, cli) = UnixStream::pair().unwrap();
             let reader = BufReader::new(srv.try_clone().unwrap());
             let writer = BufWriter::new(srv);
-            session.attach_authenticated(label.to_string(), reader, writer);
+            // No cap in the registry tests (they exercise replace/coexist/guard
+            // semantics, not the browser DoS cap).
+            assert!(session.attach_authenticated(label.to_string(), reader, writer, None));
             cli
         }
 
@@ -770,6 +801,35 @@ mod tests {
             chrome_w.flush().unwrap();
             let got = caller.join().unwrap().unwrap();
             assert_eq!(got, serde_json::json!("real"));
+        }
+
+        #[test]
+        fn a_new_label_beyond_the_cap_is_refused_but_a_reconnect_is_allowed() {
+            // The distinct-browser cap is enforced at attach: with `max` labels
+            // present, a NEW label is refused, but a same-label reconnect
+            // (which replaces, not adds) still goes through even at the cap.
+            let session = Session::new();
+            let max = 2;
+            let mk = || {
+                let (srv, cli) = UnixStream::pair().unwrap();
+                (
+                    BufReader::new(srv.try_clone().unwrap()),
+                    BufWriter::new(srv),
+                    cli,
+                )
+            };
+            let (r1, w1, _c1) = mk();
+            assert!(session.attach_authenticated("a".into(), r1, w1, Some(max)));
+            let (r2, w2, _c2) = mk();
+            assert!(session.attach_authenticated("b".into(), r2, w2, Some(max)));
+            // A third DISTINCT label is refused at the cap.
+            let (r3, w3, _c3) = mk();
+            assert!(!session.attach_authenticated("c".into(), r3, w3, Some(max)));
+            assert_eq!(session.labels(), vec!["a", "b"]);
+            // A reconnect under an existing label replaces its slot even at cap.
+            let (r2b, w2b, _c2b) = mk();
+            assert!(session.attach_authenticated("b".into(), r2b, w2b, Some(max)));
+            assert_eq!(session.labels(), vec!["a", "b"]);
         }
     }
 }

@@ -35,6 +35,29 @@ pub(crate) fn pid_identity(pid: u32) -> io::Result<String> {
     pid_cdhash(pid)
 }
 
+/// The full client identity of an arbitrary process named by pid: its running
+/// image's `cdhash` plus its signing Team ID when the image is Team-ID signed.
+/// Used to attest the harness (parent) for the trusted-client allowlist. Like
+/// [`pid_identity`] this identifies the guest by pid (not audit token), so it
+/// carries the narrow pid-reuse race recorded in ADR-0020; the running
+/// signature is still validated via `SecCodeCheckValidity`.
+pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientIdentity> {
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
+    let num = unsafe {
+        CFNumberCreate(
+            kCFAllocatorDefault,
+            KCF_NUMBER_SINT32,
+            (&pid as *const libc::pid_t).cast(),
+        )
+    };
+    if num.is_null() {
+        return Err(io::Error::other("CFNumberCreate for pid failed"));
+    }
+    let _num = Cf(num);
+    guest_client_identity(GuestKey::Pid, num)
+}
+
 /// The PID of the peer of a connected Unix-domain socket. macOS has no
 /// SO_PEERCRED pid; LOCAL_PEERPID on the AF_UNIX socket yields the pid of the
 /// process that opened the peer end.
@@ -76,8 +99,10 @@ type SecCodeRef = *mut c_void;
 type SecStaticCodeRef = *mut c_void;
 
 const DEFAULT_FLAGS: SecCSFlags = 0; // kSecCSDefaultFlags
+const SIGNING_INFORMATION_FLAGS: SecCSFlags = 0x2; // kSecCSSigningInformation
 const ERR_SEC_SUCCESS: OSStatus = 0;
 const KCF_NUMBER_SINT32: CFIndex = 3; // kCFNumberSInt32Type
+const KCF_STRING_ENCODING_UTF8: u32 = 0x0800_0100; // kCFStringEncodingUTF8
 
 // From <sys/un.h>: getsockopt level/name for the peer's audit token.
 const SOL_LOCAL: libc::c_int = 0;
@@ -110,6 +135,12 @@ extern "C" {
         value_callbacks: *const c_void,
     ) -> CFDictionaryRef;
     fn CFDictionaryGetValue(dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
+    fn CFStringGetCString(
+        the_string: CFStringRef,
+        buffer: *mut std::os::raw::c_char,
+        buffer_size: CFIndex,
+        encoding: u32,
+    ) -> u8;
 }
 
 #[link(name = "Security", kind = "framework")]
@@ -117,6 +148,7 @@ extern "C" {
     static kSecGuestAttributeAudit: CFStringRef;
     static kSecGuestAttributePid: CFStringRef;
     static kSecCodeInfoUnique: CFStringRef;
+    static kSecCodeInfoTeamIdentifier: CFStringRef;
     fn SecCodeCopySelf(flags: SecCSFlags, self_out: *mut SecCodeRef) -> OSStatus;
     fn SecCodeCopyGuestWithAttributes(
         host: SecCodeRef,
@@ -304,6 +336,59 @@ fn guest_cdhash(key: GuestKey, value: CFTypeRef) -> io::Result<String> {
     validate_and_cdhash(guest, "peer")
 }
 
+/// Like [`guest_cdhash`], but returns the guest's full client identity
+/// (cdhash + Team ID). Builds the same one-entry guest-attribute dictionary,
+/// copies and validates the peer's `SecCode`, and reads both signing fields.
+fn guest_client_identity(
+    key: GuestKey,
+    value: CFTypeRef,
+) -> io::Result<super::super::ClientIdentity> {
+    let key_ref = unsafe {
+        match key {
+            GuestKey::Audit => kSecGuestAttributeAudit,
+            GuestKey::Pid => kSecGuestAttributePid,
+        }
+    };
+    let keys: [*const c_void; 1] = [key_ref];
+    let values: [*const c_void; 1] = [value];
+    let attrs = unsafe {
+        CFDictionaryCreate(
+            kCFAllocatorDefault,
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            std::ptr::addr_of!(kCFTypeDictionaryKeyCallBacks),
+            std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
+        )
+    };
+    if attrs.is_null() {
+        return Err(io::Error::other(
+            "CFDictionaryCreate for guest attributes failed",
+        ));
+    }
+    let _attrs = Cf(attrs);
+
+    let mut guest: SecCodeRef = std::ptr::null_mut();
+    let st = unsafe {
+        SecCodeCopyGuestWithAttributes(std::ptr::null_mut(), attrs, DEFAULT_FLAGS, &mut guest)
+    };
+    if st != ERR_SEC_SUCCESS {
+        return Err(osstatus_err("SecCodeCopyGuestWithAttributes", st));
+    }
+    if guest.is_null() {
+        return Err(io::Error::other(
+            "SecCodeCopyGuestWithAttributes returned null on success",
+        ));
+    }
+    let _guest = Cf(guest as CFTypeRef);
+
+    let st = unsafe { SecCodeCheckValidity(guest, DEFAULT_FLAGS, std::ptr::null()) };
+    if st != ERR_SEC_SUCCESS {
+        return Err(osstatus_err("SecCodeCheckValidity (harness)", st));
+    }
+    signing_identity_of_code(guest)
+}
+
 /// Validate a dynamic `SecCode`'s running signature, then return its cdhash.
 /// The validity check is the running-image-bound step: it verifies the code
 /// pages match the signature of the process actually executing.
@@ -358,4 +443,85 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
     }
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
     Ok(super::super::rand::hex_encode(bytes))
+}
+
+/// Read a validated `SecCode`'s full signing identity: its `cdhash` (required)
+/// and its Team ID (optional). Uses `kSecCSSigningInformation` so the signing
+/// dictionary carries the Team ID; `kSecCodeInfoUnique` (the cdhash) is present
+/// regardless. An unsigned / ad-hoc image has no Team ID, so `team_id` is
+/// `None` and the allowlist must anchor it on the hash instead.
+fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::ClientIdentity> {
+    let mut static_code: SecStaticCodeRef = std::ptr::null_mut();
+    let st = unsafe { SecCodeCopyStaticCode(code, DEFAULT_FLAGS, &mut static_code) };
+    if st != ERR_SEC_SUCCESS {
+        return Err(osstatus_err("SecCodeCopyStaticCode", st));
+    }
+    if static_code.is_null() {
+        return Err(io::Error::other(
+            "SecCodeCopyStaticCode returned null on success",
+        ));
+    }
+    let _static = Cf(static_code as CFTypeRef);
+
+    let mut info: CFDictionaryRef = std::ptr::null();
+    let st =
+        unsafe { SecCodeCopySigningInformation(static_code, SIGNING_INFORMATION_FLAGS, &mut info) };
+    if st != ERR_SEC_SUCCESS {
+        return Err(osstatus_err("SecCodeCopySigningInformation", st));
+    }
+    if info.is_null() {
+        return Err(io::Error::other(
+            "SecCodeCopySigningInformation returned null on success",
+        ));
+    }
+    let _info = Cf(info);
+
+    // cdhash (borrowed Get-rule references; do not release).
+    let cdhash = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) } as CFDataRef;
+    if cdhash.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "code has no cdhash (unsigned?)",
+        ));
+    }
+    let len = unsafe { CFDataGetLength(cdhash) };
+    let ptr = unsafe { CFDataGetBytePtr(cdhash) };
+    if len <= 0 || ptr.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "code-directory hash is empty",
+        ));
+    }
+    let hash =
+        super::super::rand::hex_encode(unsafe { std::slice::from_raw_parts(ptr, len as usize) });
+
+    // Team ID is optional: ad-hoc / unsigned images simply lack it.
+    let team_ref = unsafe { CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier) } as CFStringRef;
+    let team_id = cfstring_to_string(team_ref).filter(|s| !s.is_empty());
+
+    Ok(super::super::ClientIdentity { hash, team_id })
+}
+
+/// Copy a `CFString` into an owned Rust `String` (UTF-8), or `None` if the
+/// reference is null or the copy fails. A fixed 256-byte buffer is ample for a
+/// 10-character Team ID; a value that would not fit is treated as absent rather
+/// than truncated.
+fn cfstring_to_string(s: CFStringRef) -> Option<String> {
+    if s.is_null() {
+        return None;
+    }
+    let mut buf = [0i8; 256];
+    let ok = unsafe {
+        CFStringGetCString(
+            s,
+            buf.as_mut_ptr(),
+            buf.len() as CFIndex,
+            KCF_STRING_ENCODING_UTF8,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
+    cstr.to_str().ok().map(str::to_string)
 }
