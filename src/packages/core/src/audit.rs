@@ -480,7 +480,7 @@ pub fn run_audit(argv: &[String]) -> i32 {
     }
     let start = lines.len().saturating_sub(limit);
     let mut unrecognized = 0usize;
-    for line in &lines[start..] {
+    for line in lines.iter().skip(start) {
         match parse_record(line) {
             Some(rec) => println!("{}", render_line(&rec)),
             None => {

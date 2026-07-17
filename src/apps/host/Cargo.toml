@@ -11,3 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 chromium-bridge-core.workspace = true
+
+[lints]
+workspace = true

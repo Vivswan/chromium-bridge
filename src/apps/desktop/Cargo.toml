@@ -15,3 +15,6 @@ tauri-build.workspace = true
 [dependencies]
 chromium-bridge-core.workspace = true
 tauri.workspace = true
+
+[lints]
+workspace = true

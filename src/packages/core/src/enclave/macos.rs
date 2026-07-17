@@ -1,4 +1,8 @@
 //! macOS keychain / Secure Enclave backend (vetted crate, no bespoke FFI).
+// Quarantined unsafe: CoreFoundation constant access for the Secure Enclave
+// token-id check (the wrapper crate does not re-export it). unsafe_code is
+// denied workspace-wide; this module is one of the audited exceptions.
+#![allow(unsafe_code)]
 
 use core_foundation::base::{TCFType, ToVoid};
 use core_foundation::string::CFString;
@@ -111,10 +115,14 @@ pub(super) fn lookup() -> Result<Option<SecKey>, EnclaveError> {
             _ => None,
         })
         .collect();
-    match keys.len() {
-        0 => Ok(None),
-        1 => {
-            let key = keys.pop().expect("len checked");
+    if keys.len() > 1 {
+        return Err(EnclaveError::KeyInvalid(
+            "multiple keys exist under the enrollment label",
+        ));
+    }
+    match keys.pop() {
+        None => Ok(None),
+        Some(key) => {
             if is_secure_enclave_key(&key) {
                 Ok(Some(key))
             } else {
@@ -123,9 +131,6 @@ pub(super) fn lookup() -> Result<Option<SecKey>, EnclaveError> {
                 ))
             }
         }
-        _ => Err(EnclaveError::KeyInvalid(
-            "multiple keys exist under the enrollment label",
-        )),
     }
 }
 

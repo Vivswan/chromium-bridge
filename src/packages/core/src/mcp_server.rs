@@ -44,7 +44,7 @@ pub fn run() -> i32 {
         Ok(hash) => log_info!(
             "mcp",
             "bridge peer attestation active (self id {})",
-            &hash[..12]
+            hash.get(..12).unwrap_or(hash)
         ),
         Err(e) => {
             log_error!("mcp", "cannot establish own executable identity: {e}");
@@ -375,23 +375,7 @@ pub(crate) fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
 /// threads inherit the blocked mask.
 fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
     #[cfg(unix)]
-    unsafe {
-        let mut set: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&mut set);
-        libc::sigaddset(&mut set, libc::SIGTERM);
-        libc::sigaddset(&mut set, libc::SIGINT);
-        // Block in the current (main) thread; threads spawned later inherit it.
-        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
-
-        std::thread::spawn(move || {
-            let mut sig: std::os::raw::c_int = 0;
-            // Wait until one of the blocked signals is delivered.
-            let _ = libc::sigwait(&set, &mut sig);
-            log_info!("mcp", "received signal {sig}, cleaning up and exiting");
-            f();
-            std::process::exit(0);
-        });
-    }
+    crate::sys::block_signals_and_spawn_cleanup(f);
     #[cfg(not(unix))]
     {
         let _ = f;

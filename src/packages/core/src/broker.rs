@@ -124,7 +124,11 @@ impl RefCount {
     /// Try to add a client. Fails (returns false) if the broker is at capacity
     /// or has already committed to shutting down (`terminal`).
     fn try_incr(&self) -> bool {
-        let mut g = self.state.lock().unwrap();
+        // A poisoned count is untrustworthy state: refuse the attach (the
+        // client redials) rather than admit past an unknowable count.
+        let Ok(mut g) = self.state.lock() else {
+            return false;
+        };
         let (count, terminal) = *g;
         if terminal || count >= self.max {
             return false;
@@ -136,9 +140,16 @@ impl RefCount {
     /// Remove a client. Wakes [`wait_zero`](RefCount::wait_zero) when the count
     /// reaches zero.
     fn decr(&self) {
-        let mut g = self.state.lock().unwrap();
+        // Recover from poison rather than skip: failing to release a slot
+        // would wedge wait_zero and keep the broker alive forever.
+        let mut g = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         debug_assert!(g.0 > 0, "decr underflow");
-        g.0 -= 1;
+        // saturating_sub: a (never-observed) double-release must not wrap the
+        // count in release builds and wedge the zero detection forever.
+        g.0 = g.0.saturating_sub(1);
         if g.0 == 0 {
             self.reached_zero.notify_all();
         }
@@ -149,9 +160,17 @@ impl RefCount {
     /// [`try_incr`](RefCount::try_incr)), so the caller can tear the broker down
     /// without racing a fresh attach.
     fn wait_zero(&self) {
-        let mut g = self.state.lock().unwrap();
+        // Shutdown path: recover from poison and keep waiting -- refusing here
+        // would abandon the terminal latch and let a racing relay revive us.
+        let mut g = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while g.0 != 0 {
-            g = self.reached_zero.wait(g).unwrap();
+            g = self
+                .reached_zero
+                .wait(g)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         g.1 = true;
     }
@@ -331,24 +350,41 @@ impl ClientRegistry {
         }
     }
 
-    fn register(&self, identity: Option<ClientIdentity>, stream: BridgeStream) -> u64 {
-        let mut inner = self.slots.lock().unwrap();
+    fn register(&self, identity: Option<ClientIdentity>, stream: BridgeStream) -> Option<u64> {
+        // Refuse on poison: this registry is the kill switch's reach, and the
+        // thread most likely to have poisoned it is the sweep watcher itself.
+        // Admitting a relay the (possibly dead) sweeper can never sever would
+        // be fail-open; the caller rejects the connection instead.
+        let Ok(mut inner) = self.slots.lock() else {
+            return None;
+        };
         let id = inner.next_id;
         inner.next_id += 1;
         inner
             .clients
             .insert(id, RegisteredClient { identity, stream });
-        id
+        Some(id)
     }
 
     fn deregister(&self, id: u64) {
-        self.slots.lock().unwrap().clients.remove(&id);
+        // Release path: recover from poison so slots cannot leak.
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clients
+            .remove(&id);
     }
 
     /// Shut down every registered relay whose identity `refuse` matches.
     /// Returns how many connections were dropped.
     fn sweep(&self, refuse: impl Fn(Option<&ClientIdentity>) -> bool) -> usize {
-        let inner = self.slots.lock().unwrap();
+        // The kill switch must bite even after a panic poisoned the registry:
+        // severing sockets is safe on inconsistent bookkeeping, whereas
+        // refusing to sever would leave clients attached.
+        let inner = self
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut dropped = 0;
         for client in inner.clients.values() {
             if refuse(client.identity.as_ref()) {
@@ -646,7 +682,7 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted {
     // authentication (as the accept loop did previously). Unix only.
     #[cfg(unix)]
     {
-        let want = unsafe { libc::geteuid() };
+        let want = crate::sys::effective_uid();
         match ipc::peer_uid(&stream) {
             Ok(uid) if uid == want => {}
             Ok(uid) => {
@@ -823,7 +859,13 @@ fn admit_client(
             return Admitted::Rejected;
         }
     };
-    let registry_id = broker.registry.register(identity.clone(), sweep_handle);
+    let Some(registry_id) = broker.registry.register(identity.clone(), sweep_handle) else {
+        log_warn!(
+            "broker",
+            "revocation registry unavailable (poisoned); refusing relay"
+        );
+        return Admitted::Rejected;
+    };
     // Every rejection path below must release the registry slot it holds.
     fn reject_relay(
         registry: &ClientRegistry,
@@ -1335,7 +1377,7 @@ mod tests {
             // is deliverable.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), srv);
+            registry.register(Some(ident("keep")), srv).unwrap();
 
             let browsers = std::cell::Cell::new(0usize);
             let seen = watch_tick(
@@ -1387,8 +1429,8 @@ mod tests {
             let registry = ClientRegistry::new();
             let (a_srv, mut a_cli) = UnixStream::pair().unwrap();
             let (b_srv, mut b_cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), a_srv);
-            registry.register(Some(ident("revoked")), b_srv);
+            registry.register(Some(ident("keep")), a_srv).unwrap();
+            registry.register(Some(ident("revoked")), b_srv).unwrap();
 
             // Same epoch as last_seen, yet "revoked" is no longer listed.
             let seen = watch_tick(
@@ -1427,8 +1469,8 @@ mod tests {
             let registry = ClientRegistry::new();
             let (a_srv, mut a_cli) = UnixStream::pair().unwrap();
             let (b_srv, mut b_cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), a_srv);
-            registry.register(Some(ident("revoked")), b_srv);
+            registry.register(Some(ident("keep")), a_srv).unwrap();
+            registry.register(Some(ident("revoked")), b_srv).unwrap();
 
             // The fresh allowlist still lists "keep" but not "revoked".
             let seen = watch_tick(
@@ -1473,7 +1515,7 @@ mod tests {
             // and nothing is dropped.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), srv);
+            registry.register(Some(ident("keep")), srv).unwrap();
             let seen = watch_tick(
                 &registry,
                 7,
@@ -1495,7 +1537,7 @@ mod tests {
             // keeps failing closed, on the next tick).
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("h")), srv);
+            registry.register(Some(ident("h")), srv).unwrap();
             let browsers = std::cell::Cell::new(0usize);
             let seen = watch_tick(
                 &registry,
@@ -1520,7 +1562,7 @@ mod tests {
             // Unreadable allowlist after a bump: same posture.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("h")), srv);
+            registry.register(Some(ident("h")), srv).unwrap();
             let seen = watch_tick(
                 &registry,
                 1,
@@ -1537,7 +1579,7 @@ mod tests {
         fn deregister_removes_the_slot_so_sweeps_skip_it() {
             let registry = ClientRegistry::new();
             let (srv, _cli) = UnixStream::pair().unwrap();
-            let id = registry.register(Some(ident("h")), srv);
+            let id = registry.register(Some(ident("h")), srv).unwrap();
             registry.deregister(id);
             assert_eq!(
                 registry.sweep(|_| true),
