@@ -176,22 +176,37 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   user approved), masking as a best-effort layer, and the audit log.
 - The **high-risk click grace window** lets *unrelated* same-origin code run
   without re-prompting: after one approved submit or link click, the same origin
-  and action kind skip the toast for 60s (see
-  [ADR-0006](../adr/0006-toast-confirmation-for-high-risk.md)). `page_eval` is not
-  in this window; it reconfirms on every call.
-- **The in-page confirmation is defeatable by the page it guards.** The
-  toast that asks the user to approve a high-risk action (a submit click,
-  `page_press`, `page_select`, `page_upload`, and the rest) is drawn in the
-  page's own DOM through a content script, or in the page's MAIN world under
-  CDP mode. A page that has already prompt-injected the model can watch for
-  that toast with a `MutationObserver` and click Allow itself, or overwrite
-  the globals the toast is built from, so consent is bypassed exactly on the
-  hostile origin where it matters most. The gate holds against an ordinary
-  page and an honest user; it does not hold against a page that owns the DOM
-  the toast lives in. Closing it needs a confirmation surface the page cannot
-  reach, such as a browser-action popup or `chrome.notifications`. This is the
-  same shape as the manifest-substitution residual: the boundary is real but
-  not enforced against an attacker who already controls that layer.
+  and action kind skip the confirmation for 60s (see
+  [ADR-0006](../adr/0006-toast-confirmation-for-high-risk.md), surface superseded
+  by [ADR-0027](../adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)).
+  `page_eval` is not in this window; it reconfirms on every call.
+- **Trust-state isolation has a cold-start window (#32, ADR-0027).** The
+  enrollment pin, the compromised marker, `requireEnrollment`, and the
+  allowlist live in `storage.local`, which Chrome exposes to content scripts by
+  default. The extension confines both storage areas to extension contexts with
+  `setAccessLevel(TRUSTED_CONTEXTS)` and fails the enrollment gate closed until
+  that lands. Because `setAccessLevel` is asynchronous and applied after the
+  service worker starts, a sub-millisecond window exists at cold start in which
+  a content script from a prior worker life, in a compromised renderer, could
+  write a tampered value that the restriction then locks in. No user-space API
+  closes it; the enclave ceremony's cryptographic checks bound, but do not
+  erase, what a planted pin achieves.
+- **High-risk confirmations now render off the page-reachable DOM
+  (ADR-0027).** Every high-risk confirmation (a submit click, `page_press`,
+  `page_select`, `page_eval`, `tab_close`, `page_upload`) shows in a dedicated
+  `confirm.html` popup window, a `chrome-extension://` document in its own
+  process. A guarded page cannot read, focus, overlay, or click it, and the
+  message router accepts the confirmation's ready/resolve messages only from
+  that exact document. This closes the earlier residual, where the toast was
+  drawn in the page's own DOM (or its MAIN world under CDP) and a
+  prompt-injected page could watch for it with a `MutationObserver` and click
+  Allow itself. A navigation that races the pipeline while a confirmation is
+  open is caught by an origin assertion run in the page atomically with the
+  act, and a click is additionally bound to the target descriptor the user
+  approved. Residual: the surface displays the request but does not yet prove
+  user presence cryptographically; Phase 8 routes `page_eval`/`page_upload`
+  approval through the host Secure Enclave (Touch ID) so the verdict is an
+  unspoofable, host-signed tap rather than a click the extension trusts.
 - **`page_upload` can attach any local file the caller names.** When the tool
   is enabled (it is off by default), it attaches whatever absolute path the
   call supplies to a file input, so a model induced to call it on a page can
