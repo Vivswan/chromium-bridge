@@ -5,10 +5,11 @@
 // could attach the user's private files to a web page and have it uploaded.
 // Two gates, both mandatory:
 //   1. OFF by default (fileUploadEnabled). The user must opt in.
-//   2. EVERY call shows an on-page confirmation Toast displaying the exact file
-//      path before anything is attached (the page is not blocked here, so we
-//      can draw the Toast in the MAIN world via Runtime.evaluate). There is no
-//      grace window — every upload reconfirms, like page_eval.
+//   2. EVERY call shows a confirmation on the extension-owned surface
+//      (ADR-0027) displaying the exact file path before anything is attached.
+//      There is no grace window - every upload reconfirms, like page_eval.
+//      Phase 8 routes this same confirmation through the host's Secure
+//      Enclave user-presence gate (Touch ID).
 //
 // The path is shown UNMASKED in the confirmation on purpose: the user must see
 // exactly which local file would leave their disk.
@@ -16,25 +17,16 @@
 import { getSetting } from "../shared/settings";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { confirmToast } from "./cdp/page-fns";
 import { cdpRegistry } from "./cdp/registry";
-import {
-  buildEvaluateExpression,
-  dbgAttach,
-  dbgDetach,
-  dbgSend,
-  isDebuggable,
-} from "./cdp/session";
+import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
+import { confirmWithUser } from "./confirm/service";
 import { resolveTargetTab } from "./tabs";
 
 interface GetDocumentResult {
-  root?: { nodeId?: number };
+  root?: { nodeId?: number; documentURL?: string };
 }
 interface QuerySelectorResult {
   nodeId?: number;
-}
-interface EvaluateResult {
-  result?: { value?: unknown };
 }
 
 export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
@@ -63,6 +55,34 @@ export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): 
   }
   const tabId = tab.id!;
 
+  // Confirm EVERY call, showing the exact path, BEFORE anything attaches.
+  // The path is shown UNMASKED on purpose: the user must see exactly which
+  // local file would leave their disk.
+  const approved = await confirmWithUser({
+    kind: "upload",
+    origin: tab.url ? new URL(tab.url).origin : "",
+    tabTitle: tab.title || "",
+    detail: `${path}\n(input: ${selector})`,
+    timeoutMs: await getSetting("clickToastTimeoutMs"),
+  });
+  if (!approved) {
+    throw new Error(`user denied page_upload: ${path}`);
+  }
+
+  // The confirmation held the pipeline open; the tab may have navigated.
+  // Re-fetch it and fail closed if the origin is no longer the one the user
+  // approved uploading to.
+  {
+    const current = await resolveTargetTab(tabId);
+    const originNow = current.url ? new URL(current.url).origin : "";
+    const originApproved = tab.url ? new URL(tab.url).origin : "";
+    if (originNow !== originApproved || !isDebuggable(current.url)) {
+      throw new Error(
+        "the tab navigated while the upload confirmation was open; re-issue page_upload",
+      );
+    }
+  }
+
   const reusing = cdpRegistry.hasSession(tabId);
   if (reusing) {
     // Await the registry's idempotent (de-duped) attach so we never issue CDP
@@ -74,33 +94,38 @@ export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): 
     } catch (e) {
       const msg = String((e as Error).message || e);
       if (/another debugger/i.test(msg)) {
-        throw new Error("该标签页已打开 DevTools,page_upload 无法附加。请关闭 DevTools 后重试。", {
-          cause: e,
-        });
+        throw new Error(
+          "page_upload cannot attach: DevTools is open on this tab. Close DevTools and retry.",
+          {
+            cause: e,
+          },
+        );
       }
       throw e;
     }
   }
   try {
-    // Confirm EVERY call, showing the exact path. Rendered in the MAIN world via
-    // Runtime.evaluate (the page is not blocked, unlike a dialog).
-    const timeoutMs = await getSetting("clickToastTimeoutMs");
-    const question = `Upload local file to this page?\n${path}\n(input: ${selector})`;
-    const expr = buildEvaluateExpression(confirmToast, [question, timeoutMs]);
-    const res = await dbgSend<EvaluateResult>(tabId, "Runtime.evaluate", {
-      expression: expr,
-      returnByValue: true,
-      awaitPromise: true,
-      userGesture: true,
-    });
-    if (res.result?.value !== true) {
-      throw new Error(`user denied page_upload: ${path}`);
-    }
-
-    // Resolve the file input node, then set the file on it.
+    // Resolve the file input node, then set the file on it. The document URL
+    // comes from the SAME DOM.getDocument the nodeId does, so this origin
+    // check is bound to the exact document the file would be attached to: a
+    // navigation after it invalidates the nodeId and the attach fails. This
+    // closes the window between the SW-side origin recheck and the attach.
     const doc = await dbgSend<GetDocumentResult>(tabId, "DOM.getDocument", { depth: 0 });
     const rootNodeId = doc.root?.nodeId;
     if (rootNodeId == null) throw new Error("page_upload: could not read the page document");
+    const docUrl = doc.root?.documentURL;
+    const approvedOrigin = tab.url ? new URL(tab.url).origin : "";
+    let docOrigin = "";
+    try {
+      docOrigin = docUrl ? new URL(docUrl).origin : "";
+    } catch {
+      docOrigin = "";
+    }
+    if (!docOrigin || docOrigin !== approvedOrigin) {
+      throw new Error(
+        "the page navigated while the upload confirmation was open; re-issue page_upload",
+      );
+    }
     const node = await dbgSend<QuerySelectorResult>(tabId, "DOM.querySelector", {
       nodeId: rootNodeId,
       selector,

@@ -1,100 +1,98 @@
-// CdpBackend — the page backend used when cdpMode is on (ADR-0017). Every
-// page-level op runs through a persistent CdpSession (browser.debugger) in the
-// page's MAIN world via Runtime.evaluate, which bypasses page CSP. The DOM work
-// is the portable functions in cdp/page-fns.ts; confirmations, settings gates,
-// masking and the same-origin grace window are handled here in the SW so they
-// match the content-script path.
+// CdpBackend - the page backend used when cdpMode is on (ADR-0017). Every
+// page-level op runs through a persistent CdpSession (browser.debugger) in
+// the page's MAIN world via Runtime.evaluate, which bypasses page CSP. The
+// DOM work is the SAME shared page API the content script uses
+// (lib/dom/page-api.ts): the self-contained factory is stringified and
+// applied in the page, so the two backends cannot drift. Allowlist,
+// confirmation, and masking policy run in dispatch.ts around this backend.
 
 import { unreachable } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
-import { truncate } from "../../content/util";
-import { maskSensitive, maskString } from "../../shared/masking";
+import type { ClickProbe, PageApi } from "../../dom/page-api";
+import { createPageApi, REF_ATTR } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
-import { getSetting } from "../../shared/settings";
 import type { OpArgs } from "../../shared/types";
-import { ensureAllowed } from "../allowlist-store";
-import {
-  type ClickTarget,
-  describeAction,
-  describeForToast,
-  isHighRiskClick,
-} from "../cdp/click-risk";
-import {
-  confirmToast,
-  doClick,
-  doFill,
-  doHover,
-  doPress,
-  doSelect,
-  evalToast,
-  pageScroll,
-  pageSnapshot,
-  pageText,
-  pageWaitFor,
-  probeClickTarget,
-  REF_ATTR,
-  readStorage,
-} from "../cdp/page-fns";
 import { cdpRegistry } from "../cdp/registry";
 import { type CdpSession, type EvaluateResponse, isDebuggable } from "../cdp/session";
+import type { PageOpGuard } from "../confirm/gate";
 import type { PageBackend } from "../page-backend";
 
-// Same-origin confirmation grace window, mirroring content/toast.ts. Lives in
-// the SW (not the page) so it survives across CDP evaluate calls. Reset if the
-// SW is recycled — acceptable, same as a re-injected content script.
-let lastConfirmed: { key: string | null; until: number } = { key: null, until: 0 };
-
-function originOf(url: string | undefined): string {
-  if (!url) return "";
-  try {
-    return new URL(url).origin;
-  } catch {
-    return url;
-  }
+// `(createPageApi)(REF_ATTR).method(...args)` as a MAIN-world expression.
+// The factory is self-contained (enforced by test), so its source evaluates
+// cleanly outside module scope; args are JSON, never string-spliced user
+// code. The method name comes from the typed PageApi key set only.
+// `expectOrigin` (when set) is asserted against location.origin INSIDE the
+// same evaluation, atomically with the act: a navigation that raced the
+// SW-side checks makes the expression throw instead of acting.
+export function pageApiExpression(
+  method: keyof PageApi,
+  args: readonly unknown[],
+  expectOrigin?: string,
+): string {
+  const argList = args.map((a) => JSON.stringify(a)).join(", ");
+  const call = `(${createPageApi.toString()})(${JSON.stringify(REF_ATTR)}).${method}(${argList})`;
+  if (expectOrigin === undefined) return call;
+  return (
+    `(() => { if (location.origin !== ${JSON.stringify(expectOrigin)}) ` +
+    `throw new Error("the page origin changed while the request was in flight - re-issue the call"); ` +
+    `return ${call}; })()`
+  );
 }
 
 export class CdpBackend implements PageBackend {
-  async run(op: PageOp, args: OpArgs, tab: Browser.tabs.Tab): Promise<unknown> {
-    // Preserve dispatch's ordering: allowlist check, then do the work.
-    await ensureAllowed(tab.url);
+  async probeClick(args: OpArgs, tab: Browser.tabs.Tab): Promise<ClickProbe> {
+    const session = await this.session(tab);
+    return (await session.evaluate(
+      pageApiExpression("probeClick", [{ ref: args.ref, selector: args.selector }]),
+    )) as ClickProbe;
+  }
+
+  private async session(tab: Browser.tabs.Tab): Promise<CdpSession> {
     if (!isDebuggable(tab.url)) {
       throw new Error(
         `CDP mode cannot control this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
       );
     }
-    const session = await cdpRegistry.get(tab.id!);
+    if (tab.id == null) throw new Error("target tab has no id");
+    return await cdpRegistry.get(tab.id);
+  }
+
+  async run(op: PageOp, args: OpArgs, tab: Browser.tabs.Tab, guard: PageOpGuard): Promise<unknown> {
+    const session = await this.session(tab);
+    const expr = (method: keyof PageApi, callArgs: readonly unknown[]) =>
+      pageApiExpression(method, callArgs, guard.expectOrigin);
 
     switch (op) {
       case "page_snapshot":
-        return await session.evaluate(pageSnapshot, [REF_ATTR]);
+        return await session.evaluate(expr("snapshot", []));
 
       case "page_text":
-        return await session.evaluate(pageText, []);
+        return await session.evaluate(expr("text", []));
 
       case "page_scroll":
-        return await session.evaluate(pageScroll, [
-          { direction: args.direction, pixels: args.pixels },
-        ]);
+        return await session.evaluate(
+          expr("scroll", [{ direction: args.direction, pixels: args.pixels }]),
+        );
 
       case "page_wait_for":
         try {
           return await session.evaluate(
-            pageWaitFor,
-            [
+            expr("waitFor", [
               {
                 nav: args.nav,
                 selector: args.selector,
                 text: args.text,
                 timeoutMs: args.timeoutMs,
               },
-            ],
+            ]),
+            [],
             { awaitPromise: true },
           );
         } catch (e) {
-          // A successful navigation destroys the MAIN-world execution context,
-          // which rejects the pending Runtime.evaluate. For a nav wait that IS
-          // the success signal, so report it as matched (mirrors the content
-          // path's { matched: true, nav: true }) instead of surfacing an error.
+          // A successful navigation destroys the MAIN-world execution
+          // context, which rejects the pending Runtime.evaluate. For a nav
+          // wait that IS the success signal, so report it as matched
+          // (mirrors the content path's { matched: true, nav: true }).
           const msg = String((e as Error)?.message || e);
           if (
             args.nav &&
@@ -109,31 +107,34 @@ export class CdpBackend implements PageBackend {
         return await session.screenshot();
 
       case "storage_get":
-        return await this.storageGet(session, args);
-
-      case "page_fill":
-        return await session.evaluate(doFill, [
-          REF_ATTR,
-          { ref: args.ref, selector: args.selector, value: args.value },
-        ]);
+        // RAW values here; dispatch masks them via egress.ts (always-on).
+        return await session.evaluate(expr("readStorage", [{ type: args.type, key: args.key }]));
 
       case "page_click":
-        return await this.click(session, args, tab);
+        // guard.clickExpect binds the click to the descriptor the preflight
+        // authorized; the page API refuses if the target changed.
+        return await session.evaluate(
+          expr("click", [{ ref: args.ref, selector: args.selector, expect: guard.clickExpect }]),
+        );
+
+      case "page_fill":
+        return await session.evaluate(
+          expr("fill", [{ ref: args.ref, selector: args.selector, value: args.value }]),
+        );
 
       case "page_press":
-        return await this.press(session, args);
+        return await session.evaluate(expr("press", [{ keys: args.keys }]));
 
       case "page_hover":
-        return await session.evaluate(doHover, [
-          REF_ATTR,
-          { ref: args.ref, selector: args.selector },
-        ]);
+        return await session.evaluate(expr("hover", [{ ref: args.ref, selector: args.selector }]));
 
       case "page_select":
-        return await this.select(session, args);
+        return await session.evaluate(
+          expr("select", [{ ref: args.ref, selector: args.selector, value: args.value }]),
+        );
 
       case "page_eval":
-        return await this.pageEval(session, args, tab);
+        return await this.pageEval(session, args, guard);
 
       default:
         // Exhaustiveness backstop: adding an op to PAGE_OPS without a case
@@ -142,172 +143,45 @@ export class CdpBackend implements PageBackend {
     }
   }
 
-  // storage_get: read raw values in the page, mask in the SW (always-on).
-  private async storageGet(session: CdpSession, args: OpArgs): Promise<unknown> {
-    const raw = (await session.evaluate(readStorage, [{ type: args.type, key: args.key }])) as
-      | { key: string; found: false }
-      | { key: string; found: true; value: string }
-      | {
-          type: string;
-          entries: Record<string, string>;
-          count: number;
-          truncated: boolean;
-          totalKeys: number;
-        };
-    if ("entries" in raw) {
-      const masked: Record<string, string> = {};
-      for (const [k, v] of Object.entries(raw.entries)) masked[k] = maskString(v);
-      return { ...raw, entries: masked };
-    }
-    if (raw.found) return { ...raw, value: maskString(raw.value) };
-    return raw;
-  }
-
-  // page_click with the same high-risk confirmation as the content path.
-  private async click(session: CdpSession, args: OpArgs, tab: Browser.tabs.Tab): Promise<unknown> {
-    const target = (await session.evaluate(probeClickTarget, [
-      REF_ATTR,
-      { ref: args.ref, selector: args.selector },
-    ])) as ClickTarget;
-
-    if (isHighRiskClick(target)) {
-      const confirmEnabled = await getSetting("confirmHighRiskClick");
-      if (confirmEnabled !== false) {
-        const actionDesc = describeAction(target, "click");
-        await this.confirmWithToast(
-          session,
-          `Click "${describeForToast(target)}"?`,
-          // Key the grace window per-tab (not just per-origin) so approving on
-          // one tab never silently suppresses the confirm on another same-origin
-          // tab — matching the content path, where lastConfirmed is per-tab.
-          `${tab.id}:${originOf(tab.url)}:${actionDesc}`,
-          actionDesc,
-          await getSetting("clickToastTimeoutMs"),
-        );
-      }
-    }
-
-    return await session.evaluate(doClick, [REF_ATTR, { ref: args.ref, selector: args.selector }]);
-  }
-
-  // page_press with a confirm-every-press toast (a keypress can submit/trigger).
-  private async press(session: CdpSession, args: OpArgs): Promise<unknown> {
-    const keys = (args.keys || "").trim();
-    if (!keys) throw new Error("page_press needs `keys`");
-    await this.confirmAlways(
-      session,
-      `Press "${keys}"?`,
-      `press ${keys}`,
-      await getSetting("clickToastTimeoutMs"),
-    );
-    return await session.evaluate(doPress, [{ keys }]);
-  }
-
-  // page_select with a confirm-every-call toast (form state change).
-  private async select(session: CdpSession, args: OpArgs): Promise<unknown> {
-    const value = args.value ?? "";
-    await this.confirmAlways(
-      session,
-      `Select "${value}"?`,
-      `select ${value}`,
-      await getSetting("clickToastTimeoutMs"),
-    );
-    return await session.evaluate(doSelect, [
-      REF_ATTR,
-      { ref: args.ref, selector: args.selector, value },
-    ]);
-  }
-
-  // Confirm with NO grace window: every call prompts. Mirrors content/toast.ts
-  // confirmAlways — page_press / page_select promise a confirmation on every
-  // call, so unlike confirmWithToast this never consults lastConfirmed.
-  private async confirmAlways(
-    session: CdpSession,
-    question: string,
-    actionDesc: string,
-    timeoutMs: number,
-  ): Promise<void> {
-    const approved = await session.evaluate(confirmToast, [question, timeoutMs], {
-      awaitPromise: true,
-    });
-    if (!approved) throw new Error(`user denied: ${actionDesc}`);
-  }
-
-  // Show the click confirmation toast in the page (honoring the grace window).
-  private async confirmWithToast(
-    session: CdpSession,
-    question: string,
-    key: string,
-    actionDesc: string,
-    timeoutMs: number,
-  ): Promise<void> {
-    const graceMs = await getSetting("confirmGraceMs");
-    if (graceMs > 0 && lastConfirmed.key === key && Date.now() < lastConfirmed.until) {
-      return; // within the grace window
-    }
-    const approved = await session.evaluate(confirmToast, [question, timeoutMs], {
-      awaitPromise: true,
-    });
-    if (!approved) throw new Error(`user denied: ${actionDesc}`);
-    lastConfirmed = { key, until: Date.now() + graceMs };
-  }
-
-  // page_eval: settings gate + enlarged confirm toast + run in MAIN world.
-  private async pageEval(
-    session: CdpSession,
-    args: OpArgs,
-    tab: Browser.tabs.Tab,
-  ): Promise<unknown> {
+  // page_eval: the settings gate and the confirmation already ran in
+  // confirm/gate.ts; here the code just runs as an async IIFE in the MAIN
+  // world. Unlike the content path this does NOT use `new Function` (blocked
+  // by strict CSP) - CDP evaluates it directly, which is the point of CDP
+  // mode. The raw response (value or exception) is normalized here and
+  // masked by dispatch via egress.ts.
+  private async pageEval(session: CdpSession, args: OpArgs, guard: PageOpGuard): Promise<unknown> {
     const code = args.code;
     if (typeof code !== "string" || !code.trim()) {
       throw new Error("page_eval needs non-empty `code`");
     }
-    if ((await getSetting("pageEvalEnabled")) === false) {
-      throw new Error("page_eval disabled in settings");
-    }
-
-    // Confirm every call, unless the user turned the eval confirmation off
-    // (confirmPageEval=false). page_eval is DELIBERATELY excluded from the
-    // same-origin grace window (ADR-0008 update 2026-07-16): there is no
-    // silent-eval window, so every eval reconfirms. This mirrors the content
-    // path in content/toast.ts. NOTE: disabling confirmPageEval removes
-    // ADR-0008's guardrail - arbitrary JS then runs with no prompt.
-    if ((await getSetting("confirmPageEval")) !== false) {
-      const approved = await session.evaluate(
-        evalToast,
-        [code, tab.url || "", tab.title || "", await getSetting("evalToastTimeoutMs")],
-        { awaitPromise: true },
-      );
-      if (!approved) throw new Error("user denied page_eval");
-    }
-
-    // Run the code as an async IIFE in the MAIN world. Unlike the content path
-    // this does NOT use `new Function` (blocked by strict CSP) — CDP evaluates
-    // it directly, which is the whole point of CDP mode.
-    const expression = `(async () => {\n${code}\n})()`;
+    // The origin assertion runs INSIDE the same evaluation, atomically with
+    // the eval itself: approved code can only ever run on the approved origin.
+    const originCheck =
+      guard.expectOrigin === undefined
+        ? ""
+        : `if (location.origin !== ${JSON.stringify(guard.expectOrigin)}) ` +
+          `throw new Error("the page origin changed while the request was in flight - re-issue the call");\n`;
+    const expression = `(async () => {\n${originCheck}${code}\n})()`;
     const res: EvaluateResponse = await session.rawEvaluate(expression, { awaitPromise: true });
-    return evalResponseToPayload(res, (await getSetting("evalMask")) !== false);
+    return evalResponseToPayload(res);
   }
 }
 
-// Format a raw Runtime.evaluate response for page_eval egress. EVERY egress
-// path — the success value and the exception name/message/stack — passes the
-// same mask gate: exceptions used to bypass it, so a page could carry a secret
-// out by throwing it (`throw new Error(localStorage.authToken)`). Exported for
-// tests.
-export function evalResponseToPayload(res: EvaluateResponse, mask: boolean): unknown {
-  let payload: unknown;
+// Format a raw Runtime.evaluate response for page_eval: the success value, or
+// the exception as structured data the model can react to. Masking of EVERY
+// field happens downstream in egress.ts - exceptions used to bypass the mask,
+// so a page could carry a secret out by throwing it. Exported for tests.
+export function evalResponseToPayload(res: EvaluateResponse): unknown {
   if (res.exceptionDetails) {
     const ex = res.exceptionDetails.exception;
     const description = ex?.description || res.exceptionDetails.text || "Error";
-    payload = {
+    const stack = description.length > 2000 ? `${description.slice(0, 2000)}...` : description;
+    return {
       __evalError: true,
       name: ex?.className || "Error",
       message: description.split("\n")[0],
-      stack: truncate(description, 2000),
+      stack,
     };
-  } else {
-    payload = res.result?.value;
   }
-  return mask ? maskSensitive(payload) : payload;
+  return res.result?.value;
 }

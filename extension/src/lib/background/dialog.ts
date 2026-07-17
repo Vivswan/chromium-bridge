@@ -53,7 +53,7 @@ export async function handleDialog(maybeTabId: number | undefined, args: OpArgs)
       const msg = String((e as Error).message || e);
       if (/another debugger/i.test(msg)) {
         throw new Error(
-          "该标签页已打开 DevTools,page_handle_dialog 无法附加。请关闭 DevTools 后重试。",
+          "page_handle_dialog cannot attach: DevTools is open on this tab. Close DevTools and retry.",
           { cause: e },
         );
       }
