@@ -24,7 +24,7 @@ const REPO = path.resolve(import.meta.dir, "..");
 // The load-unpacked target is the built bundle. Run
 // `bun run --cwd extension build` first (run_all.ts / just handle this).
 // Override with BB_EXT_DIR to point at a different unpacked extension.
-const EXTENSION_DIR = process.env.BB_EXT_DIR || path.join(REPO, "extension", "dist");
+const EXTENSION_DIR = process.env.BB_EXT_DIR || path.join(REPO, "extension", "dist", "chrome-mv3");
 const CHROME =
   process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 

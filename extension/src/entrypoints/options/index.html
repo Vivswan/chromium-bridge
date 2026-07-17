@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="manifest.open_in_tab" content="true" />
+  <title>Chromium Bridge 设置</title>
+  <style>
+    :root {
+      --fg: #111827; --muted: #6b7280; --faint: #9ca3af;
+      --line: #e5e7eb; --line-soft: #f3f4f6; --bg-soft: #f9fafb;
+      --brand: #2e8b57; --brand-dark: #276b46;
+      --danger: #dc2626; --danger-dark: #b91c1c;
+      --warn-border: #f0c674; --warn-bg: #fff8e1; --warn-fg: #92600a;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: var(--fg);
+    }
+    * { box-sizing: border-box; }
+    body { max-width: 720px; margin: 0 auto; padding: 40px 24px 72px; font-size: 14px;
+           line-height: 1.6; background: #fff; }
+
+    header { margin-bottom: 28px; }
+    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+    header .sub { margin: 0; }
+
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
+         margin: 34px 0 12px; color: var(--muted); font-weight: 700; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+    .sub code { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 4px;
+                padding: 1px 5px; font-size: 12px; }
+
+    /* Toggle card */
+    .card { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px;
+            display: flex; align-items: flex-start; gap: 12px; background: #fff;
+            transition: border-color 0.15s, background 0.15s, box-shadow 0.15s; }
+    .card:hover { box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .card.danger { border-color: var(--warn-border); background: var(--warn-bg); }
+    .card .body { flex: 1; min-width: 0; }
+    .card .title { font-weight: 600; }
+    .card .desc { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+    .card .warn { color: var(--danger-dark); font-size: 12px; margin-top: 6px; font-weight: 600; }
+    .card input[type=checkbox] { margin-top: 2px; width: 17px; height: 17px; flex: none;
+                                 accent-color: var(--brand); cursor: pointer; }
+
+    /* Number-input rows, grouped in a panel */
+    .panel { border: 1px solid var(--line); border-radius: 10px; padding: 6px 14px; }
+
+    /* Enrollment (pairing) panel */
+    #enroll-panel { padding: 12px 14px; }
+    .fp { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all;
+          background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px;
+          padding: 10px 12px; margin: 8px 0; letter-spacing: 0.02em; }
+    .enroll-state { font-weight: 600; }
+    .enroll-state.bad { color: var(--danger); }
+    .enroll-state.ok { color: var(--brand); }
+    .enroll-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .enroll-err { color: var(--danger-dark); font-size: 12px; margin-top: 8px; font-weight: 600;
+                  word-break: break-word; }
+    .enroll-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+    .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; flex-wrap: wrap;
+           border-bottom: 1px solid var(--line-soft); }
+    .row:last-child { border-bottom: none; }
+    .row label { min-width: 200px; color: var(--fg); font-weight: 500; }
+    .row input[type=number] { width: 110px; padding: 6px 10px; border: 1px solid var(--line);
+                              border-radius: 8px; font-size: 13px; }
+    .row input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(46,139,87,0.12); }
+    .row .unit { color: var(--faint); font-size: 12px; }
+
+    .add-row { display: flex; gap: 8px; margin: 4px 0 12px; }
+    .add-row input { flex: 1; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
+                     font-size: 13px; font-family: ui-monospace, monospace; }
+    .add-row input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(46,139,87,0.12); }
+
+    button { padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+             cursor: pointer; font-size: 13px; font-weight: 600; color: var(--fg);
+             transition: background 0.15s, border-color 0.15s; }
+    button:hover { background: var(--bg-soft); }
+    button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+    button.primary:hover { background: var(--brand-dark); }
+    button.danger { color: var(--danger); border-color: transparent; background: transparent; padding: 4px 10px; }
+    button.danger:hover { background: #fef2f2; }
+
+    .list { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    .item { display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+    .item:last-child { border-bottom: none; }
+    .item code { font-size: 12px; font-family: ui-monospace, monospace; }
+    .empty { color: var(--faint); padding: 16px; text-align: center; border: 1px dashed var(--line);
+             border-radius: 10px; font-size: 13px; }
+
+    .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tool { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px;
+            border: 1px solid var(--line); border-radius: 8px; }
+    .tool input[type=checkbox] { margin-top: 1px; accent-color: var(--brand); flex: none; cursor: pointer; }
+    .tool .name { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600; }
+    .tool .tdesc { font-size: 11px; color: var(--faint); }
+
+    .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(8px);
+             background: #111827; color: #fff; padding: 9px 18px; border-radius: 10px;
+             font-size: 13px; font-weight: 600; opacity: 0; transition: opacity 0.2s, transform 0.2s;
+             pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ---- Dark mode: flip the tokens + the few hardcoded surfaces ---- */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e6e8eb; --muted: #9aa3af; --faint: #6b7280;
+        --line: #333a44; --line-soft: #262b32; --bg-soft: #20242a;
+        --brand: #3fa76a; --brand-dark: #348a58;
+        --danger: #f87171; --danger-dark: #fca5a5;
+        --warn-border: #6b5a1e; --warn-bg: #2b2718; --warn-fg: #e8c66a;
+      }
+      body { background: #15181c; }
+      .card, button, .panel, .list, .tool,
+      .row input[type=number], .add-row input { background: #1e2228; }
+      .card:hover { box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+      button:hover { background: #262b32; }
+      button.primary { background: var(--brand); }
+      button.primary:hover { background: var(--brand-dark); }
+      button.danger { background: transparent; }
+      button.danger:hover { background: #3a1f1f; }
+      .toast { background: #0b0d10; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Chromium Bridge 设置</h1>
+    <div class="sub">所有更改即时保存。安全类开关请谨慎调整。</div>
+  </header>
+
+  <!-- ===== 安全 ===== -->
+  <h2>安全</h2>
+  <div class="card" id="card-requireEnrollment">
+    <input type="checkbox" id="requireEnrollment" />
+    <div class="body">
+      <div class="title">要求主机配对(Secure Enclave 注册)</div>
+      <div class="desc">开启时,只有完成一次配对仪式并固定了主机公钥后,桥接请求才会被执行(ADR-0021)。配对能阻止静默配对——恶意的 <code>claude mcp add</code> 或任何未经你批准的主机都无法驱动浏览器;配合下方「立即验证」也能发现主机被替换。它<b>不能</b>阻止已配对之后同用户进程的静默替换(那需要每操作 Touch ID,是另一个未实现的可选层级)。仅 macOS 有 Secure Enclave:其他平台上配对不可用,此项<b>不会</b>阻断桥接——桥接以基础认证运行(Linux:UDS + peer-UID + HMAC + 二进制签名校验;Windows:仅 HMAC),主机被替换的残余风险见威胁模型。判定用的是浏览器自身的平台信息,不采信主机的自述,因此 macOS 上的主机谎称「不支持」不能绕过配对。</div>
+      <div class="warn" id="requireEnrollment-warn" style="display:none">⚠ 关闭后,任何能写 MCP 配置的本地进程都可能在你不知情时建立并使用桥接。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-pageEvalEnabled">
+    <input type="checkbox" id="pageEvalEnabled" />
+    <div class="body">
+      <div class="title">允许 page_eval(执行任意 JavaScript)</div>
+      <div class="desc">关闭后,AI 调用 page_eval 会直接被拒绝,不会在页面执行任何代码。这是最危险的工具——即使有确认通道,关闭它可彻底消除静默代码执行的风险(ADR-0008)。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-evalMask">
+    <input type="checkbox" id="evalMask" />
+    <div class="body">
+      <div class="title">脱敏 page_eval 返回值</div>
+      <div class="desc">对 eval 结果做正则遮罩:JWT、长 hex、长数字、疑似 token/密钥的字符串(ADR-0008)。</div>
+      <div class="warn" id="evalMask-warn" style="display:none">⚠ 关闭后,token / Cookie / 密钥可能原样泄露给 AI。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-confirmHighRiskClick">
+    <input type="checkbox" id="confirmHighRiskClick" />
+    <div class="body">
+      <div class="title">高危点击二次确认(提交按钮 / 链接跳转)</div>
+      <div class="desc">点击表单提交按钮或链接时弹出确认 Toast,需用户批准。这是防止 AI 静默下单/转账/跳转的关键防线(ADR-0006)。</div>
+      <div class="warn" id="confirmHighRiskClick-warn" style="display:none">⚠ 关闭后,AI 点击提交/链接将不再确认,请仅在你完全信任 AI 时关闭。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-confirmPageEval">
+    <input type="checkbox" id="confirmPageEval" />
+    <div class="body">
+      <div class="title">page_eval 二次确认(执行任意 JS)</div>
+      <div class="desc">每次 page_eval 弹出确认 Toast 并展示完整代码,需用户批准(ADR-0008)。page_eval 能执行任意 JavaScript,是风险最高的操作。</div>
+      <div class="warn" id="confirmPageEval-warn" style="display:none">⚠ 关闭后,AI 将无提示直接执行任意 JS,请仅在完全信任 AI 且需要全自动时关闭。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-confirmTabClose">
+    <input type="checkbox" id="confirmTabClose" />
+    <div class="body">
+      <div class="title">tab_close 二次确认(关闭标签页)</div>
+      <div class="desc">关闭标签页前在页面内弹出「Close tab?」确认,需用户批准。</div>
+      <div class="warn" id="confirmTabClose-warn" style="display:none">⚠ 关闭后,AI 将无提示直接关闭标签页。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-warnPreciseSnapshot">
+    <input type="checkbox" id="warnPreciseSnapshot" />
+    <div class="body">
+      <div class="title">精确 snapshot 前提示</div>
+      <div class="desc">调用 page_snapshot_precise(走 chrome.debugger)前在页面弹出信息提示。Chrome 顶部会短暂显示「调试中」横幅(ADR-0009)。</div>
+    </div>
+  </div>
+
+  <!-- ===== 主机配对 ===== -->
+  <h2>主机配对(Secure Enclave)</h2>
+  <div class="sub">流程:先在终端运行 <code>chromium-bridge pair</code>(会弹 Touch ID,并打印公钥指纹),然后点击下方「开始配对」,再次通过 Touch ID 后,这里会显示主机的指纹。<b>逐字符对比两处指纹,一致才批准</b>;批准后公钥被固定。请注意默认行为的边界:主机身份只在<b>配对时</b>(有人在场)和你<b>手动「立即验证」时</b>被验证,重连<b>不会</b>自动重新验证——每次验证都要弹 Touch ID,而 MV3 每几分钟就重连一次,逐次验证不可用(ADR-0021)。因此配对之后主机若被同用户进程替换,默认不会被自动发现,直到你手动验证、开启下方的定期重新验证,或未来的每操作确认层级。</div>
+  <div class="panel" id="enroll-panel">
+    <div class="row"><span class="unit">加载中…</span></div>
+  </div>
+  <div class="panel" style="margin-top:10px">
+    <div class="row">
+      <label for="hostReverifyMs">定期重新验证间隔</label>
+      <input type="number" id="hostReverifyMs" min="0" step="60000" />
+      <span class="unit">毫秒(0 = 关闭,默认)</span>
+    </div>
+    <div class="sub" style="margin:2px 0 10px">大于 0 时,重连若距上次成功验证超过该间隔,会自动对固定公钥发起一次验证(弹 Touch ID;例如 3600000 = 每小时至多一次)。这能把「主机被替换却未被发现」的窗口限制在该间隔内;验证失败会立即阻断桥接。未通过的提示(比如你随手取消)不改变已配对状态,只有密码学上的不匹配才会阻断。</div>
+  </div>
+
+  <!-- ===== 标签页 ===== -->
+  <h2>标签页</h2>
+  <div class="card" id="card-groupTabs">
+    <input type="checkbox" id="groupTabs" />
+    <div class="body">
+      <div class="title">把 AI 打开的标签页归入「Chromium Bridge」分组</div>
+      <div class="desc">通过 tab_open 打开的标签页会自动放进一个命名的标签分组,和你自己的标签页视觉隔离,可整组折叠/关闭。默认开启(ADR-0018)。</div>
+    </div>
+  </div>
+
+  <!-- ===== 执行模式 ===== -->
+  <h2>执行模式</h2>
+  <div class="card" id="card-cdpMode">
+    <input type="checkbox" id="cdpMode" />
+    <div class="body">
+      <div class="title">全部页面操作走 CDP(chrome.debugger)</div>
+      <div class="desc">开启后所有页面操作改用 CDP(chrome.debugger),不再注入内容脚本;可在严格 CSP 站点(如 Bing)执行 page_eval。默认关闭(ADR-0017)。</div>
+      <div class="warn" id="cdpMode-warn">⚠ 开启后 Chrome 顶部会持续显示「正在调试此浏览器」横幅(调试器全程附加),且访问面更大。仅在需要绕过 CSP 或统一深控时开启。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-fileUploadEnabled">
+    <input type="checkbox" id="fileUploadEnabled" />
+    <div class="body">
+      <div class="title">允许 page_upload(上传本地文件)</div>
+      <div class="desc">开启后 AI 可用 page_upload 把本机文件附加到页面的文件输入框并上传。默认关闭。这是本地文件外泄通道:被劫持的模型可借此上传你的私有文件。每次调用仍会在页面弹出确认并展示完整文件路径。</div>
+      <div class="warn" id="fileUploadEnabled-warn">⚠ 开启后 AI 能读取并上传本机文件(逐次确认路径)。仅在你确实需要让 AI 上传指定文件时开启。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-handleDialogEnabled">
+    <input type="checkbox" id="handleDialogEnabled" />
+    <div class="body">
+      <div class="title">允许 page_handle_dialog(响应弹窗)</div>
+      <div class="desc">开启后 AI 可用 page_handle_dialog 接受/取消页面的 alert / confirm / prompt 弹窗(走 chrome.debugger)。默认关闭。弹窗会阻塞页面,无法在页面内二次确认,因此这个开关本身就是唯一的门禁。</div>
+      <div class="warn" id="handleDialogEnabled-warn">⚠ 接受弹窗可能替你确认危险操作,且无法在页面内二次确认。仅在你信任 AI 且确有需要时开启。</div>
+    </div>
+  </div>
+
+  <!-- ===== 确认超时与宽限期 ===== -->
+  <h2>确认超时与宽限期</h2>
+  <div class="panel">
+    <div class="row">
+      <label for="confirmGraceMs">确认后免重复宽限期</label>
+      <input type="number" id="confirmGraceMs" min="0" max="3600000" step="1000" />
+      <span class="unit">毫秒(0 = 每次都确认)</span>
+    </div>
+    <div class="row">
+      <label for="clickToastTimeoutMs">点击确认 Toast 超时</label>
+      <input type="number" id="clickToastTimeoutMs" min="5000" max="300000" step="1000" />
+      <span class="unit">毫秒(超时自动拒绝)</span>
+    </div>
+    <div class="row">
+      <label for="evalToastTimeoutMs">eval 确认 Toast 超时</label>
+      <input type="number" id="evalToastTimeoutMs" min="10000" max="300000" step="1000" />
+      <span class="unit">毫秒(超时自动拒绝)</span>
+    </div>
+  </div>
+
+  <!-- ===== 工具 ===== -->
+  <h2>工具启用</h2>
+  <div class="sub">取消勾选的工具,AI 调用时会收到「tool disabled in settings」错误。注意:AI 仍能看到该工具存在,但无法执行。</div>
+  <div class="tools" id="tools-grid"></div>
+
+  <!-- ===== 允许的站点 ===== -->
+  <h2>允许的站点(白名单)</h2>
+
+  <div class="card" id="card-allowAllSites">
+    <input type="checkbox" id="allowAllSites" />
+    <div class="body">
+      <div class="title">允许所有站点(跳过逐站点审批)</div>
+      <div class="desc">开启后,AI 可直接操作任意 http(s) 站点,不再为每个新站点弹窗授权。开启时会请求「&lt;所有网址&gt;」主机权限。适合信任 AI 全自动浏览的场景;否则建议保持关闭,用下面的逐站点白名单。</div>
+      <div class="warn" id="allowAllSites-warn" style="display:none">⚠ 开启后,任意站点(含银行、邮箱、内网)都无需授权即可被操作,请谨慎。</div>
+    </div>
+  </div>
+
+  <div class="sub">格式:<code>https://域名/*</code>。手动添加后,首次访问该站点时仍需批准 Chrome 的主机权限弹窗。</div>
+  <div class="add-row">
+    <input type="text" id="new-site" placeholder="https://example.com/*" />
+    <button type="button" class="primary" id="add-site">添加</button>
+  </div>
+  <div class="list" id="site-list"></div>
+
+  <div class="toast" id="toast"></div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

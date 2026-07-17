@@ -54,8 +54,9 @@ equal the union of its tools' permissions.
 ## `identity.json`
 
 The identity constants that have no other natural home. The native-messaging
-host id is declared here; the extension ID is *not* (Chrome derives it from
-`extension/manifest.json`'s `key`, so the manifest is its source).
+host id is declared here, and so is the extension's pinned manifest `key`
+(`extensionManifestKey`): `extension/wxt.config.ts` injects it into the
+generated manifest, and Chrome derives the extension ID from it.
 `scripts/gen-ops.ts` emits both into `packages/shared/src/identity.gen.ts`
 (the extension imports `NATIVE_HOST_ID` for `connectNative` and
 `PINNED_EXTENSION_ID` for its startup self-check), and

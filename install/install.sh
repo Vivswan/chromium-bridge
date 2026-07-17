@@ -5,7 +5,7 @@
 # Usage:
 #   ./install.sh                        Build + install everything. The
 #                                       extension ID is fixed (pinned by the
-#                                       `key` in extension/manifest.json), so no
+#                                       `key` in contracts/identity.json), so no
 #                                       ID copy-paste is needed.
 #   ./install.sh --extension-id ID      Override the pinned extension ID.
 #   ./install.sh --browser LIST         Which browsers to target. LIST is
@@ -71,7 +71,7 @@ HOST_NAME="com.vivswan.chromium_bridge.host"
 BINARY_NAME="chromium-bridge"
 
 # Deterministic extension ID, derived from the public `key` in
-# extension/manifest.json (same for everyone, regardless of load path). If you
+# contracts/identity.json (same for everyone, regardless of load path). If you
 # ever change that key, update this to match (or pass --extension-id).
 PINNED_EXTENSION_ID="mkjjlmjbcljpcfkfadfmhblmmddkdihf"
 
@@ -554,7 +554,7 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
   BIN_SRC="$ROOT/target/release/$BINARY_NAME"
 
   if [[ "$SKIP_EXTENSION_BUILD" == "1" ]]; then
-    DIST_DIR="$ROOT/extension/dist"
+    DIST_DIR="$ROOT/extension/dist/chrome-mv3"
     [[ -d "$DIST_DIR" ]] || {
       echo "error: --skip-extension-build requires an existing $DIST_DIR" >&2
       exit 1
@@ -566,10 +566,10 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
       echo "       Install bun, or build extension/dist elsewhere and pass --skip-extension-build." >&2
       exit 1
     fi
-    echo "[install] building extension bundle (esbuild)..."
+    echo "[install] building extension bundle (wxt)..."
     [[ -d "$ROOT/node_modules" ]] || (cd "$ROOT" && bun install --frozen-lockfile)
     (cd "$ROOT/extension" && bun run build)
-    DIST_DIR="$ROOT/extension/dist"
+    DIST_DIR="$ROOT/extension/dist/chrome-mv3"
   fi
 else
   PREBUILT=1
