@@ -24,10 +24,17 @@ import { base64Encode, buildChallengeMessage, computeKeyId } from "./enclave-ver
 
 // ---- chrome mock ------------------------------------------------------------
 
+// The browser's platform probe, which scopes enrollment enforcement. Tests
+// default to "mac" (enforcing); the platform-scoping suite overrides it.
+let mockOs = "mac";
+
 function installChromeMock(): Record<string, unknown> {
   const store: Record<string, unknown> = {};
   (globalThis as unknown as { chrome: unknown }).chrome = {
-    runtime: { id: "test-ext-id" },
+    runtime: {
+      id: "test-ext-id",
+      getPlatformInfo: () => Promise.resolve({ os: mockOs }),
+    },
     storage: {
       local: {
         // Supports both the callback style (settings.ts) and the promise
@@ -99,6 +106,7 @@ let store: Record<string, unknown>;
 let posted: Array<Record<string, unknown>>;
 
 beforeEach(() => {
+  mockOs = "mac";
   store = installChromeMock();
   posted = [];
   detachPort(); // clear any leftover outstanding challenge from a prior test
@@ -298,11 +306,20 @@ describe("ceremony state machine", () => {
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 
-  test("unsupported_platform names the way out explicitly", async () => {
+  test("a host claiming unsupported_platform on macOS stays blocked (no downgrade dodge)", async () => {
     await onPortConnected();
     await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });
     const st = await getEnrollmentStatus();
-    expect(st.lastError).toContain("macOS");
+    expect(st.lastError).toContain("suspect");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("unsupported_platform during verify fails closed (downgrade claim on a pinned machine)", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await verifyPinnedNow()).ok).toBe(true);
+    await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });
+    expect((await getEnrollmentStatus()).state).toBe("compromised");
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 
@@ -504,5 +521,57 @@ describe("periodic re-verification (hostReverifyMs)", () => {
     const before = posted.length;
     await onPortConnected(); // second connect while unanswered: no duplicate
     expect(posted.length).toBe(before);
+  });
+});
+
+describe("platform scoping (non-Enclave platforms)", () => {
+  test("on linux, enrollment is unavailable: gate open, no ceremony, honest status", async () => {
+    mockOs = "linux";
+    expect((await enrollmentGate()).allowed).toBe(true); // requireEnrollment default true
+    await onPortConnected();
+    expect(posted.length).toBe(0); // no challenge ever issued
+    const st = await getEnrollmentStatus();
+    expect(st.platformSupported).toBe(false);
+    expect(st.state).toBe("unpaired");
+    expect(st.blocked).toBe(false);
+  });
+
+  test("on windows, pairing and verify actions refuse rather than challenge", async () => {
+    mockOs = "win";
+    const pair = await startPairing();
+    expect(pair.ok).toBe(false);
+    expect(pair.error).toContain("unavailable");
+    const verify = await verifyPinnedNow();
+    expect(verify.ok).toBe(false);
+    expect(posted.length).toBe(0);
+  });
+
+  test("only the browser's probe decides: the host's unsupported claim cannot open a mac gate", async () => {
+    // mockOs stays "mac". Even after the host answers unsupported_platform,
+    // the gate must keep blocking - otherwise a substituted host could dodge
+    // enrollment by lying about the platform.
+    await onPortConnected();
+    await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });
+    expect((await enrollmentGate()).allowed).toBe(false);
+    expect((await getEnrollmentStatus()).platformSupported).toBe(true);
+  });
+
+  test("a failing platform probe fails closed (gate still enforces)", async () => {
+    (
+      globalThis as unknown as { chrome: { runtime: { getPlatformInfo: () => Promise<never> } } }
+    ).chrome.runtime.getPlatformInfo = () => Promise.reject(new Error("probe failed"));
+    expect((await enrollmentGate()).allowed).toBe(false);
+    expect((await getEnrollmentStatus()).platformSupported).toBe(true);
+  });
+
+  test("a compromised mark still blocks regardless of platform", async () => {
+    mockOs = "linux";
+    store["enclaveCompromised"] = { reason: "test", at: Date.now() };
+    expect((await enrollmentGate()).allowed).toBe(false);
+    // The status must report the truth so the UI renders the compromised
+    // panel (with its revoke control), not the platform-N/A panel.
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("compromised");
+    expect(st.blocked).toBe(true);
   });
 });

@@ -24,6 +24,11 @@
 //   compromised a pinned-key verification failed. Refused until the user
 //               revokes and re-pairs.
 //
+// Platform scoping: on platforms without a Secure Enclave (decided by the
+// browser's own getPlatformInfo probe, never by the host's claim) enrollment
+// is unavailable, so the gate does not block and no challenge is issued; the
+// bridge runs on the base transport authentication.
+//
 // The challenge-on-connect policy lives entirely in onPortConnected below.
 
 import { getSetting } from "../shared/settings";
@@ -135,13 +140,39 @@ async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; e
   return { ok: true };
 }
 
+// ---- platform capability ------------------------------------------------------
+
+/** Whether this platform can enroll at all, decided by the BROWSER's own
+ * platform probe (chrome.runtime.getPlatformInfo), never by the host's
+ * unsupported_platform claim. The host is the party being authenticated, so
+ * its self-reported platform must not be able to open the gate: a
+ * substituted host on macOS could otherwise dodge enrollment by claiming
+ * "unsupported". Where the Secure Enclave does not exist (non-mac),
+ * enrollment is unavailable rather than unsatisfied: the bridge runs on the
+ * base transport authentication and the ceremony is skipped entirely. That
+ * is a platform fact, not a disabled security control. If the probe itself
+ * fails, ambiguity fails closed: the platform is treated as capable and the
+ * gate enforces. */
+async function platformCanEnroll(): Promise<boolean> {
+  try {
+    const info = await chrome.runtime.getPlatformInfo();
+    return info.os === "mac";
+  } catch (e) {
+    console.warn("[bb] getPlatformInfo failed; enforcing enrollment", e);
+    return true;
+  }
+}
+
 // ---- the fail-closed gate ----------------------------------------------------
 
 export type Gate = { allowed: true } | { allowed: false; reason: string };
 
 /** Consulted by port.ts before every dispatched bridge request. "Blocked"
  * means exactly this: the request is answered with {ok:false, error:reason}
- * and never reaches dispatch(), so no tab, cookie, or page op runs. */
+ * and never reaches dispatch(), so no tab, cookie, or page op runs. The
+ * block-until-pinned enforcement applies only where the platform can enroll
+ * (macOS); elsewhere enrollment is unavailable and requests proceed on the
+ * base authentication. */
 export async function enrollmentGate(): Promise<Gate> {
   if ((await getSetting("requireEnrollment")) !== true) return { allowed: true };
   const compromised = await pinStore.getCompromised();
@@ -154,6 +185,7 @@ export async function enrollmentGate(): Promise<Gate> {
         "(`browser-bridge pair`).",
     };
   }
+  if (!(await platformCanEnroll())) return { allowed: true };
   if (await pinStore.getPin()) return { allowed: true };
   if (await pinStore.getPending()) {
     return {
@@ -183,6 +215,7 @@ export function onPortConnected(): Promise<void> {
   return serialized(async () => {
     await updateBadge();
     if ((await getSetting("requireEnrollment")) !== true) return;
+    if (!(await platformCanEnroll())) return; // no Enclave here; no ceremony
     if (await pinStore.getCompromised()) return;
     const pin = await pinStore.getPin();
     if (pin) {
@@ -318,9 +351,14 @@ async function handleError(frame: EnclaveInboundFrame): Promise<void> {
     console.warn("[bb] dropping unsolicited enclave_error:", reason);
     return;
   }
-  if (current.mode === "verify" && (reason === "not_enrolled" || reason === "key_invalid")) {
-    // A key is pinned but the host can no longer prove it: the enrollment key
-    // was revoked or replaced under our feet. Fail closed.
+  if (
+    current.mode === "verify" &&
+    (reason === "not_enrolled" || reason === "key_invalid" || reason === "unsupported_platform")
+  ) {
+    // A key is pinned but the answering host can no longer prove it: the
+    // enrollment key was revoked or replaced, or the host now denies Enclave
+    // capability on a machine that demonstrably enrolled one (a downgrade
+    // claim from a suspect binary). Fail closed.
     await pinStore.setCompromised({
       reason: `host cannot prove the pinned key (${reason})`,
       at: Date.now(),
@@ -340,9 +378,11 @@ function errorHelp(reason: string, mode: "pair" | "verify"): string {
       );
     case "unsupported_platform":
       return (
-        "unsupported_platform: Secure Enclave enrollment needs macOS. " +
-        'On this OS the bridge stays blocked unless you turn off "Require host pairing" ' +
-        "in the options page (an explicit decision to run without host verification)."
+        "unsupported_platform: the host reports no Secure Enclave, but this browser is " +
+        "running on macOS. If this Mac genuinely lacks one (pre-T2 Intel), pairing is " +
+        'impossible and turning off "Require host pairing" is an explicit decision to run ' +
+        "without host verification. Otherwise treat the host binary as suspect (outdated " +
+        "or substituted) and leave the bridge blocked."
       );
     case "invalid_challenge":
       return "invalid_challenge: the host rejected our challenge frame (version mismatch?).";
@@ -368,6 +408,9 @@ function errorHelp(reason: string, mode: "pair" | "verify"): string {
 
 export function startPairing(): Promise<{ ok: boolean; error?: string }> {
   return serialized(async () => {
+    if (!(await platformCanEnroll())) {
+      return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
+    }
     if (await pinStore.getPin()) {
       return { ok: false, error: "a key is already pinned; revoke it first to re-pair" };
     }
@@ -386,6 +429,9 @@ export function startPairing(): Promise<{ ok: boolean; error?: string }> {
 
 export function verifyPinnedNow(): Promise<{ ok: boolean; error?: string }> {
   return serialized(async () => {
+    if (!(await platformCanEnroll())) {
+      return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
+    }
     if (!(await pinStore.getPin())) return { ok: false, error: "no pinned key to verify" };
     if (await pinStore.getCompromised()) {
       return { ok: false, error: "enrollment already failed closed; revoke and re-pair" };
@@ -452,6 +498,10 @@ export function revokePin(): Promise<{ ok: boolean }> {
 
 export interface EnrollmentStatus {
   required: boolean;
+  /** False on platforms without a Secure Enclave (non-mac): enrollment is
+   * unavailable there and the gate never blocks, per the browser's own
+   * platform probe (not the host's claim). */
+  platformSupported: boolean;
   state: "unpaired" | "pending" | "pinned" | "compromised";
   /** Bridge requests are currently refused by the gate. */
   blocked: boolean;
@@ -466,12 +516,14 @@ export interface EnrollmentStatus {
 
 export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
   const required = (await getSetting("requireEnrollment")) === true;
+  const platformSupported = await platformCanEnroll();
   const compromised = await pinStore.getCompromised();
   const pin = await pinStore.getPin();
   const pending = await pinStore.getPending();
   const lastError = await pinStore.getLastError();
   const base = {
     required,
+    platformSupported,
     lastError: lastError ?? undefined,
     paused: await pinStore.getPaused(),
   };
@@ -500,12 +552,12 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
     return {
       ...base,
       state: "pending",
-      blocked: required,
+      blocked: required && platformSupported,
       keyId: pending.keyId,
       fingerprint: fingerprintDisplay(pending.keyId),
     };
   }
-  return { ...base, state: "unpaired", blocked: required };
+  return { ...base, state: "unpaired", blocked: required && platformSupported };
 }
 
 // ---- badge ----------------------------------------------------------------------
@@ -518,9 +570,8 @@ let badgeShown = false;
 async function updateBadge(): Promise<void> {
   if (typeof chrome === "undefined" || !chrome.action) return;
   const st = await getEnrollmentStatus();
-  const blocked = st.required && st.state !== "pinned";
   try {
-    if (blocked) {
+    if (st.blocked) {
       badgeShown = true;
       await chrome.action.setBadgeText({ text: st.state === "pending" ? "PAIR" : "!" });
       await chrome.action.setBadgeBackgroundColor({

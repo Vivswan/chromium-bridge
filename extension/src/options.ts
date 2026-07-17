@@ -194,6 +194,7 @@ function wireAddSite() {
 // Shape of the background's getEnrollmentStatus() reply.
 interface EnrollmentStatusView {
   required: boolean;
+  platformSupported: boolean;
   state: "unpaired" | "pending" | "pinned" | "compromised";
   blocked: boolean;
   fingerprint?: string;
@@ -209,6 +210,17 @@ async function refreshEnrollment() {
   const panel = $("enroll-panel");
   if (!st) {
     panel.innerHTML = `<div class="enroll-err">无法获取配对状态(后台未响应)。</div>`;
+    return;
+  }
+  // The compromised state must render (with its revoke control) even where
+  // pairing is unavailable: the gate blocks on it regardless of platform, so
+  // the N/A panel would falsely claim the bridge is unaffected.
+  if (!st.platformSupported && st.state !== "compromised") {
+    panel.innerHTML =
+      `<div class="enroll-state">此平台没有 Secure Enclave,配对不可用(仅 macOS 支持)。</div>` +
+      `<div class="enroll-meta">这不会阻断桥接:桥接以基础认证运行` +
+      `(Linux:UDS + peer-UID + HMAC + 二进制签名校验;Windows:仅 HMAC)。` +
+      `注意,「主机二进制被同用户进程替换」这一残余风险在此平台无法由配对覆盖,详见威胁模型。</div>`;
     return;
   }
   const parts: string[] = [];
