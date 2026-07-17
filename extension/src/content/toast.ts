@@ -23,8 +23,17 @@ export async function confirmWithToast(question: string, actionDesc: string) {
   lastConfirmed = { key, until: Date.now() + graceMs };
 }
 
-// Eval confirmation: enlarged Toast with the full code shown. page_eval is the
-// highest-risk action, so it is DELIBERATELY excluded from the same-origin
+// Confirm with NO grace window: every call prompts. Used by page_press and
+// page_select, whose tool contracts promise a confirmation on every call (a
+// keypress can submit/trigger; a select changes form state). Deliberately does
+// not touch lastConfirmed, so it neither reads nor extends the click grace
+// window.
+export async function confirmAlways(question: string, actionDesc: string) {
+  const approved = await showToast(question);
+  if (!approved) throw new Error(`user denied: ${actionDesc}`);
+}
+
+// Eval confirmation: enlarged Toast with the full code shown. page_eval is the// highest-risk action, so it is DELIBERATELY excluded from the same-origin
 // grace window (ADR-0008 update 2026-07-16): every page_eval reconfirms. There
 // is no silent-eval window. The grace window still applies to lower-risk
 // click/submit confirmations via confirmWithToast.

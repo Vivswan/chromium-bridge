@@ -227,6 +227,24 @@
     </div>
   </div>
 
+  <div class="card" id="card-fileUploadEnabled">
+    <input type="checkbox" id="fileUploadEnabled" />
+    <div class="body">
+      <div class="title">允许 page_upload(上传本地文件)</div>
+      <div class="desc">开启后 AI 可用 page_upload 把本机文件附加到页面的文件输入框并上传。默认关闭。这是本地文件外泄通道:被劫持的模型可借此上传你的私有文件。每次调用仍会在页面弹出确认并展示完整文件路径。</div>
+      <div class="warn" id="fileUploadEnabled-warn">⚠ 开启后 AI 能读取并上传本机文件(逐次确认路径)。仅在你确实需要让 AI 上传指定文件时开启。</div>
+    </div>
+  </div>
+
+  <div class="card" id="card-handleDialogEnabled">
+    <input type="checkbox" id="handleDialogEnabled" />
+    <div class="body">
+      <div class="title">允许 page_handle_dialog(响应弹窗)</div>
+      <div class="desc">开启后 AI 可用 page_handle_dialog 接受/取消页面的 alert / confirm / prompt 弹窗(走 chrome.debugger)。默认关闭。弹窗会阻塞页面,无法在页面内二次确认,因此这个开关本身就是唯一的门禁。</div>
+      <div class="warn" id="handleDialogEnabled-warn">⚠ 接受弹窗可能替你确认危险操作,且无法在页面内二次确认。仅在你信任 AI 且确有需要时开启。</div>
+    </div>
+  </div>
+
   <!-- ===== 确认超时与宽限期 ===== -->
   <h2>确认超时与宽限期</h2>
   <div class="panel">

@@ -60,6 +60,49 @@ export async function tabFocus(tabId: number) {
   return { focused: tabId };
 }
 
+// page_navigate / page_back / page_forward / page_reload operate on the ACTIVE
+// tab via chrome.tabs, so they need no content script. Every one gates on the
+// allowlist: page_navigate on the destination URL (which can be a new origin,
+// exactly like tab_open), and back/forward/reload on the active tab's CURRENT
+// URL, so the AI can only drive tabs whose origin the user has approved. That
+// keeps these consistent with every other page-acting tool (ensureAllowed)
+// rather than carving out an unchecked exception.
+
+export async function pageNavigate(url: string) {
+  if (!url || !/^https?:\/\//i.test(url)) {
+    throw new Error("page_navigate needs an absolute http(s) URL");
+  }
+  await ensureAllowed(url);
+  const tab = await resolveTargetTab(undefined);
+  if (tab.id == null) throw new Error("no active tab to navigate");
+  await chrome.tabs.update(tab.id, { url });
+  return { navigated: tab.id, url };
+}
+
+export async function pageBack() {
+  const tab = await resolveTargetTab(undefined);
+  if (tab.id == null) throw new Error("no active tab");
+  await ensureAllowed(tab.url);
+  await chrome.tabs.goBack(tab.id);
+  return { back: tab.id };
+}
+
+export async function pageForward() {
+  const tab = await resolveTargetTab(undefined);
+  if (tab.id == null) throw new Error("no active tab");
+  await ensureAllowed(tab.url);
+  await chrome.tabs.goForward(tab.id);
+  return { forward: tab.id };
+}
+
+export async function pageReload() {
+  const tab = await resolveTargetTab(undefined);
+  if (tab.id == null) throw new Error("no active tab");
+  await ensureAllowed(tab.url);
+  await chrome.tabs.reload(tab.id);
+  return { reloaded: tab.id };
+}
+
 // Name + color of the tab group browser-bridge collects its tabs into, so the
 // AI's tabs are visually separated from the user's and can be collapsed/closed
 // as a unit. See ADR-0018.

@@ -36,6 +36,42 @@ pub(super) fn build_page_fill(args: &Value) -> Value {
     payload
 }
 
+pub(super) fn build_page_navigate(args: &Value) -> Value {
+    json!({ "url": sarg(args, "url") })
+}
+
+pub(super) fn build_page_press(args: &Value) -> Value {
+    json!({ "keys": sarg(args, "keys") })
+}
+
+pub(super) fn build_page_select(args: &Value) -> Value {
+    let value = sarg(args, "value");
+    let mut payload = ref_or_selector(args);
+    payload["value"] = json!(value);
+    payload
+}
+
+pub(super) fn build_console_get(args: &Value) -> Value {
+    let mut payload = serde_json::Map::new();
+    if let Some(l) = args.get("limit").and_then(|v| v.as_i64()) {
+        payload.insert("limit".into(), json!(l));
+    }
+    Value::Object(payload)
+}
+
+pub(super) fn build_page_handle_dialog(args: &Value) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("action".into(), json!(sarg(args, "action")));
+    if let Some(t) = args.get("promptText").and_then(|v| v.as_str()) {
+        payload.insert("promptText".into(), json!(t));
+    }
+    Value::Object(payload)
+}
+
+pub(super) fn build_page_upload(args: &Value) -> Value {
+    json!({ "selector": sarg(args, "selector"), "path": sarg(args, "path") })
+}
+
 pub(super) fn build_page_scroll(args: &Value) -> Value {
     let mut payload = serde_json::Map::new();
     if let Some(d) = args.get("direction").and_then(|v| v.as_str()) {

@@ -3,9 +3,19 @@
   "capabilities": [
     {
       "id": "tab_control",
-      "description": "Enumerate, focus, open, close browser tabs and capture the visible viewport. Opening/closing are gated by allowlist + user confirmation.",
+      "description": "Enumerate, focus, open, close browser tabs, navigate history (back/forward/reload), navigate the active tab to a URL, and capture the visible viewport. Opening, navigating, and history moves are gated by the allowlist; closing a tab is confirmed in-page.",
       "permissions": ["tabs"],
-      "tools": ["tab_list", "tab_focus", "tab_open", "tab_close", "page_screenshot"]
+      "tools": [
+        "tab_list",
+        "tab_focus",
+        "tab_open",
+        "tab_close",
+        "page_screenshot",
+        "page_navigate",
+        "page_back",
+        "page_forward",
+        "page_reload"
+      ]
     },
     {
       "id": "page_snapshot",
@@ -21,9 +31,17 @@
     },
     {
       "id": "page_interact",
-      "description": "Drive the page: click elements, fill form fields, scroll, and wait for conditions. High-risk clicks trigger an on-page confirmation Toast.",
+      "description": "Drive the page: click elements, fill form fields, press keys, hover, choose <select> options, scroll, and wait for conditions. High-risk clicks, key presses, and selections trigger an on-page confirmation Toast.",
       "permissions": ["scripting"],
-      "tools": ["page_click", "page_fill", "page_scroll", "page_wait_for"]
+      "tools": [
+        "page_click",
+        "page_fill",
+        "page_press",
+        "page_hover",
+        "page_select",
+        "page_scroll",
+        "page_wait_for"
+      ]
     },
     {
       "id": "page_read",
@@ -48,6 +66,24 @@
       "description": "Read the active tab's localStorage / sessionStorage (same-origin only). Read-only; values are always masked.",
       "permissions": ["scripting"],
       "tools": ["storage_get"]
+    },
+    {
+      "id": "console_read",
+      "description": "Read recent console output from the active tab via Chrome's debugger. Values are masked. Briefly shows the 'Started debugging this browser' banner.",
+      "permissions": ["debugger"],
+      "tools": ["console_get"]
+    },
+    {
+      "id": "dialog_control",
+      "description": "Accept or dismiss JavaScript dialogs (alert / confirm / prompt) via Chrome's debugger. High-risk and OFF by default (must be enabled in settings).",
+      "permissions": ["debugger"],
+      "tools": ["page_handle_dialog"]
+    },
+    {
+      "id": "file_upload",
+      "description": "Attach a local file to a page file input via Chrome's debugger (DOM.setFileInputFiles). Critical-risk local-file egress vector: OFF by default and confirmed on every call.",
+      "permissions": ["debugger"],
+      "tools": ["page_upload"]
     }
   ]
 }

@@ -512,8 +512,150 @@ export function doFill(
   return { filled: args.ref || args.selector };
 }
 
-// --- confirmation toasts (no content script) -------------------------------
-// Both return a Promise<boolean>; the backend evaluates them with
+// --- page_press ------------------------------------------------------------
+// Dispatch a synthetic keyboard event (keydown [+ keypress] + keyup) to the
+// focused element. Mirrors content/actions.ts press. Self-contained: no module
+// scope.
+export function doPress(args: { keys: string }): { pressed: string } {
+  const spec = (args.keys || "").trim();
+  if (!spec) throw new Error("page_press needs `keys`");
+  const parts = spec.split("+").map((p) => p.trim());
+  const key = parts.pop() || "";
+  const mods = new Set(parts.map((p) => p.toLowerCase()));
+  function codeFor(k: string): string {
+    if (k.length === 1) {
+      if (/[a-zA-Z]/.test(k)) return "Key" + k.toUpperCase();
+      if (/[0-9]/.test(k)) return "Digit" + k;
+      if (k === " ") return "Space";
+    }
+    const named: Record<string, string> = {
+      Enter: "Enter",
+      Escape: "Escape",
+      Esc: "Escape",
+      Tab: "Tab",
+      Backspace: "Backspace",
+      Delete: "Delete",
+      ArrowUp: "ArrowUp",
+      ArrowDown: "ArrowDown",
+      ArrowLeft: "ArrowLeft",
+      ArrowRight: "ArrowRight",
+      Home: "Home",
+      End: "End",
+      PageUp: "PageUp",
+      PageDown: "PageDown",
+      Space: "Space",
+    };
+    return named[k] || "";
+  }
+  const combo = {
+    key: key === "Space" ? " " : key,
+    code: codeFor(key),
+    ctrlKey: mods.has("control") || mods.has("ctrl"),
+    shiftKey: mods.has("shift"),
+    altKey: mods.has("alt") || mods.has("option"),
+    metaKey: mods.has("meta") || mods.has("cmd") || mods.has("command"),
+  };
+  const el = (document.activeElement as HTMLElement) || document.body;
+  const dispatch = (type: string) =>
+    el.dispatchEvent(
+      new KeyboardEvent(type, {
+        key: combo.key,
+        code: combo.code,
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: combo.ctrlKey,
+        shiftKey: combo.shiftKey,
+        altKey: combo.altKey,
+        metaKey: combo.metaKey,
+      })
+    );
+  dispatch("keydown");
+  if (combo.key.length === 1) dispatch("keypress");
+  dispatch("keyup");
+  return { pressed: spec };
+}
+
+// --- page_hover ------------------------------------------------------------
+export function doHover(
+  refAttr: string,
+  args: { ref?: string; selector?: string }
+): { hovered: string | undefined; role: string } {
+  function resolveTarget(): HTMLElement {
+    if (args.ref) {
+      const el = document.querySelector<HTMLElement>(`[${refAttr}="${args.ref}"]`);
+      if (!el) throw new Error(`ref not found: ${args.ref} — call page_snapshot again`);
+      return el;
+    }
+    if (args.selector) {
+      const el = document.querySelector<HTMLElement>(args.selector);
+      if (!el) throw new Error(`selector matched nothing: ${args.selector}`);
+      return el;
+    }
+    throw new Error("hover needs `ref` or `selector`");
+  }
+  function roleOf(el: HTMLElement): string {
+    const explicit = el.getAttribute("role");
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    if (tag === "a" && el.hasAttribute("href")) return "link";
+    if (tag === "button") return "button";
+    if (tag === "input") {
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "submit" || type === "button" || type === "reset") return "button";
+      return "textbox";
+    }
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return "listbox";
+    if (tag === "summary") return "button";
+    return tag;
+  }
+  const el = resolveTarget();
+  el.scrollIntoView({ block: "center" });
+  el.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, cancelable: true }));
+  el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+  el.dispatchEvent(
+    new MouseEvent("mouseenter", { bubbles: false, cancelable: true, view: window })
+  );
+  el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, view: window }));
+  return { hovered: args.ref || args.selector, role: roleOf(el) };
+}
+
+// --- page_select -----------------------------------------------------------
+export function doSelect(
+  refAttr: string,
+  args: { ref?: string; selector?: string; value?: string }
+): { selected: string; text: string } {
+  function resolveTarget(): HTMLElement {
+    if (args.ref) {
+      const el = document.querySelector<HTMLElement>(`[${refAttr}="${args.ref}"]`);
+      if (!el) throw new Error(`ref not found: ${args.ref} — call page_snapshot again`);
+      return el;
+    }
+    if (args.selector) {
+      const el = document.querySelector<HTMLElement>(args.selector);
+      if (!el) throw new Error(`selector matched nothing: ${args.selector}`);
+      return el;
+    }
+    throw new Error("select needs `ref` or `selector`");
+  }
+  const el = resolveTarget();
+  if (el.tagName !== "SELECT") throw new Error("page_select target is not a <select>");
+  const value = args.value ?? "";
+  const sel = el as HTMLSelectElement;
+  const opts = Array.from(sel.options);
+  let idx = opts.findIndex((o) => o.value === value);
+  if (idx < 0) idx = opts.findIndex((o) => (o.textContent || "").trim() === value);
+  if (idx < 0) throw new Error(`page_select: no option matching "${value}"`);
+  sel.selectedIndex = idx;
+  sel.dispatchEvent(new Event("input", { bubbles: true }));
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+  return { selected: opts[idx].value, text: (opts[idx].textContent || "").trim() };
+}
+
+// --- confirmation toasts (no content script) -------------------------------// Both return a Promise<boolean>; the backend evaluates them with
 // awaitPromise:true. Styles are inlined because toast.css is never injected in
 // CDP mode. Markup/behavior mirror content/toast.ts.
 export function confirmToast(question: string, timeoutMs: number): Promise<boolean> {
