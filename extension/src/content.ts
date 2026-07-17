@@ -12,13 +12,13 @@ import { maskErrorMessage } from "./shared/masking";
 
 declare global {
   interface Window {
-    __browserBridgeLoaded?: boolean;
+    __chromiumBridgeLoaded?: boolean;
   }
 }
 
 (() => {
-  if (window.__browserBridgeLoaded) return; // guard against double-inject
-  window.__browserBridgeLoaded = true;
+  if (window.__chromiumBridgeLoaded) return; // guard against double-inject
+  window.__chromiumBridgeLoaded = true;
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     handle(msg)
