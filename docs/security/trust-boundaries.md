@@ -17,14 +17,24 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   errors surfaced, not fatal; **stdout carries only protocol** (diagnostics go
   to stderr, or a stray write corrupts the stream).
 
-## ② Rust MCP server ↔ native host  (localhost TCP, NDJSON)
+## ② Rust MCP server ↔ native host  (bridge socket, NDJSON)
 
 - **Direction of trust**: this is the one boundary defended against *local*
-  peers — any process that can reach `127.0.0.1:<port>`.
-- **Enforcement**: the native host must send a `hello` with the **per-run secret**
-  from the 0600 lock file; a bad/missing secret is rejected. The port is
-  ephemeral and published only in the lock file. Each connection is size-checked
-  NDJSON; the newest authenticated connection replaces the previous writer.
+  peers — any process that could try to reach the bridge.
+- **Enforcement** (see [ADR-0019](../adr/0019-authenticated-ipc.md)):
+  - **No listening port** (Unix): the bridge is a **0600 Unix-domain socket**
+    inside a 0700 per-user directory, so there is no localhost port for another
+    process to connect to, and the filesystem mode keeps other users out.
+    Windows, lacking std Unix sockets, keeps a loopback TCP socket.
+  - **Peer-UID check**: on `accept`, the server reads the connecting peer's UID
+    from the kernel (`getpeereid` / `SO_PEERCRED`) and drops any connection not
+    from its own UID, before authentication.
+  - **HMAC challenge-response**: the server sends a fresh random nonce; the host
+    replies with `HMAC-SHA256(secret, nonce)`, verified in constant time. The
+    per-run secret (0600 lock file) never travels on the wire, and the
+    per-connection nonce defeats replay.
+  - Each connection is size-checked NDJSON; the newest authenticated connection
+    replaces the previous writer.
 
 ## ③ Chrome ↔ native host  (Native Messaging framing)
 
@@ -56,7 +66,8 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
 ## Invariants that must not regress
 
 - stdout on either binary mode = protocol bytes only.
-- The bridge never serves a connection that failed the hello check.
+- The bridge never serves a connection that failed the peer-UID check or the
+  HMAC handshake.
 - The host manifest's `allowed_origins` always pins exactly our extension ID.
 - No page-level tool runs on a non-allowlisted origin (absent `allowAllSites`).
 - No tool writes cookies or web storage.

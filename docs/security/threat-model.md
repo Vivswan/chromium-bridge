@@ -28,9 +28,11 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 
 ## Trust assumptions
 
-- **Single-user machine.** The bridge socket is localhost-only with a per-run
-  secret in a 0600 lock file; the model assumes no hostile local user with the
-  same UID.
+- **Single-user machine.** The bridge is a 0600 Unix-domain socket (no
+  listening port) in a 0700 per-user directory, gated by a kernel peer-UID
+  check and an HMAC challenge-response over a per-run secret; the model assumes
+  no hostile local user with the same UID. (See
+  [ADR-0019](../adr/0019-authenticated-ipc.md).)
 - **The MCP client is trusted.** A malicious client the user themselves
   installed is out of scope — it already has whatever the user granted it. The
   tools exist to be driven by that client.
@@ -59,8 +61,11 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 
 4. **Another local process hijacks the bridge** to issue tool calls or read
    responses.
-   → The native host authenticates with a **per-run secret** read from a 0600
-   lock file; the MCP server rejects connections with a bad/absent hello.
+   → On Unix there is **no listening port**: the bridge is a 0600 Unix-domain
+   socket in a 0700 directory. Every connection is gated by a **kernel peer-UID
+   check** (rejecting other users) and an **HMAC-SHA256 challenge-response** in
+   which the per-run secret never crosses the wire and a fresh nonce defeats
+   replay. See [ADR-0019](../adr/0019-authenticated-ipc.md).
 
 5. **A malformed/oversized message crashes or corrupts the bridge.**
    → Native-messaging framing is length-checked (64 MB inbound clamp, 1 MB
