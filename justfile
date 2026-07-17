@@ -29,7 +29,7 @@ lint:
 
 # Lint the remaining standalone shell scripts (needs shellcheck)
 lint-scripts:
-    shellcheck install/install.sh scripts/build-repro.sh tests/install_verify_test.sh
+    shellcheck install/install.sh scripts/build-repro.sh tests/install_verify_test.sh tests/fuzz_smoke.sh
 
 # Source-code spell check (CI gate; config in typos.toml)
 typos:
