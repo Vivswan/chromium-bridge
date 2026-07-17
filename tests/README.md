@@ -70,9 +70,16 @@ exercises.
 `integration_e2e.ts` closes the one seam the others can't: the **real** MCP
 server ↔ **real** extension round-trip over native messaging. It spawns the
 release binary as the MCP server, launches Chrome (puppeteer) with a unique
-copy of the extension, registers a native-messaging host manifest (backing up
-and restoring any existing one), and drives a `tab_list` call all the way to
-`chrome.tabs.query` and back.
+copy of the extension, registers a native-messaging host manifest, and drives
+a `tab_list` call all the way to `chrome.tabs.query` and back.
+
+On macOS the manifest goes inside the throwaway `--user-data-dir` profile,
+which Chrome for Testing and Chromium resolve for user-level host manifests
+(the fixed `~/Library/.../Google/Chrome/NativeMessagingHosts` directory is
+not read under a custom profile dir; verified with Chrome for Testing 151 and
+Chromium 1663645), so a real installation's registration is never touched. On
+Windows the registration is an HKCU registry value shared by every Chrome
+instance of the account; the test backs it up and restores it.
 
 ```sh
 BB_REAL_E2E=1 bun integration_e2e.ts     # macOS/Linux shell

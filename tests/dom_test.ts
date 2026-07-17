@@ -462,16 +462,21 @@ async function invokeWithEvalApproval(
   timeoutMs = 8000
 ): Promise<any> {
   const clickP = invoke(page, op, args, timeoutMs);
-  // Wait for the eval Toast to appear, then approve it.
+  // Wait for the eval Toast to appear, then approve it. A dismissed card from
+  // a previous eval lingers in the DOM for its 150ms fade-out (.zcb-toast-out)
+  // and its buttons are inert, so match only cards that are still live, and
+  // find + click in a single evaluation so the card can't be dismissed between
+  // the two steps.
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 80));
-    const has = await page.evaluate(
-      `!!document.querySelector(".zcb-eval-card .zcb-toast-allow")`
-    );
-    if (has) {
-      await clickToastButton(page, ".zcb-eval-card .zcb-toast-allow");
-      break;
-    }
+    const clicked = await page.evaluate(`
+      (function(){
+        var btn = document.querySelector(".zcb-eval-card:not(.zcb-toast-out) .zcb-toast-allow");
+        if (btn) btn.click();
+        return !!btn;
+      })();
+    `);
+    if (clicked) break;
   }
   return clickP;
 }
