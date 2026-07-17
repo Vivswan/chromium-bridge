@@ -6,9 +6,22 @@ import type { BridgeReq } from "../shared/types";
 import { getSetting } from "../shared/settings";
 import { TOOL_META } from "../shared/ops";
 import { decide } from "./policy";
-import { resolveTargetTab, tabList, tabFocus, tabOpen, tabClose } from "./tabs";
+import {
+  resolveTargetTab,
+  tabList,
+  tabFocus,
+  tabOpen,
+  tabClose,
+  pageNavigate,
+  pageBack,
+  pageForward,
+  pageReload,
+} from "./tabs";
 import { snapshotPrecise } from "./precise";
 import { cookieGet } from "./cookies";
+import { consoleGet } from "./console";
+import { handleDialog } from "./dialog";
+import { pageUpload } from "./upload";
 import { selectBackend } from "./page-backend";
 
 /**
@@ -51,12 +64,29 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
       return await tabOpen(req.args.url);
     case "tab_close":
       return await tabClose(req.args.tabId);
+    case "page_navigate":
+      return await pageNavigate(req.args.url);
+    case "page_back":
+      return await pageBack();
+    case "page_forward":
+      return await pageForward();
+    case "page_reload":
+      return await pageReload();
     case "page_snapshot_precise":
       // Handled in SW via chrome.debugger; does NOT go through content.js.
       return await snapshotPrecise(req.tabId, req.args);
     case "cookie_get":
       // chrome.cookies API is only available in SW context.
       return await cookieGet(req.tabId, req.args);
+    case "console_get":
+      // chrome.debugger (CDP Runtime/Log); SW-only, does NOT go through content.js.
+      return await consoleGet(req.tabId, req.args);
+    case "page_handle_dialog":
+      // chrome.debugger (CDP Page.handleJavaScriptDialog); SW-only.
+      return await handleDialog(req.tabId, req.args);
+    case "page_upload":
+      // chrome.debugger (CDP DOM.setFileInputFiles); SW-only. OFF by default.
+      return await pageUpload(req.tabId, req.args);
   }
 
   // Page-level ops. Resolve the target tab, then run through the selected

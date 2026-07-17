@@ -25,9 +25,10 @@ use crate::session::Session;
 pub use catalogue::{all, Tool};
 
 use handlers::{
-    build_cookie_get, build_empty, build_page_eval, build_page_fill, build_page_scroll,
-    build_page_snapshot_precise, build_page_wait_for, build_storage_get, build_tab_close,
-    build_tab_focus, build_tab_open, call, ref_or_selector,
+    build_console_get, build_cookie_get, build_empty, build_page_eval, build_page_fill,
+    build_page_handle_dialog, build_page_navigate, build_page_press, build_page_scroll,
+    build_page_select, build_page_snapshot_precise, build_page_upload, build_page_wait_for,
+    build_storage_get, build_tab_close, build_tab_focus, build_tab_open, call, ref_or_selector,
 };
 
 /// A registered tool handler. The bridge `op` name equals the tool `name`;
@@ -108,6 +109,46 @@ const HANDLERS: &[Handler] = &[
     Handler {
         name: "storage_get",
         build_payload: build_storage_get,
+    },
+    Handler {
+        name: "page_navigate",
+        build_payload: build_page_navigate,
+    },
+    Handler {
+        name: "page_back",
+        build_payload: build_empty,
+    },
+    Handler {
+        name: "page_forward",
+        build_payload: build_empty,
+    },
+    Handler {
+        name: "page_reload",
+        build_payload: build_empty,
+    },
+    Handler {
+        name: "page_press",
+        build_payload: build_page_press,
+    },
+    Handler {
+        name: "page_hover",
+        build_payload: ref_or_selector,
+    },
+    Handler {
+        name: "page_select",
+        build_payload: build_page_select,
+    },
+    Handler {
+        name: "console_get",
+        build_payload: build_console_get,
+    },
+    Handler {
+        name: "page_handle_dialog",
+        build_payload: build_page_handle_dialog,
+    },
+    Handler {
+        name: "page_upload",
+        build_payload: build_page_upload,
     },
 ];
 

@@ -20,6 +20,8 @@ export const DEFAULTS: Settings = {
   allowAllSites: false,
   cdpMode: false, // route ALL page ops through chrome.debugger (CDP). See ADR-0017.
   groupTabs: true, // collect tab_open tabs into a "Browser Bridge" group. See ADR-0018.
+  fileUploadEnabled: false, // page_upload is OFF by default: attaching a local file to a page is a local-file egress vector.
+  handleDialogEnabled: false, // page_handle_dialog is OFF by default: a blocked dialog cannot show an in-page confirm, so the opt-in is the gate.
   requireEnrollment: true, // refuse bridge ops until a host key is paired + pinned (ADR-0021).
   hostReverifyMs: 0, // 0 = verify host identity only at pairing + on demand. >0 = on connect,
   // re-verify against the pin when the last successful verification is older
