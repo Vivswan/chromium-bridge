@@ -395,7 +395,7 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted {
     };
 
     match attach {
-        AttachRequest::Browser => admit_browser(label, reader, writer),
+        AttachRequest::Browser {} => admit_browser(label, reader, writer),
         AttachRequest::Client { harness } => admit_client(broker, harness, reader, writer),
     }
 }
@@ -412,7 +412,7 @@ fn admit_browser(
     // browser loses the cap race at insert time it is dropped and reconnects
     // (a benign, self-healing degradation only reachable at a pathological
     // browser count). See the note on `attach_browser`.
-    if bridge_write(&mut writer, &AttachReply::Accepted).is_err() {
+    if bridge_write(&mut writer, &AttachReply::Accepted {}).is_err() {
         return Admitted::Rejected;
     }
     // Steady state: an idle browser connection is normal, so clear the timeout.
@@ -501,7 +501,7 @@ fn admit_client(
         );
         return Admitted::Rejected;
     }
-    if bridge_write(&mut writer, &AttachReply::Accepted).is_err() {
+    if bridge_write(&mut writer, &AttachReply::Accepted {}).is_err() {
         broker.refcount.decr();
         return Admitted::Rejected;
     }
@@ -616,7 +616,7 @@ pub(crate) fn run_relay(harness: Option<HarnessId>) -> RelayOutcome {
         return RelayOutcome::Retry;
     }
     match bridge_read::<_, AttachReply>(&mut reader) {
-        Ok(Some(AttachReply::Accepted)) => {}
+        Ok(Some(AttachReply::Accepted {})) => {}
         Ok(Some(AttachReply::Refused { reason })) => {
             log_error!("relay", "broker refused this client: {reason}");
             return RelayOutcome::Denied;

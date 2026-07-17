@@ -116,13 +116,13 @@ pub fn run() -> i32 {
     // anything but Accepted (a capacity/version refusal, or a closed socket)
     // means we exit so Chrome tears down the port and the extension reconnects.
     if let Err(e) =
-        crate::protocol::bridge_write(&mut writer, &crate::protocol::AttachRequest::Browser)
+        crate::protocol::bridge_write(&mut writer, &crate::protocol::AttachRequest::Browser {})
     {
         log_error!("native-host", "attach declaration failed: {e}");
         return 1;
     }
     match crate::protocol::bridge_read::<_, crate::protocol::AttachReply>(&mut reader) {
-        Ok(Some(crate::protocol::AttachReply::Accepted)) => {}
+        Ok(Some(crate::protocol::AttachReply::Accepted {})) => {}
         Ok(Some(other)) => {
             log_error!(
                 "native-host",
