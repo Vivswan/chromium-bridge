@@ -8,6 +8,7 @@
 //   refs / snapshot / actions / wait / eval / storage / toast / handle
 
 import { handle } from "./content/handle";
+import { maskErrorMessage } from "./shared/masking";
 
 declare global {
   interface Window {
@@ -22,7 +23,9 @@ declare global {
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     handle(msg)
       .then((data) => sendResponse(data || {}))
-      .catch((e) => sendResponse({ __error: String(e?.message || e) }));
+      // An error message can carry page-derived data (a getter that throws, a
+      // failed op echoing page state), so this egress is masked like any other.
+      .catch((e) => sendResponse({ __error: maskErrorMessage(e) }));
     return true; // keep the channel open for the async response
   });
 })();
