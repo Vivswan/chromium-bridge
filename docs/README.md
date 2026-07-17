@@ -1,61 +1,67 @@
-# browser-bridge 文档
+# browser-bridge documentation
 
-本目录是 browser-bridge 项目的**单一信源**。代码注释回答"这段代码做什么",
-本目录回答"为什么这么做、要做什么、约束是什么"。
+This directory is the **single source of truth** for the browser-bridge
+project. Code comments answer "what does this code do"; this directory answers
+"why it is done this way, what it must do, and what the constraints are".
 
-## 文档地图
+## Doc map
 
-| 文档 | 内容 | 读者 |
+| Doc | Contents | Audience |
 |------|------|------|
-| [requirements.md](./requirements.md) | 需求:目标、用户故事、功能/非功能需求、范围边界、阶段划分 | 所有人(先读这个) |
-| [architecture.md](./architecture.md) | 架构:组件、数据流、协议、安全模型、关键约束、技术选型 | 实现者、评审者 |
-| [cli.md](./cli.md) | CLI 子命令与故障排查:`doctor`/`status` 只读自检、"server not reachable" 解读 | 使用者、排查者 |
-| [operations.md](./operations.md) | 运维:两种二进制模式、`doctor`/`status`、`BB_LOG`/审计、锁文件、native host 重连 | 使用者、运维者 |
-| [compatibility.md](./compatibility.md) | 兼容性:三种版本、内部协议版本、能力/版本握手(契约现状) | 实现者、评审者 |
-| [release.md](./release.md) | 发布:tag 驱动流水线、预编译 tarball + 校验和、双模式 `install.sh`、SBOM | 发布者、评审者 |
-| [chrome-web-store.md](./chrome-web-store.md) | 上架 Chrome Web Store 的决策清单:钉死 ID 迁移、审核风险、前置条件 | 维护者(决策) |
-| [security/incident-response.md](./security/incident-response.md) | 安全事件响应 Runbook:报告、分级、缓解(禁用工具/收回白名单/总开关)、披露 | 维护者、报告者 |
-| [adr/](./adr/) | 架构决策记录(ADR):每一个"为什么这么选"的可追溯记录 | 评审者、未来改动者 |
+| [requirements.md](./requirements.md) | Requirements: goals, user stories, functional/non-functional requirements, scope boundaries, phase plan | Everyone (read this first) |
+| [architecture.md](./architecture.md) | Architecture: components, data flow, protocols, security model, key constraints, technology choices | Implementers, reviewers |
+| [cli.md](./cli.md) | CLI subcommands and troubleshooting: the `doctor`/`status` read-only self-check, how to interpret "server not reachable" | Users, troubleshooters |
+| [operations.md](./operations.md) | Operations: the two binary modes, `doctor`/`status`, `BB_LOG`/audit, the lock file, native host reconnect | Users, operators |
+| [compatibility.md](./compatibility.md) | Compatibility: the three kinds of version, the internal protocol version, the capability/version handshake (contract status) | Implementers, reviewers |
+| [release.md](./release.md) | Releasing: tag-driven pipeline, prebuilt tarballs + checksums, dual-mode `install.sh`, SBOM | Releasers, reviewers |
+| [chrome-web-store.md](./chrome-web-store.md) | Decision checklist for publishing to the Chrome Web Store: pinned-ID migration, review risks, prerequisites | Maintainers (decision) |
+| [security/incident-response.md](./security/incident-response.md) | Security incident response runbook: reporting, triage, mitigation (disable tools / revoke allowlist / kill switch), disclosure | Maintainers, reporters |
+| [adr/](./adr/) | Architecture Decision Records (ADRs): a traceable record of every "why was this chosen" | Reviewers, future changers |
 
-> 跨进程契约(工具目录、错误分类、能力、协议版本)的单一信源在
-> [`contracts/`](../contracts/README.md)。
+> The single source of truth for cross-process contracts (tool catalogue,
+> error taxonomy, capabilities, protocol version) is
+> [`contracts/`](../contracts/README.md).
 
-> **开发流程**(分支/提交/同步/合并规范)见根目录 [`CONTRIBUTING.md`](../CONTRIBUTING.md);
-> 智能体速查入口见 [`AGENTS.md`](../AGENTS.md)。构建/测试工具链见 [development.md](./development.md)。
+> The **development process** (branch/commit/sync/merge rules) is in the
+> root-level [`CONTRIBUTING.md`](../CONTRIBUTING.md); the quick-reference
+> entry point for agents is [`AGENTS.md`](../AGENTS.md). The build/test
+> toolchain is in [development.md](./development.md).
 
-## 怎么读
+## How to read
 
-- **第一次了解项目** → `requirements.md` → `architecture.md`
-- **要改一个设计决策** → 先读对应的 ADR,看当时的取舍,再判断要不要推翻
-- **要加新功能** → `requirements.md` 的"范围边界"先确认在不在 v0.1 范围
+- **First time learning the project** -> `requirements.md` -> `architecture.md`
+- **Changing a design decision** -> read the corresponding ADR first, see the trade-offs made at the time, then decide whether to overturn it
+- **Adding a new feature** -> check the "scope boundaries" in `requirements.md` first to confirm it is in scope for v0.1
 
-## ADR 索引
+## ADR index
 
-ADR(Architecture Decision Record)记录的是**有多个合理选项、最终选了一个**的决策。
-没有争议的常规选择不写 ADR。
+An ADR (Architecture Decision Record) records a decision where **multiple
+reasonable options existed and one was chosen**. Uncontroversial routine
+choices do not get an ADR.
 
-| # | 标题 | 状态 |
+| # | Title | Status |
 |---|------|------|
-| [0001](./adr/0001-use-rust-single-binary.md) | 用 Rust 单二进制 + 子命令分发 | Accepted |
-| [0002](./adr/0002-three-process-architecture-localhost-tcp.md) | 三进程架构 + localhost TCP 桥接 | Accepted |
-| [0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) | snapshot 走 content script 而非 chrome.debugger | Accepted |
-| [0004](./adr/0004-allowlist-with-optional-host-permissions.md) | 白名单 + optional host permissions 按需授权 | Accepted |
-| [0005](./adr/0005-page-eval-disabled-by-default.md) | page_eval 默认禁用 | Superseded by #0008 |
-| [0006](./adr/0006-toast-confirmation-for-high-risk.md) | 高危动作用页面 Toast + 短时免确认 | Accepted |
-| [0007](./adr/0007-mcp-protocol-version-2025-06-18.md) | 锁定 MCP 协议版本 2025-06-18 | Accepted |
-| [0008](./adr/0008-page-eval-confirmation-channel.md) | page_eval 高危确认通道 | Accepted |
-| [0009](./adr/0009-page-snapshot-precise-debugger.md) | page_snapshot_precise 用 chrome.debugger 取权威 a11y 树 | Accepted |
-| [0010](./adr/0010-cookie-storage-readonly.md) | Cookie/Storage 只读访问 | Accepted |
-| [0011](./adr/0011-options-page-for-settings.md) | 配置通过独立 Options 页管理 | Accepted |
-| [0017](./adr/0017-cdp-mode-all-ops.md) | CDP 模式:所有页面操作可选走 chrome.debugger | Accepted |
-| [0018](./adr/0018-tab-workspace-group.md) | AI 标签页归入「Browser Bridge」分组(工作区) | Accepted |
+| [0001](./adr/0001-use-rust-single-binary.md) | Rust single binary with subcommand dispatch | Accepted |
+| [0002](./adr/0002-three-process-architecture-localhost-tcp.md) | Three-process architecture with localhost TCP bridging | Accepted; superseded in part by ADR-0019 |
+| [0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) | Snapshot via content script, not chrome.debugger | Accepted |
+| [0004](./adr/0004-allowlist-with-optional-host-permissions.md) | Allowlist with on-demand optional host permissions | Accepted |
+| [0005](./adr/0005-page-eval-disabled-by-default.md) | page_eval disabled by default | Superseded by #0008 |
+| [0006](./adr/0006-toast-confirmation-for-high-risk.md) | In-page Toast for high-risk actions, with a short confirmation-free window | Accepted |
+| [0007](./adr/0007-mcp-protocol-version-2025-06-18.md) | Pin the MCP protocol version to 2025-06-18 | Accepted |
+| [0008](./adr/0008-page-eval-confirmation-channel.md) | page_eval high-risk confirmation channel | Accepted |
+| [0009](./adr/0009-page-snapshot-precise-debugger.md) | page_snapshot_precise takes the authoritative a11y tree via chrome.debugger | Accepted |
+| [0010](./adr/0010-cookie-storage-readonly.md) | Read-only Cookie/Storage access | Accepted |
+| [0011](./adr/0011-options-page-for-settings.md) | Settings managed through a dedicated Options page | Accepted |
+| [0017](./adr/0017-cdp-mode-all-ops.md) | CDP mode (all page operations optionally via chrome.debugger) | Accepted |
+| [0018](./adr/0018-tab-workspace-group.md) | AI tabs go into a "Browser Bridge" tab group (workspace) | Accepted |
 
-## ADR 写作约定
+## ADR writing conventions
 
-新增 ADR 时:
-- 文件名:`NNNN-kebab-case-title.md`,编号接续最大值
-- 状态:Accepted / Superseded by #NNNN / Deprecated
-- 必备小节:背景、决策、考虑过的替代方案、后果
-- 一条决策一篇,不混合
+When adding an ADR:
+- File name: `NNNN-kebab-case-title.md`, numbered after the current maximum
+- Status: Accepted / Superseded by #NNNN / Deprecated
+- Required sections: context, decision, alternatives considered, consequences
+- One decision per ADR; do not mix
 
-被推翻的 ADR **不删除**,改状态为 `Superseded by #NNNN` 并加链接,保留历史。
+A superseded ADR is **not deleted**: change its status to
+`Superseded by #NNNN` with a link, and keep the history.
