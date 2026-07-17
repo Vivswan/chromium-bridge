@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-// Run all chromium-bridge tests: protocol layer (e2e.py) + DOM layer (dom_test.ts).
+// Run all chromium-bridge tests: protocol layer (e2e.py) + DOM layer (dom_test.ts)
+// + extension smoke (ext_test.ts) + security browser proofs (security_browser_test.ts).
 // Exits 0 only if ALL tests pass.
 //
 // Requirements:
@@ -97,6 +98,10 @@ if (!existsSync(join(repo, "extension/dist/chrome-mv3"))) {
   }
   if (!run(["bun", join(here, "ext_test.ts")], { CHROME_BIN: chromeBin })) {
     console.error("SMOKE TEST FAILED");
+    failed = true;
+  }
+  if (!run(["bun", join(here, "security_browser_test.ts")], { CHROME_BIN: chromeBin })) {
+    console.error("SECURITY BROWSER PROOFS FAILED");
     failed = true;
   }
 }
