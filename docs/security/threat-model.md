@@ -91,15 +91,38 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    [ADR-0020](../adr/0020-kernel-attested-peer-identity.md). **Not covered:** a
    same-user attacker who re-executes *our own* binary is byte-identical to the
    legitimate host (same hash, same cdhash), so neither the hash nor a code
-   signature can tell them apart; only browser/extension-side pairing can, which
-   is tracked separately. Team-ID pinning on macOS (to also trust a separate
-   signed build) is a deferred follow-up (see ADR-0020).
+   signature can tell them apart. The enrollment ceremony
+   ([ADR-0021](../adr/0021-enrollment-ceremony.md), threat #6) makes the
+   *pairing* of extension to bridge presence-gated, but does not distinguish
+   same-user processes post-enrollment (see the manifest-substitution
+   residual). Team-ID pinning on macOS (to also trust a separate signed
+   build) is a deferred follow-up (see ADR-0020).
 
 5. **A malformed/oversized message crashes or corrupts the bridge.**
    → Native-messaging framing is length-checked (64 MB inbound clamp, 1 MB
    outbound cap); a `panic = "abort"` profile + stderr panic hook keep panics
    off the protocol stream; parse errors are surfaced, not fatal. (Protocol
    fuzzing is a planned hardening — see the roadmap.)
+
+6. **Silent pairing: a malicious `claude mcp add` (or any process able to
+   write an MCP client config) stands up the whole chain without the user
+   noticing.**
+   → The **enrollment ceremony**
+   ([ADR-0021](../adr/0021-enrollment-ceremony.md), on by default on macOS):
+   `browser-bridge pair` mints a P-256 key inside the Secure Enclave whose
+   every use requires user presence (Touch ID / password), and performs a
+   presence-gated self-test signature; declining it leaves the machine
+   unenrolled. The extension pins the public key and verifies
+   `enclave_proof` frames against it; on an unenrolled machine a challenge
+   gets `enclave_error: not_enrolled` and a pinning extension fails closed.
+   Re-pinning (`pair --reset`) requires presence again, and `revoke` deletes
+   the key so no proof can be produced at all. The user compares the SHA-256
+   fingerprint printed by `pair` with the one the extension shows, which
+   defeats a man-in-the-middle host between them. **Scope:** this closes
+   silent *first* pairing and silent re-pinning; it does **not** close
+   post-enrollment same-user substitution (see the residual below), and the
+   host side ships first: until the extension-side pin lands, the host
+   answers challenges but nothing yet enforces them.
 
 ## Explicit non-goals
 
@@ -123,11 +146,31 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   speaks native messaging straight to the real extension, issuing `BridgeReq`s
   without ever touching the authenticated socket. `allowed_origins` pins which
   extension may open the host, but nothing pins which host the extension will
-  accept. So the "no unauthorized driver" guarantee is not complete on this leg:
-  a same-user attacker who swaps the manifest can drive the extension, subject
-  only to the per-action confirmations on high-risk ops. Closing this needs the
-  extension to verify the host it is paired with (trust-on-first-use
-  host-identity pairing in the extension settings), which is tracked separately.
+  accept. The enrollment ceremony
+  ([ADR-0021](../adr/0021-enrollment-ceremony.md)) narrows this: once the
+  extension-side pin lands, a substituted host cannot present a valid
+  `enclave_proof` without raising a Touch ID prompt the user did not expect,
+  so substitution at *enrollment time* is no longer silent. What remains open
+  is substitution *between* presence checks: MV3 respawns the host on every
+  service-worker restart (roughly every five idle minutes), presence cannot be
+  demanded per reconnect (a Touch ID prompt every five minutes is not
+  shippable), and any silent per-reconnect credential can be exercised by any
+  same-user process. So post-enrollment, a same-user attacker who swaps the
+  manifest or re-executes our binary is indistinguishable at reconnect time.
+  The opt-in per-action presence tier (tracked separately) is the mechanism
+  that would close this remainder.
+- **Read exfiltration on approved origins (accepted).** Once an origin is on
+  the allowlist, reads are unprompted by design: `page_text`, `cookie_get`,
+  and `storage_get` run with no per-action confirmation, protected only by
+  heuristic masking. A page that successfully prompt-injects the model on an
+  approved, logged-in origin can therefore silently read page content, and
+  any secret the masking heuristics miss (they match token-like shapes, not
+  meaning, so a novel format can slip through). Gating reads behind per-action
+  prompts was considered and rejected: it would add a confirmation to nearly
+  every agent step, teaching users to click through the prompts that guard the
+  genuinely dangerous actions. This is a consciously accepted residual; the
+  mitigations are the origin allowlist (the page must already be somewhere the
+  user approved), masking as a best-effort layer, and the audit log.
 - The **high-risk click grace window** lets *unrelated* same-origin code run
   without re-prompting: after one approved submit or link click, the same origin
   and action kind skip the toast for 60s (see
