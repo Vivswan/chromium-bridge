@@ -61,11 +61,11 @@ A permission model is needed to control "which sites the AI can operate on."
 
 ## Implementation details
 
-- `extension/manifest.json`: `permissions: [tabs, scripting, storage, nativeMessaging]` (no activeTab, because injection happens from the background); `host_permissions: []`; `optional_host_permissions: ["<all_urls>"]`; **no content_scripts field**
-- `extension/background.js`:
+- `src/apps/extension/manifest.json`: `permissions: [tabs, scripting, storage, nativeMessaging]` (no activeTab, because injection happens from the background); `host_permissions: []`; `optional_host_permissions: ["<all_urls>"]`; **no content_scripts field**
+- `src/apps/extension/background.js`:
   - `ensureAllowed(url)`: check whether the origin glob is on the allowlist; if not, `promptUserForAllow` (set badge + store `pendingAllow` + 60s timeout)
   - `injectIfNeeded(tabId)`: ping the content script, `chrome.scripting.executeScript` on failure
-- `extension/popup.js`: on `resolvePending`, call `chrome.permissions.request({origins: [pattern]})` and record the allowlist entry
+- `src/apps/extension/popup.js`: on `resolvePending`, call `chrome.permissions.request({origins: [pattern]})` and record the allowlist entry
 
 ## Design note
 

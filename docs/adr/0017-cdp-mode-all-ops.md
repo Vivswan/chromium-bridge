@@ -19,7 +19,7 @@ The requirement: provide a **global switch** that routes **all** page operations
 
 **Add a user setting `cdpMode` (default `false`). When on, dispatch routes every page-level operation to the CDP backend; when off, behavior is byte-for-byte what it is today (still the content script).**
 
-The implementation is organized around three patterns (`extension/src/background/`):
+The implementation is organized around three patterns (`src/apps/extension/src/background/`):
 
 | Role | Module | Responsibility |
 |------|------|------|
@@ -75,11 +75,11 @@ Key design points:
 
 ## Implementation
 
-- `extension/src/background/page-backend.ts`, `backends/content-script.ts`, `backends/cdp.ts`
-- `extension/src/background/cdp/{session,registry,page-fns,click-risk}.ts`
-- `extension/src/background/dispatch.ts`: the page block becomes `selectBackend(cdpMode).run(op, args, tab)`
-- `extension/src/background/precise.ts`: reuses the `cdp/session.ts` primitives
-- `extension/src/background.ts`: `installCdpLifecycleListeners()` at startup
-- `extension/src/shared/{types,settings}.ts`: new `cdpMode` (default false)
-- `extension/options.html` + `options.ts`: new "execution mode" settings card
+- `src/apps/extension/src/background/page-backend.ts`, `backends/content-script.ts`, `backends/cdp.ts`
+- `src/apps/extension/src/background/cdp/{session,registry,page-fns,click-risk}.ts`
+- `src/apps/extension/src/background/dispatch.ts`: the page block becomes `selectBackend(cdpMode).run(op, args, tab)`
+- `src/apps/extension/src/background/precise.ts`: reuses the `cdp/session.ts` primitives
+- `src/apps/extension/src/background.ts`: `installCdpLifecycleListeners()` at startup
+- `src/apps/extension/src/shared/{types,settings}.ts`: new `cdpMode` (default false)
+- `src/apps/extension/options.html` + `options.ts`: new "execution mode" settings card
 - Unit tests: `selectBackend`, `isHighRiskClick`/`describeAction`/`describeForToast`, `isDebuggable`, `buildEvaluateExpression`, page-fn self-containment

@@ -132,10 +132,10 @@ Different prefixes; content.js looks up by attribute value, so no change is need
 
 ## Implementation
 
-- `extension/manifest.json`: add the `debugger` permission
-- `extension/background.js`: the `snapshotPrecise(tabId)` function, the full CDP chain plus error handling
-- `extension/content.js`: `showInfoToast` + the `page_snapshot_precise_info` case
-- `extension/toast.css`: `.zcb-info-card` blue scheme
+- `src/apps/extension/manifest.json`: add the `debugger` permission
+- `src/apps/extension/background.js`: the `snapshotPrecise(tabId)` function, the full CDP chain plus error handling
+- `src/apps/extension/content.js`: `showInfoToast` + the `page_snapshot_precise_info` case
+- `src/apps/extension/toast.css`: `.zcb-info-card` blue scheme
 - `src/tools.rs`: tool definition + dispatch
 
 ## Relationship to other ADRs

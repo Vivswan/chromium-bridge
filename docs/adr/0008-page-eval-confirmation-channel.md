@@ -135,10 +135,10 @@ What each remaining setting relaxes, and the residual the user accepts:
 | `confirmPageEval` | `true` | Off = page_eval runs with no prompt at all | Arbitrary JS executes silently; user owns this by opting in (Options warning is explicit) |
 | `confirmGraceMs` | `60000` | Applies to click/submit only; a same-origin re-click within the window does not re-prompt | A second same-origin click/submit within the window is silent. Does NOT affect eval |
 
-Code: `extension/src/content/toast.ts` (`confirmWithEvalToast` no longer reads
-or writes `lastConfirmed`), `extension/src/background/backends/cdp.ts`
+Code: `src/apps/extension/src/content/toast.ts` (`confirmWithEvalToast` no longer reads
+or writes `lastConfirmed`), `src/apps/extension/src/background/backends/cdp.ts`
 (`pageEval` confirm block drops the grace check), and
-`extension/src/content/eval.ts` / `extension/src/shared/settings.ts` comments.
+`src/apps/extension/src/content/eval.ts` / `src/apps/extension/src/shared/settings.ts` comments.
 
 This is the explicit, reviewed relaxation-of-a-default record the zero-trust
 rule requires. Superseding only the eval portion of the grace-window decision;
@@ -165,9 +165,9 @@ the rest of ADR-0008 stands.
 ## Implementation
 
 - `src/tools.rs`: add the Tool definition and the dispatch branch
-- `extension/content.js`: `runEval()` + `confirmWithEvalToast()` + `serializeResult()` + `maskSensitive()` + `getMaskSetting()`
-- `extension/toast.css`: `.zcb-eval-card` / `.zcb-eval-code` / `.zcb-eval-meta` warning color scheme
-- `extension/popup.html/js`: the masking switch
+- `src/apps/extension/content.js`: `runEval()` + `confirmWithEvalToast()` + `serializeResult()` + `maskSensitive()` + `getMaskSetting()`
+- `src/apps/extension/toast.css`: `.zcb-eval-card` / `.zcb-eval-code` / `.zcb-eval-meta` warning color scheme
+- `src/apps/extension/popup.html/js`: the masking switch
 - Docs: requirements FR-3 gains page_eval; architecture section 7 gains the Function-constructor choice
 
 ## Relationship to other ADRs

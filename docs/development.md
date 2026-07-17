@@ -26,27 +26,28 @@ would fail CI fails at commit time instead.
 
 The TypeScript side is a bun workspace rooted at the repo top level
 (`package.json` `workspaces`), sharing one `bun.lock` and one `node_modules/`.
+Buildable code lives under `src/` (apps and packages); every directory there is
+a member of either the cargo workspace or the bun workspace, so one gate
+compiles the whole graph. TS packages keep sources and tests in separate
+folders (`src/` and `tests/`).
 
 ```
-crates/core/         Rust library "chromium-bridge-core": MCP server + native-host bridge
-crates/host/         Rust binary "chromium-bridge" (thin argv dispatch over the library)
-extension/
-  src/*.ts           TypeScript sources (background/content/options/popup)
-  dist/              esbuild output — the load-unpacked target (gitignored)
-  build.ts           esbuild driver (bun)
-  manifest.json, *.html, toast.css, icons/   static assets, copied into dist/
-packages/shared/     workspace package for contract types / validators / i18n
-                     (scaffold today; the codegen backbone generates into it)
-tests/               e2e.py (protocol), dom_test.ts (DOM), ext_test.ts (smoke),
-                     run_all.ts (orchestrates all suites)
-scripts/             TypeScript tooling, run via bun: gen-ops.ts,
-                     check-version.ts, sync-version.ts, check-extension-id.ts,
-                     lib.ts (shared helpers) + build-repro.sh (deterministic build)
+src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
+src/apps/extension/      MV3 extension (WXT); dist/ is the load-unpacked target (gitignored)
+src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
+src/packages/core/fuzz/  cargo-fuzz workspace for the wire parsers (nightly + libFuzzer)
+src/packages/shared/     contract types / validators / i18n (bun workspace member)
+tests/protocol/          e2e.py, adversarial.py, chaos.py — drive the real release binary
+tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
+                         integration_e2e.ts, run_all.ts (bun workspace member; isolated Chrome only)
+tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
+scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
+                         check-extension-id.ts, lib.ts + the standalone shell scripts
 ```
 
-Two standalone shell scripts remain (`install/install.sh` and
-`scripts/build-repro.sh`, plus the installer's test harness) because they must
-run without a bun toolchain. They're `shellcheck`-clean (CI gates it;
+The standalone shell scripts (`install/install.sh`, `scripts/build-repro.sh`,
+`scripts/install_verify_test.sh`, `scripts/fuzz_smoke.sh`) stay shell because
+they must run without a bun toolchain. They're `shellcheck`-clean (CI gates it;
 `just lint-scripts` locally).
 
 Rust dependencies are gated by supply-chain review (`cargo vet`, the
@@ -62,7 +63,8 @@ code enters the build without someone choosing to let it in.
 With `just` (`just` lists every recipe):
 
 ```sh
-just build          # cargo build --release
+just build          # build everything (mirror of `bun run build`, see below)
+just build-release  # cargo build --release (the binary the e2e suites drive)
 just build-repro    # deterministic release build (scripts/build-repro.sh)
 just test           # rust tests (nextest) + protocol e2e
 just test-browser   # build the extension, then DOM + smoke tests (needs Chrome)
@@ -73,50 +75,55 @@ just fix-ts         # biome lint+format auto-fix across the workspace
 just install        # build + install binary + host manifest
 ```
 
+`bun run build` (which `just build` wraps) builds the entire repo in one
+command: it typechecks `src/packages/shared`, bundles the extension, typechecks
+`scripts/`, and finishes with `cargo build --workspace`. Use it to prove the
+whole graph still compiles after a cross-cutting change.
+
 Or run the underlying commands directly:
 
 ```sh
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
-python3 tests/e2e.py
+python3 tests/protocol/e2e.py
 bun install
-bun run typecheck               # tsc for extension, tests, scripts, packages/shared
+bun run typecheck               # tsc for the extension, tests/browser, scripts, src/packages/shared
 bunx biome ci .                 # lint + format check (biome.json)
-bun run --cwd extension build   # esbuild → dist/
+bun run --cwd src/apps/extension build
 ```
 
 ## Working on the extension
 
 The extension is authored in TypeScript and bundled with esbuild (driven by
-`extension/build.ts` under bun). Because esbuild only strips types, a correct
+`src/apps/extension/build.ts` under bun). Because esbuild only strips types, a correct
 typing change produces a byte-identical bundle — a handy way to prove a
 refactor is behavior-neutral (diff `dist/*.js` against a saved reference).
 
 ```sh
 bun install
-bun run --cwd extension watch     # rebuild dist/ on change
+bun run --cwd src/apps/extension watch     # rebuild dist/ on change
 ```
 
-Load `extension/dist/` as an unpacked extension in `chrome://extensions`
+Load `src/apps/extension/dist/` as an unpacked extension in `chrome://extensions`
 (Developer mode). Rebuild after editing `src/`, then hit the reload button on
 the extension card.
 
 ## Testing
 
-Three suites, all wired into `tests/run_all.ts` (and CI):
+Three suites, all wired into `tests/browser/run_all.ts` (and CI):
 
-- **Protocol** (`tests/e2e.py`) — drives the real release binary as
+- **Protocol** (`tests/protocol/e2e.py`) — drives the real release binary as
   subprocesses over the actual wire protocols. No browser needed.
-- **DOM** (`tests/dom_test.ts`, bun) — injects the built `dist/content.js` into
+- **DOM** (`tests/browser/dom_test.ts`, bun) — injects the built `dist/content.js` into
   a headless Chrome page via CDP and exercises every content-script op.
-- **Smoke** (`tests/ext_test.ts`, bun + puppeteer-core) — launches Chrome with
+- **Smoke** (`tests/browser/ext_test.ts`, bun + puppeteer-core) — launches Chrome with
   `dist/` loaded and checks the service worker boots. Set `BB_EXT_DIR` to point
   at a different unpacked extension.
 
 ```sh
-bun tests/run_all.ts          # all three (skips browser tests if Chrome absent)
-CHROME_BIN=/path/to/chrome bun tests/run_all.ts
+bun tests/browser/run_all.ts          # all three (skips browser tests if Chrome absent)
+CHROME_BIN=/path/to/chrome bun tests/browser/run_all.ts
 ```
 
 ## Logging

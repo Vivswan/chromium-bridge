@@ -102,20 +102,20 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - name: Contracts in sync (packages/shared *.gen.ts generated from contracts/)
+      - name: Contracts in sync (src/packages/shared *.gen.ts generated from contracts/)
         run: |
           bun scripts/gen-ops.ts
-          bunx biome format --write packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts
-          git diff --exit-code -- packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts \
+          bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts
+          git diff --exit-code -- src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts \
             || { echo "::error::generated contract code is stale - run 'just gen' after editing contracts/"; exit 1; }
-      - name: Typecheck (extension, tests, scripts, packages/shared)
+      - name: Typecheck (extension, tests, scripts, src/packages/shared)
         run: bun run typecheck
       - name: Biome (lint + format)
         run: bunx biome ci .
-      - name: packages/shared tests (contract equivalence, parity, boundary validators)
-        run: bun run --cwd packages/shared test
-      - run: bun run --cwd extension test
-      - run: bun run --cwd extension build
+      - name: src/packages/shared tests (contract equivalence, parity, boundary validators)
+        run: bun run --cwd src/packages/shared test
+      - run: bun run --cwd src/apps/extension test
+      - run: bun run --cwd src/apps/extension build
 
   version-consistency:
     name: Version and extension ID consistency
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # shellcheck is preinstalled on GitHub's ubuntu runners. Only the
       # standalone shell scripts remain; the dev tooling is TypeScript now.
-      - run: shellcheck install/install.sh scripts/build-repro.sh tests/install_verify_test.sh
+      - run: shellcheck install/install.sh scripts/build-repro.sh scripts/install_verify_test.sh
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
           # Pinned: these tools' verdicts gate the build. Bump deliberately.
@@ -155,7 +155,7 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - run: bun run --cwd extension build
+      - run: bun run --cwd src/apps/extension build
       - name: Install for chrome,chromium,brave,edge (explicit keys)
         run: |
           tmp="$(mktemp -d)"
@@ -187,7 +187,7 @@ jobs:
           done
           test ! -e "$tmp/data/chromium-bridge/chromium-bridge"
       - name: Prebuilt-mode verification passes and fails closed (isolated fake archive)
-        run: ./tests/install_verify_test.sh
+        run: ./scripts/install_verify_test.sh
       - name: Escape hatch --nm-dir, and uninstall clears table + explicit dirs
         run: |
           tmp="$(mktemp -d)"
@@ -219,7 +219,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: cargo build --release
-      - run: python3 tests/e2e.py
+      - run: python3 tests/protocol/e2e.py
 
   adversarial:
     name: Adversarial break-in (Python)
@@ -234,7 +234,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: cargo build --release
-      - run: python3 tests/adversarial.py
+      - run: python3 tests/protocol/adversarial.py
 
   chaos:
     name: Fault-injection chaos (Python)
@@ -249,7 +249,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: cargo build --release
-      - run: python3 tests/chaos.py
+      - run: python3 tests/protocol/chaos.py
 
   browser:
     name: DOM + smoke (Chrome)
@@ -264,19 +264,19 @@ jobs:
         with:
           chrome-version: stable
       - run: bun install --frozen-lockfile
-      - run: bun run --cwd extension build
+      - run: bun run --cwd src/apps/extension build
       - name: Typecheck tests
-        run: bun run --cwd tests typecheck
+        run: bun run --cwd tests/browser typecheck
       - name: DOM-layer tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        run: bun tests/dom_test.ts
+        run: bun tests/browser/dom_test.ts
       - name: Extension smoke test
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
         # The smoke test needs a non-headless browser (MV3 SW reliability), so
         # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
-        run: xvfb-run -a bun tests/ext_test.ts
+        run: xvfb-run -a bun tests/browser/ext_test.ts
 
   typography:
     name: typography

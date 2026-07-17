@@ -11,7 +11,7 @@ This is the most common WSL setup: the MCP client (Codex, Claude Code, and so
 on) runs in WSL, while the daily browser is still Windows Chrome.
 
 1. Run `install/install.ps1` in the Windows checkout of the repo, and load
-   `extension/dist` into Windows Chrome.
+   `src/apps/extension/dist` into Windows Chrome.
 2. In the WSL MCP configuration, run the Windows-installed `.exe` directly.
    WSL interop launches it as a Windows process, so it shares the same
    registry, `%LOCALAPPDATA%` lock file, and Native Messaging host as Windows
@@ -53,7 +53,7 @@ Default install locations:
   `XDG_RUNTIME_DIR` it falls back to `$XDG_CACHE_HOME/chromium-bridge/run.lock`
   or `~/.cache/chromium-bridge/run.lock`
 
-Load the current WSL repo's `extension/dist` in Linux Chrome/Chromium at
+Load the current WSL repo's `src/apps/extension/dist` in Linux Chrome/Chromium at
 `chrome://extensions`, then configure the MCP client to run the
 Linux-installed binary:
 

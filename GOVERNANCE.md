@@ -96,7 +96,7 @@ know why it is there:
   installers and example config live in `install/` (`install.sh` / `install.ps1`
   / `mcp-config.example.json`), packaged *flat* at the archive root by
   `release.yml`; each installer detects the repo-vs-tarball layout to locate
-  `extension/` and the crate. `justfile` (root) is the canonical task entrypoint.
+  `src/apps/extension/` and the crate. `justfile` (root) is the canonical task entrypoint.
 
 If a genuine reason to relocate one appears, update every reference in the same
 change (CI workflows, `justfile`, `scripts/`, docs, `CODEOWNERS`) and confirm the

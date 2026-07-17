@@ -123,7 +123,7 @@ ignored today.
 - Windows does not get the port-less transport or the peer check (no std UDS);
   it keeps the prior loopback-TCP + secret model. The HMAC handshake, being
   transport-independent, does apply on Windows.
-- `doctor` and `tests/e2e.py` had to learn the new `endpoint` field and the
+- `doctor` and `tests/protocol/e2e.py` had to learn the new `endpoint` field and the
   handshake; the mock extension now computes the HMAC.
 
 ### What remains irreducible (accepted)
@@ -149,5 +149,5 @@ ignored today.
 - `src/native_host.rs`: `client_handshake` before the pumps start; old hello
   filter removed.
 - `src/protocol.rs`: the typed `Handshake` enum.
-- `tests/e2e.py`: mock extension connects over the socket and answers the HMAC
+- `tests/protocol/e2e.py`: mock extension connects over the socket and answers the HMAC
   challenge; verified end-to-end including real `--native-host` mode.

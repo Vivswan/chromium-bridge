@@ -6,16 +6,16 @@
 /target/
 
 # cargo-fuzz build artifacts, fuzzer-generated corpus, and crash reproducers.
-# The fuzz crate (fuzz/Cargo.toml + fuzz/fuzz_targets/) and its lockfile ARE
-# tracked; only the machine-generated outputs are ignored.
-/fuzz/target/
-/fuzz/corpus/
-/fuzz/artifacts/
-/fuzz/coverage/
+# The fuzz crate (src/packages/core/fuzz/Cargo.toml + fuzz_targets/) and its
+# lockfile ARE tracked; only the machine-generated outputs are ignored.
+/src/packages/core/fuzz/target/
+/src/packages/core/fuzz/corpus/
+/src/packages/core/fuzz/artifacts/
+/src/packages/core/fuzz/coverage/
 
 # Extension build output
-/extension/dist/
-extension/.wxt/
+/src/apps/extension/dist/
+src/apps/extension/.wxt/
 
 # Downloaded isolated Chrome for Testing (browser suites; never committed)
 /tests/.chrome-for-testing/
@@ -29,8 +29,8 @@ extension/.wxt/
 # Test scratch
 /tmp/
 
-# Python bytecode cache from the tests/ harness (adversarial.py imports e2e.py)
-tests/__pycache__/
+# Python bytecode cache from the tests/protocol/ harness (adversarial.py imports e2e.py)
+tests/protocol/__pycache__/
 
 # Isolated browsers downloaded for the browser suites
 # (npx @puppeteer/browsers install ... run from tests/)

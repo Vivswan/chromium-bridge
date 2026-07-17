@@ -313,26 +313,26 @@ reason as `HostConfig`: local, single-writer-version, security-relevant.
 
 ## Implementation pointers
 
-- `crates/core/src/revocation.rs`: `Revocation`, `Scope`, `bump` /
+- `src/packages/core/src/revocation.rs`: `Revocation`, `Scope`, `bump` /
   `bump_locked` / `latch_clients_enrolled_locked`, the epoch proptests.
-- `crates/core/src/allowlist.rs`: `Allowlist::revoke` (rewrite + bump in one
+- `src/packages/core/src/allowlist.rs`: `Allowlist::revoke` (rewrite + bump in one
   critical section), `Allowlist::pair` (sets the latch), `load_enforced` /
   `apply_latch` (the tamper-evidence matrix), the CLI handlers.
-- `crates/core/src/broker.rs`: `EpochGuard` (per-request re-decide),
+- `src/packages/core/src/broker.rs`: `EpochGuard` (per-request re-decide),
   `ClientRegistry` + `watch_tick` (idle-connection sweep), the `OwnHarness`
   threading, the loom registry-drain model.
-- `crates/core/src/mcp_server.rs`: `admit_own_harness` reads the epoch and
+- `src/packages/core/src/mcp_server.rs`: `admit_own_harness` reads the epoch and
   threads it into the broker.
-- `crates/core/src/native_host.rs`: `revoke_host_key`, `admin_client_list` /
+- `src/packages/core/src/native_host.rs`: `revoke_host_key`, `admin_client_list` /
   `admin_client_revoke`, `spawn_host_key_revocation_watch`, the host-originated
   `enclave_revoked` push.
-- `crates/core/src/protocol.rs`: `EnclaveControl::{EnclaveRevoke, EnclaveRevoked}`,
+- `src/packages/core/src/protocol.rs`: `EnclaveControl::{EnclaveRevoke, EnclaveRevoked}`,
   `AdminControl`, `classify_nm_frame`, `host_control_type`.
-- `crates/core/src/enclave/{cli.rs,config.rs}`: `run_revoke` bumps
+- `src/packages/core/src/enclave/{cli.rs,config.rs}`: `run_revoke` bumps
   `host_key_epoch`; `HostConfig` is `deny_unknown_fields` + versioned.
-- `extension/src/lib/background/`: `clients.ts` (admin request/reply
+- `src/apps/extension/src/lib/background/`: `clients.ts` (admin request/reply
   correlation), `enrollment.ts` (`handleRevoked`, durable
   `host-revoke-pending`), `enclave-pin.ts` (the durable flag).
-- `extension/src/entrypoints/options/TrustedClientsPanel.tsx`: the revoke UI.
-- `tests/adversarial.py` A17/A18/A19; `tests/chaos.py` C10/C11;
-  `tests/e2e.py::test_admin_control_frames`.
+- `src/apps/extension/src/entrypoints/options/TrustedClientsPanel.tsx`: the revoke UI.
+- `tests/protocol/adversarial.py` A17/A18/A19; `tests/protocol/chaos.py` C10/C11;
+  `tests/protocol/e2e.py::test_admin_control_frames`.

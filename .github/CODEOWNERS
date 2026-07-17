@@ -7,12 +7,12 @@
 
 # Security-critical surfaces - called out explicitly so changes here are
 # obvious in review (see SECURITY.md).
-/crates/core/src/ipc/ @vivswan
-/crates/core/src/protocol.rs @vivswan
-/extension/src/lib/background/allowlist-store.ts @vivswan
-/extension/src/lib/content/eval.ts @vivswan
-/extension/src/lib/content/toast.ts @vivswan
-/extension/wxt.config.ts @vivswan
+/src/packages/core/src/ipc/ @vivswan
+/src/packages/core/src/protocol.rs @vivswan
+/src/apps/extension/src/lib/background/allowlist-store.ts @vivswan
+/src/apps/extension/src/lib/content/eval.ts @vivswan
+/src/apps/extension/src/lib/content/info-toast.ts @vivswan
+/src/apps/extension/wxt.config.ts @vivswan
 /install/ @vivswan
 /SECURITY.md @vivswan
 /docs/security/ @vivswan
