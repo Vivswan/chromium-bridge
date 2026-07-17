@@ -18,7 +18,9 @@
 //               (ADR-0021): reconnects are NOT re-challenged, because every
 //               host signature raises a presence prompt and MV3 respawns the
 //               host every few minutes. "Verify now" in the options page
-//               challenges on demand.
+//               challenges on demand, and the opt-in hostReverifyMs setting
+//               re-verifies lazily on connect once the last success is older
+//               than that interval (default 0 = off).
 //   compromised a pinned-key verification failed. Refused until the user
 //               revokes and re-pairs.
 //
@@ -172,19 +174,43 @@ export async function enrollmentGate(): Promise<Gate> {
 // ---- connect hook -------------------------------------------------------------
 
 /** Called by port.ts after each successful connectNative(). Once pinned this
- * does nothing but refresh the badge: per ADR-0021 the steady state is never
- * challenged (a challenge is a Touch ID prompt, and MV3 reconnects every few
- * minutes). While unpaired it drives the ceremony forward. */
+ * refreshes the badge and, only when the opt-in hostReverifyMs interval has
+ * lapsed, issues a re-verify challenge; per ADR-0021 the default steady
+ * state is never challenged (a challenge is a Touch ID prompt, and MV3
+ * reconnects every few minutes). While unpaired it drives the ceremony
+ * forward. */
 export function onPortConnected(): Promise<void> {
   return serialized(async () => {
     await updateBadge();
     if ((await getSetting("requireEnrollment")) !== true) return;
     if (await pinStore.getCompromised()) return;
-    if (await pinStore.getPin()) return;
+    const pin = await pinStore.getPin();
+    if (pin) {
+      await maybePeriodicReverify(pin);
+      return;
+    }
     if (await pinStore.getPending()) return; // proof already in hand; awaiting approval
     if (await pinStore.getPaused()) return; // user halted pairing; manual restart only
     await issueChallenge("pair");
   });
+}
+
+/** Optional lazy re-verification (hostReverifyMs > 0): on connect, when the
+ * last successful verification (pairing counts as one) is older than the
+ * interval, challenge the host against the pin. The default (0) keeps the
+ * ADR-0021 session behavior: verify at pairing and on demand only. This is
+ * detection, not gating - like a manual verify, an unanswered or declined
+ * prompt leaves the pinned state and the gate unchanged, and only a
+ * cryptographic mismatch (or a host that can no longer prove the key) fails
+ * closed. Each re-verify raises a Touch ID prompt, which is why it is
+ * opt-in. */
+async function maybePeriodicReverify(pin: pinStore.EnclavePin): Promise<void> {
+  const interval = await getSetting("hostReverifyMs");
+  if (typeof interval !== "number" || interval <= 0) return;
+  const lastVerified = Math.max(pin.pinnedAt, (await pinStore.getLastVerifiedAt()) ?? 0);
+  if (Date.now() - lastVerified < interval) return;
+  console.log("[bb] periodic host re-verification due");
+  await issueChallenge("verify");
 }
 
 // ---- inbound control frames ----------------------------------------------------

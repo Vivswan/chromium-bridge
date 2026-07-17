@@ -21,6 +21,9 @@ export const DEFAULTS: Settings = {
   cdpMode: false, // route ALL page ops through chrome.debugger (CDP). See ADR-0017.
   groupTabs: true, // collect tab_open tabs into a "Browser Bridge" group. See ADR-0018.
   requireEnrollment: true, // refuse bridge ops until a host key is paired + pinned (ADR-0021).
+  hostReverifyMs: 0, // 0 = verify host identity only at pairing + on demand. >0 = on connect,
+  // re-verify against the pin when the last successful verification is older
+  // than this many ms (lazy check, no scheduler; each re-verify prompts Touch ID).
 };
 
 // Read one setting from chrome.storage.local, falling back to its default.
