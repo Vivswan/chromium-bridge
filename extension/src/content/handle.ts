@@ -2,7 +2,7 @@
 
 import type { ContentMsg } from "../shared/types";
 import { snapshot } from "./snapshot";
-import { click, fill, text, screenshot, scroll } from "./actions";
+import { click, fill, text, screenshot, scroll, press, hover, select } from "./actions";
 import { waitFor } from "./wait";
 import { runEval } from "./eval";
 import { storageGet } from "./storage";
@@ -19,6 +19,12 @@ export async function handle(msg: ContentMsg) {
       return await click(args);
     case "page_fill":
       return await fill(args);
+    case "page_press":
+      return await press(args);
+    case "page_hover":
+      return await hover(args);
+    case "page_select":
+      return await select(args);
     case "page_text":
       return text();
     case "page_screenshot":

@@ -23,6 +23,9 @@ import {
   probeClickTarget,
   doClick,
   doFill,
+  doPress,
+  doHover,
+  doSelect,
   confirmToast,
   evalToast,
 } from "../cdp/page-fns";
@@ -114,6 +117,18 @@ export class CdpBackend implements PageBackend {
       case "page_click":
         return await this.click(session, args, tab);
 
+      case "page_press":
+        return await this.press(session, args);
+
+      case "page_hover":
+        return await session.evaluate(doHover, [
+          REF_ATTR,
+          { ref: args.ref, selector: args.selector },
+        ]);
+
+      case "page_select":
+        return await this.select(session, args);
+
       case "page_eval":
         return await this.pageEval(session, args, tab);
 
@@ -168,6 +183,49 @@ export class CdpBackend implements PageBackend {
     }
 
     return await session.evaluate(doClick, [REF_ATTR, { ref: args.ref, selector: args.selector }]);
+  }
+
+  // page_press with a confirm-every-press toast (a keypress can submit/trigger).
+  private async press(session: CdpSession, args: OpArgs): Promise<unknown> {
+    const keys = (args.keys || "").trim();
+    if (!keys) throw new Error("page_press needs `keys`");
+    await this.confirmAlways(
+      session,
+      `Press "${keys}"?`,
+      `press ${keys}`,
+      await getSetting("clickToastTimeoutMs")
+    );
+    return await session.evaluate(doPress, [{ keys }]);
+  }
+
+  // page_select with a confirm-every-call toast (form state change).
+  private async select(session: CdpSession, args: OpArgs): Promise<unknown> {
+    const value = args.value ?? "";
+    await this.confirmAlways(
+      session,
+      `Select "${value}"?`,
+      `select ${value}`,
+      await getSetting("clickToastTimeoutMs")
+    );
+    return await session.evaluate(doSelect, [
+      REF_ATTR,
+      { ref: args.ref, selector: args.selector, value },
+    ]);
+  }
+
+  // Confirm with NO grace window: every call prompts. Mirrors content/toast.ts
+  // confirmAlways — page_press / page_select promise a confirmation on every
+  // call, so unlike confirmWithToast this never consults lastConfirmed.
+  private async confirmAlways(
+    session: CdpSession,
+    question: string,
+    actionDesc: string,
+    timeoutMs: number
+  ): Promise<void> {
+    const approved = await session.evaluate(confirmToast, [question, timeoutMs], {
+      awaitPromise: true,
+    });
+    if (!approved) throw new Error(`user denied: ${actionDesc}`);
   }
 
   // Show the click confirmation toast in the page (honoring the grace window).

@@ -23,6 +23,8 @@ export interface Settings {
   allowAllSites: boolean;
   cdpMode: boolean;
   groupTabs: boolean;
+  fileUploadEnabled: boolean;
+  handleDialogEnabled: boolean;
   requireEnrollment: boolean;
   hostReverifyMs: number;
 }
@@ -63,6 +65,11 @@ export interface OpArgs {
   type?: string;
   key?: string;
   message?: string;
+  keys?: string;
+  action?: string;
+  promptText?: string;
+  path?: string;
+  limit?: number;
   // tab-level / cookie ops (service worker)
   tabId?: number;
   url?: string;

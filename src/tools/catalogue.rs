@@ -214,6 +214,172 @@ pub fn all() -> Vec<Tool> {
                 ],
             ),
         },
+        Tool {
+            name: "page_navigate",
+            description:
+                "Navigate the active tab to an http(s) URL. The host domain must be in the user's \
+                 allowlist. This loads in the CURRENT tab (use tab_open to open a new tab \
+                 instead).",
+            input_schema: bridge_schema(
+                &["url"],
+                &[(
+                    "url",
+                    "string",
+                    "Absolute http(s) URL to load in the active tab",
+                )],
+            ),
+        },
+        Tool {
+            name: "page_back",
+            description:
+                "Navigate the active tab back one step in its session history (the browser Back \
+                 button). Errors if there is nothing to go back to.",
+            input_schema: bridge_schema(&[], &[]),
+        },
+        Tool {
+            name: "page_forward",
+            description:
+                "Navigate the active tab forward one step in its session history (the browser \
+                 Forward button). Errors if there is nothing to go forward to.",
+            input_schema: bridge_schema(&[], &[]),
+        },
+        Tool {
+            name: "page_reload",
+            description: "Reload the active tab (the browser Reload button).",
+            input_schema: bridge_schema(&[], &[]),
+        },
+        Tool {
+            name: "page_press",
+            description:
+                "Send a keyboard key or combo to the active tab, e.g. \"Enter\", \"Escape\", or \
+                 \"Control+A\". Dispatched as a synthetic keyboard event to the focused element, \
+                 so page JavaScript handlers see it; the event is not trusted, so it may not \
+                 trigger a native default action such as submitting a form (use page_click on the \
+                 submit control for that). Every press shows an on-page confirmation prompt, \
+                 because a keypress can submit or trigger an action.",
+            input_schema: bridge_schema(
+                &["keys"],
+                &[(
+                    "keys",
+                    "string",
+                    "A single key or combo, e.g. \"Enter\", \"Escape\", \"Tab\", \"a\", or \
+                     \"Control+A\". Modifiers: Control, Shift, Alt, Meta.",
+                )],
+            ),
+        },
+        Tool {
+            name: "page_hover",
+            description:
+                "Move the pointer over an element on the active tab (dispatches pointerover / \
+                 mouseover / mouseenter / mousemove), revealing hover menus or tooltips. Prefer \
+                 `ref` (from page_snapshot); fall back to `selector`.",
+            input_schema: bridge_schema(
+                &[],
+                &[
+                    (
+                        "ref",
+                        "string",
+                        "Element ref from page_snapshot, e.g. \"e3\"",
+                    ),
+                    ("selector", "string", "CSS selector fallback"),
+                ],
+            ),
+        },
+        Tool {
+            name: "page_select",
+            description:
+                "Choose an option in a <select> drop-down on the active tab. Prefer `ref` (from \
+                 page_snapshot); fall back to `selector`. `value` matches an option by its value \
+                 attribute, or by its visible text when no value matches. Fires input and change \
+                 events so frameworks react. Shows an on-page confirmation prompt, because it \
+                 changes form state.",
+            input_schema: bridge_schema(
+                &["value"],
+                &[
+                    (
+                        "ref",
+                        "string",
+                        "Element ref from page_snapshot for the <select>",
+                    ),
+                    (
+                        "selector",
+                        "string",
+                        "CSS selector fallback for the <select>",
+                    ),
+                    (
+                        "value",
+                        "string",
+                        "Option to choose: its value attribute, or its visible text",
+                    ),
+                ],
+            ),
+        },
+        Tool {
+            name: "console_get",
+            description: "Return recent console output from the active tab, captured via Chrome's \
+                 debugger. Includes browser-logged entries (network, security, and deprecation \
+                 warnings, which the debugger replays on attach) plus any console.* calls and \
+                 uncaught errors during the short capture window; console.* output produced \
+                 before this call is generally not available. Values are masked (JWT / long hex \
+                 / long numbers / token-like strings), because console lines can carry tokens. \
+                 Attaching briefly shows the 'Started debugging this browser' banner. `limit` \
+                 caps the number of entries returned (default 100).",
+            input_schema: bridge_schema(
+                &[],
+                &[("limit", "integer", "Max entries to return (default 100)")],
+            ),
+        },
+        Tool {
+            name: "page_handle_dialog",
+            description:
+                "Respond to a JavaScript dialog (alert / confirm / prompt) on the active tab: \
+                 `action` is \"accept\" or \"dismiss\", with optional `promptText` for a \
+                 prompt(). Uses Chrome's debugger (CDP Page.handleJavaScriptDialog). HIGH RISK, \
+                 because accepting a dialog can confirm a destructive action, so this tool is OFF \
+                 by default and must be enabled in the extension settings. A dialog blocks the \
+                 page, so the confirmation cannot be shown in-page; the settings opt-in is the \
+                 gate. Chrome needs the debugger attached when the dialog opens for it to be \
+                 handleable (turn on CDP mode), otherwise the dialog may not be capturable.",
+            input_schema: bridge_schema(
+                &["action"],
+                &[
+                    ("action", "string", "\"accept\" or \"dismiss\""),
+                    (
+                        "promptText",
+                        "string",
+                        "Text to enter for a prompt() before accepting",
+                    ),
+                ],
+            ),
+        },
+        Tool {
+            name: "page_upload",
+            description:
+                "CRITICAL RISK - attach a LOCAL file from the user's disk to a file input \
+                 (<input type=file>) on the active tab so the page can upload it. `selector` \
+                 targets the file input; `path` is the absolute local file path. This can \
+                 exfiltrate private local files to a web page, so it is OFF by default (enable in \
+                 the extension settings) and EVERY call shows an on-page confirmation prompt \
+                 displaying the exact file path before it proceeds. Uses Chrome's debugger (CDP \
+                 DOM.setFileInputFiles); the 'Started debugging this browser' banner flashes \
+                 while it runs. Do not use this unless the user explicitly asked to upload that \
+                 specific file.",
+            input_schema: bridge_schema(
+                &["selector", "path"],
+                &[
+                    (
+                        "selector",
+                        "string",
+                        "CSS selector for the <input type=file> element",
+                    ),
+                    (
+                        "path",
+                        "string",
+                        "Absolute local filesystem path of the file to attach",
+                    ),
+                ],
+            ),
+        },
     ]
 }
 
@@ -272,7 +438,7 @@ mod tests {
     #[test]
     fn tool_count_is_pinned() {
         // Bump deliberately when adding/removing a tool (keeps docs honest).
-        assert_eq!(all().len(), 16);
+        assert_eq!(all().len(), 26);
     }
 
     // contracts/tools.json is the single source of truth for the catalogue.
