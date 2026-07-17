@@ -72,7 +72,7 @@ function route(
       void getAllowlist().then((list) => sendResponse({ list }));
       return true;
     case "add_allow":
-      void addAllow(msg.glob).then((list) => sendResponse({ ok: true, list }));
+      void addAllow(msg.glob).then((r) => sendResponse(r));
       return true;
     case "remove_allow":
       void removeAllow(msg.glob).then((r) => sendResponse({ ok: true, ...r }));

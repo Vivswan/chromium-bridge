@@ -7,6 +7,7 @@ import { verifyExtensionId } from "@/lib/background/id-check";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
 import { connectNative } from "@/lib/background/port";
 import { hardenStorageAccess } from "@/lib/background/trusted-storage";
+import { migrateSettings } from "@/lib/shared/settings-migration";
 
 // MV3 service worker entry point. Thin wiring only; the real logic lives in
 // lib/background/*:
@@ -26,6 +27,11 @@ export default defineBackground(() => {
   // trust decision is ever made on un-confined storage. See the residual note
   // in trusted-storage.ts for the unavoidable sub-ms cold-start window.
   void hardenStorageAccess();
+
+  // Run any pending settings migrations (versioned storage). Best-effort:
+  // failure never blocks startup - the per-field salvage in shared/settings
+  // keeps reads safe regardless.
+  void migrateSettings().catch((e) => console.warn("[bb] settings migration failed", e));
 
   // Loudly log if the running extension id is not the pinned id. A mismatch
   // means the native host rejects this extension (allowed_origins pins the

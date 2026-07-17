@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "wxt";
 import { MANIFEST_PERMISSIONS } from "./src/lib/shared/manifest-permissions";
 
@@ -20,10 +22,18 @@ export default defineConfig({
   publicDir: "src/public",
   // No magic: every import is written out, so grep and tsc see the truth.
   imports: false,
+  // Compiles src/locales/*.yml -> _locales/<locale>/messages.json and
+  // generates the #i18n key structure the runtime types against.
+  modules: ["@wxt-dev/i18n/module"],
+  vite: () => ({
+    plugins: [react(), tailwindcss()],
+  }),
   manifest: {
     name: "Chromium Bridge",
-    description:
-      "Let an MCP client (Claude Code, Codex, ...) operate your real Chrome - your tabs and logins. You approve new sites and risky actions.",
+    // The Chrome-resolved description reads from _locales; the in-extension
+    // UI additionally honors the user's chosen display language (lib/i18n).
+    default_locale: "en",
+    description: "__MSG_extDescription__",
     key: identity.extensionManifestKey,
     // The extension relies on modern MV3 storage + scripting behavior; 116 is
     // the floor the pre-rehaul build targeted and remains the supported

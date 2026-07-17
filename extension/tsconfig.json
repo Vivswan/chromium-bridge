@@ -5,7 +5,8 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["chrome", "vitest/globals"]
+    "jsx": "react-jsx",
+    "types": ["chrome", "vitest/globals", "@testing-library/jest-dom"]
   },
   "exclude": ["node_modules", "dist"]
 }
