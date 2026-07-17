@@ -1,6 +1,6 @@
 # Releasing: the tag-driven release pipeline
 
-> This doc explains how browser-bridge is released: pushing a tag triggers
+> This doc explains how chromium-bridge is released: pushing a tag triggers
 > prebuilt artifacts, checksums, and the dual-mode install script, plus a
 > decoupled SBOM workflow. Version discipline is in
 > [compatibility.md](./compatibility.md); install artifact paths are in
@@ -29,7 +29,7 @@ older glibc baseline to widen compatibility). For each target:
 
 1. `cargo build --release` produces the binary.
 2. `npm ci && npm run build` produces the extension bundle (`extension/dist/`).
-3. Everything is packed into `browser-bridge-<tag>-<platform>-<arch>.tar.gz`, containing
+3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz`, containing
    the binary, `extension/dist`, `install.sh`, `mcp-config.example.json`, `LICENSE`, and
    `README.md`.
 4. A `.tar.gz.sha256` checksum is generated (`shasum` or `sha256sum`).
@@ -60,7 +60,7 @@ hard-coded to the extension ID); details are in
 `release: published` (that is, **after** the release has been created):
 
 - It uses `anchore/sbom-action` to generate CycloneDX JSON
-  (`browser-bridge.cdx.json`) from the **committed lock files** (`Cargo.lock` +
+  (`chromium-bridge.cdx.json`) from the **committed lock files** (`Cargo.lock` +
   `extension/package-lock.json`), scanning declared dependencies rather than an installed
   tree (a fresh checkout has no `node_modules`/`target`).
 - It attaches the SBOM as an asset to the Release for the corresponding tag.

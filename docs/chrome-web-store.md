@@ -73,7 +73,7 @@ advance:
 ## Packaging and submission
 
 - [ ] Produce the store zip (the release pipeline already emits
-      `browser-bridge-extension-<tag>.zip`; confirm it is the uploadable `dist/`).
+      `chromium-bridge-extension-<tag>.zip`; confirm it is the uploadable `dist/`).
 - [ ] Confirm the `manifest.json` version matches Cargo
       (`scripts/check-version.sh` already enforces this).
 - [ ] Decide whether the `key` field stays (keep it to preserve a consistent unpacked ID,

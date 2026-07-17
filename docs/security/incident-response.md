@@ -26,7 +26,7 @@ client the user configured themselves (trusted by design, see
 ## Reporting channel
 
 **Do not open a public issue for a security problem.** Use GitHub's
-**[Report a vulnerability](https://github.com/whg517/browser-bridge/security/advisories/new)**
+**[Report a vulnerability](https://github.com/Vivswan/chromium-bridge/security/advisories/new)**
 (Security -> Advisories) for a private report, including: what the attacker can do (the
 impact) and which trust boundary is crossed, reproduction steps or a PoC, and the affected
 versions/commits. As a small project, we will acknowledge within days and ask for a
@@ -63,7 +63,7 @@ ready:
   [ADR-0004](../adr/0004-allowlist-with-optional-host-permissions.md),
   [ADR-0011](../adr/0011-options-page-for-settings.md)). Removing an authorization also
   revokes that origin's host permission.
-- **Kill switch**: disable or remove the Browser Bridge extension at
+- **Kill switch**: disable or remove the Chromium Bridge extension at
   `chrome://extensions`. Once the extension stops, the native host gets EOF on stdin and
   exits, which severs the bridge. If needed, also end the MCP client session so the MCP
   server process exits (confirm not reachable with `doctor`, see

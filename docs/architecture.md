@@ -1,15 +1,15 @@
-# Architecture: browser-bridge
+# Architecture: chromium-bridge
 
 > This document describes the component structure, data flows, protocols,
-> security model, and key constraints of browser-bridge.
+> security model, and key constraints of chromium-bridge.
 > For the "why" behind design decisions, see [adr/](./adr/).
 
 ## 1. Architecture overview
 
 ```
 +----------------------------------------------------------------------------+
-|                     browser-bridge (single Rust binary)                     |
-|                                                                             |
+|                    chromium-bridge (single Rust binary)                    |
+|                                                                            |
 |  +---------------------------+   localhost TCP     +---------------------+ |
 |  | MCP server (default mode) | <---NDJSON JSON---> | --native-host       | |
 |  | - holds session state     |  127.0.0.1:<random> | (thin bridge)       | |
@@ -29,7 +29,7 @@
 +-----------------------------+                                    | chrome.runtime.connectNative
                                                                    v
                                                     +------------------------+
-                                                    | Browser Bridge         |
+                                                    | Chromium Bridge         |
                                                     | extension (MV3)        |
                                                     | background.js (SW):    |
                                                     |  - native port +       |
@@ -191,49 +191,49 @@ the pure modules, including one cross-language guard (the op list must match
 macOS:
 
 ```
-~/.browser-bridge/
-|-- browser-bridge          # release binary (608KB)
-|-- run-host-chrome.sh      # wrapper: exec browser-bridge --native-host --label chrome
+~/.chromium-bridge/
+|-- chromium-bridge          # release binary (608KB)
+|-- run-host-chrome.sh      # wrapper: exec chromium-bridge --native-host --label chrome
 |-- run-host-<browser>.sh   # one wrapper per installed browser (brave/edge/...)
 `-- run-host.sh             # label-less wrapper, only for manual --nm-dir registration
                             # (wrappers work around the NM manifest's lack of an args field)
 
 ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/
-`-- com.browser_bridge.host.json   # host manifest; path points at that browser's own wrapper
+`-- com.vivswan.chromium_bridge.host.json   # host manifest; path points at that browser's own wrapper
 ```
 
 Windows:
 
 ```text
-%LOCALAPPDATA%\browser-bridge\
-|-- browser-bridge.exe
-`-- com.browser_bridge.host.json
+%LOCALAPPDATA%\chromium-bridge\
+|-- chromium-bridge.exe
+`-- com.vivswan.chromium_bridge.host.json
 
-HKCU\Software\Google\Chrome\NativeMessagingHosts\com.browser_bridge.host
+HKCU\Software\Google\Chrome\NativeMessagingHosts\com.vivswan.chromium_bridge.host
 `-- (Default) = absolute path of the manifest above
 ```
 
 Linux:
 
 ```text
-${XDG_DATA_HOME:-~/.local/share}/browser-bridge/
-|-- browser-bridge
+${XDG_DATA_HOME:-~/.local/share}/chromium-bridge/
+|-- chromium-bridge
 |-- run-host-chrome.sh
 |-- run-host-<browser>.sh
 `-- run-host.sh
 
 ${XDG_CONFIG_HOME:-~/.config}/google-chrome/NativeMessagingHosts/
-`-- com.browser_bridge.host.json
+`-- com.vivswan.chromium_bridge.host.json
 
 ${XDG_CONFIG_HOME:-~/.config}/chromium/NativeMessagingHosts/
-`-- com.browser_bridge.host.json   # when Chromium or --browser both is selected
+`-- com.vivswan.chromium_bridge.host.json   # when Chromium or --browser both is selected
 ```
 
 On Windows the manifest points directly at the EXE. When Chrome starts the
 native host it appends the caller's extension origin, and the binary uses
 that to enter native-host mode; on macOS/Linux the wrapper passes
 `--native-host` explicitly. On Linux the lock file lives at
-`$XDG_RUNTIME_DIR/browser-bridge/run.lock` when a runtime dir exists,
+`$XDG_RUNTIME_DIR/chromium-bridge/run.lock` when a runtime dir exists,
 falling back to the XDG cache otherwise; see
 [ADR-0016](./adr/0016-linux-wsl-support.md).
 
@@ -330,7 +330,7 @@ immediately. See
 **Constraint**: the manifest's `path` must be an executable and cannot carry
 arguments.
 **Mitigation**: use a wrapper (shebang script):
-`exec browser-bridge --native-host --label <browser>`. One
+`exec chromium-bridge --native-host --label <browser>`. One
 `run-host-<browser>.sh` per browser; the label identifies that browser, and
 the server keeps a multi-browser connection registry keyed by label (see
 [ADR-0022](./adr/0022-multi-browser-label-routing.md)).
@@ -496,4 +496,4 @@ the extension release version (Cargo-sourced). They are all different.
 
 > To troubleshoot these two links at runtime (whether the connection is
 > reachable; whether the lock file/port/manifest are in place), use the
-> read-only `browser-bridge doctor`; see [cli.md](./cli.md).
+> read-only `chromium-bridge doctor`; see [cli.md](./cli.md).

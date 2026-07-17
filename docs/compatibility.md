@@ -1,6 +1,6 @@
 # Compatibility: protocol and capability versions
 
-> This doc explains the three kinds of "version" in browser-bridge, the
+> This doc explains the three kinds of "version" in chromium-bridge, the
 > compatibility policy for the internal bridge protocol, and the **contract
 > status** of the version/capability handshake. The protocol-boundary overview
 > is in [architecture.md section 11](./architecture.md#11-protocol-boundary-error-taxonomy-and-handshake);
