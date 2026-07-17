@@ -67,7 +67,12 @@ const ALLOWLIST_MAX_BYTES: usize = 256 * 1024;
 /// The authorization key of an allowlist entry: the unforgeable thing a
 /// harness's attested identity must match. Never the name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Anchor {
     /// Pin the exact attested image hash (macOS `cdhash`, Linux
     /// `/proc/<pid>/exe` SHA256). Precise, but a code re-sign changes the
@@ -541,5 +546,27 @@ mod tests {
             "surprise": true
         });
         assert!(serde_json::from_value::<Allowlist>(json).is_err());
+
+        // The same holds at every nesting level: inside an entry and inside
+        // the anchor's adjacently-tagged {kind, value} shape.
+        assert!(serde_json::from_value::<ClientEntry>(serde_json::json!({
+            "name": "codex",
+            "anchor": { "kind": "hash", "value": "ab" },
+            "added_unix": 0,
+            "surprise": true
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<Anchor>(serde_json::json!({
+            "kind": "hash",
+            "value": "ab",
+            "surprise": true
+        }))
+        .is_err());
+        // Positive control: the exact shape still parses.
+        assert!(serde_json::from_value::<Anchor>(serde_json::json!({
+            "kind": "team_id",
+            "value": "3ZMH96L4V9"
+        }))
+        .is_ok());
     }
 }
