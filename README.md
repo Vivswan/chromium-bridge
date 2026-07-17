@@ -42,7 +42,8 @@ Full details: **[SECURITY.md](./SECURITY.md)** ·
 
 ## Quickstart (≈60 seconds)
 
-**Prereqs:** Google Chrome (or Chromium on Linux). The **prebuilt** path below
+**Prereqs:** any Chromium-based browser (Chrome, Chromium, Brave, Edge, Vivaldi,
+Opera, ...). The **prebuilt** path below
 needs *no Rust and no Node.js*.
 
 ### 1. Get the binary + extension
@@ -81,8 +82,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 Installs `browser-bridge.exe` to `%LOCALAPPDATA%\browser-bridge\` and registers
-the host under your user's Chrome Native Messaging registry key. No admin rights
-needed.
+the host under the Native Messaging registry key of each detected Chromium
+browser (pick specific ones with `-Browser chrome,brave`, or point at any other
+with `-NmRegistry`). No admin rights needed.
 
 > **SmartScreen:** the prebuilt exe is unsigned, so SmartScreen may warn on first
 > run — choose **More info → Run anyway**.
@@ -93,7 +95,7 @@ needed.
 
 ```sh
 git clone https://github.com/whg517/browser-bridge && cd browser-bridge
-./install/install.sh            # Linux: --browser chrome|chromium|both
+./install/install.sh            # --browser auto|all|chrome,chromium,brave,... | --nm-dir DIR
 ```
 
 `install/install.sh` builds the Rust binary and the extension bundle, then installs both.
@@ -227,11 +229,35 @@ Deep dive: [docs/architecture.md](./docs/architecture.md) ·
 | | Supported |
 |---|---|
 | **macOS** | Apple Silicon (arm64) prebuilt. Intel via Rosetta 2 or from source. |
-| **Linux** | x64 prebuilt; Google Chrome or Chromium. |
+| **Linux** | x64 prebuilt; any Chromium-based browser. |
 | **Windows** | x64 prebuilt (native, no admin). |
-| **Browser** | Chrome / Chromium, Manifest V3 |
+| **Browser** | Any Chromium-based browser, Manifest V3 |
 | **MCP protocol** | `2025-06-18` ([ADR-0007](./docs/adr/0007-mcp-protocol-version-2025-06-18.md)) |
 | **Internal bridge protocol** | `1` (see [contracts/protocol-version.json](./contracts/protocol-version.json)) |
+
+Every Chromium browser reads the same native-messaging manifest (same pinned
+extension ID, same `allowed_origins`); only the per-user `NativeMessagingHosts`
+directory differs. The installer knows these by name (`--browser` /
+`-Browser` keys):
+
+| Key | macOS `NativeMessagingHosts` under | Linux (`$XDG_CONFIG_HOME`) | Windows registry root (HKCU) |
+|---|---|---|---|
+| `chrome` | `Google/Chrome/` | `google-chrome/` | `Software\Google\Chrome` |
+| `chromium` | `Chromium/` | `chromium/` | `Software\Chromium` |
+| `brave` | `BraveSoftware/Brave-Browser/` | `BraveSoftware/Brave-Browser/` | `Software\BraveSoftware\Brave-Browser` |
+| `edge` | `Microsoft Edge/` | `microsoft-edge/` | `Software\Microsoft\Edge` |
+| `vivaldi` | `Vivaldi/` | `vivaldi/` | `Software\Vivaldi` |
+| `opera` | `com.operasoftware.Opera/` | `opera/` | `Software\Opera Software` |
+
+`--browser auto` (the default) installs for every browser whose config directory
+already exists; `--browser all` targets every row; a comma-separated list
+(`--browser chrome,brave`) targets specific ones. For any Chromium browser not
+in the table, use the escape hatch: `--nm-dir <NativeMessagingHosts dir>` on
+macOS/Linux (repeatable), or `-NmRegistry <HKCU key>` on Windows (pass an array
+for several, e.g. `-NmRegistry 'keyA','keyB'`). Uninstall clears every row above
+automatically; because the installer keeps no record of escape-hatch targets,
+re-pass the same `--nm-dir` / `-NmRegistry` to the uninstall command to clear
+those too.
 
 Prebuilt targets come from the tag-driven [release workflow](./.github/workflows/release.yml);
 see [docs/compatibility.md](./docs/compatibility.md).

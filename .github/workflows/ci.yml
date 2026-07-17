@@ -89,20 +89,53 @@ jobs:
         working-directory: extension
       - run: npm run build
         working-directory: extension
-      - name: Install for Chrome and Chromium
+      - name: Install for chrome,chromium,brave,edge (explicit keys)
         run: |
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           XDG_DATA_HOME="$tmp/data" \
           XDG_CONFIG_HOME="$tmp/config" \
-            ./install/install.sh --browser both --skip-extension-build
+            ./install/install.sh --browser chrome,chromium,brave,edge --skip-extension-build
           test -x "$tmp/data/browser-bridge/browser-bridge"
           test -x "$tmp/data/browser-bridge/run-host.sh"
-          test -f "$tmp/config/google-chrome/NativeMessagingHosts/com.browser_bridge.host.json"
-          test -f "$tmp/config/chromium/NativeMessagingHosts/com.browser_bridge.host.json"
-          grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' \
-            "$tmp/config/google-chrome/NativeMessagingHosts/com.browser_bridge.host.json"
+          for d in google-chrome chromium BraveSoftware/Brave-Browser microsoft-edge; do
+            manifest="$tmp/config/$d/NativeMessagingHosts/com.browser_bridge.host.json"
+            test -f "$manifest"
+            grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$manifest"
+          done
           "$tmp/data/browser-bridge/browser-bridge" --help
+      - name: Install all, then uninstall removes every known registration
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          export XDG_DATA_HOME="$tmp/data" XDG_CONFIG_HOME="$tmp/config"
+          ./install/install.sh --browser all --skip-extension-build
+          dirs="google-chrome chromium BraveSoftware/Brave-Browser microsoft-edge vivaldi opera"
+          for d in $dirs; do
+            test -f "$tmp/config/$d/NativeMessagingHosts/com.browser_bridge.host.json"
+          done
+          ./install/install.sh --uninstall
+          for d in $dirs; do
+            test ! -e "$tmp/config/$d/NativeMessagingHosts/com.browser_bridge.host.json"
+          done
+          test ! -e "$tmp/data/browser-bridge/browser-bridge"
+      - name: Escape hatch --nm-dir, and uninstall clears table + explicit dirs
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          export XDG_DATA_HOME="$tmp/data" XDG_CONFIG_HOME="$tmp/config"
+          custom="$tmp/custom/NativeMessagingHosts"
+          chrome="$tmp/config/google-chrome/NativeMessagingHosts/com.browser_bridge.host.json"
+          # A standard browser plus an out-of-table one via the escape hatch.
+          ./install/install.sh --browser chrome --skip-extension-build
+          ./install/install.sh --nm-dir "$custom" --skip-extension-build
+          test -f "$chrome"
+          test -f "$custom/com.browser_bridge.host.json"
+          grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$custom/com.browser_bridge.host.json"
+          # Uninstall with --nm-dir must clear BOTH the table dir and the explicit one.
+          ./install/install.sh --uninstall --nm-dir "$custom"
+          test ! -e "$chrome"
+          test ! -e "$custom/com.browser_bridge.host.json"
 
   e2e:
     name: Protocol e2e (Python)
