@@ -100,7 +100,7 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     parent directory confers (`LOCALAPPDATA`, falling back to
     `USERPROFILE\AppData\Local`, both per-user by default; then the temp
     directory, which is not guaranteed per-user; see `runtime_dir()`
-    in `crates/core/src/ipc/`). So on Windows the guarantee is weaker: it
+    in `src/packages/core/src/ipc/`). So on Windows the guarantee is weaker: it
     rests on the secret staying confidential, not on kernel-attested peer
     identity.
   - **Residual risk**: neither a hash nor a code signature can distinguish the

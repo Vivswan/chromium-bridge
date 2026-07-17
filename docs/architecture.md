@@ -153,12 +153,12 @@ against the secret in the lock file. See [ipc.rs](../src/ipc.rs).
 | `error.rs` | Typed error `CallError` at the tool-call boundary (thiserror); its Display is the text the model sees. See [ADR-0014](./adr/0014-leveled-logging.md) |
 | `log.rs` | Leveled stderr logger controlled by `BB_LOG` (error/warn/info/debug, default info) + the `log_*!` macros. See [ADR-0014](./adr/0014-leveled-logging.md) |
 
-### 4.2 Chrome extension (`extension/`)
+### 4.2 Chrome extension (`src/apps/extension/`)
 
 The extension source is written in **TypeScript** (strict) under
-`extension/src/*.ts` and bundled by **esbuild** into IIFEs in
-`extension/dist/`, with static assets (manifest/HTML/CSS/icons) copied in.
-**The load-unpacked target is `extension/dist/`** (not `extension/`). After
+`src/apps/extension/src/*.ts` and bundled by **esbuild** into IIFEs in
+`src/apps/extension/dist/`, with static assets (manifest/HTML/CSS/icons) copied in.
+**The load-unpacked target is `src/apps/extension/dist/`** (not `src/apps/extension/`). After
 changing code, run `bun run build` (or `just ext-build`) first. See
 [ADR-0012](./adr/0012-typescript-esbuild-extension-build.md).
 
@@ -237,7 +237,7 @@ that to enter native-host mode; on macOS/Linux the wrapper passes
 falling back to the XDG cache otherwise; see
 [ADR-0016](./adr/0016-linux-wsl-support.md).
 
-The extension itself is loaded **load-unpacked** from **`extension/dist/`**
+The extension itself is loaded **load-unpacked** from **`src/apps/extension/dist/`**
 (the esbuild output: bundled from `src/*.ts` plus copied static assets);
 `install.sh`/`install.ps1` build it first. dist/ is not checked in, so after
 cloning run `bun run build` (or `just ext-build`) first. See
@@ -421,7 +421,7 @@ See [ADR-0010](./adr/0010-cookie-storage-readonly.md).
 | Binary split | Single binary + subcommands | One codebase, one compile, upgrades replace one file. See [ADR-0001](./adr/0001-use-rust-single-binary.md) |
 | IPC | localhost TCP + lock file | Simple across processes; easy to debug; per-run secret authentication. See [ADR-0002](./adr/0002-three-process-architecture-localhost-tcp.md) |
 | Rust dependencies | serde/serde_json + libc + thiserror | The protocol is still handwritten and tokio is still unused; beyond serde, `libc` (signals/low-level interaction) and `thiserror` (typed errors on the tool path) were added. This revises ADR-0001's old "serde is the only dependency" wording; the minimal-dependency principle stands. See [ADR-0014](./adr/0014-leveled-logging.md) |
-| Extension toolchain | TypeScript + esbuild -> dist/ | strict types + a single dependency bundling to IIFE; load-unpacked target is `extension/dist/`. See [ADR-0012](./adr/0012-typescript-esbuild-extension-build.md) |
+| Extension toolchain | TypeScript + esbuild -> dist/ | strict types + a single dependency bundling to IIFE; load-unpacked target is `src/apps/extension/dist/`. See [ADR-0012](./adr/0012-typescript-esbuild-extension-build.md) |
 | Engineering gates | justfile + GitHub Actions | A single task entry point + CI (fmt/clippy -D warnings, Biome, typos/machete + tests); Cargo is the version's single source. See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by the 2026-07 bun/Biome/just migration |
 | Extension platform | MV3 | Mandated by Chrome; Service Worker model |
 | snapshot implementation | content script approximate a11y tree | No infobar; roughly 90% coverage, with the debugger fallback as backstop. See [ADR-0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) |
@@ -449,7 +449,7 @@ Extension points reserved in the architecture:
 A round of engineering standardization reshaped the build, test, and
 observability baseline without changing the tools' runtime behavior. The
 decisions:
-- **[ADR-0012](./adr/0012-typescript-esbuild-extension-build.md)**: the extension moved to TypeScript, bundled by esbuild into `extension/dist/` (the new load-unpacked target).
+- **[ADR-0012](./adr/0012-typescript-esbuild-extension-build.md)**: the extension moved to TypeScript, bundled by esbuild into `src/apps/extension/dist/` (the new load-unpacked target).
 - **[ADR-0013](./adr/0013-ci-and-toolchain.md)**: task-runner entry point + GitHub Actions CI + rustfmt/clippy and TS lint/format gates + Cargo-sourced version sync (tooling now just + Biome, 2026-07).
 - **[ADR-0014](./adr/0014-leveled-logging.md)**: `BB_LOG` leveled stderr logging + thiserror typed errors (new `libc` and `thiserror` dependencies).
 

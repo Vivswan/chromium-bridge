@@ -6,18 +6,20 @@
   "type": "module",
   "packageManager": "bun@1.3.14",
   "workspaces": [
-    "extension",
-    "packages/*",
-    "tests"
+    "src/apps/extension",
+    "src/packages/*",
+    "tests/browser",
+    "scripts"
   ],
   "scripts": {
-    "gen": "bun scripts/gen-ops.ts && biome format --write packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts",
-    "typecheck": "tsc -p extension && tsc -p tests && tsc -p scripts && tsc -p packages/shared",
+    "gen": "bun scripts/gen-ops.ts && biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts",
+    "typecheck": "tsc -p src/apps/extension && tsc -p tests/browser && tsc -p scripts && tsc -p src/packages/shared",
+    "build": "bun run --cwd src/packages/shared typecheck && bun run --cwd src/apps/extension build && tsc -p scripts && cargo build --workspace",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "check": "biome check .",
-    "test": "bun run --cwd packages/shared test && bun run --cwd extension test"
+    "test": "bun run --cwd src/packages/shared test && bun run --cwd src/apps/extension test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",

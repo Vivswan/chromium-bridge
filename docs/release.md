@@ -28,7 +28,7 @@ macOS is **deliberately omitted** because hosted runners are scarce, and Linux u
 older glibc baseline to widen compatibility). For each target:
 
 1. `cargo build --release` produces the binary.
-2. `bun install --frozen-lockfile && bun run --cwd extension build` produces the extension bundle (`extension/dist/`).
+2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` produces the extension bundle (`src/apps/extension/dist/`).
 3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz`, containing
    the binary, `extension/dist`, `install.sh`, `mcp-config.example.json`, `LICENSE`, and
    `README.md`.

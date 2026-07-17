@@ -3,9 +3,9 @@
 // Verify the bridge's identity constants against their sources of truth:
 //
 //   - extension id: DERIVED from contracts/identity.json's
-//     `extensionManifestKey` (Chrome's id derivation; extension/wxt.config.ts
+//     `extensionManifestKey` (Chrome's id derivation; src/apps/extension/wxt.config.ts
 //     injects the same key into the generated manifest). The generated
-//     packages/shared/src/identity.gen.ts and both installers must carry
+//     src/packages/shared/src/identity.gen.ts and both installers must carry
 //     exactly that id.
 //   - native-messaging host id: DECLARED in contracts/identity.json. The
 //     generated TS, the Rust host, and both installers must agree, and the id
@@ -39,7 +39,7 @@ const derivedId = [...hex]
 const sources: Array<[string, RegExp]> = [
   ["install/install.sh", /PINNED_EXTENSION_ID="([a-p]{32})"/],
   ["install/install.ps1", /\$ExtensionId\s*=\s*'([a-p]{32})'/],
-  ["packages/shared/src/identity.gen.ts", /PINNED_EXTENSION_ID = "([a-p]{32})"/],
+  ["src/packages/shared/src/identity.gen.ts", /PINNED_EXTENSION_ID = "([a-p]{32})"/],
 ];
 
 let failed = false;
@@ -64,8 +64,8 @@ if (typeof hostId !== "string" || !/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(hostId)) {
   process.exit(1);
 }
 const hostSources: Array<[string, RegExp]> = [
-  ["packages/shared/src/identity.gen.ts", /NATIVE_HOST_ID = "([a-z0-9._]+)"/],
-  ["crates/core/src/doctor.rs", /const HOST_NAME: &str = "([a-z0-9._]+)"/],
+  ["src/packages/shared/src/identity.gen.ts", /NATIVE_HOST_ID = "([a-z0-9._]+)"/],
+  ["src/packages/core/src/doctor.rs", /const HOST_NAME: &str = "([a-z0-9._]+)"/],
   ["install/install.sh", /HOST_NAME="([a-z0-9._]+)"/],
   ["install/install.ps1", /\$HostName = '([a-z0-9._]+)'/],
 ];
@@ -82,10 +82,10 @@ for (const [relativePath, pattern] of hostSources) {
 // shipped artifact: the pinned key, the exact permission set, no install-time
 // host access, and no manifest-declared content scripts. This catches drift
 // between wxt.config.ts and what the build actually emits (the config-level
-// assertions live in extension/tests/shared/manifest.test.ts). `just ci`
+// assertions live in src/apps/extension/tests/shared/manifest.test.ts). `just ci`
 // builds before this check runs; a standalone run without dist/ skips it
 // loudly rather than failing a build-free environment.
-const builtManifestPath = resolve(root, "extension/dist/chrome-mv3/manifest.json");
+const builtManifestPath = resolve(root, "src/apps/extension/dist/chrome-mv3/manifest.json");
 if (existsSync(builtManifestPath)) {
   const built = JSON.parse(readFileSync(builtManifestPath, "utf8")) as {
     key?: unknown;
@@ -124,12 +124,14 @@ if (existsSync(builtManifestPath)) {
     problems.push("built manifest declares content_scripts; injection must stay runtime-only");
   }
   if (problems.length > 0) {
-    for (const p of problems) console.error(`extension/dist manifest: ${p}`);
+    for (const p of problems) console.error(`src/apps/extension/dist manifest: ${p}`);
     process.exit(1);
   }
   console.log("built manifest security surface verified (key, permissions, host access)");
 } else {
-  console.log("note: extension/dist/chrome-mv3 not built; skipped built-manifest verification");
+  console.log(
+    "note: src/apps/extension/dist/chrome-mv3 not built; skipped built-manifest verification",
+  );
 }
 
 if (failed) process.exit(1);

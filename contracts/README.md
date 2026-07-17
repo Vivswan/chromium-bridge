@@ -11,17 +11,17 @@ The tool catalogue: for each tool, its `name`, `uiLabel` (options page),
 
 Derived / verified from it:
 
-- **`packages/shared/src/ops.gen.ts`**: *generated* by `scripts/gen-ops.ts`
+- **`src/packages/shared/src/ops.gen.ts`**: *generated* by `scripts/gen-ops.ts`
   (`just gen`): op names, UI labels, policy metadata, and a Zod arg validator
   per tool. The `BridgeCommand` request union is inferred from those
   validators, so the compile-time types and the runtime checks are the same
   artifact. CI fails if the file is out of date.
-- **`crates/core/src/tools/catalogue.rs`**: *verified* by the
+- **`src/packages/core/src/tools/catalogue.rs`**: *verified* by the
   `matches_contract` test (`cargo test`): names, descriptions, and schemas
   must match the contract.
-- **`packages/shared/src/ops.gen.test.ts`**: asserts the generated catalogue
+- **`src/packages/shared/tests/ops.gen.test.ts`**: asserts the generated catalogue
   and validators match the contract; the roster test in
-  `extension/src/shared/rosters.test.ts` asserts every op has exactly one
+  `src/apps/extension/tests/shared/rosters.test.ts` asserts every op has exactly one
   handling surface in the extension (service worker, page backends, or the
   MCP server itself).
 
@@ -47,7 +47,7 @@ stable `id`, a `description`, the Chrome `permissions` it needs, and the `tools`
 which capability ids are actually available; a tool is callable only if its
 capability is advertised. The groupings and descriptions are hand-authored, so
 the file is *verified* rather than generated:
-`packages/shared/src/capabilities.test.ts` fails CI unless every bridge-routed
+`src/packages/shared/tests/capabilities.test.ts` fails CI unless every bridge-routed
 tool is covered by exactly one capability and each capability's `permissions`
 equal the union of its tools' permissions.
 
@@ -55,9 +55,9 @@ equal the union of its tools' permissions.
 
 The identity constants that have no other natural home. The native-messaging
 host id is declared here, and so is the extension's pinned manifest `key`
-(`extensionManifestKey`): `extension/wxt.config.ts` injects it into the
+(`extensionManifestKey`): `src/apps/extension/wxt.config.ts` injects it into the
 generated manifest, and Chrome derives the extension ID from it.
-`scripts/gen-ops.ts` emits both into `packages/shared/src/identity.gen.ts`
+`scripts/gen-ops.ts` emits both into `src/packages/shared/src/identity.gen.ts`
 (the extension imports `NATIVE_HOST_ID` for `connectNative` and
 `PINNED_EXTENSION_ID` for its startup self-check), and
 `scripts/check-extension-id.ts` (`just check-extension-id`, part of `just ci`)
@@ -85,10 +85,10 @@ intentionally unconstrained, and stable error **codes** live in `errors.json`,
 not in the response schema.
 
 Their runtime form is the hand-written Zod schemas in
-`packages/shared/src/envelope.ts`, which the extension enforces on every
+`src/packages/shared/src/envelope.ts`, which the extension enforces on every
 inbound native-messaging frame (`parseBridgeReq`, fail closed). The TS types
 are inferred from those schemas, and the **equivalence test**
-(`packages/shared/src/contract-equivalence.test.ts`) diffs
+(`src/packages/shared/tests/contract-equivalence.test.ts`) diffs
 `z.toJSONSchema()` of each schema against the contract file in CI, so there
 is no hand-synced mirror left to drift. The request schema's `OpArgs` is
 pinned to the union of every tool's `inputSchema` properties (minus the
@@ -98,8 +98,8 @@ server-consumed `browser` routing argument) by the same test.
 
 1. Edit `tools.json` (and `capabilities.json` if the tool needs a new
    capability grouping).
-2. `just gen` (regenerates `packages/shared/src/ops.gen.ts`).
-3. Update the Rust handler in `crates/core/src/tools/` (the test enforces
+2. `just gen` (regenerates `src/packages/shared/src/ops.gen.ts`).
+3. Update the Rust handler in `src/packages/core/src/tools/` (the test enforces
    parity).
 4. Give the op a home in the extension: `SW_OPS` + a `dispatchSw` case, or
    `PAGE_OPS` + cases in both page backends. The roster and exhaustiveness

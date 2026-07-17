@@ -40,9 +40,9 @@ invariant is now deliberately dropped.
 ## Decision
 
 1. **Cargo workspace.** The flat crate splits into a workspace:
-   `crates/core` (library: ipc, protocol, session, tools, enclave, error,
+   `src/packages/core` (library: ipc, protocol, session, tools, enclave, error,
    log, plus the new allowlist / revocation / broker modules) and
-   `crates/host` (the binary; the `main.rs` mode dispatch moves verbatim,
+   `src/apps/host` (the binary; the `main.rs` mode dispatch moves verbatim,
    so the argv and native-messaging contracts are untouched). The TS side
    becomes a bun workspace with a shared package consumed by both the
    extension and the app UI.
@@ -96,7 +96,7 @@ The security architecture of the existing bridge is carried over, not
 redesigned: the 0600 socket in the 0700 runtime directory, the kernel
 peer-UID check, executable attestation, the HMAC challenge-response, the
 enrollment ceremony, origin allowlisting, masking, and the per-action
-confirmations all survive the move into `crates/core` with their semantics
+confirmations all survive the move into `src/packages/core` with their semantics
 intact. The native-messaging protocol and the MCP tool catalogue are
 unchanged by the restructure itself. "stdout is protocol" still holds in
 both binary modes.

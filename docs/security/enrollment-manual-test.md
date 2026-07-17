@@ -4,7 +4,7 @@ The presence-gated parts of the enrollment ceremony (ADR-0021) cannot run in
 CI: they require a Secure Enclave, a codesigned binary, and a human at the
 keyboard. Everything else about enrollment is covered by automated tests
 (`cargo test` for the DER converter, challenge validation, and frame serde;
-`tests/e2e.py::test_enclave_control_frames` for the host's local handling of
+`tests/protocol/e2e.py::test_enclave_control_frames` for the host's local handling of
 control frames). This script covers the rest. Run it on a Mac with Touch ID
 before any release that touches `src/enclave.rs`, the control-frame filter,
 or the keychain ACL.

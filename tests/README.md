@@ -1,14 +1,15 @@
 # Tests
 
-Three suites across **two languages**. The language split is deliberate, not
-historical accident:
+Three suites across **two languages**, in two directories: `protocol/` (python)
+and `browser/` (TypeScript, a bun workspace member), with shared pages in
+`fixtures/`. The language split is deliberate, not historical accident:
 
 | Suite | File | Runtime | Why this language |
 |-------|------|---------|-------------------|
-| **Protocol** | `e2e.py` | `python3` (stdlib only) | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the TCP bridge) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
-| **DOM** | `dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `extension/dist/content.js` into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
-| **Smoke** | `ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `extension/dist/` loaded and checks the MV3 service worker boots with its APIs. |
-| **Integration** (opt-in) | `integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
+| **Protocol** | `protocol/e2e.py` | `python3` (stdlib only) | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the TCP bridge) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
+| **DOM** | `browser/dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `src/apps/extension/dist/content.js` into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
+| **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `src/apps/extension/dist/` loaded and checks the MV3 service worker boots with its APIs. |
+| **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
 
 The two browser suites are **TypeScript run under bun** (matching the
 extension). The protocol suite stays **Python on purpose** - rewriting it in
@@ -38,17 +39,17 @@ export CHROME_BIN="/Applications/Google Chrome for Testing.app/Contents/MacOS/Go
 ```sh
 # Everything (builds the binary + extension first; skips browser tests if
 # Chrome is missing). This is what CI runs.
-bun run_all.ts
-CHROME_BIN="/path/to/chrome" bun run_all.ts   # override Chrome location
+bun browser/run_all.ts
+CHROME_BIN="/path/to/chrome" bun browser/run_all.ts   # override Chrome location
 
 # Individually:
-python3 e2e.py                 # protocol - no browser needed
-bun run test:dom               # DOM     - bun + Chrome
-bun run test:smoke             # smoke   - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
+python3 protocol/e2e.py                     # protocol - no browser needed
+bun run --cwd browser test:dom              # DOM     - bun + Chrome
+bun run --cwd browser test:smoke            # smoke   - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
 ```
 
 The browser suites read the **built** bundle, so build the extension first
-(`bun run --cwd ../extension build`); `run_all.ts` and `just test-browser` do
+(`bun run --cwd ../src/apps/extension build`); `run_all.ts` and `just test-browser` do
 this for you.
 
 ## Types
@@ -83,8 +84,8 @@ Windows the registration is an HKCU registry value shared by every Chrome
 instance of the account; the test backs it up and restores it.
 
 ```sh
-BB_REAL_E2E=1 bun integration_e2e.ts     # macOS/Linux shell
-$env:BB_REAL_E2E='1'; node integration_e2e.ts  # Windows PowerShell, Node 22.12+
+BB_REAL_E2E=1 bun browser/integration_e2e.ts     # macOS/Linux shell
+$env:BB_REAL_E2E='1'; node browser/integration_e2e.ts  # Windows PowerShell, Node 22.12+
 ```
 
 - **Opt-in** (skips unless `BB_REAL_E2E=1`), macOS/Windows, and pops a

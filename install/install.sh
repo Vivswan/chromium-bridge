@@ -554,7 +554,7 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
   BIN_SRC="$ROOT/target/release/$BINARY_NAME"
 
   if [[ "$SKIP_EXTENSION_BUILD" == "1" ]]; then
-    DIST_DIR="$ROOT/extension/dist/chrome-mv3"
+    DIST_DIR="$ROOT/src/apps/extension/dist/chrome-mv3"
     [[ -d "$DIST_DIR" ]] || {
       echo "error: --skip-extension-build requires an existing $DIST_DIR" >&2
       exit 1
@@ -563,13 +563,13 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
   else
     if ! command -v bun >/dev/null 2>&1; then
       echo "error: bun is needed to build the extension (https://bun.sh)." >&2
-      echo "       Install bun, or build extension/dist elsewhere and pass --skip-extension-build." >&2
+      echo "       Install bun, or build src/apps/extension/dist elsewhere and pass --skip-extension-build." >&2
       exit 1
     fi
     echo "[install] building extension bundle (wxt)..."
     [[ -d "$ROOT/node_modules" ]] || (cd "$ROOT" && bun install --frozen-lockfile)
-    (cd "$ROOT/extension" && bun run build)
-    DIST_DIR="$ROOT/extension/dist/chrome-mv3"
+    (cd "$ROOT/src/apps/extension" && bun run build)
+    DIST_DIR="$ROOT/src/apps/extension/dist/chrome-mv3"
   fi
 else
   PREBUILT=1

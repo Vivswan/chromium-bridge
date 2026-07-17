@@ -9,7 +9,7 @@
  *    keep the rules here generic and layout-neutral.
  *  - Never use display:none, visibility:hidden, opacity:0, zero sizes, or
  *    text-transform here - the snapshot's isVisible() and accessible-name
- *    logic (extension/src/content/snapshot.ts) read computed style and
+ *    logic (src/apps/extension/src/content/snapshot.ts) read computed style and
  *    innerText of these elements.
  *  - No external resources: fixtures load from file:// and must stay offline.
  */
