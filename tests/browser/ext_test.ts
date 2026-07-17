@@ -173,6 +173,13 @@ async function main(): Promise<void> {
       zh_CN: "\u663E\u793A\u8BED\u8A00",
       zh_TW: "\u986F\u793A\u8A9E\u8A00",
     };
+    // The tab_list tool label, per locale: proves the tool grid reads the
+    // locale bundle (the original leak was this grid showing zh on en).
+    const TAB_LIST_LABEL = {
+      en: "List open tabs",
+      zh_CN: "\u5217\u51FA\u6240\u6709\u6807\u7B7E\u9875",
+      zh_TW: "\u5217\u51FA\u6240\u6709\u5206\u9801",
+    };
 
     const page = await browser.newPage();
     await page.goto(`chrome-extension://${extId}/options.html`, { waitUntil: "networkidle0" });
@@ -183,6 +190,10 @@ async function main(): Promise<void> {
     // Fresh throwaway profile, nothing stored: the UI must come up in
     // English, whatever the machine's locale is.
     check((await bodyText()).includes(LANG_LABEL.en), "fresh profile renders English");
+    check(
+      (await bodyText()).includes(TAB_LIST_LABEL.en),
+      "fresh profile tool grid is English (tab_list)",
+    );
     check(
       (await page.evaluate(() => document.documentElement.lang)) === "en",
       "fresh profile html lang is en",
@@ -212,6 +223,10 @@ async function main(): Promise<void> {
         )
         .catch(() => {});
       check((await bodyText()).includes(LANG_LABEL[locale]), `${locale} locale renders`);
+      check(
+        (await bodyText()).includes(TAB_LIST_LABEL[locale]),
+        `${locale} tool grid is localized (tab_list)`,
+      );
       // Native names stay untranslated under this locale too.
       await page.click('[aria-labelledby="lang-label"]');
       await page.waitForSelector('[role="option"]');
