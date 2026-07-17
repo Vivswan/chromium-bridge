@@ -218,7 +218,7 @@ pub fn assess(reg: &Registration) -> RegState {
 impl Registrar {
     /// The JSON manifest for `launch_path` (the wrapper on Unix, the binary
     /// itself on Windows).
-    fn manifest_json(&self, launch_path: &Path) -> String {
+    fn manifest_json(&self, launch_path: &Path) -> Result<String, String> {
         let manifest = serde_json::json!({
             "name": HOST_ID,
             "description": MANIFEST_DESCRIPTION,
@@ -226,10 +226,12 @@ impl Registrar {
             "type": "stdio",
             "allowed_origins": [format!("chrome-extension://{}/", self.extension_id)],
         });
-        // to_string_pretty on a json! literal cannot fail.
-        let mut text = serde_json::to_string_pretty(&manifest).expect("static manifest JSON");
+        // to_string_pretty on a json! literal cannot fail; propagate rather
+        // than panic if serde_json ever finds a way.
+        let mut text = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| format!("could not serialize the host manifest: {e}"))?;
         text.push('\n');
-        text
+        Ok(text)
     }
 
     /// Wrapper script content: exec the host in native-host mode, optionally
@@ -314,7 +316,7 @@ impl Registrar {
 
         write_atomic(
             &manifest_path,
-            self.manifest_json(&launch_path).as_bytes(),
+            self.manifest_json(&launch_path)?.as_bytes(),
             false,
         )
         .map_err(|e| format!("could not write {}: {e}", manifest_path.display()))?;
@@ -683,10 +685,13 @@ fn select_targets(args: &DoctorArgs, entries: &[BrowserEntry]) -> Result<Vec<Tar
                 );
                 return Err(2);
             };
-            let entry = entries
-                .iter()
-                .find(|e| e.browser == browser)
-                .expect("resolve() covers every browser");
+            let Some(entry) = entries.iter().find(|e| e.browser == browser) else {
+                // resolve() enumerates every Browser variant, so this cannot
+                // be reached; refuse with the same typed exit as a bad key
+                // rather than panic if that invariant is ever broken.
+                log_error!("doctor", "browser {key:?} missing from the resolved set");
+                return Err(2);
+            };
             targets.push(Target::for_browser(entry));
         }
         return Ok(targets);

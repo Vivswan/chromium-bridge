@@ -85,7 +85,7 @@ pub fn parse(args: &[String]) -> Command {
     if is_native_host_mode(args) {
         return Command::NativeHost;
     }
-    let rest = &args[1.min(args.len())..];
+    let rest = args.get(1..).unwrap_or(&[]);
     match rest.first().map(String::as_str) {
         None => Command::McpServer,
         Some("-h" | "--help") => Command::Help,
@@ -93,7 +93,9 @@ pub fn parse(args: &[String]) -> Command {
         // the handler.
         Some("doctor" | "status") => Command::Doctor,
         Some("pair") if rest.len() == 1 => Command::Pair { reset: false },
-        Some("pair") if rest.len() == 2 && rest[1] == "--reset" => Command::Pair { reset: true },
+        Some("pair") if rest.len() == 2 && rest.get(1).is_some_and(|a| a == "--reset") => {
+            Command::Pair { reset: true }
+        }
         Some("revoke") if rest.len() == 1 => Command::Revoke,
         Some("enclave-status") if rest.len() == 1 => Command::EnclaveStatus,
         // The client-allowlist subcommands take their own flags, parsed by the

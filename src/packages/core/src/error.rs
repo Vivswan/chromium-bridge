@@ -74,6 +74,13 @@ pub enum CallError {
          see `chromium-bridge doctor` and docs/operations.md for recovery"
     )]
     KillStateUnknown(String),
+
+    /// An internal invariant failed (e.g. a session registry lock poisoned by
+    /// a panic in another thread). The call is refused rather than acting on
+    /// possibly inconsistent state. Field 0 names the invariant for the log;
+    /// no state is trusted after this fires.
+    #[error("internal bridge error: {0}")]
+    Internal(String),
 }
 
 impl CallError {
@@ -95,6 +102,7 @@ impl CallError {
             CallError::Extension(_) => &specs::EXECUTION_FAILED,
             CallError::Killed => &specs::BRIDGE_KILLED,
             CallError::KillStateUnknown(_) => &specs::BRIDGE_KILLED,
+            CallError::Internal(_) => &specs::INTERNAL_ERROR,
         }
     }
 
@@ -325,6 +333,7 @@ mod tests {
             CallError::Extension("boom".into()),
             CallError::Killed,
             CallError::KillStateUnknown("corrupt".into()),
+            CallError::Internal("poisoned lock".into()),
         ];
         for err in cases {
             assert!(
