@@ -453,7 +453,7 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         assert_eq!(
             names, cnames,
-            "tools.rs names/order must match contracts/tools.json (run `make gen`)"
+            "tools.rs names/order must match contracts/tools.json (run `just gen`)"
         );
         for t in &tools {
             let c = ctools.iter().find(|c| c["name"] == t.name).unwrap();

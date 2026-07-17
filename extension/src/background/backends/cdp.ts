@@ -5,36 +5,36 @@
 // masking and the same-origin grace window are handled here in the SW so they
 // match the content-script path.
 
-import type { OpArgs } from "../../shared/types";
-import type { PageBackend } from "../page-backend";
-import { getSetting } from "../../shared/settings";
-import { maskSensitive, maskString } from "../../shared/masking";
 import { truncate } from "../../content/util";
+import { maskSensitive, maskString } from "../../shared/masking";
+import { getSetting } from "../../shared/settings";
+import type { OpArgs } from "../../shared/types";
 import { ensureAllowed } from "../allowlist-store";
-import { isDebuggable, type CdpSession, type EvaluateResponse } from "../cdp/session";
-import { cdpRegistry } from "../cdp/registry";
 import {
-  REF_ATTR,
-  pageSnapshot,
-  pageText,
-  pageScroll,
-  pageWaitFor,
-  readStorage,
-  probeClickTarget,
-  doClick,
-  doFill,
-  doPress,
-  doHover,
-  doSelect,
-  confirmToast,
-  evalToast,
-} from "../cdp/page-fns";
-import {
-  isHighRiskClick,
+  type ClickTarget,
   describeAction,
   describeForToast,
-  type ClickTarget,
+  isHighRiskClick,
 } from "../cdp/click-risk";
+import {
+  confirmToast,
+  doClick,
+  doFill,
+  doHover,
+  doPress,
+  doSelect,
+  evalToast,
+  pageScroll,
+  pageSnapshot,
+  pageText,
+  pageWaitFor,
+  probeClickTarget,
+  REF_ATTR,
+  readStorage,
+} from "../cdp/page-fns";
+import { cdpRegistry } from "../cdp/registry";
+import { type CdpSession, type EvaluateResponse, isDebuggable } from "../cdp/session";
+import type { PageBackend } from "../page-backend";
 
 // Same-origin confirmation grace window, mirroring content/toast.ts. Lives in
 // the SW (not the page) so it survives across CDP evaluate calls. Reset if the
@@ -56,7 +56,7 @@ export class CdpBackend implements PageBackend {
     await ensureAllowed(tab.url);
     if (!isDebuggable(tab.url)) {
       throw new Error(
-        `CDP mode cannot control this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`
+        `CDP mode cannot control this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
       );
     }
     const session = await cdpRegistry.get(tab.id!);
@@ -85,7 +85,7 @@ export class CdpBackend implements PageBackend {
                 timeoutMs: args.timeoutMs,
               },
             ],
-            { awaitPromise: true }
+            { awaitPromise: true },
           );
         } catch (e) {
           // A successful navigation destroys the MAIN-world execution context,
@@ -151,7 +151,7 @@ export class CdpBackend implements PageBackend {
         };
     if ("entries" in raw) {
       const masked: Record<string, string> = {};
-      for (const k of Object.keys(raw.entries)) masked[k] = maskString(raw.entries[k]);
+      for (const [k, v] of Object.entries(raw.entries)) masked[k] = maskString(v);
       return { ...raw, entries: masked };
     }
     if (raw.found) return { ...raw, value: maskString(raw.value) };
@@ -177,7 +177,7 @@ export class CdpBackend implements PageBackend {
           // tab — matching the content path, where lastConfirmed is per-tab.
           `${tab.id}:${originOf(tab.url)}:${actionDesc}`,
           actionDesc,
-          await getSetting("clickToastTimeoutMs")
+          await getSetting("clickToastTimeoutMs"),
         );
       }
     }
@@ -193,7 +193,7 @@ export class CdpBackend implements PageBackend {
       session,
       `Press "${keys}"?`,
       `press ${keys}`,
-      await getSetting("clickToastTimeoutMs")
+      await getSetting("clickToastTimeoutMs"),
     );
     return await session.evaluate(doPress, [{ keys }]);
   }
@@ -205,7 +205,7 @@ export class CdpBackend implements PageBackend {
       session,
       `Select "${value}"?`,
       `select ${value}`,
-      await getSetting("clickToastTimeoutMs")
+      await getSetting("clickToastTimeoutMs"),
     );
     return await session.evaluate(doSelect, [
       REF_ATTR,
@@ -220,7 +220,7 @@ export class CdpBackend implements PageBackend {
     session: CdpSession,
     question: string,
     actionDesc: string,
-    timeoutMs: number
+    timeoutMs: number,
   ): Promise<void> {
     const approved = await session.evaluate(confirmToast, [question, timeoutMs], {
       awaitPromise: true,
@@ -234,7 +234,7 @@ export class CdpBackend implements PageBackend {
     question: string,
     key: string,
     actionDesc: string,
-    timeoutMs: number
+    timeoutMs: number,
   ): Promise<void> {
     const graceMs = await getSetting("confirmGraceMs");
     if (graceMs > 0 && lastConfirmed.key === key && Date.now() < lastConfirmed.until) {
@@ -251,7 +251,7 @@ export class CdpBackend implements PageBackend {
   private async pageEval(
     session: CdpSession,
     args: OpArgs,
-    tab: chrome.tabs.Tab
+    tab: chrome.tabs.Tab,
   ): Promise<unknown> {
     const code = args.code;
     if (typeof code !== "string" || !code.trim()) {
@@ -271,7 +271,7 @@ export class CdpBackend implements PageBackend {
       const approved = await session.evaluate(
         evalToast,
         [code, tab.url || "", tab.title || "", await getSetting("evalToastTimeoutMs")],
-        { awaitPromise: true }
+        { awaitPromise: true },
       );
       if (!approved) throw new Error("user denied page_eval");
     }

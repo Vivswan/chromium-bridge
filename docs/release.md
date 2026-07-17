@@ -28,7 +28,7 @@ macOS is **deliberately omitted** because hosted runners are scarce, and Linux u
 older glibc baseline to widen compatibility). For each target:
 
 1. `cargo build --release` produces the binary.
-2. `npm ci && npm run build` produces the extension bundle (`extension/dist/`).
+2. `bun install --frozen-lockfile && bun run --cwd extension build` produces the extension bundle (`extension/dist/`).
 3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz`, containing
    the binary, `extension/dist`, `install.sh`, `mcp-config.example.json`, `LICENSE`, and
    `README.md`.
@@ -36,7 +36,7 @@ older glibc baseline to widen compatibility). For each target:
 5. `softprops/action-gh-release` creates the GitHub Release with the tarball + `.sha256`
    attached, and auto-generates release notes.
 
-Users therefore **do not need a Rust/Node toolchain** to install. All third-party Actions
+Users therefore **do not need a Rust/bun toolchain** to install. All third-party Actions
 are pinned to commit SHAs (supply-chain governance).
 
 ## Dual-mode install.sh
@@ -44,9 +44,9 @@ are pinned to commit SHAs (supply-chain governance).
 The same `install.sh` automatically distinguishes two modes:
 
 - **Source mode** (a `Cargo.toml` is present): builds the binary with Rust and the
-  extension with Node/npm on the spot, then installs.
+  extension with bun on the spot, then installs.
 - **Prebuilt mode** (no `Cargo.toml`, i.e. after unpacking a release tarball): installs
-  the bundled binary and `extension/dist` directly, requiring **neither** Rust nor Node.
+  the bundled binary and `extension/dist` directly, requiring **neither** Rust nor bun.
 
 Both modes register the Chrome native messaging host manifest (`allowed_origins` is
 hard-coded to the extension ID); details are in
@@ -61,7 +61,7 @@ hard-coded to the extension ID); details are in
 
 - It uses `anchore/sbom-action` to generate CycloneDX JSON
   (`chromium-bridge.cdx.json`) from the **committed lock files** (`Cargo.lock` +
-  `extension/package-lock.json`), scanning declared dependencies rather than an installed
+  `bun.lock`), scanning declared dependencies rather than an installed
   tree (a fresh checkout has no `node_modules`/`target`).
 - It attaches the SBOM as an asset to the Release for the corresponding tag.
 

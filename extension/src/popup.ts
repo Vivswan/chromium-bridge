@@ -13,7 +13,8 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 async function refreshStatus() {
   const status = await send({ type: "get_status" });
   const enroll = (await send({ type: "get_enrollment" })) as
-    { state?: string; blocked?: boolean } | undefined;
+    | { state?: string; blocked?: boolean }
+    | undefined;
   const dot = $("dot");
   const connected = Boolean(status?.nativeConnected);
   let text: string;
@@ -28,7 +29,7 @@ async function refreshStatus() {
     dot.className = "dot bad";
   } else {
     text = connected ? "Connected to bridge" : "Not connected (is your MCP client running?)";
-    dot.className = "dot " + (connected ? "ok" : "bad");
+    dot.className = `dot ${connected ? "ok" : "bad"}`;
   }
   $("status-text").textContent = text;
 }
@@ -41,7 +42,7 @@ async function refreshList() {
     .map(
       (g) =>
         `<div class="item"><code>${escapeHtml(g)}</code>` +
-        `<button class="danger" data-glob="${escapeAttr(g)}">Revoke</button></div>`
+        `<button class="danger" data-glob="${escapeAttr(g)}">Revoke</button></div>`,
     )
     .join("");
   // Wire revoke buttons.
@@ -49,7 +50,7 @@ async function refreshList() {
     b.onclick = async () => {
       const glob = b.getAttribute("data-glob")!;
       await send({ type: "remove_allow", glob });
-      refreshList();
+      await refreshList();
     };
   });
 }
@@ -58,7 +59,7 @@ async function refreshPending() {
   const { pendingAllow } = (await chrome.storage.local.get("pendingAllow")) as {
     pendingAllow?: { id?: string; glob?: string };
   };
-  if (pendingAllow && pendingAllow.id && pendingAllow.glob) {
+  if (pendingAllow?.id && pendingAllow.glob) {
     const { id, glob } = pendingAllow;
     $("pending").style.display = "block";
     $("pending-glob").textContent = glob;
@@ -89,13 +90,13 @@ async function resolvePending(id: string, glob: string, allow: boolean) {
   }
   await send({ type: "resolve_allow", id, allow });
   $("pending").style.display = "none";
-  refreshList();
+  await refreshList();
 }
 
 function globToPattern(glob: string) {
   // "https://example.com/*" is already a valid match pattern; pass through.
   // If it somehow lacks the trailing *, add it.
-  return glob.endsWith("/*") ? glob : glob + "*";
+  return glob.endsWith("/*") ? glob : `${glob}*`;
 }
 
 function send(msg: object): Promise<Record<string, unknown> | undefined> {
@@ -112,7 +113,7 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 function escapeHtml(s: string) {
-  return s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+  return s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
 }
 function escapeAttr(s: string) {
   return escapeHtml(s);
@@ -124,8 +125,8 @@ $("open-settings").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
 });
 
-refreshStatus();
-refreshList();
-refreshPending();
+void refreshStatus();
+void refreshList();
+void refreshPending();
 
 export {};

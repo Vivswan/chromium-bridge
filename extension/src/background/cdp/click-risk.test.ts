@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isHighRiskClick, describeAction, describeForToast, type ClickTarget } from "./click-risk";
+import { type ClickTarget, describeAction, describeForToast, isHighRiskClick } from "./click-risk";
 
 function target(over: Partial<ClickTarget>): ClickTarget {
   return { tagName: "DIV", role: "", type: "", hasHref: false, name: "", ...over };
@@ -8,13 +8,13 @@ function target(over: Partial<ClickTarget>): ClickTarget {
 describe("isHighRiskClick", () => {
   test("submit buttons are high-risk", () => {
     expect(isHighRiskClick(target({ tagName: "BUTTON", role: "button", type: "submit" }))).toBe(
-      true
+      true,
     );
   });
 
   test("non-submit buttons are not high-risk", () => {
     expect(isHighRiskClick(target({ tagName: "BUTTON", role: "button", type: "button" }))).toBe(
-      false
+      false,
     );
     expect(isHighRiskClick(target({ tagName: "BUTTON", role: "button", type: "" }))).toBe(false);
   });
@@ -56,10 +56,10 @@ describe("describeAction", () => {
 describe("describeForToast", () => {
   test("prefers the name, then role, then lowercased tag", () => {
     expect(describeForToast(target({ name: "Sign in", role: "button", tagName: "BUTTON" }))).toBe(
-      "Sign in"
+      "Sign in",
     );
     expect(describeForToast(target({ name: "", role: "button", tagName: "BUTTON" }))).toBe(
-      "button"
+      "button",
     );
     expect(describeForToast(target({ name: "", role: "", tagName: "BUTTON" }))).toBe("button");
   });

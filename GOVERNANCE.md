@@ -96,15 +96,15 @@ know why it is there:
   installers and example config live in `install/` (`install.sh` / `install.ps1`
   / `mcp-config.example.json`), packaged *flat* at the archive root by
   `release.yml`; each installer detects the repo-vs-tarball layout to locate
-  `extension/` and the crate. `Makefile` (root) is the canonical task entrypoint.
+  `extension/` and the crate. `justfile` (root) is the canonical task entrypoint.
 
 If a genuine reason to relocate one appears, update every reference in the same
-change (CI workflows, `Makefile`, `scripts/`, docs, `CODEOWNERS`) and confirm the
+change (CI workflows, `justfile`, `scripts/`, docs, `CODEOWNERS`) and confirm the
 lint/build gates still find their config.
 
 ## Versioning & release
 
-`Cargo.toml` is the single source of truth; `make sync-version` propagates it.
+`Cargo.toml` is the single source of truth; `just sync-version` propagates it.
 Tagging `vX.Y.Z` triggers the release build. SemVer discipline applies even
 pre-1.0 - a `0.x` bump is not a license to break compatibility silently
 (tool removal/rename, permission widening, protocol breaks are "major"-shaped).

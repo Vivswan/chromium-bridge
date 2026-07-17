@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
-import { resolve } from "path";
-import { OP_NAMES, TOOL_META, TOOLS } from "./ops";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { BridgeCommand } from "./ops";
+import { OP_NAMES, TOOL_META, TOOLS } from "./ops";
 
 // The JSON-Schema → TS type mapping the generator uses; mirrored here so the
 // test can reconstruct the expected union arms from the contract.
@@ -25,16 +25,16 @@ describe("ops catalogue", () => {
     }
   });
 
-  // ops.ts is generated from contracts/tools.json (scripts/gen-ops.mjs); assert
+  // ops.ts is generated from contracts/tools.json (scripts/gen-ops.ts); assert
   // it's in sync with the contract (the single source). tools.rs is checked
   // against the same contract in `cargo test` — so all three stay aligned.
   test("matches contracts/tools.json (the source)", () => {
     const contract = JSON.parse(
-      readFileSync(resolve(import.meta.dir, "../../../contracts/tools.json"), "utf8")
+      readFileSync(resolve(import.meta.dir, "../../../contracts/tools.json"), "utf8"),
     );
     const names = contract.tools.map((t: { name: string }) => t.name);
     const labels = Object.fromEntries(
-      contract.tools.map((t: { name: string; uiLabel: string }) => [t.name, t.uiLabel])
+      contract.tools.map((t: { name: string; uiLabel: string }) => [t.name, t.uiLabel]),
     );
     expect(OP_NAMES).toEqual(names);
     for (const t of TOOLS) expect(t.desc).toBe(labels[t.op]);
@@ -44,7 +44,7 @@ describe("ops catalogue", () => {
   // (risk / scope / permission / confirmation) matches tool-for-tool.
   test("TOOL_META matches contracts/tools.json (the source)", () => {
     const contract = JSON.parse(
-      readFileSync(resolve(import.meta.dir, "../../../contracts/tools.json"), "utf8")
+      readFileSync(resolve(import.meta.dir, "../../../contracts/tools.json"), "utf8"),
     ) as {
       tools: {
         name: string;
@@ -75,7 +75,7 @@ describe("ops catalogue", () => {
   test("BridgeCommand union matches contracts/tools.json (the source)", () => {
     const src = readFileSync(resolve(import.meta.dir, "./ops.ts"), "utf8");
     const contract = JSON.parse(
-      readFileSync(resolve(import.meta.dir, "../../../contracts/tools.json"), "utf8")
+      readFileSync(resolve(import.meta.dir, "../../../contracts/tools.json"), "utf8"),
     ) as {
       tools: {
         name: string;

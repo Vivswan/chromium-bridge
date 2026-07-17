@@ -109,20 +109,20 @@ export function fingerprintDisplay(keyIdHex: string): string {
 async function verifySignature(
   pubkey: Uint8Array,
   sig: Uint8Array,
-  message: Uint8Array
+  message: Uint8Array,
 ): Promise<boolean> {
   const key = await crypto.subtle.importKey(
     "raw",
     pubkey as BufferSource,
     { name: "ECDSA", namedCurve: "P-256" },
     false,
-    ["verify"]
+    ["verify"],
   );
   return crypto.subtle.verify(
     { name: "ECDSA", hash: "SHA-256" },
     key,
     sig as BufferSource,
-    message as BufferSource
+    message as BufferSource,
   );
 }
 
@@ -134,7 +134,8 @@ export interface ProofFields {
 }
 
 export type PairingVerifyResult =
-  { ok: true; pubkeyB64: string; keyId: string } | { ok: false; reason: string };
+  | { ok: true; pubkeyB64: string; keyId: string }
+  | { ok: false; reason: string };
 
 /** Pairing-time (ceremony) verification. The proof is checked for internal
  * consistency (key_id matches pubkey) and a valid signature by its OWN
@@ -145,7 +146,7 @@ export type PairingVerifyResult =
 export async function verifyPairingProof(
   proof: ProofFields,
   nonce: string,
-  context?: string
+  context?: string,
 ): Promise<PairingVerifyResult> {
   let pubkey: Uint8Array;
   let sig: Uint8Array;
@@ -178,7 +179,7 @@ export async function verifyProofAgainstPin(
   nonce: string,
   context: string | undefined,
   pinnedPubkeyB64: string,
-  pinnedKeyId: string
+  pinnedKeyId: string,
 ): Promise<PinVerifyResult> {
   let pinned: Uint8Array;
   let sig: Uint8Array;

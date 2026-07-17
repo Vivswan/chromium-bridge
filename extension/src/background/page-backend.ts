@@ -10,8 +10,8 @@
 // injection/attach happen inside the backend (preserving dispatch's ordering).
 
 import type { OpArgs } from "../shared/types";
-import { ContentScriptBackend } from "./backends/content-script";
 import { CdpBackend } from "./backends/cdp";
+import { ContentScriptBackend } from "./backends/content-script";
 
 export interface PageBackend {
   run(op: string, args: OpArgs, tab: chrome.tabs.Tab): Promise<unknown>;

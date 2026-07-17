@@ -30,7 +30,7 @@ cannot connect.
   pinned ID (unpacked / developers).
 - Update [`install.sh`](../install/install.sh)'s `PINNED_EXTENSION_ID`,
   [`install.ps1`](../install/install.ps1), and
-  [`scripts/check-extension-id.mjs`](../scripts/check-extension-id.mjs) in step so they
+  [`scripts/check-extension-id.ts`](../scripts/check-extension-id.ts) in step so they
   trust both IDs.
 - Optional: backfill the store listing's public key into the manifest `key` so unpacked
   loads also get the store ID. This changes today's pinned ID, so it needs weighing.
@@ -75,7 +75,7 @@ advance:
 - [ ] Produce the store zip (the release pipeline already emits
       `chromium-bridge-extension-<tag>.zip`; confirm it is the uploadable `dist/`).
 - [ ] Confirm the `manifest.json` version matches Cargo
-      (`scripts/check-version.sh` already enforces this).
+      (`scripts/check-version.ts` already enforces this).
 - [ ] Decide whether the `key` field stays (keep it to preserve a consistent unpacked ID,
       or hand it to the store; see the number one trap).
 - [ ] Upload, fill in the data-use disclosure + privacy policy, and submit. Review takes

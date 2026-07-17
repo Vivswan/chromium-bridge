@@ -5,15 +5,15 @@
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach. See ADR-0009.
 
-import type { OpArgs, PageResponse } from "../shared/types";
 import { getSetting } from "../shared/settings";
+import type { OpArgs, PageResponse } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { resolveTargetTab, injectIfNeeded } from "./tabs";
+import { cdpRegistry } from "./cdp/registry";
 // The chrome.debugger primitives + the non-debuggable URL filter now live in
 // the CdpSession facade (ADR-0017); precise.ts reuses them rather than keeping
 // its own private copies.
 import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
-import { cdpRegistry } from "./cdp/registry";
+import { injectIfNeeded, resolveTargetTab } from "./tabs";
 
 // The subset of the CDP payloads we actually read (not the full protocol).
 interface AXValueLike {
@@ -76,7 +76,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
 
   if (!isDebuggable(tab.url)) {
     throw new Error(
-      `page_snapshot_precise cannot debug this page (URL scheme not allowed): ${truncateUrl(tab.url)}`
+      `page_snapshot_precise cannot debug this page (URL scheme not allowed): ${truncateUrl(tab.url)}`,
     );
   }
 
@@ -120,7 +120,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
       if (/another debugger/i.test(msg)) {
         throw new Error(
           "该标签页已打开 DevTools,page_snapshot_precise 无法附加。请关闭 DevTools 后重试。",
-          { cause: e }
+          { cause: e },
         );
       }
       throw e;
@@ -205,5 +205,5 @@ function truncateUrl(u: string | undefined) {
 }
 function truncateAx(s: unknown): unknown {
   if (typeof s !== "string") return s;
-  return s.length > 120 ? s.slice(0, 120) + "…" : s;
+  return s.length > 120 ? `${s.slice(0, 120)}…` : s;
 }

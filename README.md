@@ -103,7 +103,7 @@ with `-NmRegistry`). No admin rights needed.
 </details>
 
 <details>
-<summary><b>Build from source (needs Rust + Node.js/npm)</b></summary>
+<summary><b>Build from source (needs Rust + bun)</b></summary>
 
 ```sh
 git clone https://github.com/Vivswan/chromium-bridge && cd chromium-bridge
@@ -393,7 +393,7 @@ in Claude Code) and the extension's Service Worker console at
 <summary>Testing & project layout</summary>
 
 Independent suites across two languages, run together with
-`./tests/run_all.sh`:
+`bun tests/run_all.ts`:
 
 - **Protocol layer** — `tests/e2e.py` drives the real binary (MCP over stdio,
   `--native-host` framing, mock extension over the TCP bridge).

@@ -4,8 +4,8 @@
 // Behavior here must stay byte-for-byte identical to the pre-CDP-mode code.
 
 import type { OpArgs, PageResponse } from "../../shared/types";
-import type { PageBackend } from "../page-backend";
 import { ensureAllowed } from "../allowlist-store";
+import type { PageBackend } from "../page-backend";
 import { injectIfNeeded } from "../tabs";
 
 export class ContentScriptBackend implements PageBackend {
@@ -18,7 +18,7 @@ export class ContentScriptBackend implements PageBackend {
       args,
       tabId: tab.id,
     })) as PageResponse;
-    if (resp && resp.__error) throw new Error(resp.__error);
+    if (resp?.__error) throw new Error(resp.__error);
     return resp;
   }
 }

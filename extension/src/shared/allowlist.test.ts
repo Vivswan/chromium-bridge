@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-  originGlobOf,
-  hostFromOriginGlob,
-  normalizeCookieDomain,
-  matchesAny,
-  simpleMatch,
   globToPermissionPattern,
+  hostFromOriginGlob,
+  matchesAny,
+  normalizeCookieDomain,
+  originGlobOf,
+  simpleMatch,
 } from "./allowlist";
 
 describe("simpleMatch", () => {
@@ -35,7 +35,7 @@ describe("originGlobOf", () => {
   test("derives host/* from a URL", () => {
     expect(originGlobOf("https://x.com/path?q=1")).toBe("https://x.com/*");
   });
-  test("null for unparseable input", () => {
+  test("null for unparsable input", () => {
     expect(originGlobOf("not a url")).toBeNull();
     expect(originGlobOf(undefined)).toBeNull();
   });

@@ -4,8 +4,8 @@
 // is excluded and always reconfirms).
 
 import { getSetting } from "../shared/settings";
+import { nameOf, roleOf } from "./snapshot";
 import { truncate } from "./util";
-import { roleOf, nameOf } from "./snapshot";
 
 // Short-circuit window: a 60s window during which the same kind of high-risk
 // action on the same origin doesn't re-prompt. Used by click/submit confirms
@@ -83,7 +83,7 @@ function showToast(question: string) {
     card.querySelector<HTMLElement>(".zcb-toast-deny")!.onclick = () => finish(false);
     // Auto-deny so the tool call doesn't hang forever. Timeout is configurable
     // via settings (default 30s).
-    getSetting("clickToastTimeoutMs").then((ms) => setTimeout(() => finish(false), ms));
+    void getSetting("clickToastTimeoutMs").then((ms) => setTimeout(() => finish(false), ms));
   });
 }
 
@@ -129,10 +129,10 @@ function showEvalToast(code: string, url: string, tabTitle: string) {
     card.addEventListener("keydown", onKey);
     // Auto-deny (longer than click's — user needs time to read code).
     // Timeout is configurable via settings (default 45s).
-    getSetting("evalToastTimeoutMs").then((ms) =>
+    void getSetting("evalToastTimeoutMs").then((ms) =>
       setTimeout(() => {
         finish(false);
-      }, ms)
+      }, ms),
     );
   });
 }

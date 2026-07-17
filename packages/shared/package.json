@@ -1,0 +1,10 @@
+{
+  "name": "@chromium-bridge/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Contract-derived types, Zod validators, and the i18n runtime shared by the extension, the app UI, and tooling. Populated by the codegen backbone (Phase 2); scaffold only for now.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

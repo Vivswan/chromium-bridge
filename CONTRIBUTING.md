@@ -33,11 +33,12 @@ lands via a squash-merged PR whose gates are green.
    ```sh
    git pull --rebase origin main
    ```
-4. **Gate locally - everything must pass** (`make help` lists all targets):
+4. **Gate locally - everything must pass** (`just` lists all recipes; the
+   lefthook pre-commit hook, wired by `bun install`, runs this for you):
    ```sh
-   make ci            # rust fmt/clippy/test + extension typecheck/lint/format + protocol e2e + version/gen consistency
+   just ci            # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
    ```
-   Browser tests (`make test-browser`) run **only** against an isolated Chrome
+   Browser tests (`just test-browser`) run **only** against an isolated Chrome
    for Testing via `CHROME_BIN`, never your daily Chrome (see Safety below and
    [tests/README.md](./tests/README.md)). They are not in the required gate;
    runtime-behavior changes (reconnect, handshake, service worker) must be
@@ -85,9 +86,10 @@ window you didn't start yourself: stop and ask first.
   (`crates/core/src/error.rs`); log via the `log_*!` macros
   (`crates/core/src/log.rs`), never bare `eprintln!` for diagnostics.
   Remember: **stdout is protocol** - all logging goes to stderr.
-- **Extension (TypeScript)** - ESLint + Prettier (`npm run lint`,
-  `npm run format:check`). Prefer real types over `any` in new code (the initial
-  migration left `any` in some DOM helpers; tightening them is welcome).
+- **TypeScript** - Biome lints and formats every TS/JS/JSON file in the bun
+  workspace (`bunx biome ci .` to check, `just fix-ts` to auto-fix; config in
+  `biome.json`). `noExplicitAny` is enforced in extension source; test files
+  and the tests/ harness are exempt until their CDP plumbing gets real types.
 - Keep the `DEFAULTS` settings objects in `background.ts`, `content.ts`, and
   `options.ts` in sync, and keep the tool `op` strings in sync with `tools.rs`.
 
@@ -97,7 +99,7 @@ A new tool touches both sides (see architecture.md §10):
 
 1. **Add it to [`contracts/tools.json`](contracts/tools.json)** - the single
    source for the catalogue (name, description, uiLabel, risk, scope,
-   permission, confirmation, inputSchema). Run `make gen` to regenerate
+   permission, confirmation, inputSchema). Run `just gen` to regenerate
    `extension/src/shared/ops.ts`, and bump the count in `tool_count_is_pinned`.
 2. Add the matching `Tool` definition (`crates/core/src/tools/catalogue.rs`)
    and a `HANDLERS` registry entry + `build_*` payload fn
@@ -111,7 +113,7 @@ A new tool touches both sides (see architecture.md §10):
 
 ## Versioning
 
-`Cargo.toml` is the source of truth. Bump it, run `make sync-version`, and update
+`Cargo.toml` is the source of truth. Bump it, run `just sync-version`, and update
 `CHANGELOG.md`. CI fails if the crate and extension versions drift.
 
 ## License

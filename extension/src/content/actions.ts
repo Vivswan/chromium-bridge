@@ -1,11 +1,11 @@
 // Direct DOM actions: click, fill, text, screenshot, scroll.
 
-import type { OpArgs } from "../shared/types";
 import { getSetting } from "../shared/settings";
-import { truncate } from "./util";
+import type { OpArgs } from "../shared/types";
 import { resolveTarget } from "./refs";
 import { roleOf } from "./snapshot";
-import { confirmWithToast, confirmAlways, describeForToast, describeAction } from "./toast";
+import { confirmAlways, confirmWithToast, describeAction, describeForToast } from "./toast";
+import { truncate } from "./util";
 
 export async function click(args: OpArgs) {
   const el = resolveTarget(args);
@@ -89,8 +89,8 @@ export function parseCombo(spec: string): KeyCombo {
 // Best-effort KeyboardEvent.code for a key name (enough for common handlers).
 function codeFor(key: string): string {
   if (key.length === 1) {
-    if (/[a-zA-Z]/.test(key)) return "Key" + key.toUpperCase();
-    if (/[0-9]/.test(key)) return "Digit" + key;
+    if (/[a-zA-Z]/.test(key)) return `Key${key.toUpperCase()}`;
+    if (/[0-9]/.test(key)) return `Digit${key}`;
     if (key === " ") return "Space";
   }
   const named: Record<string, string> = {
@@ -124,7 +124,7 @@ function dispatchKey(el: HTMLElement, type: string, combo: KeyCombo) {
       shiftKey: combo.shiftKey,
       altKey: combo.altKey,
       metaKey: combo.metaKey,
-    })
+    }),
   );
 }
 
@@ -137,7 +137,7 @@ export async function hover(args: OpArgs) {
   el.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, cancelable: true }));
   el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
   el.dispatchEvent(
-    new MouseEvent("mouseenter", { bubbles: false, cancelable: true, view: window })
+    new MouseEvent("mouseenter", { bubbles: false, cancelable: true, view: window }),
   );
   el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, view: window }));
   return { hovered: args.ref || args.selector, role: roleOf(el) };
@@ -153,11 +153,12 @@ export async function select(args: OpArgs) {
   const opts = Array.from(sel.options);
   let idx = opts.findIndex((o) => o.value === value);
   if (idx < 0) idx = opts.findIndex((o) => (o.textContent || "").trim() === value);
-  if (idx < 0) throw new Error(`page_select: no option matching "${value}"`);
+  const opt = opts[idx];
+  if (!opt) throw new Error(`page_select: no option matching "${value}"`);
   sel.selectedIndex = idx;
   sel.dispatchEvent(new Event("input", { bubbles: true }));
   sel.dispatchEvent(new Event("change", { bubbles: true }));
-  return { selected: opts[idx].value, text: (opts[idx].textContent || "").trim() };
+  return { selected: opt.value, text: (opt.textContent || "").trim() };
 }
 
 // Setting el.value directly doesn't trigger React/Vue change detection. Use the
@@ -191,9 +192,9 @@ function setNativeValue(el: HTMLElement, value: string) {
 export function text() {
   // Mask password fields.
   const cloneSrc = document.body.cloneNode(true) as HTMLElement;
-  cloneSrc
-    .querySelectorAll<HTMLInputElement>("input[type=password]")
-    .forEach((i) => (i.value = "••••••"));
+  cloneSrc.querySelectorAll<HTMLInputElement>("input[type=password]").forEach((i) => {
+    i.value = "••••••";
+  });
   // Mask long digit runs that look like card numbers.
   const txt = (cloneSrc.innerText || "").replace(/\b\d{12,19}\b/g, "••••••");
   return { text: truncate(txt, 20000), url: location.href };
