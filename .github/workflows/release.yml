@@ -99,7 +99,7 @@ jobs:
           TAG="$RELEASE_TAG"
           NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
           mkdir -p "$NAME/extension"
-          cp -r extension/dist "$NAME/extension/dist"
+          cp -r extension/dist/chrome-mv3 "$NAME/extension/dist"
           cp install/mcp-config.example.json LICENSE README.md "$NAME/"
           # RELEASE.txt tells the installer which release this archive came
           # from, so it can fetch the published checksum for the binary and
@@ -162,7 +162,9 @@ jobs:
           NAME="chromium-bridge-extension-${TAG}"
           # Zip the built bundle with a top-level `dist/` folder so users can
           # point "Load unpacked" straight at the extracted directory.
-          (cd extension && zip -r "../$NAME.zip" dist)
+          rm -rf dist-zip && mkdir dist-zip
+          cp -r extension/dist/chrome-mv3 dist-zip/dist
+          (cd dist-zip && zip -r "../$NAME.zip" dist)
           if command -v shasum >/dev/null 2>&1; then
             shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256"
           else

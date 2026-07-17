@@ -15,6 +15,7 @@
 
 # Extension build output
 /extension/dist/
+extension/.wxt/
 
 # Local install destination (binaries live in ~/.chromium-bridge/, but guard
 # against accidental copies into the repo)

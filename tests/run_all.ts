@@ -83,8 +83,8 @@ console.log("(4/4) DOM-layer + smoke tests");
 // --load-extension launch can capture and close your real session. We do NOT
 // default CHROME_BIN to the system Chrome; if it's unset, skip the browser suite.
 const chromeBin = process.env.CHROME_BIN;
-if (!existsSync(join(repo, "extension/dist"))) {
-  console.log("  SKIP  extension/dist missing (build step above did not run)");
+if (!existsSync(join(repo, "extension/dist/chrome-mv3"))) {
+  console.log("  SKIP  extension/dist/chrome-mv3 missing (build step above did not run)");
 } else if (!chromeBin) {
   console.log("  SKIP  browser tests: set CHROME_BIN to an isolated Chrome for Testing /");
   console.log("        Chromium binary (NOT your daily Chrome). See tests/README.md -> Safety.");
