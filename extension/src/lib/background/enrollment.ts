@@ -277,9 +277,13 @@ export function onPortConnected(): Promise<void> {
 }
 
 /** Resend the not-yet-acknowledged host key-deletion request (ADR-0025). The
- * durable flag is cleared only by the host's `enclave_revoked` ack, so a lost
- * frame or a dead SW just means another send here; deletion is idempotent on
- * the host side. */
+ * durable flag is cleared by the host's `enclave_revoked` ack (a lost frame
+ * or a dead SW just means another send here), or superseded when a fresh
+ * pairing is PINNED (approvePending): `enclave_revoke` names no key, so past
+ * a re-pair it would delete the newly minted key, not the one the revoke
+ * meant. Merely starting a ceremony does not supersede it - an abandoned
+ * ceremony must leave the deletion pending, or the old key would outlive the
+ * revoke with nothing left to request its removal. */
 async function maybeSendPendingHostRevoke(): Promise<void> {
   if (!postFrame) return;
   if (!(await pinStore.getHostRevokePending())) return;
@@ -538,6 +542,9 @@ export function approvePending(): Promise<{ ok: boolean; error?: string }> {
     });
     await pinStore.clearPending();
     await pinStore.clearLastError();
+    // The pin IS the fresh pairing: a deletion request still pending from
+    // before it is stale, and resending it would revoke the key just pinned.
+    await pinStore.setHostRevokePending(false);
     await updateBadge();
     console.log("[bb] enrollment pinned:", pending.keyId);
     return { ok: true };
