@@ -4,9 +4,10 @@
 These tests drive the release binary as real subprocesses:
   - MCP server mode (default), spoken to over JSON-RPC/stdio
   - --native-host mode, spoken to with real Chrome Native-Messaging frames
-  - a mock "extension" that connects over the localhost TCP bridge socket
+  - a mock "extension" that connects over the bridge socket (a Unix-domain
+    socket on Unix, loopback TCP on Windows)
 
-They cover the protocol layers (NM framing, MCP JSON-RPC, TCP bridge) and
+They cover the protocol layers (NM framing, MCP JSON-RPC, bridge socket) and
 the request/response correlation, including the new page_eval tool path.
 
 Run:
@@ -18,6 +19,8 @@ This is an orchestration test (not a Rust #[test]) on purpose: it exercises
 the full process boundary the way an MCP client and Chrome would, which a unit
 test inside the crate cannot.
 """
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -155,10 +158,10 @@ def connect_bridge(lf, timeout=5):
 
 
 def mock_extension(lf, responder):
-    """Connect to the bridge socket as the extension would, answer requests
-    using `responder(req) -> dict`."""
+    """Connect to the bridge socket as the extension would, complete the HMAC
+    challenge-response handshake, then answer requests using
+    `responder(req) -> dict`."""
     s = connect_bridge(lf)
-    s.sendall((json.dumps({"hello": lf["secret"]}) + "\n").encode())
     buf = bytearray()
 
     def readline():
@@ -170,6 +173,13 @@ def mock_extension(lf, responder):
             buf += d
         line, _, buf = buf.partition(b"\n")
         return line
+
+    # Handshake: read the server's challenge, answer with HMAC(secret, nonce).
+    challenge = json.loads(readline())
+    assert challenge.get("type") == "challenge", f"unexpected handshake {challenge}"
+    mac = hmac.new(lf["secret"].encode(), challenge["nonce"].encode(),
+                   hashlib.sha256).hexdigest()
+    s.sendall((json.dumps({"type": "response", "mac": mac}) + "\n").encode())
 
     def serve_one():
         line = readline()
@@ -271,7 +281,7 @@ def test_tab_list_round_trip():
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.1)  # let the mock connect + hello authenticate
+        time.sleep(0.1)  # let the mock connect + complete the handshake
         # serve the single tab_list request the call below will trigger
         served = []
         t = threading.Thread(target=lambda: served.append(serve()))
@@ -519,7 +529,7 @@ def test_native_host_mode():
         # Binary mode (no text=True) since NM framing is raw bytes.
         nh = subprocess.Popen([BIN, "--native-host"], stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(0.3)  # let it connect + send hello
+        time.sleep(0.3)  # let it connect + complete the handshake
 
         c = McpClient(mcp)
         c.initialize()

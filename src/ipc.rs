@@ -8,13 +8,16 @@
 //!   directory keep other users out.
 //! - On Windows (no std Unix-domain sockets) the server keeps a loopback TCP
 //!   socket on an ephemeral port, published the same way in the lock file.
-//! - The native host reads the lock file on startup and connects; it presents
-//!   the secret as the first NDJSON line ("hello").
+//! - The native host reads the lock file on startup and connects. Authentication
+//!   is an HMAC-SHA256 challenge-response ([`server_handshake`] /
+//!   [`client_handshake`]): the server sends a random nonce, the client replies
+//!   with HMAC(secret, nonce). The secret never travels on the wire, and a fresh
+//!   nonce per connection makes a captured response useless to replay.
 
 use std::fs;
 #[cfg(unix)]
 use std::io::Read;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 #[cfg(windows)]
@@ -24,7 +27,13 @@ use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(windows)]
 use std::time::Duration;
 
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+
+use crate::protocol::{bridge_read, bridge_write, Handshake};
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// The bridge listener and stream types, unified across platforms so the rest
 /// of the crate is transport-agnostic: a Unix-domain socket on Unix, a loopback
@@ -328,32 +337,16 @@ fn read_lock_or_err() -> io::Result<LockFile> {
     })
 }
 
-/// Send the hello line (the secret) as the first NDJSON frame on a freshly
-/// connected client stream.
-fn send_hello(stream: &BridgeStream, secret: &str) {
-    let hello = serde_json::json!({ "hello": secret });
-    let mut line = serde_json::to_vec(&hello).unwrap();
-    line.push(b'\n');
-    let mut s = stream;
-    let _ = s.write_all(&line);
-    let _ = s.flush();
-}
-
-/// Client side (native host): read the lock file and connect. On a stale lock
-/// (server crashed) the connect fails fast and the lock is removed so the next
-/// server start wins cleanly.
+/// Client side (native host): read the lock file and connect. Authentication
+/// happens afterwards via [`client_handshake`]. On a stale lock (server
+/// crashed) the connect fails fast and the lock is removed so the next server
+/// start wins cleanly.
 #[cfg(unix)]
 pub fn connect() -> io::Result<BridgeStream> {
     let lf = read_lock_or_err()?;
-    let stream = match UnixStream::connect(&lf.endpoint) {
-        Ok(s) => s,
-        Err(e) => {
-            LockFile::remove();
-            return Err(e);
-        }
-    };
-    send_hello(&stream, &lf.secret);
-    Ok(stream)
+    UnixStream::connect(&lf.endpoint).inspect_err(|_| {
+        LockFile::remove();
+    })
 }
 
 #[cfg(windows)]
@@ -363,29 +356,111 @@ pub fn connect() -> io::Result<BridgeStream> {
         .endpoint
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("addr parse: {e}")))?;
-    let stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
-        Ok(s) => s,
-        Err(e) => {
-            LockFile::remove();
-            return Err(e);
-        }
-    };
-    send_hello(&stream, &lf.secret);
-    Ok(stream)
+    TcpStream::connect_timeout(&addr, Duration::from_secs(2)).inspect_err(|_| {
+        LockFile::remove();
+    })
 }
 
-/// Validate an inbound hello line received on a freshly-accepted server
-/// connection. Returns true if the secret matches the lock file.
-pub fn validate_hello(hello_value: &serde_json::Value) -> bool {
-    let want = match LockFile::read() {
-        Ok(Some(lf)) => lf.secret,
-        _ => return false,
-    };
-    hello_value
-        .get("hello")
-        .and_then(|v| v.as_str())
-        .map(|s| s == want)
-        .unwrap_or(false)
+/// HMAC-SHA256 of `msg` under `key`, hex-encoded. The key is the per-run
+/// secret's bytes and the message is the challenge nonce's bytes.
+fn compute_mac(key: &[u8], msg: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a key of any length");
+    mac.update(msg);
+    hex_encode(&mac.finalize().into_bytes())
+}
+
+/// Constant-time verification that `provided_hex` is HMAC-SHA256(key, msg).
+/// Uses `Mac::verify_slice`, whose comparison does not short-circuit, so a
+/// caller cannot recover the expected tag byte-by-byte via timing.
+fn verify_mac(key: &[u8], msg: &[u8], provided_hex: &str) -> io::Result<()> {
+    let provided = hex_decode(provided_hex)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "mac is not valid hex"))?;
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a key of any length");
+    mac.update(msg);
+    mac.verify_slice(&provided)
+        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "hmac mismatch"))
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// Server side: run the challenge-response over a freshly-accepted connection,
+/// using the same buffered reader/writer the session will keep, so no bytes are
+/// consumed past the handshake. Returns `Ok(())` only when the client proved
+/// knowledge of the per-run secret.
+pub fn server_handshake<R: BufRead, W: Write>(reader: &mut R, writer: &mut W) -> io::Result<()> {
+    let secret = read_lock_or_err()?.secret;
+    server_handshake_with_secret(reader, writer, &secret)
+}
+
+fn server_handshake_with_secret<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    secret: &str,
+) -> io::Result<()> {
+    let nonce = generate_secret();
+    bridge_write(
+        writer,
+        &Handshake::Challenge {
+            nonce: nonce.clone(),
+        },
+    )?;
+
+    match bridge_read::<_, Handshake>(reader)? {
+        Some(Handshake::Response { mac, .. }) => {
+            verify_mac(secret.as_bytes(), nonce.as_bytes(), &mac)
+        }
+        Some(Handshake::Challenge { .. }) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected handshake response, got challenge",
+        )),
+        None => Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "connection closed before handshake response",
+        )),
+    }
+}
+
+/// Client side: read the server's challenge and answer it with
+/// HMAC(secret, nonce). `label` names the browser this host fronts (carried for
+/// a later multi-browser phase; ignored by the server today). Reuses the pump's
+/// buffered reader/writer so the handshake never leaks into forwarded frames.
+pub fn client_handshake<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    label: Option<String>,
+) -> io::Result<()> {
+    let secret = read_lock_or_err()?.secret;
+    client_handshake_with_secret(reader, writer, &secret, label)
+}
+
+fn client_handshake_with_secret<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    secret: &str,
+    label: Option<String>,
+) -> io::Result<()> {
+    match bridge_read::<_, Handshake>(reader)? {
+        Some(Handshake::Challenge { nonce }) => {
+            let mac = compute_mac(secret.as_bytes(), nonce.as_bytes());
+            bridge_write(writer, &Handshake::Response { mac, label })
+        }
+        Some(Handshake::Response { .. }) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected handshake challenge, got response",
+        )),
+        None => Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "connection closed before handshake challenge",
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -414,14 +489,105 @@ mod tests {
     }
 
     #[test]
-    fn validate_hello_rejects_missing_key() {
-        // No "hello" key can never match, regardless of any on-disk lock file.
-        assert!(!validate_hello(&serde_json::json!({ "nothello": "x" })));
+    fn lock_path_has_expected_filename() {
+        assert_eq!(LockFile::path().file_name().unwrap(), "run.lock");
     }
 
     #[test]
-    fn lock_path_has_expected_filename() {
-        assert_eq!(LockFile::path().file_name().unwrap(), "run.lock");
+    fn hex_decode_roundtrips_and_rejects_bad_input() {
+        assert_eq!(hex_decode("00ff10"), Some(vec![0x00, 0xff, 0x10]));
+        // Odd length and non-hex digits are rejected, not silently truncated.
+        assert_eq!(hex_decode("abc"), None);
+        assert_eq!(hex_decode("zz"), None);
+    }
+
+    #[test]
+    fn verify_mac_accepts_correct_and_rejects_wrong() {
+        let key = b"per-run-secret";
+        let nonce = b"challenge-nonce";
+        let mac = compute_mac(key, nonce);
+        // The MAC the client would send verifies.
+        assert!(verify_mac(key, nonce, &mac).is_ok());
+        // A different key (attacker who doesn't know the secret) is rejected.
+        assert!(verify_mac(b"wrong-secret", nonce, &mac).is_err());
+        // A different nonce (replay against a fresh challenge) is rejected.
+        assert!(verify_mac(key, b"other-nonce", &mac).is_err());
+        // Non-hex garbage is rejected before any comparison.
+        assert!(verify_mac(key, nonce, "not-hex").is_err());
+    }
+
+    #[test]
+    fn handshake_challenge_response_authenticates_over_a_pipe() {
+        // Drive the client half against a known challenge and confirm it emits
+        // the exact HMAC response (including the carried label) the server will
+        // verify. The server's own accept path is exercised end-to-end in the
+        // socketpair test below and in tests/e2e.py.
+        use std::io::Cursor;
+
+        let secret = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4";
+        let nonce = "feedface";
+        let expected = compute_mac(secret.as_bytes(), nonce.as_bytes());
+
+        let mut challenge = serde_json::to_vec(&Handshake::Challenge {
+            nonce: nonce.into(),
+        })
+        .unwrap();
+        challenge.push(b'\n');
+        let mut client_in = Cursor::new(challenge);
+        let mut client_out = Vec::new();
+        client_handshake_with_secret(
+            &mut client_in,
+            &mut client_out,
+            secret,
+            Some("chrome".into()),
+        )
+        .unwrap();
+
+        let sent: Handshake = serde_json::from_slice(&client_out[..client_out.len() - 1]).unwrap();
+        match sent {
+            Handshake::Response { mac, label } => {
+                assert_eq!(mac, expected);
+                assert_eq!(label.as_deref(), Some("chrome"));
+            }
+            _ => panic!("client should send a response"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn handshake_round_trip_over_socketpair() {
+        use std::io::{BufReader, BufWriter};
+
+        let secret = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+
+        // Matching secrets on both ends: the server accepts.
+        let (srv, cli) = UnixStream::pair().unwrap();
+        let cli_secret = secret.to_string();
+        let client = std::thread::spawn(move || {
+            let mut r = BufReader::new(cli.try_clone().unwrap());
+            let mut w = BufWriter::new(cli);
+            client_handshake_with_secret(&mut r, &mut w, &cli_secret, None)
+        });
+        let mut r = BufReader::new(srv.try_clone().unwrap());
+        let mut w = BufWriter::new(srv);
+        assert!(server_handshake_with_secret(&mut r, &mut w, secret).is_ok());
+        assert!(client.join().unwrap().is_ok());
+
+        // A client that does not know the secret is rejected by the server.
+        let (srv, cli) = UnixStream::pair().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut r = BufReader::new(cli.try_clone().unwrap());
+            let mut w = BufWriter::new(cli);
+            client_handshake_with_secret(&mut r, &mut w, "the-wrong-secret", None)
+        });
+        let mut r = BufReader::new(srv.try_clone().unwrap());
+        let mut w = BufWriter::new(srv);
+        let server_res = server_handshake_with_secret(&mut r, &mut w, secret);
+        assert_eq!(
+            server_res.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let _ = client.join();
     }
 
     #[cfg(unix)]

@@ -120,13 +120,14 @@ impl Session {
     /// Replaces any previous connection (the old one is dropped/closed).
     /// Spawns a reader thread that dispatches BridgeResp by id.
     pub fn attach_connection(&self, stream: ipc::BridgeStream) -> io::Result<()> {
-        // Validate the hello line (auth) before trusting the connection.
+        // Authenticate with the HMAC challenge-response before trusting the
+        // connection or installing the writer. The same buffered reader/writer
+        // carry the handshake and then the session, so no frame is lost.
         let mut reader = BufReader::new(stream.try_clone()?);
-        let first: Option<Value> = bridge_read(&mut reader)?;
-        let hello_ok = first.as_ref().map(ipc::validate_hello).unwrap_or(false);
-        if !hello_ok {
-            log_warn!("session", "rejected inbound connection: bad/missing hello");
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "bad hello"));
+        let mut writer = BufWriter::new(stream);
+        if let Err(e) = ipc::server_handshake(&mut reader, &mut writer) {
+            log_warn!("session", "rejected inbound connection: {e}");
+            return Err(e);
         }
 
         // Allocate this connection's generation before publishing the writer, so
@@ -138,7 +139,6 @@ impl Session {
         );
 
         // Store the writer half together with its generation.
-        let writer = BufWriter::new(stream);
         *self.conn.lock().unwrap() = Some(Conn {
             generation: my_gen,
             writer,
