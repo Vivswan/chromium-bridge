@@ -2,11 +2,11 @@
 //!
 //! Prints a health report about this install without touching the browser,
 //! spawning processes, or killing anything. It only reads the lock file, does a
-//! passive localhost TCP connect probe against our OWN server port (no bytes
-//! sent), and checks whether the per-OS native-messaging manifest file exists.
+//! passive connect probe against our OWN bridge socket (no bytes sent), and
+//! checks whether the per-OS native-messaging manifest file exists.
 
-use std::net::TcpStream;
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::time::Duration;
 
 use crate::ipc::LockFile;
@@ -26,10 +26,10 @@ struct Report {
     lock_present: bool,
     /// `Some(err)` when the lock file exists but could not be parsed.
     lock_error: Option<String>,
-    port: Option<u16>,
+    endpoint: Option<String>,
     pid: Option<u32>,
     secret_len: Option<usize>,
-    /// `None` when no probe was attempted (no lock file / no port).
+    /// `None` when no probe was attempted (no lock file / no endpoint).
     reachable: Option<bool>,
     manifest_path: PathBuf,
     manifest_present: bool,
@@ -70,14 +70,21 @@ fn manifest_path() -> PathBuf {
     }
 }
 
-/// Passive reachability probe: connect to our own localhost port and drop the
+/// Passive reachability probe: connect to our own bridge socket and drop the
 /// connection immediately. No command bytes are ever sent.
-fn probe(port: u16) -> bool {
-    let addr = match format!("127.0.0.1:{port}").parse() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
-    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+fn probe(endpoint: &str) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::net::UnixStream::connect(endpoint).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        let addr = match endpoint.parse() {
+            Ok(a) => a,
+            Err(_) => return false,
+        };
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+    }
 }
 
 /// Gather the report by reading (never mutating) local state.
@@ -93,7 +100,7 @@ fn gather() -> Report {
         lock_path,
         lock_present: false,
         lock_error: None,
-        port: None,
+        endpoint: None,
         pid: None,
         secret_len: None,
         reachable: None,
@@ -104,10 +111,10 @@ fn gather() -> Report {
     match LockFile::read() {
         Ok(Some(lf)) => {
             report.lock_present = true;
-            report.port = Some(lf.port);
+            report.reachable = Some(probe(&lf.endpoint));
+            report.endpoint = Some(lf.endpoint);
             report.pid = Some(lf.pid);
             report.secret_len = Some(lf.secret.len());
-            report.reachable = Some(probe(lf.port));
         }
         Ok(None) => {
             // No lock file: server not running. Leave defaults.
@@ -133,8 +140,8 @@ fn render(r: &Report) -> String {
         out.push_str(&format!("  present but unreadable: {err}\n"));
     } else if r.lock_present {
         out.push_str("  present: yes\n");
-        if let Some(port) = r.port {
-            out.push_str(&format!("  port:    {port}\n"));
+        if let Some(endpoint) = &r.endpoint {
+            out.push_str(&format!("  endpoint: {endpoint}\n"));
         }
         if let Some(pid) = r.pid {
             out.push_str(&format!("  pid:     {pid}\n"));
@@ -148,7 +155,7 @@ fn render(r: &Report) -> String {
 
     out.push_str("mcp server:      ");
     match r.reachable {
-        Some(true) => out.push_str("reachable (127.0.0.1 connect OK)\n"),
+        Some(true) => out.push_str("reachable (socket connect OK)\n"),
         Some(false) => out.push_str("not reachable\n"),
         None => out.push_str("not probed (no lock file)\n"),
     }
@@ -209,7 +216,6 @@ pub fn run() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
 
     fn healthy_report() -> Report {
         Report {
@@ -219,7 +225,7 @@ mod tests {
             lock_path: PathBuf::from("/tmp/run.lock"),
             lock_present: true,
             lock_error: None,
-            port: Some(5123),
+            endpoint: Some("/tmp/browser-bridge/run.sock".into()),
             pid: Some(4242),
             secret_len: Some(32),
             reachable: Some(true),
@@ -234,12 +240,12 @@ mod tests {
         let text = render(&r);
         assert!(text.contains("v1.2.3"));
         assert!(text.contains("macos/aarch64"));
-        assert!(text.contains("port:    5123"));
+        assert!(text.contains("endpoint: /tmp/browser-bridge/run.sock"));
         assert!(text.contains("pid:     4242"));
         assert!(text.contains("<redacted, 32 chars>"));
         // The real secret value must never appear.
         assert!(!text.contains("deadbeef"));
-        assert!(text.contains("reachable (127.0.0.1 connect OK)"));
+        assert!(text.contains("reachable (socket connect OK)"));
         // Honest note: green checks still don't prove the extension connected.
         assert!(text.contains("do NOT confirm the Chrome extension"));
         assert!(text.trim_end().ends_with("OK"));
@@ -255,7 +261,7 @@ mod tests {
             lock_path: PathBuf::from("/run/user/1000/browser-bridge.lock"),
             lock_present: false,
             lock_error: None,
-            port: None,
+            endpoint: None,
             pid: None,
             secret_len: None,
             reachable: None,
@@ -271,15 +277,36 @@ mod tests {
         assert_eq!(exit_code(&r), 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn probe_detects_open_and_closed_sockets() {
+        use std::os::unix::net::UnixListener;
+
+        // A live Unix-domain listener: probe must succeed.
+        let dir = std::env::temp_dir().join(format!("bb-doctor-probe-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sock = dir.join("run.sock");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let path = sock.to_string_lossy().into_owned();
+        assert!(probe(&path));
+
+        // Close it and unlink, then probe the now-dead socket: must fail.
+        drop(listener);
+        let _ = std::fs::remove_file(&sock);
+        assert!(!probe(&path));
+    }
+
+    #[cfg(windows)]
     #[test]
     fn probe_detects_open_and_closed_ports() {
-        // A live local listener: probe must succeed.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        assert!(probe(port));
+        use std::net::TcpListener;
 
-        // Close it, then probe the now-dead port: must fail.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        assert!(probe(&endpoint));
+
         drop(listener);
-        assert!(!probe(port));
+        assert!(!probe(&endpoint));
     }
 }

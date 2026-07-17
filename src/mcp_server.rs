@@ -65,8 +65,8 @@ pub fn run() -> i32 {
     }
     log_info!(
         "mcp",
-        "bridge listening on 127.0.0.1:{} (pid {}) lock at {}",
-        lock.port,
+        "bridge listening at {} (pid {}) lock at {}",
+        lock.endpoint,
         lock.pid,
         ipc::LockFile::path().display()
     );
