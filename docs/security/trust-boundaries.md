@@ -128,15 +128,33 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   - **Allowlist**: page-level ops only run on origins the user approved; a new
     origin prompts the user and requests the host permission. The page cannot
     self-approve.
-  - **Confirmation**: submit/link clicks, `page_eval`, and tab close inject an
-    in-page toast the page cannot forge or auto-dismiss (30s auto-deny). Only
-    these high-risk ops confirm; low-risk ops (navigate, `page_text`,
-    `tab_list`, masked cookie or storage reads) run with no per-action prompt.
-  - **Masking**: page text, cookies, storage, and eval output are masked before
-    crossing back toward the model.
+  - **Confirmation (ADR-0027)**: submit/link clicks, `page_press`,
+    `page_select`, `page_eval`, tab close, and `page_upload` confirm on an
+    extension-owned popup window (`confirm.html`), a `chrome-extension://`
+    document in its own process the page cannot read, overlay, or auto-click;
+    the router accepts its ready/resolve messages only from that exact
+    document. Timeout, close, and a missing provider all deny. Only these
+    high-risk ops confirm; low-risk ops (navigate, `page_text`, `tab_list`,
+    masked cookie or storage reads) run with no per-action prompt. A navigation
+    racing an open confirmation is caught by an origin assertion run in the
+    page atomically with the act; a click is additionally bound to the approved
+    target descriptor. Phase 8 routes `page_eval`/`page_upload` approval through
+    the host Secure Enclave (Touch ID).
+  - **Masking**: page text, cookies, storage, and eval output are masked in the
+    service worker (`egress.ts`) before crossing back toward the model, once
+    for both page backends.
+  - **Trust-state isolation (#32)**: `storage.local` and `.session` are confined
+    to extension contexts via `setAccessLevel(TRUSTED_CONTEXTS)`, so a content
+    script cannot read or write the enrollment pin, compromised marker,
+    `requireEnrollment`, or the allowlist. The enrollment gate fails closed
+    until the restriction lands. Residual: a sub-millisecond cold-start window
+    before the async restriction resolves (see the threat model).
   - **Isolation**: content scripts run in the isolated world; `page_eval` uses a
     `Function` constructor (not the content script's scope) and its result is
-    serialized safely (cycles/DOM/exotic types) before masking.
+    serialized safely (cycles/DOM/exotic types) before masking. Both page
+    backends run one shared, self-contained DOM implementation
+    (`lib/dom/page-api.ts`); the CDP path ships its stringified source, so the
+    two cannot diverge.
   - **Read-only credentials**: no cookie/storage writes.
 
 ## Invariants that must not regress
