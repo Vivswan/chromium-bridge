@@ -86,10 +86,11 @@ ext-test:
 shared-test:
     bun run --cwd packages/shared test
 
-# DOM + smoke tests (needs bun + Chrome; builds first)
+# DOM + smoke + security proofs (needs bun + isolated Chrome; builds first)
 test-browser: ext-build
     cd tests && bun dom_test.ts
     bun tests/ext_test.ts
+    bun tests/security_browser_test.ts
 
 # Real E2E integration (opt-in; real binary + Chrome + extension)
 test-integration: build ext-build

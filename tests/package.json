@@ -8,7 +8,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test:dom": "bun dom_test.ts",
-    "test:smoke": "bun ext_test.ts"
+    "test:smoke": "bun ext_test.ts",
+    "test:security": "bun security_browser_test.ts"
   },
   "dependencies": {
     "puppeteer-core": "^25.3.0"
