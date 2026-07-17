@@ -9,7 +9,7 @@
 //!    MCP server and the native-host subprocess over the bridge socket
 //!    (newline-delimited JSON).
 
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -254,27 +254,60 @@ impl BridgeResp {
 }
 
 /// Read/write bridge messages as NDJSON lines over a TCP stream.
+///
+/// The read is bounded to [`BRIDGE_MAX_LINE`] bytes per line (including the
+/// trailing newline), the same 64 MB order of magnitude [`nm_read_frame`]
+/// clamps inbound frames to. `bridge_read` runs only after the peer is
+/// attested, but zero trust means even an attested peer must not be able to
+/// exhaust memory by sending one newline-less line, so the line is capped
+/// rather than trusting the peer to terminate it.
+pub const BRIDGE_MAX_LINE: usize = 64 * 1024 * 1024;
+
 pub fn bridge_read<R: io::BufRead, T: for<'de> Deserialize<'de>>(
     r: &mut R,
 ) -> io::Result<Option<T>> {
-    let mut line = Vec::new();
-    let n = r.read_until(b'\n', &mut line)?;
-    if n == 0 {
-        return Ok(None);
+    bridge_read_capped(r, BRIDGE_MAX_LINE)
+}
+
+fn bridge_read_capped<R: io::BufRead, T: for<'de> Deserialize<'de>>(
+    r: &mut R,
+    max_line: usize,
+) -> io::Result<Option<T>> {
+    // Loop (not recurse) over skipped blank lines: a peer that floods blank
+    // lines must not grow the stack, which under panic=abort would abort the
+    // process.
+    loop {
+        let mut line = Vec::new();
+        // Take bounds how many bytes read_until will pull in. The +1 sentinel
+        // byte lets a full-but-legal line (exactly at the cap) be told apart
+        // from one that ran past it: only an overrun leaves line.len() above
+        // max_line.
+        let n = (&mut *r)
+            .take(max_line as u64 + 1)
+            .read_until(b'\n', &mut line)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if line.len() > max_line {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "bridge frame exceeds the line-length cap",
+            ));
+        }
+        while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let msg = serde_json::from_slice(&line).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("bridge json decode: {e}"),
+            )
+        })?;
+        return Ok(Some(msg));
     }
-    while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
-        line.pop();
-    }
-    if line.is_empty() {
-        return bridge_read(r);
-    }
-    let msg = serde_json::from_slice(&line).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("bridge json decode: {e}"),
-        )
-    })?;
-    Ok(Some(msg))
 }
 
 pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
@@ -388,6 +421,54 @@ mod tests {
         assert_eq!(got.op, "page_click");
         assert_eq!(got.tab_id, Some(3));
         assert_eq!(got.args, json!({ "ref": "e3" }));
+    }
+
+    #[test]
+    fn bridge_read_rejects_a_line_over_the_cap() {
+        // A newline-less line longer than the cap is rejected instead of being
+        // buffered in full (the memory-exhaustion path). A tiny cap keeps the
+        // test fast; the public bridge_read wires the real 64 MB ceiling.
+        let mut r = Cursor::new(vec![b'x'; 64]); // no newline, cap is 16
+        let err = bridge_read_capped::<_, Value>(&mut r, 16).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn bridge_read_cap_boundary_is_exact() {
+        // The cap counts the whole line, newline included. A line whose length
+        // equals the cap parses; one byte tighter rejects it rather than
+        // truncating. This pins the off-by-one the +1 sentinel guards.
+        let mut wire = br#"{"id":1,"op":"x"}"#.to_vec();
+        wire.push(b'\n');
+        let total = wire.len();
+
+        let got: Option<BridgeReq> =
+            bridge_read_capped(&mut Cursor::new(wire.clone()), total).unwrap();
+        assert_eq!(got.unwrap().id, 1);
+
+        let err =
+            bridge_read_capped::<_, BridgeReq>(&mut Cursor::new(wire), total - 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn bridge_read_skips_blank_lines_without_recursing() {
+        // Blank lines are skipped iteratively, so a flood of them cannot grow
+        // the stack (which would abort under panic=abort). A few leading blanks
+        // still resolve to the first real frame.
+        let mut wire = b"\n\n\r\n".to_vec();
+        bridge_write(
+            &mut wire,
+            &BridgeReq {
+                id: 9,
+                op: "noop".into(),
+                tab_id: None,
+                args: json!(null),
+            },
+        )
+        .unwrap();
+        let got: BridgeReq = bridge_read(&mut Cursor::new(wire)).unwrap().unwrap();
+        assert_eq!(got.id, 9);
     }
 
     #[test]
