@@ -179,8 +179,30 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   and action kind skip the toast for 60s (see
   [ADR-0006](../adr/0006-toast-confirmation-for-high-risk.md)). `page_eval` is not
   in this window; it reconfirms on every call.
-- Masking is heuristic — it can miss a novel secret format or over-mask benign
-  data.
+- **The in-page confirmation is defeatable by the page it guards.** The
+  toast that asks the user to approve a high-risk action (a submit click,
+  `page_press`, `page_select`, `page_upload`, and the rest) is drawn in the
+  page's own DOM through a content script, or in the page's MAIN world under
+  CDP mode. A page that has already prompt-injected the model can watch for
+  that toast with a `MutationObserver` and click Allow itself, or overwrite
+  the globals the toast is built from, so consent is bypassed exactly on the
+  hostile origin where it matters most. The gate holds against an ordinary
+  page and an honest user; it does not hold against a page that owns the DOM
+  the toast lives in. Closing it needs a confirmation surface the page cannot
+  reach, such as a browser-action popup or `chrome.notifications`. This is the
+  same shape as the manifest-substitution residual: the boundary is real but
+  not enforced against an attacker who already controls that layer.
+- **`page_upload` can attach any local file the caller names.** When the tool
+  is enabled (it is off by default), it attaches whatever absolute path the
+  call supplies to a file input, so a model induced to call it on a page can
+  hand that page a file the user never picked, such as an SSH key or a private
+  document. Three gates stand in front of it: the opt-in, the origin
+  allowlist, and a per-call confirmation that shows the exact path. The
+  confirmation, though, is the page-defeatable one above, so on a hostile
+  allowlisted origin the last check can be auto-clicked, and the path itself
+  is not constrained to a picked file or a safe directory. Tracked for
+  hardening (a page-unreachable confirmation plus an OS file picker, so the
+  model names no path) before file upload is recommended for general use.
 - `page_snapshot_precise` briefly attaches the debugger (infobar flash).
 - **CDP mode** (`cdpMode`, opt-in, off by default — see
   [ADR-0017](../adr/0017-cdp-mode-all-ops.md)) routes all page ops through
