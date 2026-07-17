@@ -94,3 +94,4 @@ async function confirmWithToast(question, actionDesc) {
 
 - 配合 [ADR-0004](./0004-allowlist-with-optional-host-permissions.md):白名单是第一层(站点级),Toast 是第二层(动作级)
 - 区别于 [ADR-0005](./0005-page-eval-disabled-by-default.md):Toast 用于 UI 动作(click/fill),page_eval 若实现需更强确认(专用窗口)
+- Relationship to [ADR-0008](./0008-page-eval-confirmation-channel.md): `page_eval`, implemented later, reuses this ADR's in-page Toast but not its 60s grace window. Since the ADR-0008 update 2026-07-16, `page_eval` reconfirms on every call; the grace window described here governs click/fill/submit/navigation only.

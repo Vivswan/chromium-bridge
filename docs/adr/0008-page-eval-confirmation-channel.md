@@ -101,26 +101,27 @@ eval 可能返回任意类型,需要 `serializeResult` 安全处理:
 
 ## Update (2026-07-16): page_eval excluded from the same-origin grace window (fail-safe default)
 
-This addendum is written in ASCII English (the surrounding ADR text is
-historical and left untouched).
+This addendum is written in ASCII English; the historical body above is left
+as-is.
 
-The original decision (see "方案 B" above and the risk note "免确认窗口对 eval
-的风险高于 click") kept a same-origin 60s grace window for page_eval, keyed
-`origin:eval`: after one approval, any further eval on that origin within the
-window ran with no prompt. Under the zero-trust principle in AGENTS.md
-("never weaken a check for convenience; a silent window is a relaxation") this
-silent-eval window is not acceptable as a default. The two eval calls in a
-window are unrelated (the risk note itself gives `document.title` vs
-`fetch('/transfer', ...)` as the example), so a single approval must not cover
-a later, different payload.
+This update reverses the original grace-window choice for page_eval and turns
+the rejected option into the shipped one. ADR-0008 first rejected 方案 B
+("每次 eval 都确认", every eval reconfirms with no grace window) and instead
+reused the same-origin 60s grace window keyed `origin:eval`, so that after one
+approval any further eval on that origin within the window ran with no prompt.
+The risk note above ("免确认窗口对 eval 的风险高于 click") already recorded why
+that is dangerous: the two calls one approval covers can be unrelated,
+`document.title` one time and `fetch('/transfer', ...)` the next.
 
-Decision: **page_eval is excluded from the grace window entirely. Every
-page_eval call reconfirms** (unless the user has turned confirmation off via
-`confirmPageEval=false`, which is the separate, explicit opt-out documented in
-the 2026-07-15 update above). The grace window (`confirmGraceMs`, default
-60000ms) is retained for the lower-risk click/submit confirmations, where the
-repeated action is at least similar and observable in the UI. No new knob is
-added; `confirmGraceMs` simply no longer applies to eval.
+The zero-trust principle in AGENTS.md ("never weaken a check for convenience")
+treats a silent same-origin window as exactly that kind of relaxation, so it
+cannot stay the default. page_eval now behaves the way 方案 B described: every
+call reconfirms, and it is excluded from the grace window entirely. The one
+exception is the explicit opt-out `confirmPageEval=false` (from the 2026-07-15
+update above), which a user sets deliberately. The grace window
+(`confirmGraceMs`, default 60000ms) stays in force for the lower-risk
+click/submit confirmations, where the repeated action is similar and visible in
+the UI. No new setting is added; `confirmGraceMs` no longer applies to eval.
 
 What each remaining setting relaxes, and the residual the user accepts:
 
