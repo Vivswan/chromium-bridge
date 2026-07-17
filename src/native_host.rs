@@ -10,9 +10,11 @@
 //! (ADR-0021): frames whose `type` is one of the enclave control tags are
 //! handled HERE — an `enclave_challenge` is answered locally by signing with
 //! the Secure Enclave key (raising the user-presence prompt) — and are never
-//! forwarded to the MCP server. Everything else forwards byte-for-byte, so
-//! all real tool logic stays in the MCP server on the other side of the
-//! socket. EOF on stdin (Chrome disconnected) is our shutdown signal.
+//! forwarded to the MCP server; symmetrically, an enclave control frame
+//! arriving FROM the server is an injection and is dropped, never forwarded
+//! to the extension. Everything else forwards byte-for-byte, so all real
+//! tool logic stays in the MCP server on the other side of the socket. EOF
+//! on stdin (Chrome disconnected) is our shutdown signal.
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::{Arc, Mutex};
@@ -20,8 +22,8 @@ use std::thread;
 
 use crate::ipc;
 use crate::protocol::{
-    bridge_read, bridge_write, classify_nm_frame, nm_read_frame, nm_write_frame, EnclaveControl,
-    FrameDisposition,
+    bridge_read, bridge_write, classify_nm_frame, enclave_control_type, nm_read_frame,
+    nm_write_frame, EnclaveControl, FrameDisposition,
 };
 use serde_json::Value;
 
@@ -242,6 +244,15 @@ pub fn run() -> i32 {
 /// line. Any read error — an over-cap line included — fails closed: the pump
 /// ends, the process exits, and Chrome tears the port down.
 ///
+/// Enclave control frames (ADR-0021) are filtered out here: they legitimately
+/// originate only in the extension (`enclave_challenge`) and in this host
+/// itself (`enclave_proof`/`enclave_error`), never in the server, so one
+/// arriving on the socket leg is an injection attempt — e.g. a spurious
+/// `enclave_error` to burn the extension's outstanding nonce or provoke a
+/// false "compromised" mark. Dropped and logged, and the pump keeps going:
+/// unlike a malformed line this is a recognized, bounded frame, so discarding
+/// it fully contains the harm without taking the bridge down.
+///
 /// `out` is the stdout writer shared with the stdin->socket thread (which
 /// writes enclave control replies). The lock is taken per frame, never across
 /// the blocking `bridge_read`, so a control reply can be interleaved while this
@@ -259,6 +270,14 @@ fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &Mutex<W>) {
                 break;
             }
         };
+        if let Some(kind) = enclave_control_type(&value) {
+            log_warn!(
+                "native-host",
+                "dropping {kind} frame injected by the server; enclave control \
+                 frames never legitimately arrive on the socket leg"
+            );
+            continue;
+        }
         let mut out = out
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -326,6 +345,27 @@ mod tests {
         let mut cur = Cursor::new(out.into_inner().unwrap());
         let frame = nm_read_frame(&mut cur).unwrap().unwrap();
         assert_eq!(frame, serde_json::json!({ "id": 1 }));
+        assert!(nm_read_frame(&mut cur).unwrap().is_none());
+    }
+
+    #[test]
+    fn server_injected_enclave_frames_are_dropped_not_forwarded() {
+        // The server leg never legitimately carries enclave control frames
+        // (the ceremony runs extension <-> host only), so an injected
+        // enclave_error — the nonce-burning / false-compromise vector — must
+        // be dropped while the pump keeps forwarding real traffic around it.
+        let input = concat!(
+            "{\"type\":\"enclave_error\",\"reason\":\"key_invalid\"}\n",
+            "{\"type\":\"enclave_challenge\",\"nonce\":\"n\"}\n",
+            "{\"type\":\"enclave_proof\",\"sig\":\"s\",\"key_id\":\"k\",\"pubkey\":\"p\"}\n",
+            "{\"id\":7,\"op\":\"tab_list\"}\n",
+        );
+        let out = Mutex::new(Vec::new());
+        pump_socket_to_stdout(&mut Cursor::new(input.as_bytes().to_vec()), &out);
+
+        let mut cur = Cursor::new(out.into_inner().unwrap());
+        let frame = nm_read_frame(&mut cur).unwrap().unwrap();
+        assert_eq!(frame, serde_json::json!({ "id": 7, "op": "tab_list" }));
         assert!(nm_read_frame(&mut cur).unwrap().is_none());
     }
 }
