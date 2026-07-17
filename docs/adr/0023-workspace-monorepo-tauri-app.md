@@ -101,6 +101,58 @@ intact. The native-messaging protocol and the MCP tool catalogue are
 unchanged by the restructure itself. "stdout is protocol" still holds in
 both binary modes.
 
+## Disposition of existing ADRs
+
+The rebuild touches ground covered by most of the existing records. This
+map is forward-looking: it says what each phase will do to which ADR, so
+the phase that lands a new record knows exactly which old one to flip.
+The old ADRs themselves are not edited here, because a
+"Superseded by ADR-00XX" line pointing at a record that does not exist
+yet is a dangling reference. Each superseding phase updates its target's
+Status line in the same commit that adds the new ADR.
+
+Superseded (the new record replaces the decision):
+
+- ADR-0006 (toast confirmation for high-risk) by the extension-rehaul
+  and Touch ID records: Phase 7 supersedes the surface (the toast moves
+  off the page-reachable DOM) and marks 0006 then; Phase 8 completes the
+  supersession for the tools whose confirmation becomes the Enclave tap.
+- ADR-0008 (page-eval confirmation channel) by the Touch ID record
+  (Phase 8).
+- ADR-0012 (TypeScript + esbuild extension build) by the Phase 3
+  toolchain record (bun, WXT, Biome).
+- ADR-0013 (CI and toolchain) in part by this phase's CI changes and the
+  rest by Phase 3.
+- ADR-0014 (leveled logging) by a tracing-based record; its thiserror
+  decision stays.
+
+Extended (the decision stands; a new record builds on it):
+
+- ADR-0019 (authenticated IPC) and ADR-0020 (kernel-attested peer
+  identity) by the multi-client pairing record (Phase 4).
+- ADR-0021 (enrollment ceremony) by the revocation and Touch ID records
+  (Phases 5 and 8).
+- ADR-0022 (multi-browser label routing) is adjacent to the broker work
+  and stays valid; the broker record must not weaken its
+  per-connection guarantees.
+
+Amended (the decision stands with a detail changed):
+
+- ADR-0001 (single Rust binary): the binary survives, now built from a
+  workspace.
+- ADR-0011 (options page for settings): the settings surface survives on
+  the new UI stack.
+- ADR-0018 (tab workspace group): the group name follows the rebrand to
+  "Chromium Bridge".
+- ADR-0003, ADR-0009, ADR-0017 (snapshot and CDP decisions): the
+  decisions stand; Phase 7 unifies their duplicated DOM layers into one
+  source.
+
+A language note: ADR-0001 through 0018 were authored in Chinese by the
+upstream project. The rebuild's docs are English-canonical, so those
+records get English versions as part of the docs consolidation; that
+conversion is tracked as its own change and is not part of this record.
+
 ## Residual risks, named honestly
 
 - **The workspace move is a mass rename.** Every path in docs, CI,
