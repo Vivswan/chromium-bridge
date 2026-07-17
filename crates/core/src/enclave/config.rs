@@ -1,7 +1,7 @@
 //! Host policy config (runtime_dir()/config.json, 0600).
 
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 
 use serde::{Deserialize, Serialize};
 
@@ -79,41 +79,12 @@ impl HostConfig {
         }
     }
 
-    /// Write atomically (temp file + rename), 0600 on Unix, mirroring
-    /// [`crate::ipc::LockFile::write`].
+    /// Write via the hardened [`crate::ipc::write_private_atomic`] (exclusive
+    /// 0600 temp file + rename), like every other private record in the
+    /// runtime directory.
     pub fn write(&self) -> io::Result<()> {
-        let path = Self::path();
-        let mut tmp = path.clone();
-        tmp.set_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(self)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut f = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            f.write_all(&bytes)?;
-            f.flush()?;
-        }
-        #[cfg(not(unix))]
-        {
-            let mut f = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&tmp)?;
-            f.write_all(&bytes)?;
-            f.flush()?;
-        }
-        #[cfg(not(unix))]
-        if path.exists() {
-            fs::remove_file(&path)?;
-        }
-        fs::rename(&tmp, &path)?;
-        Ok(())
+        crate::ipc::write_private_atomic(&Self::path(), &bytes)
     }
 
     pub fn remove() {
