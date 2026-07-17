@@ -152,6 +152,21 @@ jobs:
       - run: cargo build --release
       - run: python3 tests/e2e.py
 
+  adversarial:
+    name: Adversarial break-in (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - run: cargo build --release
+      - run: python3 tests/adversarial.py
+
   browser:
     name: DOM + smoke (Chrome)
     runs-on: ubuntu-latest
@@ -203,6 +218,7 @@ jobs:
         scripts,
         linux-install,
         e2e,
+        adversarial,
         browser,
         typography,
       ]
