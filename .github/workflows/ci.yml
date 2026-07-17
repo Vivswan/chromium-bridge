@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # shellcheck is preinstalled on GitHub's ubuntu runners.
-      - run: shellcheck install/install.sh scripts/*.sh tests/run_all.sh
+      - run: shellcheck install/install.sh scripts/*.sh tests/run_all.sh tests/install_verify_test.sh
 
   linux-install:
     name: Linux installer (isolated XDG directories)
@@ -119,6 +119,8 @@ jobs:
             test ! -e "$tmp/config/$d/NativeMessagingHosts/com.browser_bridge.host.json"
           done
           test ! -e "$tmp/data/browser-bridge/browser-bridge"
+      - name: Prebuilt-mode verification passes and fails closed (isolated fake archive)
+        run: ./tests/install_verify_test.sh
       - name: Escape hatch --nm-dir, and uninstall clears table + explicit dirs
         run: |
           tmp="$(mktemp -d)"

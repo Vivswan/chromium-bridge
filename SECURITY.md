@@ -130,6 +130,55 @@ result or storage dump as potentially sensitive. Masking can be disabled per
 surface (`evalMask`), which removes this filter entirely.
 
 
+## Release artifact integrity
+
+Release binaries are built by GitHub Actions from the tagged commit
+(`.github/workflows/release.yml`) with a deterministic build
+(`scripts/build-repro.sh`: pinned toolchain, path remapping,
+`SOURCE_DATE_EPOCH`, `--locked`), so the binary's hash can be re-derived
+from the tag. Byte-identical rebuilds are verified across clean builds and
+checkout paths on the same machine; matching a published hash from another
+machine requires the same rustup toolchain and platform SDK, and
+independent cross-machine rebuilds have not been demonstrated yet. Each
+release publishes the archive's SHA-256, a separate SHA-256 of the binary
+inside it (`<name>.binary.sha256`), and a build provenance attestation
+covering both.
+
+In prebuilt mode `install.sh` refuses to install a binary it cannot verify.
+It hashes the private copy it is about to install (not the source file, so
+the checked bytes are the installed bytes) and compares against the
+published `.binary.sha256`, or against a user-supplied `--expected-sha256`.
+The repository whose checksums are trusted is pinned in the installer's
+code; the archive's `RELEASE.txt` supplies only the tag/platform/arch and
+must name that same repository, so a tampered archive cannot redirect
+verification to a repository its author controls (installing a fork's
+release requires an explicit `--release-repo`). The build provenance
+attestation is verified too when an authenticated `gh` is available. Any
+mismatch, missing reference, or failed download aborts the install, and the
+macOS quarantine attribute is cleared only after the checksum has matched.
+
+Known gaps, stated plainly:
+
+- The verifier travels inside the archive it verifies. `install.sh` can
+  prove the binary was tampered with, but an attacker who can rewrite the
+  whole archive can rewrite `install.sh` too. Protection against that
+  requires verifying the archive itself before running anything from it
+  (its published `.sha256` or attestation; commands in README "Verifying
+  your binary") or installing from a source checkout.
+- A hostile process already running as the same user during install is out
+  of scope here; that boundary is enforced at runtime by the bridge's peer
+  attestation, not at install time.
+- Binaries are not yet Apple-codesigned or notarized, and the Windows exe is
+  not Authenticode-signed. Until a signing identity exists, macOS
+  verification is the SHA-256 and attestation above rather than a
+  cdhash/signature check. Once signing lands, released binaries will no
+  longer be byte-identical to local rebuilds and verification will move to
+  comparing cdhashes.
+- The installer does not verify the bundled `extension/dist`; those files
+  are covered only when the user verifies the whole archive before
+  extraction, as above.
+- `install.ps1` (Windows) performs no verification yet.
+
 ## Security-relevant changes (review bar)
 
 A change is **security-relevant** — and must carry the
