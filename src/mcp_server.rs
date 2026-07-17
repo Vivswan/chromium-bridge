@@ -79,6 +79,29 @@ pub fn run() -> i32 {
         thread::spawn(move || loop {
             match listener.accept() {
                 Ok((stream, _addr)) => {
+                    // Single chokepoint: reject any peer that is not this same
+                    // user before the connection is authenticated or trusted.
+                    #[cfg(unix)]
+                    {
+                        let want = unsafe { libc::geteuid() };
+                        match ipc::peer_uid(&stream) {
+                            Ok(uid) if uid == want => {}
+                            Ok(uid) => {
+                                log_warn!(
+                                    "mcp",
+                                    "rejected bridge connection from uid {uid} (server euid {want})"
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                log_warn!(
+                                    "mcp",
+                                    "rejected bridge connection: peer uid unknown: {e}"
+                                );
+                                continue;
+                            }
+                        }
+                    }
                     if let Err(e) = session.attach_connection(stream) {
                         log_warn!("mcp", "accept handler error: {e}");
                     }
