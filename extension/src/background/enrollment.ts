@@ -172,8 +172,33 @@ export type Gate = { allowed: true } | { allowed: false; reason: string };
  * and never reaches dispatch(), so no tab, cookie, or page op runs. The
  * block-until-pinned enforcement applies only where the platform can enroll
  * (macOS); elsewhere enrollment is unavailable and requests proceed on the
- * base authentication. */
-export async function enrollmentGate(): Promise<Gate> {
+ * base authentication.
+ *
+ * Fail closed against concurrent transitions: the state reads are
+ * individually async and this gate runs on the hot request path, so a
+ * transition (a revoke, a compromised mark) can land while a read pass is in
+ * flight. A first, unserialized pass answers the cheap refusals; an
+ * "allowed" answer must then be confirmed by a second read INSIDE the
+ * serialized transition queue, and `onAllowed` (the dispatch kickoff) runs
+ * synchronously in that same critical section. That gives every op a strict
+ * order against every transition: a transition queued or in flight before
+ * the confirming read is fully applied first and honored (the op is
+ * blocked); a transition queued after it runs strictly after the op has
+ * already begun dispatching, i.e. the op is ordered before the transition by
+ * mechanism, not by luck. */
+export async function enrollmentGate(onAllowed?: () => void): Promise<Gate> {
+  const first = await readGateState();
+  if (!first.allowed) return first;
+  return serialized(async () => {
+    const gate = await readGateState();
+    if (gate.allowed) onAllowed?.();
+    return gate;
+  });
+}
+
+/** One unserialized read of the gate state. Callers other than the two-pass
+ * enrollmentGate must not use this to grant access. */
+async function readGateState(): Promise<Gate> {
   if ((await getSetting("requireEnrollment")) !== true) return { allowed: true };
   const compromised = await pinStore.getCompromised();
   if (compromised) {
