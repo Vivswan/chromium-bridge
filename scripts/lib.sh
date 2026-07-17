@@ -19,7 +19,7 @@ bb_die() {
 # global BB_CARGO to its absolute path, and prepend its directory to PATH so the
 # rustc it shells out to is discoverable. Exits via bb_die if cargo is missing.
 #
-# Call it as a plain statement (NOT `$(bb_find_cargo)`) — the PATH export must
+# Call it as a plain statement (NOT `$(bb_find_cargo)`) - the PATH export must
 # happen in the caller's shell, not a command-substitution subshell. Read the
 # result from $BB_CARGO afterwards.
 bb_find_cargo() {

@@ -102,7 +102,7 @@ const commandArm = (t) => {
 
 const commands = contract.tools.map(commandArm).join("\n");
 
-const out = `// GENERATED from contracts/tools.json by scripts/gen-ops.mjs — DO NOT EDIT.
+const out = `// GENERATED from contracts/tools.json by scripts/gen-ops.mjs - DO NOT EDIT.
 // Edit the contract, then run \`make gen\` (or \`node scripts/gen-ops.mjs\`).
 //
 // The tool catalogue, JS side: op names + Chinese UI labels for the options
@@ -123,7 +123,7 @@ ${items}
 export const OP_NAMES: string[] = TOOLS.map((t) => t.op);
 
 // Policy metadata, mirrored from the contract. Consumed by the policy layer
-// (background/policy.ts) — kept as plain data so it stays import-side-effect-free.
+// (background/policy.ts) - kept as plain data so it stays import-side-effect-free.
 export type Risk = ${riskUnion};
 export type Scope = ${scopeUnion};
 export type Permission = ${permissionUnion};
