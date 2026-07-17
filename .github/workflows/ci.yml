@@ -171,6 +171,59 @@ jobs:
             grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$manifest"
           done
           "$tmp/data/chromium-bridge/chromium-bridge" --help
+      - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data"
+          bin="$PWD/target/release/chromium-bridge"   # built by the install.sh step above
+          mkdir -p "$tmp/home"
+          # Fresh machine, no browsers: --fix refuses instead of guessing.
+          if "$bin" doctor --fix; then
+            echo "doctor --fix should have failed with no browser detected" >&2; exit 1
+          fi
+          # Fake a detected Chrome; --fix picks exactly it up (fresh-machine install).
+          mkdir -p "$tmp/config/google-chrome"
+          "$bin" doctor --list
+          "$bin" doctor --fix
+          manifest="$tmp/config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          test -f "$manifest"
+          grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$manifest"
+          grep -q '"com.vivswan.chromium_bridge.host"' "$manifest"
+          wrapper="$tmp/data/chromium-bridge/run-host-chrome.sh"
+          test -x "$wrapper"
+          grep -q -- '--native-host' "$wrapper"
+          grep -q -- "--label 'chrome'" "$wrapper"
+          # doctor --list reports the healthy registration.
+          "$bin" doctor --list | grep -E 'chrome\s+detected\s+ok'
+          # A wiped wrapper is diagnosed as stale, and --fix repairs it in place.
+          rm "$wrapper"
+          "$bin" doctor --list | grep -q 'stale'
+          "$bin" doctor --fix
+          test -x "$wrapper"
+          # Explicit selection and the escape hatch.
+          "$bin" doctor --fix --browser brave
+          test -f "$tmp/config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          "$bin" doctor --fix --manifest-dir "$tmp/custom/NativeMessagingHosts"
+          test -f "$tmp/custom/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          # A manifest we did not write is refused and left byte-identical:
+          # target it explicitly via --manifest-dir.
+          mkdir -p "$tmp/foreign/NativeMessagingHosts"
+          foreign="$tmp/foreign/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          echo '{"name":"com.other.host","description":"not ours"}' > "$foreign"
+          if "$bin" doctor --fix --manifest-dir "$tmp/foreign/NativeMessagingHosts"; then
+            echo "doctor --fix should have refused the foreign manifest" >&2; exit 1
+          fi
+          if "$bin" uninstall --manifest-dir "$tmp/foreign/NativeMessagingHosts"; then
+            echo "uninstall should have failed on the foreign manifest" >&2; exit 1
+          fi
+          test -f "$foreign"
+          grep -q 'com.other.host' "$foreign"
+          # Everything we wrote is gone despite the failure on the foreign file.
+          "$bin" uninstall --manifest-dir "$tmp/custom/NativeMessagingHosts"
+          test ! -e "$manifest"
+          test ! -e "$tmp/custom/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          test ! -e "$wrapper"
       - name: Install all, then uninstall removes every known registration
         run: |
           tmp="$(mktemp -d)"

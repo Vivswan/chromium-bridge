@@ -1,19 +1,23 @@
-//! Read-only `doctor` / `status` subcommand.
+//! `doctor` / `status`: diagnosis, and (only with `--fix`) repair.
 //!
-//! Prints a health report about this install without touching the browser,
-//! spawning processes, or killing anything. It only reads the lock file, does a
-//! passive connect probe against our OWN bridge socket (no bytes sent), and
-//! checks whether the per-OS native-messaging manifest file exists.
+//! Plain `doctor` prints a health report without touching the browser,
+//! spawning processes, or killing anything. It only reads the lock file, does
+//! a passive connect probe against our OWN bridge socket (no bytes sent), and
+//! diagnoses each browser's native-messaging registration
+//! (missing/ok/stale/foreign) through the shared resolver in
+//! `crate::browsers`. `doctor --list` is the short, resolver-only form of
+//! that report. `doctor --fix` hands the diagnosis to
+//! `crate::registration` for an idempotent repair; on a fresh machine that
+//! repair IS the registration. The app self-registers through the same
+//! engine; app and CLI are co-equal surfaces (see docs/cli.md).
 
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::time::Duration;
 
+use crate::browsers::{self, BaseDirs, Os, HOST_ID};
 use crate::ipc::LockFile;
-
-/// Native-messaging host id, as written by the installers (`install.sh` /
-/// `install.ps1`). The manifest file is `<HOST_NAME>.json`.
-const HOST_NAME: &str = "com.vivswan.chromium_bridge.host";
+use crate::registration::{self, RegState};
 
 /// Plain facts gathered for the report. Kept free of I/O so `render` is pure
 /// and unit-testable.
@@ -31,42 +35,31 @@ struct Report {
     secret_len: Option<usize>,
     /// `None` when no probe was attempted (no lock file / no endpoint).
     reachable: Option<bool>,
-    manifest_path: PathBuf,
-    manifest_present: bool,
+    /// Per known browser: detection and manifest registration, in
+    /// `Browser::ALL` order. Empty only when the environment could not be
+    /// resolved (see `manifest_error`).
+    manifests: Vec<ManifestStatus>,
+    /// Why the manifest check could not run (e.g. no HOME).
+    manifest_error: Option<String>,
 }
 
-/// Expected per-OS Chrome native-messaging manifest path for this platform.
-///
-/// Mirrors the installers: macOS/Windows are exactly what `install.sh` /
-/// `install.ps1` write; Linux falls back to the conventional Chrome
-/// `NativeMessagingHosts` directory under `~/.config`.
-fn manifest_path() -> PathBuf {
-    let file = format!("{HOST_NAME}.json");
+/// One browser's registration state, as diagnosed through the shared
+/// resolver and `registration::assess`.
+#[derive(Debug, Clone)]
+struct ManifestStatus {
+    key: &'static str,
+    detected: bool,
+    /// `RegState::describe()` output: ok/missing/stale/... with the reason.
+    state: String,
+    healthy: bool,
+    location: String,
+}
 
-    #[cfg(target_os = "macos")]
-    {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-        let mut p = PathBuf::from(home);
-        p.push("Library/Application Support/Google/Chrome/NativeMessagingHosts");
-        p.push(file);
-        p
-    }
-
-    #[cfg(windows)]
-    {
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        base.join("chromium-bridge").join(file)
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .unwrap_or_else(|| PathBuf::from("/"));
-        base.join("google-chrome/NativeMessagingHosts").join(file)
+impl Report {
+    /// Whether any browser this user actually has picks up a healthy
+    /// registration.
+    fn manifest_ok(&self) -> bool {
+        self.manifests.iter().any(|m| m.detected && m.healthy)
     }
 }
 
@@ -87,11 +80,32 @@ fn probe(endpoint: &str) -> bool {
     }
 }
 
+/// Gather the per-browser manifest states (read-only).
+fn gather_manifests() -> (Vec<ManifestStatus>, Option<String>) {
+    let dirs = match BaseDirs::from_env() {
+        Ok(d) => d,
+        Err(e) => return (Vec::new(), Some(e)),
+    };
+    let statuses = browsers::resolve(Os::current(), &dirs)
+        .iter()
+        .map(|entry| {
+            let state = registration::assess(&entry.registration);
+            ManifestStatus {
+                key: entry.browser.key(),
+                detected: entry.detected(),
+                healthy: state == RegState::Ok,
+                state: state.describe(),
+                location: entry.registration.location(),
+            }
+        })
+        .collect();
+    (statuses, None)
+}
+
 /// Gather the report by reading (never mutating) local state.
 fn gather() -> Report {
     let lock_path = LockFile::path();
-    let manifest_path = manifest_path();
-    let manifest_present = manifest_path.exists();
+    let (manifests, manifest_error) = gather_manifests();
 
     let mut report = Report {
         version: env!("CARGO_PKG_VERSION"),
@@ -104,8 +118,8 @@ fn gather() -> Report {
         pid: None,
         secret_len: None,
         reachable: None,
-        manifest_path,
-        manifest_present,
+        manifests,
+        manifest_error,
     };
 
     match LockFile::read() {
@@ -160,11 +174,23 @@ fn render(r: &Report) -> String {
         None => out.push_str("not probed (no lock file)\n"),
     }
 
-    out.push_str(&format!("native manifest: {}\n", r.manifest_path.display()));
-    out.push_str(&format!(
-        "  present: {}\n",
-        if r.manifest_present { "yes" } else { "no" }
-    ));
+    out.push_str(&format!("native manifests: (host id {HOST_ID})\n"));
+    if let Some(err) = &r.manifest_error {
+        out.push_str(&format!("  could not check: {err}\n"));
+    }
+    for m in &r.manifests {
+        out.push_str(&format!(
+            "  {:<9} {:<13} manifest {:<8} {}\n",
+            m.key,
+            if m.detected {
+                "detected"
+            } else {
+                "not detected"
+            },
+            m.state,
+            m.location,
+        ));
+    }
 
     // These probes only cover the MCP-server/bridge side. doctor cannot observe
     // whether the Chrome extension is loaded and connected without speaking the
@@ -191,8 +217,10 @@ fn summary(r: &Report) -> &'static str {
         return "server not running — is your MCP client started?";
     }
     match r.reachable {
-        Some(true) if r.manifest_present => "OK",
-        Some(true) => "server reachable, but native host manifest not installed — run install.sh",
+        Some(true) if r.manifest_ok() => "OK",
+        Some(true) => {
+            "server reachable, but no detected browser has a healthy native-host registration — run `chromium-bridge doctor --fix`"
+        }
         _ => "server not reachable — is your MCP client running?",
     }
 }
@@ -206,8 +234,46 @@ fn exit_code(r: &Report) -> i32 {
     }
 }
 
-/// Entry point for the `doctor` / `status` subcommand.
-pub fn run() -> i32 {
+/// `doctor --list`: one line per known browser (detection, registration
+/// state, location). Read-only, resolver-only: no lock file, no probe.
+fn run_list() -> i32 {
+    let (os, dirs) = match registration::resolve_env() {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    println!("known browsers (host id {HOST_ID}):");
+    for entry in browsers::resolve(os, &dirs) {
+        println!(
+            "  {:<9} {:<13} {:<30} {}",
+            entry.browser.key(),
+            if entry.detected() {
+                "detected"
+            } else {
+                "not detected"
+            },
+            registration::assess(&entry.registration).describe(),
+            entry.registration.location()
+        );
+    }
+    0
+}
+
+/// Entry point for the `doctor` / `status` subcommand: report by default,
+/// `--list` for the short listing, `--fix` to repair/register.
+pub fn run(argv: &[String]) -> i32 {
+    let args = match crate::cli::doctor_args(argv) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("doctor: {e}");
+            return 2;
+        }
+    };
+    if args.list {
+        return run_list();
+    }
+    if args.fix {
+        return registration::run_fix(&args);
+    }
     let report = gather();
     print!("{}", render(&report));
     exit_code(&report)
@@ -229,8 +295,23 @@ mod tests {
             pid: Some(4242),
             secret_len: Some(32),
             reachable: Some(true),
-            manifest_path: PathBuf::from("/tmp/com.vivswan.chromium_bridge.host.json"),
-            manifest_present: true,
+            manifests: vec![
+                ManifestStatus {
+                    key: "chrome",
+                    detected: true,
+                    state: "ok".into(),
+                    healthy: true,
+                    location: "/tmp/com.vivswan.chromium_bridge.host.json".into(),
+                },
+                ManifestStatus {
+                    key: "brave",
+                    detected: false,
+                    state: "missing".into(),
+                    healthy: false,
+                    location: "/tmp/brave/com.vivswan.chromium_bridge.host.json".into(),
+                },
+            ],
+            manifest_error: None,
         }
     }
 
@@ -246,10 +327,26 @@ mod tests {
         // The real secret value must never appear.
         assert!(!text.contains("deadbeef"));
         assert!(text.contains("reachable (socket connect OK)"));
+        // Per-browser manifest lines from the shared resolver.
+        assert!(text.contains("host id com.vivswan.chromium_bridge.host"));
+        assert!(text.contains("chrome"));
+        assert!(text.contains("manifest ok"));
+        assert!(text.contains("manifest missing"));
         // Honest note: green checks still don't prove the extension connected.
         assert!(text.contains("do NOT confirm the Chrome extension"));
         assert!(text.trim_end().ends_with("OK"));
         assert_eq!(exit_code(&r), 0);
+    }
+
+    #[test]
+    fn manifest_on_undetected_browser_alone_is_not_healthy() {
+        // A manifest registered only for a browser this user does not have
+        // will never be read; the summary must say so instead of "OK".
+        let mut r = healthy_report();
+        r.manifests[0].detected = false;
+        let text = render(&r);
+        assert!(text.contains("run `chromium-bridge doctor --fix`"));
+        assert_eq!(exit_code(&r), 1);
     }
 
     #[test]
@@ -265,15 +362,32 @@ mod tests {
             pid: None,
             secret_len: None,
             reachable: None,
-            manifest_path: PathBuf::from(
-                "/home/u/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
-            ),
-            manifest_present: false,
+            manifests: vec![ManifestStatus {
+                key: "chrome",
+                detected: true,
+                state: "missing".into(),
+                healthy: false,
+                location:
+                    "/home/u/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+                        .into(),
+            }],
+            manifest_error: None,
         };
         let text = render(&r);
         assert!(text.contains("present: no"));
         assert!(text.contains("not probed (no lock file)"));
         assert!(text.contains("server not running"));
+        assert_eq!(exit_code(&r), 1);
+    }
+
+    #[test]
+    fn unresolvable_environment_is_reported_not_hidden() {
+        let mut r = healthy_report();
+        r.manifests = Vec::new();
+        r.manifest_error = Some("HOME (or USERPROFILE) is not set".into());
+        let text = render(&r);
+        assert!(text.contains("could not check: HOME"));
+        // No verified manifest means not healthy.
         assert_eq!(exit_code(&r), 1);
     }
 

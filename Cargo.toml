@@ -38,6 +38,10 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 core-foundation = "0.10"
 security-framework = { version = "3", features = ["OSX_10_15"] }
 security-framework-sys = "2"
+# HKCU native-messaging registration on Windows
+# (src/packages/core/src/registration.rs). The vetted wrapper (rust-lang
+# community, windows-sys underneath) instead of hand-rolled Advapi32 FFI.
+winreg = "0.55"
 chromium-bridge-core = { path = "src/packages/core" }
 # Tauri v2 desktop shell (src/apps/desktop only; never a dependency of the
 # security core or the host). Policy per ADR-0023: the GUI layer carries no

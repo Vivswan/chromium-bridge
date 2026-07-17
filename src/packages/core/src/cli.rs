@@ -8,7 +8,9 @@ pub enum Command {
     McpServer,
     /// `--native-host` (or a Chrome-appended extension origin on Windows).
     NativeHost,
-    /// `doctor` / `status`: read-only health report.
+    /// `doctor` / `status`: health report, plus `--fix` (repair/register
+    /// the native-messaging manifests) and `--list`. Flags are parsed by
+    /// [`doctor_args`] in the handler.
     Doctor,
     /// `pair [--reset]`: the enrollment ceremony (ADR-0021).
     Pair { reset: bool },
@@ -24,6 +26,9 @@ pub enum Command {
     RevokeClient,
     /// `list-clients`: print the trusted-client allowlist.
     ListClients,
+    /// `uninstall ...`: reverse exactly the registrations this project
+    /// wrote. Flags are parsed by [`uninstall_args`] in the handler.
+    Uninstall,
     /// `-h` / `--help`.
     Help,
     /// Anything unrecognized: print help, exit non-zero.
@@ -77,7 +82,9 @@ pub fn parse(args: &[String]) -> Command {
     match rest.first().map(String::as_str) {
         None => Command::McpServer,
         Some("-h" | "--help") => Command::Help,
-        Some("doctor" | "status") if rest.len() == 1 => Command::Doctor,
+        // doctor takes flags (--fix/--list/...), parsed by doctor_args in
+        // the handler.
+        Some("doctor" | "status") => Command::Doctor,
         Some("pair") if rest.len() == 1 => Command::Pair { reset: false },
         Some("pair") if rest.len() == 2 && rest[1] == "--reset" => Command::Pair { reset: true },
         Some("revoke") if rest.len() == 1 => Command::Revoke,
@@ -88,6 +95,7 @@ pub fn parse(args: &[String]) -> Command {
         Some("pair-client") => Command::PairClient,
         Some("revoke-client") => Command::RevokeClient,
         Some("list-clients") if rest.len() == 1 => Command::ListClients,
+        Some("uninstall") => Command::Uninstall,
         Some(_) => Command::Unknown,
     }
 }
@@ -163,6 +171,114 @@ pub fn revoke_client_name(args: &[String]) -> Result<String, String> {
     name.ok_or_else(|| "revoke-client requires --name <label>".into())
 }
 
+/// The parsed arguments of `doctor` / `status`. Plain `doctor` (all fields
+/// off) is the read-only report. `--list` is a short resolver-only listing.
+/// `--fix` repairs/registers, with an exclusive targeting choice: explicit
+/// `--manifest-dir` dirs, `--all`, `--browser <keys>`, or (none of them)
+/// every detected browser.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DoctorArgs {
+    /// `--fix`: (re-)register the targeted browsers. Idempotent, so this is
+    /// also the fresh-machine registration path.
+    pub fix: bool,
+    /// `--list`: print detection/registration state, change nothing.
+    pub list: bool,
+    /// `--browser chrome,brave`: exactly these known browsers (needs --fix).
+    pub browsers: Option<Vec<String>>,
+    /// `--all`: every known browser, present or not (needs --fix).
+    pub all: bool,
+    /// `--manifest-dir PATH` (repeatable, needs --fix): exact
+    /// NativeMessagingHosts dirs, for Chromium browsers we do not know by
+    /// name. Absolute paths only.
+    pub manifest_dirs: Vec<String>,
+}
+
+/// Parse the flags of `doctor` / `status`. Same strictness as
+/// [`pair_client_args`]: conflicting or malformed selections are an error,
+/// never a guess.
+pub fn doctor_args(args: &[String]) -> Result<DoctorArgs, String> {
+    let mut parsed = DoctorArgs::default();
+    let mut it = args.iter().skip(2);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--fix" => parsed.fix = true,
+            "--list" => parsed.list = true,
+            "--browser" => {
+                if parsed.browsers.is_some() {
+                    return Err("--browser given more than once".into());
+                }
+                let value = take_value(&mut it, "--browser")?;
+                let mut keys: Vec<String> = Vec::new();
+                for key in value.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+                    if keys.iter().any(|k| k == key) {
+                        return Err(format!("--browser lists {key:?} twice"));
+                    }
+                    keys.push(key.to_string());
+                }
+                if keys.is_empty() {
+                    return Err(format!("--browser selected no browser: {value:?}"));
+                }
+                parsed.browsers = Some(keys);
+            }
+            "--all" => parsed.all = true,
+            "--manifest-dir" => {
+                parsed.manifest_dirs.push(manifest_dir_value(&mut it)?);
+            }
+            other => return Err(format!("unexpected argument {other:?}")),
+        }
+    }
+
+    let selections = usize::from(parsed.all)
+        + usize::from(parsed.browsers.is_some())
+        + usize::from(!parsed.manifest_dirs.is_empty());
+    if selections > 1 {
+        return Err("--all, --browser, and --manifest-dir are mutually exclusive".into());
+    }
+    if selections > 0 && !parsed.fix {
+        return Err("--browser/--all/--manifest-dir only target a repair; add --fix".into());
+    }
+    if parsed.list && (parsed.fix || selections > 0) {
+        return Err("--list is a read-only report and takes no other flags".into());
+    }
+    Ok(parsed)
+}
+
+/// The parsed arguments of `uninstall`: only the `--manifest-dir` targets to
+/// clear beyond the known-browser table (re-pass what you passed to
+/// `doctor --fix`).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct UninstallArgs {
+    pub manifest_dirs: Vec<String>,
+}
+
+/// Parse the flags of `uninstall`.
+pub fn uninstall_args(args: &[String]) -> Result<UninstallArgs, String> {
+    let mut parsed = UninstallArgs::default();
+    let mut it = args.iter().skip(2);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--manifest-dir" => {
+                parsed.manifest_dirs.push(manifest_dir_value(&mut it)?);
+            }
+            other => return Err(format!("unexpected argument {other:?}")),
+        }
+    }
+    Ok(parsed)
+}
+
+/// Take and validate a `--manifest-dir` value: non-empty and absolute, so a
+/// registration can never land relative to whatever the current directory
+/// happens to be.
+fn manifest_dir_value<'a, I: Iterator<Item = &'a String>>(it: &mut I) -> Result<String, String> {
+    let value = take_value(it, "--manifest-dir")?;
+    if !std::path::Path::new(&value).is_absolute() {
+        return Err(format!(
+            "--manifest-dir must be an absolute path, got {value:?}"
+        ));
+    }
+    Ok(value)
+}
+
 /// Pull the value following a flag, rejecting a missing value or a following
 /// flag (`--x --y`) as an error rather than swallowing the next flag.
 fn take_value<'a, I: Iterator<Item = &'a String>>(
@@ -214,6 +330,8 @@ pub fn print_help() {
          USAGE:\n    \
          chromium-bridge                Run as MCP server (for your MCP client)\n    \
          chromium-bridge doctor         Print a read-only health report (alias: status)\n    \
+         chromium-bridge doctor --list  List known browsers + registration state (read-only)\n    \
+         chromium-bridge doctor --fix [--browser <keys> | --all | --manifest-dir <dir>]\n                                Repair (or first-register) the native-messaging\n                                manifests for your Chromium browsers. Default:\n                                every browser detected for this user; keys:\n                                chrome,chromium,brave,edge,vivaldi,opera\n    \
          chromium-bridge pair           Enroll: mint the Secure Enclave key (macOS)\n    \
          chromium-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
          chromium-bridge revoke         Delete the enrollment key (fails closed)\n    \
@@ -221,6 +339,7 @@ pub fn print_help() {
          chromium-bridge pair-client --name <label> (--this-parent | --hash <hex> | --team-id <id>)\n                                Trust an MCP-client harness (ADR-0024)\n    \
          chromium-bridge revoke-client --name <label>   Untrust a client\n    \
          chromium-bridge list-clients   Print the trusted-client allowlist\n    \
+         chromium-bridge uninstall [--manifest-dir <dir>]\n                                Remove exactly the registrations this project wrote\n                                (re-pass any --manifest-dir you registered)\n    \
          chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, …) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
@@ -305,6 +424,76 @@ mod tests {
         assert_eq!(parse(&args(&["pair", "--rest"])), Command::Unknown);
         assert_eq!(parse(&args(&["pair", "--reset", "x"])), Command::Unknown);
         assert_eq!(parse(&args(&["revoke", "--force"])), Command::Unknown);
-        assert_eq!(parse(&args(&["doctor", "extra"])), Command::Unknown);
+        // doctor now takes flags; stray arguments are rejected by doctor_args
+        // (see doctor_args_fail_loud_on_conflicts_and_bad_values).
+        assert!(super::doctor_args(&args(&["doctor", "extra"])).is_err());
+    }
+
+    #[test]
+    fn doctor_and_uninstall_are_dispatched_with_flags() {
+        assert_eq!(parse(&args(&["doctor"])), Command::Doctor);
+        assert_eq!(parse(&args(&["status", "--fix"])), Command::Doctor);
+        assert_eq!(parse(&args(&["doctor", "--list"])), Command::Doctor);
+        assert_eq!(parse(&args(&["uninstall"])), Command::Uninstall);
+        // The install verb does not exist; the app (or doctor --fix) registers.
+        assert_eq!(parse(&args(&["install"])), Command::Unknown);
+    }
+
+    #[test]
+    fn doctor_args_parse_fix_and_targeting() {
+        use super::doctor_args;
+        let ok = |list: &[&str]| doctor_args(&args(list)).unwrap();
+        assert_eq!(ok(&["doctor"]), super::DoctorArgs::default());
+        assert!(ok(&["doctor", "--fix"]).fix);
+        assert!(ok(&["doctor", "--list"]).list);
+        assert!(ok(&["doctor", "--fix", "--all"]).all);
+        assert_eq!(
+            ok(&["doctor", "--fix", "--browser", "chrome, brave"]).browsers,
+            Some(vec!["chrome".to_string(), "brave".to_string()])
+        );
+        assert_eq!(
+            ok(&[
+                "doctor",
+                "--fix",
+                "--manifest-dir",
+                "/a",
+                "--manifest-dir",
+                "/b"
+            ])
+            .manifest_dirs,
+            vec!["/a".to_string(), "/b".to_string()]
+        );
+    }
+
+    #[test]
+    fn doctor_args_fail_loud_on_conflicts_and_bad_values() {
+        use super::doctor_args;
+        let err = |list: &[&str]| doctor_args(&args(list)).unwrap_err();
+        // Targeting flags without --fix never guess.
+        assert!(err(&["doctor", "--browser", "chrome"]).contains("add --fix"));
+        assert!(err(&["doctor", "--all"]).contains("add --fix"));
+        // Conflicting selections never guess.
+        assert!(err(&["doctor", "--fix", "--all", "--browser", "chrome"])
+            .contains("mutually exclusive"));
+        assert!(err(&["doctor", "--list", "--fix"]).contains("read-only"));
+        // Malformed values.
+        assert!(err(&["doctor", "--fix", "--browser"]).contains("requires a value"));
+        assert!(err(&["doctor", "--fix", "--browser", ","]).contains("no browser"));
+        assert!(err(&["doctor", "--fix", "--browser", "chrome,chrome"]).contains("twice"));
+        assert!(err(&["doctor", "--fix", "--manifest-dir", "relative/dir"]).contains("absolute"));
+        assert!(err(&["doctor", "--fix", "--manifest-dir", ""]).contains("absolute"));
+        assert!(err(&["doctor", "--bogus"]).contains("unexpected argument"));
+    }
+
+    #[test]
+    fn uninstall_args_take_only_manifest_dirs() {
+        use super::uninstall_args;
+        assert_eq!(
+            uninstall_args(&args(&["uninstall", "--manifest-dir", "/a"]))
+                .unwrap()
+                .manifest_dirs,
+            vec!["/a".to_string()]
+        );
+        assert!(uninstall_args(&args(&["uninstall", "--browser", "chrome"])).is_err());
     }
 }
