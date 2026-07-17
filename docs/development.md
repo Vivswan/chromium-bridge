@@ -36,6 +36,14 @@ Shell scripts (`install/install.sh`, `scripts/*.sh`, `tests/run_all.sh`) share
 candidate list or parsing in one place. They're `shellcheck`-clean (CI gates
 it; `make lint-scripts` locally).
 
+Rust dependencies are gated by supply-chain review (`cargo vet`, the
+`cargo-vet` CI job). Adding or bumping a crate fails CI until the new version
+has a recorded decision in `supply-chain/`: run `cargo vet` to see what is
+missing, then `cargo vet certify` if you actually reviewed the code, or
+`cargo vet add-exemption` to record a deliberate exemption. The initial
+baseline exempts the pre-existing tree; the point of the gate is that no new
+code enters the build without someone choosing to let it in.
+
 ## Common tasks
 
 With `make` (`make help` lists every target):
