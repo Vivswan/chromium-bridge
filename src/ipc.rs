@@ -213,7 +213,7 @@ pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
     fs::set_permissions(&sock, fs::Permissions::from_mode(0o600))?;
     let lf = LockFile {
         endpoint: sock.to_string_lossy().into_owned(),
-        secret: generate_secret(),
+        secret: generate_secret()?,
         pid: std::process::id(),
     };
     Ok((listener, lf))
@@ -225,7 +225,7 @@ pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
     let port = listener.local_addr()?.port();
     let lf = LockFile {
         endpoint: format!("127.0.0.1:{port}"),
-        secret: generate_secret(),
+        secret: generate_secret()?,
         pid: std::process::id(),
     };
     Ok((listener, lf))
@@ -772,49 +772,44 @@ mod codesign {
     }
 }
 
-fn generate_secret() -> String {
-    #[cfg(windows)]
-    {
-        let mut buf = [0u8; 16];
-        // BCRYPT_USE_SYSTEM_PREFERRED_RNG lets BCryptGenRandom use the system
-        // RNG without opening and managing an algorithm-provider handle.
-        let status = unsafe {
-            BCryptGenRandom(
-                std::ptr::null_mut(),
-                buf.as_mut_ptr(),
-                buf.len() as u32,
-                0x0000_0002,
-            )
-        };
-        if status >= 0 {
-            return hex_encode(&buf);
-        }
-    }
+/// 128 bits from the OS CSPRNG, hex-encoded. Used for the per-run secret that
+/// keys the HMAC handshake and for the per-connection challenge nonces. Fails
+/// closed if the CSPRNG is unavailable: a weaker fallback (time, pid, address
+/// bits) would be guessable and silently void the authentication guarantee, so
+/// the caller must refuse to proceed instead.
+fn generate_secret() -> io::Result<String> {
+    let mut buf = [0u8; 16];
+    fill_os_random(&mut buf)?;
+    Ok(hex_encode(&buf))
+}
 
-    #[cfg(unix)]
-    {
-        // 128 bits of entropy from the OS RNG. We avoid pulling in `rand` by
-        // reading /dev/urandom directly (macOS and Linux both expose it).
-        let mut buf = [0u8; 16];
-        if let Ok(mut f) = fs::File::open("/dev/urandom") {
-            if f.read_exact(&mut buf).is_ok() {
-                return hex_encode(&buf);
-            }
-        }
+#[cfg(unix)]
+fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
+    // We avoid pulling in `rand` by reading /dev/urandom directly (macOS and
+    // Linux both expose it).
+    let mut f = fs::File::open("/dev/urandom")?;
+    f.read_exact(buf)
+}
+
+#[cfg(windows)]
+fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
+    // BCRYPT_USE_SYSTEM_PREFERRED_RNG lets BCryptGenRandom use the system
+    // RNG without opening and managing an algorithm-provider handle.
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            0x0000_0002,
+        )
+    };
+    if status >= 0 {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "BCryptGenRandom failed (NTSTATUS {status:#010x})"
+        )))
     }
-    // Fallback: mix in time + pid + a stack address. Not cryptographic, but
-    // this is only the connect-back token for a per-user lock file on a
-    // single-user machine.
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id() as u128;
-    let stack = &t as *const _ as u128;
-    hex_encode(&t.wrapping_add(pid).wrapping_add(stack).to_le_bytes())
-        .chars()
-        .take(32)
-        .collect::<String>()
 }
 
 #[cfg(windows)]
@@ -932,7 +927,7 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
     writer: &mut W,
     secret: &str,
 ) -> io::Result<()> {
-    let nonce = generate_secret();
+    let nonce = generate_secret()?;
     bridge_write(
         writer,
         &Handshake::Challenge {
@@ -1009,10 +1004,14 @@ mod tests {
     }
 
     #[test]
-    fn secret_is_32_hex_chars() {
-        let s = generate_secret();
+    fn secret_is_32_hex_chars_and_unique() {
+        let s = generate_secret().unwrap();
         assert_eq!(s.len(), 32);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
+        // 128 bits from the CSPRNG: two draws colliding means the RNG is
+        // broken (or the fail-closed path silently regressed to something
+        // deterministic).
+        assert_ne!(s, generate_secret().unwrap());
     }
 
     #[test]
