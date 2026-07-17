@@ -122,15 +122,24 @@ See [docs/development.md](./docs/development.md) for the full build/test loop.
 <summary><b>Verifying your binary (checksums, provenance, reproducible builds)</b></summary>
 
 In prebuilt mode `install.sh` verifies the shipped binary before installing
-anything: it hashes the exact copy it is about to install and compares it
-against the release's published `.binary.sha256` asset, fetched over HTTPS
-from the repository pinned in the installer (the archive's `RELEASE.txt`
-names the tag and platform, but cannot pick the repository; a fork's release
-needs an explicit `--release-repo`). When an authenticated `gh` CLI is
-available it also checks the GitHub build-provenance attestation. Any
-mismatch aborts the install, and on macOS the quarantine attribute is cleared
-only after the checksum has matched. Installing offline? Pass the hash you
-verified out of band: `./install.sh --expected-sha256 <hash>`.
+anything, through an anchor whose trust is independent of the release asset, so
+a swapped or tampered binary cannot pass. There are two paths:
+
+- Online (the default): it hashes the exact copy it is about to install and
+  requires a successful GitHub build-provenance attestation for those bytes,
+  checked with an authenticated `gh` CLI against the repository pinned in the
+  installer. The release's `.binary.sha256` is fetched and compared too, but
+  only as a corruption check: it lives in the same release as the binary, so on
+  its own it is not proof of origin. If `gh` is missing or unauthenticated, or
+  the attestation does not verify, the install aborts.
+- Offline: pass a hash you obtained out of band with
+  `./install.sh --expected-sha256 <hash>`. That hash is itself the independent
+  anchor, so this path needs no `gh` and fetches nothing.
+
+The archive's `RELEASE.txt` names the tag and platform but cannot pick the
+repository (a fork's release needs an explicit `--release-repo`). Any mismatch
+aborts the install, and on macOS the quarantine attribute is cleared only after
+verification has passed.
 
 One thing the bundled installer cannot prove is its own integrity: it ships
 inside the archive it checks. To rule out a tampered archive entirely, verify
