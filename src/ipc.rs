@@ -153,6 +153,154 @@ impl LockFile {
         let _ = fs::remove_file(socket_path());
         let _ = fs::remove_file(Self::path());
     }
+
+    /// Remove the lock file (and on Unix the socket) ONLY if the on-disk lock
+    /// still names this process as the owner. An exiting server must never
+    /// clean up its successor's files: after a takeover the lock and socket
+    /// path belong to the new server, so an instance that cannot prove
+    /// ownership leaves them alone. The check-then-remove runs under the
+    /// [`RuntimeMutex`], so it cannot interleave with a successor's
+    /// [`listen_and_publish`] (without the mutex, a successor could publish
+    /// between our read and our remove and we would delete its files).
+    /// Missing or unreadable lock, or an unacquirable mutex: do nothing (fail
+    /// safe - never delete what we cannot prove is ours; a stale file is
+    /// cleared by the next server start).
+    pub fn remove_if_owned() {
+        let Ok(_guard) = RuntimeMutex::acquire() else {
+            return;
+        };
+        if matches!(Self::read(), Ok(Some(lf)) if lf.pid == std::process::id()) {
+            Self::remove();
+        }
+    }
+}
+
+/// Cross-process serialization of every mutation of the shared runtime state
+/// (lock file + socket): kernel-enforced advisory file locking (`flock` on
+/// Unix, `LockFileEx` on Windows via std's `File::lock`), so read-decide-remove
+/// sequences in different processes cannot interleave. This protects our own
+/// processes from clobbering each other during takeovers and reconnects; it is
+/// NOT a defense against a hostile same-user process, which could always
+/// delete these files directly (the boundary against other users is the 0700
+/// directory).
+struct RuntimeMutex(#[allow(dead_code)] fs::File);
+
+impl RuntimeMutex {
+    fn acquire() -> io::Result<RuntimeMutex> {
+        let path = runtime_dir().join("run.mutex");
+        let mut opts = fs::OpenOptions::new();
+        opts.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let f = opts.open(&path)?;
+        f.lock()?; // blocks until exclusive; released on drop (close)
+        Ok(RuntimeMutex(f))
+    }
+}
+
+/// Result of [`listen_and_publish`]: either we now own the bridge (listener
+/// bound and lock published), or another live server published while we were
+/// preparing and the caller must decide whether to supplant it too.
+pub enum PublishOutcome {
+    Published(BridgeListener, LockFile),
+    LostRace(LockFile),
+}
+
+/// Bind the bridge socket and publish the lock file as one critical section
+/// under the [`RuntimeMutex`]. Re-checks the on-disk lock first: if another
+/// live server published since the caller last looked (two servers starting
+/// at once), nothing is touched and `LostRace` reports the current owner -
+/// binding anyway would unlink that server's freshly-bound socket, the exact
+/// takeover bug this serialization exists to prevent. Stale state from a dead
+/// owner is cleared before binding.
+pub fn listen_and_publish() -> io::Result<PublishOutcome> {
+    let _guard = RuntimeMutex::acquire()?;
+    if let Ok(Some(cur)) = LockFile::read() {
+        if cur.pid != std::process::id() && pid_is_alive(cur.pid) {
+            return Ok(PublishOutcome::LostRace(cur));
+        }
+    }
+    LockFile::remove();
+    let (listener, lf) = listen()?;
+    lf.write()?;
+    Ok(PublishOutcome::Published(listener, lf))
+}
+
+/// Whether a process with the given pid is alive. Used by the takeover logic
+/// and by the stale-lock cleanup on the connect path. On Unix `kill(pid, 0)`
+/// checks existence without delivering a signal.
+pub fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Some(pid) = checked_pid(pid) else {
+            return false;
+        };
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(windows)]
+    {
+        windows_process::is_alive(pid)
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// A pid validated for use with Unix process syscalls. POSIX reserves zero and
+/// negative values for process groups or broadcast signalling, so values that
+/// cannot be represented as a positive `pid_t` are rejected instead of
+/// truncated (`u32::MAX` would otherwise become -1 and signal every process
+/// the current user is allowed to terminate).
+#[cfg(unix)]
+pub fn checked_pid(pid: u32) -> Option<libc::pid_t> {
+    libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)
+}
+
+#[cfg(windows)]
+pub mod windows_process {
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit_handle: i32, process_id: u32) -> Handle;
+        fn GetExitCodeProcess(process: Handle, exit_code: *mut u32) -> i32;
+        fn TerminateProcess(process: Handle, exit_code: u32) -> i32;
+        fn CloseHandle(object: Handle) -> i32;
+    }
+
+    pub fn is_alive(pid: u32) -> bool {
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut exit_code = 0;
+            let ok = GetExitCodeProcess(handle, &mut exit_code) != 0;
+            CloseHandle(handle);
+            ok && exit_code == STILL_ACTIVE
+        }
+    }
+
+    pub fn terminate(pid: u32) {
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if !handle.is_null() {
+                let _ = TerminateProcess(handle, 0);
+                CloseHandle(handle);
+            }
+        }
+    }
 }
 
 /// Read a small file in full, bounded by `max` bytes. Returns `Ok(None)` when
@@ -229,10 +377,11 @@ fn ensure_private_dir(path: &std::path::Path) {
 }
 
 /// Server side: bind the bridge socket and return the listener plus the
-/// lock-file contents to publish. The caller `write()`s the lock file and
-/// removes it on shutdown.
+/// lock-file contents to publish. Private: callers go through
+/// [`listen_and_publish`], which serializes the unlink-bind-publish sequence
+/// against other instances.
 #[cfg(unix)]
-pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
+fn listen() -> io::Result<(BridgeListener, LockFile)> {
     use std::os::unix::fs::PermissionsExt;
 
     let sock = socket_path();
@@ -250,7 +399,7 @@ pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
 }
 
 #[cfg(windows)]
-pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
+fn listen() -> io::Result<(BridgeListener, LockFile)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let lf = LockFile {
@@ -873,12 +1022,12 @@ fn read_lock_or_err() -> io::Result<LockFile> {
 /// Client side (native host): read the lock file and connect. Authentication
 /// happens afterwards via [`client_handshake`]. On a stale lock (server
 /// crashed) the connect fails fast and the lock is removed so the next server
-/// start wins cleanly.
+/// start wins cleanly - see [`cleanup_stale_lock`] for the conditions.
 #[cfg(unix)]
 pub fn connect() -> io::Result<BridgeStream> {
     let lf = read_lock_or_err()?;
     UnixStream::connect(&lf.endpoint).inspect_err(|_| {
-        LockFile::remove();
+        cleanup_stale_lock(&lf);
     })
 }
 
@@ -890,8 +1039,30 @@ pub fn connect() -> io::Result<BridgeStream> {
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("addr parse: {e}")))?;
     TcpStream::connect_timeout(&addr, Duration::from_secs(2)).inspect_err(|_| {
-        LockFile::remove();
+        cleanup_stale_lock(&lf);
     })
+}
+
+/// After a failed connect: remove the lock (and socket) ONLY when, re-checked
+/// under the [`RuntimeMutex`], the on-disk lock is still the one we dialed and
+/// its recorded owner is dead. An unconditional remove here used to delete a
+/// LIVE server's lock and socket on any transient connect failure, taking the
+/// bridge down for good; and without the mutex + re-read, a new server could
+/// publish between our liveness check and the remove, losing its files the
+/// same way. Anything ambiguous is left alone - a truly stale lock is also
+/// cleared by the next server start.
+fn cleanup_stale_lock(dialed: &LockFile) {
+    let Ok(_guard) = RuntimeMutex::acquire() else {
+        return;
+    };
+    if matches!(
+        LockFile::read(),
+        Ok(Some(cur)) if cur.pid == dialed.pid
+            && cur.endpoint == dialed.endpoint
+            && !pid_is_alive(cur.pid)
+    ) {
+        LockFile::remove();
+    }
 }
 
 /// HMAC-SHA256 of `msg` under `key`, hex-encoded. The key is the per-run
@@ -1047,6 +1218,24 @@ mod tests {
     #[test]
     fn lock_path_has_expected_filename() {
         assert_eq!(LockFile::path().file_name().unwrap(), "run.lock");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_pid_rejects_group_and_overflow_values() {
+        assert_eq!(checked_pid(0), None);
+        assert_eq!(checked_pid(u32::MAX), None);
+        assert_eq!(
+            checked_pid(std::process::id()),
+            Some(std::process::id() as libc::pid_t)
+        );
+    }
+
+    #[test]
+    fn pid_is_alive_sees_self_and_rejects_pid_zero() {
+        assert!(pid_is_alive(std::process::id()));
+        // pid 0 is the process-group broadcast value, never a real peer.
+        assert!(!pid_is_alive(0));
     }
 
     /// A scratch directory for filesystem tests, unique per test so parallel

@@ -617,6 +617,170 @@ def test_server_takeover():
             second.wait(timeout=3)
 
 
+def test_takeover_leaves_new_socket_connectable():
+    """Regression: the takeover used to run AFTER the new server bound its
+    socket, and the supplant path (plus the dying server's own cleanup)
+    unlinked that freshly-bound socket. The new listener stayed bound to an
+    unlinked inode, the reconnecting native host got ENOENT, and the bridge
+    reported "extension not connected" until everything was restarted by
+    hand. This drives the exact sequence: live server, takeover by a second
+    server, then a real native host must reach the NEW server's socket and a
+    tool call must round-trip through it.
+
+    NOTE: this proves the socket/lock/reconnect leg at the process level. The
+    full loop (Chrome observing the port close and the extension's service
+    worker re-spawning the host) still needs an isolated browser to confirm.
+    """
+    print("\n[test] after takeover, a native host reaches the new server's socket")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    first = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    second = None
+    nh = None
+    try:
+        check(wait_lock(first) is not None, "first server wrote its lock file")
+        # Keep the first server ALIVE (stdin open) so this is a real takeover
+        # of a running instance, not a stale-lock cleanup.
+        second = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        second_lock = wait_lock(second)
+        check(second_lock is not None, "second server wrote its lock file")
+        first.wait(timeout=8)
+        check(first.poll() is not None, "first server was terminated")
+        if os.name != "nt":
+            check(os.path.exists(second_lock["endpoint"]),
+                  "new server's socket path exists on disk after the takeover")
+
+        # The reconnect: a fresh native host (as Chrome would spawn) must be
+        # able to dial, attest, and complete the handshake against the NEW
+        # server. Before the fix this failed with ENOENT on the socket.
+        nh = start_bridge_host()
+        try:
+            wait_host_ready(nh)
+            check(True, "native host completed the handshake with the new server")
+        except TimeoutError:
+            nh = None  # wait_host_ready already reaped it
+            check(False, "native host completed the handshake with the new server")
+            return
+
+        # And a full tool round-trip through the post-takeover server.
+        def responder(req):
+            return {"id": req["id"], "ok": True,
+                    "data": [{"id": 1, "title": "Takeover OK", "url": "z", "active": True}]}
+
+        c = McpClient(second)
+        c.initialize()
+        c.initialized()
+        served = []
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
+        t.start()
+        r = c.call("tab_list", {}, _id=12)
+        t.join(timeout=3)
+        check(bool(served), "tab_list BridgeReq reached the host via the new socket")
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "Takeover OK",
+              "tool call round-trips through the post-takeover server")
+    finally:
+        if nh is not None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        if first.poll() is None:
+            first.kill()
+        if second is not None:
+            try:
+                second.stdin.close()
+            except Exception:
+                pass
+            second.wait(timeout=3)
+
+
+def test_concurrent_server_starts_settle_to_one_working_bridge():
+    """Several servers starting at once must settle to exactly one owner whose
+    socket a native host can actually reach. The publish step is serialized by
+    a kernel file lock (ipc::RuntimeMutex) and re-checks the lock owner, so
+    racing servers supplant each other in turn instead of unlinking each
+    other's freshly-bound sockets; losers either get terminated or give up
+    after bounded retries."""
+    print("\n[test] concurrent server starts settle to one working bridge")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    servers = [subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, encoding="utf-8")
+               for _ in range(4)]
+    nh = None
+    try:
+        # Let the takeover churn settle: eventually exactly one server remains,
+        # and the lock on disk names it.
+        deadline = time.time() + 20
+        alive = servers
+        lf = None
+        while time.time() < deadline:
+            alive = [s for s in servers if s.poll() is None]
+            if len(alive) == 1:
+                lf = wait_lock(alive[0], timeout=2)
+                if lf is not None:
+                    break
+            time.sleep(0.2)
+        check(len(alive) == 1, f"exactly one server survives ({len(alive)} alive)")
+        if len(alive) != 1:
+            return
+        winner = alive[0]
+        check(lf is not None and lf.get("pid") == winner.pid,
+              "lock file names the surviving server")
+        if os.name != "nt":
+            check(os.path.exists(lf["endpoint"]), "survivor's socket path exists")
+
+        nh = start_bridge_host()
+        try:
+            wait_host_ready(nh)
+            check(True, "native host completed the handshake with the survivor")
+        except TimeoutError:
+            nh = None
+            check(False, "native host completed the handshake with the survivor")
+            return
+
+        def responder(req):
+            return {"id": req["id"], "ok": True,
+                    "data": [{"id": 2, "title": "Survivor OK", "url": "w", "active": True}]}
+
+        c = McpClient(winner)
+        c.initialize()
+        c.initialized()
+        served = []
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
+        t.start()
+        r = c.call("tab_list", {}, _id=13)
+        t.join(timeout=3)
+        check(bool(served), "tab_list round-trips through the surviving server")
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "Survivor OK", "survivor returned the host's data")
+    finally:
+        if nh is not None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        for s in servers:
+            if s.poll() is None:
+                try:
+                    s.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    s.wait(timeout=3)
+                except Exception:
+                    s.kill()
+
+
 def test_unknown_method_returns_32601():
     print("\n[test] unknown method returns JSON-RPC -32601")
     try:
@@ -702,6 +866,8 @@ def main():
     test_native_host_mode()
     test_foreign_peer_is_rejected()
     test_server_takeover()
+    test_takeover_leaves_new_socket_connectable()
+    test_concurrent_server_starts_settle_to_one_working_bridge()
     test_unknown_method_returns_32601()
     print(f"\n{'='*40}\n{_passed} passed, {_failed} failed")
     sys.exit(0 if _failed == 0 else 1)
