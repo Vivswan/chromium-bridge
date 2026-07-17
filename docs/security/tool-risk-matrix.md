@@ -37,9 +37,11 @@ submit button or a navigating link (those trigger the confirmation toast).
 - **Masking**: `page_text`, `cookie_get`, `storage_get`, and `page_eval` output
   run through the mask (JWT / long hex / long digit runs / token-like strings).
   `storage_get` masking is not user-toggleable.
-- **Confirmation grace window**: after a confirm, same-origin same-kind actions
-  skip re-prompting for 60s (configurable). For `page_eval` this window is
-  riskier (unrelated code can run) — see [ADR-0008](../adr/0008-page-eval-confirmation-channel.md).
+- **Confirmation grace window**: after a user allows a high-risk click, the same
+  origin and same action kind (submit or link) skip re-prompting for 60s,
+  configurable (see [ADR-0006](../adr/0006-toast-confirmation-for-high-risk.md)).
+  `page_eval` is **excluded** from this window. It reconfirms on every call, so an
+  earlier approval never lets later, unrelated code run.
 - **Read-only by design**: no `cookie_set` / `storage_set` (writing httpOnly
   cookies is a session-fixation risk — see [ADR-0010](../adr/0010-cookie-storage-readonly.md)).
 - **CDP mode (opt-in, off by default)**: the `cdpMode` setting reroutes **every**
