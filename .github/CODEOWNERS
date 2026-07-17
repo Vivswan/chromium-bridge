@@ -1,14 +1,18 @@
-# Default owner for everything.
-* @whg517
+# Default owners for everything in the repo. Baseline from
+# Vivswan/repo-platform; add repo-specific rules freely -
+# local edits survive template updates via three-way merge.
 
-# Security-critical surfaces — call out explicitly so changes here are obvious
-# in review (see SECURITY.md).
-/src/ipc.rs @whg517
-/src/protocol.rs @whg517
-/extension/src/background/allowlist-store.ts @whg517
-/extension/src/content/eval.ts @whg517
-/extension/src/content/toast.ts @whg517
-/extension/manifest.json @whg517
-/install/ @whg517
-/SECURITY.md @whg517
-/docs/security/ @whg517
+* @vivswan
+/.github/ @vivswan
+
+# Security-critical surfaces - called out explicitly so changes here are
+# obvious in review (see SECURITY.md).
+/src/ipc.rs @vivswan
+/src/protocol.rs @vivswan
+/extension/src/background/allowlist-store.ts @vivswan
+/extension/src/content/eval.ts @vivswan
+/extension/src/content/toast.ts @vivswan
+/extension/manifest.json @vivswan
+/install/ @vivswan
+/SECURITY.md @vivswan
+/docs/security/ @vivswan

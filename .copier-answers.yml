@@ -1,0 +1,15 @@
+# This file is managed by Vivswan/repo-platform.
+# Copier uses it to track the template source and version - do not delete.
+_commit: 4f694d4
+_src_path: /Users/vivswanshah/Projects/repo-platform
+description: 'Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome):
+    Rust native-messaging host + MV3 extension, no debug port'
+enable_release_please: true
+github_username: Vivswan
+homepage: ''
+private: false
+profile: full
+project_name: Chromium Bridge
+project_slug: chromium-bridge
+stack: bun-ts
+topics: mcp,browser-automation,native-messaging,chrome-extension,brave,rust

@@ -44,7 +44,7 @@ jobs:
           node scripts/gen-ops.mjs
           npm --prefix extension exec prettier -- --write extension/src/shared/ops.ts
           git diff --exit-code -- extension/src/shared/ops.ts \
-            || { echo "::error::ops.ts is stale — run 'make gen' after editing contracts/tools.json"; exit 1; }
+            || { echo "::error::ops.ts is stale - run 'make gen' after editing contracts/tools.json"; exit 1; }
       - run: npm run typecheck
         working-directory: extension
       - run: npm run lint
@@ -151,3 +151,38 @@ jobs:
         # The smoke test needs a non-headless browser (MV3 SW reliability), so
         # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
         run: xvfb-run -a bun tests/ext_test.ts
+
+  typography:
+    name: typography
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: Vivswan/repo-platform/actions/check-typography@main
+
+  all-green:
+    name: all-green
+    if: always()
+    needs:
+      [
+        rust,
+        extension,
+        version-consistency,
+        scripts,
+        linux-install,
+        e2e,
+        browser,
+        typography,
+      ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs green
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a required job did not succeed"
+              exit 1
+            fi
+          done
