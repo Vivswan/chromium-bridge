@@ -6,7 +6,7 @@ NPM := npm --prefix extension
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build fmt fmt-check lint lint-scripts test-rust test-e2e \
+.PHONY: help build build-repro fmt fmt-check lint lint-scripts test-rust test-e2e \
 	ext-deps ext-build ext-typecheck ext-lint ext-format-check ext-test \
 	test-browser test-integration test ci install sync-version check-extension-id check-version release
 
@@ -16,6 +16,9 @@ help: ## List available targets
 
 build: ## Build the release binary
 	cargo build --release
+
+build-repro: ## Deterministic release build (path-remapped, --locked)
+	./scripts/build-repro.sh
 
 fmt: ## Format Rust sources
 	cargo fmt
@@ -27,7 +30,7 @@ lint: ## Lint Rust, denying all warnings (CI gate)
 	cargo clippy --all-targets -- -D warnings
 
 lint-scripts: ## Lint shell scripts (needs shellcheck)
-	shellcheck install/install.sh scripts/*.sh tests/run_all.sh
+	shellcheck install/install.sh scripts/*.sh tests/run_all.sh tests/install_verify_test.sh
 
 audit: ## Supply-chain checks (needs cargo-deny, cargo-audit)
 	cargo deny check
