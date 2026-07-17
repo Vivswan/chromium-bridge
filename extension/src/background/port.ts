@@ -95,19 +95,20 @@ function onNativeMessage(msg: BridgeReq) {
   }
   // Fail closed (ADR-0021): while enrollment is required and unsatisfied,
   // every bridge request is refused right here and never reaches dispatch().
-  enrollmentGate().then(
+  // The dispatch kickoff is passed INTO the gate so it starts inside the
+  // gate's serialized critical section: a revoke or compromise mark can then
+  // never land between "gate said allowed" and "dispatch began".
+  enrollmentGate(() => {
+    dispatch(msg).then(
+      (data) => sendResponse(msg.id, true, data),
+      // A rejection message can embed page-derived data (a CDP evaluate
+      // exception carries the page's error description), so this egress is
+      // masked like any other.
+      (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err))
+    );
+  }).then(
     (gate) => {
-      if (!gate.allowed) {
-        sendResponse(msg.id, false, undefined, gate.reason);
-        return;
-      }
-      dispatch(msg).then(
-        (data) => sendResponse(msg.id, true, data),
-        // A rejection message can embed page-derived data (a CDP evaluate
-        // exception carries the page's error description), so this egress is
-        // masked like any other.
-        (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err))
-      );
+      if (!gate.allowed) sendResponse(msg.id, false, undefined, gate.reason);
     },
     // Gate errors are ambiguity, and ambiguity refuses.
     (err) => sendResponse(msg.id, false, undefined, `enrollment gate error: ${String(err)}`)
