@@ -67,8 +67,12 @@ jobs:
           echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
           [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
 
-      - name: Build binary
-        run: cargo build --release
+      - name: Build binary (deterministic)
+        # build-repro.sh pins SOURCE_DATE_EPOCH and remaps build paths so the
+        # binary is bit-for-bit reproducible from the tag with the pinned
+        # toolchain; see README.md "Verifying your binary".
+        shell: bash
+        run: ./scripts/build-repro.sh
 
       - name: Build extension bundle
         run: |
@@ -85,14 +89,28 @@ jobs:
           mkdir -p "$NAME/extension"
           cp -r extension/dist "$NAME/extension/dist"
           cp install/mcp-config.example.json LICENSE README.md "$NAME/"
+          # RELEASE.txt tells the installer which release this archive came
+          # from, so it can fetch the published checksum for the binary and
+          # verify before installing (install.sh prebuilt mode). The values
+          # are untrusted input to the installer: tag/platform/arch select
+          # which published checksum to fetch, and repo is cross-checked
+          # against the repository pinned in install.sh - never trusted.
+          {
+            echo "repo=${GITHUB_REPOSITORY}"
+            echo "tag=${TAG}"
+            echo "platform=${PLATFORM}"
+            echo "arch=${ARCH}"
+          } > "$NAME/RELEASE.txt"
           if [ "$PLATFORM" = "windows" ]; then
             cp target/release/browser-bridge.exe "$NAME/"
+            BIN_FILE="browser-bridge.exe"
             cp install/install.ps1 "$NAME/"
             7z a -tzip "$NAME.zip" "$NAME" > /dev/null
             sha256sum "$NAME.zip" > "$NAME.zip.sha256"
             ARCHIVE="$NAME.zip"
           else
             cp target/release/browser-bridge "$NAME/"
+            BIN_FILE="browser-bridge"
             cp install/install.sh "$NAME/"
             tar czf "$NAME.tar.gz" "$NAME"
             if command -v shasum >/dev/null 2>&1; then
@@ -102,9 +120,22 @@ jobs:
             fi
             ARCHIVE="$NAME.tar.gz"
           fi
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
-          echo "sha256file=$ARCHIVE.sha256" >> "$GITHUB_OUTPUT"
+          # Per-binary checksum, published as its own release asset. This is
+          # what install.sh downloads to verify the shipped binary (the
+          # archive-level .sha256 can't be checked after extraction). Hash
+          # from inside $NAME so the recorded file name is the bare binary.
+          if command -v shasum >/dev/null 2>&1; then
+            (cd "$NAME" && shasum -a 256 "$BIN_FILE") > "$NAME.binary.sha256"
+          else
+            (cd "$NAME" && sha256sum "$BIN_FILE") > "$NAME.binary.sha256"
+          fi
+          {
+            echo "name=$NAME"
+            echo "archive=$ARCHIVE"
+            echo "sha256file=$ARCHIVE.sha256"
+            echo "binary=$NAME/$BIN_FILE"
+            echo "binsha256file=$NAME.binary.sha256"
+          } >> "$GITHUB_OUTPUT"
 
       # The built extension bundle is platform-independent, so we emit the
       # standalone zip on ONLY the macos/arm64 leg to avoid uploading duplicate
@@ -136,7 +167,12 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: ${{ steps.pkg.outputs.archive }}
+          # Attest the bare binary as well as the archive: the installer runs
+          # after extraction, so `gh attestation verify` needs a subject whose
+          # digest matches the shipped binary itself.
+          subject-path: |
+            ${{ steps.pkg.outputs.archive }}
+            ${{ steps.pkg.outputs.binary }}
 
       # Attest the standalone extension zip on the same (macos) leg that built it.
       - name: Attest extension zip provenance
@@ -152,6 +188,7 @@ jobs:
           files: |
             ${{ steps.pkg.outputs.archive }}
             ${{ steps.pkg.outputs.sha256file }}
+            ${{ steps.pkg.outputs.binsha256file }}
             ${{ steps.extzip.outputs.assets }}
           fail_on_unmatched_files: true
           generate_release_notes: true
