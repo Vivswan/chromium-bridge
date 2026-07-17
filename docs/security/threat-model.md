@@ -83,8 +83,11 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    loopback TCP socket with neither check (both are compiled only for Unix), so
    any local process can reach the port and the only barrier is the HMAC secret
    in the lock file. That lock file gets no explicit restrictive mode on Windows;
-   it relies on the default per-user permissions of its `LOCALAPPDATA`
-   directory. So on Windows the protection rests on the secret staying
+   it relies on whatever permissions the directory it lands in confers
+   (`LOCALAPPDATA`, or `USERPROFILE\AppData\Local` when `LOCALAPPDATA` is
+   unset, both per-user by default; or the temp directory as a last resort,
+   which is not guaranteed per-user; see `runtime_dir()` in
+   `src/ipc.rs`). So on Windows the protection rests on the secret staying
    confidential, not on kernel-attested peer identity: a local user who reads
    the lock file can drive the bridge. See
    [ADR-0019](../adr/0019-authenticated-ipc.md) and
