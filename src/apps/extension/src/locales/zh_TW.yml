@@ -18,9 +18,6 @@ common:
 lang:
   label: "顯示語言"
   auto: "跟隨瀏覽器"
-  en: "英文"
-  zh_CN: "简体中文"
-  zh_TW: "繁體中文"
 
 popup:
   status_connected: "已連線至橋接器"

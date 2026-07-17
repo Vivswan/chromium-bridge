@@ -7,12 +7,15 @@ import {
 } from "@/components/ui/select";
 import { useI18n } from "@/hooks/useI18n";
 import type { UiLanguage } from "@/lib/i18n";
+import { NATIVE_LANGUAGE_NAMES } from "@/lib/native-language-names";
 
 const OPTIONS: UiLanguage[] = ["auto", "en", "zh_CN", "zh_TW"];
 
 // Display-language chooser. Writing uiLanguage triggers storage.onChanged,
 // which the i18n runtime watches and swaps the locale reactively (every open
-// view re-renders via useI18n).
+// view re-renders via useI18n). Each language option is rendered in its own
+// language (NATIVE_LANGUAGE_NAMES), never translated into the active locale;
+// only the "match browser" option is a translatable phrase.
 export function LanguagePicker({
   value,
   onChange,
@@ -37,7 +40,7 @@ export function LanguagePicker({
         <SelectContent>
           {OPTIONS.map((opt) => (
             <SelectItem key={opt} value={opt}>
-              {t(`lang.${opt}`)}
+              {opt === "auto" ? t("lang.auto") : NATIVE_LANGUAGE_NAMES[opt]}
             </SelectItem>
           ))}
         </SelectContent>
