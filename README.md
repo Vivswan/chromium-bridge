@@ -77,10 +77,11 @@ Installs the binary to `~/.browser-bridge/` (macOS) or
 `~/.local/share/browser-bridge/` (Linux) and writes the native-messaging host
 manifest with the pinned extension ID already trusted.
 
-> **macOS Gatekeeper:** the prebuilt binary is not yet notarized, so a
-> browser-downloaded archive may be quarantined ("cannot be verified"). Clear it
-> once after extracting — `xattr -dr com.apple.quarantine .` inside the
-> extracted folder — then re-run `./install.sh`.
+> **macOS Gatekeeper:** the prebuilt binary is not yet notarized. The installer
+> verifies the binary against the release's published checksum and then clears
+> the quarantine attribute on the installed copy, so no manual step is needed
+> for the binary itself. If macOS refuses to run `install.sh` because the
+> script is quarantined, clear it first: `xattr -d com.apple.quarantine install.sh`.
 </details>
 
 <details>
@@ -116,6 +117,54 @@ See [docs/development.md](./docs/development.md) for the full build/test loop.
 > Only need the extension (binary already installed)? Grab
 > `browser-bridge-extension-<tag>.zip` from the same release and unzip it — it
 > contains a top-level `dist/` you can load directly.
+
+<details>
+<summary><b>Verifying your binary (checksums, provenance, reproducible builds)</b></summary>
+
+In prebuilt mode `install.sh` verifies the shipped binary before installing
+anything: it hashes the exact copy it is about to install and compares it
+against the release's published `.binary.sha256` asset, fetched over HTTPS
+from the repository pinned in the installer (the archive's `RELEASE.txt`
+names the tag and platform, but cannot pick the repository; a fork's release
+needs an explicit `--release-repo`). When an authenticated `gh` CLI is
+available it also checks the GitHub build-provenance attestation. Any
+mismatch aborts the install, and on macOS the quarantine attribute is cleared
+only after the checksum has matched. Installing offline? Pass the hash you
+verified out of band: `./install.sh --expected-sha256 <hash>`.
+
+One thing the bundled installer cannot prove is its own integrity: it ships
+inside the archive it checks. To rule out a tampered archive entirely, verify
+the archive before running anything from it:
+
+```sh
+shasum -a 256 -c browser-bridge-<tag>-<platform>-<arch>.tar.gz.sha256
+gh attestation verify browser-bridge-<tag>-<platform>-<arch>.tar.gz --repo <owner>/<repo>
+```
+
+The binary itself builds reproducibly, so you can also re-derive its hash from
+source instead of trusting the release pipeline. Install the exact toolchain
+pinned in `rust-toolchain.toml` via [rustup](https://rustup.rs) (a Homebrew or
+distro rustc embeds different standard-library paths and will not match), on
+the same platform the release targets, then:
+
+```sh
+git checkout <tag>
+./scripts/build-repro.sh
+shasum -a 256 target/release/browser-bridge   # compare with the release's .binary.sha256
+```
+
+Two honest limits. Reproducibility is verified across clean rebuilds and
+checkout paths on one machine so far; matching the CI-published hash from
+your machine also depends on the platform SDK and linker matching the
+runner's, and the archives are not bit-reproducible at all (tar and gzip
+embed metadata), which is why the release publishes the binary's hash
+separately. And the binaries are not yet Apple-codesigned, notarized, or
+Authenticode-signed: once a real signing identity lands, a released macOS
+binary will carry a signature a local rebuild cannot have, and verification
+there will move from whole-file hashes to comparing cdhashes.
+`install.ps1` on Windows does not verify yet. See
+[SECURITY.md](./SECURITY.md#release-artifact-integrity) for the full picture.
+</details>
 
 ### 2. Load the extension
 
