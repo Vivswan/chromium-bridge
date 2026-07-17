@@ -160,12 +160,14 @@ macOS:
 
 ```
 ~/.browser-bridge/
-├── browser-bridge       # release 二进制(608KB)
-└── run-host.sh          # wrapper:exec browser-bridge --native-host
-                         # (绕过 NM manifest 无 args 字段的限制)
+├── browser-bridge          # release 二进制(608KB)
+├── run-host-chrome.sh      # wrapper:exec browser-bridge --native-host --label chrome
+├── run-host-<browser>.sh   # 每个已安装浏览器一个 wrapper(brave/edge/...)
+└── run-host.sh             # 无 label 的 wrapper,仅用于 --nm-dir 手动注册
+                            # (wrapper 绕过 NM manifest 无 args 字段的限制)
 
 ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/
-└── com.browser_bridge.host.json   # host manifest,path 指向 run-host.sh
+└── com.browser_bridge.host.json   # host manifest,path 指向该浏览器自己的 wrapper
 ```
 
 Windows:
@@ -184,6 +186,8 @@ Linux:
 ```text
 ${XDG_DATA_HOME:-~/.local/share}/browser-bridge/
 ├── browser-bridge
+├── run-host-chrome.sh
+├── run-host-<browser>.sh
 └── run-host.sh
 
 ${XDG_CONFIG_HOME:-~/.config}/google-chrome/NativeMessagingHosts/
@@ -277,7 +281,7 @@ MCP server accept → validate_hello → session.attach_connection(替换旧连�
 
 ### 7.3 Native Messaging manifest 无 args 字段
 **约束**:manifest 的 `path` 必须是可执行文件,不能带参数。
-**应对**:用 `run-host.sh` wrapper(shebang 脚本)`exec browser-bridge --native-host`。
+**应对**:用 wrapper(shebang 脚本)`exec browser-bridge --native-host --label <browser>`。每个浏览器一个 `run-host-<browser>.sh`,label 标识该浏览器,服务端按 label 维护多浏览器连接注册表(见 [ADR-0022](./adr/0022-multi-browser-label-routing.md))。
 
 ### 7.4 chrome.permissions.request 必须用户手势
 **约束**:`permissions.request`(申请 host 权限)必须在 popup/action 点击等用户手势上下文调用,不能在 service worker 后台调。
