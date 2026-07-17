@@ -1,0 +1,17 @@
+[package]
+name = "chromium-bridge-desktop"
+version.workspace = true
+edition.workspace = true
+description = "Chromium Bridge control panel - Tauri v2 shell (Phase 6 signing spike)"
+license.workspace = true
+
+[[bin]]
+name = "chromium-bridge-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+chromium-bridge-core.workspace = true
+tauri.workspace = true

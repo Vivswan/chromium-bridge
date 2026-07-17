@@ -4,17 +4,46 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Unmaintained-crate advisories carried by the Tauri v2 GUI tree, reviewed at
+# policy level (ADR-0026): none of these crates is reachable from the security
+# core (crates/core, crates/host) - they sit under src/apps/desktop only, and
+# the GTK3 bindings additionally compile only on Linux. Tauri upstream tracks
+# the GTK3 migration; revisit this list when bumping tauri.
+ignore = [
+  "RUSTSEC-2024-0411", # atk (gtk-rs GTK3 bindings, unmaintained)
+  "RUSTSEC-2024-0412", # atk-sys
+  "RUSTSEC-2024-0413", # gdk
+  "RUSTSEC-2024-0414", # gdk-sys
+  "RUSTSEC-2024-0415", # gdkwayland-sys
+  "RUSTSEC-2024-0416", # gdkx11
+  "RUSTSEC-2024-0417", # gdkx11-sys
+  "RUSTSEC-2024-0418", # gtk
+  "RUSTSEC-2024-0419", # gtk-sys
+  "RUSTSEC-2024-0420", # gtk3-macros
+  "RUSTSEC-2024-0370", # proc-macro-error (via gtk3-macros)
+  "RUSTSEC-2025-0075", # unic-char-property (via urlpattern -> tauri-utils)
+  "RUSTSEC-2025-0080", # unic-char-range
+  "RUSTSEC-2025-0081", # unic-common
+  "RUSTSEC-2025-0098", # unic-ucd-version
+  "RUSTSEC-2025-0100", # unic-ucd-ident
+]
 
 [licenses]
 version = 2
-# The crate is Apache-2.0; only allow permissive, compatible licenses in deps.
-# Only the licenses currently present in the dependency tree. A new license
-# here fails the check on purpose - review it before widening the list.
+# The crate is Apache-2.0; only allow permissive (or, for unmodified deps,
+# weak file-level copyleft) licenses. Only the licenses currently present in
+# the dependency tree. A new license here fails the check on purpose - review
+# it before widening the list. The entries below BSD-2-Clause arrived with
+# the Tauri v2 GUI tree (src/apps/desktop; never the security core).
 allow = [
   "Apache-2.0",
   "MIT",
   "BSD-2-Clause",
   "Unicode-3.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "MPL-2.0",
+  "Zlib",
 ]
 confidence-threshold = 0.9
 
