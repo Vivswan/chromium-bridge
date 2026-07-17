@@ -16,10 +16,13 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// HMAC-SHA256 of `msg` under `key`, hex-encoded. The key is the per-run
 /// secret's bytes and the message is built by [`handshake_mac_message`].
-fn compute_mac(key: &[u8], msg: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a key of any length");
+fn compute_mac(key: &[u8], msg: &[u8]) -> io::Result<String> {
+    // HMAC accepts a key of any length, so this cannot fail today; propagate
+    // (failing the handshake) rather than panic if the Mac impl ever changes.
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "unusable hmac key"))?;
     mac.update(msg);
-    hex_encode(&mac.finalize().into_bytes())
+    Ok(hex_encode(&mac.finalize().into_bytes()))
 }
 
 /// The exact bytes the handshake MAC covers: the server's nonce and, when the
@@ -44,7 +47,8 @@ fn handshake_mac_message(nonce: &str, label: Option<&str>) -> Vec<u8> {
 fn verify_mac(key: &[u8], msg: &[u8], provided_hex: &str) -> io::Result<()> {
     let provided = hex_decode(provided_hex)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "mac is not valid hex"))?;
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a key of any length");
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "unusable hmac key"))?;
     mac.update(msg);
     mac.verify_slice(&provided)
         .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "hmac mismatch"))
@@ -63,7 +67,11 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
     }
     bytes
         .chunks_exact(2)
-        .map(|pair| Some(hex_nibble(pair[0])? << 4 | hex_nibble(pair[1])?))
+        .map(|pair| match pair {
+            [hi, lo] => Some(hex_nibble(*hi)? << 4 | hex_nibble(*lo)?),
+            // chunks_exact(2) yields two-byte windows only.
+            _ => None,
+        })
         .collect()
 }
 
@@ -89,7 +97,7 @@ fn hex_nibble(b: u8) -> Option<u8> {
 pub fn validate_label(label: &str) -> bool {
     let bytes = label.as_bytes();
     (1..=32).contains(&bytes.len())
-        && bytes[0].is_ascii_alphanumeric()
+        && bytes.first().is_some_and(|b| b.is_ascii_alphanumeric())
         && bytes
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
@@ -179,7 +187,7 @@ fn client_handshake_with_secret<R: BufRead, W: Write>(
             let mac = compute_mac(
                 secret.as_bytes(),
                 &handshake_mac_message(&nonce, label.as_deref()),
-            );
+            )?;
             bridge_write(writer, &Handshake::Response { mac, label })
         }
         Some(Handshake::Response { .. }) => Err(io::Error::new(
@@ -279,7 +287,7 @@ mod tests {
     fn verify_mac_accepts_correct_and_rejects_wrong() {
         let key = b"per-run-secret";
         let nonce = b"challenge-nonce";
-        let mac = compute_mac(key, nonce);
+        let mac = compute_mac(key, nonce).unwrap();
         // The MAC the client would send verifies.
         assert!(verify_mac(key, nonce, &mac).is_ok());
         // A different key (attacker who doesn't know the secret) is rejected.
@@ -305,7 +313,8 @@ mod tests {
         let expected = compute_mac(
             secret.as_bytes(),
             &handshake_mac_message(nonce, Some("chrome")),
-        );
+        )
+        .unwrap();
 
         let mut challenge = serde_json::to_vec(&Handshake::Challenge {
             nonce: nonce.into(),
@@ -416,7 +425,8 @@ mod tests {
         let signed_for_chrome = compute_mac(
             secret.as_bytes(),
             &handshake_mac_message(nonce, Some("chrome")),
-        );
+        )
+        .unwrap();
         // Genuine claim verifies.
         assert!(verify_mac(
             secret.as_bytes(),

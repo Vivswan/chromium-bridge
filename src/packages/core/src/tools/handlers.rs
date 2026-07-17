@@ -31,9 +31,9 @@ pub(super) fn build_page_eval(args: &Value) -> Value {
 
 pub(super) fn build_page_fill(args: &Value) -> Value {
     let value = sarg(args, "value");
-    let mut payload = ref_or_selector(args);
-    payload["value"] = json!(value);
-    payload
+    let mut payload = ref_or_selector_map(args);
+    payload.insert("value".into(), json!(value));
+    Value::Object(payload)
 }
 
 pub(super) fn build_page_navigate(args: &Value) -> Value {
@@ -46,9 +46,9 @@ pub(super) fn build_page_press(args: &Value) -> Value {
 
 pub(super) fn build_page_select(args: &Value) -> Value {
     let value = sarg(args, "value");
-    let mut payload = ref_or_selector(args);
-    payload["value"] = json!(value);
-    payload
+    let mut payload = ref_or_selector_map(args);
+    payload.insert("value".into(), json!(value));
+    Value::Object(payload)
 }
 
 pub(super) fn build_console_get(args: &Value) -> Value {
@@ -159,6 +159,13 @@ fn iarg(args: &Value, key: &str) -> i64 {
 }
 
 pub(super) fn ref_or_selector(args: &Value) -> Value {
+    Value::Object(ref_or_selector_map(args))
+}
+
+/// Map form of [`ref_or_selector`], for builders that add further fields:
+/// inserting into the map directly avoids `Value` index-assignment (which
+/// panics on a non-object) while keeping the payload construction identical.
+fn ref_or_selector_map(args: &Value) -> serde_json::Map<String, Value> {
     let mut payload = serde_json::Map::new();
     if let Some(r) = args.get("ref").and_then(|v| v.as_str()) {
         payload.insert("ref".into(), json!(r));
@@ -166,5 +173,5 @@ pub(super) fn ref_or_selector(args: &Value) -> Value {
     if let Some(s) = args.get("selector").and_then(|v| v.as_str()) {
         payload.insert("selector".into(), json!(s));
     }
-    Value::Object(payload)
+    payload
 }

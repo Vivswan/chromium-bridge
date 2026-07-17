@@ -122,7 +122,7 @@ fn drain_pending_for_generation(
         .map(|(id, _)| *id)
         .collect();
     ids.into_iter()
-        .map(|id| pending.remove(&id).expect("id just enumerated").1)
+        .filter_map(|id| pending.remove(&id).map(|(_, tx)| tx))
         .collect()
 }
 
@@ -153,9 +153,9 @@ fn resolve_target(available: &[&str], want: Option<&str>) -> Result<String, Call
                 Err(CallError::BrowserNotFound(w.to_string(), labels.join(", ")))
             }
         }
-        None => match labels.len() {
-            0 => Err(CallError::NotConnected),
-            1 => Ok(labels[0].to_string()),
+        None => match labels.as_slice() {
+            [] => Err(CallError::NotConnected),
+            [sole] => Ok((*sole).to_string()),
             _ => Err(CallError::AmbiguousBrowser(labels.join(", "))),
         },
     }
@@ -243,7 +243,16 @@ impl Session {
         // drops the old writer; its reader will observe the disconnect and,
         // thanks to the generation guard below, leave THIS entry alone.
         let my_gen = {
-            let mut guard = self.conns.lock().unwrap();
+            // A poisoned registry lock means a thread panicked mid-mutation;
+            // refuse the new connection rather than install it into state we
+            // cannot trust (the native host will redial).
+            let Ok(mut guard) = self.conns.lock() else {
+                log_error!(
+                    "session",
+                    "browser registry lock poisoned; refusing connection '{label}'"
+                );
+                return false;
+            };
             if let Some(max) = cap {
                 if !guard.contains_key(&label) && guard.len() >= max {
                     log_warn!(
@@ -307,13 +316,27 @@ impl Session {
                 // pending mutex, which is compatible with the conns→pending
                 // ordering used elsewhere.
                 let routed = {
-                    let mut pending_guard = pending.lock().unwrap();
-                    match pending_guard.get(&resp.id) {
-                        Some((gen, _)) if *gen == my_gen => RoutedResp::Deliver(
-                            pending_guard.remove(&resp.id).expect("entry just found").1,
-                        ),
-                        Some((gen, _)) => RoutedResp::Foreign(*gen),
-                        None => RoutedResp::Unknown,
+                    let Ok(mut pending_guard) = pending.lock() else {
+                        // Poisoned pending map: no delivery can be trusted;
+                        // drop this connection (fail closed) and let the
+                        // cleanup below do what it still can.
+                        log_error!(
+                            "session",
+                            "pending-call lock poisoned ('{label}' generation {my_gen}); \
+                             dropping connection"
+                        );
+                        break;
+                    };
+                    match pending_guard.entry(resp.id) {
+                        std::collections::hash_map::Entry::Occupied(entry)
+                            if entry.get().0 == my_gen =>
+                        {
+                            RoutedResp::Deliver(entry.remove().1)
+                        }
+                        std::collections::hash_map::Entry::Occupied(entry) => {
+                            RoutedResp::Foreign(entry.get().0)
+                        }
+                        std::collections::hash_map::Entry::Vacant(_) => RoutedResp::Unknown,
                     }
                 };
                 match routed {
@@ -346,13 +369,39 @@ impl Session {
             //      instead of blocking for the full 120s timeout. Pending
             //      entries of other connections are left untouched.
             let drained = {
-                let mut conns_guard = conns.lock().unwrap();
-                let current = conns_guard.get(&label).map(|c| c.generation);
-                if should_clear_conn(current, my_gen) {
-                    conns_guard.remove(&label);
+                // A poisoned lock here means another thread panicked while
+                // holding it; skip the half we cannot trust (and say so) --
+                // any caller whose entry survives fails via its timeout.
+                let mut conns_guard = match conns.lock() {
+                    Ok(guard) => Some(guard),
+                    Err(_) => {
+                        log_error!(
+                            "session",
+                            "browser registry lock poisoned during '{label}' cleanup \
+                             (generation {my_gen})"
+                        );
+                        None
+                    }
+                };
+                if let Some(guard) = conns_guard.as_mut() {
+                    let current = guard.get(&label).map(|c| c.generation);
+                    if should_clear_conn(current, my_gen) {
+                        guard.remove(&label);
+                    }
                 }
-                let mut pending_guard = pending.lock().unwrap();
-                drain_pending_for_generation(&mut pending_guard, my_gen)
+                match pending.lock() {
+                    Ok(mut pending_guard) => {
+                        drain_pending_for_generation(&mut pending_guard, my_gen)
+                    }
+                    Err(_) => {
+                        log_error!(
+                            "session",
+                            "pending-call lock poisoned during '{label}' cleanup \
+                             (generation {my_gen})"
+                        );
+                        Vec::new()
+                    }
+                }
             };
             // Senders drop here (locks already released), unblocking callers.
             drop(drained);
@@ -363,7 +412,18 @@ impl Session {
     /// The labels of all currently-connected browsers, sorted. Used by the
     /// `list_browsers` tool and by routing errors.
     pub fn labels(&self) -> Vec<String> {
-        let mut labels: Vec<String> = self.conns.lock().unwrap().keys().cloned().collect();
+        // A poisoned registry reads as empty: report nothing rather than
+        // labels from state we cannot trust (callers then fail NotConnected).
+        let mut labels: Vec<String> = match self.conns.lock() {
+            Ok(guard) => guard.keys().cloned().collect(),
+            Err(_) => {
+                log_error!(
+                    "session",
+                    "browser registry lock poisoned; reporting no browsers"
+                );
+                Vec::new()
+            }
+        };
         labels.sort_unstable();
         labels
     }
@@ -378,7 +438,13 @@ impl Session {
     /// broker's watcher may call this every tick while killed. Returns how
     /// many connections were signaled.
     pub(crate) fn shutdown_all_browsers(&self) -> usize {
-        let guard = self.conns.lock().unwrap();
+        // The kill switch must bite even after a panic poisoned the registry:
+        // severing sockets is safe on inconsistent bookkeeping, whereas
+        // refusing to sever would leave the bridge alive. Recover the guard.
+        let guard = self
+            .conns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for conn in guard.values() {
             let _ = conn.writer.get_ref().shutdown(std::net::Shutdown::Both);
         }
@@ -392,7 +458,8 @@ impl Session {
     /// can correlate a tool call with the specific browser and connection it
     /// ran over, across reconnects. Just a lock and a map — non-blocking.
     pub fn route_info(&self, browser: Option<&str>) -> Option<(String, u64)> {
-        let conns = self.conns.lock().unwrap();
+        // A poisoned registry is unroutable (None), same as nothing connected.
+        let conns = self.conns.lock().ok()?;
         let labels: Vec<&str> = conns.keys().map(String::as_str).collect();
         let label = resolve_target(&labels, browser).ok()?;
         let generation = conns.get(&label)?.generation;
@@ -418,10 +485,13 @@ impl Session {
         // only covers the empty-registry case: once at least one browser is
         // attached, an unknown or ambiguous target is a real error the caller
         // should see immediately, not something to wait out.
-        if self.conns.lock().unwrap().is_empty() {
+        // A poisoned lock skips the wait (reads as non-empty); try_call below
+        // then surfaces the failure as a typed error.
+        let registry_empty = || self.conns.lock().is_ok_and(|g| g.is_empty());
+        if registry_empty() {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
             while std::time::Instant::now() < deadline {
-                if !self.conns.lock().unwrap().is_empty() {
+                if !registry_empty() {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(150));
@@ -456,35 +526,55 @@ impl Session {
         // reader draining a real generation (>= 1) will never touch this
         // sentinel entry.
         let (tx, rx) = mpsc::channel::<BridgeResp>();
-        self.pending
-            .lock()
-            .unwrap()
-            .insert(id, (UNSENT_GENERATION, tx));
+        let Ok(mut pending_guard) = self.pending.lock() else {
+            return Err(CallError::Internal("pending-call lock poisoned".into()));
+        };
+        pending_guard.insert(id, (UNSENT_GENERATION, tx));
+        drop(pending_guard);
 
         // Resolve the target and send, all under the registry lock so the
         // chosen connection cannot be swapped between the decision and the
         // write. Lock ordering is always conns mutex THEN pending mutex when
         // nesting, matching the reader-cleanup path, so the two can never
-        // deadlock.
+        // deadlock. A poisoned lock anywhere on this path refuses the call
+        // with a typed internal error instead of acting on suspect state.
         {
-            let mut guard = self.conns.lock().unwrap();
+            let Ok(mut guard) = self.conns.lock() else {
+                self.remove_pending(id);
+                return Err(CallError::Internal("browser registry lock poisoned".into()));
+            };
             let labels: Vec<&str> = guard.keys().map(String::as_str).collect();
             let label = match resolve_target(&labels, browser) {
                 Ok(l) => l,
                 Err(e) => {
                     // Clean up the pending entry on failure.
-                    self.pending.lock().unwrap().remove(&id);
+                    self.remove_pending(id);
                     return Err(e);
                 }
             };
-            let conn = guard
-                .get_mut(&label)
-                .expect("resolve_target only returns live labels");
+            let Some(conn) = guard.get_mut(&label) else {
+                // Unreachable in practice: resolve_target picked the label
+                // from this very map under the same lock. Refuse rather than
+                // panic if that invariant is ever broken.
+                self.remove_pending(id);
+                return Err(CallError::Internal(
+                    "resolved browser label vanished from the registry".into(),
+                ));
+            };
             // Bind this pending entry to the live connection's generation so a
             // subsequent disconnect of *this* connection drains it fast.
             let generation = conn.generation;
-            if let Some(entry) = self.pending.lock().unwrap().get_mut(&id) {
-                entry.0 = generation;
+            match self.pending.lock() {
+                Ok(mut pending_guard) => {
+                    if let Some(entry) = pending_guard.get_mut(&id) {
+                        entry.0 = generation;
+                    }
+                }
+                Err(_) => {
+                    // Do not send a request whose response could never be
+                    // routed back (the entry would stay UNSENT forever).
+                    return Err(CallError::Internal("pending-call lock poisoned".into()));
+                }
             }
             let req = BridgeReq {
                 id,
@@ -494,7 +584,7 @@ impl Session {
                 browser: Some(label),
             };
             if let Err(e) = bridge_write(&mut conn.writer, &req) {
-                self.pending.lock().unwrap().remove(&id);
+                self.remove_pending(id);
                 return Err(CallError::Write(e));
             }
         }
@@ -511,13 +601,22 @@ impl Session {
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.pending.lock().unwrap().remove(&id);
+                self.remove_pending(id);
                 Err(CallError::Timeout(timeout))
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                self.pending.lock().unwrap().remove(&id);
+                self.remove_pending(id);
                 Err(CallError::Disconnected)
             }
+        }
+    }
+
+    /// Best-effort removal of a pending entry (error/timeout cleanup). If the
+    /// pending lock is poisoned the entry is left behind: the map is already
+    /// condemned state and every path that could act on it refuses first.
+    fn remove_pending(&self, id: u64) {
+        if let Ok(mut pending_guard) = self.pending.lock() {
+            pending_guard.remove(&id);
         }
     }
 }

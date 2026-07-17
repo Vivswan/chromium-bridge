@@ -22,10 +22,12 @@ impl EnclavePublicKey {
                 bytes.len()
             )));
         }
-        if bytes[0] != 0x04 {
+        // Length 65 was just checked, so a first byte exists; 0 is not 0x04,
+        // so the impossible empty case still lands in the error arm.
+        let lead = bytes.first().copied().unwrap_or(0);
+        if lead != 0x04 {
             return Err(EnclaveError::Keychain(format!(
-                "public key does not start with 0x04 (uncompressed point), got 0x{:02x}",
-                bytes[0]
+                "public key does not start with 0x04 (uncompressed point), got 0x{lead:02x}",
             )));
         }
         Ok(Self { sec1: bytes })
@@ -51,7 +53,7 @@ impl EnclavePublicKey {
         let hex = self.fingerprint_hex();
         hex.as_bytes()
             .chunks(4)
-            .map(|c| std::str::from_utf8(c).expect("hex is ascii"))
+            .map(String::from_utf8_lossy)
             .collect::<Vec<_>>()
             .join(" ")
     }

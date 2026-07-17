@@ -85,7 +85,7 @@ pub fn ensure_own_identity() -> io::Result<&'static str> {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn attest_parent() -> io::Result<super::ClientIdentity> {
     // getppid cannot fail and returns the current parent's pid.
-    let ppid = unsafe { libc::getppid() };
+    let ppid = crate::sys::parent_pid();
     let ppid = u32::try_from(ppid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "parent pid out of range"))?;
     os::pid_client_identity(ppid)
