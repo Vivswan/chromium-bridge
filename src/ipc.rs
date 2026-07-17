@@ -24,9 +24,7 @@
 //!   ADR-0020.
 
 use std::fs;
-#[cfg(unix)]
-use std::io::Read;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 
 #[cfg(windows)]
@@ -123,6 +121,12 @@ fn socket_path() -> PathBuf {
     runtime_dir().join("run.sock")
 }
 
+/// Upper bound on the lock file's size when reading it back. The file is a
+/// few hundred bytes of JSON; anything bigger is not ours (e.g. a same-user
+/// process planted a huge file at the path) and is rejected instead of being
+/// slurped into memory.
+const LOCK_MAX_BYTES: usize = 64 * 1024;
+
 impl LockFile {
     /// Path of the lock file in the per-user runtime directory.
     pub fn path() -> PathBuf {
@@ -130,56 +134,18 @@ impl LockFile {
     }
 
     pub fn write(&self) -> io::Result<()> {
-        let path = Self::path();
-        let mut tmp = path.clone();
-        tmp.set_extension("lock.tmp");
         let bytes = serde_json::to_vec(self)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut f = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            f.write_all(&bytes)?;
-            f.flush()?;
-        }
-        #[cfg(windows)]
-        {
-            let mut f = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&tmp)?;
-            f.write_all(&bytes)?;
-            f.flush()?;
-        }
-        // Unix rename atomically replaces an existing destination. Windows'
-        // std::fs::rename does not, so remove a stale destination first. That
-        // creates a tiny not-found window, but the extension's reconnect loop
-        // retries after 2 seconds and can never observe a half-written JSON
-        // file because all bytes were flushed to the temporary file first.
-        #[cfg(windows)]
-        if path.exists() {
-            fs::remove_file(&path)?;
-        }
-        fs::rename(&tmp, &path)?;
-        Ok(())
+        write_private_atomic(&Self::path(), &bytes)
     }
 
     pub fn read() -> io::Result<Option<Self>> {
-        match fs::read(Self::path()) {
-            Ok(bytes) => {
-                let lf: LockFile = serde_json::from_slice(&bytes).map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("lockfile decode: {e}"))
-                })?;
-                Ok(Some(lf))
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-        }
+        let Some(bytes) = read_capped(&Self::path(), LOCK_MAX_BYTES)? else {
+            return Ok(None);
+        };
+        let lf: LockFile = serde_json::from_slice(&bytes).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("lockfile decode: {e}"))
+        })?;
+        Ok(Some(lf))
     }
 
     pub fn remove() {
@@ -187,6 +153,70 @@ impl LockFile {
         let _ = fs::remove_file(socket_path());
         let _ = fs::remove_file(Self::path());
     }
+}
+
+/// Read a small file in full, bounded by `max` bytes. Returns `Ok(None)` when
+/// the file does not exist; fails with `InvalidData` when it exceeds the cap,
+/// reading at most `max + 1` bytes rather than the whole oversized file.
+fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Option<Vec<u8>>> {
+    let f = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut bytes = Vec::new();
+    f.take(max as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "lock file exceeds the size cap",
+        ));
+    }
+    Ok(Some(bytes))
+}
+
+/// Write `bytes` to `path` atomically via a same-directory temp file. On Unix
+/// the temp file is created exclusively (O_EXCL) with mode 0600: any
+/// pre-planted file at the temp path is removed first and never reused, so a
+/// looser mode on a planted file can never carry over to the secret-bearing
+/// lock. If the removal races with a re-plant, `create_new` fails closed
+/// instead of adopting the foreign file.
+fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+    let mut tmp = path.to_path_buf();
+    tmp.set_extension("lock.tmp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let _ = fs::remove_file(&tmp);
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.flush()?;
+    }
+    #[cfg(windows)]
+    {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.flush()?;
+    }
+    // Unix rename atomically replaces an existing destination. Windows'
+    // std::fs::rename does not, so remove a stale destination first. That
+    // creates a tiny not-found window, but the extension's reconnect loop
+    // retries after 2 seconds and can never observe a half-written JSON
+    // file because all bytes were flushed to the temporary file first.
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1017,6 +1047,72 @@ mod tests {
     #[test]
     fn lock_path_has_expected_filename() {
         assert_eq!(LockFile::path().file_name().unwrap(), "run.lock");
+    }
+
+    /// A scratch directory for filesystem tests, unique per test so parallel
+    /// tests never collide, removed on drop.
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn new(test: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("browser-bridge-test-{}-{test}", std::process::id()));
+            fs::create_dir_all(&dir).unwrap();
+            ScratchDir(dir)
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn read_capped_rejects_an_oversized_file_and_passes_a_small_one() {
+        let dir = ScratchDir::new("read-capped");
+        let path = dir.0.join("run.lock");
+
+        // Missing file is a clean None, not an error.
+        assert!(read_capped(&path, LOCK_MAX_BYTES).unwrap().is_none());
+
+        // A file over the cap is rejected without being read in full.
+        fs::write(&path, vec![b'x'; LOCK_MAX_BYTES + 1]).unwrap();
+        let err = read_capped(&path, LOCK_MAX_BYTES).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        // A normal-sized file reads back verbatim.
+        fs::write(&path, b"{\"pid\":1}").unwrap();
+        assert_eq!(
+            read_capped(&path, LOCK_MAX_BYTES).unwrap().unwrap(),
+            b"{\"pid\":1}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_write_never_reuses_a_preplanted_loose_tmp() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = ScratchDir::new("preplanted-tmp");
+        let path = dir.0.join("run.lock");
+        let mut tmp = path.clone();
+        tmp.set_extension("lock.tmp");
+
+        // An attacker pre-plants a world-readable temp file at our temp path.
+        // The old open(create=true) would reuse it, keeping its 0644 mode on
+        // the secret-bearing lock after the rename.
+        fs::write(&tmp, b"planted").unwrap();
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_private_atomic(&path, b"{\"secret\":\"s\"}").unwrap();
+
+        // The planted file was replaced, not adopted: content is ours and no
+        // group/other bits survive.
+        assert_eq!(fs::read(&path).unwrap(), b"{\"secret\":\"s\"}");
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode & 0o077, 0, "lock mode {mode:o} leaks group/other bits");
+        assert!(!tmp.exists());
     }
 
     #[test]
