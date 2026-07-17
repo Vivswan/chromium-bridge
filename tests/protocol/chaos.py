@@ -897,6 +897,150 @@ def c11_revoke_during_sw_death_browser_gated():
     skip("C11 browser-gated (isolated Chrome); covered piecewise by C10 + unit/adv suites")
 
 
+def c12_kill_mid_dispatch():
+    """ADR-0030 chaos: engage the kill switch while a tool call is IN FLIGHT
+    (the browser has the request and will never answer). The severed browser
+    leg must fail the caller fast and typed (CONNECTION_LOST via the drained
+    pending entry, never a 120s hang), the next call must be the typed
+    BRIDGE_KILLED refusal, and an explicit release must fully restore the
+    bridge on the same broker."""
+    print("\n[C12] kill mid-dispatch (LIVE: in-flight call fails fast; typed refusals; recovery)")
+    if os.name == "nt":
+        skip("C12 uses the Unix harness-attestation path")
+        return
+    adv._rm_lock()
+    adv._rm_clients()
+    broker = None
+    nh = None
+    nh2 = None
+    try:
+        adv._pair_client("--name", "pytest", "--this-parent")
+        broker = adv.start_server()
+        if not check(e2e.wait_lock(broker) is not None, "C12 broker up"):
+            return
+        cb = mcp_ready(broker)
+        nh = start_host()
+        if not check(wait_ready(nh), "C12 browser attached"):
+            return
+        check(round_trip_ok(cb, nh, title="C12-before", _id=1100),
+              "C12 the bridge works before the kill")
+
+        # Fire a call, wait until the host HOLDS the request (it will never
+        # answer), then kill mid-flight.
+        cb.send({"jsonrpc": "2.0", "id": 1101, "method": "tools/call",
+                 "params": {"name": "tab_list", "arguments": {}}})
+        held = bounded("C12 in-flight request reaches the host",
+                       lambda: e2e.nm_read(nh), 10)
+        check(held is not None and held.get("op") == "tab_list",
+              "C12 the request is in flight at the browser")
+        subprocess.run([e2e.BIN, "kill"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # The watcher severs the browser leg; the drained pending entry fails
+        # the in-flight caller fast (typed), instead of a 120s timeout.
+        line = bounded("C12 in-flight call resolves", lambda: cb.recv(), 15)
+        text = line["result"]["content"][0]["text"]
+        check(line["result"].get("isError") is True and "CONNECTION_LOST" in text,
+              "C12 the in-flight call fails fast and typed on the severed leg")
+
+        # Steady state while killed: typed BRIDGE_KILLED refusals.
+        r = bounded("C12 next call refused", lambda: cb.call("tab_list", {}, _id=1102), 10)
+        text = r["result"]["content"][0]["text"]
+        check(r["result"].get("isError") is True and "BRIDGE_KILLED" in text,
+              "C12 the next call is the typed BRIDGE_KILLED refusal")
+
+        # Release and recover on the SAME broker.
+        e2e.unkill_interactive()
+        nh2 = start_host()
+        if check(wait_ready(nh2), "C12 a browser re-attaches after the release"):
+            check(round_trip_ok(cb, nh2, title="C12-after", _id=1103),
+                  "C12 the bridge fully recovers after the release")
+    finally:
+        close_host(nh)
+        close_host(nh2)
+        adv._reap(broker)
+        e2e.unkill_interactive(check=False)
+        adv._rm_clients()
+
+
+def c13_audit_sink_failure_never_fails_the_decision():
+    """ADR-0030 chaos: break the audit file mid-run (replace it with a
+    DIRECTORY, so every append fails) while decisions keep being made. Nothing
+    may fail because its bookkeeping failed -- tool calls keep flowing, a kill
+    still engages and still refuses typed -- and once the sink heals, the
+    trail carries a `dropped` counter so the gap is visible."""
+    print("\n[C13] audit sink failure during decisions (LIVE: log-after-decide, drop-on-full)")
+    if os.name == "nt":
+        skip("C13 exercises the Unix runtime-dir layout")
+        return
+    adv._rm_lock()
+    adv._rm_clients()
+    audit_path = os.path.join(os.path.dirname(e2e.LOCK), "audit.log")
+    broker = None
+    nh = None
+    try:
+        adv._pair_client("--name", "pytest", "--this-parent")
+        broker = adv.start_server()
+        if not check(e2e.wait_lock(broker) is not None, "C13 broker up"):
+            return
+        cb = mcp_ready(broker)
+        nh = start_host()
+        if not check(wait_ready(nh), "C13 browser attached"):
+            return
+
+        # Break the sink: a directory at the file's path fails every append.
+        try:
+            os.remove(audit_path)
+        except FileNotFoundError:
+            pass
+        os.mkdir(audit_path)
+
+        check(round_trip_ok(cb, nh, title="C13-broken-sink", _id=1200),
+              "C13 tool calls keep flowing while the audit sink is broken")
+        r = subprocess.run([e2e.BIN, "kill"], capture_output=True, text=True)
+        check(r.returncode == 0, "C13 the kill still engages with the sink broken")
+        r2 = cb.call("tab_list", {}, _id=1201)
+        text = r2["result"]["content"][0]["text"]
+        check(r2["result"].get("isError") is True and "BRIDGE_KILLED" in text,
+              "C13 enforcement still refuses typed with the sink broken")
+        e2e.unkill_interactive()
+
+        # Heal the sink; the next decisions land, and the writer that failed
+        # earlier surfaces its gap as a dropped counter on its next record.
+        os.rmdir(audit_path)
+        subprocess.run([e2e.BIN, "kill"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        e2e.unkill_interactive()
+        cb.call("tab_list", {}, _id=1202)  # a refused-or-served call to audit
+        deadline = time.time() + 5
+        records = []
+        while time.time() < deadline:
+            try:
+                with open(audit_path) as f:
+                    records = [json.loads(ln) for ln in f if ln.strip()]
+                if records:
+                    break
+            except FileNotFoundError:
+                pass
+            time.sleep(0.2)
+        check(bool(records), "C13 the healed sink receives records again")
+        kinds = [rec.get("kind") for rec in records]
+        check("kill_engage" in kinds and "kill_release" in kinds,
+              "C13 post-heal decisions are in the trail")
+        dropped = [rec for rec in records if rec.get("dropped")]
+        check(bool(dropped),
+              "C13 a writer that failed earlier surfaces its gap (dropped counter)")
+    finally:
+        close_host(nh)
+        adv._reap(broker)
+        e2e.unkill_interactive(check=False)
+        try:
+            os.rmdir(audit_path)
+        except OSError:
+            pass
+        adv._rm_clients()
+
+
 # ---------------------------------------------------------------------------
 
 def main():
@@ -915,6 +1059,8 @@ def main():
         c9_relay_attach_drop_churn()
         c10_revoke_mid_dispatch()
         c11_revoke_during_sw_death_browser_gated()
+        c12_kill_mid_dispatch()
+        c13_audit_sink_failure_never_fails_the_decision()
         c8_browser_gated_todo()
     finally:
         shutil.rmtree(rundir, ignore_errors=True)

@@ -548,11 +548,12 @@ pub enum EnclaveControl {
     EnclaveRevoked {},
 }
 
-/// Host-admin control frames (ADR-0025), spoken over the native-messaging
+/// Host-admin control frames (ADR-0025/0030), spoken over the native-messaging
 /// channel and handled by the native host itself, exactly like
 /// [`EnclaveControl`]: never forwarded to the MCP server, and dropped if the
 /// server leg tries to inject one. They give the extension's options UI a
-/// managed path to the trusted-client allowlist:
+/// managed path to the trusted-client allowlist, the global kill switch, and
+/// the audit trail:
 ///
 /// - `client_list {}` -> `client_list_result { ok, enrolled, clients, error? }`
 ///   Read-only. `enrolled` mirrors the CLI's unenrolled/enrolled distinction;
@@ -563,12 +564,27 @@ pub enum EnclaveControl {
 /// - `client_revoke { name }` -> `client_revoke_result { ok, error? }`
 ///   Removes one trusted client and bumps the revocation epoch in the same
 ///   critical section, so a live broker drops that client's connections.
+/// - `kill_status {}` / `kill_engage {}` / `kill_release {}` ->
+///   `kill_status_result { ok, killed?, error? }` (ADR-0030). The result frame
+///   is also PUSHED host-originated, unsolicited: at startup and whenever the
+///   host's revocation watch sees the kill marker move, so the extension's
+///   SW-only mirror tracks CLI-driven transitions without polling. `ok: false`
+///   (state unreadable) carries no `killed` claim; the extension treats it as
+///   unknown and fails closed.
+/// - `audit_event { kind, outcome?, tool?, name?, detail? }` (ADR-0030,
+///   fire-and-forget, no reply): the extension reports one of ITS OWN
+///   user-facing decisions (confirmations, enrollment approvals) for the
+///   host's on-disk audit trail. The host accepts only the extension-owned
+///   kinds ([`crate::audit::extension_kind`]) and stamps the surface itself,
+///   so the frame cannot forge host-side events like admissions or kills.
 ///
 /// Trust: these frames arrive only from the extension Chrome connected to
-/// this host (`allowed_origins`), and everything they can do -- enumerate or
-/// revoke trust -- is already available to any same-user process via the CLI
-/// (`list-clients`, `revoke-client`), so the frames add no capability beyond
-/// a new path to capability REDUCTION. See ADR-0025.
+/// this host (`allowed_origins`). The list/revoke pair adds no capability
+/// beyond the CLI's (capability reduction); `kill_engage` is also reduction.
+/// `kill_release` RESTORES capability and is the one deliberate exception,
+/// accepted because the extension's options page is a trusted surface on par
+/// with the CLI (ADR-0030 records the decision and the page-can-never-reach-it
+/// gating that keeps it true).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AdminControl {
@@ -592,6 +608,36 @@ pub enum AdminControl {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Extension -> host: report the kill-switch state (ADR-0030).
+    KillStatus {},
+    /// Extension -> host: engage the global kill switch.
+    KillEngage {},
+    /// Extension -> host: release the global kill switch.
+    KillRelease {},
+    /// Host -> extension: the kill-switch state. The reply to all three kill
+    /// frames, and pushed unsolicited on observed transitions. `killed` is
+    /// absent when `ok` is false (the state could not be read; the extension
+    /// fails closed on unknown).
+    KillStatusResult {
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        killed: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Extension -> host: one extension-side decision for the audit trail
+    /// (ADR-0030). Fire-and-forget; no reply frame.
+    AuditEvent {
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
 }
 
 /// How the native host's stdin->socket pump must treat one inbound frame.
@@ -611,6 +657,21 @@ pub enum FrameDisposition {
     ClientList,
     /// A well-formed `client_revoke` (ADR-0025): revoke the named client.
     ClientRevoke { name: String },
+    /// A well-formed `kill_status` (ADR-0030): report the kill-switch state.
+    KillStatus,
+    /// A well-formed `kill_engage` (ADR-0030): engage the kill switch.
+    KillEngage,
+    /// A well-formed `kill_release` (ADR-0030): release the kill switch.
+    KillRelease,
+    /// A well-formed `audit_event` (ADR-0030): record one extension-side
+    /// decision in the audit trail. Fire-and-forget, no reply.
+    AuditEvent {
+        kind: String,
+        outcome: Option<String>,
+        tool: Option<String>,
+        name: Option<String>,
+        detail: Option<String>,
+    },
     /// A control-frame `type` that is not addressed to the host (a stray
     /// proof/error/revoked/result, or a malformed host-directed frame with no
     /// defined error reply) — drop it, never forward it.
@@ -653,11 +714,42 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
             Ok(AdminControl::ClientRevoke { name }) => FrameDisposition::ClientRevoke { name },
             _ => FrameDisposition::MalformedAdmin("client_revoke"),
         },
+        Some("kill_status") => match serde_json::from_value(frame.clone()) {
+            Ok(AdminControl::KillStatus {}) => FrameDisposition::KillStatus,
+            _ => FrameDisposition::MalformedAdmin("kill_status"),
+        },
+        Some("kill_engage") => match serde_json::from_value(frame.clone()) {
+            Ok(AdminControl::KillEngage {}) => FrameDisposition::KillEngage,
+            _ => FrameDisposition::MalformedAdmin("kill_engage"),
+        },
+        Some("kill_release") => match serde_json::from_value(frame.clone()) {
+            Ok(AdminControl::KillRelease {}) => FrameDisposition::KillRelease,
+            _ => FrameDisposition::MalformedAdmin("kill_release"),
+        },
+        Some("audit_event") => match serde_json::from_value(frame.clone()) {
+            Ok(AdminControl::AuditEvent {
+                kind,
+                outcome,
+                tool,
+                name,
+                detail,
+            }) => FrameDisposition::AuditEvent {
+                kind,
+                outcome,
+                tool,
+                name,
+                detail,
+            },
+            // Fire-and-forget has no reply contract; a malformed event is
+            // dropped (and logged), never recorded as if it were valid.
+            _ => FrameDisposition::Drop("malformed audit_event"),
+        },
         Some("enclave_proof") => FrameDisposition::Drop("enclave_proof"),
         Some("enclave_error") => FrameDisposition::Drop("enclave_error"),
         Some("enclave_revoked") => FrameDisposition::Drop("enclave_revoked"),
         Some("client_list_result") => FrameDisposition::Drop("client_list_result"),
         Some("client_revoke_result") => FrameDisposition::Drop("client_revoke_result"),
+        Some("kill_status_result") => FrameDisposition::Drop("kill_status_result"),
         _ => FrameDisposition::Forward,
     }
 }
@@ -683,7 +775,12 @@ pub fn host_control_type(frame: &Value) -> Option<&str> {
             | "client_list"
             | "client_list_result"
             | "client_revoke"
-            | "client_revoke_result",
+            | "client_revoke_result"
+            | "kill_status"
+            | "kill_engage"
+            | "kill_release"
+            | "kill_status_result"
+            | "audit_event",
         ) => tag,
         _ => None,
     }
@@ -1400,6 +1497,55 @@ mod tests {
     }
 
     #[test]
+    fn classify_handles_kill_and_audit_frames_locally() {
+        // ADR-0030: the three kill requests classify to their handlers...
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "kill_status" })),
+            FrameDisposition::KillStatus
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "kill_engage" })),
+            FrameDisposition::KillEngage
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "kill_release" })),
+            FrameDisposition::KillRelease
+        ));
+        // ...malformed variants get the matching ok:false reply path...
+        for tag in ["kill_status", "kill_engage", "kill_release"] {
+            assert!(matches!(
+                classify_nm_frame(&json!({ "type": tag, "extra": 1 })),
+                FrameDisposition::MalformedAdmin(k) if k == tag
+            ));
+        }
+        // ...a result frame never legitimately arrives inbound...
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "kill_status_result", "ok": true })),
+            FrameDisposition::Drop(_)
+        ));
+        // ...an audit event carries its fields to the handler...
+        match classify_nm_frame(&json!({
+            "type": "audit_event", "kind": "confirm_denied", "tool": "eval"
+        })) {
+            FrameDisposition::AuditEvent { kind, tool, .. } => {
+                assert_eq!(kind, "confirm_denied");
+                assert_eq!(tool.as_deref(), Some("eval"));
+            }
+            other => panic!("expected AuditEvent, got {other:?}"),
+        }
+        // ...and a malformed one is dropped (fire-and-forget: no reply
+        // contract to honor, and nothing may be recorded from garbage).
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "audit_event" })),
+            FrameDisposition::Drop(_)
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "audit_event", "kind": 5 })),
+            FrameDisposition::Drop(_)
+        ));
+    }
+
+    #[test]
     fn host_control_type_matches_exactly_the_control_tags() {
         // Every host-handled control tag is recognized (the socket->stdout
         // pump drops all of them when the server leg tries to inject one)...
@@ -1413,6 +1559,11 @@ mod tests {
             "client_list_result",
             "client_revoke",
             "client_revoke_result",
+            "kill_status",
+            "kill_engage",
+            "kill_release",
+            "kill_status_result",
+            "audit_event",
         ] {
             assert_eq!(
                 host_control_type(&json!({ "type": tag })),

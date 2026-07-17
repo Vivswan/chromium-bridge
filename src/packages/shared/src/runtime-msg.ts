@@ -38,6 +38,16 @@ export const RuntimeMsgSchema = z.discriminatedUnion("type", [
     type: z.literal("revoke_client"),
     name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/),
   }),
+  // The ADR-0030 kill switch. get_kill returns the SW-only mirror plus a live
+  // host query when the port is up; set_kill relays kill_engage/kill_release
+  // to the native host, which performs the transition and answers with the
+  // resulting state. The router requires an extension-page sender for BOTH
+  // (the top-level gate): a page or content script can neither read nor
+  // toggle the switch.
+  z.strictObject({ type: z.literal("get_kill") }),
+  z.strictObject({ type: z.literal("set_kill"), on: z.boolean() }),
+  // The ADR-0030 read-only audit panel: the SW's local audit ring.
+  z.strictObject({ type: z.literal("get_audit") }),
   // The ADR-0021 pairing ceremony actions.
   z.strictObject({ type: z.literal("enroll_pair") }),
   z.strictObject({ type: z.literal("enroll_verify") }),

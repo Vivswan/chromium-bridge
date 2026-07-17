@@ -94,6 +94,12 @@ fn revoke_host_key() -> EnclaveControl {
                 "native-host",
                 "extension revoked the enrollment key (existed: {existed})"
             );
+            // Log-after-decide (ADR-0030): the key deletion is complete.
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::HostKeyRevoke)
+                    .surface(crate::audit::Surface::Extension)
+                    .outcome("ok"),
+            );
             EnclaveControl::EnclaveRevoked {}
         }
         Err(e) => {
@@ -155,6 +161,13 @@ fn admin_client_revoke(name: &str) -> AdminControl {
     match crate::allowlist::Allowlist::revoke(name) {
         Ok(true) => {
             log_info!("native-host", "extension revoked trusted client '{name}'");
+            // Log-after-decide (ADR-0030): the rewrite + bump are complete.
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
+                    .surface(crate::audit::Surface::Extension)
+                    .name(name)
+                    .outcome("ok"),
+            );
             AdminControl::ClientRevokeResult {
                 ok: true,
                 error: None,
@@ -171,22 +184,136 @@ fn admin_client_revoke(name: &str) -> AdminControl {
     }
 }
 
+// ---- ADR-0030: kill-switch control frames and the audit-event sink ----------
+
+/// The current kill state as a `kill_status_result` frame. `ok: false`
+/// carries no `killed` claim at all: the extension must treat an unreadable
+/// state as unknown and fail closed, and handing it a boolean would invite
+/// trusting it.
+fn kill_status_reply() -> AdminControl {
+    match crate::kill::is_killed() {
+        Ok(killed) => AdminControl::KillStatusResult {
+            ok: true,
+            killed: Some(killed),
+            error: None,
+        },
+        Err(e) => AdminControl::KillStatusResult {
+            ok: false,
+            killed: None,
+            error: Some(format!("kill state unreadable: {e}")),
+        },
+    }
+}
+
+/// Handle `kill_engage` / `kill_release` from the extension (ADR-0030). The
+/// core API performs the latch flip + epoch bump in one critical section and
+/// audits it with `surface: extension`. The reply reports the resulting
+/// state, which the extension's SW-only mirror adopts.
+///
+/// Releasing runs the user-presence ladder first ([`crate::presence`]) with
+/// the extension floor: this process cannot raise a prompt of its own (stdin
+/// and stdout are the native-messaging protocol), so pre-Phase-8 the options
+/// page's explicit confirmation dialog IS the interactive floor, attested by
+/// the channel that delivered the frame (`allowed_origins` pins the
+/// extension; the #32 sender gate pins its pages). Once Phase 8 wires
+/// LocalAuthentication, the same call raises Touch ID host-side, and a
+/// hardware refusal keeps the bridge killed (`ok: false`, audited).
+fn handle_kill_transition(engage: bool) -> AdminControl {
+    let res = if engage {
+        crate::kill::engage(crate::audit::Surface::Extension)
+    } else {
+        match crate::presence::require_presence(
+            "Releasing the kill switch lets MCP clients drive your browser again.",
+            crate::presence::Floor::ExtensionConfirm,
+        ) {
+            Ok(auth) => crate::kill::release(crate::audit::Surface::Extension, auth),
+            Err(e) => {
+                crate::kill::audit_refused_release(crate::audit::Surface::Extension, &e);
+                log_warn!(
+                    "native-host",
+                    "extension-requested release refused at the presence gate: {e}"
+                );
+                return AdminControl::KillStatusResult {
+                    ok: false,
+                    killed: None,
+                    error: Some(format!("release refused: {e}")),
+                };
+            }
+        }
+    };
+    match res {
+        Ok(epoch) => {
+            log_info!(
+                "native-host",
+                "extension {} the kill switch (epoch {epoch})",
+                if engage { "ENGAGED" } else { "released" }
+            );
+            AdminControl::KillStatusResult {
+                ok: true,
+                killed: Some(engage),
+                error: None,
+            }
+        }
+        Err(e) => {
+            log_warn!(
+                "native-host",
+                "extension-requested kill transition failed: {e}"
+            );
+            AdminControl::KillStatusResult {
+                ok: false,
+                killed: None,
+                error: Some(e.to_string()),
+            }
+        }
+    }
+}
+
+/// Record one extension-side decision in the audit trail (ADR-0030). Only the
+/// extension-owned kinds are accepted ([`crate::audit::extension_kind`]) and
+/// the surface is stamped HERE, so the browser leg cannot forge host-side
+/// events (an admission, a kill) into the trail. Fire-and-forget: no reply.
+fn handle_audit_event(
+    kind: String,
+    outcome: Option<String>,
+    tool: Option<String>,
+    name: Option<String>,
+    detail: Option<String>,
+) {
+    let Some(kind) = crate::audit::extension_kind(&kind) else {
+        log_warn!(
+            "native-host",
+            "dropping audit_event with a non-extension kind {kind:?}"
+        );
+        return;
+    };
+    let mut rec = crate::audit::AuditRecord::new(kind).surface(crate::audit::Surface::Extension);
+    rec.outcome = outcome;
+    rec.tool = tool;
+    rec.name = name;
+    rec.detail = detail;
+    crate::audit::record(rec);
+}
+
 /// The reply for a malformed admin request frame: the matching result frame
 /// with `ok: false`, so the extension's pending request resolves instead of
 /// timing out.
 fn malformed_admin_reply(kind: &'static str) -> AdminControl {
-    if kind == "client_list" {
-        AdminControl::ClientListResult {
+    match kind {
+        "client_list" => AdminControl::ClientListResult {
             ok: false,
             enrolled: false,
             clients: Vec::new(),
             error: Some("malformed client_list frame".into()),
-        }
-    } else {
-        AdminControl::ClientRevokeResult {
+        },
+        "kill_status" | "kill_engage" | "kill_release" => AdminControl::KillStatusResult {
+            ok: false,
+            killed: None,
+            error: Some(format!("malformed {kind} frame")),
+        },
+        _ => AdminControl::ClientRevokeResult {
             ok: false,
             error: Some(format!("malformed {kind} frame")),
-        }
+        },
     }
 }
 
@@ -213,34 +340,59 @@ fn push_revoked(out: &Mutex<BufWriter<io::Stdout>>) {
     }
 }
 
-/// Watch for an out-of-band host-key revocation (`chromium-bridge revoke`,
-/// `pair --reset`) while this host is connected, and notify the extension.
-/// Two triggers, both requiring a RECORDED revocation (`host_key_epoch > 0`)
-/// AND a keychain-confirmed absent key before any frame is sent:
-/// - at startup, covering a revocation that happened while no host was
-///   running (MV3 kills the host with the service worker; the pinned state
-///   survives in the extension's durable storage, so the push on the next
-///   spawn is what flips it without waiting for an opt-in reverify);
-/// - while running, a change of the record's host-key marker triggers a
-///   fresh keychain check.
+/// Push the current kill state to the extension as an unsolicited
+/// `kill_status_result` (ADR-0030). Sent when the watch observes a transition,
+/// and at startup only when the news is bad (killed, or unreadable): a
+/// healthy startup pushes nothing, because the extension itself queries
+/// `kill_status` on every port connect (which is what clears a stale killed
+/// mirror after a CLI unkill), and an unconditional push would put an
+/// unexpected frame in front of every fresh connection. Best-effort: a failed
+/// write only delays the mirror to the extension's own query.
+fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
+    if let Err(e) = write_control_reply(out, &kill_status_reply()) {
+        log_warn!("native-host", "could not push kill_status_result: {e}");
+    }
+}
+
+/// Watch the revocation record while this host runs, and notify the extension
+/// of out-of-band transitions:
 ///
-/// Requiring the recorded marker keeps a never-enrolled machine quiet (no
-/// push on every spawn) and keeps the trigger tied to a revocation act; the
-/// keychain check keeps a scribbled-on revocation file from faking one. A key
-/// deleted directly out of the keychain with no record leaves no push -- the
-/// pinned extension catches that at its next verification, and the deletion
-/// only ever reduced capability.
-fn spawn_host_key_revocation_watch(out: Arc<Mutex<BufWriter<io::Stdout>>>) {
+/// - **host-key revocations** (`chromium-bridge revoke`, `pair --reset`),
+///   pushed as `enclave_revoked` — both triggers require a RECORDED revocation
+///   (`host_key_epoch > 0`) AND a keychain-confirmed absent key before any
+///   frame is sent (see ADR-0025; the keychain check keeps a scribbled-on
+///   revocation file from faking one);
+/// - **kill-switch transitions** (ADR-0030), pushed as `kill_status_result`
+///   whenever `kill_epoch` moves — plus once at startup when the state is
+///   already killed or unreadable — so the extension's SW-only mirror tracks
+///   CLI-driven kills without polling (the alive direction is pulled by the
+///   extension's own on-connect query).
+///
+/// With `exit_on_unkill` (the control-plane mode of a killed bridge), an
+/// observed release additionally ends this process: Chrome tears the port
+/// down, the extension reconnects, and the fresh host comes up in normal
+/// bridge mode. The exit happens only AFTER the released state was pushed,
+/// so the mirror is not left engaged across the respawn gap.
+///
+/// An unreadable record is pushed once (as `ok: false`, which the extension
+/// treats as unknown and fails closed on) and logged once, not every tick.
+fn spawn_revocation_watch(out: Arc<Mutex<BufWriter<io::Stdout>>>, exit_on_unkill: bool) {
     thread::spawn(move || {
-        let mut last = match Revocation::current() {
+        // Startup posture: bad news is announced now (a key revoked or a kill
+        // engaged while no host was running); a healthy state stays quiet.
+        let mut last: Option<(u64, u64)> = match Revocation::current() {
             Ok(rev) => {
                 if rev.host_key_epoch > 0 && enrollment_key_is_gone() {
                     push_revoked(&out);
                 }
-                Some(rev.host_key_epoch)
+                if rev.killed {
+                    push_kill_status(&out);
+                }
+                Some((rev.host_key_epoch, rev.kill_epoch))
             }
             Err(e) => {
                 log_warn!("native-host", "revocation record unreadable: {e}");
+                push_kill_status(&out); // pushes ok:false (unknown, fail closed)
                 None
             }
         };
@@ -248,23 +400,178 @@ fn spawn_host_key_revocation_watch(out: Arc<Mutex<BufWriter<io::Stdout>>>) {
             thread::sleep(REVOCATION_POLL);
             match Revocation::current() {
                 Ok(rev) => {
-                    if last != Some(rev.host_key_epoch) {
-                        last = Some(rev.host_key_epoch);
-                        if rev.host_key_epoch > 0 && enrollment_key_is_gone() {
+                    let cur = (rev.host_key_epoch, rev.kill_epoch);
+                    if let Some((last_host_key, last_kill)) = last {
+                        if last_host_key != rev.host_key_epoch
+                            && rev.host_key_epoch > 0
+                            && enrollment_key_is_gone()
+                        {
                             push_revoked(&out);
                         }
+                        if last_kill != rev.kill_epoch {
+                            push_kill_status(&out);
+                            if exit_on_unkill && !rev.killed {
+                                log_info!(
+                                    "native-host",
+                                    "kill switch released; exiting so the extension \
+                                     reconnects into a bridge-mode host"
+                                );
+                                std::process::exit(0);
+                            }
+                        }
+                    } else {
+                        // Recovered from an unreadable record: re-announce.
+                        push_kill_status(&out);
                     }
+                    last = Some(cur);
                 }
                 Err(e) => {
-                    // Log the transition to unreadable once, not every tick.
+                    // Log (and push the unknown state) on the transition to
+                    // unreadable once, not every tick.
                     if last.is_some() {
                         log_warn!("native-host", "revocation record unreadable: {e}");
+                        push_kill_status(&out);
                         last = None;
                     }
                 }
             }
         }
     });
+}
+
+/// What one inbound native-messaging frame turned into.
+enum Inbound {
+    /// A host-handled control frame: the reply (if any) has been written.
+    Handled,
+    /// Not a control frame: the caller decides (forward over the bridge in
+    /// normal mode; drop in control-plane mode).
+    Forward(Value),
+}
+
+/// Handle one frame from Chrome against the host-handled control surface
+/// (ADR-0021/0025/0030). Shared by the normal stdin->socket pump and the
+/// control-plane-only loop, so the two modes cannot drift in what they answer.
+/// An `Err` means a control REPLY could not be written (stdout gone), which
+/// ends the calling loop.
+fn handle_control_frame(frame: Value, out: &Mutex<BufWriter<io::Stdout>>) -> io::Result<Inbound> {
+    match classify_nm_frame(&frame) {
+        FrameDisposition::Forward => Ok(Inbound::Forward(frame)),
+        FrameDisposition::Challenge { nonce, context } => {
+            log_info!("native-host", "answering enclave challenge locally");
+            // Signing blocks this pump until the user answers the
+            // presence prompt, so extension->server traffic is
+            // head-of-line blocked for the duration (server->extension
+            // still flows). Accepted: challenges only occur during the
+            // user-present enrollment ceremony, not in steady state.
+            let reply = crate::enclave::respond_to_challenge(&nonce, context.as_deref());
+            write_control_reply(out, &reply)?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::RevokeHostKey => {
+            write_control_reply(out, &revoke_host_key())?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::ClientList => {
+            write_control_reply(out, &admin_client_list())?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::ClientRevoke { name } => {
+            write_control_reply(out, &admin_client_revoke(&name))?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::KillStatus => {
+            write_control_reply(out, &kill_status_reply())?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::KillEngage => {
+            write_control_reply(out, &handle_kill_transition(true))?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::KillRelease => {
+            write_control_reply(out, &handle_kill_transition(false))?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::AuditEvent {
+            kind,
+            outcome,
+            tool,
+            name,
+            detail,
+        } => {
+            // Fire-and-forget by contract: no reply frame.
+            handle_audit_event(kind, outcome, tool, name, detail);
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::MalformedAdmin(kind) => {
+            log_warn!("native-host", "malformed {kind} frame from browser");
+            write_control_reply(out, &malformed_admin_reply(kind))?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::Drop(kind) => {
+            log_warn!(
+                "native-host",
+                "dropping unexpected {kind} frame from browser"
+            );
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::Malformed => {
+            log_warn!(
+                "native-host",
+                "malformed enclave control frame from browser"
+            );
+            let reply = EnclaveControl::EnclaveError {
+                reason: "invalid_challenge".into(),
+            };
+            write_control_reply(out, &reply)?;
+            Ok(Inbound::Handled)
+        }
+    }
+}
+
+/// Control-plane-only mode (ADR-0030): the bridge is killed (or its state is
+/// unreadable), so NOTHING may flow between the browser and a broker -- but
+/// this host must stay up, because the extension's unkill rides a control
+/// frame through this very process, and the SW-only kill mirror is fed by
+/// this host's pushes. So: no socket, no forwarding; host-handled control
+/// frames (kill status/engage/release, enclave ceremony, client admin, audit
+/// events) keep working; a bridge frame that arrives anyway is dropped and
+/// logged. When the watch observes the switch released, the process exits so
+/// the extension's reconnect spawns a normal bridge-mode host.
+fn run_control_plane() -> i32 {
+    let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+    // exit_on_unkill: leaving this mode goes through a clean respawn.
+    spawn_revocation_watch(Arc::clone(&stdout_writer), true);
+    let mut stdin = io::stdin();
+    loop {
+        let frame: Option<Value> = match nm_read_frame(&mut stdin) {
+            Ok(v) => v,
+            Err(e) => {
+                log_warn!("native-host", "stdin read error: {e}");
+                break;
+            }
+        };
+        let Some(frame) = frame else {
+            log_info!("native-host", "stdin EOF, shutting down");
+            break;
+        };
+        match handle_control_frame(frame, &stdout_writer) {
+            Ok(Inbound::Handled) => {}
+            Ok(Inbound::Forward(_)) => {
+                // Fail closed: no bridge traffic while killed. The extension's
+                // own gate refuses ops too; this covers a raced or tampered
+                // sender.
+                log_warn!(
+                    "native-host",
+                    "dropping bridge frame while the kill switch is engaged"
+                );
+            }
+            Err(e) => {
+                log_warn!("native-host", "control reply write error: {e}");
+                break;
+            }
+        }
+    }
+    0
 }
 
 pub fn run() -> i32 {
@@ -292,6 +599,29 @@ pub fn run() -> i32 {
             "cannot establish own executable identity: {e}"
         );
         return 1;
+    }
+
+    // ADR-0030: while the kill switch is engaged -- or its state cannot be
+    // read -- this host bridges NOTHING. It does not even dial the broker
+    // (which refuses browser attaches while killed); it drops into the
+    // control-plane-only mode instead, which keeps the extension's unkill
+    // surface reachable and its kill mirror fed.
+    match crate::kill::is_killed() {
+        Ok(false) => {}
+        Ok(true) => {
+            log_error!(
+                "native-host",
+                "kill switch is engaged; serving the control plane only (no bridge traffic)"
+            );
+            return run_control_plane();
+        }
+        Err(e) => {
+            log_error!(
+                "native-host",
+                "kill state unreadable ({e}); failing closed to the control plane only"
+            );
+            return run_control_plane();
+        }
     }
 
     // Connect to the MCP server's bridge socket (reads the lock file).
@@ -401,9 +731,11 @@ pub fn run() -> i32 {
     // mutex around one buffered writer keeps frames whole; every write flushes.
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
 
-    // ADR-0025: notify the extension when the enrollment key has been revoked
-    // out-of-band (at startup if it is already gone; live on an epoch bump).
-    spawn_host_key_revocation_watch(Arc::clone(&stdout_writer));
+    // ADR-0025/0030: notify the extension when the enrollment key has been
+    // revoked out-of-band, and keep its kill mirror fed (at startup and on
+    // every observed transition). exit_on_unkill=false: in bridge mode an
+    // engaged kill ends this process via the broker severing the socket.
+    spawn_revocation_watch(Arc::clone(&stdout_writer), false);
 
     // Thread A: stdin -> socket
     let ctrl_out = Arc::clone(&stdout_writer);
@@ -426,83 +758,21 @@ pub fn run() -> i32 {
                     break;
                 }
             };
-            // Host-handled control frames (ADR-0021/0025) are addressed to
-            // THIS process and must never reach the socket; everything else
-            // forwards.
-            match classify_nm_frame(&frame) {
-                FrameDisposition::Forward => {}
-                FrameDisposition::Challenge { nonce, context } => {
-                    log_info!("native-host", "answering enclave challenge locally");
-                    // Signing blocks this pump until the user answers the
-                    // presence prompt, so extension->server traffic is
-                    // head-of-line blocked for the duration (server->extension
-                    // still flows). Accepted: challenges only occur during the
-                    // user-present enrollment ceremony, not in steady state.
-                    let reply = crate::enclave::respond_to_challenge(&nonce, context.as_deref());
-                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
-                        log_warn!("native-host", "control reply write error: {e}");
+            // Host-handled control frames (ADR-0021/0025/0030) are addressed
+            // to THIS process and must never reach the socket; everything
+            // else forwards.
+            match handle_control_frame(frame, &ctrl_out) {
+                Ok(Inbound::Handled) => continue,
+                Ok(Inbound::Forward(frame)) => {
+                    if let Err(e) = bridge_write(&mut sock, &frame) {
+                        log_warn!("native-host", "bridge write error: {e}");
                         break;
                     }
-                    continue;
                 }
-                FrameDisposition::RevokeHostKey => {
-                    let reply = revoke_host_key();
-                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
-                        log_warn!("native-host", "control reply write error: {e}");
-                        break;
-                    }
-                    continue;
+                Err(e) => {
+                    log_warn!("native-host", "control reply write error: {e}");
+                    break;
                 }
-                FrameDisposition::ClientList => {
-                    let reply = admin_client_list();
-                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
-                        log_warn!("native-host", "control reply write error: {e}");
-                        break;
-                    }
-                    continue;
-                }
-                FrameDisposition::ClientRevoke { name } => {
-                    let reply = admin_client_revoke(&name);
-                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
-                        log_warn!("native-host", "control reply write error: {e}");
-                        break;
-                    }
-                    continue;
-                }
-                FrameDisposition::MalformedAdmin(kind) => {
-                    log_warn!("native-host", "malformed {kind} frame from browser");
-                    let reply = malformed_admin_reply(kind);
-                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
-                        log_warn!("native-host", "control reply write error: {e}");
-                        break;
-                    }
-                    continue;
-                }
-                FrameDisposition::Drop(kind) => {
-                    log_warn!(
-                        "native-host",
-                        "dropping unexpected {kind} frame from browser"
-                    );
-                    continue;
-                }
-                FrameDisposition::Malformed => {
-                    log_warn!(
-                        "native-host",
-                        "malformed enclave control frame from browser"
-                    );
-                    let reply = EnclaveControl::EnclaveError {
-                        reason: "invalid_challenge".into(),
-                    };
-                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
-                        log_warn!("native-host", "control reply write error: {e}");
-                        break;
-                    }
-                    continue;
-                }
-            }
-            if let Err(e) = bridge_write(&mut sock, &frame) {
-                log_warn!("native-host", "bridge write error: {e}");
-                break;
             }
         }
         // Either side breaking means this process is done. Exit immediately so
@@ -663,6 +933,11 @@ mod tests {
             "{\"type\":\"client_list_result\",\"ok\":true,\"enrolled\":true,\"clients\":[]}\n",
             "{\"type\":\"client_revoke\",\"name\":\"codex\"}\n",
             "{\"type\":\"client_revoke_result\",\"ok\":true}\n",
+            "{\"type\":\"kill_status\"}\n",
+            "{\"type\":\"kill_engage\"}\n",
+            "{\"type\":\"kill_release\"}\n",
+            "{\"type\":\"kill_status_result\",\"ok\":true,\"killed\":false}\n",
+            "{\"type\":\"audit_event\",\"kind\":\"confirm_allowed\"}\n",
             "{\"id\":7,\"op\":\"tab_list\"}\n",
         );
         let out = Mutex::new(Vec::new());
@@ -693,6 +968,50 @@ mod tests {
             } => {}
             other => panic!("expected a failed client_revoke_result, got {other:?}"),
         }
+        // The kill frames all resolve to a kill_status_result whose ok:false
+        // carries NO killed claim (unknown fails closed on the extension side).
+        for kind in ["kill_status", "kill_engage", "kill_release"] {
+            match malformed_admin_reply(kind) {
+                AdminControl::KillStatusResult {
+                    ok: false,
+                    killed: None,
+                    error: Some(_),
+                } => {}
+                other => panic!("expected a failed kill_status_result for {kind}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn kill_status_reply_never_claims_a_state_it_cannot_read() {
+        // On a machine whose revocation record is absent (the unit-test
+        // environment), the reply is ok with an explicit killed flag; the
+        // ok:false shape is pinned by the malformed test above and the
+        // adversarial suite (corrupt record).
+        match kill_status_reply() {
+            AdminControl::KillStatusResult {
+                ok: true,
+                killed: Some(_),
+                error: None,
+            } => {}
+            AdminControl::KillStatusResult {
+                ok: false,
+                killed: None,
+                error: Some(_),
+            } => {}
+            other => {
+                panic!("kill_status_result must never pair ok:false with a killed claim: {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn audit_events_with_host_side_kinds_are_dropped() {
+        // handle_audit_event must refuse to stamp host-side kinds from the
+        // browser leg. Success here is the absence of a panic plus the
+        // whitelist test in audit.rs; this exercises the wiring.
+        handle_audit_event("kill_engage".into(), None, None, None, None);
+        handle_audit_event("harness_admit".into(), None, None, None, None);
     }
 
     #[cfg(not(target_os = "macos"))]

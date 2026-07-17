@@ -106,6 +106,38 @@ def nm_write(p, obj):
     p.stdin.flush()
 
 
+def unkill_interactive(phrase="release", check=True):
+    """Release the kill switch through the CLI's presence floor (ADR-0030):
+    `unkill` refuses a non-terminal stdin, so drive it on a pty and type the
+    confirmation phrase. Unix only (every caller is already Unix-gated).
+    Returns a CompletedProcess; with check=True a non-zero exit raises."""
+    import pty
+
+    master, slave = pty.openpty()
+    try:
+        p = subprocess.Popen([BIN, "unkill"], stdin=slave,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, encoding="utf-8")
+        os.close(slave)
+        slave = -1
+        # The pty buffers the phrase until the prompt reads it.
+        os.write(master, (phrase + "\n").encode())
+        try:
+            out, err = p.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            # Reap the specific child we spawned; never leave it running.
+            p.kill()
+            out, err = p.communicate()
+    finally:
+        if slave >= 0:
+            os.close(slave)
+        os.close(master)
+    result = subprocess.CompletedProcess([BIN, "unkill"], p.returncode, out, err)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"unkill failed ({result.returncode}): {err}")
+    return result
+
+
 def nm_read(p):
     hdr = p.stdout.read(4)
     if len(hdr) < 4:
@@ -779,6 +811,169 @@ def test_admin_control_frames():
         shutil.rmtree(rundir, ignore_errors=True)
 
 
+def test_kill_switch_round_trip():
+    """ADR-0030: `kill` halts everything (typed BRIDGE_KILLED errors on a LIVE
+    broker, severed browser leg, control-plane-only hosts), the extension
+    surface can release it via a control frame, and the bridge fully recovers.
+    Also proves the audit trail: kill/unkill land in the 0600 audit file and
+    `chromium-bridge audit` renders them."""
+    print("\n[test] global kill switch: engage, refuse, release, recover (ADR-0030)")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    rundir = os.path.dirname(os.path.dirname(LOCK))
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    nh = None
+    nh2 = None
+    nh3 = None
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        c.initialize()
+        c.initialized()
+        nh = start_bridge_host()
+        wait_host_ready(nh)
+
+        # Healthy round trip before the kill.
+        served = []
+        t = threading.Thread(target=lambda: served.append(
+            serve_bridge_req(nh, lambda req: {"id": req["id"], "ok": True, "data": []})))
+        t.start()
+        r = c.call("tab_list", {}, _id=80)
+        t.join(timeout=5)
+        check(not r["result"].get("isError", False), "bridge works before the kill")
+
+        # Engage from the CLI surface.
+        kill = subprocess.run([BIN, "kill"], capture_output=True, text=True)
+        check(kill.returncode == 0, "`kill` exits 0")
+
+        # The LIVE broker refuses the very next call with the stable typed
+        # code -- and the harness connection survives to deliver it (a typed
+        # refusal, not an opaque EOF).
+        r = c.call("tab_list", {}, _id=81)
+        text = r["result"]["content"][0]["text"]
+        check(r["result"].get("isError") is True and "BRIDGE_KILLED" in text,
+              "a live broker answers tools/call with the typed BRIDGE_KILLED error")
+
+        # The connected browser leg is severed within a watcher tick: the
+        # host sees its socket close and exits (it may first relay the
+        # transition push toward "Chrome"; both frames-then-EOF and plain EOF
+        # are valid shapes).
+        try:
+            nh.wait(timeout=8)
+        except Exception:
+            pass
+        # Keep the handle either way: the finally block only kills a host
+        # that is still running, so a failed exit is cleaned up, not leaked.
+        check(nh.poll() is not None, "the connected native host exits after the kill")
+
+        # A freshly spawned host must NOT bridge: it comes up control-plane
+        # only, announces the killed state (startup push), answers a status
+        # query, and honors the extension's release frame (the options-page
+        # unkill path).
+        nh2 = start_bridge_host()
+        frame = nm_read(nh2)
+        check(frame is not None and frame.get("type") == "kill_status_result"
+              and frame.get("ok") is True and frame.get("killed") is True,
+              "a fresh host announces the killed state (control-plane mode)")
+        check(not nh2.ready.is_set(),
+              "the control-plane host never completes a bridge handshake")
+        nm_write(nh2, {"type": "kill_status"})
+        frame = nm_read(nh2)
+        check(frame is not None and frame.get("type") == "kill_status_result"
+              and frame.get("killed") is True, "kill_status is answered locally")
+        nm_write(nh2, {"type": "kill_release"})
+        frame = nm_read(nh2)
+        check(frame is not None and frame.get("type") == "kill_status_result"
+              and frame.get("ok") is True and frame.get("killed") is False,
+              "kill_release (the extension surface) releases the switch")
+        # On the released transition the control-plane host exits so the
+        # extension reconnects into a bridge-mode host. Drain any trailing
+        # transition push until EOF, bounded so a host that wrongly stays up
+        # fails the test instead of hanging the suite.
+        drained = []
+        drain = threading.Thread(target=lambda: [
+            drained.append(f) for f in iter(lambda: nm_read(nh2), None)])
+        drain.start()
+        drain.join(timeout=8)
+        try:
+            nh2.wait(timeout=8)
+        except Exception:
+            pass
+        # Keep the handle either way: the finally block only kills a host
+        # that is still running, so a failed exit is cleaned up, not leaked.
+        check(nh2.poll() is not None, "the control-plane host exits after the release")
+
+        # Full recovery on the SAME broker: a new host attaches and the
+        # harness's calls flow again.
+        nh3 = start_bridge_host()
+        wait_host_ready(nh3)
+        served = []
+        t = threading.Thread(target=lambda: served.append(
+            serve_bridge_req(nh3, lambda req: {"id": req["id"], "ok": True, "data": []})))
+        t.start()
+        r = c.call("tab_list", {}, _id=82)
+        t.join(timeout=5)
+        check(not r["result"].get("isError", False),
+              "the bridge fully recovers after the release")
+
+        # The audit trail: 0600 on-disk file carrying the kill and the
+        # release, rendered by the read-only subcommand. Read the rotated
+        # file too, exactly like the CLI reader, so a rotation mid-suite
+        # cannot fake a missing record.
+        audit_path = os.path.join(rundir, "chromium-bridge", "audit.log")
+        check(os.path.exists(audit_path), "audit.log exists in the runtime dir")
+        if os.name != "nt" and os.path.exists(audit_path):
+            mode = os.stat(audit_path).st_mode & 0o777
+            check(mode == 0o600, f"audit.log is 0600 (got {oct(mode)})")
+        records = []
+        for name in (audit_path + ".1", audit_path):
+            try:
+                with open(name) as f:
+                    for line in f:
+                        records.append(json.loads(line))
+            except FileNotFoundError:
+                pass
+        kinds = [rec.get("kind") for rec in records]
+        check("kill_engage" in kinds, "the kill is in the audit file")
+        check("kill_release" in kinds, "the release is in the audit file")
+        release = next(rec for rec in records if rec.get("kind") == "kill_release")
+        check(release.get("surface") == "extension",
+              "the release records its surface (extension control frame)")
+        check("auth=extension_confirm" in release.get("detail", ""),
+              "the release names the presence rung that authorized it")
+        killed_calls = [rec for rec in records
+                        if rec.get("kind") == "tool_call"
+                        and rec.get("code") == "BRIDGE_KILLED"]
+        check(bool(killed_calls), "the refused tool call is audited with its code")
+        shown = subprocess.run([BIN, "audit"], capture_output=True, text=True)
+        check(shown.returncode == 0 and "kill_engage" in shown.stdout
+              and "kill_release" in shown.stdout,
+              "`audit` renders the trail read-only")
+    finally:
+        for host in (nh, nh2, nh3):
+            if host is not None and host.poll() is None:
+                host.kill()
+                try:
+                    host.wait(timeout=3)
+                except Exception:
+                    pass
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=5)
+        # Leave the isolated dir clean for the tests that follow: the kill
+        # state and the audit trail are this test's artifacts.
+        for name in ("revocation.json", "audit.log", "audit.log.1", "audit.log.lock"):
+            try:
+                os.remove(os.path.join(rundir, "chromium-bridge", name))
+            except FileNotFoundError:
+                pass
+
+
 def test_second_instance_coexists_as_relay():
     """Coexistence (ADR-0024): a second MCP-server instance does NOT SIGTERM the
     first (newest-wins takeover is gone). The first instance is the broker and
@@ -1269,6 +1464,7 @@ def main():
     test_native_host_mode()
     test_enclave_control_frames()
     test_admin_control_frames()
+    test_kill_switch_round_trip()
     test_two_browsers()
     test_foreign_peer_is_rejected()
     test_second_instance_coexists_as_relay()

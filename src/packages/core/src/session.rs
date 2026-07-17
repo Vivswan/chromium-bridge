@@ -368,6 +368,23 @@ impl Session {
         labels
     }
 
+    /// Sever every live browser connection (the kill switch's teeth on the
+    /// browser leg, ADR-0030). Shuts each connection's socket down and lets
+    /// the owning reader thread do the actual cleanup -- clear its slot and
+    /// drain its pending callers into [`CallError::Disconnected`] -- exactly
+    /// as it would on any other disconnect, so slot bookkeeping stays in one
+    /// place (mirroring the broker registry's sweep-never-removes rule).
+    /// Idempotent: shutting down an already-shut socket is harmless, so the
+    /// broker's watcher may call this every tick while killed. Returns how
+    /// many connections were signaled.
+    pub(crate) fn shutdown_all_browsers(&self) -> usize {
+        let guard = self.conns.lock().unwrap();
+        for conn in guard.values() {
+            let _ = conn.writer.get_ref().shutdown(std::net::Shutdown::Both);
+        }
+        guard.len()
+    }
+
     /// Resolve where a call with the given `browser` argument would be routed
     /// right now: the label and that connection's generation. `None` when the
     /// request is unroutable at this moment (nothing connected, unknown label,
@@ -694,6 +711,32 @@ mod tests {
                 thread::sleep(Duration::from_millis(10));
             }
             false
+        }
+
+        #[test]
+        fn shutdown_all_browsers_severs_every_connection_and_readers_clean_up() {
+            use std::io::Read;
+            let session = Session::new();
+            let mut chrome = attach(&session, "chrome");
+            let mut brave = attach(&session, "brave");
+            assert_eq!(session.labels(), vec!["brave", "chrome"]);
+
+            // The kill sweep signals both connections...
+            assert_eq!(session.shutdown_all_browsers(), 2);
+
+            // ...each far end sees EOF (the native host exits on it)...
+            for far in [&mut chrome, &mut brave] {
+                far.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut buf = [0u8; 1];
+                assert_eq!(far.read(&mut buf).unwrap(), 0, "far end must see EOF");
+            }
+
+            // ...and the reader threads clear their own slots, exactly as on
+            // any other disconnect.
+            assert!(wait_until(|| session.labels().is_empty()));
+
+            // Idempotent: sweeping an empty registry signals nobody.
+            assert_eq!(session.shutdown_all_browsers(), 0);
         }
 
         #[test]

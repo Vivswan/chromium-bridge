@@ -38,6 +38,7 @@ import {
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
+import { auditEvent } from "./audit-log";
 import * as pinStore from "./enclave-pin";
 import {
   fingerprintDisplay,
@@ -45,6 +46,7 @@ import {
   verifyPairingProof,
   verifyProofAgainstPin,
 } from "./enclave-verify";
+import { killGate } from "./kill";
 import { hardenStorageAccess } from "./trusted-storage";
 
 // ---- frame plumbing ---------------------------------------------------------
@@ -213,6 +215,12 @@ async function readGateState(): Promise<Gate> {
         "and reload the extension.",
     };
   }
+  // The kill switch next (ADR-0030), before any enrollment reasoning: while
+  // the mirror says killed (or unknown, or is malformed) every bridge request
+  // is refused here, whatever the enrollment state. The mirror lives in the
+  // storage the line above just confined, which is why the order matters.
+  const kill = await killGate();
+  if (!kill.allowed) return kill;
   if ((await getSetting("requireEnrollment")) !== true) return { allowed: true };
   const compromised = await pinStore.getCompromised();
   if (compromised) {
@@ -547,6 +555,7 @@ export function approvePending(): Promise<{ ok: boolean; error?: string }> {
     await pinStore.setHostRevokePending(false);
     await updateBadge();
     console.log("[bb] enrollment pinned:", pending.keyId);
+    auditEvent("enroll_approved", { name: fingerprintDisplay(pending.keyId) });
     return { ok: true };
   });
 }
@@ -564,6 +573,7 @@ export function rejectPending(): Promise<{ ok: boolean; error?: string }> {
         "investigate before pairing again.",
     );
     await updateBadge();
+    auditEvent("enroll_rejected", {});
     return { ok: true };
   });
 }
@@ -590,6 +600,7 @@ export function revokePin(): Promise<{ ok: boolean }> {
     }
     await updateBadge();
     console.log("[bb] enrollment pin revoked; host key deletion requested");
+    auditEvent("enroll_revoked", {});
     return { ok: true };
   });
 }
