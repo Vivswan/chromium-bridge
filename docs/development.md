@@ -34,6 +34,9 @@ folders (`src/` and `tests/`).
 ```
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); dist/ is the load-unpacked target (gitignored)
+src/apps/desktop/        Tauri v2 desktop shell (signing spike, ADR-0026): workspace
+                         member but NOT a default member; `just desktop-bundle`
+                         builds + signs it with the bundled host
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace for the wire parsers (nightly + libFuzzer)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)

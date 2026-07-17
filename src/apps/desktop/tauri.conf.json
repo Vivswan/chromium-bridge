@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chromium Bridge",
+  "identifier": "com.vivswan.chromium-bridge",
+  "build": {
+    "frontendDist": "./ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Chromium Bridge",
+        "width": 520,
+        "height": 360
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.icns"],
+    "macOS": {
+      "signingIdentity": "Apple Development: vivswanshah@icloud.com (LKTYT58LGS)",
+      "entitlements": "entitlements/app.entitlements",
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
