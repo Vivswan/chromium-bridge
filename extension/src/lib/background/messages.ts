@@ -1,12 +1,21 @@
 // Runtime message router: handles requests from the popup / options page
-// (allowlist approve/add/remove/list, connection status) and the content
-// script's screenshot proxy. The background entrypoint installs the listener
-// via registerRuntimeMessageRouter().
+// (allowlist approve/add/remove/list, connection + enrollment status,
+// enrollment ceremony) and the confirmation window (confirm_*). The background
+// entrypoint installs the listener via registerRuntimeMessageRouter().
 //
 // Every inbound message is parsed against RuntimeMsgSchema before anything
 // acts on it: an unrecognized or malformed message is answered with a refusal
 // (never interpreted loosely), so the router only ever operates on shapes the
 // schema vouches for.
+//
+// SENDER GATING (#32, security-critical): EVERY message is refused unless it
+// comes from an extension page (fromExtensionPage), and confirm_* additionally
+// require the confirmation window specifically (fromConfirmPage). The content
+// script sends the router NOTHING; a content-script sender for any of these
+// would be a compromised renderer trying to reach the trust state, so it is
+// refused. This is what makes the #32 claim true for the MEDIATED path: without
+// it, a content script on an already-approved origin could add_allow{evil.com}
+// to seed the allowlist, or read keyId/fingerprint out of get_enrollment.
 
 import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
@@ -23,9 +32,11 @@ import {
 } from "./enrollment";
 import { isNativeConnected } from "./port";
 
-// The enrollment actions change the extension's trust anchor, so they are
-// accepted only from the extension's own pages (popup/options), never from a
-// content script running in a tab. Content-script senders carry the page URL.
+// True only for a sender that is one of the extension's OWN pages (popup /
+// options / confirm), identified by the extension id AND a chrome-extension://
+// <our-id>/ URL. A content script's sender carries the http(s) page URL and its
+// id is our extension id too, so the URL prefix is the discriminator. Every
+// router message requires this.
 function fromExtensionPage(sender: Browser.runtime.MessageSender): boolean {
   return (
     sender.id === browser.runtime.id &&
@@ -36,16 +47,17 @@ function fromExtensionPage(sender: Browser.runtime.MessageSender): boolean {
 
 // The confirmation verdict may come ONLY from the confirmation window
 // itself - not merely any extension page - shrinking the surface that can
-// approve an action to the one document the service opened.
+// approve an action to the one document the service opened. Reuses
+// fromExtensionPage for the origin (a robust prefix check) and adds an EXACT
+// pathname match: a prefix test would also admit /confirm.htmlfoo or
+// /confirm.html/...; the query/hash stay free (the window carries ?id=...).
+// Deliberately does NOT compare url.origin, which is a real tuple origin in
+// Chrome for chrome-extension:// but an opaque "null" in some URL parsers -
+// pathname is scheme-independent and correct in both.
 function fromConfirmPage(sender: Browser.runtime.MessageSender): boolean {
-  if (sender.id !== browser.runtime.id || typeof sender.url !== "string") return false;
-  // Exact document match (origin + path), not a prefix test: a prefix would
-  // also admit /confirm.htmlfoo or /confirm.html/...; query/hash stay free.
+  if (!fromExtensionPage(sender) || typeof sender.url !== "string") return false;
   try {
-    const url = new URL(sender.url);
-    return (
-      url.origin === `chrome-extension://${browser.runtime.id}` && url.pathname === "/confirm.html"
-    );
+    return new URL(sender.url).pathname === "/confirm.html";
   } catch {
     return false;
   }
@@ -59,11 +71,20 @@ const ENROLLMENT_ACTIONS = {
   enroll_revoke: revokePin,
 } as const;
 
-function route(
+/** The router core, exported for the sender-gating tests. */
+export function route(
   msg: RuntimeMsg,
   sender: Browser.runtime.MessageSender,
   sendResponse: (response?: unknown) => void,
 ): boolean {
+  // #32 gate: refuse EVERY message from a non-extension-page sender. A content
+  // script sends the router nothing, so a content-script sender here is a
+  // compromised renderer reaching for trust state (the allowlist, the pin, the
+  // enrollment status). confirm_* is gated more strictly still, below.
+  if (!fromExtensionPage(sender)) {
+    sendResponse({ ok: false, error: "this action is only accepted from extension pages" });
+    return false;
+  }
   switch (msg.type) {
     case "resolve_allow":
       void resolvePendingAllow(msg.id, msg.allow).then((r) => sendResponse(r));
@@ -84,11 +105,11 @@ function route(
       void getEnrollmentStatus().then((st) => sendResponse(st));
       return true;
     case "confirm_ready":
-      // The confirmation window (ADR-0027) asking for its payload. ONLY from
-      // the confirmation window: a content script (or any other page) must
-      // never see what is pending.
+      // The confirmation window (ADR-0027) asking for its payload. Requires the
+      // confirmation window SPECIFICALLY (not just any extension page): a
+      // content script (or any other page) must never see what is pending.
       if (!fromConfirmPage(sender)) {
-        sendResponse({ ok: false, error: "confirmations are extension-page-only" });
+        sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
         return false;
       }
       sendResponse({ payload: getPendingConfirm(msg.id) });
@@ -98,7 +119,7 @@ function route(
       // restriction is what makes page-side auto-approval impossible (the
       // page can neither see nor answer the request).
       if (!fromConfirmPage(sender)) {
-        sendResponse({ ok: false, error: "confirmations are extension-page-only" });
+        sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
         return false;
       }
       sendResponse(resolveConfirm(msg.id, msg.approved));
@@ -110,13 +131,8 @@ function route(
         sendResponse({ ok: false, error: `unhandled message type: ${(msg as RuntimeMsg).type}` });
         return false;
       }
-      if (!fromExtensionPage(sender)) {
-        sendResponse({
-          ok: false,
-          error: "enrollment actions are only accepted from extension pages",
-        });
-        return false;
-      }
+      // Enrollment actions change the trust anchor; the top-level gate already
+      // required an extension-page sender.
       ENROLLMENT_ACTIONS[msg.type]().then((r) => sendResponse(r));
       return true;
     }
