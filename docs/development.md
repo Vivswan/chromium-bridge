@@ -42,6 +42,7 @@ With `make` (`make help` lists every target):
 
 ```sh
 make build          # cargo build --release
+make build-repro    # deterministic release build (scripts/build-repro.sh)
 make test           # rust unit tests + protocol e2e
 make test-browser   # build the extension, then DOM + smoke tests (needs bun + Chrome)
 make ci             # everything CI runs, minus the browser job

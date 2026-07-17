@@ -23,10 +23,17 @@ thiserror = "2.0.18"
 # its dependency tree stays within the licenses allowed by `deny.toml`.
 proptest = { version = "1", default-features = false, features = ["std"] }
 
+# codegen-units=1 and strip=symbols also serve reproducibility: one codegen
+# unit removes parallel-codegen variance, and stripping drops the symbol/debug
+# sections most likely to leak build-machine paths. Path remapping and
+# SOURCE_DATE_EPOCH live in scripts/build-repro.sh (used by the release
+# workflow), since they need the concrete checkout path at build time.
 [profile.release]
 opt-level = "z"
 lto = true
 panic = "abort"
+codegen-units = 1
+strip = "symbols"
 
 # Secure Enclave enrollment key (src/enclave.rs). The vetted wrapper crate is
 # used instead of hand-rolled Security.framework FFI; OSX_10_15 is required
