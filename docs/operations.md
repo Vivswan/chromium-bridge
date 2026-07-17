@@ -25,8 +25,12 @@ single stray write would corrupt the frame stream
 `chromium-bridge doctor` (alias `status`) is a **read-only** self-check: it does not listen
 on a port, does not write the lock file, and does not spawn child processes. It only probes
 and prints the environment and connectivity conclusions (version/platform, lock file
-port/pid, MCP server reachability, whether the native host manifest is in place). It does
-**no repairs**: it does not kill processes, delete the lock file, or restart the server.
+port/pid, MCP server reachability, and per browser the state of the native-messaging
+registration). Plain doctor does **no repairs**: it does not kill processes, delete the
+lock file, or restart the server. Repairing a registration is the explicit, opt-in
+`chromium-bridge doctor --fix` (with `uninstall` as its reverse); the report and the
+repair share one browser-path resolver, so they always agree on where a manifest belongs
+(see [cli.md](./cli.md#doctor---fix--uninstall-native-messaging-registration)).
 The meaning of each item and how to interpret "server not reachable" are in
 [cli.md](./cli.md#doctor--status-read-only-self-check).
 

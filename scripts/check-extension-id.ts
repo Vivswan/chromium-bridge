@@ -40,6 +40,7 @@ const sources: Array<[string, RegExp]> = [
   ["install/install.sh", /PINNED_EXTENSION_ID="([a-p]{32})"/],
   ["install/install.ps1", /\$ExtensionId\s*=\s*'([a-p]{32})'/],
   ["src/packages/shared/src/identity.gen.ts", /PINNED_EXTENSION_ID = "([a-p]{32})"/],
+  ["src/packages/core/src/browsers.rs", /PINNED_EXTENSION_ID: &str = "([a-p]{32})"/],
 ];
 
 let failed = false;
@@ -65,7 +66,7 @@ if (typeof hostId !== "string" || !/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(hostId)) {
 }
 const hostSources: Array<[string, RegExp]> = [
   ["src/packages/shared/src/identity.gen.ts", /NATIVE_HOST_ID = "([a-z0-9._]+)"/],
-  ["src/packages/core/src/doctor.rs", /const HOST_NAME: &str = "([a-z0-9._]+)"/],
+  ["src/packages/core/src/browsers.rs", /HOST_ID: &str = "([a-z0-9._]+)"/],
   ["install/install.sh", /HOST_NAME="([a-z0-9._]+)"/],
   ["install/install.ps1", /\$HostName = '([a-z0-9._]+)'/],
 ];
