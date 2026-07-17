@@ -1,110 +1,110 @@
-# ADR-0010:Cookie/Storage 只读访问
+# ADR-0010: Read-only Cookie/Storage access
 
-- **状态**:Accepted
-- **日期**:2026-07-08
-- **实现**:阶段三第一批
+- **Status**: Accepted
+- **Date**: 2026-07-08
+- **Implemented**: phase three, first batch
 
-## 背景
+## Context
 
-用户场景:"让 AI 读取我已登录站点的 session token,用于别处(本地脚本、跨工具调用、调试 API)。"
+The user scenario: "let the AI read the session token of a site I am logged into, for use elsewhere (local scripts, cross-tool calls, API debugging)."
 
-这个需求的核心价值在于 **httpOnly Cookie**——很多站点(尤其生产环境)把 session/JWT/refresh token 存在 httpOnly Cookie 里,**页面 JS 的 `document.cookie` 读不到**(这正是 httpOnly 的安全设计)。只有 `chrome.cookies` API 能读。
+The core value of this is the **httpOnly Cookie**: many sites (production environments especially) keep the session/JWT/refresh token in an httpOnly Cookie, which **page JS cannot read via `document.cookie`** (that is exactly httpOnly's security design). Only the `chrome.cookies` API can read it.
 
-同时,很多前端框架(Auth0/NextAuth/Firebase)把 token 存在 `localStorage`/`sessionStorage`,这部分 content script 能读。
+At the same time, many frontend frameworks (Auth0/NextAuth/Firebase) keep tokens in `localStorage`/`sessionStorage`, which a content script can read.
 
-## 决策
+## Decision
 
-**新增 `cookie_get` + `storage_get` 两个只读工具,不做任何写入:**
+**Add two read-only tools, `cookie_get` and `storage_get`, with no writes of any kind:**
 
-| 维度 | 实现 |
+| Dimension | Implementation |
 |------|------|
-| 范围 | **只读** — `cookie_get` + `storage_get`;**不做** cookie_set/cookie_remove/storage_set |
-| 确认 | 静默执行(同 page_snapshot/page_text),不弹 Toast |
-| host 约束 | 复用现有白名单;Cookie 受 host_permissions 自然约束,storage 受同源约束 |
-| 输出脱敏 | 复用 [ADR-0008](./0008-page-eval-confirmation-channel.md) 的 `maskSensitive`(JWT/长hex/长数字/敏感 key) |
-| httpOnly | 读取包含 httpOnly Cookie(核心价值) |
+| Scope | **Read-only**: `cookie_get` + `storage_get`; **no** cookie_set/cookie_remove/storage_set |
+| Confirmation | Silent execution (like page_snapshot/page_text), no Toast |
+| Host constraint | Reuses the existing allowlist; cookies are naturally constrained by host_permissions, storage by same-origin |
+| Output masking | Reuses `maskSensitive` from [ADR-0008](./0008-page-eval-confirmation-channel.md) (JWT/long hex/long numbers/sensitive keys) |
+| httpOnly | Reads include httpOnly Cookies (the core value) |
 
-## 关键调研结论(决定设计的事实)
+## Key research conclusions (the facts that shaped the design)
 
-1. **`chrome.cookies` API 受 host_permissions 约束**:`getAll({})` 只返回已授权域名的 Cookie,**不是**全部浏览器 Cookie。blast radius 与现有工具一致,复用现有白名单([ADR-0004](./0004-allowlist-with-optional-host-permissions.md))。
-2. **能读 httpOnly Cookie**:API 暴露 `httpOnly` 字段并正常返回 httpOnly Cookie——这是相对 `document.cookie` 的核心价值。
-3. **页面 localStorage 必须从 content script 读**(同源限制);`chrome.storage` 是扩展自己的,与页面无关——两者不同。所以 `storage_get` 在 content.js,`cookie_get` 在 background.js。
-4. **`cookies` 权限无额外安装警告**(我们已有 debugger 触发了最大 host 警告,加 `cookies` 零成本)。
-5. **`cookie_set` 能伪造 httpOnly+Secure Cookie**(会话固定攻击向量,连页面 XSS 都做不到)→ **不做**。
+1. **The `chrome.cookies` API is constrained by host_permissions**: `getAll({})` returns only the cookies of granted domains, **not** every browser cookie. The blast radius matches the existing tools and reuses the existing allowlist ([ADR-0004](./0004-allowlist-with-optional-host-permissions.md)).
+2. **It can read httpOnly Cookies**: the API exposes the `httpOnly` field and returns httpOnly cookies normally; this is the core value over `document.cookie`.
+3. **Page localStorage must be read from a content script** (same-origin restriction); `chrome.storage` belongs to the extension itself and has nothing to do with the page. The two are different things. So `storage_get` lives in content.js and `cookie_get` in background.js.
+4. **The `cookies` permission adds no install warning** (we already have debugger triggering the maximum host warning, so adding `cookies` costs nothing).
+5. **`cookie_set` can forge httpOnly+Secure cookies** (a session-fixation attack vector, something even page XSS cannot do) -> **not implemented**.
 
-## 工具设计
+## Tool design
 
-### `cookie_get(details)` — background.js 执行
-- 参数(全部可选,至少一个用于定位):
-  - `url`(string)— 返回会发给该 URL 的 Cookie
-  - `domain`(string)— 匹配该域及子域
-  - `name`(string)— 精确匹配 Cookie 名
-- 实现:调 `chrome.cookies.getAll({url, domain, name})` → 脱敏 value(保留 name/domain/httpOnly 结构)→ 返回
-- 返回:`[{name, value(脱敏), domain, path, httpOnly, secure, sameSite, session, expirationDate?}]`
-- 友好提示:空结果时检查"域名是否已授权"(Chrome 未授权返回空数组,不报错)
+### `cookie_get(details)`, runs in background.js
+- Parameters (all optional, at least one to narrow the query):
+  - `url` (string): returns cookies that would be sent to that URL
+  - `domain` (string): matches that domain and subdomains
+  - `name` (string): exact cookie-name match
+- Implementation: call `chrome.cookies.getAll({url, domain, name})` -> mask values (keep name/domain/httpOnly structure) -> return
+- Returns: `[{name, value(masked), domain, path, httpOnly, secure, sameSite, session, expirationDate?}]`
+- Friendly hint: on empty results, suggest checking "is the domain granted" (Chrome returns an empty array, not an error, when ungranted)
 
-### `storage_get(details)` — content.js 执行
-- 参数:
-  - `type`("local" | "session",默认 "local")
-  - `key`(string,可选)— 指定 key;不传则返回全部(脱敏)
-- 实现:从 `window.localStorage` / `window.sessionStorage` 读 → 脱敏 → 返回
-- 返回:单 key `{key, value(脱敏)}`;全部 `{type, entries: {k:v(脱敏)}, count}`
+### `storage_get(details)`, runs in content.js
+- Parameters:
+  - `type` ("local" | "session", default "local")
+  - `key` (string, optional): a specific key; omitted returns everything (masked)
+- Implementation: read from `window.localStorage` / `window.sessionStorage` -> mask -> return
+- Returns: single key `{key, value(masked)}`; everything `{type, entries: {k:v(masked)}, count}`
 
-## 为什么不做 cookie_set(风险复述)
+## Why no cookie_set (the risk, restated)
 
-`chrome.cookies.set` 能伪造 **httpOnly+Secure** Cookie——这是连页面 XSS 都做不到的事(页面 JS 不能设 httpOnly Cookie)。
+`chrome.cookies.set` can forge **httpOnly+Secure** cookies, something even page XSS cannot do (page JS cannot set httpOnly cookies).
 
-后果:如果 AI 被诱导(提示注入),可以在用户已登录的站点植入**攻击者控制的 session ID**(会话固定攻击)。即使有确认 UI,一次误批就植入成功,且用户很难察觉——Cookie 不像点击/填表那样可见。
+Consequence: if the AI is subverted (prompt injection), it could plant an **attacker-controlled session ID** into a site the user is logged into (session fixation). Even with a confirmation UI, one mistaken approval plants it, and the user can hardly notice; cookies are not visible the way clicks and form fills are.
 
-读取覆盖 90% 场景(取登录态用于别处),写入极少必要。**不做 = 最小攻击面**,符合安全第一原则。
+Reading covers 90% of the scenario (taking the login state elsewhere); writing is rarely necessary. **Not building it = minimal attack surface**, in line with the security-first principle.
 
-## 不做 cookie_remove 的理由
-- 比 set 安全(只能登出/清除),但实际用途窄(清除登录态重试)
-- 加了 remove 就要加确认(用户会问"为什么删我的 Cookie"),增加复杂度
-- v0.1 不做,留作未来(若真有需求,remove 比 set 安全,可后加)
+## Why no cookie_remove
+- Safer than set (can only log out/clear), but the practical use is narrow (clearing login state to retry)
+- Adding remove means adding a confirmation (users would ask "why is it deleting my cookies"), which adds complexity
+- Not in v0.1, left for the future (if real demand appears, remove is safer than set and can be added later)
 
-## 考虑过的替代方案
+## Alternatives considered
 
-### 方案 A:读写都做(cookie_set 走高危确认)
-- **优点**:能力最全
-- **缺点**:cookie_set 能伪造 httpOnly Cookie(会话固定攻击),即使有确认 UI,一次误批就植入恶意 session
-- **排除**:用户选了只读,攻击面最小
+### Option A: both read and write (cookie_set behind high-risk confirmation)
+- **Pros**: most complete capability
+- **Cons**: cookie_set can forge httpOnly cookies (session fixation); even with a confirmation UI, one mistaken approval plants a malicious session
+- **Rejected**: the user chose read-only, the minimal attack surface
 
-### 方案 B:读取 + cookie_remove(不做 set)
-- **优点**:比全读写安全;remove 只能清除不能伪造
-- **缺点**:用途窄;要加确认 UI
-- **未被选**:用户选了纯只读
+### Option B: read plus cookie_remove (no set)
+- **Pros**: safer than full read-write; remove can only clear, not forge
+- **Cons**: narrow use; needs a confirmation UI
+- **Not chosen**: the user chose pure read-only
 
-### 方案 C:读取每次确认
-- **优点**:最安全
-- **缺点**:读取动作频繁(取 token、查状态),每次确认打断流程
-- **排除**:用户选了静默(同 page_snapshot/page_text 一致)
+### Option C: confirm every read
+- **Pros**: safest
+- **Cons**: reads are frequent (fetching tokens, checking state); confirming each one breaks the flow
+- **Rejected**: the user chose silent (consistent with page_snapshot/page_text)
 
-## 后果
+## Consequences
 
-### 正面
-- **补齐核心场景**:读 httpOnly Cookie / localStorage token,用于跨工具调用
-- **零新增攻击面**:只读 + 脱敏 + 受现有白名单约束,blast radius 等价于 page_text
-- **无安装警告成本**:cookies 权限静默,debugger 已触发最大警告
-- **复用脱敏**:不写新代码,直接用 page_eval 的 maskSensitive
+### Positive
+- **Completes the core scenario**: reading httpOnly cookies / localStorage tokens for cross-tool use
+- **Zero added attack surface**: read-only, masked, constrained by the existing allowlist; blast radius equivalent to page_text
+- **No install-warning cost**: the cookies permission is silent; debugger already triggered the maximum warning
+- **Reuses masking**: no new code, page_eval's maskSensitive is used directly
 
-### 负面
-- **空结果歧义**:未授权 vs 真没数据,Chrome 不区分,只能提示
-- **脱敏可能误伤**:base64 配置等正常长值会被遮罩(共用 evalMask 开关,后续可细化)
-- **不支持 IndexedDB**:部分框架(Airbnb LiteSet 等)用 IndexedDB 存 token,本方案不覆盖
+### Negative
+- **Empty-result ambiguity**: ungranted versus genuinely no data; Chrome does not distinguish, only a hint is possible
+- **Masking can mangle**: legitimate long values (base64 configs and the like) get masked (shares the evalMask switch; can be refined later)
+- **No IndexedDB support**: some frameworks (Airbnb LiteSet and the like) store tokens in IndexedDB; this design does not cover it
 
-### 中性
-- 工具数 13 → 15
+### Neutral
+- Tool count 13 -> 15
 
-## 已知限制
+## Known limitations
 
-1. **localStorage 受同源限制**:content script 只能读当前注入页面的源;跨域 iframe 读不到
-2. **空结果歧义**:Chrome cookies API 未授权返回空数组而非错误
-3. **脱敏开关粒度**:当前 `evalMask` 同时影响 page_eval 和 cookie/storage;未来可拆成独立开关
+1. **localStorage is same-origin bound**: the content script reads only the origin of the page it is injected into; cross-origin iframes are unreachable
+2. **Empty-result ambiguity**: the Chrome cookies API returns an empty array, not an error, when ungranted
+3. **Masking-switch granularity**: `evalMask` currently affects both page_eval and cookie/storage; it could be split into separate switches later
 
-## 与其他 ADR 的关系
+## Relationship to other ADRs
 
-- **复用 [ADR-0004](./0004-allowlist-with-optional-host-permissions.md)**:白名单是站点级第一层防御;Cookie/Storage 自动受其约束
-- **复用 [ADR-0008](./0008-page-eval-confirmation-channel.md)**:`maskSensitive` 脱敏函数,JWT/hex/数字/敏感 key 模式库
-- **区别于 [ADR-0008](./0008-page-eval-confirmation-channel.md)**:eval 是执行(需高危确认),Cookie/Storage 是只读(静默)。两者都用脱敏,但确认强度不同
-- **补充 [ADR-0003](./0003-content-script-snapshot-vs-chrome-debugger.md) 的能力边界**:content script 读 localStorage(同源),chrome.debugger 也能读但太重;此处用 content script 足够
+- **Reuses [ADR-0004](./0004-allowlist-with-optional-host-permissions.md)**: the allowlist is the site-level first defense layer; Cookie/Storage is automatically constrained by it
+- **Reuses [ADR-0008](./0008-page-eval-confirmation-channel.md)**: the `maskSensitive` function and its JWT/hex/number/sensitive-key pattern library
+- **Distinct from [ADR-0008](./0008-page-eval-confirmation-channel.md)**: eval is execution (needs high-risk confirmation), Cookie/Storage is read-only (silent). Both mask, but the confirmation strength differs
+- **Supplements the capability boundary of [ADR-0003](./0003-content-script-snapshot-vs-chrome-debugger.md)**: the content script reads localStorage (same-origin); chrome.debugger could read it too but is too heavy; the content script suffices here
