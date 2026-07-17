@@ -307,6 +307,23 @@ async function main(): Promise<void> {
       webAccess.confirm,
     );
 
+    // Proof: a plain web page cannot even REACH the runtime router (no
+    // externally_connectable), so the mediated path to the trust state
+    // (add_allow/get_enrollment/...) is unreachable from page context. A
+    // content-script context DOES have runtime.sendMessage, but the router
+    // refuses a non-extension-page sender - covered by the unit test
+    // extension/tests/background/messages.test.ts.
+    const pageRuntime = (await webPage.evaluate(() => {
+      const c = (globalThis as unknown as { chrome?: { runtime?: { sendMessage?: unknown } } })
+        .chrome;
+      return typeof c?.runtime?.sendMessage;
+    })) as string;
+    check(
+      pageRuntime === "undefined",
+      "a web page cannot message the extension at all (no chrome.runtime.sendMessage)",
+      { pageRuntime },
+    );
+
     // Open our options page (a non-confirm extension page) at the pinned ID.
     const optUrl = `chrome-extension://${ours.id}/options.html`;
     const optPage = await browser.newPage();

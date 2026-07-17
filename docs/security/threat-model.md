@@ -185,12 +185,18 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   allowlist live in `storage.local`, which Chrome exposes to content scripts by
   default. The extension confines both storage areas to extension contexts with
   `setAccessLevel(TRUSTED_CONTEXTS)` and fails the enrollment gate closed until
-  that lands. Because `setAccessLevel` is asynchronous and applied after the
-  service worker starts, a sub-millisecond window exists at cold start in which
-  a content script from a prior worker life, in a compromised renderer, could
-  write a tampered value that the restriction then locks in. No user-space API
-  closes it; the enclave ceremony's cryptographic checks bound, but do not
-  erase, what a planted pin achieves.
+  that lands. The runtime message router (the mediated path to the same state)
+  refuses every message whose sender is not one of the extension's own pages, so
+  a content script cannot seed the allowlist via `add_allow` or read the pinned
+  key id/fingerprint via `get_enrollment`. Because `setAccessLevel` is
+  asynchronous and applied after the service worker starts, a sub-millisecond
+  window remains at cold start in which a content script from a prior worker
+  life, in a compromised renderer, could write a tampered value directly to
+  `storage.local` before the restriction lands; the restriction then locks it
+  in. With the router gated, that cold-start window is the ONLY remaining
+  content-script path to the trust state. No user-space API closes it; the
+  enclave ceremony's cryptographic checks bound, but do not erase, what a
+  planted pin achieves.
 - **High-risk confirmations now render off the page-reachable DOM
   (ADR-0027).** Every high-risk confirmation (a submit click, `page_press`,
   `page_select`, `page_eval`, `tab_close`, `page_upload`) shows in a dedicated

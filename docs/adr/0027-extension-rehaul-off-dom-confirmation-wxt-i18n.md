@@ -126,12 +126,26 @@ storage is locked down. The result is memoized for the service worker's life;
 a failure stays failed until the worker restarts, which errs toward blocked
 rather than degraded.
 
+Direct reads are not the only way a content script could reach the trust state:
+the runtime message router is a mediated path. A content script that sent
+`add_allow` could seed the per-origin allowlist, and `get_enrollment` would hand
+back the pinned key id and fingerprint. So the router refuses every message
+whose sender is not one of the extension's own pages (`fromExtensionPage`: our
+extension id plus a `chrome-extension://<id>/` URL), and the confirmation
+messages require the confirmation window specifically. The content script sends
+the router nothing, so nothing legitimate is lost. Without this gate the
+`setAccessLevel` restriction would be true for direct reads but bypassable
+through the router; with it, the allowlist and the enrollment status are
+writable and readable only from extension pages.
+
 `setAccessLevel` is asynchronous and applied after the worker starts, so it
 cannot lock storage at t=0. A sub-millisecond window exists at cold start in
 which a content script from a prior worker life, in a compromised renderer,
 could write a tampered value that the restriction then locks in. No user-space
 API closes it; the enclave ceremony's cryptographic checks bound, but do not
-erase, what a planted pin achieves. The threat model records this residual
+erase, what a planted pin achieves. With the router gated, this cold-start
+window is the only remaining content-script path to the trust state. The threat
+model records this residual
 honestly.
 
 ### WXT, React, and runtime i18n
