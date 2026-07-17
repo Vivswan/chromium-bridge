@@ -17,6 +17,7 @@ describe("DEFAULTS", () => {
         "evalToastTimeoutMs",
         "groupTabs",
         "pageEvalEnabled",
+        "requireEnrollment",
         "warnPreciseSnapshot",
       ].sort()
     );
@@ -26,6 +27,9 @@ describe("DEFAULTS", () => {
     expect(DEFAULTS.allowAllSites).toBe(false);
     expect(DEFAULTS.cdpMode).toBe(false);
     expect(DEFAULTS.groupTabs).toBe(true);
+    // Enrollment is on by default (ADR-0021): the bridge fails closed until a
+    // host key is paired and pinned.
+    expect(DEFAULTS.requireEnrollment).toBe(true);
   });
 });
 

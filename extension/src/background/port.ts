@@ -5,6 +5,14 @@
 import type { BridgeReq } from "../shared/types";
 import { dispatch } from "./dispatch";
 import { maskErrorMessage } from "../shared/masking";
+import {
+  attachPort,
+  detachPort,
+  enrollmentGate,
+  handleEnclaveFrame,
+  isEnclaveFrame,
+  onPortConnected,
+} from "./enrollment";
 
 const NATIVE_HOST = "com.browser_bridge.host";
 
@@ -28,6 +36,10 @@ export function connectNative() {
     console.log("[bb] native host connected");
     port.onMessage.addListener(onNativeMessage);
     port.onDisconnect.addListener(onNativeDisconnect);
+    // Hand the enrollment ceremony (ADR-0021) the fresh port. It decides
+    // whether this connect needs a pairing challenge.
+    attachPort(postFrame);
+    void onPortConnected();
   } catch (e) {
     portOk = false;
     console.error("[bb] connectNative threw", e);
@@ -35,9 +47,22 @@ export function connectNative() {
   }
 }
 
+// Raw frame sender for enclave control frames (they are not BridgeResps).
+function postFrame(frame: object): boolean {
+  if (!port) return false;
+  try {
+    port.postMessage(frame);
+    return true;
+  } catch (e) {
+    console.warn("[bb] postFrame failed", e);
+    return false;
+  }
+}
+
 function onNativeDisconnect(_p: chrome.runtime.Port) {
   portOk = false;
   port = null;
+  detachPort();
   const err = chrome.runtime.lastError;
   console.warn("[bb] native host disconnected:", err?.message || "unknown");
   // Chrome kills the host process when the Port drops. Reconnect so a fresh
@@ -55,18 +80,37 @@ function scheduleReconnect() {
 }
 
 function onNativeMessage(msg: BridgeReq) {
+  // Enclave control frames (ADR-0021) are ceremony traffic between the
+  // extension and the host itself; they carry `type`, not `op`, and are never
+  // dispatched as bridge ops.
+  if (isEnclaveFrame(msg)) {
+    void handleEnclaveFrame(msg);
+    return;
+  }
   // Each message is a BridgeReq: { id, op, tabId?, args }. Guard defensively —
   // it crosses the native-messaging boundary.
   if (!msg || typeof msg.id === "undefined" || !msg.op) {
     console.warn("[bb] malformed BridgeReq", msg);
     return;
   }
-  dispatch(msg).then(
-    (data) => sendResponse(msg.id, true, data),
-    // A rejection message can embed page-derived data (a CDP evaluate
-    // exception carries the page's error description), so this egress is
-    // masked like any other.
-    (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err))
+  // Fail closed (ADR-0021): while enrollment is required and unsatisfied,
+  // every bridge request is refused right here and never reaches dispatch().
+  enrollmentGate().then(
+    (gate) => {
+      if (!gate.allowed) {
+        sendResponse(msg.id, false, undefined, gate.reason);
+        return;
+      }
+      dispatch(msg).then(
+        (data) => sendResponse(msg.id, true, data),
+        // A rejection message can embed page-derived data (a CDP evaluate
+        // exception carries the page's error description), so this egress is
+        // masked like any other.
+        (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err))
+      );
+    },
+    // Gate errors are ambiguity, and ambiguity refuses.
+    (err) => sendResponse(msg.id, false, undefined, `enrollment gate error: ${String(err)}`)
   );
 }
 

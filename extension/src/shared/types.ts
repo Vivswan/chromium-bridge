@@ -23,6 +23,7 @@ export interface Settings {
   allowAllSites: boolean;
   cdpMode: boolean;
   groupTabs: boolean;
+  requireEnrollment: boolean;
 }
 
 // A request from the native host, forwarded to the right tab's content script.
@@ -86,11 +87,19 @@ export interface PageResponse {
 }
 
 // Messages the service worker receives from the popup / options page and the
-// content-script screenshot proxy (chrome.runtime.onMessage).
+// content-script screenshot proxy (chrome.runtime.onMessage). The enroll_*
+// messages drive the ADR-0021 pairing ceremony and are accepted only from the
+// extension's own pages (messages.ts checks the sender).
 export type RuntimeMsg =
   | { type: "resolve_allow"; id: string; allow: boolean }
   | { type: "get_allowlist" }
   | { type: "add_allow"; glob: string }
   | { type: "remove_allow"; glob: string }
   | { type: "get_status" }
-  | { type: "capture_visible_tab" };
+  | { type: "capture_visible_tab" }
+  | { type: "get_enrollment" }
+  | { type: "enroll_pair" }
+  | { type: "enroll_verify" }
+  | { type: "enroll_approve" }
+  | { type: "enroll_reject" }
+  | { type: "enroll_revoke" };
