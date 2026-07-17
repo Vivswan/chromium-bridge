@@ -57,6 +57,38 @@ pub fn parse(args: &[String]) -> Command {
     }
 }
 
+/// Extract the `--label <name>` argument of `--native-host` mode: the browser
+/// name this host announces in its bridge handshake, so one MCP server can
+/// tell several browsers apart. Returns `Ok(None)` when no label was given
+/// (the server files the connection under its default slot). A missing or
+/// flag-shaped value, a repeated `--label`, or a label that fails
+/// [`crate::ipc::validate_label`] is an error — the caller must refuse to
+/// start rather than run under a mangled identity.
+pub fn native_host_label(args: &[String]) -> Result<Option<String>, String> {
+    let mut found: Option<String> = None;
+    let mut it = args.iter().skip(1);
+    while let Some(arg) = it.next() {
+        if arg == "--label" {
+            if found.is_some() {
+                return Err("--label given more than once".to_string());
+            }
+            let value = it
+                .next()
+                // A following flag (e.g. a bare `--label --native-host`) is a
+                // missing value, not a label; valid labels start alphanumeric.
+                .filter(|v| !v.starts_with('-'))
+                .ok_or_else(|| "--label requires a value".to_string())?;
+            if !crate::ipc::validate_label(value) {
+                return Err(format!(
+                    "invalid --label {value:?}: want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric"
+                ));
+            }
+            found = Some(value.clone());
+        }
+    }
+    Ok(found)
+}
+
 pub fn print_help() {
     eprintln!(
         "browser-bridge {version}\n\
@@ -68,7 +100,7 @@ pub fn print_help() {
          browser-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
          browser-bridge revoke         Delete the enrollment key (fails closed)\n    \
          browser-bridge enclave-status Print the enrollment state\n    \
-         browser-bridge --native-host  Run as the Chrome native messaging host\n\n\
+         browser-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, …) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
          --native-host via the host manifest. You normally never invoke either \
@@ -79,7 +111,7 @@ pub fn print_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_native_host_mode, parse, Command};
+    use super::{is_native_host_mode, native_host_label, parse, Command};
 
     fn args(list: &[&str]) -> Vec<String> {
         std::iter::once("browser-bridge")
@@ -92,6 +124,32 @@ mod tests {
     fn explicit_native_host_flag_is_recognized() {
         assert!(is_native_host_mode(&args(&["--native-host"])));
         assert_eq!(parse(&args(&["--native-host"])), Command::NativeHost);
+    }
+
+    #[test]
+    fn label_argument_is_parsed_and_validated() {
+        let argv = |rest: &[&str]| -> Vec<String> {
+            std::iter::once("browser-bridge")
+                .chain(rest.iter().copied())
+                .map(String::from)
+                .collect()
+        };
+        // No --label: None (server files the connection under its default).
+        assert_eq!(native_host_label(&argv(&["--native-host"])), Ok(None));
+        // A well-formed label is returned.
+        assert_eq!(
+            native_host_label(&argv(&["--native-host", "--label", "brave"])),
+            Ok(Some("brave".into()))
+        );
+        // Missing value and malformed labels refuse to start (fail closed).
+        assert!(native_host_label(&argv(&["--native-host", "--label"])).is_err());
+        assert!(native_host_label(&argv(&["--native-host", "--label", "bad label"])).is_err());
+        // A following flag is a missing value, not a label.
+        assert!(native_host_label(&argv(&["--label", "--native-host"])).is_err());
+        // A repeated --label is ambiguous and refused.
+        assert!(
+            native_host_label(&argv(&["--native-host", "--label", "a", "--label", "b"])).is_err()
+        );
     }
 
     #[cfg(windows)]

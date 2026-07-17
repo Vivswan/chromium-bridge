@@ -106,8 +106,9 @@ pub(super) fn call(
     op: &str,
     tab_id: Option<i64>,
     args: Value,
+    browser: Option<&str>,
 ) -> Result<Value, CallError> {
-    session.call(op, tab_id, args)
+    session.call(op, tab_id, args, browser)
 }
 
 fn sarg(args: &Value, key: &str) -> String {

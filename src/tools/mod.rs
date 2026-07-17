@@ -43,6 +43,13 @@ struct Handler {
 
 const HANDLERS: &[Handler] = &[
     Handler {
+        name: "list_browsers",
+        // Answered by the MCP server itself (see `list_browsers` below);
+        // registered here so the registry/catalogue parity test keeps covering
+        // it. The builder is never used to send a bridge request.
+        build_payload: build_empty,
+    },
+    Handler {
         name: "tab_list",
         build_payload: build_empty,
     },
@@ -115,11 +122,23 @@ pub struct Outcome {
 
 /// Dispatch a tool call. Returns the MCP result `content` value (an array)
 /// and the isError flag. Errors are tool-level (isError=true), not RPC-level.
+///
+/// Every tool accepts an optional `browser` argument naming which connected
+/// browser to run on; it is consumed here (routing) and never forwarded in the
+/// op's own args. `list_browsers` is answered by the server itself from its
+/// connection registry — it is the one tool that does not translate into a
+/// single bridge request.
 pub fn dispatch(session: &Session, name: &str, args: &Value) -> Outcome {
-    let result = match HANDLERS.iter().find(|h| h.name == name) {
-        Some(h) => call(session, name, None, (h.build_payload)(args)),
-        None => Err(CallError::UnknownTool(name.to_string())),
-    };
+    let result = extract_browser(args).and_then(|browser| {
+        if name == "list_browsers" {
+            list_browsers(session)
+        } else {
+            match HANDLERS.iter().find(|h| h.name == name) {
+                Some(h) => call(session, name, None, (h.build_payload)(args), browser),
+                None => Err(CallError::UnknownTool(name.to_string())),
+            }
+        }
+    });
 
     match result {
         Ok(data) => {
@@ -153,6 +172,52 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> Outcome {
             error_code: Some(e.code()),
         },
     }
+}
+
+/// Extract the `browser` routing argument. Absent and JSON `null` (how some
+/// clients serialize an unset optional) both mean "unaddressed"; any other
+/// non-string shape is rejected, because with a single browser connected a
+/// silently-dropped malformed target would still route the call somewhere.
+fn extract_browser(args: &Value) -> Result<Option<&str>, CallError> {
+    match args.get("browser") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.as_str())),
+        Some(other) => Err(CallError::InvalidBrowserArg(other.to_string())),
+    }
+}
+
+/// Answer `list_browsers` from the server's connection registry: one entry per
+/// live, authenticated connection, enriched with that browser's open-tab count
+/// (a routed `tab_list` round-trip per browser). A browser that fails to
+/// answer stays in the list with `tabCount: null` and its error text — being
+/// slow or broken should not hide it from enumeration. The per-browser
+/// round-trip uses a short enumeration timeout (and no connect-wait), so one
+/// wedged browser costs seconds, not the interactive 120s, and can never
+/// starve discovery of the healthy ones. No browsers connected is a normal,
+/// empty result, not an error.
+fn list_browsers(session: &Session) -> Result<Value, CallError> {
+    let labels = session.labels();
+    let browsers: Vec<Value> = labels
+        .into_iter()
+        .map(|label| {
+            match session.try_call(
+                "tab_list",
+                None,
+                json!({}),
+                Some(&label),
+                std::time::Duration::from_secs(5),
+            ) {
+                Ok(data) => {
+                    // tab_list returns an array of tabs; anything else counts
+                    // as unknown rather than 0.
+                    let count = data.as_array().map(|tabs| tabs.len());
+                    json!({ "label": label, "tabCount": count })
+                }
+                Err(e) => json!({ "label": label, "tabCount": null, "error": e.to_string() }),
+            }
+        })
+        .collect();
+    Ok(json!({ "count": browsers.len(), "browsers": browsers }))
 }
 
 #[cfg(test)]
@@ -204,5 +269,34 @@ mod tests {
         );
         // Empty builder ignores extraneous args.
         assert_eq!(build("page_snapshot", json!({ "junk": 1 })), json!({}));
+    }
+
+    // The `browser` routing argument is strictly typed: absent/null route as
+    // "unaddressed", strings route by label, anything else is rejected before
+    // any bridge traffic (or connect-waiting) can happen.
+    #[test]
+    fn browser_arg_must_be_a_string() {
+        assert_eq!(extract_browser(&json!({})).unwrap(), None);
+        assert_eq!(extract_browser(&json!({ "browser": null })).unwrap(), None);
+        assert_eq!(
+            extract_browser(&json!({ "browser": "brave" })).unwrap(),
+            Some("brave")
+        );
+        for bad in [json!(123), json!(true), json!(["chrome"]), json!({})] {
+            let err = extract_browser(&json!({ "browser": bad })).unwrap_err();
+            assert!(matches!(err, CallError::InvalidBrowserArg(_)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn dispatch_rejects_a_malformed_browser_arg_without_routing() {
+        // A fresh session has no connections; a call would normally block in
+        // the 12s startup wait. The malformed `browser` must be rejected
+        // before that — this test finishing quickly is itself the assertion
+        // that no routing was attempted.
+        let session = Session::new();
+        let out = dispatch(&session, "tab_list", &json!({ "browser": 123 }));
+        assert!(out.is_error);
+        assert_eq!(out.error_code, Some("INVALID_ARGUMENT"));
     }
 }

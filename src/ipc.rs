@@ -1067,11 +1067,27 @@ fn cleanup_stale_lock(dialed: &LockFile) {
 }
 
 /// HMAC-SHA256 of `msg` under `key`, hex-encoded. The key is the per-run
-/// secret's bytes and the message is the challenge nonce's bytes.
+/// secret's bytes and the message is built by [`handshake_mac_message`].
 fn compute_mac(key: &[u8], msg: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a key of any length");
     mac.update(msg);
     hex_encode(&mac.finalize().into_bytes())
+}
+
+/// The exact bytes the handshake MAC covers: the server's nonce and, when the
+/// client claims a browser label, a NUL separator plus that label. Covering
+/// the label makes the claim authenticated rather than merely adjacent to the
+/// MAC — a response whose label was altered in any way fails verification.
+/// The two forms cannot collide: the nonce is fixed-width hex (never contains
+/// NUL), so a message either ends at the nonce (no label) or continues past
+/// exactly one NUL with the label bytes.
+fn handshake_mac_message(nonce: &str, label: Option<&str>) -> Vec<u8> {
+    let mut msg = nonce.as_bytes().to_vec();
+    if let Some(label) = label {
+        msg.push(0);
+        msg.extend_from_slice(label.as_bytes());
+    }
+    msg
 }
 
 /// Constant-time verification that `provided_hex` is HMAC-SHA256(key, msg).
@@ -1115,11 +1131,32 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
+/// Whether `label` is an acceptable browser label: 1-32 characters, starting
+/// with an ASCII alphanumeric, the rest ASCII alphanumeric or `.`, `_`, `-`.
+/// The label arrives in the (signed) handshake response and ends up in log
+/// lines, audit records, and tool output, so it is bounded and restricted to
+/// a tame charset; the leading-alphanumeric rule also keeps a label from ever
+/// looking like a command-line flag. Anything else fails the handshake (fail
+/// closed) rather than being sanitized.
+pub fn validate_label(label: &str) -> bool {
+    let bytes = label.as_bytes();
+    (1..=32).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// Server side: run the challenge-response over a freshly-accepted connection,
 /// using the same buffered reader/writer the session will keep, so no bytes are
-/// consumed past the handshake. Returns `Ok(())` only when the client proved
-/// knowledge of the per-run secret.
-pub fn server_handshake<R: BufRead, W: Write>(reader: &mut R, writer: &mut W) -> io::Result<()> {
+/// consumed past the handshake. On success returns the browser label the
+/// client carried in its signed response (`None` when it sent none). The label
+/// is read only AFTER the MAC verifies, and only a validated label is
+/// returned; a malformed one fails the whole handshake.
+pub fn server_handshake<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+) -> io::Result<Option<String>> {
     let secret = read_lock_or_err()?.secret;
     server_handshake_with_secret(reader, writer, &secret)
 }
@@ -1128,7 +1165,7 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
     secret: &str,
-) -> io::Result<()> {
+) -> io::Result<Option<String>> {
     let nonce = generate_secret()?;
     bridge_write(
         writer,
@@ -1138,8 +1175,25 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
     )?;
 
     match bridge_read::<_, Handshake>(reader)? {
-        Some(Handshake::Response { mac, .. }) => {
-            verify_mac(secret.as_bytes(), nonce.as_bytes(), &mac)
+        Some(Handshake::Response { mac, label }) => {
+            // Authenticate FIRST; nothing the peer sent is trusted before
+            // this. The MAC covers the nonce AND the claimed label
+            // (handshake_mac_message), so a label that was altered after
+            // signing fails here.
+            verify_mac(
+                secret.as_bytes(),
+                &handshake_mac_message(&nonce, label.as_deref()),
+                &mac,
+            )?;
+            if let Some(l) = &label {
+                if !validate_label(l) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid browser label in handshake (want 1-32 chars of [A-Za-z0-9._-])",
+                    ));
+                }
+            }
+            Ok(label)
         }
         Some(Handshake::Challenge { .. }) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -1153,9 +1207,10 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
 }
 
 /// Client side: read the server's challenge and answer it with
-/// HMAC(secret, nonce). `label` names the browser this host fronts (carried for
-/// a later multi-browser phase; ignored by the server today). Reuses the pump's
-/// buffered reader/writer so the handshake never leaks into forwarded frames.
+/// HMAC(secret, nonce). `label` names the browser this host fronts; the server
+/// keys its connection registry by it (missing label = the default slot).
+/// Reuses the pump's buffered reader/writer so the handshake never leaks into
+/// forwarded frames.
 pub fn client_handshake<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -1173,7 +1228,10 @@ fn client_handshake_with_secret<R: BufRead, W: Write>(
 ) -> io::Result<()> {
     match bridge_read::<_, Handshake>(reader)? {
         Some(Handshake::Challenge { nonce }) => {
-            let mac = compute_mac(secret.as_bytes(), nonce.as_bytes());
+            let mac = compute_mac(
+                secret.as_bytes(),
+                &handshake_mac_message(&nonce, label.as_deref()),
+            );
             bridge_write(writer, &Handshake::Response { mac, label })
         }
         Some(Handshake::Response { .. }) => Err(io::Error::new(
@@ -1214,6 +1272,35 @@ mod tests {
         // broken (or the fail-closed path silently regressed to something
         // deterministic).
         assert_ne!(s, generate_secret().unwrap());
+    }
+
+    #[test]
+    fn label_validation_bounds_length_and_charset() {
+        // Accepted: browser-ish names within 32 chars of [A-Za-z0-9._-],
+        // starting alphanumeric.
+        for ok in ["default", "chrome", "Brave-2", "work_profile", "a", "x.y"] {
+            assert!(validate_label(ok), "{ok:?} should validate");
+        }
+        // Rejected: empty, overlong, spaces/newlines (log injection), path
+        // separators, non-ASCII, and anything starting like a flag or a
+        // dotfile (first char must be alphanumeric).
+        for bad in [
+            "",
+            "a b",
+            "a\nb",
+            "a/b",
+            "a\\b",
+            "läbel",
+            "-flag",
+            "--native-host",
+            ".hidden",
+            "_x",
+            &"x".repeat(33),
+        ] {
+            assert!(!validate_label(bad), "{bad:?} should be rejected");
+        }
+        // The 32-char boundary itself is accepted.
+        assert!(validate_label(&"x".repeat(32)));
     }
 
     #[test]
@@ -1378,7 +1465,12 @@ mod tests {
 
         let secret = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4";
         let nonce = "feedface";
-        let expected = compute_mac(secret.as_bytes(), nonce.as_bytes());
+        // The MAC covers nonce AND label (handshake_mac_message), so the
+        // label claim is authenticated, not merely adjacent to the MAC.
+        let expected = compute_mac(
+            secret.as_bytes(),
+            &handshake_mac_message(nonce, Some("chrome")),
+        );
 
         let mut challenge = serde_json::to_vec(&Handshake::Challenge {
             nonce: nonce.into(),
@@ -1412,7 +1504,23 @@ mod tests {
 
         let secret = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 
-        // Matching secrets on both ends: the server accepts.
+        // Matching secrets on both ends: the server accepts and returns the
+        // label the client carried in its signed response.
+        let (srv, cli) = UnixStream::pair().unwrap();
+        let cli_secret = secret.to_string();
+        let client = std::thread::spawn(move || {
+            let mut r = BufReader::new(cli.try_clone().unwrap());
+            let mut w = BufWriter::new(cli);
+            client_handshake_with_secret(&mut r, &mut w, &cli_secret, Some("brave".into()))
+        });
+        let mut r = BufReader::new(srv.try_clone().unwrap());
+        let mut w = BufWriter::new(srv);
+        let label = server_handshake_with_secret(&mut r, &mut w, secret).unwrap();
+        assert_eq!(label.as_deref(), Some("brave"));
+        assert!(client.join().unwrap().is_ok());
+
+        // No label carried: the server reports None (the caller applies the
+        // default), still authenticated.
         let (srv, cli) = UnixStream::pair().unwrap();
         let cli_secret = secret.to_string();
         let client = std::thread::spawn(move || {
@@ -1422,8 +1530,27 @@ mod tests {
         });
         let mut r = BufReader::new(srv.try_clone().unwrap());
         let mut w = BufWriter::new(srv);
-        assert!(server_handshake_with_secret(&mut r, &mut w, secret).is_ok());
+        assert_eq!(
+            server_handshake_with_secret(&mut r, &mut w, secret).unwrap(),
+            None
+        );
         assert!(client.join().unwrap().is_ok());
+
+        // A malformed label fails the handshake even with a valid MAC: the
+        // label feeds registry keys and log lines, so it is validated (fail
+        // closed) right after authentication.
+        let (srv, cli) = UnixStream::pair().unwrap();
+        let cli_secret = secret.to_string();
+        let client = std::thread::spawn(move || {
+            let mut r = BufReader::new(cli.try_clone().unwrap());
+            let mut w = BufWriter::new(cli);
+            client_handshake_with_secret(&mut r, &mut w, &cli_secret, Some("bad label\n".into()))
+        });
+        let mut r = BufReader::new(srv.try_clone().unwrap());
+        let mut w = BufWriter::new(srv);
+        let err = server_handshake_with_secret(&mut r, &mut w, secret).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let _ = client.join();
 
         // A client that does not know the secret is rejected by the server.
         let (srv, cli) = UnixStream::pair().unwrap();
@@ -1440,6 +1567,41 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
         let _ = client.join();
+    }
+
+    #[test]
+    fn a_tampered_label_invalidates_the_mac() {
+        // A response whose label was altered after signing must fail
+        // verification: the MAC covers (nonce, label), so swapping the label
+        // while keeping the MAC is detected. This is what makes the label an
+        // authenticated claim rather than a free-rider next to the MAC.
+        let secret = "d00dd00dd00dd00dd00dd00dd00dd00d";
+        let nonce = "cafebabe";
+        let signed_for_chrome = compute_mac(
+            secret.as_bytes(),
+            &handshake_mac_message(nonce, Some("chrome")),
+        );
+        // Genuine claim verifies.
+        assert!(verify_mac(
+            secret.as_bytes(),
+            &handshake_mac_message(nonce, Some("chrome")),
+            &signed_for_chrome,
+        )
+        .is_ok());
+        // The same MAC presented with a different label is rejected.
+        assert!(verify_mac(
+            secret.as_bytes(),
+            &handshake_mac_message(nonce, Some("brave")),
+            &signed_for_chrome,
+        )
+        .is_err());
+        // ...and with the label stripped entirely.
+        assert!(verify_mac(
+            secret.as_bytes(),
+            &handshake_mac_message(nonce, None),
+            &signed_for_chrome,
+        )
+        .is_err());
     }
 
     #[cfg(unix)]

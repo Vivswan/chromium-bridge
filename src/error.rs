@@ -32,6 +32,25 @@ pub enum CallError {
     #[error("unknown tool: {0}")]
     UnknownTool(String),
 
+    /// The `browser` routing argument was present but not a string (e.g. a
+    /// number or object). Rejected rather than treated as absent: with one
+    /// browser connected, ignoring a malformed target would silently run the
+    /// call there.
+    #[error("invalid `browser` argument {0}: must be a string label from list_browsers")]
+    InvalidBrowserArg(String),
+
+    /// Several browsers are connected and the call did not say which one to
+    /// use. Field 0 is the comma-joined list of live labels. Refusing (rather
+    /// than guessing) is deliberate: acting in the wrong logged-in browser is
+    /// worse than asking the caller to name one.
+    #[error("multiple browsers are connected ({0}) — pass the `browser` argument to pick one (see list_browsers)")]
+    AmbiguousBrowser(String),
+
+    /// The call named a browser label that is not currently connected.
+    /// Field 0 is the requested label, field 1 the comma-joined live labels.
+    #[error("no connected browser is labeled '{0}' (connected: {1}) — see list_browsers")]
+    BrowserNotFound(String, String),
+
     /// The extension executed the op and reported a failure of its own.
     #[error("{0}")]
     Extension(String),
@@ -51,6 +70,9 @@ impl CallError {
             CallError::Timeout(_) => "RESPONSE_TIMEOUT",
             CallError::Disconnected => "CONNECTION_LOST",
             CallError::UnknownTool(_) => "INVALID_ARGUMENT",
+            CallError::InvalidBrowserArg(_) => "INVALID_ARGUMENT",
+            CallError::AmbiguousBrowser(_) => "BROWSER_AMBIGUOUS",
+            CallError::BrowserNotFound(..) => "BROWSER_NOT_FOUND",
             CallError::Extension(_) => "EXECUTION_FAILED",
         }
     }
@@ -96,6 +118,18 @@ mod tests {
             ("Timeout", CallError::Timeout(Duration::from_secs(1))),
             ("Disconnected", CallError::Disconnected),
             ("UnknownTool", CallError::UnknownTool("t".into())),
+            (
+                "InvalidBrowserArg",
+                CallError::InvalidBrowserArg("123".into()),
+            ),
+            (
+                "AmbiguousBrowser",
+                CallError::AmbiguousBrowser("brave, chrome".into()),
+            ),
+            (
+                "BrowserNotFound",
+                CallError::BrowserNotFound("edge".into(), "brave, chrome".into()),
+            ),
             ("Extension", CallError::Extension("boom".into())),
         ];
 
