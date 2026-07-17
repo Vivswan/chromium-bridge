@@ -88,31 +88,7 @@ pub fn run() -> i32 {
     let mut lost_races = 0;
     let (listener, lock) = loop {
         if let Ok(Some(prev)) = ipc::LockFile::read() {
-            if prev.pid != std::process::id() && ipc::pid_is_alive(prev.pid) {
-                log_info!("mcp", "supplanting prior MCP server pid {}", prev.pid);
-                // SIGTERM -> old server cleans up its own lock and socket and
-                // exits -> its listener closes -> native host gets EOF -> SW
-                // onDisconnect -> reconnect spawns a fresh host -> reads OUR
-                // lock. Give it a moment to die and clean up.
-                terminate_process(prev.pid);
-                for _ in 0..50 {
-                    if !ipc::pid_is_alive(prev.pid) {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-                if ipc::pid_is_alive(prev.pid) {
-                    // Proceed anyway: listen_and_publish clears its files and
-                    // binds over them, and its exit cleanup is ownership-
-                    // guarded, so it cannot remove what will by then be OUR
-                    // lock and socket.
-                    log_warn!(
-                        "mcp",
-                        "prior MCP server pid {} did not exit in time; proceeding",
-                        prev.pid
-                    );
-                }
-            }
+            supplant_prior_server(prev.pid);
         }
         match ipc::listen_and_publish() {
             Ok(ipc::PublishOutcome::Published(listener, lock)) => break (listener, lock),
@@ -368,15 +344,118 @@ fn next_request_id() -> u64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-fn terminate_process(pid: u32) {
-    #[cfg(unix)]
-    if let Some(pid) = ipc::checked_pid(pid) {
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
+/// SIGTERM the prior server named in the lock file and wait for it to exit —
+/// but only after kernel-attesting that the pid is actually running OUR
+/// binary. The pid is just a number read from a file on disk: with a stale
+/// lock plus OS pid reuse it can name an arbitrary, innocent process, and
+/// signaling an unverified pid is exactly the mistake the safety red lines
+/// ban.
+///
+/// A pid that does not attest is never signaled. That covers two distinct
+/// cases, both fail-closed for signaling but with different meanings:
+/// - identity mismatch: some other program (a reused pid — or a different
+///   release of this binary after an upgrade; we cannot tell those apart, so
+///   neither is killed);
+/// - unmeasurable (attestation errored): commonly a pid reused by another
+///   user's process, whose image we cannot read.
+///
+/// Either way the lock is superseded rather than obeyed: listen_and_publish
+/// re-checks under the runtime mutex and binds over it. If the owner really
+/// was a live server we could not verify, it is NOT taken down — it keeps its
+/// existing connections and simply stops being named by the lock; the
+/// extension converges to the new server on its next reconnect (MV3 respawns
+/// the host every few minutes). Windows has no executable attestation (all
+/// mechanisms are cfg unix/macos), so it keeps the liveness-only takeover —
+/// a documented best-effort residual, see SECURITY.md "Platform support".
+///
+/// Signal binding (see `ipc::attest_and_terminate`): on Linux the SIGTERM is
+/// bound to the exact process instance through `pidfd_open` + `pidfd_send_signal`,
+/// so a pid the OS reuses after we pin it can never be signaled (the send
+/// returns ESRCH against the dead original). macOS has no pidfd equivalent and
+/// keeps attest-then-kill, so a pid-reuse race stays there, but only in the
+/// microseconds between attesting our own instance and the kill (the same class
+/// ADR-0020 records for pid-keyed measurement); before this the window was the
+/// whole lifetime of a stale lock file.
+///
+/// When the pid does attest: SIGTERM -> old server cleans up its own lock and
+/// socket and exits -> its listener closes -> native host gets EOF -> SW
+/// onDisconnect -> reconnect spawns a fresh host -> reads OUR lock. We give
+/// it a moment to die; if it lingers we proceed anyway (listen_and_publish
+/// binds over its files, and the old server's exit cleanup is
+/// ownership-guarded, so it cannot remove what will by then be OUR lock and
+/// socket).
+fn supplant_prior_server(prev_pid: u32) {
+    if prev_pid == std::process::id() || !ipc::pid_is_alive(prev_pid) {
+        return;
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    match ipc::attest_and_terminate(prev_pid) {
+        Ok(()) => {
+            log_info!("mcp", "supplanting prior MCP server pid {prev_pid}");
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            log_warn!(
+                "mcp",
+                "lock file names live pid {prev_pid}, which runs a different binary; \
+                 not signaling it and superseding the lock instead"
+            );
+            return;
+        }
+        Err(e) => {
+            log_warn!(
+                "mcp",
+                "lock file names live pid {prev_pid} whose identity could not be \
+                 verified ({e}); not signaling it and superseding the lock instead"
+            );
+            return;
         }
     }
     #[cfg(windows)]
-    ipc::windows_process::terminate(pid);
-    #[cfg(all(not(unix), not(windows)))]
-    let _ = pid;
+    {
+        log_info!("mcp", "supplanting prior MCP server pid {prev_pid}");
+        ipc::windows_process::terminate(prev_pid);
+    }
+    for _ in 0..50 {
+        if !ipc::pid_is_alive(prev_pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    log_warn!(
+        "mcp",
+        "prior MCP server pid {prev_pid} did not exit in time; proceeding"
+    );
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn takeover_never_signals_a_pid_that_is_not_our_binary() {
+        // A stale lock whose pid the OS reused for an unrelated process: the
+        // takeover must refuse to signal it. The stand-in is a child WE
+        // spawned (a specific, verified pid — never a pattern match) running
+        // a foreign binary; it must still be alive after the takeover logic
+        // ran against its pid.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+
+        supplant_prior_server(child.id());
+
+        // A mistakenly-sent SIGTERM needs a moment to be delivered before
+        // try_wait can observe it; without the attestation gate this reliably
+        // reaps the child here.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let status = child.try_wait().expect("try_wait");
+        assert!(
+            status.is_none(),
+            "takeover signaled a pid running a foreign binary: {status:?}"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
