@@ -1,5 +1,5 @@
-// GENERATED from contracts/tools.json by scripts/gen-ops.mjs - DO NOT EDIT.
-// Edit the contract, then run `make gen` (or `node scripts/gen-ops.mjs`).
+// GENERATED from contracts/tools.json by scripts/gen-ops.ts - DO NOT EDIT.
+// Edit the contract, then run `just gen` (or `bun scripts/gen-ops.ts`).
 //
 // The tool catalogue, JS side: op names + Chinese UI labels for the options
 // page, policy metadata (risk / scope / permission / confirmation), and the

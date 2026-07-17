@@ -10,9 +10,9 @@
 //   - messages.ts       runtime message router (popup/options/screenshot)
 
 import "./background/messages"; // registers the runtime.onMessage router
-import { connectNative } from "./background/port";
 import { installCdpLifecycleListeners } from "./background/cdp/registry";
 import { verifyExtensionId } from "./background/id-check";
+import { connectNative } from "./background/port";
 
 // Loudly log if the running extension id ≠ the pinned id. A mismatch means the
 // native host rejects this extension (allowed_origins pins the id) — the most
@@ -30,5 +30,3 @@ chrome.runtime.onInstalled.addListener(connectNative);
 // idempotent-ish: if a port already exists it creates a new one and the old
 // is replaced.
 connectNative();
-
-export {};

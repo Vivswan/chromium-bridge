@@ -15,17 +15,17 @@
 // and may not be capturable — Page.handleJavaScriptDialog then errors, which we
 // surface honestly.
 
-import type { OpArgs } from "../shared/types";
 import { getSetting } from "../shared/settings";
+import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { resolveTargetTab } from "./tabs";
-import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
 import { cdpRegistry } from "./cdp/registry";
+import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
+import { resolveTargetTab } from "./tabs";
 
 export async function handleDialog(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
   if ((await getSetting("handleDialogEnabled")) !== true) {
     throw new Error(
-      "page_handle_dialog is disabled. Enable it in the extension settings first (it is off by default because a blocked dialog cannot show an in-page confirmation)."
+      "page_handle_dialog is disabled. Enable it in the extension settings first (it is off by default because a blocked dialog cannot show an in-page confirmation).",
     );
   }
   const action = args.action;
@@ -36,7 +36,7 @@ export async function handleDialog(maybeTabId: number | undefined, args: OpArgs)
   await ensureAllowed(tab.url);
   if (!isDebuggable(tab.url)) {
     throw new Error(
-      `page_handle_dialog cannot debug this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`
+      `page_handle_dialog cannot debug this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
     );
   }
   const tabId = tab.id!;
@@ -54,7 +54,7 @@ export async function handleDialog(maybeTabId: number | undefined, args: OpArgs)
       if (/another debugger/i.test(msg)) {
         throw new Error(
           "该标签页已打开 DevTools,page_handle_dialog 无法附加。请关闭 DevTools 后重试。",
-          { cause: e }
+          { cause: e },
         );
       }
       throw e;

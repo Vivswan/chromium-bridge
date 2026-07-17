@@ -22,7 +22,7 @@ describe("DEFAULTS", () => {
         "pageEvalEnabled",
         "requireEnrollment",
         "warnPreciseSnapshot",
-      ].sort()
+      ].sort(),
     );
     expect(DEFAULTS.pageEvalEnabled).toBe(true);
     expect(DEFAULTS.confirmGraceMs).toBe(60000);

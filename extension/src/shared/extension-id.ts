@@ -2,7 +2,7 @@
 //
 // This is the extension-side copy of the single source of truth. It is kept in
 // lockstep with `extension/manifest.json`'s `key`, `install/install.sh`, and
-// `install/install.ps1` by `scripts/check-extension-id.mjs` (a CI gate). If you
+// `install/install.ps1` by `scripts/check-extension-id.ts` (a CI gate). If you
 // rotate the key (e.g. to adopt a Chrome Web Store-assigned id), update all of
 // them together — the gate fails otherwise.
 export const PINNED_EXTENSION_ID = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
@@ -27,7 +27,7 @@ export interface IdDiagnosis {
  */
 export function diagnoseExtensionId(
   runtimeId: string,
-  expected: string = PINNED_EXTENSION_ID
+  expected: string = PINNED_EXTENSION_ID,
 ): IdDiagnosis {
   if (runtimeId === expected) {
     return {

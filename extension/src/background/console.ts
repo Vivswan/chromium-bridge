@@ -9,12 +9,12 @@
 // they leave the extension (console lines can carry tokens). Mirrors the
 // transient-attach shape of precise.ts (ADR-0009 / ADR-0017).
 
-import type { OpArgs } from "../shared/types";
 import { maskString } from "../shared/masking";
+import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { resolveTargetTab } from "./tabs";
-import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
 import { cdpRegistry } from "./cdp/registry";
+import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
+import { resolveTargetTab } from "./tabs";
 
 // The subset of CDP payloads we read (not the full protocol).
 interface RemoteObject {
@@ -64,7 +64,7 @@ export async function consoleGet(maybeTabId: number | undefined, args: OpArgs): 
   await ensureAllowed(tab.url);
   if (!isDebuggable(tab.url)) {
     throw new Error(
-      `console_get cannot debug this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`
+      `console_get cannot debug this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
     );
   }
   const tabId = tab.id!;
@@ -92,7 +92,8 @@ export async function consoleGet(maybeTabId: number | undefined, args: OpArgs): 
     } else if (method === "Runtime.exceptionThrown") {
       const details = (params as ExceptionThrown).exceptionDetails || {};
       const desc = details.exception?.description || details.text || "Uncaught exception";
-      collected.push({ level: "error", text: String(desc).split("\n")[0], source: "exception" });
+      const firstLine = String(desc).split("\n")[0] ?? String(desc);
+      collected.push({ level: "error", text: firstLine, source: "exception" });
     }
   };
 

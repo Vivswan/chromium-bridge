@@ -2,27 +2,27 @@
 // run here in the SW; page-level ops are forwarded to the target tab's content
 // script (injecting it first).
 
-import type { BridgeReq } from "../shared/types";
-import { getSetting } from "../shared/settings";
 import { TOOL_META } from "../shared/ops";
+import { getSetting } from "../shared/settings";
+import type { BridgeReq } from "../shared/types";
+import { consoleGet } from "./console";
+import { cookieGet } from "./cookies";
+import { handleDialog } from "./dialog";
+import { selectBackend } from "./page-backend";
 import { decide } from "./policy";
+import { snapshotPrecise } from "./precise";
 import {
-  resolveTargetTab,
-  tabList,
-  tabFocus,
-  tabOpen,
-  tabClose,
-  pageNavigate,
   pageBack,
   pageForward,
+  pageNavigate,
   pageReload,
+  resolveTargetTab,
+  tabClose,
+  tabFocus,
+  tabList,
+  tabOpen,
 } from "./tabs";
-import { snapshotPrecise } from "./precise";
-import { cookieGet } from "./cookies";
-import { consoleGet } from "./console";
-import { handleDialog } from "./dialog";
 import { pageUpload } from "./upload";
-import { selectBackend } from "./page-backend";
 
 /**
  * The disable gate, factored out for testability. Routes through the pure

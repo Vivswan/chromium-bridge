@@ -7,14 +7,11 @@
 # - extension/: converted with the Phase 7 extension rehaul.
 # - docs/ and README.md: Chinese-language docs owned by the translation
 #   pass; historical ADRs keep their original text. Cleaned in Phase 11.
-# - tests/: fixtures and assertions may depend on exact non-ASCII text;
-#   converted with the Phase 3 test-toolchain migration.
 # - contracts/: tool descriptions are a cross-process contract; Phase 2
 #   owns changes there.
 # - CHANGELOG.md: generated release history, never edited by hand.
 extension/
 docs/
-tests/
 contracts/
 CHANGELOG.md
 README.md

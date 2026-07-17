@@ -71,7 +71,7 @@ def check(cond, label):
 def ensure_binary():
     if os.path.exists(BIN):
         return
-    print("[setup] release binary missing, building…")
+    print("[setup] release binary missing, building...")
     cargo = "/opt/homebrew/bin/cargo"
     if not os.path.exists(cargo):
         cargo = "cargo"
@@ -82,7 +82,7 @@ def ensure_binary():
 
 def wait_lock(proc=None, timeout=8):
     """Wait for the lock file and return its contents. If `proc` is given,
-    require the lock to belong to it (lock["pid"] == proc.pid) — this ignores a
+    require the lock to belong to it (lock["pid"] == proc.pid) - this ignores a
     stale lock from a previous test's server that hasn't finished exiting, which
     would otherwise point us at a dead port. Tolerates transient read errors."""
     t0 = time.time()
@@ -640,7 +640,7 @@ def test_enclave_control_frames():
         wait_host_ready(nh)
 
         # A challenge whose nonce fails validation (embedded NUL) is answered
-        # by the host with enclave_error/invalid_challenge — locally, without
+        # by the host with enclave_error/invalid_challenge - locally, without
         # touching the keychain.
         nm_write(nh, {"type": "enclave_challenge", "nonce": "bad\x00nonce"})
         reply = nm_read(nh)
@@ -658,7 +658,7 @@ def test_enclave_control_frames():
               "malformed control frame answered locally")
 
         # A stray proof frame is dropped: no reply, and the pump keeps
-        # working. Prove both with a normal tool round trip afterwards — if
+        # working. Prove both with a normal tool round trip afterwards - if
         # the stray frame had been forwarded, it would desynchronize the
         # bridge correlation and this round trip would fail.
         nm_write(nh, {"type": "enclave_proof", "sig": "x", "key_id": "y",
@@ -1044,7 +1044,7 @@ def test_two_browsers():
         check("BROWSER_NOT_FOUND" in r["result"]["content"][0]["text"],
               "unknown label carries BROWSER_NOT_FOUND")
 
-        # A malformed (non-string) browser argument is rejected up front —
+        # A malformed (non-string) browser argument is rejected up front -
         # it must not silently route anywhere.
         n_served = len(chrome_seen) + len(brave_seen)
         r = c.call("tab_list", {"browser": 123}, _id=28)

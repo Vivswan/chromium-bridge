@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-  maskPatterns,
-  maskString,
   maskCookieValue,
-  maskNumber,
-  maskKeyName,
-  maskSensitive,
   maskErrorMessage,
+  maskKeyName,
+  maskNumber,
+  maskPatterns,
+  maskSensitive,
+  maskString,
 } from "./masking";
 
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghij";
@@ -36,7 +36,7 @@ describe("maskPatterns", () => {
     // "a-a-a-..." was quadratic under the old nested-lookahead pattern. It has
     // a letter but no digit, so it must return unchanged, and must return fast
     // (bun's test timeout catches a hang).
-    const adversarial = "a-".repeat(40000) + "a"; // 80001 chars
+    const adversarial = `${"a-".repeat(40000)}a`; // 80001 chars
     expect(maskPatterns(adversarial)).toBe(adversarial);
   });
   test("leaves ordinary text alone", () => {
@@ -133,7 +133,7 @@ describe("maskErrorMessage (outer error egress)", () => {
   });
   test("ordinary error messages pass through readably", () => {
     expect(maskErrorMessage(new Error("user denied: click submit"))).toBe(
-      "user denied: click submit"
+      "user denied: click submit",
     );
   });
   test("null/undefined fall back to a generic message", () => {

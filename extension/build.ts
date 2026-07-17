@@ -1,16 +1,16 @@
 // esbuild driver for the chromium-bridge MV3 extension.
 //
-// Bundles src/*.ts → dist/*.js (IIFE, unminified so the unpacked extension
+// Bundles src/*.ts -> dist/*.js (IIFE, unminified so the unpacked extension
 // stays debuggable) and copies the static assets (manifest, HTML, CSS, icons)
 // alongside. The load-unpacked target is extension/dist/.
 //
-//   node build.mjs          one-shot build
-//   node build.mjs --watch  rebuild on change
+//   bun build.ts          one-shot build
+//   bun build.ts --watch  rebuild on change
 
-import * as esbuild from "esbuild";
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as esbuild from "esbuild";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const outdir = join(root, "dist");
@@ -23,8 +23,7 @@ function copyStatic() {
   cpSync(join(root, "icons"), join(outdir, "icons"), { recursive: true });
 }
 
-/** @type {import("esbuild").BuildOptions} */
-const options = {
+const options: esbuild.BuildOptions = {
   entryPoints: [
     join(root, "src/background.ts"),
     join(root, "src/content.ts"),
@@ -48,9 +47,9 @@ if (watch) {
   const ctx = await esbuild.context(options);
   await ctx.watch();
   copyStatic();
-  console.log("[build] watching src/ …");
+  console.log("[build] watching src/ ...");
 } else {
   await esbuild.build(options);
   copyStatic();
-  console.log("[build] done → extension/dist/");
+  console.log("[build] done -> extension/dist/");
 }

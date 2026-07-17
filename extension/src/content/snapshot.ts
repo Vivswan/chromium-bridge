@@ -2,8 +2,8 @@
 // tagged with a stable ref. A content-script approximation of a real a11y tree
 // (see README for why we avoid chrome.debugger's infobar by default).
 
+import { assignRef, resetRefs } from "./refs";
 import { truncate } from "./util";
-import { resetRefs, assignRef } from "./refs";
 
 export function snapshot() {
   resetRefs();
@@ -14,9 +14,8 @@ export function snapshot() {
       isInteractive(el as HTMLElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
   });
 
-  let node: Node | null;
   // TreeWalker's first nextNode() walks from currentNode; start from root.
-  while ((node = walker.nextNode())) {
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const el = node as HTMLElement; // SHOW_ELEMENT guarantees an element
     if (!isVisible(el)) continue;
     const ref = assignRef(el);
@@ -104,7 +103,7 @@ export function nameOf(el: HTMLElement) {
     if (parts) return truncate(parts, 120);
   }
   const aria = el.getAttribute("aria-label");
-  if (aria && aria.trim()) return truncate(aria.trim(), 120);
+  if (aria?.trim()) return truncate(aria.trim(), 120);
   // <label for> or wrapping <label>
   const labelFor = document.querySelector<HTMLElement>(`label[for="${el.id}"]`);
   if (labelFor) {
@@ -116,7 +115,7 @@ export function nameOf(el: HTMLElement) {
     const t = (wrapping.innerText || "").trim();
     if (t) return truncate(t, 120);
   }
-  if (el.title && el.title.trim()) return truncate(el.title.trim(), 120);
+  if (el.title?.trim()) return truncate(el.title.trim(), 120);
   // Fallbacks by content
   const txt = (el.innerText || el.textContent || "").trim();
   if (txt) return truncate(txt, 120);
@@ -138,7 +137,7 @@ function previewValue(el: HTMLElement): string | undefined {
 }
 
 function isVisible(el: HTMLElement) {
-  if (!el || !el.getClientRects) return false;
+  if (!el?.getClientRects) return false;
   const rects = el.getClientRects();
   if (rects.length === 0) return false;
   const style = getComputedStyle(el);

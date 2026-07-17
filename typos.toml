@@ -1,0 +1,17 @@
+# typos (https://github.com/crate-ci/typos) - source-code spell checker.
+# Run via `just typos`; wired into `just ci` and the lefthook pre-commit hook.
+
+[files]
+# Generated release history and vendored supply-chain audits are not ours to
+# respell; localized docs will arrive with the translation phases.
+extend-exclude = ["CHANGELOG.md", "supply-chain/"]
+
+[default]
+extend-ignore-re = [
+    # RFC 4648 base64 test vectors ("f", "fo", "foo", ...) in encoding tests.
+    'b"fo"',
+]
+
+[default.extend-words]
+# IIFE = immediately-invoked function expression (esbuild output format).
+iif = "iif"

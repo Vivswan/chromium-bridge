@@ -277,7 +277,7 @@
     <input type="checkbox" id="allowAllSites" />
     <div class="body">
       <div class="title">允许所有站点(跳过逐站点审批)</div>
-      <div class="desc">开启后,AI 可直接操作任意 http(s) 站点,不再为每个新站点弹窗授权。开启时会请求「<所有网址>」主机权限。适合信任 AI 全自动浏览的场景;否则建议保持关闭,用下面的逐站点白名单。</div>
+      <div class="desc">开启后,AI 可直接操作任意 http(s) 站点,不再为每个新站点弹窗授权。开启时会请求「&lt;所有网址&gt;」主机权限。适合信任 AI 全自动浏览的场景;否则建议保持关闭,用下面的逐站点白名单。</div>
       <div class="warn" id="allowAllSites-warn" style="display:none">⚠ 开启后,任意站点(含银行、邮箱、内网)都无需授权即可被操作,请谨慎。</div>
     </div>
   </div>
@@ -285,7 +285,7 @@
   <div class="sub">格式:<code>https://域名/*</code>。手动添加后,首次访问该站点时仍需批准 Chrome 的主机权限弹窗。</div>
   <div class="add-row">
     <input type="text" id="new-site" placeholder="https://example.com/*" />
-    <button class="primary" id="add-site">添加</button>
+    <button type="button" class="primary" id="add-site">添加</button>
   </div>
   <div class="list" id="site-list"></div>
 

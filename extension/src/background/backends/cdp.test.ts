@@ -13,7 +13,7 @@ describe("evalResponseToPayload", () => {
           exception: { className: "Error", description: `Error: ${JWT}\n    at <anonymous>:1:7` },
         },
       } as any,
-      true
+      true,
     );
     expect(out.__evalError).toBe(true);
     expect(out.name).toBe("Error");
@@ -25,7 +25,7 @@ describe("evalResponseToPayload", () => {
   test("exceptionDetails.text is the fallback and is masked too", () => {
     const out: any = evalResponseToPayload(
       { exceptionDetails: { text: `boom ${JWT}` } } as any,
-      true
+      true,
     );
     expect(out.__evalError).toBe(true);
     expect(out.message).not.toContain(JWT);
@@ -34,7 +34,7 @@ describe("evalResponseToPayload", () => {
   test("success values pass the same gate", () => {
     const out: any = evalResponseToPayload(
       { result: { value: { jwt: JWT, note: "hi" } } } as any,
-      true
+      true,
     );
     expect(JSON.stringify(out)).not.toContain(JWT);
     expect(out.note).toBe("hi");
@@ -43,7 +43,7 @@ describe("evalResponseToPayload", () => {
   test("mask=false (explicit opt-out) leaves both paths raw", () => {
     const err: any = evalResponseToPayload(
       { exceptionDetails: { text: `boom ${JWT}` } } as any,
-      false
+      false,
     );
     expect(err.message).toContain(JWT);
     const ok: any = evalResponseToPayload({ result: { value: JWT } } as any, false);
