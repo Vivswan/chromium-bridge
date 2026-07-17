@@ -28,6 +28,16 @@ export const TOOLS: ToolInfo[] = [
   { op: "page_snapshot_precise", desc: "精确快照(走 debugger)" },
   { op: "cookie_get", desc: "读取 Cookie(脱敏)" },
   { op: "storage_get", desc: "读取 localStorage/sessionStorage(脱敏)" },
+  { op: "page_navigate", desc: "导航当前标签页(需白名单)" },
+  { op: "page_back", desc: "后退" },
+  { op: "page_forward", desc: "前进" },
+  { op: "page_reload", desc: "刷新页面" },
+  { op: "page_press", desc: "按键(带确认)" },
+  { op: "page_hover", desc: "悬停元素" },
+  { op: "page_select", desc: "选择下拉项(带确认)" },
+  { op: "console_get", desc: "读取控制台日志(脱敏)" },
+  { op: "page_handle_dialog", desc: "响应页面对话框(需开启)" },
+  { op: "page_upload", desc: "上传本地文件(极高危,需开启)" },
 ];
 
 // All op names, for enumeration / consistency checks.
@@ -144,6 +154,66 @@ export const TOOL_META: Record<string, ToolMeta> = {
     permission: "scripting",
     confirmation: "none",
   },
+  page_navigate: {
+    risk: "medium",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  page_back: {
+    risk: "low",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  page_forward: {
+    risk: "low",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  page_reload: {
+    risk: "low",
+    scope: "tab",
+    permission: "tabs",
+    confirmation: "none",
+  },
+  page_press: {
+    risk: "high",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "page-toast",
+  },
+  page_hover: {
+    risk: "low",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "none",
+  },
+  page_select: {
+    risk: "high",
+    scope: "page",
+    permission: "scripting",
+    confirmation: "page-toast",
+  },
+  console_get: {
+    risk: "medium",
+    scope: "page",
+    permission: "debugger",
+    confirmation: "warn",
+  },
+  page_handle_dialog: {
+    risk: "high",
+    scope: "page",
+    permission: "debugger",
+    confirmation: "warn",
+  },
+  page_upload: {
+    risk: "critical",
+    scope: "page",
+    permission: "debugger",
+    confirmation: "every-call",
+  },
 };
 
 // Per-tool request shapes, derived from each tool's inputSchema. Discriminated
@@ -171,4 +241,14 @@ export type BridgeCommand =
   | { op: "page_eval"; args: { code: string } }
   | { op: "page_snapshot_precise"; args: { frameId?: string } }
   | { op: "cookie_get"; args: { domain?: string; name?: string; url?: string } }
-  | { op: "storage_get"; args: { key?: string; type?: string } };
+  | { op: "storage_get"; args: { key?: string; type?: string } }
+  | { op: "page_navigate"; args: { url: string } }
+  | { op: "page_back"; args: Record<string, never> }
+  | { op: "page_forward"; args: Record<string, never> }
+  | { op: "page_reload"; args: Record<string, never> }
+  | { op: "page_press"; args: { keys: string } }
+  | { op: "page_hover"; args: { ref?: string; selector?: string } }
+  | { op: "page_select"; args: { ref?: string; selector?: string; value: string } }
+  | { op: "console_get"; args: { limit?: number } }
+  | { op: "page_handle_dialog"; args: { action: string; promptText?: string } }
+  | { op: "page_upload"; args: { selector: string; path: string } };

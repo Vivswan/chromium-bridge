@@ -390,6 +390,27 @@ function escapeAttr(s: string) {
     });
   }
 
+  // fileUploadEnabled and handleDialogEnabled follow the same "dangerous when
+  // ON" shape as cdpMode: both gate a tool that is OFF by default (local-file
+  // egress / un-confirmable blocked dialog), so their warning shows while
+  // CHECKED. Default off.
+  for (const key of ["fileUploadEnabled", "handleDialogEnabled"] as (keyof Settings)[]) {
+    const input = $<HTMLInputElement>(key);
+    const warn = $(`${key}-warn`);
+    const card = $(`card-${key}`);
+    const sync = (on: boolean) => {
+      if (warn) warn.style.display = on ? "block" : "none";
+      if (card) card.classList.toggle("danger", on);
+    };
+    input.checked = s[key] === true;
+    sync(input.checked);
+    input.addEventListener("change", (e: Event) => {
+      const on = (e.target as HTMLInputElement).checked;
+      sync(on);
+      saveSetting(key, on);
+    });
+  }
+
   // "Allow all sites" toggle — special wiring (permission request on enable).
   // Derive the initial checkbox state from BOTH the stored setting and whether
   // the <all_urls> permission is actually held, so they can't drift apart.

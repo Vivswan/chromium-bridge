@@ -15,7 +15,9 @@ describe("DEFAULTS", () => {
         "disabledTools",
         "evalMask",
         "evalToastTimeoutMs",
+        "fileUploadEnabled",
         "groupTabs",
+        "handleDialogEnabled",
         "hostReverifyMs",
         "pageEvalEnabled",
         "requireEnrollment",
@@ -28,6 +30,10 @@ describe("DEFAULTS", () => {
     expect(DEFAULTS.allowAllSites).toBe(false);
     expect(DEFAULTS.cdpMode).toBe(false);
     expect(DEFAULTS.groupTabs).toBe(true);
+    // page_upload and page_handle_dialog are OFF by default (local-file egress /
+    // un-confirmable blocked dialog); the opt-in setting is their gate.
+    expect(DEFAULTS.fileUploadEnabled).toBe(false);
+    expect(DEFAULTS.handleDialogEnabled).toBe(false);
     // Enrollment is on by default (ADR-0021): the bridge fails closed until a
     // host key is paired and pinned.
     expect(DEFAULTS.requireEnrollment).toBe(true);
