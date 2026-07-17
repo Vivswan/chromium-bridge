@@ -28,7 +28,7 @@
 #                                       CLI on PATH). Off by default; other clients
 #                                       get ready-to-paste config printed instead.
 #   ./install.sh --uninstall            Remove what this installer placed (binary,
-#                                       run-host wrapper, run.lock, and the
+#                                       run-host wrappers, run.lock, and the
 #                                       native-host manifest for every known
 #                                       browser). Re-pass any --nm-dir target to
 #                                       clear it too. Leaves the browser and the
@@ -116,6 +116,12 @@ done
 
 OS="$(uname -s)"
 declare -a NM_DIRS=()
+# Install targets as parallel arrays (bash 3.2 has no associative arrays):
+# TARGET_KEYS[i] is the browser key whose label the wrapper bakes in ("" for an
+# explicit --nm-dir whose browser is unknown), TARGET_DIRS[i] the matching
+# NativeMessagingHosts dir.
+declare -a TARGET_KEYS=()
+declare -a TARGET_DIRS=()
 # Candidate per-user runtime/data dirs where the MCP server may have written its
 # run.lock (mirrors LockFile::path() in src/ipc.rs). Only used by --uninstall,
 # and only the exact file "run.lock" is ever removed from them.
@@ -220,7 +226,7 @@ if [[ ${#NM_DIRS_EXPLICIT[@]} -gt 0 ]]; then
 fi
 
 if [[ "$UNINSTALL" == "1" ]]; then
-  # Uninstall removes the shared binary + wrapper, so every manifest that could
+  # Uninstall removes the shared binary + wrappers, so every manifest that could
   # point at them must go: every known browser dir plus any explicit dir. The
   # manifest is uniquely named for this project, so scanning all of them is safe.
   read -ra ALL_KEYS <<< "$BB_BROWSER_KEYS"
@@ -229,20 +235,28 @@ if [[ "$UNINSTALL" == "1" ]]; then
     NM_DIRS+=("${EXPLICIT_DIRS[@]}")
   fi
 elif [[ ${#EXPLICIT_DIRS[@]} -gt 0 ]]; then
-  # Explicit dirs take over install selection; --browser is ignored.
-  NM_DIRS+=("${EXPLICIT_DIRS[@]}")
+  # Explicit dirs take over install selection; --browser is ignored. The
+  # browser behind an explicit dir is unknown, so these registrations use the
+  # unlabeled wrapper (the MCP server files that connection under "default").
+  for dir in "${EXPLICIT_DIRS[@]}"; do
+    TARGET_KEYS+=("")
+    TARGET_DIRS+=("$dir")
+  done
 else
   SELECTION="$(bb_resolve_selection "$BROWSER")" || exit 1
   read -ra SELECTED_KEYS <<< "$SELECTION"
-  for key in "${SELECTED_KEYS[@]}"; do NM_DIRS+=("$(bb_nm_dir_for "$key")"); done
+  for key in "${SELECTED_KEYS[@]}"; do
+    TARGET_KEYS+=("$key")
+    TARGET_DIRS+=("$(bb_nm_dir_for "$key")")
+  done
 fi
 
 # ---- uninstall ------------------------------------------------------------
 # Reverses exactly what the install path above lays down: the binary and
-# run-host wrapper in INSTALL_DIR, the native-host manifest in each NM_DIR, and
-# the run.lock the server writes. Idempotent, prints every removal, never uses
-# wildcards, never touches a process or the browser, and never removes anything
-# this project did not create.
+# run-host wrappers in INSTALL_DIR, the native-host manifest in each NM_DIR,
+# and the run.lock the server writes. Idempotent, prints every removal, never
+# uses wildcards, never touches a process or the browser, and never removes
+# anything this project did not create.
 
 if [[ "$UNINSTALL" == "1" ]]; then
   echo "[uninstall] removing browser-bridge artifacts on $OS"
@@ -260,9 +274,16 @@ if [[ "$UNINSTALL" == "1" ]]; then
     fi
   done
 
-  # Binary + native-host wrapper we placed in INSTALL_DIR.
-  for artifact in "$INSTALL_DIR/$BINARY_NAME" "$INSTALL_DIR/run-host.sh"; do
-    if [[ -e "$artifact" ]]; then
+  # Binary + native-host wrappers we placed in INSTALL_DIR: the unlabeled
+  # run-host.sh plus one run-host-<browser>.sh per known browser key. Exact,
+  # project-unique names only, never a glob; -L catches a dangling symlink
+  # left at a managed name.
+  declare -a INSTALL_ARTIFACTS=("$INSTALL_DIR/$BINARY_NAME" "$INSTALL_DIR/run-host.sh")
+  for key in $BB_BROWSER_KEYS; do
+    INSTALL_ARTIFACTS+=("$INSTALL_DIR/run-host-$key.sh")
+  done
+  for artifact in "${INSTALL_ARTIFACTS[@]}"; do
+    if [[ -e "$artifact" || -L "$artifact" ]]; then
       rm -f "$artifact"
       echo "[uninstall] removed: $artifact"
       removed=1
@@ -345,7 +366,7 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 # Owner-only, enforced rather than left to umask: this dir holds the binary and
-# run-host.sh wrapper the browser launches, so a group- or world-writable mode
+# the run-host wrappers the browser launches, so a group- or world-writable mode
 # would let another account swap them out. Matches ensure_private_dir (0700) in
 # src/ipc.rs. The browser runs as this same user, so it can still traverse here.
 chmod 0700 "$INSTALL_DIR"
@@ -372,18 +393,39 @@ fi
 # ---- host manifest --------------------------------------------------------
 
 # Chrome native-messaging manifests have no `args` field, so Unix installs use
-# a tiny wrapper to select the binary's native-host mode.
-WRAPPER="$INSTALL_DIR/run-host.sh"
-cat > "$WRAPPER" <<EOF
-#!/usr/bin/env bash
-exec "$INSTALL_DIR/$BINARY_NAME" --native-host
-EOF
-chmod 0755 "$WRAPPER"
+# a tiny wrapper to select the binary's native-host mode. Each browser gets its
+# OWN wrapper (run-host-<browser>.sh) baking in `--label <browser>`: the label
+# rides in the authenticated bridge handshake, letting one MCP server keep
+# every browser attached at once and address them by name (see the
+# list_browsers tool). Explicit --nm-dir targets (browser unknown) get the
+# unlabeled run-host.sh, which the server files under its "default" slot.
+bb_write_wrapper() { # $1 = wrapper path, $2 = label ("" = no label)
+  # %q-escape everything baked into executable text. Write via mktemp (0600,
+  # exclusive create - never follows a planted symlink) + chmod + atomic mv,
+  # so the final path is replaced, never written through.
+  local exec_line tmp
+  exec_line="exec $(printf '%q' "$INSTALL_DIR/$BINARY_NAME") --native-host"
+  if [[ -n "$2" ]]; then
+    exec_line="$exec_line --label $(printf '%q' "$2")"
+  fi
+  tmp="$(mktemp "$1.tmp.XXXXXX")"
+  printf '#!/usr/bin/env bash\n%s\n' "$exec_line" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 0755 "$tmp"
+  mv -f "$tmp" "$1"
+}
 
 # allowed_origins pins the extension ID (fixed via the manifest key).
 ORIGINS="[\"chrome-extension://$EXTENSION_ID/\"]"
 
-for NM_DIR in "${NM_DIRS[@]}"; do
+for i in "${!TARGET_DIRS[@]}"; do
+  KEY="${TARGET_KEYS[$i]}"
+  NM_DIR="${TARGET_DIRS[$i]}"
+  if [[ -n "$KEY" ]]; then
+    WRAPPER="$INSTALL_DIR/run-host-$KEY.sh"
+  else
+    WRAPPER="$INSTALL_DIR/run-host.sh"
+  fi
+  bb_write_wrapper "$WRAPPER" "$KEY"
   mkdir -p "$NM_DIR"
   MANIFEST="$NM_DIR/$HOST_NAME.json"
   cat > "$MANIFEST" <<EOF
@@ -397,6 +439,7 @@ for NM_DIR in "${NM_DIRS[@]}"; do
 EOF
   chmod 0644 "$MANIFEST"
   echo "[install] host manifest written to $MANIFEST"
+  echo "[install]   launches: $WRAPPER${KEY:+ (label: $KEY)}"
 done
 echo "[install]   allowed_origins: $ORIGINS"
 
