@@ -58,6 +58,20 @@ as itself.
   configuration. It also keeps development and CI working: an unsigned, freshly
   built binary still matches itself, because both ends are that same build.
 
+- **No environment-configurable allowlist (e.g. `BB_TRUSTED_PEER_SHA256`).** An
+  earlier sketch of this work considered an env or config list of extra trusted
+  hex digests so a different-but-trusted build or path could be permitted. We
+  deliberately did **not** add it. An allowlist a same-user process can set
+  through the environment is exactly the "flag, default, or env var that bypasses
+  a security gate" that AGENTS.md forbids adding without a reviewed decision: a
+  hostile process that can influence how the host is launched could append its
+  own impostor's hash and defeat the entire attestation. The allowlist stays
+  `{our own binary}`, which is unforgeable by construction. If a concrete
+  different-but-trusted-build need ever arises (say, a signed release plus a local
+  dev build), it should be met by the macOS `SecCode`/Team-ID path below or by an
+  explicit, ADR-recorded allowlist with a non-environment trust source, not by an
+  env knob.
+
 - **Kernel peer-PID, not a PID sent over the socket.** A PID the peer told us
   could be forged; `SO_PEERCRED` / `LOCAL_PEERPID` come from the kernel for the
   actual process on the other end of the socket.
