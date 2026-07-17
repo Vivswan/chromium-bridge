@@ -1,0 +1,421 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as pinStore from "./enclave-pin";
+import {
+  approvePending,
+  attachPort,
+  detachPort,
+  enrollmentGate,
+  getEnrollmentStatus,
+  handleEnclaveFrame,
+  isEnclaveFrame,
+  onPortConnected,
+  rejectPending,
+  revokePin,
+  startPairing,
+  verifyPinnedNow,
+} from "./enrollment";
+import { base64Encode, buildChallengeMessage, computeKeyId } from "./enclave-verify";
+
+// The ceremony state machine, driven end to end with a mocked chrome and a
+// WebCrypto key standing in for the host's Secure Enclave key. What CANNOT be
+// tested here: the real native host, the keychain, and the Touch ID prompt;
+// those have a manual script on the host side
+// (docs/security/enrollment-manual-test.md).
+
+// ---- chrome mock ------------------------------------------------------------
+
+function installChromeMock(): Record<string, unknown> {
+  const store: Record<string, unknown> = {};
+  (globalThis as unknown as { chrome: unknown }).chrome = {
+    runtime: { id: "test-ext-id" },
+    storage: {
+      local: {
+        // Supports both the callback style (settings.ts) and the promise
+        // style (enclave-pin.ts).
+        get: (key: string | string[], cb?: (r: Record<string, unknown>) => void) => {
+          const keys = typeof key === "string" ? [key] : key;
+          const result: Record<string, unknown> = {};
+          for (const k of keys) if (k in store) result[k] = store[k];
+          if (typeof cb === "function") {
+            cb(result);
+            return;
+          }
+          return Promise.resolve(result);
+        },
+        set: (obj: Record<string, unknown>) => {
+          Object.assign(store, obj);
+          return Promise.resolve();
+        },
+        remove: (key: string | string[]) => {
+          for (const k of Array.isArray(key) ? key : [key]) delete store[k];
+          return Promise.resolve();
+        },
+      },
+    },
+    action: {
+      setBadgeText: () => Promise.resolve(),
+      setBadgeBackgroundColor: () => Promise.resolve(),
+    },
+  };
+  return store;
+}
+
+// ---- test key (plays the host's Enclave key) ---------------------------------
+
+interface TestKey {
+  kp: CryptoKeyPair;
+  pubkeyB64: string;
+  keyId: string;
+}
+
+async function genKey(): Promise<TestKey> {
+  const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ]);
+  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  return { kp, pubkeyB64: base64Encode(raw), keyId: await computeKeyId(raw) };
+}
+
+async function proofFrame(key: TestKey, nonce: string, context?: string) {
+  const sig = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      key.kp.privateKey,
+      buildChallengeMessage(nonce, context)
+    )
+  );
+  return {
+    type: "enclave_proof",
+    sig: base64Encode(sig),
+    key_id: key.keyId,
+    pubkey: key.pubkeyB64,
+  };
+}
+
+// ---- harness ------------------------------------------------------------------
+
+let store: Record<string, unknown>;
+let posted: Array<Record<string, unknown>>;
+
+beforeEach(() => {
+  store = installChromeMock();
+  posted = [];
+  detachPort(); // clear any leftover outstanding challenge from a prior test
+  attachPort((frame) => {
+    posted.push(frame as Record<string, unknown>);
+    return true;
+  });
+});
+
+afterEach(() => {
+  detachPort();
+});
+
+function lastChallenge(): { nonce: string; context: string } {
+  const frame = posted[posted.length - 1];
+  expect(frame.type).toBe("enclave_challenge");
+  return { nonce: frame.nonce as string, context: frame.context as string };
+}
+
+async function pairAndPin(key: TestKey): Promise<void> {
+  await onPortConnected();
+  const { nonce, context } = lastChallenge();
+  await handleEnclaveFrame(await proofFrame(key, nonce, context));
+  const approved = await approvePending();
+  expect(approved.ok).toBe(true);
+}
+
+// ---- tests ----------------------------------------------------------------------
+
+describe("isEnclaveFrame", () => {
+  test("matches the three control tags and nothing else", () => {
+    expect(isEnclaveFrame({ type: "enclave_proof" })).toBe(true);
+    expect(isEnclaveFrame({ type: "enclave_error" })).toBe(true);
+    expect(isEnclaveFrame({ type: "enclave_challenge" })).toBe(true);
+    expect(isEnclaveFrame({ id: 1, op: "tab_list", args: {} })).toBe(false);
+    expect(isEnclaveFrame({ type: "something_else" })).toBe(false);
+    expect(isEnclaveFrame(null)).toBe(false);
+    expect(isEnclaveFrame("enclave_proof")).toBe(false);
+  });
+});
+
+describe("pin store", () => {
+  test("pin roundtrip with a real key; clearAll forgets everything", async () => {
+    const key = await genKey();
+    expect(await pinStore.getPin()).toBeNull();
+    const pin = { keyId: key.keyId, pubkeyB64: key.pubkeyB64, pinnedAt: 123 };
+    await pinStore.setPin(pin);
+    expect(await pinStore.getPin()).toEqual(pin);
+    await pinStore.clearAll();
+    expect(await pinStore.getPin()).toBeNull();
+    expect(await pinStore.getPending()).toBeNull();
+    expect(await pinStore.getCompromised()).toBeNull();
+  });
+
+  test("a stored pin whose keyId does not match its pubkey is not a pin", async () => {
+    const key = await genKey();
+    store["enclavePin"] = { keyId: "a".repeat(64), pubkeyB64: key.pubkeyB64, pinnedAt: 1 };
+    expect(await pinStore.getPin()).toBeNull();
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("a stored pin whose pubkey does not decode is not a pin", async () => {
+    // "QUJD" is canonical base64 for "ABC": 3 bytes, not a 65-byte point.
+    store["enclavePin"] = { keyId: "a".repeat(64), pubkeyB64: "QUJD", pinnedAt: 1 };
+    expect(await pinStore.getPin()).toBeNull();
+    store["enclavePin"] = { keyId: "short", pubkeyB64: "QUJD", pinnedAt: 1 };
+    expect(await pinStore.getPin()).toBeNull();
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+});
+
+describe("ceremony state machine", () => {
+  test("default state fails closed with pairing instructions", async () => {
+    const gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("browser-bridge pair");
+    expect((await getEnrollmentStatus()).state).toBe("unpaired");
+  });
+
+  test("full ceremony: challenge -> proof -> pending -> approve -> pinned", async () => {
+    const key = await genKey();
+
+    await onPortConnected();
+    expect(posted.length).toBe(1);
+    const { nonce, context } = lastChallenge();
+    expect(nonce).toMatch(/^[0-9a-f]{64}$/);
+    expect(context).toContain("test-ext-id");
+
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    let st = await getEnrollmentStatus();
+    expect(st.state).toBe("pending");
+    expect(st.keyId).toBe(key.keyId);
+    let gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false); // pending is still blocked
+
+    expect((await approvePending()).ok).toBe(true);
+    st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect(st.keyId).toBe(key.keyId);
+    gate = await enrollmentGate();
+    expect(gate.allowed).toBe(true);
+  });
+
+  test("once pinned, reconnects are not challenged (session granularity)", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    const before = posted.length;
+    await onPortConnected();
+    await onPortConnected();
+    expect(posted.length).toBe(before);
+  });
+
+  test("a proof from the wrong key never becomes pending", async () => {
+    const attacker = await genKey();
+    await onPortConnected();
+    const { nonce } = lastChallenge();
+    // Signed over the right nonce but the wrong context: fails verification.
+    await handleEnclaveFrame(await proofFrame(attacker, nonce, "wrong-context"));
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect(st.lastError).toContain("rejected");
+  });
+
+  test("manual verify against the pin succeeds for the pinned key", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await verifyPinnedNow()).ok).toBe(true);
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect(typeof st.lastVerifiedAt).toBe("number");
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("verify answered by another key fails closed", async () => {
+    const key = await genKey();
+    const attacker = await genKey();
+    await pairAndPin(key);
+    expect((await verifyPinnedNow()).ok).toBe(true);
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(attacker, nonce, context));
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("compromised");
+    const gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("failed closed");
+  });
+
+  test("verify answered with the pinned identifiers but another signer fails closed", async () => {
+    const key = await genKey();
+    const attacker = await genKey();
+    await pairAndPin(key);
+    expect((await verifyPinnedNow()).ok).toBe(true);
+    const { nonce, context } = lastChallenge();
+    const forged = await proofFrame(attacker, nonce, context);
+    forged.key_id = key.keyId;
+    forged.pubkey = key.pubkeyB64;
+    await handleEnclaveFrame(forged);
+    expect((await getEnrollmentStatus()).state).toBe("compromised");
+  });
+
+  test("unsolicited and replayed proofs are dropped without touching state", async () => {
+    const key = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    const frame = await proofFrame(key, nonce, context);
+    await handleEnclaveFrame(frame);
+    expect((await approvePending()).ok).toBe(true);
+    // Same frame delivered again: no outstanding challenge, so it is dropped.
+    await handleEnclaveFrame(frame);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("a proof for a challenge lost to a SW restart is dropped", async () => {
+    const key = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    const frame = await proofFrame(key, nonce, context);
+    detachPort(); // port drop / SW death clears the outstanding nonce
+    attachPort((f) => {
+      posted.push(f as Record<string, unknown>);
+      return true;
+    });
+    await handleEnclaveFrame(frame);
+    expect((await getEnrollmentStatus()).state).toBe("unpaired");
+  });
+
+  test("not_enrolled during pairing surfaces the pair instruction, still blocked", async () => {
+    await onPortConnected();
+    await handleEnclaveFrame({ type: "enclave_error", reason: "not_enrolled" });
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect(st.lastError).toContain("browser-bridge pair");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("unsupported_platform names the way out explicitly", async () => {
+    await onPortConnected();
+    await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });
+    const st = await getEnrollmentStatus();
+    expect(st.lastError).toContain("macOS");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("signing_failed during verify does NOT fail closed (prompt declined)", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await verifyPinnedNow()).ok).toBe(true);
+    await handleEnclaveFrame({ type: "enclave_error", reason: "signing_failed" });
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect(st.lastError).toContain("signing_failed");
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("not_enrolled during verify DOES fail closed (pinned key is gone)", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await verifyPinnedNow()).ok).toBe(true);
+    await handleEnclaveFrame({ type: "enclave_error", reason: "not_enrolled" });
+    expect((await getEnrollmentStatus()).state).toBe("compromised");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("rejecting the fingerprint pauses auto-pairing", async () => {
+    const key = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    expect((await rejectPending()).ok).toBe(true);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect(st.paused).toBe(true);
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before); // no surprise Touch ID prompt
+    // startPairing resumes explicitly.
+    expect((await startPairing()).ok).toBe(true);
+    expect(posted.length).toBe(before + 1);
+  });
+
+  test("revoke forgets the pin, blocks, and pauses auto-pairing", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await revokePin()).ok).toBe(true);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect((await enrollmentGate()).allowed).toBe(false);
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before);
+  });
+
+  test("startPairing refuses while a key is pinned", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    const res = await startPairing();
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("revoke");
+  });
+
+  test("requireEnrollment=false opens the gate and skips the ceremony", async () => {
+    store["requireEnrollment"] = false;
+    expect((await enrollmentGate()).allowed).toBe(true);
+    await onPortConnected();
+    expect(posted.length).toBe(0);
+  });
+
+  test("a stale reject after approval does not touch the pin", async () => {
+    const key = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    expect((await approvePending()).ok).toBe(true);
+    // Second tab clicks reject after the first tab approved.
+    const rej = await rejectPending();
+    expect(rej.ok).toBe(false);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect(st.paused).not.toBe(true);
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("interleaved approve and revoke serialize; revoke wins and nothing resurrects the pin", async () => {
+    const key = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    // Fire both without awaiting in between: the transition queue must run
+    // them in call order (approve, then revoke), leaving the pin gone.
+    const approveP = approvePending();
+    const revokeP = revokePin();
+    expect((await approveP).ok).toBe(true);
+    expect((await revokeP).ok).toBe(true);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("a pairing proof in flight cannot recreate pending state after revoke", async () => {
+    const keyA = await genKey();
+    const keyB = await genKey();
+    await pairAndPin(keyA);
+    expect((await revokePin()).ok).toBe(true);
+    // Paused now; restart pairing manually, then interleave a revoke with the
+    // proof so the proof processes after state was wiped again.
+    expect((await startPairing()).ok).toBe(true);
+    const { nonce, context } = lastChallenge();
+    const frame = await proofFrame(keyB, nonce, context);
+    const revokeP = revokePin(); // queued first: clears the outstanding nonce
+    const proofP = handleEnclaveFrame(frame); // queued second: must be unsolicited
+    await Promise.all([revokeP, proofP]);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+});
