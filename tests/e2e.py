@@ -32,6 +32,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -688,8 +689,12 @@ def test_enclave_control_frames():
         mcp.wait(timeout=5)
 
 
-def test_server_takeover():
-    print("\n[test] new MCP server supplants the previous server")
+def test_second_instance_coexists_as_relay():
+    """Coexistence (ADR-0024): a second MCP-server instance does NOT SIGTERM the
+    first (newest-wins takeover is gone). The first instance is the broker and
+    keeps owning the lock; the second attests it and attaches as a relay. Both
+    stay alive and both can drive the bridge over their own stdio."""
+    print("\n[test] a second instance coexists as a relay (no takeover)")
     try:
         os.remove(LOCK)
     except FileNotFoundError:
@@ -699,39 +704,41 @@ def test_server_takeover():
     second = None
     try:
         first_lock = wait_lock(first)
-        check(first_lock is not None, "first server wrote its lock file")
+        check(first_lock is not None, "first instance became the broker and wrote the lock")
         second = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True, encoding="utf-8")
-        second_lock = wait_lock(second)
-        check(second_lock is not None, "second server replaced the lock file")
-        first.wait(timeout=8)
-        check(first.poll() is not None, "previous server was terminated")
+        # Give the relay a moment to attest, handshake, and attach.
+        time.sleep(1.0)
+        check(first.poll() is None, "broker is NOT terminated by the second instance")
+        check(second.poll() is None, "second instance stays alive as a relay")
+        still = wait_lock(first, timeout=2)
+        check(still is not None and still.get("pid") == first.pid,
+              "the lock still names the original broker (not replaced)")
+        # Both harnesses answer over their own stdio: the broker directly, the
+        # relay transparently over the authenticated socket.
+        cb = McpClient(first)
+        check("result" in cb.initialize(), "broker harness initializes")
+        cr = McpClient(second)
+        check("result" in cr.initialize(), "relay harness initializes over the broker")
+        check(cr.ping(_id=77).get("result") == {}, "relay harness pings via the broker")
     finally:
-        if first.poll() is None:
-            first.kill()
-        if second is not None:
-            try:
-                second.stdin.close()
-            except Exception:
-                pass
-            second.wait(timeout=3)
+        for p in (second, first):
+            if p is not None and p.poll() is None:
+                try:
+                    p.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    p.wait(timeout=5)
+                except Exception:
+                    p.kill()
 
 
-def test_takeover_leaves_new_socket_connectable():
-    """Regression: the takeover used to run AFTER the new server bound its
-    socket, and the supplant path (plus the dying server's own cleanup)
-    unlinked that freshly-bound socket. The new listener stayed bound to an
-    unlinked inode, the reconnecting native host got ENOENT, and the bridge
-    reported "extension not connected" until everything was restarted by
-    hand. This drives the exact sequence: live server, takeover by a second
-    server, then a real native host must reach the NEW server's socket and a
-    tool call must round-trip through it.
-
-    NOTE: this proves the socket/lock/reconnect leg at the process level. The
-    full loop (Chrome observing the port close and the extension's service
-    worker re-spawning the host) still needs an isolated browser to confirm.
-    """
-    print("\n[test] after takeover, a native host reaches the new server's socket")
+def test_two_harnesses_drive_one_browser():
+    """The core multi-client win: a broker and a relay, both attached to one
+    browser, drive it concurrently. Each harness's tool call routes through the
+    shared session to the single native host, which answers both."""
+    print("\n[test] two harnesses (broker + relay) drive one browser concurrently")
     try:
         os.remove(LOCK)
     except FileNotFoundError:
@@ -741,129 +748,161 @@ def test_takeover_leaves_new_socket_connectable():
     second = None
     nh = None
     try:
-        check(wait_lock(first) is not None, "first server wrote its lock file")
-        # Keep the first server ALIVE (stdin open) so this is a real takeover
-        # of a running instance, not a stale-lock cleanup.
+        check(wait_lock(first) is not None, "broker wrote the lock")
         second = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True, encoding="utf-8")
-        second_lock = wait_lock(second)
-        check(second_lock is not None, "second server wrote its lock file")
-        first.wait(timeout=8)
-        check(first.poll() is not None, "first server was terminated")
-        if os.name != "nt":
-            check(os.path.exists(second_lock["endpoint"]),
-                  "new server's socket path exists on disk after the takeover")
+        time.sleep(1.0)
+        check(second.poll() is None, "relay attached")
 
-        # The reconnect: a fresh native host (as Chrome would spawn) must be
-        # able to dial, attest, and complete the handshake against the NEW
-        # server. Before the fix this failed with ENOENT on the socket.
         nh = start_bridge_host()
-        try:
-            wait_host_ready(nh)
-            check(True, "native host completed the handshake with the new server")
-        except TimeoutError:
-            nh = None  # wait_host_ready already reaped it
-            check(False, "native host completed the handshake with the new server")
-            return
+        wait_host_ready(nh)
+        check(True, "one native host attached to the broker")
 
-        # And a full tool round-trip through the post-takeover server.
         def responder(req):
             return {"id": req["id"], "ok": True,
-                    "data": [{"id": 1, "title": "Takeover OK", "url": "z", "active": True}]}
+                    "data": [{"id": 1, "title": "Shared", "url": "z", "active": True}]}
+        box = serve_bridge_loop(nh, responder)
 
-        c = McpClient(second)
-        c.initialize()
-        c.initialized()
-        served = []
-        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
-        t.start()
-        r = c.call("tab_list", {}, _id=12)
-        t.join(timeout=3)
-        check(bool(served), "tab_list BridgeReq reached the host via the new socket")
-        content = json.loads(r["result"]["content"][0]["text"])
-        check(content[0]["title"] == "Takeover OK",
-              "tool call round-trips through the post-takeover server")
+        cb = McpClient(first)
+        cb.initialize(); cb.initialized()
+        cr = McpClient(second)
+        cr.initialize(); cr.initialized()
+
+        rb = cb.call("tab_list", {}, _id=21)
+        rr = cr.call("tab_list", {}, _id=22)
+        cb_content = json.loads(rb["result"]["content"][0]["text"])
+        cr_content = json.loads(rr["result"]["content"][0]["text"])
+        check(cb_content[0]["title"] == "Shared", "broker harness reached the browser")
+        check(cr_content[0]["title"] == "Shared", "relay harness reached the same browser")
+        check(box["error"] is None, f"browser responder clean ({box['error']!r})")
     finally:
-        if nh is not None:
+        if nh is not None and nh.poll() is None:
             nh.kill()
             try:
                 nh.wait(timeout=3)
             except Exception:
                 pass
-        if first.poll() is None:
-            first.kill()
-        if second is not None:
-            try:
-                second.stdin.close()
-            except Exception:
-                pass
-            second.wait(timeout=3)
+        for p in (second, first):
+            if p is not None and p.poll() is None:
+                try:
+                    p.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    p.wait(timeout=5)
+                except Exception:
+                    p.kill()
 
 
-def test_concurrent_server_starts_settle_to_one_working_bridge():
-    """Several servers starting at once must settle to exactly one owner whose
-    socket a native host can actually reach. The publish step is serialized by
-    a kernel file lock (ipc::RuntimeMutex) and re-checks the lock owner, so
-    racing servers supplant each other in turn instead of unlinking each
-    other's freshly-bound sockets; losers either get terminated or give up
-    after bounded retries."""
-    print("\n[test] concurrent server starts settle to one working bridge")
+def test_broker_is_ref_counted():
+    """The broker is ref-counted (ADR-0024): it exits when the LAST harness
+    (its own plus every relay) detaches, and it OUTLIVES its own harness while a
+    relay is still attached. No idle daemon, but no premature exit either."""
+    print("\n[test] the broker is ref-counted (outlives own harness, exits on last detach)")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+
+    # Part A: a lone broker exits when its own (only) harness detaches.
+    solo = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        check(wait_lock(solo) is not None, "lone broker wrote the lock")
+        solo.stdin.close()
+        solo.wait(timeout=8)
+        check(solo.poll() is not None, "lone broker exits when its only harness detaches")
+        check(not os.path.exists(LOCK), "lone broker removed its lock on exit")
+    finally:
+        if solo.poll() is None:
+            solo.kill()
+
+    # Part B: broker + relay. Detaching the broker's OWN harness must NOT exit
+    # the broker while the relay is attached; only the relay leaving ends it.
+    first = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    second = None
+    try:
+        first_lock = wait_lock(first)
+        check(first_lock is not None, "broker wrote the lock")
+        second = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        time.sleep(1.0)
+        check(second.poll() is None, "relay attached")
+
+        # Detach the broker's own harness. The broker must keep serving the relay.
+        first.stdin.close()
+        time.sleep(1.0)
+        check(first.poll() is None, "broker OUTLIVES its own harness while a relay is attached")
+        still = wait_lock(first, timeout=2)
+        check(still is not None and still.get("pid") == first.pid,
+              "the broker still owns the lock after its own harness left")
+        check(McpClient(second).ping(_id=88).get("result") == {},
+              "relay still works after the broker's own harness detached")
+
+        # Now the last harness (the relay) leaves: the broker exits and cleans up.
+        second.stdin.close()
+        first.wait(timeout=10)
+        check(first.poll() is not None, "broker exits once the LAST harness detaches")
+        check(not os.path.exists(LOCK), "broker removed its lock on final exit")
+    finally:
+        for p in (second, first):
+            if p is not None and p.poll() is None:
+                p.kill()
+
+
+def test_concurrent_starts_coexist_and_all_drive_the_bridge():
+    """Several instances starting at once settle to exactly one broker (owning
+    the lock) plus relays, with ALL instances alive and able to drive one
+    attached browser. Coexistence replaces the old newest-wins churn: no
+    instance SIGTERMs another, and the RuntimeMutex still guarantees a single
+    socket owner."""
+    print("\n[test] concurrent starts coexist: one broker + relays, all drive the bridge")
     try:
         os.remove(LOCK)
     except FileNotFoundError:
         pass
     servers = [subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, encoding="utf-8")
-               for _ in range(4)]
+               for _ in range(3)]
     nh = None
     try:
-        # Let the takeover churn settle: eventually exactly one server remains,
-        # and the lock on disk names it.
-        deadline = time.time() + 20
-        alive = servers
+        # Settle: exactly one lock exists, naming a live instance, and every
+        # instance is still alive (one broker + two relays).
+        deadline = time.time() + 15
         lf = None
         while time.time() < deadline:
             alive = [s for s in servers if s.poll() is None]
-            if len(alive) == 1:
-                lf = wait_lock(alive[0], timeout=2)
-                if lf is not None:
-                    break
+            lf = wait_lock(timeout=1)
+            if lf is not None and len(alive) == len(servers):
+                break
             time.sleep(0.2)
-        check(len(alive) == 1, f"exactly one server survives ({len(alive)} alive)")
-        if len(alive) != 1:
-            return
-        winner = alive[0]
-        check(lf is not None and lf.get("pid") == winner.pid,
-              "lock file names the surviving server")
-        if os.name != "nt":
-            check(os.path.exists(lf["endpoint"]), "survivor's socket path exists")
+        alive = [s for s in servers if s.poll() is None]
+        check(len(alive) == len(servers),
+              f"all {len(servers)} instances coexist ({len(alive)} alive)")
+        check(lf is not None, "exactly one lock exists")
+        owner_pids = [s.pid for s in servers if s.pid == (lf or {}).get("pid")]
+        check(bool(owner_pids), "the lock names one of the instances (the broker)")
 
         nh = start_bridge_host()
-        try:
-            wait_host_ready(nh)
-            check(True, "native host completed the handshake with the survivor")
-        except TimeoutError:
-            nh = None
-            check(False, "native host completed the handshake with the survivor")
-            return
+        wait_host_ready(nh)
+        check(True, "a native host attached to the broker")
 
         def responder(req):
             return {"id": req["id"], "ok": True,
-                    "data": [{"id": 2, "title": "Survivor OK", "url": "w", "active": True}]}
+                    "data": [{"id": 3, "title": "Coexist", "url": "w", "active": True}]}
+        box = serve_bridge_loop(nh, responder)
 
-        c = McpClient(winner)
-        c.initialize()
-        c.initialized()
-        served = []
-        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
-        t.start()
-        r = c.call("tab_list", {}, _id=13)
-        t.join(timeout=3)
-        check(bool(served), "tab_list round-trips through the surviving server")
-        content = json.loads(r["result"]["content"][0]["text"])
-        check(content[0]["title"] == "Survivor OK", "survivor returned the host's data")
+        # Every instance (broker + each relay) drives the one browser.
+        for i, s in enumerate(servers):
+            c = McpClient(s)
+            c.initialize(); c.initialized()
+            r = c.call("tab_list", {}, _id=30 + i)
+            content = json.loads(r["result"]["content"][0]["text"])
+            check(content[0]["title"] == "Coexist", f"instance {i} drove the shared browser")
+        check(box["error"] is None, f"browser responder clean ({box['error']!r})")
     finally:
-        if nh is not None:
+        if nh is not None and nh.poll() is None:
             nh.kill()
             try:
                 nh.wait(timeout=3)
@@ -879,6 +918,7 @@ def test_concurrent_server_starts_settle_to_one_working_bridge():
                     s.wait(timeout=3)
                 except Exception:
                     s.kill()
+
 
 
 def test_unknown_method_returns_32601():
@@ -1107,8 +1147,27 @@ def test_two_browsers():
         mcp.wait(timeout=5)
 
 
+def isolate():
+    """Point every server this suite spawns at a private, empty runtime dir so
+    its lock/socket and the broker's coexistence logic can NEVER touch the
+    developer's real bridge. Mandatory: the standing rule is that no e2e/broker
+    run uses the default user-level runtime dir. Recomputes LOCK to match."""
+    global LOCK
+    rundir = tempfile.mkdtemp(prefix="bb-e2e-")
+    os.environ["XDG_RUNTIME_DIR"] = rundir
+    os.environ["XDG_CONFIG_HOME"] = os.path.join(rundir, "config")
+    if sys.platform == "darwin":
+        os.environ["HOME"] = rundir
+    LOCK = os.path.join(rundir, "chromium-bridge", "run.lock")
+    if os.environ.get("XDG_RUNTIME_DIR") != rundir or not LOCK.startswith(rundir):
+        sys.exit("REFUSING TO RUN: e2e runtime-dir isolation did not take")
+    print(f"[isolation] per-run runtime dir: {rundir}")
+    print(f"[isolation] lock path:           {LOCK}")
+
+
 def main():
     ensure_binary()
+    isolate()
     print(f"binary: {BIN}")
     test_stale_lock_is_replaced()
     test_mcp_handshake_and_tools()
@@ -1121,9 +1180,10 @@ def main():
     test_enclave_control_frames()
     test_two_browsers()
     test_foreign_peer_is_rejected()
-    test_server_takeover()
-    test_takeover_leaves_new_socket_connectable()
-    test_concurrent_server_starts_settle_to_one_working_bridge()
+    test_second_instance_coexists_as_relay()
+    test_two_harnesses_drive_one_browser()
+    test_broker_is_ref_counted()
+    test_concurrent_starts_coexist_and_all_drive_the_bridge()
     test_unknown_method_returns_32601()
     print(f"\n{'='*40}\n{_passed} passed, {_failed} failed")
     sys.exit(0 if _failed == 0 else 1)

@@ -1,16 +1,22 @@
 //! MCP server mode: the default (no args) mode. Speaks JSON-RPC 2.0 over
-//! stdio with the MCP client, and accepts inbound bridge connections from the
-//! native host over the bridge socket.
-
-use std::io::{self, BufReader, BufWriter};
-use std::thread;
+//! stdio with the MCP client (the "harness"), and either becomes the broker
+//! that owns the browser-facing bridge socket or, if a broker already owns it,
+//! attaches to that broker as a relay. See [`crate::broker`] and ADR-0024.
 
 use serde_json::{json, Value};
 
+use crate::allowlist::{self, Decision};
+use crate::broker::{self, RelayOutcome};
 use crate::ipc;
-use crate::protocol::{install_stderr_panic_hook, mcp_read, mcp_write, JsonRpc};
+use crate::protocol::{install_stderr_panic_hook, HarnessId, JsonRpc};
 use crate::session::Session;
 use crate::tools;
+
+/// The environment variable a harness may set to name itself
+/// (claude-code/copilot/codex/...). Self-asserted and used for logs and the
+/// audit surface only; it is NEVER the authorization key -- admission keys on
+/// the harness's attested code identity (see [`crate::allowlist`]).
+const CLIENT_NAME_ENV: &str = "CHROMIUM_BRIDGE_CLIENT_NAME";
 
 pub fn run() -> i32 {
     install_stderr_panic_hook();
@@ -18,21 +24,21 @@ pub fn run() -> i32 {
 
     // Handle termination signals gracefully so we always remove the lock file
     // on the way out (a stale lock is harmless but confuses diagnostics, and a
-    // supplanted server should clean up after itself). Ownership-guarded: if a
+    // broker that exits should clean up after itself). Ownership-guarded: if a
     // successor has already taken over, the lock and socket on disk are the
-    // NEW server's, and removing them would take the working bridge down. This
+    // NEW broker's, and removing them would take the working bridge down. This
     // must run BEFORE we spawn any worker threads: it blocks SIGTERM/SIGINT
     // process-wide, and only threads created afterwards inherit that blocked
-    // mask — otherwise the kernel could deliver the signal to an unmasked
+    // mask -- otherwise the kernel could deliver the signal to an unmasked
     // worker and terminate us before the handler thread runs.
     install_signal_cleanup(|| {
         ipc::LockFile::remove_if_owned();
     });
 
-    // Capture our own executable identity up front, before binding or accepting,
-    // so peer attestation compares against the genuine binary rather than one an
-    // attacker might swap onto disk later. Refuse to run if we cannot hash our
-    // own image. See ADR-0020.
+    // Capture our own executable identity up front, before binding or dialing,
+    // so peer attestation compares against the genuine binary rather than one
+    // an attacker might swap onto disk later. Refuse to run if we cannot hash
+    // our own image. See ADR-0020.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     match ipc::ensure_own_identity() {
         Ok(hash) => log_info!(
@@ -46,9 +52,9 @@ pub fn run() -> i32 {
         }
     }
 
-    // Windows has none of the mechanisms above (all cfg unix/macos), so say so
-    // loudly at every startup rather than let the platform difference pass
-    // silently. Error level, not warn: BB_LOG=error must not silence it.
+    // Windows has none of the peer/attestation mechanisms (all cfg unix/macos),
+    // so say so loudly at every startup rather than let the platform difference
+    // pass silently. Error level, not warn: BB_LOG=error must not silence it.
     // See SECURITY.md "Platform support".
     #[cfg(target_os = "windows")]
     {
@@ -56,167 +62,175 @@ pub fn run() -> i32 {
             "mcp",
             "SECURITY: Windows support is BEST-EFFORT. The same-user and \
              local-process protections enforced on macOS/Linux do NOT hold \
-             here: there is no peer-UID check and no executable attestation, \
-             and the bridge listens on loopback TCP, reachable by ANY process \
-             on this machine. Access control reduces to the confidentiality \
-             of the per-run secret in the lock file, which relies only on the \
-             default permissions of the per-user runtime directory (normally \
-             under LOCALAPPDATA). Treat any local process as able to attempt \
-             a connection; do not use this bridge on a Windows machine where \
-             that risk is unacceptable. See SECURITY.md (Platform support) \
-             for details."
+             here: there is no peer-UID check, no executable attestation, and \
+             no harness attestation, and the bridge listens on loopback TCP, \
+             reachable by ANY process on this machine. Access control reduces \
+             to the confidentiality of the per-run secret in the lock file. \
+             See SECURITY.md (Platform support) for details."
         );
     }
 
-    // 1. Take over from any prior MCP server instance, then bind and publish.
-    // The MCP client may spawn a fresh server per session; if the previous one
-    // is still alive, the native host keeps talking to IT (it doesn't follow
-    // lock-file changes), so the new server's tool calls would report
-    // "extension not connected". Kill the old instance so the native host's
-    // connection drops and the extension reconnects against our lock.
-    //
-    // The sequencing is load-bearing: the dying server's cleanup unlinks the
-    // socket path, so the takeover must fully complete before we bind. An
-    // earlier version bound first and then supplanted, which left the new
-    // listener bound to an already-unlinked inode — the reconnecting native
-    // host got ENOENT and the bridge stayed down until both processes were
-    // restarted by hand. The SIGTERM-and-wait runs OUTSIDE the runtime mutex
-    // (the dying server's own cleanup needs that mutex to finish);
-    // listen_and_publish then re-checks under the mutex and reports LostRace
-    // if yet another server published meanwhile, in which case we supplant
-    // that one too (newest server wins, bounded retries).
-    let mut lost_races = 0;
-    let (listener, lock) = loop {
-        if let Ok(Some(prev)) = ipc::LockFile::read() {
-            supplant_prior_server(prev.pid);
-        }
-        match ipc::listen_and_publish() {
-            Ok(ipc::PublishOutcome::Published(listener, lock)) => break (listener, lock),
-            Ok(ipc::PublishOutcome::LostRace(cur)) => {
-                lost_races += 1;
-                if lost_races > 3 {
-                    log_error!(
-                        "mcp",
-                        "another MCP server (pid {}) keeps publishing concurrently; giving up",
-                        cur.pid
-                    );
-                    return 1;
-                }
-                log_info!(
-                    "mcp",
-                    "another MCP server (pid {}) published concurrently; supplanting it",
-                    cur.pid
-                );
-            }
-            Err(e) => {
-                log_error!("mcp", "failed to bind and publish bridge socket: {e}");
-                return 1;
-            }
-        }
+    // Attest our own harness (the process that spawned us over stdio) and
+    // decide admission against the trusted-client allowlist BEFORE serving any
+    // tool call. A refusal here is fail-closed: we do not become a broker or a
+    // relay. Returns the harness identity to report if we end up a relay.
+    let harness = match admit_own_harness() {
+        Some(h) => h,
+        None => return 1, // fail closed, already logged
     };
-    log_info!(
-        "mcp",
-        "bridge listening at {} (pid {}) lock at {}",
-        lock.endpoint,
-        lock.pid,
-        ipc::LockFile::path().display()
-    );
 
     let session = Session::new();
 
-    // 2. Background thread: accept the native host's connection(s).
-    {
-        let session = session.clone();
-        thread::spawn(move || loop {
-            match listener.accept() {
-                Ok((stream, _addr)) => {
-                    // Single chokepoint: reject any peer that is not this same
-                    // user before the connection is authenticated or trusted.
-                    #[cfg(unix)]
-                    {
-                        let want = unsafe { libc::geteuid() };
-                        match ipc::peer_uid(&stream) {
-                            Ok(uid) if uid == want => {}
-                            Ok(uid) => {
-                                log_warn!(
-                                    "mcp",
-                                    "rejected bridge connection from uid {uid} (server euid {want})"
-                                );
-                                continue;
-                            }
-                            Err(e) => {
-                                log_warn!(
-                                    "mcp",
-                                    "rejected bridge connection: peer uid unknown: {e}"
-                                );
-                                continue;
-                            }
-                        }
-                    }
-                    // Kernel-attest the peer's executable identity: only another
-                    // instance of THIS binary may drive the bridge, so a
-                    // different same-user program is rejected here, before the
-                    // HMAC handshake. See ADR-0020.
-                    #[cfg(any(target_os = "linux", target_os = "macos"))]
-                    {
-                        if let Err(e) = ipc::attest_peer(&stream) {
-                            log_warn!("mcp", "rejected bridge connection: {e}");
-                            continue;
-                        }
-                    }
-                    if let Err(e) = session.attach_connection(stream) {
-                        log_warn!("mcp", "accept handler error: {e}");
-                    }
-                }
-                Err(e) => {
-                    log_error!("mcp", "accept failed: {e}");
-                    break;
-                }
-            }
-        });
-    }
-
-    // 3. Main loop: read NDJSON JSON-RPC from stdin, respond on stdout.
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    let stdout = io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
-
+    // Become the broker, or attach to an existing one as a relay. Newest-wins
+    // takeover is gone (ADR-0024): a live, attested broker is coexisted with,
+    // not SIGTERMed. Bounded retries cover the races -- a broker exiting as we
+    // dial, or several instances starting at once.
+    let mut attempts = 0u32;
     loop {
-        let msg = match mcp_read(&mut reader) {
-            Ok(Some(m)) => m,
-            Ok(None) => break, // stdin EOF
-            Err(e) => {
-                log_warn!("mcp", "stdin parse error: {e}");
-                // Send a parse-error with null id; keep going if possible.
-                let err = JsonRpc::err(Value::Null, -32700, format!("parse error: {e}"));
-                let _ = mcp_write(&mut writer, &err);
-                continue;
+        attempts += 1;
+        if attempts > 6 {
+            log_error!(
+                "mcp",
+                "could not become the broker or attach to one after several tries; giving up"
+            );
+            return 1;
+        }
+        match ipc::listen_and_publish() {
+            Ok(ipc::PublishOutcome::Published(listener, lock)) => {
+                log_info!(
+                    "mcp",
+                    "this instance is the broker; bridge listening at {} (pid {}) lock at {}",
+                    lock.endpoint,
+                    lock.pid,
+                    ipc::LockFile::path().display()
+                );
+                return broker::run_broker(listener, session);
             }
-        };
-        let resp = handle(&session, &msg);
-        if let Some(r) = resp {
-            if let Err(e) = mcp_write(&mut writer, &r) {
-                log_error!("mcp", "stdout write failed: {e}");
-                break;
+            Ok(ipc::PublishOutcome::LostRace(cur)) => {
+                log_info!(
+                    "mcp",
+                    "a broker (pid {}) already owns the bridge; attaching to it as a relay",
+                    cur.pid
+                );
+                match broker::run_relay(harness.identity()) {
+                    // A relay that attached and served ends by exiting the
+                    // process directly (see run_relay), so it never returns
+                    // here; only the pre-serve outcomes come back.
+                    RelayOutcome::Denied => return 1,
+                    RelayOutcome::Retry => {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        continue;
+                    }
+                }
+            }
+            Err(e) => {
+                log_error!("mcp", "failed to bind and publish the bridge socket: {e}");
+                return 1;
             }
         }
-        // None means notification (no response).
     }
-
-    // stdin EOF: the MCP client disconnected. Remove the lock file — unless a
-    // successor has already replaced it (ownership-guarded, see above).
-    ipc::LockFile::remove_if_owned();
-    0
 }
 
-fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
+/// The result of admitting our own spawning harness: an optional attested
+/// identity to report when relaying. `None` from [`admit_own_harness`] means
+/// refused (the caller exits non-zero); a `Some(Harness)` whose `identity()` is
+/// `None` means the harness could not be measured but admission was permitted
+/// (unenrolled / Windows).
+struct Harness {
+    id: Option<HarnessId>,
+}
+
+impl Harness {
+    fn identity(&self) -> Option<HarnessId> {
+        self.id.clone()
+    }
+}
+
+/// Measure and admit the harness that spawned this MCP-server instance over
+/// stdio. Returns `Some(Harness)` when serving is permitted (with the harness
+/// identity to report if we become a relay), or `None` when it is refused (the
+/// caller fails closed). On an unreadable allowlist this fails closed via
+/// `process::exit(1)` rather than degrading to unenrolled.
+fn admit_own_harness() -> Option<Harness> {
+    let name = client_name_from_env();
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let identity = match ipc::attest_parent() {
+        Ok(id) => Some(id),
+        Err(e) => {
+            log_warn!(
+                "mcp",
+                "could not attest the spawning harness (getppid): {e}"
+            );
+            None
+        }
+    };
+    // Windows has no harness attestation; admission degrades to unenrolled /
+    // secret-only along with the rest of the IPC layer.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let identity: Option<ipc::ClientIdentity> = None;
+
+    let list = match allowlist::Allowlist::load() {
+        Ok(l) => l,
+        Err(e) => {
+            log_error!(
+                "mcp",
+                "cannot read the trusted-client allowlist ({e}); refusing to serve (fail closed)"
+            );
+            std::process::exit(1);
+        }
+    };
+
+    match allowlist::decide(list.as_ref(), identity.as_ref()) {
+        Decision::Refuse => {
+            log_error!(
+                "mcp",
+                "this harness is not in the trusted-client allowlist; refusing to serve \
+                 (fail closed). Pair it first: `chromium-bridge pair-client --name <label>`."
+            );
+            return None;
+        }
+        Decision::AdmitUnenrolled => {
+            log_error!(
+                "mcp",
+                "SECURITY: harness admission is NOT enforced -- no trusted-client allowlist \
+                 exists yet (unenrolled). Any same-user process that runs our binary can drive \
+                 the browser. Run `chromium-bridge pair-client` to enroll trusted clients and \
+                 turn on enforcement. See SECURITY.md."
+            );
+        }
+        Decision::Admit { name } => {
+            log_info!("mcp", "harness admitted as trusted client '{name}'");
+        }
+    }
+
+    let id = identity.map(|id| HarnessId {
+        hash: id.hash,
+        team_id: id.team_id,
+        name,
+    });
+    Some(Harness { id })
+}
+
+/// The self-asserted client name from [`CLIENT_NAME_ENV`], validated like a
+/// browser label, or `None`. Never used for authorization.
+fn client_name_from_env() -> Option<String> {
+    std::env::var(CLIENT_NAME_ENV)
+        .ok()
+        .filter(|n| ipc::validate_label(n))
+}
+
+/// Handle one JSON-RPC message against the shared session and return the
+/// response (or `None` for a notification). Called by both the broker's own
+/// stdio loop and every relay's serve loop, so all harnesses share one
+/// dispatcher over one [`Session`].
+pub(crate) fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
     // Notifications have no id and expect no response.
     let id = match &msg.id {
         Some(i) => i.clone(),
         None => {
             // Notification: the only one we care about is
-            // notifications/initialized — no reply needed. Swallow the rest.
+            // notifications/initialized -- no reply needed. Swallow the rest.
             return None;
         }
     };
@@ -263,12 +277,7 @@ fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             // Capture where this call would be routed (browser label +
             // connection generation), so the audit line can be correlated
             // with a specific browser and native-host connection across
-            // reconnects. Best-effort diagnostics, not enforcement: the
-            // snapshot is taken outside the routing lock, so a reconnect
-            // racing the call can leave it one generation stale. The
-            // post-dispatch retry covers the common miss (a host that
-            // attached during the call's startup wait); `"-"` when still
-            // unroutable.
+            // reconnects. Best-effort diagnostics, not enforcement.
             let browser_arg = args.get("browser").and_then(|v| v.as_str());
             let route = session.route_info(browser_arg);
             // Tool errors are returned as a *successful* RPC with isError=true
@@ -296,7 +305,7 @@ fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             let result = json!({ "content": out.content, "isError": out.is_error });
             Some(JsonRpc::ok(id, result))
         }
-        // Unknown method → JSON-RPC method-not-found.
+        // Unknown method -> JSON-RPC method-not-found.
         _ => Some(JsonRpc::err(
             id,
             -32601,
@@ -321,7 +330,7 @@ fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
         // Block in the current (main) thread; threads spawned later inherit it.
         libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
 
-        thread::spawn(move || {
+        std::thread::spawn(move || {
             let mut sig: std::os::raw::c_int = 0;
             // Wait until one of the blocked signals is delivered.
             let _ = libc::sigwait(&set, &mut sig);
@@ -342,120 +351,4 @@ fn next_request_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     COUNTER.fetch_add(1, Ordering::Relaxed)
-}
-
-/// SIGTERM the prior server named in the lock file and wait for it to exit —
-/// but only after kernel-attesting that the pid is actually running OUR
-/// binary. The pid is just a number read from a file on disk: with a stale
-/// lock plus OS pid reuse it can name an arbitrary, innocent process, and
-/// signaling an unverified pid is exactly the mistake the safety red lines
-/// ban.
-///
-/// A pid that does not attest is never signaled. That covers two distinct
-/// cases, both fail-closed for signaling but with different meanings:
-/// - identity mismatch: some other program (a reused pid — or a different
-///   release of this binary after an upgrade; we cannot tell those apart, so
-///   neither is killed);
-/// - unmeasurable (attestation errored): commonly a pid reused by another
-///   user's process, whose image we cannot read.
-///
-/// Either way the lock is superseded rather than obeyed: listen_and_publish
-/// re-checks under the runtime mutex and binds over it. If the owner really
-/// was a live server we could not verify, it is NOT taken down — it keeps its
-/// existing connections and simply stops being named by the lock; the
-/// extension converges to the new server on its next reconnect (MV3 respawns
-/// the host every few minutes). Windows has no executable attestation (all
-/// mechanisms are cfg unix/macos), so it keeps the liveness-only takeover —
-/// a documented best-effort residual, see SECURITY.md "Platform support".
-///
-/// Signal binding (see `ipc::attest_and_terminate`): on Linux the SIGTERM is
-/// bound to the exact process instance through `pidfd_open` + `pidfd_send_signal`,
-/// so a pid the OS reuses after we pin it can never be signaled (the send
-/// returns ESRCH against the dead original). macOS has no pidfd equivalent and
-/// keeps attest-then-kill, so a pid-reuse race stays there, but only in the
-/// microseconds between attesting our own instance and the kill (the same class
-/// ADR-0020 records for pid-keyed measurement); before this the window was the
-/// whole lifetime of a stale lock file.
-///
-/// When the pid does attest: SIGTERM -> old server cleans up its own lock and
-/// socket and exits -> its listener closes -> native host gets EOF -> SW
-/// onDisconnect -> reconnect spawns a fresh host -> reads OUR lock. We give
-/// it a moment to die; if it lingers we proceed anyway (listen_and_publish
-/// binds over its files, and the old server's exit cleanup is
-/// ownership-guarded, so it cannot remove what will by then be OUR lock and
-/// socket).
-fn supplant_prior_server(prev_pid: u32) {
-    if prev_pid == std::process::id() || !ipc::pid_is_alive(prev_pid) {
-        return;
-    }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    match ipc::attest_and_terminate(prev_pid) {
-        Ok(()) => {
-            log_info!("mcp", "supplanting prior MCP server pid {prev_pid}");
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            log_warn!(
-                "mcp",
-                "lock file names live pid {prev_pid}, which runs a different binary; \
-                 not signaling it and superseding the lock instead"
-            );
-            return;
-        }
-        Err(e) => {
-            log_warn!(
-                "mcp",
-                "lock file names live pid {prev_pid} whose identity could not be \
-                 verified ({e}); not signaling it and superseding the lock instead"
-            );
-            return;
-        }
-    }
-    #[cfg(windows)]
-    {
-        log_info!("mcp", "supplanting prior MCP server pid {prev_pid}");
-        ipc::windows_process::terminate(prev_pid);
-    }
-    for _ in 0..50 {
-        if !ipc::pid_is_alive(prev_pid) {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    log_warn!(
-        "mcp",
-        "prior MCP server pid {prev_pid} did not exit in time; proceeding"
-    );
-}
-
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn takeover_never_signals_a_pid_that_is_not_our_binary() {
-        // A stale lock whose pid the OS reused for an unrelated process: the
-        // takeover must refuse to signal it. The stand-in is a child WE
-        // spawned (a specific, verified pid — never a pattern match) running
-        // a foreign binary; it must still be alive after the takeover logic
-        // ran against its pid.
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
-
-        supplant_prior_server(child.id());
-
-        // A mistakenly-sent SIGTERM needs a moment to be delivered before
-        // try_wait can observe it; without the attestation gate this reliably
-        // reaps the child here.
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let status = child.try_wait().expect("try_wait");
-        assert!(
-            status.is_none(),
-            "takeover signaled a pid running a foreign binary: {status:?}"
-        );
-
-        let _ = child.kill();
-        let _ = child.wait();
-    }
 }

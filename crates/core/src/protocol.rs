@@ -236,6 +236,63 @@ pub enum Handshake {
     },
 }
 
+/// A relay's kernel-attested harness (parent) identity, carried in
+/// [`AttachRequest::Client`] so the broker can check it against the
+/// trusted-client allowlist. It is trustworthy not because of this frame's
+/// contents but because the connection carrying it already passed
+/// `attest_peer` (the relay is our own binary, which measures its parent
+/// honestly via `getppid`). `name` is a self-asserted label for logs only and
+/// is NEVER the authorization key. See ADR-0024.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessId {
+    /// The parent's attested image hash (macOS cdhash / Linux exe SHA256).
+    pub hash: String,
+    /// The parent's macOS signing Team ID, when Team-ID signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+    /// Self-asserted human label (claude-code/copilot/codex/...); logs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// The role-declaration frame a peer sends over the bridge socket immediately
+/// after the HMAC handshake, before any session traffic. It tells the broker
+/// which kind of peer this is: a Chrome-spawned native host fronting a browser,
+/// or a sibling MCP-server instance relaying its harness's tool calls. Reading
+/// exactly one of these after the handshake is mandatory and fail-closed: an
+/// EOF or a malformed frame drops the connection. See ADR-0024.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "attach", rename_all = "snake_case")]
+pub enum AttachRequest {
+    /// A native host fronting a browser. The browser label was already carried
+    /// (MAC-signed) in the handshake `Response`; this frame only declares the
+    /// role, so the browser leg's label authentication is unchanged.
+    Browser,
+    /// A sibling MCP-server-mode instance relaying its harness's tool calls to
+    /// the broker. `harness` is the relay's getppid-attested parent identity
+    /// (absent only when the relay could not measure its parent, which the
+    /// broker treats as unmeasured -> fail closed once enrolled).
+    Client {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        harness: Option<HarnessId>,
+    },
+}
+
+/// The broker's reply to an [`AttachRequest`]. `Accepted` lets the peer proceed
+/// to session traffic. `Refused` names an authorization denial (allowlist miss)
+/// and the peer must fail closed. `Unavailable` names a transient condition
+/// (capacity, or the broker shutting down) and the peer should retry -- which,
+/// for a relay, may mean becoming the broker itself. Making these explicit
+/// (rather than a bare socket close) lets a relay tell "not admitted" apart
+/// from "broker went away" apart from "denied".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "attach_reply", rename_all = "snake_case")]
+pub enum AttachReply {
+    Accepted,
+    Refused { reason: String },
+    Unavailable { reason: String },
+}
+
 /// A request from the MCP server to the extension, exchanged over the
 /// localhost TCP socket as newline-delimited JSON. Carries an `id` the
 /// extension echoes back so we can correlate (the socket is one-shot per
@@ -692,6 +749,56 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(matches!(back, Handshake::Response { label: None, .. }));
+    }
+
+    #[test]
+    fn attach_frames_roundtrip_and_are_tagged() {
+        // Browser attach is a bare role marker (its label rode the signed
+        // handshake response, not this frame).
+        assert_eq!(
+            serde_json::to_value(AttachRequest::Browser).unwrap(),
+            json!({ "attach": "browser" })
+        );
+        // Client attach carries the relay's attested harness identity; a name
+        // is optional and is a log label only.
+        let client = AttachRequest::Client {
+            harness: Some(HarnessId {
+                hash: "abc123".into(),
+                team_id: Some("3ZMH96L4V9".into()),
+                name: Some("claude-code".into()),
+            }),
+        };
+        let v = serde_json::to_value(&client).unwrap();
+        assert_eq!(v["attach"], "client");
+        assert_eq!(v["harness"]["hash"], "abc123");
+        assert_eq!(v["harness"]["team_id"], "3ZMH96L4V9");
+        let back: AttachRequest = serde_json::from_value(v).unwrap();
+        assert!(matches!(back, AttachRequest::Client { harness: Some(h) } if h.hash == "abc123"));
+
+        // A client attach with no measurable harness omits the field.
+        let bare = AttachRequest::Client { harness: None };
+        assert_eq!(
+            serde_json::to_value(&bare).unwrap(),
+            json!({ "attach": "client" })
+        );
+
+        // Replies are tagged and roundtrip.
+        for reply in [
+            AttachReply::Accepted,
+            AttachReply::Refused {
+                reason: "not allowlisted".into(),
+            },
+            AttachReply::Unavailable {
+                reason: "capacity".into(),
+            },
+        ] {
+            let v = serde_json::to_value(&reply).unwrap();
+            let back: AttachReply = serde_json::from_value(v).unwrap();
+            assert_eq!(
+                serde_json::to_value(back).unwrap(),
+                serde_json::to_value(reply).unwrap()
+            );
+        }
     }
 
     #[test]

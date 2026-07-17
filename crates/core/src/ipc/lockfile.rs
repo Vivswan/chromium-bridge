@@ -217,10 +217,20 @@ pub fn listen_and_publish() -> io::Result<PublishOutcome> {
     Ok(PublishOutcome::Published(listener, lf))
 }
 
+/// Run `f` while holding the cross-process [`RuntimeMutex`], so a
+/// read-modify-write of shared runtime state (the lock file, the client
+/// allowlist) cannot interleave with another of our processes doing the same.
+/// Not a defense against a hostile same-user process (it can delete the files
+/// directly); the boundary against other users is the 0700 directory.
+pub(crate) fn with_runtime_lock<T>(f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let _guard = RuntimeMutex::acquire()?;
+    f()
+}
+
 /// Read a small file in full, bounded by `max` bytes. Returns `Ok(None)` when
 /// the file does not exist; fails with `InvalidData` when it exceeds the cap,
 /// reading at most `max + 1` bytes rather than the whole oversized file.
-fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Option<Vec<u8>>> {
+pub(crate) fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Option<Vec<u8>>> {
     let f = match fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -243,7 +253,7 @@ fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Option<Vec<u8>>
 /// looser mode on a planted file can never carry over to the secret-bearing
 /// lock. If the removal races with a re-plant, `create_new` fails closed
 /// instead of adopting the foreign file.
-fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     let mut tmp = path.to_path_buf();
     tmp.set_extension("lock.tmp");
     #[cfg(unix)]

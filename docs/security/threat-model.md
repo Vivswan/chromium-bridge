@@ -213,54 +213,87 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   is the wider surface and the removed CSP defense-in-depth layer, accepted as
   the explicit price of the opt-in.
 
-## Rebuild delta: new trust boundaries (stubs)
+## Rebuild delta: new trust boundaries
 
 The workspace/Tauri rebuild
 ([ADR-0023](../adr/0023-workspace-monorepo-tauri-app.md)) introduces five
-boundaries that do not exist in the model above. These entries are stubs:
-each names the boundary, who enforces it, and the residual we already know
-about. The full treatment (mechanism, failure modes, adversarial tests)
-lands in the ADR of the phase that builds the component, and this section
-gets folded into the main model then. Until a component ships with its
-mechanism, it must be treated as unenforced.
+boundaries that do not exist in the model above. Boundaries 1-3 shipped with
+Phase 4 and are described here as delivered (mechanism, enforcement point,
+residual); see [ADR-0024](../adr/0024-multi-client-attested-pairing-and-broker.md)
+for the full treatment. Boundaries 4 and 5 remain stubs for later phases and
+must be treated as unenforced until their components ship.
 
-1. **Harness -> MCP server stdio admission.** Today anything that spawns the
-   binary in MCP mode owns its stdin and is trusted unconditionally (the
-   "MCP client is trusted" assumption). The rebuild adds admission control:
-   the server must identify the client driving it before serving tool
-   calls, keyed against a host-side client allowlist. Enforced by: the MCP
-   server at startup. The mechanism is an open design problem for the
-   pairing ADR: stdio is an anonymous pipe, so the socket layer's kernel
-   peer credentials do not exist here (a pipe endpoint can be inherited or
-   relayed, and a parent PID proves who spawned us, not who is writing to
-   us). If no unforgeable stdio-level check exists on a platform, admission
-   must move to a channel that has one, or the gap must be recorded here as
-   a residual, not papered over. Residual (already known): attestation of
-   any kind identifies a binary, not an intention; a trusted-but-compromised
-   harness is still trusted, and the self-asserted client name is a label,
-   never the authorization key.
+1. **Harness -> MCP server stdio admission (delivered, ADR-0024).** The
+   server no longer trusts whatever spawned it. Before serving a single tool
+   call, it measures the code identity of its parent process --
+   `attest_parent()` takes `getppid()` and measures that pid's running image
+   (macOS: a `SecCodeCheckValidity`-validated `cdhash` plus the signing Team
+   ID; Linux: the SHA256 of `/proc/<pid>/exe`) -- and checks it against the
+   trusted-client allowlist at `runtime_dir()/clients.json`. Enforced by:
+   the MCP server at startup (`admit_own_harness`), and again by the broker
+   for every relay attach (the relay reports its attested parent identity in
+   `AttachRequest::Client`, trusted because the relay connection itself
+   passed `attest_peer` and is therefore our own binary). Enforcement is
+   opt-in like the enrollment ceremony: no allowlist file means unenrolled,
+   admission not enforced, logged at ERROR level on every start (the
+   pre-existing threat #4 same-user residual, unchanged). Once the file
+   exists, everything unmatched fails closed -- including an identity that
+   could not be measured, and including an unreadable or corrupt allowlist
+   (a load error is never treated as unenrolled). Authorization keys on the
+   attested anchor (Team ID where signed, image hash otherwise); the
+   self-asserted client name (`CHROMIUM_BRIDGE_CLIENT_NAME`) is a log label
+   only. Residual: stdio is an anonymous pipe with no kernel peer
+   credentials, so this attests who *spawned* the server, not who writes its
+   stdin. At startup `getppid` names the genuine spawner (the OS just forked
+   us) and a later reparenting makes it name the reaper, which fails admission
+   closed; but an anonymous pipe's write end can be inherited or passed on, so
+   spawner and stdin-writer are not provably the same, and the pid-keyed
+   measurement carries the usual microsecond pid-reuse race (on macOS the
+   running image is still signature-validated). It raises the bar; it is not
+   kernel attestation of the pipe. And attestation identifies a binary, not an
+   intention: a trusted-but-compromised harness is still trusted. Exercised
+   live by adversarial tests A14/A15/A16.
 
-2. **The ref-counted broker.** Concurrent multi-client support replaces
-   newest-wins takeover with a broker that owns the browser-facing socket
-   and multiplexes attested clients, exiting when the last one detaches.
-   This is a new persistent same-user surface that did not exist when the
-   server's lifetime equaled one harness's lifetime. Enforced by: the broker
-   process itself; every attach is individually attested, and the socket
-   stays 0600 in the 0700 runtime dir. Residual: the broker aggregates what
-   were separate blast radii (one process now fronts all clients), and it
-   needs its own DoS posture (connection caps, timeouts) because it outlives
-   any one client. On Windows it degrades with the rest of the IPC layer to
-   secret-only.
+2. **The ref-counted broker (delivered, ADR-0024).** The first MCP-server
+   instance binds the 0600 socket and the lock and becomes the broker; later
+   attested instances attach as relays instead of SIGTERMing the owner (the
+   old newest-wins `supplant_prior_server` takeover was removed). One shared
+   `Session` holds the browser connections and multiplexes every attached
+   harness's tool calls. The broker is ref-counted on harness clients (its
+   own stdio harness plus relays; browsers deliberately do not count) and
+   exits when the last harness detaches -- the shutdown protocol is
+   model-checked with loom (shutdown exactly at zero, no attach after the
+   terminal decision). Enforced by: the broker process; every attach is
+   individually gated by the peer-UID check, `attest_peer`, the HMAC
+   handshake, a mandatory role-declaring attach frame, and (for relays) the
+   allowlist decision; the socket stays 0600 in the 0700 runtime dir. Its
+   DoS posture is explicit: at most 8 harness clients and 16 distinct
+   browsers, at most 32 connections mid-handshake, a 10 s handshake+attach
+   read timeout (cleared for admitted, legitimately idle connections), and a
+   per-relay token-bucket rate limit (burst 128, refill 128/s) that drops a
+   flooding relay. Residual: the broker aggregates what were separate blast
+   radii (one process fronts all clients), mitigated but not eliminated by
+   the caps; and it is a single point of failure whose crash EOFs every
+   attached harness (the survivors' restarts elect a new broker, exercised
+   by chaos tests C4/C9). On Windows it degrades with the rest of the IPC
+   layer to secret-only.
 
-3. **Host-allowlist writers.** The set of trusted client binaries becomes a
-   persisted allowlist, which means something writes it. Writers: the CLI
-   (`pair`/`revoke`) and the control-panel app. Enforced by: file
-   permissions on the 0700 runtime/config dir, atomic writes under the
-   runtime mutex, and pairing ceremonies for additions. Residual: the
-   allowlist file inherits the same same-user-writer exposure as the
-   native-messaging manifest (threat #4's class); a same-user process that
-   can win a pairing ceremony can add itself. More writers also means more
-   code with write capability to audit.
+3. **Host-allowlist writers (delivered, ADR-0024).** The trusted-client set
+   is persisted at `runtime_dir()/clients.json`: 0600, written atomically
+   under the runtime lock, parsed fail-closed (`deny_unknown_fields`,
+   version check, size cap). Writers: the CLI (`pair-client`,
+   `revoke-client`; the control-panel app arrives in a later phase and goes
+   through the same `core` write path). `pair-client` replaces a same-named
+   entry (the re-pair path for hash anchors after a re-sign); `revoke-client`
+   leaves the file in place even when it empties, because a present-but-empty
+   list means enrolled-and-locked, not a reset to the open posture. Enforced
+   by: file permissions on the 0700 runtime dir plus the atomic-write
+   discipline. Residual: the allowlist file inherits the same
+   same-user-writer exposure as the native-messaging manifest (threat #4's
+   class) -- a same-user process that can run our CLI can pair itself; the
+   ERROR-level logging and `list-clients` are the visibility on that, not a
+   prevention. More writers also means more code with write capability to
+   audit.
 
 4. **The app as issuer.** The Tauri control panel can mint pairings and
    revocations. It is a writer over the allowlist and a requester of

@@ -11,6 +11,8 @@
 
 #[macro_use]
 pub mod log;
+pub mod allowlist;
+pub mod broker;
 pub mod cli;
 pub mod doctor;
 pub mod enclave;

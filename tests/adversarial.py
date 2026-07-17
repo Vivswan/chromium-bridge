@@ -25,6 +25,9 @@ Attack matrix (live MUST-BLOCK vs annotated residual):
   A9  over-64MB line on MCP + NM legs           LIVE  bounded rejection, survives
   A11 no open TCP port                          LIVE  UNIX listener only
   A12 secret confidentiality                    LIVE  secret never leaks; redacted
+  A14 enrolled + non-allowlisted harness        LIVE  refused, fail closed
+  A15 enrolled + spoofed client NAME            LIVE  name is not authz; refused
+  A16 enrolled + genuinely paired harness       LIVE  admitted; drives the bridge
   A4/A5 replay / forged-MAC                      REF  subsumed by attestation (+unit)
   A6/A7 hex / serde parser abuse                 REF  Rust hex_fuzz + serde proptests
   A10 cross-uid connect                          NOTE root/manual; 0700 dir is gate
@@ -634,6 +637,130 @@ def annotated_matrix():
          "See a13_manifest_substitution_xfail below.")
 
 
+# ---------------------------------------------------------------------------
+# A14/A15/A16 - trusted-client allowlist admission (Phase 4, ADR-0024)
+# ---------------------------------------------------------------------------
+
+def _clients_path():
+    return os.path.join(os.path.dirname(e2e.LOCK), "clients.json")
+
+
+def _rm_clients():
+    _require_isolated()
+    try:
+        os.remove(_clients_path())
+    except FileNotFoundError:
+        pass
+
+
+def _pair_client(*args):
+    """Run `chromium-bridge pair-client ...` under the isolation env."""
+    _require_isolated()
+    subprocess.run([e2e.BIN, "pair-client", *args], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def a14_non_allowlisted_harness_refused():
+    print("\n[A14] enrolled + non-allowlisted harness (LIVE, must REFUSE / fail closed)")
+    if os.name == "nt":
+        note("A14 skipped: harness attestation is Unix-only (Windows secret-only)")
+        return
+    _rm_lock()
+    _rm_clients()
+    try:
+        # Enroll a DECOY that does not match this python interpreter. Admission
+        # is now ENFORCED, so our python-parented server must be refused.
+        _pair_client("--name", "decoy", "--hash", "00" * 20)
+        srv = start_server()
+        try:
+            lf = e2e.wait_lock(srv, timeout=3)
+            check(lf is None, "A14 refused harness never became the broker (no lock)")
+            srv.wait(timeout=5)
+            check(srv.returncode == 1, "A14 refused server exits non-zero (fail closed)")
+            err = server_stderr(srv)
+            check("not in the trusted-client allowlist" in err,
+                  "A14 stderr names the allowlist refusal")
+        finally:
+            _reap(srv)
+    finally:
+        _rm_clients()
+
+
+def a15_spoofed_client_name_is_not_authz():
+    print("\n[A15] enrolled + spoofed client NAME (LIVE, name is not the authz key)")
+    if os.name == "nt":
+        note("A15 skipped: harness attestation is Unix-only")
+        return
+    _rm_lock()
+    _rm_clients()
+    try:
+        # Enroll a decoy under the name "trusted". The attacker then claims that
+        # exact NAME via the env var. Authorization keys on the attested hash,
+        # not the self-asserted name, so admission must still be refused.
+        _pair_client("--name", "trusted", "--hash", "11" * 20)
+        env = dict(os.environ, CHROMIUM_BRIDGE_CLIENT_NAME="trusted")
+        srv = subprocess.Popen([e2e.BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+        srv.err_lines = []
+        srv.err_thread = threading.Thread(
+            target=lambda: [srv.err_lines.append(ln) for ln in srv.stderr], daemon=True)
+        srv.err_thread.start()
+        try:
+            lf = e2e.wait_lock(srv, timeout=3)
+            check(lf is None, "A15 a matching NAME does not admit a non-matching hash")
+            srv.wait(timeout=5)
+            check(srv.returncode == 1, "A15 refused despite the spoofed name (fail closed)")
+        finally:
+            _reap(srv)
+    finally:
+        _rm_clients()
+
+
+def a16_paired_harness_is_admitted():
+    print("\n[A16] enrolled + genuinely paired harness (LIVE, must be ADMITTED and serve)")
+    if os.name == "nt":
+        note("A16 skipped: harness attestation is Unix-only")
+        return
+    _rm_lock()
+    _rm_clients()
+    nh = None
+    srv = None
+    try:
+        # Pair THIS python (the server's parent) by its real attested identity.
+        # A server it spawns must now be admitted -- enrollment must not brick a
+        # genuinely trusted client, and the allowlist gates on the real hash.
+        _pair_client("--name", "pytest", "--this-parent")
+        srv = start_server()
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A16 paired harness IS admitted and becomes the broker")
+        if lf is None:
+            return
+        c = e2e.McpClient(srv)
+        c.initialize()
+        c.initialized()
+        nh = e2e.start_bridge_host()
+        e2e.wait_host_ready(nh)
+        served = []
+        t = threading.Thread(
+            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
+        t.start()
+        r = c.call("tab_list", {}, _id=42)
+        t.join(timeout=3)
+        check(bool(served), "A16 a tool call round-trips through the admitted broker")
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "Adversarial Tab",
+              "A16 the paired client actually drives the browser")
+    finally:
+        if nh is not None and nh.poll() is None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        _reap(srv)
+        _rm_clients()
+
+
 def a13_manifest_substitution_xfail():
     print("\n[A13] native-messaging manifest substitution (XFAIL until enrollment #13)")
     # A malicious install could point the NM manifest at a different host binary,
@@ -668,6 +795,9 @@ def main():
         a9_oversize_frame_nm_leg()
         a11_no_tcp_port()
         a12_secret_confidentiality()
+        a14_non_allowlisted_harness_refused()
+        a15_spoofed_client_name_is_not_authz()
+        a16_paired_harness_is_admitted()
         annotated_matrix()
         a13_manifest_substitution_xfail()
     finally:
