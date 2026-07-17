@@ -84,3 +84,27 @@ jobs:
           if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
             exit "$rc"
           fi
+
+  # Parser fuzzing lives here rather than in the PR gate because libFuzzer needs
+  # a nightly toolchain and a real run is far too slow for every PR. This is a
+  # SMOKE pass (bounded runs per target) that proves the harnesses build and
+  # survive a blast of random input; the "no findings" path is a normal pass,
+  # and a crash (a parser panic/abort on hostile input) is fatal -- exactly the
+  # exit semantics of tests/fuzz_smoke.sh.
+  fuzz:
+    name: Parser fuzz smoke (cargo-fuzz, scheduled)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: nightly
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz the wire parsers (bounded smoke; a crash is fatal)
+        run: tests/fuzz_smoke.sh 200000
+
