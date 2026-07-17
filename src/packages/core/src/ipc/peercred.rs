@@ -2,6 +2,9 @@
 //! plus process-liveness checks. The per-OS syscalls live in
 //! [`super::platform`]; this module holds the cross-platform policy (pid
 //! range validation, the EPERM-means-alive convention).
+// Quarantined unsafe: getpeereid / kill(pid, 0) FFI. unsafe_code is denied
+// workspace-wide; this module is one of the audited exceptions.
+#![allow(unsafe_code)]
 
 // `io` is only touched on the Unix paths (peer credentials + kill(0)); the
 // Windows liveness check goes through platform::windows.

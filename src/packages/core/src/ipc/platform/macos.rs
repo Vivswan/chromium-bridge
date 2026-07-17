@@ -8,6 +8,10 @@
 //! binaries too; Team-ID / designated-requirement pinning is the follow-up for
 //! when a real signing identity lands. All FFI is hand-declared to avoid
 //! adding crates (keeps cargo-deny clean). See ADR-0020.
+// Quarantined unsafe: Security.framework and libc FFI (audit-token peer
+// identity, code-signature validation). unsafe_code is denied workspace-wide;
+// this module is one of the audited exceptions.
+#![allow(unsafe_code)]
 
 use std::ffi::c_void;
 use std::io;

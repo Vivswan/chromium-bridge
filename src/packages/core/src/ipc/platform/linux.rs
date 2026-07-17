@@ -1,6 +1,9 @@
 //! Linux mechanisms: image identity as the SHA256 of `/proc/<pid>/exe` (the
 //! kernel's magic symlink to the executable inode), and peer credentials via
 //! `SO_PEERCRED`.
+// Quarantined unsafe: SO_PEERCRED getsockopt FFI. unsafe_code is denied
+// workspace-wide; this module is one of the audited exceptions.
+#![allow(unsafe_code)]
 
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -65,7 +68,15 @@ fn hash_file(path: &std::path::Path) -> io::Result<String> {
         if n == 0 {
             break;
         }
-        hasher.update(&buf[..n]);
+        // read() never returns more than buf.len(); a broken Read impl that
+        // did would corrupt the identity hash, so refuse it instead.
+        let chunk = buf.get(..n).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "read returned an impossible length",
+            )
+        })?;
+        hasher.update(chunk);
     }
     Ok(super::super::rand::hex_encode(hasher.finalize().as_slice()))
 }

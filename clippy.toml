@@ -1,3 +1,12 @@
 # Clippy configuration. Lint enforcement (`-D warnings`) lives in the justfile
 # and CI, not here; this file only tunes thresholds.
 cognitive-complexity-threshold = 30
+
+# The no-panic bans on the security core (src/packages/core/src/lib.rs) apply
+# to production code only: tests SHOULD assert hard, and an unwrap in a test
+# is the assertion. These switches scope the unwrap/expect/panic/indexing
+# lints to non-test code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

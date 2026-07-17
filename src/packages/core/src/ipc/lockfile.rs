@@ -81,7 +81,7 @@ pub(crate) fn runtime_dir() -> PathBuf {
         } else if let Some(home) = std::env::var_os("HOME") {
             PathBuf::from(home).join(".cache/chromium-bridge")
         } else {
-            std::env::temp_dir().join(format!("chromium-bridge-{}", unsafe { libc::geteuid() }))
+            std::env::temp_dir().join(format!("chromium-bridge-{}", crate::sys::effective_uid()))
         };
         ensure_private_dir(&dir);
         dir

@@ -47,13 +47,47 @@ winreg = "0.55"
 # double-derivation diff against the extension's Zod validators. Excluded from
 # default and release builds - the shipped binary never compiles schemars.
 schemars = "1"
-chromium-bridge-core = { path = "src/packages/core" }
+# The version is stated alongside the path so the dependency is not a
+# version-less wildcard: `cargo deny check bans` (wildcards = "deny") treats
+# a bare path dependency as `*` and fails the supply-chain gate.
+chromium-bridge-core = { path = "src/packages/core", version = "0.1.0" }
 # Tauri v2 desktop shell (src/apps/desktop only; never a dependency of the
 # security core or the host). Policy per ADR-0023: the GUI layer carries no
 # security weight, so the widely-audited framework is the right trust
 # boundary there.
 tauri = "2"
 tauri-build = "2"
+
+# Workspace-wide lint floor; every member opts in via `[lints] workspace =
+# true`. CI promotes warn to deny (`cargo clippy -- -D warnings`), so "warn"
+# here is a hard gate. The set is deliberately curated rather than
+# `clippy::pedantic` wholesale: the pedantic group is dominated by doc/naming
+# noise and by cast lints whose mechanical fixes would alter error/panic
+# semantics in the FFI layers. The no-panic bans for the security core are
+# crate-level attributes in src/packages/core/src/lib.rs (Cargo lint tables
+# are all-or-nothing per crate, so the core's stricter set cannot live here).
+[workspace.lints.rust]
+# Zero-trust quarantine: unsafe is denied everywhere and re-allowed only in
+# the audited FFI modules (ipc/platform/*, ipc/peercred.rs, enclave/macos.rs),
+# each with a scoped `#![allow(unsafe_code)]` and justification.
+unsafe_code = "deny"
+# Typography policy (no look-alike characters) extended to identifiers.
+non_ascii_idents = "deny"
+# `loom` is an explicit, self-set cfg (see the loom dev-dependency in
+# src/packages/core), not a typo; teach check-cfg about it workspace-wide.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+# Leftover-debug and stub markers must never ship.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+# mem::forget on a guard silently skips Drop-based cleanup (lockfiles,
+# sockets); there is no legitimate use in this codebase.
+mem_forget = "warn"
+# Casting a function pointer to an integer of a different size truncates it.
+fn_to_numeric_cast_any = "warn"
 
 # codegen-units=1 and strip=symbols also serve reproducibility: one codegen
 # unit removes parallel-codegen variance, and stripping drops the symbol/debug

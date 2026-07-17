@@ -808,10 +808,7 @@ pub fn install_stderr_panic_hook() {
 /// own I/O but not for the inherited disposition everywhere; ignore it so we
 /// get EPIPE errors instead of dying. Safe to call once at startup.
 pub fn ignore_sigpipe() {
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
-    }
+    crate::sys::ignore_sigpipe();
 }
 
 #[cfg(test)]

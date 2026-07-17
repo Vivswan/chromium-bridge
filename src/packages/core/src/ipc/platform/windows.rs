@@ -2,6 +2,9 @@
 //! OS randomness. Windows has no executable-image attestation (see
 //! SECURITY.md "Platform support"); the bridge falls back to secret-only
 //! authentication there.
+// Quarantined unsafe: process-handle and BCrypt FFI. unsafe_code is denied
+// workspace-wide; this module is one of the audited exceptions.
+#![allow(unsafe_code)]
 
 use std::io;
 

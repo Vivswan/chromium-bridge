@@ -46,9 +46,20 @@ pub fn der_to_raw_signature(der: &[u8]) -> Result<[u8; 64], EnclaveError> {
     }
 
     let mut out = [0u8; 64];
-    out[32 - r.len()..32].copy_from_slice(r);
-    out[64 - s.len()..64].copy_from_slice(s);
+    let (r_out, s_out) = out.split_at_mut(32);
+    copy_right_aligned(r_out, r);
+    copy_right_aligned(s_out, s);
     Ok(out)
+}
+
+/// Copy `src` into the tail of `dst` (right-aligned, zero-padded on the
+/// left). `der_read_integer` bounds each scalar at 32 bytes, so `src` always
+/// fits; the reverse zip makes that structurally panic-free instead of
+/// relying on slice arithmetic.
+fn copy_right_aligned(dst: &mut [u8], src: &[u8]) {
+    for (d, s) in dst.iter_mut().rev().zip(src.iter().rev()) {
+        *d = *s;
+    }
 }
 
 /// Read one strict-DER INTEGER holding a positive value of at most 32 bytes.
@@ -80,21 +91,21 @@ fn der_read_integer(input: &[u8]) -> Result<(&[u8], &[u8]), EnclaveError> {
     // Positive, minimally encoded: a leading 0x00 is legal only as sign
     // padding for a value whose top bit is set, and a top bit set without
     // that padding would encode a negative number.
-    let stripped = if value[0] == 0x00 {
-        if value.len() == 1 {
+    let stripped = match value.split_first() {
+        // Length 1..=33 was enforced above, so the value has a first byte.
+        None => return Err(bad("empty INTEGER value".into())),
+        Some((&0x00, tail)) => match tail.first() {
             // INTEGER 0 — impossible for a valid ECDSA r or s, but it is
             // well-formed DER; map it to 32 zero bytes and let the verifier
             // reject the signature.
-            &value[..0]
-        } else if value[1] & 0x80 == 0 {
-            return Err(bad("non-minimal INTEGER encoding".into()));
-        } else {
-            &value[1..]
-        }
-    } else if value[0] & 0x80 != 0 {
-        return Err(bad("negative INTEGER".into()));
-    } else {
-        value
+            None => tail,
+            Some(second) if second & 0x80 == 0 => {
+                return Err(bad("non-minimal INTEGER encoding".into()))
+            }
+            Some(_) => tail,
+        },
+        Some((first, _)) if first & 0x80 != 0 => return Err(bad("negative INTEGER".into())),
+        Some(_) => value,
     };
     if stripped.len() > 32 {
         return Err(bad(format!(
