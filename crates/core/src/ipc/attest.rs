@@ -5,8 +5,6 @@
 //! identity allowlist is exactly `{our own binary}`, and every ambiguity
 //! fails closed. See ADR-0020.
 
-#![cfg(any(target_os = "linux", target_os = "macos"))]
-
 use std::io;
 
 use super::platform::os;
