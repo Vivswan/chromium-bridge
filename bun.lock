@@ -11,7 +11,14 @@
         "typescript": "7.0.2",
       },
     },
-    "extension": {
+    "scripts": {
+      "name": "@chromium-bridge/scripts",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/bun": "^1.3.14",
+      },
+    },
+    "src/apps/extension": {
       "name": "chromium-bridge-extension",
       "version": "0.1.0",
       "dependencies": {
@@ -47,7 +54,7 @@
         "yaml": "^2.9.0",
       },
     },
-    "packages/shared": {
+    "src/packages/shared": {
       "name": "@chromium-bridge/shared",
       "version": "0.0.0",
       "dependencies": {
@@ -57,7 +64,7 @@
         "@types/bun": "^1.3.14",
       },
     },
-    "tests": {
+    "tests/browser": {
       "name": "chromium-bridge-tests",
       "version": "0.1.0",
       "dependencies": {
@@ -134,7 +141,9 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.4", "", { "os": "win32", "cpu": "x64" }, "sha512-U1jaluLw1qQc2Tx7/CeSoL9N5XcqIH+GWjpUAy1ouB5nVjSCMNO+NNHdY3RAs8zxNurLWAdj6pehQdCA2zyU+Q=="],
 
-    "@chromium-bridge/shared": ["@chromium-bridge/shared@workspace:packages/shared"],
+    "@chromium-bridge/scripts": ["@chromium-bridge/scripts@workspace:scripts"],
+
+    "@chromium-bridge/shared": ["@chromium-bridge/shared@workspace:src/packages/shared"],
 
     "@devicefarmer/adbkit": ["@devicefarmer/adbkit@3.3.8", "", { "dependencies": { "@devicefarmer/adbkit-logcat": "^2.1.2", "@devicefarmer/adbkit-monkey": "~1.2.1", "bluebird": "~3.7", "commander": "^9.1.0", "debug": "~4.3.1", "node-forge": "^1.3.1", "split": "~1.0.1" }, "bin": { "adbkit": "bin/adbkit" } }, "sha512-7rBLLzWQnBwutH2WZ0EWUkQdihqrnLYCUMaB44hSol9e0/cdIhuNFcqZO0xNheAU6qqHVA8sMiLofkYTgb+lmw=="],
 
@@ -546,9 +555,9 @@
 
     "chromium-bidi": ["chromium-bidi@16.0.1", "", { "dependencies": { "mitt": "^3.0.1", "zod": "^3.24.1" }, "peerDependencies": { "devtools-protocol": "*" } }, "sha512-J63PGu/9PpeCwLIcKYyzWP6yaVL5pxuBc0shlYCYM8BaAkmlwiQboXO1iNbOgSDbVklEyYFfNEcHD8oOAWacUA=="],
 
-    "chromium-bridge-extension": ["chromium-bridge-extension@workspace:extension"],
+    "chromium-bridge-extension": ["chromium-bridge-extension@workspace:src/apps/extension"],
 
-    "chromium-bridge-tests": ["chromium-bridge-tests@workspace:tests"],
+    "chromium-bridge-tests": ["chromium-bridge-tests@workspace:tests/browser"],
 
     "ci-info": ["ci-info@4.4.0", "", {}, "sha512-77PSwercCZU2Fc4sX94eF8k8Pxte6JAwL4/ICZLFjJLqegs7kCuAsqqj/70NQF6TvDpgFjkubQB2FW2ZZddvQg=="],
 

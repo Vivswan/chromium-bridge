@@ -13,7 +13,7 @@
 
 The entire install flow depends on one **fixed** ID, `mkjjlmjbcljpcfkfadfmhblmmddkdihf`
 (derived from the `key` in
-[`extension/manifest.json`](../extension/manifest.json));
+[`src/apps/extension/manifest.json`](../src/apps/extension/manifest.json));
 [`install.sh`](../install/install.sh) / [`install.ps1`](../install/install.ps1)
 write it into the native host manifest's `allowed_origins`.
 
@@ -51,7 +51,7 @@ cannot connect.
 - [ ] A **privacy policy URL** (**required** for this project: the extension reads page
       content, cookies, and web storage). It can live under `docs/`.
 - [ ] Store listing assets: 1-5 screenshots (1280x800 or 640x400), a 128px icon
-      (`extension/icons/icon128.png` already exists), short + detailed descriptions, a
+      (`src/apps/extension/icons/icon128.png` already exists), short + detailed descriptions, a
       category, and support/homepage URLs.
 
 ## Review risks specific to this extension

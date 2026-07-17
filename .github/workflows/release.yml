@@ -90,7 +90,7 @@ jobs:
       - name: Build extension bundle
         run: |
           bun install --frozen-lockfile
-          bun run --cwd extension build
+          bun run --cwd src/apps/extension build
 
       - name: Package release archive
         id: pkg
@@ -99,7 +99,7 @@ jobs:
           TAG="$RELEASE_TAG"
           NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
           mkdir -p "$NAME/extension"
-          cp -r extension/dist/chrome-mv3 "$NAME/extension/dist"
+          cp -r src/apps/extension/dist/chrome-mv3 "$NAME/extension/dist"
           cp install/mcp-config.example.json LICENSE README.md "$NAME/"
           # RELEASE.txt tells the installer which release this archive came
           # from, so it can fetch the published checksum for the binary and
@@ -163,7 +163,7 @@ jobs:
           # Zip the built bundle with a top-level `dist/` folder so users can
           # point "Load unpacked" straight at the extracted directory.
           rm -rf dist-zip && mkdir dist-zip
-          cp -r extension/dist/chrome-mv3 dist-zip/dist
+          cp -r src/apps/extension/dist/chrome-mv3 dist-zip/dist
           (cd dist-zip && zip -r "../$NAME.zip" dist)
           if command -v shasum >/dev/null 2>&1; then
             shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256"

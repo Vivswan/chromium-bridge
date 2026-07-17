@@ -98,12 +98,12 @@ The defaults are defined as a `DEFAULTS` object in each of `options.js` / `backg
 
 ## Implementation details
 
-- `extension/manifest.json`: add `options_ui: { page: "options.html", open_in_tab: true }`
-- `extension/options.html`: full-page layout, grouped (security / confirmation timeouts and grace window / tool enablement / allowed sites), dangerous switches get a yellow warning card
-- `extension/options.js`: storage read/write, immediate form persistence, allowlist add/remove, allowAllSites permission request/removal/reconciliation
-- `extension/popup.html` / `popup.js`: add the settings button (`openOptionsPage`), remove the evalMask section
-- `extension/background.js`: DEFAULTS + `getSetting`, disabledTools interception at the `dispatch` entry, the `add_allow` message, `snapshotPrecise` reads warnPreciseSnapshot, `ensureAllowed`/`ensureDomainAllowed` read allowAllSites
-- `extension/content.js`: DEFAULTS + `getSetting`, runEval reads pageEvalEnabled, click reads confirmHighRiskClick, grace window/timeouts read from storage
+- `src/apps/extension/manifest.json`: add `options_ui: { page: "options.html", open_in_tab: true }`
+- `src/apps/extension/options.html`: full-page layout, grouped (security / confirmation timeouts and grace window / tool enablement / allowed sites), dangerous switches get a yellow warning card
+- `src/apps/extension/options.js`: storage read/write, immediate form persistence, allowlist add/remove, allowAllSites permission request/removal/reconciliation
+- `src/apps/extension/popup.html` / `popup.js`: add the settings button (`openOptionsPage`), remove the evalMask section
+- `src/apps/extension/background.js`: DEFAULTS + `getSetting`, disabledTools interception at the `dispatch` entry, the `add_allow` message, `snapshotPrecise` reads warnPreciseSnapshot, `ensureAllowed`/`ensureDomainAllowed` read allowAllSites
+- `src/apps/extension/content.js`: DEFAULTS + `getSetting`, runEval reads pageEvalEnabled, click reads confirmHighRiskClick, grace window/timeouts read from storage
 
 ## Relationship to other ADRs
 

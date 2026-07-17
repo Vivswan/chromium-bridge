@@ -114,7 +114,7 @@ force regardless of these settings.
 
 ## Masking is heuristic and best-effort
 
-Cookie, storage, and `page_eval`-result masking (`extension/src/shared/masking.ts`)
+Cookie, storage, and `page_eval`-result masking (`src/apps/extension/src/shared/masking.ts`)
 is a **heuristic, best-effort** filter, not a guarantee. It targets common
 secret shapes (JWTs, long hex, long digit runs, opaque base64url tokens of >=32
 chars containing both a letter and a digit, and `bearer`/`key=` assignments) and

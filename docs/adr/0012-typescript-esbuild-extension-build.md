@@ -6,7 +6,7 @@
 
 ## Context
 
-The v0.1/v0.2 MV3 extension was four hand-written plain `.js` files (`background.js` / `content.js` / `options.js` / `popup.js`), loaded unpacked straight from the `extension/` directory. That was fast enough for the prototype phase, but as ADR-0008 (page_eval), ADR-0009 (page_snapshot_precise), ADR-0010 (cookie/storage), and ADR-0011 (Options page) landed, the extension-side code volume and complexity grew, and several problems surfaced:
+The v0.1/v0.2 MV3 extension was four hand-written plain `.js` files (`background.js` / `content.js` / `options.js` / `popup.js`), loaded unpacked straight from the `src/apps/extension/` directory. That was fast enough for the prototype phase, but as ADR-0008 (page_eval), ADR-0009 (page_snapshot_precise), ADR-0010 (cookie/storage), and ADR-0011 (Options page) landed, the extension-side code volume and complexity grew, and several problems surfaced:
 
 - **No types**: the `chrome.*` APIs and the bridge messages' `op`/`args`/response shapes lived on memory and comment conventions; refactors and new tools easily dropped fields or passed wrong types, caught only by runtime errors.
 - **No static checks**: unused variables, misspelled branches, and implicit `any` went unchallenged.
@@ -17,7 +17,7 @@ The engineering-standards cleanup needed to give the extension types, lint, and 
 
 ## Decision
 
-**Rewrite the extension sources in TypeScript (`extension/src/*.ts`, strict mode), bundle with esbuild into IIFE files under `extension/dist/`, and make dist/ the new load-unpacked target.**
+**Rewrite the extension sources in TypeScript (`src/apps/extension/src/*.ts`, strict mode), bundle with esbuild into IIFE files under `src/apps/extension/dist/`, and make dist/ the new load-unpacked target.**
 
 - The four entries `src/{background,content,options,popup}.ts` each bundle into `dist/*.js`.
 - Static assets (`manifest.json`, `popup.html`, `options.html`, `toast.css`, `icons/`) are copied into dist/ verbatim by the build script (`build.mjs`).
@@ -59,7 +59,7 @@ The conversion ran in two steps, pipeline first, types second (see git history P
 - The existing test suites locked the behavior: `dom_test` 77/77 (unchanged), smoke 4/4, protocol e2e 45/45, all green, proving the build step behavior-neutral.
 - **Phase 2b/2c** then added strict types file by file on the verified pipeline, added ESLint/Prettier, and deleted dead code.
 
-`tests/dom_test.ts` reads the **build artifact** `extension/dist/content.js` (not the `.ts` sources) for its DOM-level assertions; it tests the code the browser actually loads, and in passing puts "esbuild output works" under test protection.
+`tests/browser/dom_test.ts` reads the **build artifact** `src/apps/extension/dist/content.js` (not the `.ts` sources) for its DOM-level assertions; it tests the code the browser actually loads, and in passing puts "esbuild output works" under test protection.
 
 ## Consequences
 
@@ -70,7 +70,7 @@ The conversion ran in two steps, pipeline first, types second (see git history P
 - **A simple pipeline**: one `build.mjs` plus the single esbuild dependency, no config sprawl.
 
 ### Negative
-- **The install/load flow changed**: the load-unpacked target moved from `extension/` to **`extension/dist/`**, and dist/ is a build artifact (gitignored). **After changing code you must run `npm run build` (or `just ext-build`) before reloading the extension**; editing `.js` in place no longer takes effect. `install.sh` also now builds first and loads from dist/.
+- **The install/load flow changed**: the load-unpacked target moved from `src/apps/extension/` to **`src/apps/extension/dist/`**, and dist/ is a build artifact (gitignored). **After changing code you must run `npm run build` (or `just ext-build`) before reloading the extension**; editing `.js` in place no longer takes effect. `install.sh` also now builds first and loads from dist/.
 - **One more build-layer dependency**: extension development needs Node plus `npm ci`; esbuild/typescript/eslint and friends enter devDependencies.
 - **Artifacts are not committed**: dist/ is untracked; a fresh clone must build before it can load.
 
@@ -79,12 +79,12 @@ The conversion ran in two steps, pipeline first, types second (see git history P
 
 ## Implementation
 
-- `extension/src/{background,content,options,popup}.ts`: strict TypeScript sources.
-- `extension/build.mjs`: the esbuild driver; bundles the four entries into IIFE files in dist/ and copies static assets; `--watch` for incremental builds.
-- `extension/tsconfig.json`: `strict`, `noEmit`, `types: ["chrome"]`, `moduleResolution: bundler`.
-- `extension/package.json`: `build` / `watch` / `typecheck` / `lint` / `format` scripts; devDependencies include esbuild, typescript, @types/chrome, eslint, prettier, typescript-eslint.
-- `.gitignore`: exclude `extension/dist` and `extension/node_modules`.
-- `tests/dom_test.ts`: reads `extension/dist/content.js` (the build artifact).
+- `src/apps/extension/src/{background,content,options,popup}.ts`: strict TypeScript sources.
+- `src/apps/extension/build.mjs`: the esbuild driver; bundles the four entries into IIFE files in dist/ and copies static assets; `--watch` for incremental builds.
+- `src/apps/extension/tsconfig.json`: `strict`, `noEmit`, `types: ["chrome"]`, `moduleResolution: bundler`.
+- `src/apps/extension/package.json`: `build` / `watch` / `typecheck` / `lint` / `format` scripts; devDependencies include esbuild, typescript, @types/chrome, eslint, prettier, typescript-eslint.
+- `.gitignore`: exclude `src/apps/extension/dist` and `src/apps/extension/node_modules`.
+- `tests/browser/dom_test.ts`: reads `src/apps/extension/dist/content.js` (the build artifact).
 - `install.sh` / `README`: build the extension and load-unpacked from dist/.
 
 ## Relationship to other ADRs

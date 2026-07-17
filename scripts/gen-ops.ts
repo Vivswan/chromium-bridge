@@ -3,10 +3,10 @@
 // files are up to date.
 //
 // Outputs:
-//   packages/shared/src/ops.gen.ts       - tool catalogue: op names, UI labels,
+//   src/packages/shared/src/ops.gen.ts       - tool catalogue: op names, UI labels,
 //     policy metadata, per-op Zod arg validators (BridgeCommand is inferred
 //     from them), and the OpArgs union schema for the request envelope.
-//   packages/shared/src/identity.gen.ts  - the pinned extension ID (derived
+//   src/packages/shared/src/identity.gen.ts  - the pinned extension ID (derived
 //     from contracts/identity.json's `extensionManifestKey`, Chrome's own id
 //     derivation) and the native-messaging host id (same contract).
 
@@ -219,7 +219,7 @@ export type BridgeCommand = {
 // The envelope-level args bag: the union of every tool's inputSchema props,
 // all optional (the per-op validators enforce required-ness). Structurally
 // equivalent to bridge-request.schema.json's $defs/OpArgs - the equivalence
-// test in packages/shared enforces that against the contract file.
+// test in src/packages/shared enforces that against the contract file.
 export const OpArgsSchema = z.strictObject({
 ${opArgsFields}
 });
@@ -227,8 +227,8 @@ ${opArgsFields}
 export type OpArgs = z.infer<typeof OpArgsSchema>;
 `;
 
-writeFileSync(join(root, "packages/shared/src/ops.gen.ts"), opsOut);
-console.log("generated packages/shared/src/ops.gen.ts from contracts/tools.json");
+writeFileSync(join(root, "src/packages/shared/src/ops.gen.ts"), opsOut);
+console.log("generated src/packages/shared/src/ops.gen.ts from contracts/tools.json");
 
 // ---- identity.gen.ts ----------------------------------------------------------
 
@@ -279,5 +279,5 @@ export const PINNED_EXTENSION_ID = ${JSON.stringify(extensionId)};
 export const NATIVE_HOST_ID = ${JSON.stringify(hostId)};
 `;
 
-writeFileSync(join(root, "packages/shared/src/identity.gen.ts"), identityOut);
-console.log("generated packages/shared/src/identity.gen.ts from contracts/identity.json");
+writeFileSync(join(root, "src/packages/shared/src/identity.gen.ts"), identityOut);
+console.log("generated src/packages/shared/src/identity.gen.ts from contracts/identity.json");

@@ -24,7 +24,7 @@ between them leaves Native Messaging unable to connect.
    respective XDG config directories.
 3. `install.sh` supports `--browser chrome|chromium|both`, defaulting to
    auto-detection; `--skip-extension-build` reuses an already-built
-   `extension/dist`.
+   `src/apps/extension/dist`.
 4. WSL uses two explicit topologies:
    - Windows Chrome: the WSL MCP client launches the Windows-installed `.exe`
      through interop.

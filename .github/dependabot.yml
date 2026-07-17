@@ -18,8 +18,8 @@ updates:
     cooldown:
       default-days: 7
 
-  # bun workspace (root bun.lock covers extension/, tests/, packages/*).
-  # Dependabot's npm ecosystem reads bun.lock since 2025.
+  # bun workspace (root bun.lock covers src/apps/extension, src/packages/*,
+  # tests/browser, scripts). Dependabot's npm ecosystem reads bun.lock since 2025.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:

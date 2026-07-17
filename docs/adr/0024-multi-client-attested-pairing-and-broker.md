@@ -57,8 +57,8 @@ anchor. This is the zero-trust rule applied to the client boundary: a
 self-reported identity is not enforcement.
 
 The user manages the list with `chromium-bridge pair-client`, `revoke-client`,
-and `list-clients` (dispatched in `crates/host/src/main.rs`, implemented in
-`crates/core/src/allowlist.rs`).
+and `list-clients` (dispatched in `src/apps/host/src/main.rs`, implemented in
+`src/packages/core/src/allowlist.rs`).
 
 ### 2. Anchors that survive re-signing
 
@@ -83,7 +83,7 @@ misread as a Team ID or vice versa.
 ### 3. Harness attestation at the stdio boundary
 
 The identity fed to the allowlist comes from `attest_parent()`
-(`crates/core/src/ipc/attest.rs`): the server takes `getppid()` and measures
+(`src/packages/core/src/ipc/attest.rs`): the server takes `getppid()` and measures
 that pid's running image the same way the bridge peers are measured -- on macOS
 a pid-identified `SecCode` validated with `SecCodeCheckValidity`, yielding the
 `cdhash` and the Team ID; on Linux the SHA256 of `/proc/<pid>/exe`. The server
@@ -190,7 +190,7 @@ exhaustively unit-tested apart from any I/O.
 ### 6. DoS limits on the broker
 
 The broker is one process fronting every client, so it gets an explicit
-resource posture (constants in `crates/core/src/broker.rs`):
+resource posture (constants in `src/packages/core/src/broker.rs`):
 
 - `MAX_HARNESS_CLIENTS = 8`: concurrent harnesses (own stdio + relays). At the
   cap a relay attach is answered `Unavailable`, retryable, not denied.
@@ -389,22 +389,22 @@ resource posture (constants in `crates/core/src/broker.rs`):
 
 ## Implementation pointers
 
-- `crates/core/src/allowlist.rs`: `Anchor`, `ClientEntry`, `Allowlist`
+- `src/packages/core/src/allowlist.rs`: `Anchor`, `ClientEntry`, `Allowlist`
   (load/pair/revoke/write), the pure `decide`, and the
   `pair-client` / `revoke-client` / `list-clients` handlers.
-- `crates/core/src/broker.rs`: `RefCount`, `RateLimiter`, `run_broker`,
+- `src/packages/core/src/broker.rs`: `RefCount`, `RateLimiter`, `run_broker`,
   `admit` / `admit_browser` / `admit_client`, `run_relay`, `pump_lines`, the
   DoS constants, and the `loom_model` tests.
-- `crates/core/src/ipc/attest.rs`: `attest_parent`;
-  `crates/core/src/ipc/platform/{macos,linux}.rs`: `pid_client_identity`
+- `src/packages/core/src/ipc/attest.rs`: `attest_parent`;
+  `src/packages/core/src/ipc/platform/{macos,linux}.rs`: `pid_client_identity`
   (macOS `signing_identity_of_code` reads cdhash + Team ID; Linux hashes
   `/proc/<pid>/exe`, `team_id` always `None`).
-- `crates/core/src/ipc/mod.rs`: `ClientIdentity`.
-- `crates/core/src/protocol.rs`: `HarnessId`, `AttachRequest`, `AttachReply`.
-- `crates/core/src/mcp_server.rs`: `admit_own_harness`, the
+- `src/packages/core/src/ipc/mod.rs`: `ClientIdentity`.
+- `src/packages/core/src/protocol.rs`: `HarnessId`, `AttachRequest`, `AttachReply`.
+- `src/packages/core/src/mcp_server.rs`: `admit_own_harness`, the
   become-broker-or-relay loop, `CLIENT_NAME_ENV`, the shared `handle()`.
-- `crates/core/src/native_host.rs`: sends `AttachRequest::Browser`, reads the
+- `src/packages/core/src/native_host.rs`: sends `AttachRequest::Browser`, reads the
   `AttachReply`.
-- `fuzz/fuzz_targets/`: `nm_frame`, `mcp_jsonrpc`, `bridge_envelope`,
+- `src/packages/core/fuzz/fuzz_targets/`: `nm_frame`, `mcp_jsonrpc`, `bridge_envelope`,
   `handshake`, `attach`.
-- `tests/adversarial.py` A14/A15/A16; `tests/chaos.py` C4/C9.
+- `tests/protocol/adversarial.py` A14/A15/A16; `tests/protocol/chaos.py` C4/C9.

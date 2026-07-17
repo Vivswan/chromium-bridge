@@ -69,7 +69,7 @@ just ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/te
 
 Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
 `cargo nextest run`; `bun run typecheck`, `bunx biome ci .`,
-`bun run --cwd packages/shared test`, `bun run --cwd extension test`;
+`bun run --cwd src/packages/shared test`, `bun run --cwd src/apps/extension test`;
 `bun scripts/gen-ops.ts` (must leave no diff); `bun scripts/check-extension-id.ts`.
 A lefthook pre-commit hook runs `just ci` automatically (`bun install` wires
 it). Browser suites (`just test-browser`) need `CHROME_BIN` -> isolated Chrome
@@ -89,20 +89,20 @@ and are **not** part of the required gate.
 ### Conventions worth knowing
 
 - **stdout is protocol** in both binary modes - all diagnostics go to stderr
-  via the `log_*!` macros (`crates/core/src/log.rs`), never bare `eprintln!`.
-- Tool-call errors use the typed `CallError` (`crates/core/src/error.rs`), mapped to the
+  via the `log_*!` macros (`src/packages/core/src/log.rs`), never bare `eprintln!`.
+- Tool-call errors use the typed `CallError` (`src/packages/core/src/error.rs`), mapped to the
   stable codes in [`contracts/errors.json`](./contracts/errors.json).
 - The tool catalogue is generated from [`contracts/tools.json`](./contracts/tools.json)
-  (`just gen` -> `packages/shared/src/ops.gen.ts`, with Zod validators the
+  (`just gen` -> `src/packages/shared/src/ops.gen.ts`, with Zod validators the
   extension enforces at its trust boundaries); Rust parity is enforced by
   `cargo test`, and the Zod envelope schemas are verified equivalent to
   `contracts/*.schema.json` in CI. Adding a tool touches both sides - see
   `CONTRIBUTING.md`.
 - Never develop on `main`; work in a git worktree under `.worktree/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge
-  PR. Security-critical surfaces (`crates/core/src/ipc/`,
-  `crates/core/src/protocol.rs`, allowlist, eval/toast content scripts,
-  `extension/manifest.json`, `install/`) deserve extra review care - see
+  PR. Security-critical surfaces (`src/packages/core/src/ipc/`,
+  `src/packages/core/src/protocol.rs`, allowlist, eval/toast content scripts,
+  `src/apps/extension/manifest.json`, `install/`) deserve extra review care - see
   `SECURITY.md`.
 - `upstream` remote is `whg517/browser-bridge`. The rebrand (ADR-0023) ended
   the keep-mergeable-with-upstream policy: port upstream fixes manually and
@@ -147,7 +147,7 @@ rebuild plan, ADR-0023):
   dependencies carry no security weight - enforcement never lives there - so
   relying on heavily-adopted, community-audited libraries and tools there is
   the right trust boundary, not a violation of it. Do not burn review budget
-  re-auditing React or esbuild; spend it on `crates/core`.
+  re-auditing React or esbuild; spend it on `src/packages/core`.
 - **Prefer many-eyes libraries over homegrown code, even in the security
   core.** A widely-used, audited crate (RustCrypto `hmac`/`sha2`, `subtle`,
   `serde`) has had more hostile review than anything we write ourselves.

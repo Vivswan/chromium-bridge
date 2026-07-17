@@ -80,18 +80,18 @@ window you didn't start yourself: stop and ask first.
 ## Code style
 
 - **Rust** - `cargo fmt` (enforced by `cargo fmt --check`) and `cargo clippy`
-  with `-D warnings`. The code lives in a Cargo workspace: `crates/core` (the
-  `chromium-bridge-core` library) and `crates/host` (the `chromium-bridge`
+  with `-D warnings`. The code lives in a Cargo workspace: `src/packages/core` (the
+  `chromium-bridge-core` library) and `src/apps/host` (the `chromium-bridge`
   binary). Errors on the tool-call path use the typed `CallError`
-  (`crates/core/src/error.rs`); log via the `log_*!` macros
-  (`crates/core/src/log.rs`), never bare `eprintln!` for diagnostics.
+  (`src/packages/core/src/error.rs`); log via the `log_*!` macros
+  (`src/packages/core/src/log.rs`), never bare `eprintln!` for diagnostics.
   Remember: **stdout is protocol** - all logging goes to stderr.
 - **TypeScript** - Biome lints and formats every TS/JS/JSON file in the bun
   workspace (`bunx biome ci .` to check, `just fix-ts` to auto-fix; config in
   `biome.json`). `noExplicitAny` is enforced in extension source; test files
   and the tests/ harness are exempt until their CDP plumbing gets real types.
 - The cross-boundary TS shapes (settings, envelopes, runtime messages) live as
-  Zod schemas in `packages/shared`; the types are inferred from them and the
+  Zod schemas in `src/packages/shared`; the types are inferred from them and the
   extension parses untrusted input against them at runtime. Don't reintroduce
   a hand-written duplicate type next to a schema - extend the schema.
 
@@ -102,23 +102,23 @@ A new tool touches both sides (see architecture.md §10):
 1. **Add it to [`contracts/tools.json`](contracts/tools.json)** - the single
    source for the catalogue (name, description, uiLabel, risk, scope,
    permission, confirmation, inputSchema). Run `just gen` to regenerate
-   `packages/shared/src/ops.gen.ts`, and bump the count in
+   `src/packages/shared/src/ops.gen.ts`, and bump the count in
    `tool_count_is_pinned`. A new arg name must also be mirrored into
    `bridge-request.schema.json`'s `OpArgs`, and the tool needs a home in
-   `capabilities.json` - the packages/shared tests point at whichever of
+   `capabilities.json` - the src/packages/shared tests point at whichever of
    these you miss.
-2. Add the matching `Tool` definition (`crates/core/src/tools/catalogue.rs`)
+2. Add the matching `Tool` definition (`src/packages/core/src/tools/catalogue.rs`)
    and a `HANDLERS` registry entry + `build_*` payload fn
-   (`crates/core/src/tools/handlers.rs`). The `matches_contract` and
+   (`src/packages/core/src/tools/handlers.rs`). The `matches_contract` and
    `registry_covers_catalogue` tests (`cargo test`) enforce parity with the
    contract.
 3. Give the op a home in the extension: `SW_OPS` + a `dispatchSw` case in
-   `extension/src/background/dispatch.ts`, or `PAGE_OPS`
-   (`extension/src/shared/page-ops.ts`) + cases in `content/handle.ts` and
+   `src/apps/extension/src/background/dispatch.ts`, or `PAGE_OPS`
+   (`src/apps/extension/src/shared/page-ops.ts`) + cases in `content/handle.ts` and
    `backends/cdp.ts`. The roster test and the exhaustive switches fail until
    the partition is complete.
 4. Give it a risk row in the [tool risk matrix](docs/security/tool-risk-matrix.md).
-5. Extend `tests/e2e.py` (and `dom_test.ts` for DOM ops).
+5. Extend `tests/protocol/e2e.py` (and `dom_test.ts` for DOM ops).
 
 ## Versioning
 
