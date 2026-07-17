@@ -33,12 +33,27 @@
 #                                       browser). Re-pass any --nm-dir target to
 #                                       clear it too. Leaves the browser and the
 #                                       loaded extension untouched.
+#   ./install.sh --expected-sha256 HASH Prebuilt mode only: verify the shipped
+#                                       binary against this SHA-256 (64 hex
+#                                       chars) instead of downloading the
+#                                       published checksum. For offline installs;
+#                                       obtain the hash out of band from the
+#                                       release's .binary.sha256 asset.
+#   ./install.sh --release-repo OWNER/REPO
+#                                       Prebuilt mode only: trust this GitHub
+#                                       repository's published checksums and
+#                                       attestations instead of the pinned
+#                                       canonical repository. Only for installing
+#                                       a fork's release you already trust.
 #
 # Two modes, auto-detected:
 #   - source checkout (Cargo.toml present): builds the binary (Rust) + the
 #     extension (Node/npm), then installs.
 #   - prebuilt release tarball (no Cargo.toml): installs the shipped binary +
-#     extension/dist directly — no Rust or Node needed.
+#     extension/dist directly — no Rust or Node needed. The shipped binary is
+#     verified against the release's published SHA-256 (and, when an
+#     authenticated `gh` is available, its build provenance attestation)
+#     before anything is installed; on any mismatch the install refuses.
 # macOS/Linux + any Chromium-based browser.
 
 set -euo pipefail
@@ -60,6 +75,13 @@ BINARY_NAME="browser-bridge"
 # ever change that key, update this to match (or pass --extension-id).
 PINNED_EXTENSION_ID="mkjjlmjbcljpcfkfadfmhblmmddkdihf"
 
+# The only GitHub repository whose published checksums and attestations the
+# prebuilt-mode verification will trust. Pinned in code, like the extension
+# ID above, so nothing inside a downloaded archive can redirect verification
+# to a repository an attacker controls. Installing a fork's release requires
+# the user to say so explicitly with --release-repo.
+PINNED_RELEASE_REPO="whg517/browser-bridge"
+
 # ---- platform + args ------------------------------------------------------
 
 EXTENSION_ID="$PINNED_EXTENSION_ID"
@@ -68,6 +90,8 @@ declare -a NM_DIRS_EXPLICIT=()
 SKIP_EXTENSION_BUILD="${BB_SKIP_EXTENSION_BUILD:-0}"
 UNINSTALL=0
 REGISTER_CLAUDE=0
+EXPECTED_SHA256=""
+RELEASE_REPO="$PINNED_RELEASE_REPO"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -98,8 +122,24 @@ while [[ $# -gt 0 ]]; do
       UNINSTALL=1
       shift
       ;;
+    --expected-sha256)
+      EXPECTED_SHA256="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')"
+      [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "error: --expected-sha256 requires a 64-character hex SHA-256 digest" >&2
+        exit 1
+      }
+      shift 2
+      ;;
+    --release-repo)
+      RELEASE_REPO="${2:-}"
+      [[ "$RELEASE_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
+        echo "error: --release-repo requires OWNER/REPO" >&2
+        exit 1
+      }
+      shift 2
+      ;;
     -h|--help)
-      sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -323,12 +363,158 @@ if [[ "$UNINSTALL" == "1" ]]; then
   exit 0
 fi
 
+# ---- prebuilt binary verification ------------------------------------------
+# Prebuilt mode installs a binary this script did not just build, so prove it
+# is byte-identical to what the release pipeline published BEFORE it is
+# installed (and before the macOS quarantine attribute is cleared).
+# Verification is mandatory in prebuilt mode and fails closed: no reference
+# checksum, no install. The reference hash comes from one of
+#   - --expected-sha256: supplied by the user, obtained out of band, or
+#   - the release's published <name>.binary.sha256 asset, fetched over HTTPS
+#     from the repo/tag recorded in RELEASE.txt inside the archive.
+# RELEASE.txt is untrusted input: it names the tag/platform/arch so the right
+# published checksum can be fetched, and its repo field is cross-checked
+# against the pinned canonical repository (or an explicit --release-repo),
+# never used as a trust anchor itself. A tampered archive cannot redirect
+# verification to a repository it controls; its binary has to hash to a value
+# the TRUSTED repository serves for that release. When gh is installed and
+# authenticated, the binary's build provenance attestation is verified as
+# well, and a failed attestation aborts the install. What this cannot defend
+# against: an archive whose install.sh was itself replaced (verify the
+# archive's published .sha256 or attestation yourself before running it; see
+# README "Verifying your binary"), or a hostile process already running as
+# this user. Full signature/cdhash verification arrives with the code-signing
+# pipeline (see SECURITY.md).
+
+bb_sha256() { # $1 = file; prints the lowercase hex digest
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    echo "error: neither shasum nor sha256sum found; cannot verify the prebuilt binary" >&2
+    return 1
+  fi
+}
+
+bb_release_field() { # $1 = key, $2 = anchored allowed-value regex; prints value
+  local value
+  value="$(sed -n "s/^$1=//p" "$ROOT/RELEASE.txt" | head -n 1)"
+  [[ "$value" =~ $2 ]] || {
+    echo "error: RELEASE.txt is missing a valid '$1' field; refusing to install an unverifiable binary" >&2
+    return 1
+  }
+  printf '%s\n' "$value"
+}
+
+bb_verify_prebuilt() { # $1 = the exact file that will be installed
+  local file="$1" actual expected reference repo tag platform arch name url tmp
+  actual="$(bb_sha256 "$file")" || return 1
+
+  if [[ -n "$EXPECTED_SHA256" ]]; then
+    expected="$EXPECTED_SHA256"
+    reference="--expected-sha256 (supplied by you)"
+  else
+    if [[ ! -f "$ROOT/RELEASE.txt" ]]; then
+      cat >&2 <<'EOF'
+error: cannot verify the prebuilt binary: RELEASE.txt not found in the archive.
+This archive predates published per-binary checksums (or was repacked).
+Either:
+  - verify the downloaded archive against its published .sha256 yourself,
+    compute the binary's hash, and re-run with --expected-sha256 <hash>, or
+  - build from source instead (git clone, then ./install/install.sh).
+Refusing to install an unverified binary.
+EOF
+      return 1
+    fi
+    repo="$(bb_release_field repo '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')" || return 1
+    tag="$(bb_release_field tag '^v[0-9A-Za-z._-]+$')" || return 1
+    platform="$(bb_release_field platform '^[a-z0-9]+$')" || return 1
+    arch="$(bb_release_field arch '^[a-z0-9]+$')" || return 1
+    # The archive's repo field must match the repository we trust; it never
+    # gets to pick one. Mismatch means this archive was published by a fork
+    # (or tampered with) - installing it requires an explicit opt-in.
+    if [[ "$repo" != "$RELEASE_REPO" ]]; then
+      echo "error: this archive says it was published by '$repo', but checksums are" >&2
+      echo "error: only trusted from '$RELEASE_REPO'. If you deliberately downloaded" >&2
+      echo "error: that repository's release and trust it, re-run with:" >&2
+      echo "error:   --release-repo $repo" >&2
+      echo "error: Refusing to install." >&2
+      return 1
+    fi
+    name="browser-bridge-$tag-$platform-$arch"
+
+    command -v curl >/dev/null 2>&1 || {
+      echo "error: curl is required to fetch the published checksum (or pass --expected-sha256)" >&2
+      return 1
+    }
+    url="https://github.com/$RELEASE_REPO/releases/download/$tag/$name.binary.sha256"
+    tmp="$(mktemp)"
+    if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp" "$url"; then
+      rm -f "$tmp"
+      echo "error: could not download the published checksum from $url" >&2
+      echo "error: refusing to install without verification. Retry with network access," >&2
+      echo "error: or pass --expected-sha256 with a hash you verified out of band." >&2
+      return 1
+    fi
+    expected="$(awk 'NR==1{print tolower($1)}' "$tmp")"
+    rm -f "$tmp"
+    reference="$url"
+    [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || {
+      echo "error: the downloaded checksum file is not a SHA-256 digest; refusing to install" >&2
+      return 1
+    }
+  fi
+
+  if [[ "$actual" != "$expected" ]]; then
+    echo "error: CHECKSUM MISMATCH for the prebuilt binary - REFUSING TO INSTALL." >&2
+    echo "error:   file:      $BIN_SRC" >&2
+    echo "error:   actual:    $actual" >&2
+    echo "error:   expected:  $expected" >&2
+    echo "error:   reference: $reference" >&2
+    echo "error: The binary is not the one the release published. Re-download the" >&2
+    echo "error: archive from the official release page; if this persists, report it." >&2
+    return 1
+  fi
+  echo "[verify] binary sha256 OK: $actual"
+  echo "[verify]   reference: $reference"
+
+  # Build provenance (defense in depth): ask GitHub whether its Actions
+  # pipeline attested this exact binary for the trusted repository. Only
+  # meaningful when the reference above is a published checksum, and needs an
+  # authenticated gh with the attestation subcommand; otherwise say so and
+  # rely on the checksum. If the check RUNS and fails, that is a red flag
+  # (a checksum asset that matches an unattested binary), so fail closed.
+  if [[ -z "$EXPECTED_SHA256" ]]; then
+    if command -v gh >/dev/null 2>&1 \
+      && gh attestation --help >/dev/null 2>&1 \
+      && gh auth status >/dev/null 2>&1; then
+      echo "[verify] checking build provenance attestation via gh..."
+      if gh attestation verify "$file" --repo "$RELEASE_REPO" >&2; then
+        echo "[verify] build provenance attestation OK"
+      else
+        echo "error: build provenance attestation FAILED for this binary (repo $RELEASE_REPO)." >&2
+        echo "error: The checksum matched but GitHub has no attestation for these bytes." >&2
+        echo "error: Refusing to install." >&2
+        return 1
+      fi
+    else
+      echo "[verify] gh unavailable or unauthenticated - attestation check skipped (sha256 verified above)"
+    fi
+  fi
+}
+
 # ---- source vs prebuilt ---------------------------------------------------
 # Source checkout (Cargo.toml present) → build the binary + extension.
 # Prebuilt release tarball (no Cargo.toml) → use the shipped browser-bridge and
 # extension/dist as-is; no Rust/Node needed.
 
 if [[ -f "$ROOT/Cargo.toml" ]]; then
+  PREBUILT=0
+  [[ -z "$EXPECTED_SHA256" ]] || {
+    echo "error: --expected-sha256 only applies to a prebuilt release archive (this is a source checkout)" >&2
+    exit 1
+  }
   # shellcheck source=SCRIPTDIR/../scripts/lib.sh
   source "$ROOT/scripts/lib.sh"
   bb_find_cargo # sets BB_CARGO + puts its dir on PATH (plain call, not subshell)
@@ -355,6 +541,7 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
     DIST_DIR="$ROOT/extension/dist"
   fi
 else
+  PREBUILT=1
   echo "[install] prebuilt mode — using shipped binary + extension (no build)"
   BIN_SRC="$ROOT/$BINARY_NAME"
   DIST_DIR="$ROOT/extension/dist"
@@ -373,6 +560,11 @@ chmod 0700 "$INSTALL_DIR"
 TMP_BIN="$INSTALL_DIR/$BINARY_NAME.tmp.$$"
 cp "$BIN_SRC" "$TMP_BIN"
 chmod 0755 "$TMP_BIN"
+# Verify the private copy, not the source file: the bytes checked are exactly
+# the bytes installed, so nothing can swap the source between check and use.
+if [[ "$PREBUILT" == "1" ]]; then
+  bb_verify_prebuilt "$TMP_BIN" || { rm -f "$TMP_BIN"; exit 1; }
+fi
 mv -f "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
 echo "[install] binary installed at $INSTALL_DIR/$BINARY_NAME"
 
@@ -380,9 +572,11 @@ echo "[install] binary installed at $INSTALL_DIR/$BINARY_NAME"
 # xattr, which the copy above inherits. Chrome spawns this binary via the native
 # messaging host, and Gatekeeper can then silently block the (unsigned,
 # not-yet-notarized) launch. Clear the attribute on the installed copy so the
-# host starts. Best-effort: the source-built binary has no such attribute, and
-# `xattr` may be absent, so never fail the install on this. This is a stopgap
-# until the release binary is notarized.
+# host starts. This point is only reached AFTER bb_verify_prebuilt has matched
+# the binary against the release's published checksum, so the attribute is
+# never cleared on unverified bytes. Best-effort: the source-built binary has
+# no such attribute, and `xattr` may be absent, so never fail the install on
+# this. This is a stopgap until the release binary is notarized.
 if [[ "$OS" == "Darwin" ]] && command -v xattr >/dev/null 2>&1; then
   if xattr -p com.apple.quarantine "$INSTALL_DIR/$BINARY_NAME" >/dev/null 2>&1; then
     xattr -d com.apple.quarantine "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null \
