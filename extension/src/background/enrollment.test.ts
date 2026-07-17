@@ -419,3 +419,90 @@ describe("ceremony state machine", () => {
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 });
+
+describe("periodic re-verification (hostReverifyMs)", () => {
+  test("default 0 never challenges after pinning", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before);
+  });
+
+  test("a fresh pin is not re-challenged within the interval", async () => {
+    const key = await genKey();
+    await pairAndPin(key); // pinnedAt = now, counts as the last verification
+    store["hostReverifyMs"] = 3_600_000;
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before);
+  });
+
+  test("a stale pin is re-challenged on connect and success refreshes the clock", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store["hostReverifyMs"] = 1000;
+    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    const frame = posted[posted.length - 1];
+    expect(frame.type).toBe("enclave_challenge");
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect(typeof st.lastVerifiedAt).toBe("number");
+    expect((await enrollmentGate()).allowed).toBe(true);
+    // The successful verification satisfies the interval: no new challenge.
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before);
+  });
+
+  test("a stale re-verify answered by the wrong key fails closed", async () => {
+    const key = await genKey();
+    const attacker = await genKey();
+    await pairAndPin(key);
+    store["hostReverifyMs"] = 1000;
+    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(attacker, nonce, context));
+    expect((await getEnrollmentStatus()).state).toBe("compromised");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("an unanswered periodic prompt leaves the pinned state and gate unchanged", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store["hostReverifyMs"] = 1000;
+    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    await onPortConnected(); // challenge out
+    // The user cancels the presence prompt: the host reports signing_failed.
+    await handleEnclaveFrame({ type: "enclave_error", reason: "signing_failed" });
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("a newer lastVerifiedAt outweighs an old pinnedAt", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store["hostReverifyMs"] = 1000;
+    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    store["enclaveLastVerifiedAt"] = Date.now(); // verified just now
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before);
+  });
+
+  test("an outstanding challenge suppresses a duplicate periodic challenge", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store["hostReverifyMs"] = 1000;
+    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    await onPortConnected(); // first stale connect: challenge goes out
+    const before = posted.length;
+    await onPortConnected(); // second connect while unanswered: no duplicate
+    expect(posted.length).toBe(before);
+  });
+});

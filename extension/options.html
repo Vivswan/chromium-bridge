@@ -193,9 +193,17 @@
 
   <!-- ===== 主机配对 ===== -->
   <h2>主机配对(Secure Enclave)</h2>
-  <div class="sub">流程:先在终端运行 <code>browser-bridge pair</code>(会弹 Touch ID,并打印公钥指纹),然后点击下方「开始配对」,再次通过 Touch ID 后,这里会显示主机的指纹。<b>逐字符对比两处指纹,一致才批准</b>;批准后公钥被固定。之后的每次重连不再重复验证——每次验证都需要 Touch ID,而 MV3 每几分钟就重连一次,逐次验证不可用(ADR-0021)。怀疑主机被替换时,用「立即验证」手动发起一次检查。</div>
+  <div class="sub">流程:先在终端运行 <code>browser-bridge pair</code>(会弹 Touch ID,并打印公钥指纹),然后点击下方「开始配对」,再次通过 Touch ID 后,这里会显示主机的指纹。<b>逐字符对比两处指纹,一致才批准</b>;批准后公钥被固定。请注意默认行为的边界:主机身份只在<b>配对时</b>(有人在场)和你<b>手动「立即验证」时</b>被验证,重连<b>不会</b>自动重新验证——每次验证都要弹 Touch ID,而 MV3 每几分钟就重连一次,逐次验证不可用(ADR-0021)。因此配对之后主机若被同用户进程替换,默认不会被自动发现,直到你手动验证、开启下方的定期重新验证,或未来的每操作确认层级。</div>
   <div class="panel" id="enroll-panel">
     <div class="row"><span class="unit">加载中…</span></div>
+  </div>
+  <div class="panel" style="margin-top:10px">
+    <div class="row">
+      <label for="hostReverifyMs">定期重新验证间隔</label>
+      <input type="number" id="hostReverifyMs" min="0" step="60000" />
+      <span class="unit">毫秒(0 = 关闭,默认)</span>
+    </div>
+    <div class="sub" style="margin:2px 0 10px">大于 0 时,重连若距上次成功验证超过该间隔,会自动对固定公钥发起一次验证(弹 Touch ID;例如 3600000 = 每小时至多一次)。这能把「主机被替换却未被发现」的窗口限制在该间隔内;验证失败会立即阻断桥接。未通过的提示(比如你随手取消)不改变已配对状态,只有密码学上的不匹配才会阻断。</div>
   </div>
 
   <!-- ===== 标签页 ===== -->
