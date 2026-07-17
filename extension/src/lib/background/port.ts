@@ -6,6 +6,7 @@ import { NATIVE_HOST_ID, parseBridgeReq } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskErrorMessage } from "../shared/masking";
+import * as clients from "./clients";
 import { dispatch } from "./dispatch";
 import {
   attachPort,
@@ -36,9 +37,11 @@ export function connectNative() {
     console.log("[bb] native host connected");
     port.onMessage.addListener(onNativeMessage);
     port.onDisconnect.addListener(onNativeDisconnect);
-    // Hand the enrollment ceremony (ADR-0021) the fresh port. It decides
-    // whether this connect needs a pairing challenge.
+    // Hand the enrollment ceremony (ADR-0021) and the trusted-client admin
+    // exchange (ADR-0025) the fresh port. Enrollment decides whether this
+    // connect needs a pairing challenge or a pending host-key deletion.
     attachPort(postFrame);
+    clients.attachPort(postFrame);
     void onPortConnected();
   } catch (e) {
     portOk = false;
@@ -63,6 +66,7 @@ function onNativeDisconnect(_p: Browser.runtime.Port) {
   portOk = false;
   port = null;
   detachPort();
+  clients.detachPort();
   const err = browser.runtime.lastError;
   console.warn("[bb] native host disconnected:", err?.message || "unknown");
   // Chrome kills the host process when the Port drops. Reconnect so a fresh
@@ -80,11 +84,17 @@ function scheduleReconnect() {
 }
 
 function onNativeMessage(msg: unknown) {
-  // Enclave control frames (ADR-0021) are ceremony traffic between the
+  // Enclave control frames (ADR-0021/0025) are ceremony traffic between the
   // extension and the host itself; they carry `type`, not `op`, and are never
   // dispatched as bridge ops.
   if (isEnclaveFrame(msg)) {
     void handleEnclaveFrame(msg);
+    return;
+  }
+  // Trusted-client admin results (ADR-0025), correlated back to the options
+  // page's outstanding request. Same trust posture as the enclave frames.
+  if (clients.isAdminFrame(msg)) {
+    clients.handleAdminFrame(msg);
     return;
   }
   // Everything else must be a well-formed BridgeReq: envelope shape, a known

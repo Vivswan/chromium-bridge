@@ -127,6 +127,34 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    host side ships first: until the extension-side pin lands, the host
    answers challenges but nothing yet enforces them.
 
+7. **A revoked client or a revoked host keeps acting because revocation does
+   not reach the enforcement point.**
+   -> The **any-side revocation epoch**
+   ([ADR-0025](../adr/0025-any-side-revocation-epoch.md)): a single monotonic
+   counter at `runtime_dir()/revocation.json`, bumped in the same critical
+   section as the trust-state change it describes, re-read by every enforcement
+   point. A `revoke-client` (from the CLI or the extension's host-mediated
+   `client_revoke` frame) rewrites the allowlist and bumps the epoch; a live
+   broker's per-request epoch guard and its idle-connection watcher then drop
+   the revoked harness fail-closed and refuse its re-attach. A host-key
+   `revoke` / `pair --reset` deletes the enclave key and bumps the epoch; the
+   native host confirms the key is gone in the keychain and pushes a
+   host-originated `enclave_revoked` frame, so a pinned extension fails closed
+   without waiting for the opt-in reverify. Unpairing from either side now
+   deletes BOTH halves of the credential (the extension's revoke also asks the
+   host to delete its key, durably re-sent until acknowledged). The epoch is a
+   change notice, never an authority: a same-user writer who tampers with it
+   can force a spurious re-check or fail every read closed, but cannot admit
+   anyone the allowlist or the keychain does not. **Scope:** the socket leg is
+   immediate; the extension's reflection of a host-key revoke is bounded to the
+   next service-worker wake. A compromised-but-allowlisted client stays trusted
+   until revoked (attestation identifies a binary, not an intention). A
+   substituted native host (threat #4's manifest-substitution residual) can
+   forge the `enclave_revoked` push and fail a pinned bridge closed, a
+   denial-of-service against the user's own bridge that grants no capability
+   and cannot be authenticated away in user space; see
+   [ADR-0025](../adr/0025-any-side-revocation-epoch.md).
+
 ## Explicit non-goals
 
 - Defending against a compromised OS account, or a same-user attacker who runs
@@ -299,22 +327,27 @@ must be treated as unenforced until their components ship.
    by chaos tests C4/C9). On Windows it degrades with the rest of the IPC
    layer to secret-only.
 
-3. **Host-allowlist writers (delivered, ADR-0024).** The trusted-client set
-   is persisted at `runtime_dir()/clients.json`: 0600, written atomically
+3. **Host-allowlist writers (delivered, ADR-0024/0025).** The trusted-client
+   set is persisted at `runtime_dir()/clients.json`: 0600, written atomically
    under the runtime lock, parsed fail-closed (`deny_unknown_fields`,
    version check, size cap). Writers: the CLI (`pair-client`,
-   `revoke-client`; the control-panel app arrives in a later phase and goes
-   through the same `core` write path). `pair-client` replaces a same-named
-   entry (the re-pair path for hash anchors after a re-sign); `revoke-client`
-   leaves the file in place even when it empties, because a present-but-empty
-   list means enrolled-and-locked, not a reset to the open posture. Enforced
-   by: file permissions on the 0700 runtime dir plus the atomic-write
-   discipline. Residual: the allowlist file inherits the same
+   `revoke-client`), and the extension through host-mediated `client_list` /
+   `client_revoke` control frames (ADR-0025); the control-panel app arrives in
+   a later phase and goes through the same `core` write path). `pair-client`
+   replaces a same-named entry (the re-pair path for hash anchors after a
+   re-sign) and sets a one-way enrollment latch in `runtime_dir()/revocation.json`;
+   `revoke-client` leaves the file in place even when it empties (a
+   present-but-empty list means enrolled-and-locked) and bumps the revocation
+   epoch so a live broker drops the revoked client and refuses its re-attach
+   (ADR-0025). Enforced by: file permissions on the 0700 runtime dir, the
+   atomic-write discipline, and the epoch re-read at every admission and
+   in-session request. Residual: the allowlist file inherits the same
    same-user-writer exposure as the native-messaging manifest (threat #4's
-   class) -- a same-user process that can run our CLI can pair itself; the
-   ERROR-level logging and `list-clients` are the visibility on that, not a
-   prevention. More writers also means more code with write capability to
-   audit.
+   class) -- a same-user process that can run our CLI can pair itself. The
+   ADR-0024 silent-revert-on-deletion residual is narrowed by the ADR-0025
+   enrollment latch: deleting `clients.json` alone now fails closed as
+   tampering; only deleting both it and `revocation.json` reverts to the
+   ERROR-logged bootstrap, the irreducible same-user residual.
 
 4. **The app as issuer.** The Tauri control panel can mint pairings and
    revocations. It is a writer over the allowlist and a requester of

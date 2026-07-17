@@ -9,6 +9,7 @@ import { useSettings } from "@/hooks/useSettings";
 import type { UiLanguage } from "@/lib/i18n";
 import { EnrollmentPanel } from "./EnrollmentPanel";
 import { SiteList } from "./SiteList";
+import { TrustedClientsPanel } from "./TrustedClientsPanel";
 
 // The options page: security toggles, host pairing, tabs, execution mode,
 // timeouts, tools, and the allowlist. Every write is event-driven (useSettings
@@ -152,6 +153,10 @@ export function OptionsApp() {
           </div>
           <div className="mt-2 text-xs text-muted">{t("settings.reverify_desc")}</div>
         </div>
+      </Section>
+
+      <Section title={t("options.section_clients")}>
+        <TrustedClientsPanel />
       </Section>
 
       <Section title={t("options.section_tabs")}>

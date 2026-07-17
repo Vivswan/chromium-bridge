@@ -2,6 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-07-17
+- Extended by (2026-07-17): [ADR-0025](0025-any-side-revocation-epoch.md) makes
+  a `revoke-client` reach the broker's live connections (drop + refuse
+  re-attach) via the revocation epoch, and closes the
+  deleting-`clients.json`-reverts-to-open residual named below for the
+  single-file case with a one-way enrollment latch.
 - Extends: [ADR-0019](0019-authenticated-ipc.md), [ADR-0020](0020-kernel-attested-peer-identity.md)
   (the UDS + peer-UID + attestation + HMAC design stands; this adds the
   harness-admission boundary and the broker)
@@ -369,10 +374,12 @@ resource posture (constants in `crates/core/src/broker.rs`):
   bootstrap posture (loudly ERROR-logged on the next start). This lives inside
   the conceded same-user boundary -- a process that can unlink the file can
   also plant a native-messaging manifest or re-run our binary -- but it means
-  the allowlist is not tamper-evident. Making enrollment tamper-evident (so a
-  deletion is detectable rather than silently permissive) is Phase 5
-  tamper-evidence work, the same class as the trust-state-tampering residual
-  (follow-up #32).
+  the allowlist is not tamper-evident. **Narrowed by
+  [ADR-0025](0025-any-side-revocation-epoch.md):** a one-way enrollment latch in
+  `revocation.json` makes deleting `clients.json` ALONE detectable, so the
+  single-file deletion now fails closed as tampering rather than reverting.
+  What remains is the two-file deletion (both `clients.json` and
+  `revocation.json`), which is the irreducible same-user residual.
 - **Wedged-broker liveness.** A broker that is alive and attested but stops
   accepting leaves a new instance retrying its bounded attempts (6, with
   150 ms sleeps) and then exiting with a clear error. It cannot and must not

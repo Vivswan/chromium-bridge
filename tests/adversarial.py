@@ -645,12 +645,22 @@ def _clients_path():
     return os.path.join(os.path.dirname(e2e.LOCK), "clients.json")
 
 
+def _revocation_path():
+    return os.path.join(os.path.dirname(e2e.LOCK), "revocation.json")
+
+
 def _rm_clients():
+    """Reset the enrollment state between tests: remove clients.json AND the
+    revocation record. Removing only clients.json is no longer a reset -- the
+    revocation record's enrollment latch turns that into detectable tampering
+    (ADR-0025, proven live by A19) -- so a full reset must drop both, which is
+    exactly the documented two-file same-user residual."""
     _require_isolated()
-    try:
-        os.remove(_clients_path())
-    except FileNotFoundError:
-        pass
+    for path in (_clients_path(), _revocation_path()):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 def _pair_client(*args):
@@ -761,6 +771,212 @@ def a16_paired_harness_is_admitted():
         _rm_clients()
 
 
+# ---------------------------------------------------------------------------
+# A17/A18/A19 - any-side revocation epoch (Phase 5, ADR-0025)
+# ---------------------------------------------------------------------------
+
+def _read_revocation():
+    with open(_revocation_path()) as f:
+        return json.load(f)
+
+
+def a17_revoke_reaches_the_live_broker():
+    print("\n[A17] revoke-client vs a LIVE broker (LIVE: dropped + no re-attach)")
+    if os.name == "nt":
+        note("A17 skipped: harness attestation is Unix-only")
+        return
+    _rm_lock()
+    _rm_clients()
+    srv = None
+    nh = None
+    try:
+        # Pair this python and stand up a serving broker (the A16 shape).
+        _pair_client("--name", "pytest", "--this-parent")
+        srv = start_server()
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A17 paired harness is admitted and becomes the broker")
+        if lf is None:
+            return
+        c = e2e.McpClient(srv)
+        c.initialize()
+        c.initialized()
+        nh = e2e.start_bridge_host()
+        e2e.wait_host_ready(nh)
+        served = []
+        t = threading.Thread(
+            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
+        t.start()
+        c.call("tab_list", {}, _id=50)
+        t.join(timeout=3)
+        check(bool(served), "A17 the paired client drives the bridge before the revoke")
+
+        # Revoke from the CLI surface. The allowlist rewrite and the epoch
+        # bump land in one critical section (ADR-0025).
+        subprocess.run([e2e.BIN, "revoke-client", "--name", "pytest"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        rev = _read_revocation()
+        check(rev["epoch"] > 0 and rev["clients_epoch"] == rev["epoch"],
+              "A17 the revocation epoch was bumped with the clients marker")
+
+        # The live broker must refuse the next request: the per-request epoch
+        # guard re-decides against the fresh allowlist and drops the (own)
+        # harness. Observed as EOF on the server's stdout, never a response.
+        c.send({"jsonrpc": "2.0", "id": 51, "method": "tools/call",
+                "params": {"name": "tab_list", "arguments": {}}})
+        finished, line = _call_with_timeout(lambda: srv.stdout.readline(), 10)
+        check(finished and line == "",
+              "A17 the revoked harness's next call gets EOF (fail closed), not service")
+        srv.wait(timeout=5)
+        check(srv.returncode is not None, "A17 the broker for the revoked harness exits")
+
+        # Re-attach is refused immediately: a fresh instance spawned by the
+        # same (now revoked) harness must fail closed, not become a broker.
+        srv2 = start_server()
+        try:
+            lf2 = e2e.wait_lock(srv2, timeout=3)
+            check(lf2 is None, "A17 a revoked client cannot re-attach or rebind")
+            srv2.wait(timeout=5)
+            check(srv2.returncode == 1, "A17 re-attach fails closed (exit 1)")
+            check("not in the trusted-client allowlist" in server_stderr(srv2),
+                  "A17 stderr names the allowlist refusal")
+        finally:
+            _reap(srv2)
+    finally:
+        if nh is not None and nh.poll() is None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        _reap(srv)
+        _rm_clients()
+
+
+def a18_extension_surface_revoke_via_host_control_frames():
+    print("\n[A18] extension-surface revoke (LIVE: client_revoke via the native host)")
+    if os.name == "nt":
+        note("A18 skipped: harness attestation is Unix-only")
+        return
+    _rm_lock()
+    _rm_clients()
+    srv = None
+    nh = None
+    try:
+        # Two trusted clients: this python, and a victim entry the "extension"
+        # will revoke through the host-handled admin control frames.
+        _pair_client("--name", "pytest", "--this-parent")
+        _pair_client("--name", "victim", "--hash", "22" * 32)
+        srv = start_server()
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A18 broker up with two trusted clients")
+        if lf is None:
+            return
+        c = e2e.McpClient(srv)
+        c.initialize()
+        c.initialized()
+        nh = e2e.start_bridge_host()
+        e2e.wait_host_ready(nh)
+
+        # client_list is answered by the HOST itself, never forwarded.
+        e2e.nm_write(nh, {"type": "client_list"})
+        reply = e2e.nm_read(nh)
+        check(reply is not None and reply.get("type") == "client_list_result"
+              and reply.get("ok") is True and reply.get("enrolled") is True,
+              "A18 client_list answered locally with the enrolled list")
+        names = sorted(cl["name"] for cl in reply.get("clients", []))
+        check(names == ["pytest", "victim"], "A18 the list names both trusted clients")
+
+        # Revoke the victim from the extension surface.
+        before = _read_revocation()["epoch"]
+        e2e.nm_write(nh, {"type": "client_revoke", "name": "victim"})
+        reply = e2e.nm_read(nh)
+        check(reply is not None and reply.get("type") == "client_revoke_result"
+              and reply.get("ok") is True,
+              "A18 client_revoke acknowledged ok")
+        with open(_clients_path()) as f:
+            names = [cl["name"] for cl in json.load(f)["clients"]]
+        check(names == ["pytest"], "A18 the allowlist no longer contains the victim")
+        check(_read_revocation()["epoch"] > before,
+              "A18 the revocation epoch was bumped by the host-mediated revoke")
+
+        # The surviving trusted client still drives the bridge: the revoke
+        # reached enforcement without collateral damage.
+        served = []
+        t = threading.Thread(
+            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
+        t.start()
+        r = c.call("tab_list", {}, _id=60)
+        t.join(timeout=3)
+        check(bool(served), "A18 the still-trusted client keeps serving after the revoke")
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "Adversarial Tab", "A18 round trip intact")
+
+        # Revoking a ghost fails cleanly with ok:false, never a guess.
+        e2e.nm_write(nh, {"type": "client_revoke", "name": "ghost"})
+        reply = e2e.nm_read(nh)
+        check(reply is not None and reply.get("type") == "client_revoke_result"
+              and reply.get("ok") is False,
+              "A18 revoking an unknown client reports ok:false")
+        nh.kill()
+        nh.wait(timeout=3)
+        nh = None
+    finally:
+        if nh is not None and nh.poll() is None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        _reap(srv)
+        _rm_clients()
+
+
+def a19_deleting_the_allowlist_is_tampering_not_a_reset():
+    print("\n[A19] clients.json deletion (LIVE: detected via the enrollment latch)")
+    if os.name == "nt":
+        note("A19 skipped: harness attestation is Unix-only")
+        return
+    _rm_lock()
+    _rm_clients()
+    try:
+        # Enroll, then simulate the ADR-0024 residual: a same-user deletion of
+        # clients.json alone. Pre-Phase-5 this silently reverted the bridge to
+        # the open, unenrolled bootstrap; the revocation record's enrollment
+        # latch (ADR-0025) must now fail it closed instead.
+        _pair_client("--name", "pytest", "--this-parent")
+        os.remove(_clients_path())
+        srv = start_server()
+        try:
+            lf = e2e.wait_lock(srv, timeout=3)
+            check(lf is None, "A19 deletion does not revert to the open bootstrap")
+            srv.wait(timeout=5)
+            check(srv.returncode == 1, "A19 the server fails closed (exit 1)")
+            err = server_stderr(srv)
+            check("tampering" in err,
+                  "A19 stderr names the deletion as tampering")
+        finally:
+            _reap(srv)
+
+        # Residual, named honestly and pinned by this check: deleting BOTH
+        # files (the allowlist and the revocation record) is the full
+        # same-user revert to bootstrap. No user-space marker survives a
+        # writer who can delete any file we can write; see ADR-0025.
+        _rm_clients()
+        srv = start_server()
+        try:
+            lf = e2e.wait_lock(srv, timeout=5)
+            check(lf is not None,
+                  "A19 two-file deletion reverts to the unenrolled bootstrap "
+                  "(the documented same-user residual)")
+            err_seen = any("harness admission is NOT enforced" in ln
+                           for ln in srv.err_lines)
+            check(err_seen, "A19 the bootstrap posture is ERROR-logged, not silent")
+        finally:
+            _reap(srv)
+    finally:
+        _rm_clients()
+
+
 def a13_manifest_substitution_xfail():
     print("\n[A13] native-messaging manifest substitution (XFAIL until enrollment #13)")
     # A malicious install could point the NM manifest at a different host binary,
@@ -798,6 +1014,9 @@ def main():
         a14_non_allowlisted_harness_refused()
         a15_spoofed_client_name_is_not_authz()
         a16_paired_harness_is_admitted()
+        a17_revoke_reaches_the_live_broker()
+        a18_extension_surface_revoke_via_host_control_frames()
+        a19_deleting_the_allowlist_is_tampering_not_a_reset()
         annotated_matrix()
         a13_manifest_substitution_xfail()
     finally:

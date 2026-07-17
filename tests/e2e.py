@@ -28,6 +28,7 @@ test inside the crate cannot.
 """
 import json
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -164,7 +165,7 @@ def connect_bridge(lf, timeout=5):
     return s
 
 
-def start_bridge_host(label=None):
+def start_bridge_host(label=None, env=None):
     """Spawn a real `chromium-bridge --native-host`, the way Chrome does. It
     dials the server's bridge socket and passes peer attestation because it is
     the same binary; the server then drives it. The "extension" side (this test)
@@ -173,7 +174,8 @@ def start_bridge_host(label=None):
 
     `label` is passed as `--label` (the per-browser identity the installer
     bakes into each browser's wrapper); None mirrors a pre-label wrapper and
-    lands in the server's "default" slot.
+    lands in the server's "default" slot. `env` overrides the child environment
+    (used by the isolated admin/revocation tests to steer the runtime dir).
 
     A daemon thread drains the host's stderr and sets `nh.ready` when the host
     logs its handshake-complete marker, so callers wait on a real readiness
@@ -183,7 +185,7 @@ def start_bridge_host(label=None):
     if label is not None:
         cmd += ["--label", label]
     nh = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     nh.ready = threading.Event()
 
     def drain_stderr():
@@ -689,6 +691,94 @@ def test_enclave_control_frames():
         mcp.wait(timeout=5)
 
 
+def test_admin_control_frames():
+    """The native host answers the ADR-0025 trusted-client admin frames itself
+    (client_list / client_revoke) and never forwards them over the bridge
+    socket, mirroring the enclave control frames. Uses an isolated runtime dir
+    (never the developer's real clients.json) via a private XDG_RUNTIME_DIR, so
+    pairing and revoking here cannot touch real state."""
+    print("\n[test] trusted-client admin frames are answered locally (ADR-0025)")
+    rundir = tempfile.mkdtemp(prefix="bb-admin-e2e-")
+    env = dict(os.environ, XDG_RUNTIME_DIR=rundir,
+               XDG_CONFIG_HOME=os.path.join(rundir, "config"))
+    if sys.platform == "darwin":
+        env["HOME"] = rundir
+    lock = os.path.join(rundir, "chromium-bridge", "run.lock")
+    global LOCK
+    saved_lock = LOCK
+    LOCK = lock
+    mcp = None
+    nh = None
+    try:
+        # Pair this test's own process so the server it spawns is admitted
+        # (admission is enforced once any client is paired), plus a separate
+        # trusted client the admin frames will enumerate and revoke.
+        subprocess.run([BIN, "pair-client", "--name", "pytest", "--this-parent"],
+                       check=True, env=env, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        subprocess.run([BIN, "pair-client", "--name", "codex", "--hash", "aa" * 32],
+                       check=True, env=env, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+        wait_lock(mcp)
+        nh = start_bridge_host(env=env)
+        wait_host_ready(nh)
+
+        # client_list is answered by the HOST, never forwarded to the server.
+        nm_write(nh, {"type": "client_list"})
+        reply = nm_read(nh)
+        check(reply is not None and reply.get("type") == "client_list_result"
+              and reply.get("ok") is True and reply.get("enrolled") is True,
+              "client_list answered locally with the enrolled list")
+        names = sorted(c["name"] for c in reply.get("clients", [])) if reply else []
+        check(names == ["codex", "pytest"], "the list carries both paired clients")
+
+        # client_revoke removes the codex entry and is acknowledged locally.
+        nm_write(nh, {"type": "client_revoke", "name": "codex"})
+        reply = nm_read(nh)
+        check(reply is not None and reply.get("type") == "client_revoke_result"
+              and reply.get("ok") is True, "client_revoke acknowledged ok")
+
+        # A stray result frame from the browser side is dropped (never
+        # forwarded): prove the pump still forwards ordinary traffic after it.
+        nm_write(nh, {"type": "client_list_result", "ok": True, "enrolled": True,
+                      "clients": []})
+        c = McpClient(mcp)
+        c.initialize()
+        c.initialized()
+        c.send({"jsonrpc": "2.0", "id": 71, "method": "tools/call",
+                "params": {"name": "tab_list", "arguments": {}}})
+        frame = nm_read(nh)
+        check(frame is not None and frame.get("op") == "tab_list",
+              "pump still forwards ordinary frames after admin control traffic")
+        nm_write(nh, {"id": frame["id"], "ok": True,
+                      "data": [{"id": 1, "title": "After Admin", "url": "u",
+                                "active": True}]})
+        r = c.recv()
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "After Admin",
+              "round trip completes; stray result frame was dropped, not forwarded")
+        nh.kill()
+        nh.wait(timeout=3)
+        nh = None
+    finally:
+        if nh is not None and nh.poll() is None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        if mcp is not None:
+            try:
+                mcp.stdin.close()
+            except Exception:
+                pass
+            mcp.wait(timeout=5)
+        LOCK = saved_lock
+        shutil.rmtree(rundir, ignore_errors=True)
+
+
 def test_second_instance_coexists_as_relay():
     """Coexistence (ADR-0024): a second MCP-server instance does NOT SIGTERM the
     first (newest-wins takeover is gone). The first instance is the broker and
@@ -1178,6 +1268,7 @@ def main():
     test_storage_get_round_trip()
     test_native_host_mode()
     test_enclave_control_frames()
+    test_admin_control_frames()
     test_two_browsers()
     test_foreign_peer_is_rejected()
     test_second_instance_coexists_as_relay()

@@ -360,16 +360,52 @@ describe("ceremony state machine", () => {
     expect(posted.length).toBe(before + 1);
   });
 
-  test("revoke forgets the pin, blocks, and pauses auto-pairing", async () => {
+  test("revoke forgets the pin, blocks, and requests host key deletion", async () => {
     const key = await genKey();
     await pairAndPin(key);
     expect((await revokePin()).ok).toBe(true);
+    // ADR-0025: the unpair also asks the host to delete its enclave key, so
+    // no usable credential is left behind. Sent immediately (port attached).
+    expect(posted[posted.length - 1]).toEqual({ type: "enclave_revoke" });
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("unpaired");
+    expect(st.hostRevokePending).toBe(true);
     expect((await enrollmentGate()).allowed).toBe(false);
+    // Until the host acknowledges, every connect re-sends the deletion
+    // request (durable across SW death) - and posts NOTHING else: no
+    // surprise Touch ID prompt (pairing is paused).
     const before = posted.length;
     await onPortConnected();
-    expect(posted.length).toBe(before);
+    expect(posted.slice(before)).toEqual([{ type: "enclave_revoke" }]);
+    // The host's enclave_revoked ack settles it: nothing further is sent.
+    await handleEnclaveFrame({ type: "enclave_revoked" });
+    expect((await getEnrollmentStatus()).hostRevokePending).toBeUndefined();
+    const afterAck = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(afterAck);
+  });
+
+  test("a host-originated enclave_revoked fails a pinned bridge closed", async () => {
+    // The ADR-0025 push: `chromium-bridge revoke` ran out-of-band, the host
+    // noticed and pushed enclave_revoked. A pinned extension must flip to the
+    // fail-closed compromised state without waiting for an opt-in reverify.
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await enrollmentGate()).allowed).toBe(true);
+    await handleEnclaveFrame({ type: "enclave_revoked" });
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("compromised");
+    expect(st.compromisedReason).toContain("revoked");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("an unsolicited enclave_revoked without a pin is a no-op", async () => {
+    // Capability reduction only: with nothing pinned there is nothing to
+    // fail closed, and the frame must not manufacture a compromised mark.
+    await handleEnclaveFrame({ type: "enclave_revoked" });
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect(st.compromisedReason).toBeUndefined();
   });
 
   test("startPairing refuses while a key is pinned", async () => {
