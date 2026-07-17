@@ -21,7 +21,8 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 ## Layout
 
 ```
-src/                 Rust: MCP server + native-host bridge (see architecture.md §4.1)
+crates/core/         Rust library "chromium-bridge-core": MCP server + native-host bridge
+crates/host/         Rust binary "chromium-bridge" (thin argv dispatch over the library)
 extension/
   src/*.ts           TypeScript sources (background/content/options/popup)
   dist/              esbuild output — the load-unpacked target (gitignored)

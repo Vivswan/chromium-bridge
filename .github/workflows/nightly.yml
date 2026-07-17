@@ -6,7 +6,7 @@ name: Nightly browser tests
 # steps) but is triggered by cron / manual dispatch instead of on push/PR.
 #
 # It uses browser-actions/setup-chrome to install an isolated Chrome into the
-# runner and points CHROME_BIN at it — it never touches a developer's own
+# runner and points CHROME_BIN at it - it never touches a developer's own
 # browser or any machine outside the ephemeral CI runner.
 
 on:

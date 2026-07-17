@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Reporting a vulnerability?** Do NOT use this — use a private
+        **Reporting a vulnerability?** Do NOT use this - use a private
         [security advisory](https://github.com/Vivswan/chromium-bridge/security/advisories/new).
 
         Use this for a *change* that affects permissions, credential access,
