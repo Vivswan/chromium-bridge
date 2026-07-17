@@ -125,9 +125,11 @@ export async function setLastVerifiedAt(at: number): Promise<void> {
 /** ADR-0025: a revoke here must also delete the HOST's enclave key (closing
  * the asymmetry where unpairing left a live keychain key behind). The request
  * rides a control frame on the native-messaging port; this durable flag
- * survives MV3 SW death and port gaps, and is cleared only by the host's
- * `enclave_revoked` acknowledgement - until then, every port connect resends
- * the request (deletion is idempotent on the host side). */
+ * survives MV3 SW death and port gaps, and every port connect resends the
+ * request until it is settled: cleared by the host's `enclave_revoked`
+ * acknowledgement, or superseded when a fresh pairing is pinned (the frame
+ * names no key, so past a re-pair it would delete the newly minted key - see
+ * enrollment.ts). */
 export async function getHostRevokePending(): Promise<boolean> {
   return (await read(HOST_REVOKE_PENDING_KEY)) === true;
 }
