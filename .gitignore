@@ -17,6 +17,9 @@
 # Test scratch
 /tmp/
 
+# Python bytecode cache from the tests/ harness (adversarial.py imports e2e.py)
+tests/__pycache__/
+
 # Development worktrees (see CONTRIBUTING.md — one per branch, never committed)
 /.worktree/
 
