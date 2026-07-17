@@ -67,18 +67,19 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    → On Unix there is **no listening port**: the bridge is a 0600 Unix-domain
    socket in a 0700 directory. Every connection is gated by a **kernel peer-UID
    check** (rejecting other users), **kernel-attested executable identity**
-   (Linux/macOS: the peer's on-disk binary must hash-match ours, so a *different*
-   same-user program is rejected before it can authenticate), and an
-   **HMAC-SHA256 challenge-response** in which the per-run secret never crosses
-   the wire and a fresh nonce defeats replay. Attestation is mutual (host and
-   server attest each other). See
+   (Linux: the peer's `/proc/<pid>/exe` must SHA256-match ours; macOS: the peer's
+   running image, identified by its kernel audit token, must `cdhash`-match ours
+   via the Security framework -- so a *different* same-user program is rejected
+   before it can authenticate), and an **HMAC-SHA256 challenge-response** in which
+   the per-run secret never crosses the wire and a fresh nonce defeats replay.
+   Attestation is mutual (host and server attest each other). See
    [ADR-0019](../adr/0019-authenticated-ipc.md) and
    [ADR-0020](../adr/0020-kernel-attested-peer-identity.md). **Not covered:** a
    same-user attacker who re-executes *our own* binary is byte-identical to the
-   legitimate host, so neither the hash nor a code signature can tell them apart;
-   only browser/extension-side pairing can, which is tracked separately. On macOS
-   the check is also best-effort until a running-image-bound `SecCode` check
-   replaces the path re-open (see ADR-0020).
+   legitimate host (same hash, same cdhash), so neither the hash nor a code
+   signature can tell them apart; only browser/extension-side pairing can, which
+   is tracked separately. Team-ID pinning on macOS (to also trust a separate
+   signed build) is a deferred follow-up (see ADR-0020).
 
 5. **A malformed/oversized message crashes or corrupts the bridge.**
    → Native-messaging framing is length-checked (64 MB inbound clamp, 1 MB
