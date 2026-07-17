@@ -54,8 +54,11 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     is a loopback TCP socket, and neither the peer-UID check nor the attestation
     is compiled in (both are Unix only). Any local process can open the loopback
     port; the only barrier is the HMAC secret. The lock file holding that secret
-    gets no explicit mode on Windows and relies on the default per-user
-    permissions of `LOCALAPPDATA`. So on Windows the guarantee is weaker: it
+    gets no explicit mode on Windows and relies on whatever permissions its
+    parent directory confers (`LOCALAPPDATA`, falling back to
+    `USERPROFILE\AppData\Local`, both per-user by default; then the temp
+    directory, which is not guaranteed per-user; see `runtime_dir()`
+    in `src/ipc.rs`). So on Windows the guarantee is weaker: it
     rests on the secret staying confidential, not on kernel-attested peer
     identity.
   - **Residual risk**: neither a hash nor a code signature can distinguish the
