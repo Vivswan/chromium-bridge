@@ -1,6 +1,6 @@
 //! MCP server mode: the default (no args) mode. Speaks JSON-RPC 2.0 over
 //! stdio with the MCP client, and accepts inbound bridge connections from the
-//! native host over a localhost TCP socket.
+//! native host over the bridge socket.
 
 use std::io::{self, BufReader, BufWriter};
 use std::thread;
@@ -39,14 +39,14 @@ pub fn run() -> i32 {
     // fresh server per session; if the previous one is still alive, the native host
     // will keep talking to IT (it doesn't follow lock-file changes), so the
     // new server's tool calls report "extension not connected". Kill the old
-    // instance first so the native host's TCP connection drops, forcing the
+    // instance first so the native host's connection drops, forcing the
     // extension to reconnect against our new lock.
     if let Ok(Some(prev)) = ipc::LockFile::read() {
         if prev.pid != lock.pid && pid_is_alive(prev.pid) {
             log_info!("mcp", "supplanting prior MCP server pid {}", prev.pid);
-            // SIGTERM → old server's stdin loop ends → it removes the lock and
-            // exits → its TCP listener closes → native host gets EOF → SW
-            // onDisconnect → reconnect spawns a fresh host → reads OUR lock.
+            // SIGTERM -> old server's stdin loop ends -> it removes the lock and
+            // exits -> its listener closes -> native host gets EOF -> SW
+            // onDisconnect -> reconnect spawns a fresh host -> reads OUR lock.
             terminate_process(prev.pid);
             // Give it a moment to die and clean up its lock.
             for _ in 0..50 {
