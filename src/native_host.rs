@@ -6,15 +6,39 @@
 //! - socket -> stdout: read NDJSON lines from the bridge socket, frame each as
 //!   a native-messaging message on stdout.
 //!
-//! All real logic lives in the MCP server on the other side of the socket.
-//! EOF on stdin (Chrome disconnected) is our shutdown signal.
+//! The one exception to "forward everything" is the enrollment ceremony
+//! (ADR-0021): frames whose `type` is one of the enclave control tags are
+//! handled HERE — an `enclave_challenge` is answered locally by signing with
+//! the Secure Enclave key (raising the user-presence prompt) — and are never
+//! forwarded to the MCP server. Everything else forwards byte-for-byte, so
+//! all real tool logic stays in the MCP server on the other side of the
+//! socket. EOF on stdin (Chrome disconnected) is our shutdown signal.
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::ipc;
-use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
+use crate::protocol::{
+    bridge_read, bridge_write, classify_nm_frame, nm_read_frame, nm_write_frame, EnclaveControl,
+    FrameDisposition,
+};
 use serde_json::Value;
+
+/// Serialize an enclave control frame and write it to Chrome via the shared
+/// stdout writer. `nm_write_frame` flushes per frame, so taking the lock per
+/// frame keeps replies atomic with respect to the socket->stdout pump.
+fn write_control_reply(
+    out: &Mutex<BufWriter<io::Stdout>>,
+    reply: &EnclaveControl,
+) -> io::Result<()> {
+    let value = serde_json::to_value(reply)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("encode reply: {e}")))?;
+    let mut out = out
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    nm_write_frame(&mut *out, &value)
+}
 
 pub fn run() -> i32 {
     // Capture our own executable identity before dialing, so attesting the
@@ -91,7 +115,14 @@ pub fn run() -> i32 {
     // process::exit runs no destructors, but our writers flush after every
     // frame, so no buffered data is lost on the normal close paths.
 
+    // stdout is shared: the socket->stdout pump owns it in steady state, and
+    // the stdin->socket thread borrows it briefly to answer enclave control
+    // frames (which reply toward Chrome, not toward the socket). A mutex
+    // around one buffered writer keeps frames whole; every write flushes.
+    let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+
     // Thread A: stdin -> socket
+    let ctrl_out = Arc::clone(&stdout_writer);
     thread::spawn(move || {
         let mut stdin = io::stdin();
         let mut sock = writer;
@@ -111,6 +142,46 @@ pub fn run() -> i32 {
                     break;
                 }
             };
+            // Enclave control frames (ADR-0021) are addressed to THIS process
+            // and must never reach the socket; everything else forwards.
+            match classify_nm_frame(&frame) {
+                FrameDisposition::Forward => {}
+                FrameDisposition::Challenge { nonce, context } => {
+                    log_info!("native-host", "answering enclave challenge locally");
+                    // Signing blocks this pump until the user answers the
+                    // presence prompt, so extension->server traffic is
+                    // head-of-line blocked for the duration (server->extension
+                    // still flows). Accepted: challenges only occur during the
+                    // user-present enrollment ceremony, not in steady state.
+                    let reply = crate::enclave::respond_to_challenge(&nonce, context.as_deref());
+                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
+                        log_warn!("native-host", "control reply write error: {e}");
+                        break;
+                    }
+                    continue;
+                }
+                FrameDisposition::Drop(kind) => {
+                    log_warn!(
+                        "native-host",
+                        "dropping unexpected {kind} frame from browser"
+                    );
+                    continue;
+                }
+                FrameDisposition::Malformed => {
+                    log_warn!(
+                        "native-host",
+                        "malformed enclave control frame from browser"
+                    );
+                    let reply = EnclaveControl::EnclaveError {
+                        reason: "invalid_challenge".into(),
+                    };
+                    if let Err(e) = write_control_reply(&ctrl_out, &reply) {
+                        log_warn!("native-host", "control reply write error: {e}");
+                        break;
+                    }
+                    continue;
+                }
+            }
             if let Err(e) = bridge_write(&mut sock, &frame) {
                 log_warn!("native-host", "bridge write error: {e}");
                 break;
@@ -129,12 +200,12 @@ pub fn run() -> i32 {
     // simply fall through to the return below (which also ends the process).
     // The handshake is already complete, so every line here is a real frame
     // bound for Chrome.
-    let stdout = io::stdout();
     let out_handle = thread::spawn(move || {
-        // stdout must be flushed after every frame; acquire a single locked,
-        // buffered writer for the whole thread (single-writer discipline).
-        let mut out = BufWriter::new(stdout.lock());
-        pump_socket_to_stdout(&mut reader, &mut out);
+        // Forwarded frames share stdout with Thread A's enclave control replies,
+        // so the pump locks the buffered writer per frame (never across the
+        // blocking socket read) — otherwise a challenge reply could not be
+        // written while this thread waits on the socket, hanging the ceremony.
+        pump_socket_to_stdout(&mut reader, &stdout_writer);
         log_debug!("native-host", "socket->stdout thread ending");
     });
 
@@ -152,7 +223,12 @@ pub fn run() -> i32 {
 /// an attested peer must not be able to exhaust memory with one newline-less
 /// line. Any read error — an over-cap line included — fails closed: the pump
 /// ends, the process exits, and Chrome tears the port down.
-fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
+///
+/// `out` is the stdout writer shared with the stdin->socket thread (which
+/// writes enclave control replies). The lock is taken per frame, never across
+/// the blocking `bridge_read`, so a control reply can be interleaved while this
+/// pump is waiting on the socket.
+fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &Mutex<W>) {
     loop {
         let value: Value = match bridge_read(reader) {
             Ok(Some(v)) => v,
@@ -165,7 +241,10 @@ fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
                 break;
             }
         };
-        if let Err(e) = nm_write_frame(out, &value) {
+        let mut out = out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Err(e) = nm_write_frame(&mut *out, &value) {
             log_warn!("native-host", "stdout write error: {e}");
             break;
         }
@@ -189,9 +268,9 @@ mod tests {
         let mut input = Vec::with_capacity(BRIDGE_MAX_LINE + 32);
         input.resize(BRIDGE_MAX_LINE + 1, b'x');
         input.extend_from_slice(b"\n{\"after\":true}\n");
-        let mut out = Vec::new();
-        pump_socket_to_stdout(&mut Cursor::new(input), &mut out);
-        assert!(out.is_empty());
+        let out = Mutex::new(Vec::new());
+        pump_socket_to_stdout(&mut Cursor::new(input), &out);
+        assert!(out.into_inner().unwrap().is_empty());
     }
 
     #[test]
@@ -202,10 +281,10 @@ mod tests {
         let mut input = b"{\"ok\":true}\n".to_vec();
         input.resize(input.len() + BRIDGE_MAX_LINE + 1, b'x');
         input.extend_from_slice(b"\n{\"after\":true}\n");
-        let mut out = Vec::new();
-        pump_socket_to_stdout(&mut Cursor::new(input), &mut out);
+        let out = Mutex::new(Vec::new());
+        pump_socket_to_stdout(&mut Cursor::new(input), &out);
 
-        let mut cur = Cursor::new(out);
+        let mut cur = Cursor::new(out.into_inner().unwrap());
         let frame = nm_read_frame(&mut cur).unwrap().unwrap();
         assert_eq!(frame, serde_json::json!({ "ok": true }));
         // Nothing after the first frame: the over-cap line was rejected.
@@ -217,19 +296,16 @@ mod tests {
         // Malformed JSON used to be skip-and-continue; it now ends the pump
         // (fail closed against an attested-but-hostile peer), so the valid
         // frame after it must not be emitted.
-        let mut out = Vec::new();
-        pump_socket_to_stdout(
-            &mut Cursor::new(b"not-json\n{\"id\":2}\n".to_vec()),
-            &mut out,
-        );
-        assert!(out.is_empty());
+        let out = Mutex::new(Vec::new());
+        pump_socket_to_stdout(&mut Cursor::new(b"not-json\n{\"id\":2}\n".to_vec()), &out);
+        assert!(out.into_inner().unwrap().is_empty());
     }
 
     #[test]
     fn blank_lines_are_skipped_and_eof_ends_the_pump() {
-        let mut out = Vec::new();
-        pump_socket_to_stdout(&mut Cursor::new(b"\n\n{\"id\":1}\n".to_vec()), &mut out);
-        let mut cur = Cursor::new(out);
+        let out = Mutex::new(Vec::new());
+        pump_socket_to_stdout(&mut Cursor::new(b"\n\n{\"id\":1}\n".to_vec()), &out);
+        let mut cur = Cursor::new(out.into_inner().unwrap());
         let frame = nm_read_frame(&mut cur).unwrap().unwrap();
         assert_eq!(frame, serde_json::json!({ "id": 1 }));
         assert!(nm_read_frame(&mut cur).unwrap().is_none());

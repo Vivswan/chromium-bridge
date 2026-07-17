@@ -347,6 +347,96 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
 }
 
 // ----------------------------------------------------------------------------
+// Enclave enrollment control frames (native messaging, extension <-> host)
+// ----------------------------------------------------------------------------
+
+/// Control frames for the enrollment ceremony (ADR-0021), spoken over the
+/// native-messaging channel between the extension and the native host. They
+/// are HANDLED BY THE HOST ITSELF: the stdin->socket pump answers an
+/// `enclave_challenge` locally (signing with the Secure Enclave key, which
+/// raises the user-presence prompt) and never forwards these frames to the
+/// MCP server. Everything without one of these `type` tags forwards
+/// byte-for-byte as before, so the protocol is fully backward compatible —
+/// an extension that never sends a challenge sees no change.
+///
+/// Contract (the extension side consumes this):
+/// - `enclave_challenge { nonce, context? }`: `nonce` is a non-empty NUL-free
+///   string of at most 256 bytes; `context` an optional NUL-free string of at
+///   most 4096 bytes. The host keeps no replay state and will sign any valid
+///   challenge (raising the presence prompt), so freshness is NORMATIVE on
+///   the extension side: the nonce MUST be freshly generated per challenge
+///   from a cryptographic RNG (e.g. 32 bytes of `crypto.getRandomValues`,
+///   encoded), MUST be single-use, and a proof MUST only be accepted for the
+///   exact nonce the extension itself just issued. A proof over any other
+///   nonce, or a second proof over a used nonce, MUST be rejected.
+/// - `enclave_proof { sig, key_id, pubkey }`: `sig` is base64 of the raw
+///   64-byte IEEE P1363 `r||s` ECDSA P-256/SHA-256 signature over
+///   `UTF8("browser-bridge-enclave-v1") || 0x00 || UTF8(nonce) || 0x00 ||
+///   UTF8(context or "")`; `key_id` is the lowercase-hex SHA-256 of the
+///   65-byte X9.63 public key; `pubkey` is base64 of those 65 bytes. The
+///   extension MUST verify `sig` against its PINNED key, not against the
+///   `pubkey` field (which is trustworthy only during the user-verified
+///   enrollment ceremony itself).
+/// - `enclave_error { reason }`: stable codes `unsupported_platform`,
+///   `not_enrolled`, `invalid_challenge`, `key_invalid`, `keychain_error`,
+///   `signing_failed`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EnclaveControl {
+    EnclaveChallenge {
+        nonce: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+    EnclaveProof {
+        sig: String,
+        key_id: String,
+        pubkey: String,
+    },
+    EnclaveError {
+        reason: String,
+    },
+}
+
+/// How the native host's stdin->socket pump must treat one inbound frame.
+#[derive(Debug)]
+pub enum FrameDisposition {
+    /// Not a control frame: forward to the MCP server unchanged.
+    Forward,
+    /// A well-formed `enclave_challenge`: answer it locally, do not forward.
+    Challenge {
+        nonce: String,
+        context: Option<String>,
+    },
+    /// A control-frame `type` that is not addressed to the host (a stray
+    /// proof/error) — drop it, never forward it.
+    Drop(&'static str),
+    /// Carries a control-frame `type` but does not parse as that frame:
+    /// reply `enclave_error { reason: "invalid_challenge" }`, do not forward.
+    Malformed,
+}
+
+/// Classify one native-messaging frame for the pump. Pure, so the
+/// handled-vs-forwarded decision is unit-testable without a socket. Keyed on
+/// the exact `type` tags of [`EnclaveControl`]: bridge requests carry `op`
+/// (no `type`), and the socket handshake frames (`challenge`/`response`)
+/// never traverse the pump, so nothing legitimate collides.
+pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
+    let tag = frame.get("type").and_then(Value::as_str);
+    match tag {
+        Some("enclave_challenge") => match serde_json::from_value(frame.clone()) {
+            Ok(EnclaveControl::EnclaveChallenge { nonce, context }) => {
+                FrameDisposition::Challenge { nonce, context }
+            }
+            _ => FrameDisposition::Malformed,
+        },
+        Some("enclave_proof") => FrameDisposition::Drop("enclave_proof"),
+        Some("enclave_error") => FrameDisposition::Drop("enclave_error"),
+        _ => FrameDisposition::Forward,
+    }
+}
+
+// ----------------------------------------------------------------------------
 // Utilities
 // ----------------------------------------------------------------------------
 
@@ -564,6 +654,102 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(matches!(back, Handshake::Response { label: None, .. }));
+    }
+
+    #[test]
+    fn enclave_control_serde_roundtrip() {
+        // Challenge with and without context; the tag is the snake_case name.
+        let chal = EnclaveControl::EnclaveChallenge {
+            nonce: "n1".into(),
+            context: Some("ctx".into()),
+        };
+        let v = serde_json::to_value(&chal).unwrap();
+        assert_eq!(
+            v,
+            json!({ "type": "enclave_challenge", "nonce": "n1", "context": "ctx" })
+        );
+        let no_ctx = EnclaveControl::EnclaveChallenge {
+            nonce: "n2".into(),
+            context: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&no_ctx).unwrap(),
+            json!({ "type": "enclave_challenge", "nonce": "n2" })
+        );
+
+        let proof = EnclaveControl::EnclaveProof {
+            sig: "c2ln".into(),
+            key_id: "ab".repeat(32),
+            pubkey: "cHViCg==".into(),
+        };
+        let v = serde_json::to_value(&proof).unwrap();
+        assert_eq!(v.get("type").unwrap(), "enclave_proof");
+        let back: EnclaveControl = serde_json::from_value(v).unwrap();
+        assert!(matches!(back, EnclaveControl::EnclaveProof { .. }));
+
+        let err = EnclaveControl::EnclaveError {
+            reason: "not_enrolled".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            json!({ "type": "enclave_error", "reason": "not_enrolled" })
+        );
+    }
+
+    #[test]
+    fn classify_forwards_ordinary_frames() {
+        // Bridge requests (op, no type) and arbitrary JSON forward untouched.
+        for frame in [
+            json!({ "op": "tab_list", "id": 1 }),
+            json!({ "id": 7, "ok": true, "data": {} }),
+            json!({ "type": "challenge", "nonce": "socket-handshake-shape" }),
+            json!({ "type": "response", "mac": "aa" }),
+            json!({ "type": 42 }),
+            json!("just a string"),
+            json!(null),
+        ] {
+            assert!(
+                matches!(classify_nm_frame(&frame), FrameDisposition::Forward),
+                "should forward: {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_handles_challenge_locally_and_never_forwards_control_types() {
+        match classify_nm_frame(
+            &json!({ "type": "enclave_challenge", "nonce": "n", "context": "c" }),
+        ) {
+            FrameDisposition::Challenge { nonce, context } => {
+                assert_eq!(nonce, "n");
+                assert_eq!(context.as_deref(), Some("c"));
+            }
+            other => panic!("expected Challenge, got {other:?}"),
+        }
+        // Context is optional.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n" })),
+            FrameDisposition::Challenge { context: None, .. }
+        ));
+        // A challenge missing its nonce is malformed — answered with an
+        // error, never forwarded.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_challenge" })),
+            FrameDisposition::Malformed
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": 5 })),
+            FrameDisposition::Malformed
+        ));
+        // Stray proof/error frames are dropped, not forwarded.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_proof", "sig": "s" })),
+            FrameDisposition::Drop("enclave_proof")
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_error", "reason": "r" })),
+            FrameDisposition::Drop("enclave_error")
+        ));
     }
 }
 

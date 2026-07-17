@@ -70,8 +70,9 @@ pub struct LockFile {
 }
 
 /// Per-user runtime/data directory holding the lock file and (on Unix) the
-/// bridge socket. Created 0700 on Unix so no other user can enter it.
-fn runtime_dir() -> PathBuf {
+/// bridge socket. Created 0700 on Unix so no other user can enter it. Also
+/// holds the enrollment policy config (`src/enclave.rs`).
+pub(crate) fn runtime_dir() -> PathBuf {
     #[cfg(windows)]
     {
         let base = std::env::var_os("LOCALAPPDATA")
@@ -956,7 +957,7 @@ mod codesign {
 /// closed if the CSPRNG is unavailable: a weaker fallback (time, pid, address
 /// bits) would be guessable and silently void the authentication guarantee, so
 /// the caller must refuse to proceed instead.
-fn generate_secret() -> io::Result<String> {
+pub(crate) fn generate_secret() -> io::Result<String> {
     let mut buf = [0u8; 16];
     fill_os_random(&mut buf)?;
     Ok(hex_encode(&buf))
@@ -1002,7 +1003,7 @@ extern "system" {
     ) -> i32;
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push_str(&format!("{b:02x}"));
