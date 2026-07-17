@@ -21,6 +21,13 @@
       "type": "integer",
       "description": "Optional target tab. When omitted, the handler resolves the active tab."
     },
+    "browser": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "The label of the browser connection the MCP server routed this request to (from the tool call's `browser` argument, or the sole/default connection). Informational for the extension: each native-messaging port already belongs to exactly one browser."
+    },
     "args": {
       "$ref": "#/$defs/OpArgs"
     }

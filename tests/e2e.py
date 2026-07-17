@@ -163,18 +163,25 @@ def connect_bridge(lf, timeout=5):
     return s
 
 
-def start_bridge_host():
+def start_bridge_host(label=None):
     """Spawn a real `browser-bridge --native-host`, the way Chrome does. It
     dials the server's bridge socket and passes peer attestation because it is
     the same binary; the server then drives it. The "extension" side (this test)
     speaks Native-Messaging frames to the host's stdin/stdout, which the host
     relays to and from the attested socket.
 
+    `label` is passed as `--label` (the per-browser identity the installer
+    bakes into each browser's wrapper); None mirrors a pre-label wrapper and
+    lands in the server's "default" slot.
+
     A daemon thread drains the host's stderr and sets `nh.ready` when the host
     logs its handshake-complete marker, so callers wait on a real readiness
     signal (wait_host_ready) instead of guessing with a sleep. Draining also
     keeps the stderr pipe from filling during a test."""
-    nh = subprocess.Popen([BIN, "--native-host"], stdin=subprocess.PIPE,
+    cmd = [BIN, "--native-host"]
+    if label is not None:
+        cmd += ["--label", label]
+    nh = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     nh.ready = threading.Event()
 
@@ -211,6 +218,31 @@ def serve_bridge_req(nh, responder):
         return None
     nm_write(nh, responder(req))
     return req
+
+
+def serve_bridge_loop(nh, responder):
+    """Keep serving BridgeReqs on `nh` from a daemon thread until the host's
+    stdout closes (host killed or test over). Used by the multi-browser test,
+    where the number of requests a given host will see is not known up front
+    (list_browsers fans out one tab_list per live browser).
+
+    Returns a box dict: `box["error"]` carries any unexpected exception from
+    the responder thread (daemon-thread exceptions would otherwise vanish),
+    and the caller must check it before the test ends."""
+    box = {"error": None, "thread": None}
+
+    def loop():
+        try:
+            while serve_bridge_req(nh, responder) is not None:
+                pass
+        except (ValueError, OSError):
+            pass  # host torn down mid-read; the test is done with it
+        except Exception as e:  # noqa: BLE001 - surfaced via box in the main thread
+            box["error"] = e
+
+    box["thread"] = threading.Thread(target=loop, daemon=True)
+    box["thread"].start()
+    return box
 
 
 def test_mcp_handshake_and_tools():
@@ -921,6 +953,160 @@ def test_foreign_peer_is_rejected():
             pass
 
 
+def test_two_browsers():
+    print("\n[test] two labeled browsers connect, are listed, and route independently")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    chrome = brave = None
+    try:
+        lf = wait_lock(mcp)
+        check(lf is not None, "lock file written")
+        c = McpClient(mcp)
+        c.initialize()
+        c.initialized()
+
+        # Two real --native-host subprocesses, one per "browser". Each dials
+        # the bridge, is attested, and completes its OWN HMAC handshake - the
+        # ready events below fire per host, proving each connection was
+        # authenticated independently rather than riding on the other's.
+        chrome = start_bridge_host("chrome")
+        brave = start_bridge_host("brave")
+        wait_host_ready(chrome)
+        wait_host_ready(brave)
+        check(True, "both hosts authenticated independently (per-connection handshake)")
+
+        # With two authenticated browsers attached, a foreign (non-binary)
+        # peer is still rejected by attestation before any challenge.
+        # (Executable attestation is Unix-only, like test_foreign_peer_is_rejected.)
+        if os.name != "nt":
+            s = connect_bridge(lf)
+            s.settimeout(3)
+            try:
+                data = s.recv(4096)
+            except socket.timeout:
+                data = b"__no_eof__"
+            check(data == b"", "foreign peer still refused while two browsers are live")
+            s.close()
+
+        # Each "extension" serves tab_list with distinct data and RECORDS the
+        # envelope's browser stamp (the server's routing decision). Recording
+        # instead of asserting keeps a mismatch from killing the responder
+        # thread (which would turn one failure into a 120s hang); the main
+        # thread asserts on the recordings below.
+        def responder_for(tabs, seen):
+            def responder(req):
+                seen.append((req.get("op"), req.get("browser")))
+                return {"id": req["id"], "ok": True, "data": tabs}
+            return responder
+
+        chrome_tabs = [{"id": 1, "title": "Chrome Tab", "url": "https://a", "active": True},
+                       {"id": 2, "title": "Chrome Tab 2", "url": "https://b", "active": False}]
+        brave_tabs = [{"id": 9, "title": "Brave Tab", "url": "https://c", "active": True}]
+        chrome_seen, brave_seen = [], []
+        chrome_box = serve_bridge_loop(chrome, responder_for(chrome_tabs, chrome_seen))
+        brave_box = serve_bridge_loop(brave, responder_for(brave_tabs, brave_seen))
+
+        # list_browsers enumerates both labels with their tab counts.
+        r = c.call("list_browsers", {}, _id=20)
+        listing = json.loads(r["result"]["content"][0]["text"])
+        check(listing.get("count") == 2, "list_browsers reports two browsers")
+        by_label = {b["label"]: b for b in listing.get("browsers", [])}
+        check(set(by_label) == {"chrome", "brave"},
+              "list_browsers shows both labels")
+        check(by_label.get("chrome", {}).get("tabCount") == 2,
+              "chrome entry counts its 2 tabs")
+        check(by_label.get("brave", {}).get("tabCount") == 1,
+              "brave entry counts its 1 tab")
+
+        # Explicit routing: the same tool call reaches different browsers.
+        r = c.call("tab_list", {"browser": "chrome"}, _id=21)
+        data = json.loads(r["result"]["content"][0]["text"])
+        check(data[0]["title"] == "Chrome Tab", "tab_list browser=chrome hits chrome")
+        r = c.call("tab_list", {"browser": "brave"}, _id=22)
+        data = json.loads(r["result"]["content"][0]["text"])
+        check(data[0]["title"] == "Brave Tab", "tab_list browser=brave hits brave")
+
+        # No browser argument while two are connected: a clear error, not a
+        # guess (the model must not act in an arbitrary logged-in browser).
+        r = c.call("tab_list", {}, _id=23)
+        check(r["result"].get("isError") is True, "unaddressed call errors with two browsers")
+        text = r["result"]["content"][0]["text"]
+        check("BROWSER_AMBIGUOUS" in text, "ambiguity error carries BROWSER_AMBIGUOUS")
+        check("brave" in text and "chrome" in text, "ambiguity error names the live labels")
+
+        # An unknown label is refused, naming what IS connected.
+        r = c.call("tab_list", {"browser": "edge"}, _id=24)
+        check(r["result"].get("isError") is True, "unknown label errors")
+        check("BROWSER_NOT_FOUND" in r["result"]["content"][0]["text"],
+              "unknown label carries BROWSER_NOT_FOUND")
+
+        # A malformed (non-string) browser argument is rejected up front —
+        # it must not silently route anywhere.
+        n_served = len(chrome_seen) + len(brave_seen)
+        r = c.call("tab_list", {"browser": 123}, _id=28)
+        check(r["result"].get("isError") is True, "non-string browser arg errors")
+        check("INVALID_ARGUMENT" in r["result"]["content"][0]["text"],
+              "non-string browser arg carries INVALID_ARGUMENT")
+        check(len(chrome_seen) + len(brave_seen) == n_served,
+              "the malformed call never reached any browser")
+
+        # The envelope of every served request carried the label of exactly
+        # the browser that served it (asserted here, in the main thread).
+        check(bool(chrome_seen) and all(b == "chrome" for _, b in chrome_seen),
+              "every request chrome served was stamped browser=chrome")
+        check(bool(brave_seen) and all(b == "brave" for _, b in brave_seen),
+              "every request brave served was stamped browser=brave")
+
+        # Kill chrome (a process we started): the registry drops only that
+        # entry, and routing collapses back to the sole remaining browser.
+        chrome.kill()
+        chrome.wait(timeout=3)
+        deadline = time.time() + 8
+        listing = None
+        while time.time() < deadline:
+            r = c.call("list_browsers", {}, _id=25)
+            listing = json.loads(r["result"]["content"][0]["text"])
+            if listing.get("count") == 1:
+                break
+            time.sleep(0.1)
+        check(listing is not None and listing.get("count") == 1
+              and listing["browsers"][0]["label"] == "brave",
+              "after chrome exits, only brave remains listed")
+        r = c.call("tab_list", {}, _id=26)
+        data = json.loads(r["result"]["content"][0]["text"])
+        check(data[0]["title"] == "Brave Tab",
+              "unaddressed call now routes to the sole remaining browser")
+        r = c.call("tab_list", {"browser": "chrome"}, _id=27)
+        check("BROWSER_NOT_FOUND" in r["result"]["content"][0]["text"],
+              "the departed browser's label is no longer routable")
+
+        # Responder threads must have run clean (their exceptions are boxed,
+        # not printed, so surface them here).
+        check(chrome_box["error"] is None and brave_box["error"] is None,
+              f"responder threads finished cleanly "
+              f"(chrome={chrome_box['error']!r} brave={brave_box['error']!r})")
+
+        brave.kill()
+        brave.wait(timeout=3)
+    finally:
+        for nh in (chrome, brave):
+            if nh is not None and nh.poll() is None:
+                nh.kill()
+                try:
+                    nh.wait(timeout=3)
+                except Exception:
+                    pass
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=5)
+
+
 def main():
     ensure_binary()
     print(f"binary: {BIN}")
@@ -933,6 +1119,7 @@ def main():
     test_storage_get_round_trip()
     test_native_host_mode()
     test_enclave_control_frames()
+    test_two_browsers()
     test_foreign_peer_is_rejected()
     test_server_takeover()
     test_takeover_leaves_new_socket_connectable()

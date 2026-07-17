@@ -41,6 +41,20 @@ fn write_control_reply(
 }
 
 pub fn run() -> i32 {
+    // Which browser this host fronts (`--label <name>`, written into the
+    // per-browser wrapper by the installer). It rides in the signed handshake
+    // response so the MCP server can key its connection registry by browser.
+    // A malformed label refuses to start: better no bridge than one filed
+    // under a mangled identity.
+    let argv: Vec<String> = std::env::args().collect();
+    let label = match crate::cli::native_host_label(&argv) {
+        Ok(l) => l,
+        Err(e) => {
+            log_error!("native-host", "{e}");
+            return 1;
+        }
+    };
+
     // Capture our own executable identity before dialing, so attesting the
     // server compares against the genuine binary and we fail fast if we cannot
     // hash our own image. See ADR-0020.
@@ -90,11 +104,15 @@ pub fn run() -> i32 {
     };
     let mut reader = BufReader::new(read_half);
     let mut writer = BufWriter::new(stream);
-    if let Err(e) = ipc::client_handshake(&mut reader, &mut writer, None) {
+    if let Err(e) = ipc::client_handshake(&mut reader, &mut writer, label.clone()) {
         log_error!("native-host", "bridge handshake failed: {e}");
         return 1;
     }
-    log_info!("native-host", "bridge handshake complete");
+    log_info!(
+        "native-host",
+        "bridge handshake complete (label '{}')",
+        label.as_deref().unwrap_or("default")
+    );
 
     // Shutdown policy: the native host has no useful work to do if EITHER
     // direction of the bridge breaks. When Chrome closes the port (stdin EOF)
