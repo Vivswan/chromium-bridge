@@ -16,6 +16,7 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "@/lib/background/enrollment";
+import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
 
 // The ceremony state machine, driven end to end with a mocked chrome and a
 // WebCrypto key standing in for the host's Secure Enclave key. What CANNOT be
@@ -33,6 +34,7 @@ let mockOs = "mac";
 
 function installBrowserMock(): Record<string, unknown> {
   fakeBrowser.reset();
+  resetStorageHardeningForTests();
   const store: Record<string, unknown> = {};
   const local = fakeBrowser.storage.local as unknown as Record<string, unknown>;
   local.get = (key: string | string[]) => {
@@ -49,6 +51,11 @@ function installBrowserMock(): Record<string, unknown> {
     for (const k of Array.isArray(key) ? key : [key]) delete store[k];
     return Promise.resolve();
   };
+  // #32 storage hardening (readGateState awaits it and fails closed
+  // otherwise): fakeBrowser has no setAccessLevel, so stub a success.
+  local.setAccessLevel = () => Promise.resolve();
+  (fakeBrowser.storage.session as unknown as Record<string, unknown>).setAccessLevel = () =>
+    Promise.resolve();
   const runtime = fakeBrowser.runtime as unknown as Record<string, unknown>;
   runtime.id = "test-ext-id";
   runtime.getPlatformInfo = () => Promise.resolve({ os: mockOs });
@@ -378,6 +385,29 @@ describe("ceremony state machine", () => {
     expect((await enrollmentGate()).allowed).toBe(true);
     await onPortConnected();
     expect(posted.length).toBe(0);
+  });
+
+  test("#32: the gate fails closed when storage hardening fails, even with a pin", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await enrollmentGate()).allowed).toBe(true); // sanity: pinned = open
+    // Now make setAccessLevel fail and re-arm the hardening check.
+    resetStorageHardeningForTests();
+    const local = fakeBrowser.storage.local as unknown as Record<string, unknown>;
+    local.setAccessLevel = () => Promise.reject(new Error("unsupported"));
+    const gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("storage access could not be restricted");
+  });
+
+  test("#32: the gate fails closed on hardening failure even with requireEnrollment off", async () => {
+    // requireEnrollment reads false, but that read is itself untrusted until
+    // storage is locked down - so a hardening failure blocks regardless.
+    store.requireEnrollment = false;
+    resetStorageHardeningForTests();
+    const local = fakeBrowser.storage.local as unknown as Record<string, unknown>;
+    local.setAccessLevel = () => Promise.reject(new Error("unsupported"));
+    expect((await enrollmentGate()).allowed).toBe(false);
   });
 
   test("a stale reject after approval does not touch the pin", async () => {

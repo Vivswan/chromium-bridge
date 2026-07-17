@@ -6,6 +6,7 @@ import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
 import { connectNative } from "@/lib/background/port";
+import { hardenStorageAccess } from "@/lib/background/trusted-storage";
 
 // MV3 service worker entry point. Thin wiring only; the real logic lives in
 // lib/background/*:
@@ -17,10 +18,18 @@ import { connectNative } from "@/lib/background/port";
 //   - allowlist-store.ts  storage-backed allowlist + approval flow
 //   - messages.ts         runtime message router (popup/options/screenshot)
 export default defineBackground(() => {
+  // #32: confine browser.storage to extension contexts as early as possible,
+  // so a content script cannot read or write the enrollment pin, the
+  // compromised marker, requireEnrollment, or the allowlist. This eager call
+  // only STARTS the async restriction; the enrollment gate and
+  // onPortConnected AWAIT its success and fail closed until it lands, so no
+  // trust decision is ever made on un-confined storage. See the residual note
+  // in trusted-storage.ts for the unavoidable sub-ms cold-start window.
+  void hardenStorageAccess();
+
   // Loudly log if the running extension id is not the pinned id. A mismatch
   // means the native host rejects this extension (allowed_origins pins the
-  // id) - the most common "won't connect" cause. Runs first so it's visible
-  // at the top of the log.
+  // id) - the most common "won't connect" cause.
   verifyExtensionId();
 
   // Runtime message router for the popup/options pages and the content

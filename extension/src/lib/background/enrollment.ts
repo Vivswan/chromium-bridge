@@ -45,6 +45,7 @@ import {
   verifyPairingProof,
   verifyProofAgainstPin,
 } from "./enclave-verify";
+import { hardenStorageAccess } from "./trusted-storage";
 
 // ---- frame plumbing ---------------------------------------------------------
 
@@ -195,6 +196,23 @@ export async function enrollmentGate(onAllowed?: () => void): Promise<Gate> {
 /** One unserialized read of the gate state. Callers other than the two-pass
  * enrollmentGate must not use this to grant access. */
 async function readGateState(): Promise<Gate> {
+  // #32 FIRST, unconditionally: every check below reads trust state from
+  // browser.storage, which must be confined to extension contexts before we
+  // can believe any of it. If the restriction is not verifiably applied this
+  // SW life, a content script could have written the very values we are about
+  // to trust (planted a pin, flipped requireEnrollment off), so refuse - even
+  // when requireEnrollment reads false, since that read is itself untrusted
+  // until storage is locked down.
+  const hardened = await hardenStorageAccess();
+  if (!hardened.ok) {
+    return {
+      allowed: false,
+      reason:
+        `storage access could not be restricted to the extension (${hardened.reason}); ` +
+        "refusing so a page context cannot tamper with the trust state. Update Chrome " +
+        "and reload the extension.",
+    };
+  }
   if ((await getSetting("requireEnrollment")) !== true) return { allowed: true };
   const compromised = await pinStore.getCompromised();
   if (compromised) {
@@ -234,6 +252,11 @@ async function readGateState(): Promise<Gate> {
  * forward. */
 export function onPortConnected(): Promise<void> {
   return serialized(async () => {
+    // Do not read or act on trust state until it is confined to the extension
+    // (#32): the same reasoning as the gate. If hardening failed, do nothing -
+    // the gate is already blocking every request, so there is no ceremony to
+    // drive.
+    if (!(await hardenStorageAccess()).ok) return;
     await updateBadge();
     if ((await getSetting("requireEnrollment")) !== true) return;
     if (!(await platformCanEnroll())) return; // no Enclave here; no ceremony
