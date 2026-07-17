@@ -2,6 +2,13 @@
 # install.sh - build chromium-bridge and register the native messaging host for
 # any Chromium-based browser.
 #
+# DEPRECATED (Phase 11 removes this script): registration now lives in the
+# product itself - use the Chromium Bridge app (GUI, self-registers on first
+# launch) or, equally, the CLI:
+#   chromium-bridge doctor --fix    # auto-detects your browsers; see docs/cli.md
+# This script remains the build-from-source and verified-prebuilt path until
+# the cutover.
+#
 # Usage:
 #   ./install.sh                        Build + install everything. The
 #                                       extension ID is fixed (pinned by the
@@ -139,7 +146,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
