@@ -76,6 +76,13 @@ pub fn nm_write_frame<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
 
 /// A parsed inbound JSON-RPC message. Distinguishes request (has `id`),
 /// notification (no `id`), and their shapes.
+///
+/// Deliberately NOT `deny_unknown_fields`, unlike every other wire type here:
+/// this is the one frame whose peer is a third-party MCP client we do not
+/// ship, and JSON-RPC/MCP implementations add top-level members as the spec
+/// evolves. Rejecting those would break the bridge's primary function against
+/// conforming clients; nothing security-relevant is decided from this frame's
+/// shape (authorization happens at the attested stdio/socket boundaries).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JsonRpc {
     pub jsonrpc: Option<String>,
@@ -224,7 +231,7 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 /// what lets several browsers stay attached at once. The label rides inside
 /// the signed response and is honored only after the HMAC verifies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Handshake {
     Challenge {
         nonce: String,
@@ -244,6 +251,7 @@ pub enum Handshake {
 /// honestly via `getppid`). `name` is a self-asserted label for logs only and
 /// is NEVER the authorization key. See ADR-0024.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HarnessId {
     /// The parent's attested image hash (macOS cdhash / Linux exe SHA256).
     pub hash: String,
@@ -261,13 +269,18 @@ pub struct HarnessId {
 /// or a sibling MCP-server instance relaying its harness's tool calls. Reading
 /// exactly one of these after the handshake is mandatory and fail-closed: an
 /// EOF or a malformed frame drops the connection. See ADR-0024.
+///
+/// `Browser` is an empty struct variant (not a unit variant) because serde
+/// silently skips `deny_unknown_fields` for unit variants of internally
+/// tagged enums; the empty-struct form serializes identically and rejects
+/// extra fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "attach", rename_all = "snake_case")]
+#[serde(tag = "attach", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AttachRequest {
     /// A native host fronting a browser. The browser label was already carried
     /// (MAC-signed) in the handshake `Response`; this frame only declares the
     /// role, so the browser leg's label authentication is unchanged.
-    Browser,
+    Browser {},
     /// A sibling MCP-server-mode instance relaying its harness's tool calls to
     /// the broker. `harness` is the relay's getppid-attested parent identity
     /// (absent only when the relay could not measure its parent, which the
@@ -285,10 +298,13 @@ pub enum AttachRequest {
 /// for a relay, may mean becoming the broker itself. Making these explicit
 /// (rather than a bare socket close) lets a relay tell "not admitted" apart
 /// from "broker went away" apart from "denied".
+///
+/// `Accepted` is an empty struct variant for the same serde reason as
+/// [`AttachRequest::Browser`]: unit variants ignore `deny_unknown_fields`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "attach_reply", rename_all = "snake_case")]
+#[serde(tag = "attach_reply", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AttachReply {
-    Accepted,
+    Accepted {},
     Refused { reason: String },
     Unavailable { reason: String },
 }
@@ -297,11 +313,32 @@ pub enum AttachReply {
 /// localhost TCP socket as newline-delimited JSON. Carries an `id` the
 /// extension echoes back so we can correlate (the socket is one-shot per
 /// request/response today, but the id future-proofs multiplexing).
+///
+/// `deny_unknown_fields` guards the envelope only; `args` stays free-form
+/// (it is validated per-op downstream against the tool catalogue). This
+/// makes adding an envelope field a breaking protocol change - an older
+/// peer rejects the frame rather than misreading it - so new per-op data
+/// belongs inside `args`, and a new envelope field needs a protocol-version
+/// bump.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BridgeReq {
+    /// Correlation id, echoed back on the matching [`BridgeResp`]. Assigned
+    /// only by the MCP server (a monotonic `AtomicU64` counter starting at
+    /// 0), so every id that legitimately appears is a small non-negative
+    /// integer - far inside the contract's JS-safe integer bound. The
+    /// contract (`contracts/bridge-request.schema.json`) is deliberately
+    /// wider (integer-or-string, for forward compatibility); this side stays
+    /// narrow on purpose: a string id can only come from a misbehaving peer,
+    /// and rejecting it is fail-closed. Widening would also thread a new id
+    /// type through the correlation maps in `session.rs` - if a string id
+    /// ever becomes real, that is a deliberate protocol change, not a parse
+    /// tweak.
     pub id: u64,
     pub op: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional target tab, `tabId` on the wire (the contract and the
+    /// extension use camelCase envelope fields).
+    #[serde(default, rename = "tabId", skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub args: Value,
@@ -315,7 +352,11 @@ pub struct BridgeReq {
 
 /// A response from the extension back to the MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BridgeResp {
+    /// Correlation id echoed from the [`BridgeReq`]. `u64` for the same
+    /// deliberate reason as [`BridgeReq::id`]: the server assigned it, so
+    /// anything else coming back is a protocol violation.
     pub id: u64,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -445,7 +486,7 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
 ///   `not_enrolled`, `invalid_challenge`, `key_invalid`, `keychain_error`,
 ///   `signing_failed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EnclaveControl {
     EnclaveChallenge {
         nonce: String,
@@ -646,6 +687,11 @@ mod tests {
         };
         let mut buf = Vec::new();
         bridge_write(&mut buf, &req).unwrap();
+        // The wire form uses the contract's camelCase field name, not the
+        // Rust field name.
+        let wire: Value = serde_json::from_slice(&buf[..buf.len() - 1]).unwrap();
+        assert_eq!(wire["tabId"], 3);
+        assert!(wire.get("tab_id").is_none());
         let got: BridgeReq = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();
         assert_eq!(got.id, 7);
         assert_eq!(got.op, "page_click");
@@ -756,7 +802,7 @@ mod tests {
         // Browser attach is a bare role marker (its label rode the signed
         // handshake response, not this frame).
         assert_eq!(
-            serde_json::to_value(AttachRequest::Browser).unwrap(),
+            serde_json::to_value(AttachRequest::Browser {}).unwrap(),
             json!({ "attach": "browser" })
         );
         // Client attach carries the relay's attested harness identity; a name
@@ -784,7 +830,7 @@ mod tests {
 
         // Replies are tagged and roundtrip.
         for reply in [
-            AttachReply::Accepted,
+            AttachReply::Accepted {},
             AttachReply::Refused {
                 reason: "not allowlisted".into(),
             },
@@ -799,6 +845,202 @@ mod tests {
                 serde_json::to_value(reply).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn wire_types_reject_unknown_fields() {
+        // Zero trust, fail closed: an unexpected field on any bridge wire
+        // frame is a protocol violation (a newer peer, a confused peer, or an
+        // attacker probing the parser) and must be rejected, never silently
+        // ignored. Each case pairs the reject with a positive control so a
+        // failure here means the deny, not a broken fixture.
+
+        // Handshake: both variants.
+        for (bad, good) in [
+            (
+                json!({ "type": "challenge", "nonce": "n", "extra": 1 }),
+                json!({ "type": "challenge", "nonce": "n" }),
+            ),
+            (
+                json!({ "type": "response", "mac": "m", "label": "b", "extra": 1 }),
+                json!({ "type": "response", "mac": "m", "label": "b" }),
+            ),
+        ] {
+            assert!(
+                serde_json::from_value::<Handshake>(bad.clone()).is_err(),
+                "should reject: {bad}"
+            );
+            assert!(serde_json::from_value::<Handshake>(good).is_ok());
+        }
+
+        // AttachRequest: the browser role frame (empty struct variant exists
+        // exactly so this reject works), the client frame, and an extra field
+        // nested inside the harness identity.
+        for (bad, good) in [
+            (
+                json!({ "attach": "browser", "extra": 1 }),
+                json!({ "attach": "browser" }),
+            ),
+            (
+                json!({ "attach": "client", "extra": 1 }),
+                json!({ "attach": "client" }),
+            ),
+            (
+                json!({ "attach": "client", "harness": { "hash": "h", "extra": 1 } }),
+                json!({ "attach": "client", "harness": { "hash": "h" } }),
+            ),
+        ] {
+            assert!(
+                serde_json::from_value::<AttachRequest>(bad.clone()).is_err(),
+                "should reject: {bad}"
+            );
+            assert!(serde_json::from_value::<AttachRequest>(good).is_ok());
+        }
+
+        // HarnessId directly.
+        assert!(serde_json::from_value::<HarnessId>(
+            json!({ "hash": "h", "team_id": "t", "name": "n", "extra": 1 })
+        )
+        .is_err());
+
+        // AttachReply: all three variants.
+        for (bad, good) in [
+            (
+                json!({ "attach_reply": "accepted", "extra": 1 }),
+                json!({ "attach_reply": "accepted" }),
+            ),
+            (
+                json!({ "attach_reply": "refused", "reason": "r", "extra": 1 }),
+                json!({ "attach_reply": "refused", "reason": "r" }),
+            ),
+            (
+                json!({ "attach_reply": "unavailable", "reason": "r", "extra": 1 }),
+                json!({ "attach_reply": "unavailable", "reason": "r" }),
+            ),
+        ] {
+            assert!(
+                serde_json::from_value::<AttachReply>(bad.clone()).is_err(),
+                "should reject: {bad}"
+            );
+            assert!(serde_json::from_value::<AttachReply>(good).is_ok());
+        }
+
+        // Bridge envelope: the deny guards the envelope only; `args` stays
+        // free-form (validated per-op downstream).
+        assert!(serde_json::from_value::<BridgeReq>(
+            json!({ "id": 1, "op": "tab_list", "args": {}, "extra": 1 })
+        )
+        .is_err());
+        // The pre-rename snake_case field is an unknown field now. Safe: no
+        // released peer ever emitted it (the field was always None/omitted),
+        // and a peer that does send it is out of contract.
+        assert!(serde_json::from_value::<BridgeReq>(
+            json!({ "id": 1, "op": "tab_list", "tab_id": 3, "args": {} })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<BridgeReq>(
+            json!({ "id": 1, "op": "tab_list", "tabId": 3, "args": {} })
+        )
+        .is_ok());
+        // A string id is rejected on both envelopes: the server is the sole
+        // assigner and only assigns integers; the contract's string arm is
+        // forward-compat only (see the field docs on BridgeReq::id).
+        assert!(serde_json::from_value::<BridgeReq>(
+            json!({ "id": "s-1", "op": "tab_list", "args": {} })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<BridgeResp>(json!({ "id": "s-1", "ok": true })).is_err());
+        let req: BridgeReq =
+            serde_json::from_value(json!({ "id": 1, "op": "x", "args": { "free": "form" } }))
+                .unwrap();
+        assert_eq!(req.args["free"], "form");
+        assert!(serde_json::from_value::<BridgeResp>(
+            json!({ "id": 1, "ok": true, "data": {}, "extra": 1 })
+        )
+        .is_err());
+        assert!(
+            serde_json::from_value::<BridgeResp>(json!({ "id": 1, "ok": true, "data": {} }))
+                .is_ok()
+        );
+
+        // Enclave control frames: all three variants reject an unexpected
+        // field, and a challenge carrying one is classified Malformed
+        // (answered with an error), never signed.
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "enclave_proof", "sig": "s", "key_id": "k", "pubkey": "p", "extra": 1 })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "enclave_error", "reason": "r", "extra": 1 })
+        )
+        .is_err());
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 })),
+            FrameDisposition::Malformed
+        ));
+    }
+
+    #[test]
+    fn bridge_envelopes_match_the_contract_schemas() {
+        // contracts/bridge-{request,response}.schema.json are the single
+        // source of truth for the envelope shapes. With deny_unknown_fields
+        // the parity must hold in BOTH directions: a field Rust serializes
+        // that the schema lacks would be rejected by the extension's Zod
+        // validator, and a schema property Rust does not know would be
+        // rejected here. Comparing the fully-populated wire form against the
+        // schema's `properties` keys pins both (this is the test that would
+        // have caught tab_id-vs-tabId).
+        fn schema_keys(raw: &str) -> std::collections::BTreeSet<String> {
+            let schema: Value = serde_json::from_str(raw).unwrap();
+            schema["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect()
+        }
+        fn wire_keys<T: Serialize>(v: &T) -> std::collections::BTreeSet<String> {
+            serde_json::to_value(v)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect()
+        }
+
+        let req = BridgeReq {
+            id: 1,
+            op: "tab_list".into(),
+            tab_id: Some(2),
+            args: json!({}),
+            browser: Some("brave".into()),
+        };
+        assert_eq!(
+            wire_keys(&req),
+            schema_keys(include_str!(
+                "../../../contracts/bridge-request.schema.json"
+            )),
+            "BridgeReq wire fields drifted from contracts/bridge-request.schema.json"
+        );
+
+        let resp = BridgeResp {
+            id: 1,
+            ok: false,
+            data: Some(json!({})),
+            error: Some("e".into()),
+        };
+        assert_eq!(
+            wire_keys(&resp),
+            schema_keys(include_str!(
+                "../../../contracts/bridge-response.schema.json"
+            )),
+            "BridgeResp wire fields drifted from contracts/bridge-response.schema.json"
+        );
     }
 
     #[test]
