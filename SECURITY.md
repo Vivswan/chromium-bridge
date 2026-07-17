@@ -144,18 +144,24 @@ release publishes the archive's SHA-256, a separate SHA-256 of the binary
 inside it (`<name>.binary.sha256`), and a build provenance attestation
 covering both.
 
-In prebuilt mode `install.sh` refuses to install a binary it cannot verify.
-It hashes the private copy it is about to install (not the source file, so
-the checked bytes are the installed bytes) and compares against the
-published `.binary.sha256`, or against a user-supplied `--expected-sha256`.
-The repository whose checksums are trusted is pinned in the installer's
-code; the archive's `RELEASE.txt` supplies only the tag/platform/arch and
-must name that same repository, so a tampered archive cannot redirect
-verification to a repository its author controls (installing a fork's
-release requires an explicit `--release-repo`). The build provenance
-attestation is verified too when an authenticated `gh` is available. Any
-mismatch, missing reference, or failed download aborts the install, and the
-macOS quarantine attribute is cleared only after the checksum has matched.
+In prebuilt mode `install.sh` refuses to install a binary it cannot verify
+against an anchor whose trust is independent of the release asset. It hashes
+the private copy it is about to install (not the source file, so the checked
+bytes are the installed bytes), then takes one of two paths. With a
+user-supplied `--expected-sha256`, obtained out of band, that hash is the
+independent anchor and verification is a direct comparison with no network. On
+the online default (no such hash), a successful GitHub build-provenance
+attestation for those exact bytes is required, checked with an authenticated
+`gh` against the pinned repository; the published `.binary.sha256` is fetched
+and compared too, but only as a corruption check, since it lives in the same
+release as the binary and so is not proof of origin on its own. The repository
+whose provenance is trusted is pinned in the installer's code; the archive's
+`RELEASE.txt` supplies only the tag/platform/arch and must name that same
+repository, so a tampered archive cannot redirect verification to a repository
+its author controls (installing a fork's release requires an explicit
+`--release-repo`). If `gh` is missing or unauthenticated, or the attestation,
+checksum, download, or reference fails, the install aborts, and the macOS
+quarantine attribute is cleared only after verification has passed.
 
 Known gaps, stated plainly:
 

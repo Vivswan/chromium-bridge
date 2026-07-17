@@ -35,9 +35,9 @@
 #                                       loaded extension untouched.
 #   ./install.sh --expected-sha256 HASH Prebuilt mode only: verify the shipped
 #                                       binary against this SHA-256 (64 hex
-#                                       chars) instead of downloading the
-#                                       published checksum. For offline installs;
-#                                       obtain the hash out of band from the
+#                                       chars) obtained out of band. The offline
+#                                       trust anchor: replaces the online gh
+#                                       provenance check. Get it from the
 #                                       release's .binary.sha256 asset.
 #   ./install.sh --release-repo OWNER/REPO
 #                                       Prebuilt mode only: trust this GitHub
@@ -479,27 +479,34 @@ EOF
   echo "[verify] binary sha256 OK: $actual"
   echo "[verify]   reference: $reference"
 
-  # Build provenance (defense in depth): ask GitHub whether its Actions
-  # pipeline attested this exact binary for the trusted repository. Only
-  # meaningful when the reference above is a published checksum, and needs an
-  # authenticated gh with the attestation subcommand; otherwise say so and
-  # rely on the checksum. If the check RUNS and fails, that is a red flag
-  # (a checksum asset that matches an unattested binary), so fail closed.
+  # Build provenance is the INDEPENDENT trust anchor for the online path. The
+  # checksum matched just above was fetched from the SAME GitHub Release as the
+  # binary, so an attacker who can swap the release asset can swap its published
+  # checksum too: the checksum alone is a corruption check, never proof of
+  # origin. When no out-of-band --expected-sha256 was supplied, a SUCCESSFUL gh
+  # attestation verify is therefore REQUIRED. It checks GitHub's signed build
+  # provenance (Sigstore-backed, in a transparency log), which a release-asset
+  # swap cannot forge. Fail closed if gh is missing, unauthenticated, or the
+  # attestation does not verify. The out-of-band --expected-sha256 path stays
+  # gh-free because that hash is itself the independent anchor.
   if [[ -z "$EXPECTED_SHA256" ]]; then
-    if command -v gh >/dev/null 2>&1 \
-      && gh attestation --help >/dev/null 2>&1 \
-      && gh auth status >/dev/null 2>&1; then
-      echo "[verify] checking build provenance attestation via gh..."
-      if gh attestation verify "$file" --repo "$RELEASE_REPO" >&2; then
-        echo "[verify] build provenance attestation OK"
-      else
-        echo "error: build provenance attestation FAILED for this binary (repo $RELEASE_REPO)." >&2
-        echo "error: The checksum matched but GitHub has no attestation for these bytes." >&2
-        echo "error: Refusing to install." >&2
-        return 1
-      fi
+    if ! command -v gh >/dev/null 2>&1 \
+      || ! gh attestation --help >/dev/null 2>&1 \
+      || ! gh auth status >/dev/null 2>&1; then
+      echo "error: cannot independently verify this binary. The release checksum shares" >&2
+      echo "error: its origin with the binary, so on its own it is not proof of authenticity." >&2
+      echo "error: Install and authenticate the GitHub CLI (gh) so its build-provenance" >&2
+      echo "error: attestation can be checked, OR re-run with --expected-sha256 <hash from" >&2
+      echo "error: the release notes, obtained out of band>. Refusing to install." >&2
+      return 1
+    fi
+    echo "[verify] checking build provenance attestation via gh..."
+    if gh attestation verify "$file" --repo "$RELEASE_REPO" >&2; then
+      echo "[verify] build provenance attestation OK"
     else
-      echo "[verify] gh unavailable or unauthenticated - attestation check skipped (sha256 verified above)"
+      echo "error: build provenance attestation FAILED for this binary (repo $RELEASE_REPO)." >&2
+      echo "error: GitHub has no valid attestation for these bytes. Refusing to install." >&2
+      return 1
     fi
   fi
 }
@@ -572,8 +579,9 @@ echo "[install] binary installed at $INSTALL_DIR/$BINARY_NAME"
 # xattr, which the copy above inherits. Chrome spawns this binary via the native
 # messaging host, and Gatekeeper can then silently block the (unsigned,
 # not-yet-notarized) launch. Clear the attribute on the installed copy so the
-# host starts. This point is only reached AFTER bb_verify_prebuilt has matched
-# the binary against the release's published checksum, so the attribute is
+# host starts. This point is only reached AFTER bb_verify_prebuilt has passed:
+# online, a matching published checksum AND a successful build-provenance
+# attestation; offline, the out-of-band --expected-sha256. So the attribute is
 # never cleared on unverified bytes. Best-effort: the source-built binary has
 # no such attribute, and `xattr` may be absent, so never fail the install on
 # this. This is a stopgap until the release binary is notarized.
