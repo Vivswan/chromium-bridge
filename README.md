@@ -178,7 +178,9 @@ there will move from whole-file hashes to comparing cdhashes.
 ### 2. Load the extension
 
 `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select
-the **`extension/dist/`** directory (the build output, *not* `extension/`).
+the **built `dist/` directory**: `src/apps/extension/dist/` in a source
+checkout, or `extension/dist/` inside an extracted release archive (the build
+output, *not* the extension source directory).
 
 The extension ID is **pinned** to `mkjjlmjbcljpcfkfadfmhblmmddkdihf` (via the
 manifest `key`), which the installer already trusted — **nothing to copy, nothing
@@ -393,19 +395,19 @@ in Claude Code) and the extension's Service Worker console at
 <summary>Testing & project layout</summary>
 
 Independent suites across two languages, run together with
-`bun tests/run_all.ts`:
+`bun tests/browser/run_all.ts`:
 
-- **Protocol layer** — `tests/e2e.py` drives the real binary (MCP over stdio,
+- **Protocol layer** — `tests/protocol/e2e.py` drives the real binary (MCP over stdio,
   `--native-host` framing, mock extension over the TCP bridge).
-- **DOM layer** — `tests/dom_test.ts` injects the real content script into
+- **DOM layer** — `tests/browser/dom_test.ts` injects the real content script into
   headless Chrome via CDP and exercises every op against a real DOM.
-- **Smoke** — `tests/ext_test.ts` boots real Chrome with `extension/dist/`.
-- **Real integration** (opt-in) — `tests/integration_e2e.ts`; run with
+- **Smoke** — `tests/browser/ext_test.ts` boots real Chrome with `src/apps/extension/dist/`.
+- **Real integration** (opt-in) — `tests/browser/integration_e2e.ts`; run with
   `BB_REAL_E2E=1`. Needs Chrome for Testing / Chromium.
 
 See [tests/README.md](./tests/README.md). Rough source layout: `src/` (Rust:
 `main.rs` mode dispatch, `protocol.rs`, `ipc.rs`, `native_host.rs`,
-`mcp_server.rs`, `tools/`, `session.rs`), `extension/src/` (TypeScript →
+`mcp_server.rs`, `tools/`, `session.rs`), `src/apps/extension/src/` (TypeScript →
 `dist/` via esbuild), `contracts/` (cross-process contracts), `docs/`.
 </details>
 

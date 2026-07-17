@@ -202,4 +202,4 @@ Not closed, stated plainly:
 - `src/protocol.rs`: `EnclaveControl`, `classify_nm_frame`, and the frame
   contract documentation the extension consumes.
 - `src/native_host.rs`: the control-frame filter in the stdin-to-socket pump.
-- `tests/e2e.py::test_enclave_control_frames`: the real-process routing test.
+- `tests/protocol/e2e.py::test_enclave_control_frames`: the real-process routing test.

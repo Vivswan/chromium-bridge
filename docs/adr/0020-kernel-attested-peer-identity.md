@@ -199,6 +199,6 @@ Irreducible (named honestly, per the zero-trust principle):
   Security-framework FFI (`peer_cdhash`, `own_cdhash`).
 - `src/mcp_server.rs`: accept loop attests the host after the peer-UID check.
 - `src/native_host.rs`: attests the server right after `connect`.
-- `tests/e2e.py`: round-trips route through a real `--native-host` process and
+- `tests/protocol/e2e.py`: round-trips route through a real `--native-host` process and
   wait on its handshake-complete signal; `test_foreign_peer_is_rejected` covers
   the reject path.

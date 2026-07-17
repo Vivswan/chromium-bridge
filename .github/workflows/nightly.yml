@@ -37,19 +37,19 @@ jobs:
         with:
           chrome-version: stable
       - run: bun install --frozen-lockfile
-      - run: bun run --cwd extension build
+      - run: bun run --cwd src/apps/extension build
       - name: Typecheck tests
-        run: bun run --cwd tests typecheck
+        run: bun run --cwd tests/browser typecheck
       - name: DOM-layer tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        run: bun tests/dom_test.ts
+        run: bun tests/browser/dom_test.ts
       - name: Extension smoke test
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
         # The smoke test needs a non-headless browser (MV3 SW reliability), so
         # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
-        run: xvfb-run -a bun tests/ext_test.ts
+        run: xvfb-run -a bun tests/browser/ext_test.ts
 
   # Mutation testing lives here rather than in the PR gate because a full
   # cargo-mutants pass is far too slow for every PR. Missed mutants (exit 2)
@@ -90,7 +90,7 @@ jobs:
   # SMOKE pass (bounded runs per target) that proves the harnesses build and
   # survive a blast of random input; the "no findings" path is a normal pass,
   # and a crash (a parser panic/abort on hostile input) is fatal -- exactly the
-  # exit semantics of tests/fuzz_smoke.sh.
+  # exit semantics of scripts/fuzz_smoke.sh.
   fuzz:
     name: Parser fuzz smoke (cargo-fuzz, scheduled)
     runs-on: ubuntu-latest
@@ -106,5 +106,5 @@ jobs:
         with:
           tool: cargo-fuzz
       - name: Fuzz the wire parsers (bounded smoke; a crash is fatal)
-        run: tests/fuzz_smoke.sh 200000
+        run: scripts/fuzz_smoke.sh 200000
 

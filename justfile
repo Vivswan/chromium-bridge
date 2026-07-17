@@ -7,8 +7,13 @@
 default:
     @just --list --unsorted
 
-# Build the release binary
+# Build everything (mirror of `bun run build`): shared typecheck -> extension
+# bundle -> scripts typecheck -> cargo build --workspace
 build:
+    bun run build
+
+# Build the release binary
+build-release:
     cargo build --release
 
 # Deterministic release build (path-remapped, --locked)
@@ -29,7 +34,7 @@ lint:
 
 # Lint the remaining standalone shell scripts (needs shellcheck)
 lint-scripts:
-    shellcheck install/install.sh scripts/build-repro.sh tests/install_verify_test.sh tests/fuzz_smoke.sh
+    shellcheck install/install.sh scripts/build-repro.sh scripts/install_verify_test.sh scripts/fuzz_smoke.sh
 
 # Source-code spell check (CI gate; config in typos.toml)
 typos:
@@ -44,10 +49,10 @@ audit:
     cargo deny check
     cargo audit
 
-# Regenerate code from contracts/ (ops.gen.ts + identity.gen.ts into packages/shared)
+# Regenerate code from contracts/ (ops.gen.ts + identity.gen.ts into src/packages/shared)
 gen:
     bun scripts/gen-ops.ts
-    bunx biome format --write packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts
+    bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts
 
 # Rust unit + integration tests (cargo-nextest, plus doctests)
 test-rust:
@@ -55,8 +60,8 @@ test-rust:
     cargo test --doc
 
 # Protocol-layer e2e tests (drives the real release binary)
-test-e2e: build
-    python3 tests/e2e.py
+test-e2e: build-release
+    python3 tests/protocol/e2e.py
 
 # Install JS workspace dev dependencies (bun)
 js-deps:
@@ -64,9 +69,9 @@ js-deps:
 
 # Build the extension bundle (src/ -> dist/)
 ext-build:
-    bun run --cwd extension build
+    bun run --cwd src/apps/extension build
 
-# Type-check every TS project (extension, tests, scripts, packages/shared)
+# Type-check every TS project (extension, tests, scripts, src/packages/shared)
 typecheck:
     bun run typecheck
 
@@ -80,21 +85,21 @@ fix-ts:
 
 # Unit-test the extension's shared modules (bun; no browser)
 ext-test:
-    bun run --cwd extension test
+    bun run --cwd src/apps/extension test
 
-# Unit-test packages/shared: contract equivalence, parity, boundary validators
+# Unit-test src/packages/shared: contract equivalence, parity, boundary validators
 shared-test:
-    bun run --cwd packages/shared test
+    bun run --cwd src/packages/shared test
 
 # DOM + smoke + security proofs (needs bun + isolated Chrome; builds first)
 test-browser: ext-build
-    cd tests && bun dom_test.ts
-    bun tests/ext_test.ts
-    bun tests/security_browser_test.ts
+    cd tests/browser && bun dom_test.ts
+    bun tests/browser/ext_test.ts
+    bun tests/browser/security_browser_test.ts
 
 # Real E2E integration (opt-in; real binary + Chrome + extension)
-test-integration: build ext-build
-    BB_REAL_E2E=1 bun tests/integration_e2e.ts
+test-integration: build-release ext-build
+    BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts
 
 # All tests that run without a browser
 test: test-rust test-e2e

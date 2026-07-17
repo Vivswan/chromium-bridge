@@ -1,13 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/host"]
+members = ["src/packages/core", "src/apps/host"]
 # Keep the default build/test/clippy surface pinned to the security core and
 # the host binary. Future members (e.g. a Tauri app) must be added here only
 # by an explicit decision, so `cargo test` stays the gate for the core.
-default-members = ["crates/core", "crates/host"]
-# `fuzz/` is its own (nightly + libFuzzer) workspace; keep it out of the main
-# build/test graph so a stable `cargo` build never tries to compile it.
-exclude = ["fuzz"]
+default-members = ["src/packages/core", "src/apps/host"]
+# `src/packages/core/fuzz/` is its own (nightly + libFuzzer) workspace; keep it
+# out of the main build/test graph so a stable `cargo` build never tries to
+# compile it.
+exclude = ["src/packages/core/fuzz"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,7 +26,7 @@ thiserror = "2.0.18"
 # (no `fork`/`timeout`/`regex-syntax` features) so it spawns no processes and
 # its dependency tree stays within the licenses allowed by `deny.toml`.
 proptest = { version = "1", default-features = false, features = ["std"] }
-# Secure Enclave enrollment key (crates/core/src/enclave.rs). The vetted
+# Secure Enclave enrollment key (src/packages/core/src/enclave.rs). The vetted
 # wrapper crate is used instead of hand-rolled Security.framework FFI;
 # OSX_10_15 is required for the data-protection keychain, the only keychain
 # that can hold Secure Enclave keys. The -sys crate is a direct dependency
@@ -34,7 +35,7 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 core-foundation = "0.10"
 security-framework = { version = "3", features = ["OSX_10_15"] }
 security-framework-sys = "2"
-chromium-bridge-core = { path = "crates/core" }
+chromium-bridge-core = { path = "src/packages/core" }
 
 # codegen-units=1 and strip=symbols also serve reproducibility: one codegen
 # unit removes parallel-codegen variance, and stripping drops the symbol/debug

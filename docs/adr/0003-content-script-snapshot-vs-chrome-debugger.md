@@ -72,7 +72,7 @@ This was confirmed through research during selection, and the user was explicit 
 
 ## Implementation details (v0.1)
 
-- The `snapshot()` function in `extension/content.js`
+- The `snapshot()` function in `src/apps/extension/content.js`
 - `INTERACTIVE_TAGS` / `INTERACTIVE_ROLES` decide which nodes enter the tree
 - `roleOf()` / `nameOf()` / `isVisible()` / `cssSelectorOf()` each hold their approximation logic
 - refs are stored as a DOM attribute plus a content script Map, so they can be rebuilt from the DOM after an SW restart

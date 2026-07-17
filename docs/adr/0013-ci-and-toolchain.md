@@ -17,9 +17,9 @@
 
 The project spans two stacks (Rust backend + TypeScript extension) and several kinds of tests (Rust unit, protocol e2e, DOM layer, smoke), but before the cleanup it had no unified developer entry point and no automated gates:
 
-- **Scattered commands**: build, test, and lint were each a string of commands to memorize (`cargo ...`, `npm --prefix extension run ...`, `python3 tests/e2e.py`, `bun ...`), spread across the README and human memory; a new contributor could not reproduce "what counts as passing."
+- **Scattered commands**: build, test, and lint were each a string of commands to memorize (`cargo ...`, `npm --prefix extension run ...`, `python3 tests/protocol/e2e.py`, `bun ...`), spread across the README and human memory; a new contributor could not reproduce "what counts as passing."
 - **No CI**: no automated checks at all; formatting, lint, and tests relied on contributor discipline, and regressions slipped into main easily.
-- **Version drift**: the same version number lived in three places: `Cargo.toml`, `extension/manifest.json`, `extension/package.json`. Manual edits easily missed one, leaving backend and extension versions inconsistent.
+- **Version drift**: the same version number lived in three places: `Cargo.toml`, `src/apps/extension/manifest.json`, `src/apps/extension/package.json`. Manual edits easily missed one, leaving backend and extension versions inconsistent.
 
 The cleanup had to give the project a baseline of "one command runs the whole suite + CI blocks regressions + versions cannot drift."
 
@@ -36,9 +36,9 @@ Triggered on push to main / PR / manual dispatch, with concurrency cancellation,
 | job | contents |
 |-----|------|
 | **rust** | `cargo fmt --check` -> `clippy --all-targets -D warnings` -> `cargo test` -> `cargo build --release` |
-| **extension** | `npm ci` -> `typecheck` -> `lint` -> `format:check` -> `build` (in `extension/`) |
+| **extension** | `npm ci` -> `typecheck` -> `lint` -> `format:check` -> `build` (in `src/apps/extension/`) |
 | **version-consistency** | `./scripts/check-version.sh` |
-| **e2e** | build the release binary, then `python3 tests/e2e.py` (drives the real binary) |
+| **e2e** | build the release binary, then `python3 tests/protocol/e2e.py` (drives the real binary) |
 | **browser** | install Chrome + bun, build the extension, run `dom_test.ts` + `ext_test.ts` |
 
 ### 3. Quality gates
@@ -47,7 +47,7 @@ Triggered on push to main / PR / manual dispatch, with concurrency cancellation,
 
 ### 4. Single source of truth for the version
 **`Cargo.toml` is the only source of truth for the version**, kept consistent by two scripts:
-- `scripts/check-version.sh`: verifies `extension/manifest.json` and `extension/package.json` match `Cargo.toml`, exit 1 on mismatch (CI's version-consistency job runs it).
+- `scripts/check-version.sh`: verifies `src/apps/extension/manifest.json` and `src/apps/extension/package.json` match `Cargo.toml`, exit 1 on mismatch (CI's version-consistency job runs it).
 - `scripts/sync-version.sh`: propagates the Cargo version into the manifest (in-place sed, avoiding the `manifest_version` key) and package.json (plus package-lock.json, via `npm version`), running the check automatically at the end.
 
 The version-bump flow: edit `Cargo.toml` -> `just sync-version` -> commit.

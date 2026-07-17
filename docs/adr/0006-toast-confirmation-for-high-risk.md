@@ -61,7 +61,7 @@ If the AI executes these silently, the user may never realize what happened. A s
 
 ## Implementation details
 
-`extension/content.js`:
+`src/apps/extension/content.js`:
 
 ```javascript
 // High-risk detection
