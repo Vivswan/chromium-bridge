@@ -203,23 +203,19 @@ export class CdpBackend implements PageBackend {
       throw new Error("page_eval disabled in settings");
     }
 
-    // Confirm (grace window keyed per-tab + origin, matching the content path),
-    // unless the user turned the eval confirmation off (confirmPageEval=false).
-    // NOTE: disabling it removes ADR-0008's guardrail — arbitrary JS runs with
-    // no prompt.
+    // Confirm every call, unless the user turned the eval confirmation off
+    // (confirmPageEval=false). page_eval is DELIBERATELY excluded from the
+    // same-origin grace window (ADR-0008 update 2026-07-16): there is no
+    // silent-eval window, so every eval reconfirms. This mirrors the content
+    // path in content/toast.ts. NOTE: disabling confirmPageEval removes
+    // ADR-0008's guardrail - arbitrary JS then runs with no prompt.
     if ((await getSetting("confirmPageEval")) !== false) {
-      const key = `${tab.id}:${originOf(tab.url)}:eval`;
-      const graceMs = await getSetting("confirmGraceMs");
-      const inGrace = graceMs > 0 && lastConfirmed.key === key && Date.now() < lastConfirmed.until;
-      if (!inGrace) {
-        const approved = await session.evaluate(
-          evalToast,
-          [code, tab.url || "", tab.title || "", await getSetting("evalToastTimeoutMs")],
-          { awaitPromise: true }
-        );
-        if (!approved) throw new Error("user denied page_eval");
-        lastConfirmed = { key, until: Date.now() + graceMs };
-      }
+      const approved = await session.evaluate(
+        evalToast,
+        [code, tab.url || "", tab.title || "", await getSetting("evalToastTimeoutMs")],
+        { awaitPromise: true }
+      );
+      if (!approved) throw new Error("user denied page_eval");
     }
 
     // Run the code as an async IIFE in the MAIN world. Unlike the content path
