@@ -16,6 +16,7 @@ describe("DEFAULTS", () => {
         "evalMask",
         "evalToastTimeoutMs",
         "groupTabs",
+        "hostReverifyMs",
         "pageEvalEnabled",
         "requireEnrollment",
         "warnPreciseSnapshot",
@@ -30,6 +31,9 @@ describe("DEFAULTS", () => {
     // Enrollment is on by default (ADR-0021): the bridge fails closed until a
     // host key is paired and pinned.
     expect(DEFAULTS.requireEnrollment).toBe(true);
+    // Periodic host re-verification is opt-in; 0 keeps the session-granularity
+    // default (verify at pairing and on demand only).
+    expect(DEFAULTS.hostReverifyMs).toBe(0);
   });
 });
 
