@@ -20,6 +20,11 @@
 # Python bytecode cache from the tests/ harness (adversarial.py imports e2e.py)
 tests/__pycache__/
 
+# Isolated browsers downloaded for the browser suites
+# (npx @puppeteer/browsers install ... run from tests/)
+/tests/chrome/
+/tests/chromium/
+
 # Development worktrees (see CONTRIBUTING.md — one per branch, never committed)
 /.worktree/
 

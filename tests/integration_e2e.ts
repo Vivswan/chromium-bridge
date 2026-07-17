@@ -13,8 +13,10 @@
  * pinned extension id; otherwise it derives the id from the throwaway path.
  *
  * OPT-IN, macOS/Windows + Chrome for Testing (or Chromium). Pops a non-headless
- * window and temporarily registers a native-messaging host manifest (backing
- * up/restoring any existing registration). Not part of the default suite or CI.
+ * window. On macOS the host manifest is written inside the throwaway profile
+ * (Chrome resolves user-level manifests relative to --user-data-dir), so no
+ * real registration is touched; on Windows the HKCU registry value is backed
+ * up and restored. Not part of the default suite or CI.
  *
  * Run:  BB_REAL_E2E=1 node tests/integration_e2e.ts
  */
@@ -37,12 +39,7 @@ const CHROME =
   (IS_WINDOWS
     ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
     : "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
-const NM_DIR = path.join(
-  os.homedir(),
-  "Library/Application Support/Google/Chrome/NativeMessagingHosts"
-);
 const HOST_NAME = "com.browser_bridge.host";
-const MANIFEST = path.join(NM_DIR, HOST_NAME + ".json");
 const REG_KEY = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 const LOCK = IS_WINDOWS
   ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData/Local"), "browser-bridge/run.lock")
@@ -148,12 +145,12 @@ async function main(): Promise<void> {
   }
 
   // Back up any existing host registration so a real install is untouched.
+  // (Windows only: the HKCU registry value is shared by every Chrome instance
+  // of this Windows account. On macOS the manifest lives inside the throwaway
+  // profile, so there is nothing to back up.)
   let backup: string | null = null;
   if (IS_WINDOWS) {
     backup = readWindowsRegistration();
-  } else if (fs.existsSync(MANIFEST)) {
-    backup = MANIFEST + ".bb-e2e-backup";
-    fs.renameSync(MANIFEST, backup);
   }
   try {
     fs.rmSync(LOCK);
@@ -193,9 +190,14 @@ async function main(): Promise<void> {
     check(fs.existsSync(LOCK), "MCP server wrote the lock file");
 
     // Host manifest authorizes ONLY our throwaway extension id. Written before
-    // launch so connectNative succeeds on the first try.
-    const testManifest = IS_WINDOWS ? path.join(work, HOST_NAME + ".json") : MANIFEST;
-    if (!IS_WINDOWS) fs.mkdirSync(NM_DIR, { recursive: true });
+    // launch so connectNative succeeds on the first try. On macOS the manifest
+    // goes inside the throwaway profile: Chrome for Testing and Chromium
+    // resolve user-level manifests relative to --user-data-dir, so this works
+    // and never touches a real registration (see tests/README.md).
+    const testManifest = IS_WINDOWS
+      ? path.join(work, HOST_NAME + ".json")
+      : path.join(profile, "NativeMessagingHosts", HOST_NAME + ".json");
+    if (!IS_WINDOWS) fs.mkdirSync(path.dirname(testManifest), { recursive: true });
     fs.writeFileSync(
       testManifest,
       JSON.stringify({
@@ -303,12 +305,8 @@ async function main(): Promise<void> {
     if (IS_WINDOWS) {
       removeWindowsRegistration();
       if (backup) writeWindowsRegistration(backup);
-    } else {
-      try {
-        fs.rmSync(MANIFEST);
-      } catch {}
-      if (backup) fs.renameSync(backup, MANIFEST);
     }
+    // macOS: the manifest lives inside `profile`, deleted just below.
     fs.rmSync(work, { recursive: true, force: true });
     fs.rmSync(profile, { recursive: true, force: true });
   }
