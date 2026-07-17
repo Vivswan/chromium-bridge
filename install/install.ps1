@@ -1,5 +1,12 @@
 # install.ps1 - build chromium-bridge and register the native messaging host for
 # any Chromium-based browser (current Windows user, HKCU).
+#
+# DEPRECATED (Phase 11 removes this script): registration now lives in the
+# product itself - use the Chromium Bridge app (GUI, self-registers on first
+# launch) or, equally, the CLI: `chromium-bridge doctor --fix` (see
+# docs/cli.md). The CLI's Windows registry path still needs verification on a
+# real Windows machine; until then this script remains the tested Windows
+# path.
 
 [CmdletBinding()]
 param(

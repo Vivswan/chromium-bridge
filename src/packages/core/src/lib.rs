@@ -13,6 +13,7 @@
 pub mod log;
 pub mod allowlist;
 pub mod broker;
+pub mod browsers;
 pub mod cli;
 pub mod doctor;
 pub mod enclave;
@@ -21,6 +22,7 @@ pub mod ipc;
 pub mod mcp_server;
 pub mod native_host;
 pub mod protocol;
+pub mod registration;
 pub mod revocation;
 pub mod session;
 pub mod tools;
