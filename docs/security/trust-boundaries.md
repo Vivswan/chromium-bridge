@@ -27,9 +27,9 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     inside a 0700 per-user directory, so there is no localhost port for another
     process to connect to, and the filesystem mode keeps other users out.
     Windows, lacking std Unix sockets, keeps a loopback TCP socket.
-  - **Peer-UID check**: on `accept`, the server reads the connecting peer's UID
-    from the kernel (`getpeereid` / `SO_PEERCRED`) and drops any connection not
-    from its own UID, before authentication.
+  - **Peer-UID check** (Unix): on `accept`, the server reads the connecting
+    peer's UID from the kernel (`getpeereid` / `SO_PEERCRED`) and drops any
+    connection not from its own UID, before authentication.
   - **Kernel-attested executable identity** (Linux/macOS): still before
     authentication, each end takes a kernel-attested identity for the peer and
     requires it to match its own running image. On Linux it resolves the peer PID
@@ -50,6 +50,14 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     per-connection nonce defeats replay.
   - Each connection is size-checked NDJSON; the newest authenticated connection
     replaces the previous writer.
+  - **Windows downgrade**: Windows has no std Unix-domain socket, so the bridge
+    is a loopback TCP socket, and neither the peer-UID check nor the attestation
+    is compiled in (both are Unix only). Any local process can open the loopback
+    port; the only barrier is the HMAC secret. The lock file holding that secret
+    gets no explicit mode on Windows and relies on the default per-user
+    permissions of `LOCALAPPDATA`. So on Windows the guarantee is weaker: it
+    rests on the secret staying confidential, not on kernel-attested peer
+    identity.
   - **Residual risk**: neither a hash nor a code signature can distinguish the
     legitimate browser-spawned host from the same binary re-run by a same-user
     attacker: the bytes, and the cdhash, are identical. Closing that requires
@@ -67,6 +75,14 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   outbound cap; single-writer + flush-per-frame on stdout; `panic = "abort"` +
   stderr panic hook so a panic can't corrupt the frame stream. Shutdown on stdin
   EOF.
+- **Residual (host-to-extension is unauthenticated)**: `allowed_origins` pins
+  which extension may open the host, but nothing pins which host the extension
+  will accept. The manifest lives in a user-writable directory, so a same-user
+  attacker can repoint its `path` at a malicious host binary. The browser
+  launches that binary and it speaks native messaging straight to the extension,
+  bypassing the authenticated socket at boundary ②. Closing this needs
+  trust-on-first-use host-identity pairing in the extension. See the
+  [threat model](threat-model.md).
 
 ## ④ Extension ↔ web page  (Chrome API / content script / DOM)
 
@@ -77,7 +93,9 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     origin prompts the user and requests the host permission. The page cannot
     self-approve.
   - **Confirmation**: submit/link clicks, `page_eval`, and tab close inject an
-    in-page toast the page cannot forge or auto-dismiss (30s auto-deny).
+    in-page toast the page cannot forge or auto-dismiss (30s auto-deny). Only
+    these high-risk ops confirm; low-risk ops (navigate, `page_text`,
+    `tab_list`, masked cookie or storage reads) run with no per-action prompt.
   - **Masking**: page text, cookies, storage, and eval output are masked before
     crossing back toward the model.
   - **Isolation**: content scripts run in the isolated world; `page_eval` uses a
@@ -88,9 +106,13 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
 ## Invariants that must not regress
 
 - stdout on either binary mode = protocol bytes only.
-- The bridge never serves a connection that failed the peer-UID check, the
-  executable-identity attestation, or the HMAC handshake.
+- On Unix, the bridge never serves a connection that failed the peer-UID check,
+  the executable-identity attestation, or the HMAC handshake. On Windows only
+  the HMAC handshake gates a connection: there is no peer-UID check and no
+  attestation, so the guarantee reduces to knowledge of the per-run secret.
 - The host manifest's `allowed_origins` always pins exactly our extension ID.
+  (This pins extension-to-host only; the host-to-extension hop is not yet
+  authenticated. See boundary ③.)
 - No page-level tool runs on a non-allowlisted origin (absent `allowAllSites`).
 - No tool writes cookies or web storage.
 
