@@ -55,8 +55,36 @@ Key invariants:
   written. There is no `cookie_set`/`storage_set` by design.
 - **Approve-per-origin + confirm high-risk** — page ops need an allowlisted
   origin; submit/link clicks, `page_eval`, and tab close prompt the user.
-- **Bridge auth** — the localhost TCP bridge authenticates each connection with
-  a per-run secret from a 0600 lock file.
+- **Bridge auth.** No bridge connection is served until it answers an HMAC
+  challenge over a per-run secret from the lock file (0600 on macOS/Linux).
+  On macOS/Linux the bridge is a private Unix-domain socket and the server
+  also rejects peers by UID and kernel-attests the peer executable before the
+  handshake; on Windows it is a loopback TCP socket with the HMAC check only
+  (see Platform support below).
+
+## Platform support
+
+The strong bridge guarantees hold on macOS and Linux only. There the MCP
+server and the native host talk over a Unix-domain socket with no listening
+port, created 0600 inside a 0700 per-user directory. The server rejects any
+peer whose UID differs from its own, and both ends kernel-attest that the
+other side is running this exact binary (Linux: SHA256 of `/proc/<pid>/exe`;
+macOS: the running image's code-directory hash) before the HMAC handshake.
+
+Windows support is best-effort. None of those mechanisms is compiled in: the
+bridge is a loopback TCP socket that any process on the machine can reach, and
+the only gate is the HMAC challenge-response over the per-run secret in the
+lock file. The lock file gets no explicit restrictive mode on Windows, so the
+secret's confidentiality rests on the default permissions of the per-user
+runtime directory (normally `%LOCALAPPDATA%\browser-bridge`, falling back to
+the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset). The
+non-abuse goal stated in the threat model (another
+program you are running must not be able to drive the bridge silently) does
+not hold on Windows: any same-user process that reads the lock file can
+authenticate. The server logs a prominent warning at startup on Windows.
+Treat the bridge accordingly there; the full scoping is in the
+[threat model](docs/security/threat-model.md) and
+[trust boundaries](docs/security/trust-boundaries.md) docs.
 
 ## page_eval and confirmation defaults (fail-safe)
 

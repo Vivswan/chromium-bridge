@@ -46,6 +46,28 @@ pub fn run() -> i32 {
         }
     }
 
+    // Windows has none of the mechanisms above (all cfg unix/macos), so say so
+    // loudly at every startup rather than let the platform difference pass
+    // silently. Error level, not warn: BB_LOG=error must not silence it.
+    // See SECURITY.md "Platform support".
+    #[cfg(target_os = "windows")]
+    {
+        log_error!(
+            "mcp",
+            "SECURITY: Windows support is BEST-EFFORT. The same-user and \
+             local-process protections enforced on macOS/Linux do NOT hold \
+             here: there is no peer-UID check and no executable attestation, \
+             and the bridge listens on loopback TCP, reachable by ANY process \
+             on this machine. Access control reduces to the confidentiality \
+             of the per-run secret in the lock file, which relies only on the \
+             default permissions of the per-user runtime directory (normally \
+             under LOCALAPPDATA). Treat any local process as able to attempt \
+             a connection; do not use this bridge on a Windows machine where \
+             that risk is unacceptable. See SECURITY.md (Platform support) \
+             for details."
+        );
+    }
+
     // 1. Take over from any prior MCP server instance, then bind and publish.
     // The MCP client may spawn a fresh server per session; if the previous one
     // is still alive, the native host keeps talking to IT (it doesn't follow
