@@ -39,6 +39,7 @@
 //!   handles + BCrypt), kept in one file per OS so the policy modules above
 //!   stay free of scattered cfg-gates.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod attest;
 mod handshake;
 mod lockfile;
