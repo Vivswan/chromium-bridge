@@ -159,7 +159,9 @@ async function main(): Promise<void> {
   const mcp = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe"] });
   let connected = false;
   mcp.stderr.on("data", (chunk: Buffer) => {
-    if (chunk.toString("utf8").includes("native host connected and authenticated")) {
+    // The session log line carries the browser label, e.g.
+    // "native host 'default' connected and authenticated (generation 1)".
+    if (chunk.toString("utf8").includes("connected and authenticated")) {
       connected = true;
     }
   });
@@ -249,6 +251,21 @@ async function main(): Promise<void> {
         browser.targets().map((target) => `${target.type()} ${target.url()}`)
       );
     }
+
+    // The enrollment gate (ADR-0021) refuses bridge ops until a host key is
+    // paired and pinned. Pairing needs an interactive Touch ID ceremony, so
+    // this test opts the throwaway profile out through the same documented
+    // setting the options page exposes ("require enrollment"), keeping every
+    // other link in the chain real.
+    const workerTarget = browser.targets().find((target) => target.url() === expectedWorkerUrl);
+    const worker = await workerTarget!.worker();
+    if (!worker) throw new Error("could not attach to the extension service worker");
+    await worker.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          chrome.storage.local.set({ requireEnrollment: false }, () => resolve());
+        })
+    );
 
     send({
       jsonrpc: "2.0",
