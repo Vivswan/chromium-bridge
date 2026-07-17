@@ -21,6 +21,7 @@ import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { addAllow, getAllowlist, removeAllow, resolvePendingAllow } from "./allowlist-store";
+import { readRing } from "./audit-log";
 import { requestClientList, revokeTrustedClient } from "./clients";
 import { getPendingConfirm, resolveConfirm } from "./confirm/service";
 import {
@@ -31,6 +32,7 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
+import { requestKillStatus, setKillSwitch } from "./kill";
 import { isNativeConnected } from "./port";
 
 // True only for a sender that is one of the extension's OWN pages (popup /
@@ -115,6 +117,23 @@ export function route(
       // ADR-0025: revoke one trusted client. Capability reduction only, but
       // still extension-page gated like every trust-state mutation.
       void revokeTrustedClient(msg.name).then((r) => sendResponse(r));
+      return true;
+    case "get_kill":
+      // ADR-0030: the kill switch's state (SW-only mirror + a live host
+      // query when the port is up). Extension-page senders only, like every
+      // other trust-state read.
+      void requestKillStatus().then((r) => sendResponse(r));
+      return true;
+    case "set_kill":
+      // ADR-0030: engage/release the kill switch. The page-can-NEVER-toggle
+      // guarantee is the top-level gate above: only the extension's own
+      // pages reach this line, and the actual transition happens host-side
+      // (this only relays a control frame the host decides on and audits).
+      void setKillSwitch(msg.on).then((r) => sendResponse(r));
+      return true;
+    case "get_audit":
+      // ADR-0030: the read-only audit ring for the options panel.
+      void readRing().then((entries) => sendResponse({ entries }));
       return true;
     case "confirm_ready":
       // The confirmation window (ADR-0027) asking for its payload. Requires the

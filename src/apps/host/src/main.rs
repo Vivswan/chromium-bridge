@@ -11,7 +11,9 @@
 //!   repair, and the enrollment ceremony, ADR-0021).
 
 use chromium_bridge_core::cli::{parse, print_help, Command};
-use chromium_bridge_core::{allowlist, doctor, enclave, mcp_server, native_host, registration};
+use chromium_bridge_core::{
+    allowlist, audit, doctor, enclave, kill, mcp_server, native_host, registration,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -29,6 +31,9 @@ fn main() {
         Command::RevokeClient => allowlist::run_revoke_client(&args),
         Command::ListClients => allowlist::run_list_clients(),
         Command::Uninstall => registration::run_uninstall_cli(&args),
+        Command::Kill => kill::run_kill(),
+        Command::Unkill => kill::run_unkill(),
+        Command::Audit => audit::run_audit(&args),
         Command::McpServer => mcp_server::run(),
         Command::Unknown => {
             print_help();

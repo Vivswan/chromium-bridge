@@ -41,6 +41,10 @@ struct Report {
     manifests: Vec<ManifestStatus>,
     /// Why the manifest check could not run (e.g. no HOME).
     manifest_error: Option<String>,
+    /// The global kill switch (ADR-0030). `Ok(bool)` from a readable
+    /// revocation record; `Err(text)` when the record is unreadable (in which
+    /// case every enforcement point is failing closed).
+    kill: Result<bool, String>,
 }
 
 /// One browser's registration state, as diagnosed through the shared
@@ -120,6 +124,7 @@ fn gather() -> Report {
         reachable: None,
         manifests,
         manifest_error,
+        kill: crate::kill::is_killed().map_err(|e| e.to_string()),
     };
 
     match LockFile::read() {
@@ -174,6 +179,17 @@ fn render(r: &Report) -> String {
         None => out.push_str("not probed (no lock file)\n"),
     }
 
+    out.push_str("kill switch:     ");
+    match &r.kill {
+        Ok(false) => out.push_str("off (bridge activity permitted)\n"),
+        Ok(true) => out
+            .push_str("ENGAGED — all bridge activity is refused until `chromium-bridge unkill`\n"),
+        Err(e) => out.push_str(&format!(
+            "state UNREADABLE ({e}) — every enforcement point is failing closed;\n  \
+             see docs/operations.md for recovery\n"
+        )),
+    }
+
     out.push_str(&format!("native manifests: (host id {HOST_ID})\n"));
     if let Some(err) = &r.manifest_error {
         out.push_str(&format!("  could not check: {err}\n"));
@@ -210,6 +226,12 @@ fn render(r: &Report) -> String {
 
 /// One-line status summary and the derived exit code hint.
 fn summary(r: &Report) -> &'static str {
+    if r.kill == Ok(true) {
+        return "kill switch ENGAGED — release it with `chromium-bridge unkill`";
+    }
+    if r.kill.is_err() {
+        return "kill state unreadable — failing closed; see docs/operations.md";
+    }
     if r.lock_error.is_some() {
         return "lock file present but unreadable — try restarting your MCP client";
     }
@@ -312,6 +334,7 @@ mod tests {
                 },
             ],
             manifest_error: None,
+            kill: Ok(false),
         }
     }
 
@@ -372,9 +395,10 @@ mod tests {
                         .into(),
             }],
             manifest_error: None,
+            kill: Ok(false),
         };
         let text = render(&r);
-        assert!(text.contains("present: no"));
+        assert!(text.contains("manifest missing"));
         assert!(text.contains("not probed (no lock file)"));
         assert!(text.contains("server not running"));
         assert_eq!(exit_code(&r), 1);

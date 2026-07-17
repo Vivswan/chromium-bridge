@@ -50,6 +50,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::allowlist::{self, Decision};
+use crate::audit;
 use crate::ipc::{self, BridgeStream, ClientIdentity};
 use crate::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, AttachReply, AttachRequest, HarnessId, JsonRpc,
@@ -360,10 +361,14 @@ impl ClientRegistry {
 }
 
 /// The watcher loop body: re-decide every live relay against the current
-/// allowlist, once per tick. Factored from the polling thread so the
-/// fail-closed matrix is testable. Returns the epoch observed (used only to
-/// deduplicate the "dropped N" log line across ticks), or `None` when a read
-/// failed (so the caller does not advance its logging cursor).
+/// allowlist, once per tick, and enforce the kill switch on the browser leg
+/// (ADR-0030). Factored from the polling thread so the fail-closed matrix is
+/// testable. `drop_browsers` severs every live browser connection (the
+/// session's kill sweep); it is invoked while the switch is engaged and when
+/// the revocation record is unreadable (kill state unknown), and is idempotent
+/// so calling it every tick is harmless. Returns the epoch observed (used only
+/// to deduplicate the "dropped N" log line across ticks), or `None` when a
+/// read failed (so the caller does not advance its logging cursor).
 ///
 /// The re-decide is **unconditional**, not gated on an epoch change. The epoch
 /// is a promptness signal for the per-request [`EpochGuard`] fast path, not the
@@ -374,29 +379,46 @@ impl ClientRegistry {
 /// depend on the authoritative `clients.json`, which the revocation already
 /// rewrote, and bounds a stale-epoch exposure to one poll interval. The
 /// allowlist is a small local file; reading it once a second is negligible.
+/// (The kill flag needs no such backstop: it lives IN the epoch's record and
+/// is written atomically with the bump, so it cannot go stale independently --
+/// but the sweep still runs it unconditionally, symmetry being cheaper than
+/// an argument.)
 fn watch_tick(
     registry: &ClientRegistry,
     last_seen: u64,
     rev: io::Result<Revocation>,
     load: impl FnOnce(bool) -> io::Result<Option<allowlist::Allowlist>>,
+    drop_browsers: impl FnOnce() -> usize,
 ) -> Option<u64> {
     let rev = match rev {
         Ok(rev) => rev,
         Err(e) => {
             // Fail closed: with the revocation record unreadable, no relay's
             // admission can be re-validated (the enrollment latch that governs
-            // an absent allowlist is unknown), so none may keep its connection.
+            // an absent allowlist is unknown) and the kill state is unknowable,
+            // so neither the relays nor the browser leg may keep a connection.
             let dropped = registry.sweep(|_| true);
-            if dropped > 0 {
+            let browsers = drop_browsers();
+            if dropped > 0 || browsers > 0 {
                 log_error!(
                     "broker",
-                    "revocation record unreadable ({e}); dropped {dropped} relay \
-                     connection(s) (fail closed)"
+                    "revocation record unreadable ({e}); dropped {dropped} relay and \
+                     {browsers} browser connection(s) (fail closed)"
                 );
             }
             return None;
         }
     };
+    if rev.killed {
+        let browsers = drop_browsers();
+        if browsers > 0 {
+            log_error!(
+                "broker",
+                "kill switch engaged (epoch {}); severed {browsers} browser connection(s)",
+                rev.epoch
+            );
+        }
+    }
     match load(rev.clients_enrolled) {
         Ok(list) => {
             let dropped = registry.sweep(|identity| {
@@ -485,7 +507,9 @@ pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: O
     });
 
     // Watch the revocation epoch so a revoke reaches IDLE relay connections
-    // too (requests are guarded inline). The thread dies with the process.
+    // too (requests are guarded inline), and so a kill severs the browser leg
+    // within a tick even when nobody is calling (ADR-0030). The thread dies
+    // with the process.
     {
         let broker = Arc::clone(&broker);
         let mut last_seen = own.epoch;
@@ -496,6 +520,7 @@ pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: O
                 last_seen,
                 Revocation::current(),
                 allowlist::load_enforced,
+                || broker.session.shutdown_all_browsers(),
             ) {
                 last_seen = seen;
             }
@@ -629,12 +654,24 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted {
                     "broker",
                     "rejected bridge connection from uid {uid} (broker euid {want})"
                 );
+                audit::record(
+                    audit::AuditRecord::new(audit::AuditKind::AttachRefuse)
+                        .surface(audit::Surface::Broker)
+                        .outcome("refused")
+                        .detail("peer uid mismatch"),
+                );
                 return Admitted::Rejected;
             }
             Err(e) => {
                 log_warn!(
                     "broker",
                     "rejected bridge connection: peer uid unknown: {e}"
+                );
+                audit::record(
+                    audit::AuditRecord::new(audit::AuditKind::AttachRefuse)
+                        .surface(audit::Surface::Broker)
+                        .outcome("refused")
+                        .detail("peer uid unknown"),
                 );
                 return Admitted::Rejected;
             }
@@ -647,6 +684,12 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted {
     {
         if let Err(e) = ipc::attest_peer(&stream) {
             log_warn!("broker", "rejected bridge connection: {e}");
+            audit::record(
+                audit::AuditRecord::new(audit::AuditKind::AttachRefuse)
+                    .surface(audit::Surface::Broker)
+                    .outcome("refused")
+                    .detail("peer attestation failed"),
+            );
             return Admitted::Rejected;
         }
     }
@@ -673,6 +716,12 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted {
             log_warn!(
                 "broker",
                 "rejected bridge connection: handshake failed: {e}"
+            );
+            audit::record(
+                audit::AuditRecord::new(audit::AuditKind::AttachRefuse)
+                    .surface(audit::Surface::Broker)
+                    .outcome("refused")
+                    .detail("handshake failed"),
             );
             return Admitted::Rejected;
         }
@@ -706,6 +755,28 @@ fn admit_browser(
     mut writer: BufWriter<BridgeStream>,
 ) -> Admitted {
     let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
+    // The kill switch severs the browser leg entirely (ADR-0030): while it is
+    // engaged -- or its state cannot be read -- no browser attach is accepted,
+    // so no path to a browser exists even if a dispatch check were bypassed.
+    // The refused native host exits; the extension's reconnect finds a
+    // control-plane-only host that keeps the unkill surface reachable.
+    if let Err(e) = crate::kill::check() {
+        let _ = bridge_write(
+            &mut writer,
+            &AttachReply::Refused {
+                reason: "bridge kill switch engaged".into(),
+            },
+        );
+        log_warn!("broker", "refused browser attach ('{label}'): {e}");
+        audit::record(
+            audit::AuditRecord::new(audit::AuditKind::BrowserRefuse)
+                .surface(audit::Surface::Broker)
+                .name(&label)
+                .outcome("refused")
+                .detail(e.code()),
+        );
+        return Admitted::Rejected;
+    }
     // The distinct-browser cap ([`Session::attach_browser`], MAX_BROWSERS) is
     // the sole, atomic authority: it is checked under the same lock that
     // inserts, so no pre-check here can race it. We accept optimistically; if a
@@ -715,6 +786,12 @@ fn admit_browser(
     if bridge_write(&mut writer, &AttachReply::Accepted {}).is_err() {
         return Admitted::Rejected;
     }
+    audit::record(
+        audit::AuditRecord::new(audit::AuditKind::BrowserAttach)
+            .surface(audit::Surface::Broker)
+            .name(&label)
+            .outcome("ok"),
+    );
     // Steady state: an idle browser connection is normal, so clear the timeout.
     clear_read_timeout(&writer);
     Admitted::Browser {
@@ -807,6 +884,13 @@ fn admit_client(
         .map(str::to_string);
     match allowlist::decide(list.as_ref(), identity.as_ref()) {
         Decision::Refuse => {
+            audit::record(
+                audit::AuditRecord::new(audit::AuditKind::HarnessRefuse)
+                    .surface(audit::Surface::Broker)
+                    .name(reported_name.as_deref().unwrap_or("-"))
+                    .outcome("refused")
+                    .detail("not in the trusted-client allowlist"),
+            );
             return reject_relay(
                 &broker.registry,
                 registry_id,
@@ -828,9 +912,21 @@ fn admit_client(
                  can drive the browser through this relay. Run `chromium-bridge pair-client` to \
                  enroll trusted clients and turn on enforcement. See SECURITY.md."
             );
+            audit::record(
+                audit::AuditRecord::new(audit::AuditKind::HarnessAdmit)
+                    .surface(audit::Surface::Broker)
+                    .name(reported_name.as_deref().unwrap_or("-"))
+                    .outcome("unenrolled"),
+            );
         }
         Decision::Admit { name } => {
             log_info!("broker", "relay admitted for trusted client '{name}'");
+            audit::record(
+                audit::AuditRecord::new(audit::AuditKind::HarnessAdmit)
+                    .surface(audit::Surface::Broker)
+                    .name(&name)
+                    .outcome("ok"),
+            );
         }
     }
 
@@ -1066,6 +1162,19 @@ mod tests {
             clients_epoch: 0,
             host_key_epoch: 0,
             clients_enrolled: latched,
+            killed: false,
+            kill_epoch: 0,
+        }
+    }
+
+    // Only the Unix-gated registry tests exercise the kill sweep (they need
+    // UnixStream pairs), so this helper is cfg-gated with them.
+    #[cfg(unix)]
+    fn killed_rev(epoch: u64) -> Revocation {
+        Revocation {
+            killed: true,
+            kill_epoch: epoch,
+            ..rev(epoch, true)
         }
     }
 
@@ -1218,6 +1327,58 @@ mod tests {
         use std::os::unix::net::UnixStream;
 
         #[test]
+        fn watch_tick_kill_severs_browsers_but_keeps_listed_relays() {
+            // ADR-0030: the kill sweep runs the browser-drop closure while the
+            // switch is engaged, on EVERY tick (idempotent), while a
+            // still-listed relay keeps its connection -- its tool calls are
+            // refused at dispatch with the typed error instead, so the refusal
+            // is deliverable.
+            let registry = ClientRegistry::new();
+            let (srv, mut cli) = UnixStream::pair().unwrap();
+            registry.register(Some(ident("keep")), srv);
+
+            let browsers = std::cell::Cell::new(0usize);
+            let seen = watch_tick(
+                &registry,
+                9,
+                Ok(killed_rev(9)),
+                |_| Ok(Some(list_with("keep"))),
+                || {
+                    browsers.set(browsers.get() + 1);
+                    2
+                },
+            );
+            assert_eq!(seen, Some(9));
+            assert_eq!(browsers.get(), 1, "the kill must sever the browser leg");
+
+            // The listed relay stays connected (no EOF within the window).
+            cli.set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let mut buf = [0u8; 1];
+            let err = cli.read(&mut buf).unwrap_err();
+            assert!(
+                matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ),
+                "listed relay must survive a kill sweep, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn watch_tick_without_a_kill_never_touches_browsers() {
+            let registry = ClientRegistry::new();
+            let seen = watch_tick(
+                &registry,
+                4,
+                Ok(rev(4, true)),
+                |_| Ok(Some(list_with("keep"))),
+                || panic!("browser sweep must not run while the switch is off"),
+            );
+            assert_eq!(seen, Some(4));
+        }
+
+        #[test]
         fn watch_tick_re_decides_every_tick_even_without_an_epoch_change() {
             // The sweep is UNCONDITIONAL: enforcement does not depend on the
             // epoch advancing (a revocation whose bump failed to persist must
@@ -1230,9 +1391,13 @@ mod tests {
             registry.register(Some(ident("revoked")), b_srv);
 
             // Same epoch as last_seen, yet "revoked" is no longer listed.
-            let seen = watch_tick(&registry, 5, Ok(rev(5, true)), |_| {
-                Ok(Some(list_with("keep")))
-            });
+            let seen = watch_tick(
+                &registry,
+                5,
+                Ok(rev(5, true)),
+                |_| Ok(Some(list_with("keep"))),
+                || 0,
+            );
             assert_eq!(seen, Some(5));
 
             b_cli
@@ -1266,9 +1431,13 @@ mod tests {
             registry.register(Some(ident("revoked")), b_srv);
 
             // The fresh allowlist still lists "keep" but not "revoked".
-            let seen = watch_tick(&registry, 1, Ok(rev(2, true)), |_| {
-                Ok(Some(list_with("keep")))
-            });
+            let seen = watch_tick(
+                &registry,
+                1,
+                Ok(rev(2, true)),
+                |_| Ok(Some(list_with("keep"))),
+                || 0,
+            );
             assert_eq!(seen, Some(2));
 
             // The revoked relay's socket was shut down: its far end reads EOF.
@@ -1305,9 +1474,13 @@ mod tests {
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
             registry.register(Some(ident("keep")), srv);
-            let seen = watch_tick(&registry, 7, Ok(rev(7, true)), |_| {
-                Ok(Some(list_with("keep")))
-            });
+            let seen = watch_tick(
+                &registry,
+                7,
+                Ok(rev(7, true)),
+                |_| Ok(Some(list_with("keep"))),
+                || 0,
+            );
             assert_eq!(seen, Some(7));
             cli.set_read_timeout(Some(Duration::from_millis(100)))
                 .unwrap();
@@ -1323,7 +1496,22 @@ mod tests {
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
             registry.register(Some(ident("h")), srv);
-            let seen = watch_tick(&registry, 1, Err(io::Error::other("corrupt")), |_| Ok(None));
+            let browsers = std::cell::Cell::new(0usize);
+            let seen = watch_tick(
+                &registry,
+                1,
+                Err(io::Error::other("corrupt")),
+                |_| Ok(None),
+                || {
+                    browsers.set(browsers.get() + 1);
+                    3
+                },
+            );
+            assert_eq!(
+                browsers.get(),
+                1,
+                "an unreadable record must also sever the browser leg (kill state unknown)"
+            );
             assert_eq!(seen, None);
             cli.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             let mut buf = [0u8; 1];
@@ -1333,9 +1521,13 @@ mod tests {
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
             registry.register(Some(ident("h")), srv);
-            let seen = watch_tick(&registry, 1, Ok(rev(2, true)), |_| {
-                Err(io::Error::other("tampered"))
-            });
+            let seen = watch_tick(
+                &registry,
+                1,
+                Ok(rev(2, true)),
+                |_| Err(io::Error::other("tampered")),
+                || 0,
+            );
             assert_eq!(seen, None);
             cli.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             assert_eq!(cli.read(&mut buf).unwrap(), 0);

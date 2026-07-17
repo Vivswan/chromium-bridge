@@ -27,6 +27,7 @@
 // fail-closed semantics here stay unchanged.
 
 import type { ConfirmKind, ConfirmPayload } from "@chromium-bridge/shared";
+import { auditEvent } from "../audit-log";
 
 export interface ConfirmRequest {
   kind: ConfirmKind;
@@ -123,12 +124,20 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
           // stall the queue.
           console.warn("[bb] confirmation dismiss failed", e);
         }
+        // Log-after-decide (ADR-0030): the verdict is already settled; the
+        // audit ring and the host's audit file record it, never gate it.
+        auditEvent(approved ? "confirm_allowed" : "confirm_denied", {
+          tool: req.kind,
+          name: req.origin,
+        });
         resolve(approved);
         const next = queue.shift();
         if (next) next();
       };
       const timer = setTimeout(() => settle(false), req.timeoutMs);
       active = { payload, settle };
+      // The surface is up in front of the user from here (ADR-0030 audit).
+      auditEvent("confirm_shown", { tool: req.kind, name: req.origin });
       presentation.verdict.then(settle, (e: unknown) => {
         console.error("[bb] confirmation presentation failed; denying", e);
         settle(false);

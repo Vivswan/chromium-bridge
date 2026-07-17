@@ -151,12 +151,14 @@ pub fn run_revoke() -> i32 {
     }
 }
 
-/// Bump the revocation epoch's host-key marker after a key deletion. The
-/// deletion itself is the authoritative act (the keychain is the ground
-/// truth); a failed bump only loses the proactive push a connected host would
-/// otherwise send, so it is reported, not fatal. A pinned extension still
-/// fails closed on its next key verification (its stored pin outlives the key,
-/// and the missing key can no longer answer a challenge).
+/// Bump the revocation epoch's host-key marker after a key deletion, and
+/// record the revocation in the audit trail (ADR-0030, log-after-decide: the
+/// keychain deletion has already happened). The deletion itself is the
+/// authoritative act (the keychain is the ground truth); a failed bump only
+/// loses the proactive push a connected host would otherwise send, so it is
+/// reported, not fatal. A pinned extension still fails closed on its next key
+/// verification (its stored pin outlives the key, and the missing key can no
+/// longer answer a challenge).
 fn bump_host_key_epoch() {
     if let Err(e) = crate::revocation::bump(crate::revocation::Scope::HostKey) {
         eprintln!(
@@ -165,6 +167,11 @@ fn bump_host_key_epoch() {
              instead notice at its next pinned-key verification"
         );
     }
+    crate::audit::record(
+        crate::audit::AuditRecord::new(crate::audit::AuditKind::HostKeyRevoke)
+            .surface(crate::audit::Surface::Cli)
+            .outcome("ok"),
+    );
 }
 
 /// `chromium-bridge enclave-status`: read-only report on the enrollment state.

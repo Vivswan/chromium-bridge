@@ -186,6 +186,36 @@ describe("ceremony state machine", () => {
     expect((await getEnrollmentStatus()).state).toBe("unpaired");
   });
 
+  test("a killed mirror refuses the gate even with enrollment satisfied or off (ADR-0030)", async () => {
+    // Fully pinned...
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await enrollmentGate()).allowed).toBe(true);
+    // ...but the kill switch wins over everything.
+    store.bridgeKillMirror = { state: "killed", at: 1 };
+    let gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("kill switch");
+    // And it wins even when requireEnrollment is off (the gate must not
+    // early-out on the enrollment toggle before the kill check).
+    store.requireEnrollment = false;
+    gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    // Releasing (an alive mirror) restores the pinned flow.
+    store.bridgeKillMirror = { state: "alive", at: 2 };
+    store.requireEnrollment = true;
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("an unknown or malformed kill mirror refuses the gate (fail closed)", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store.bridgeKillMirror = { state: "unknown", at: 1 };
+    expect((await enrollmentGate()).allowed).toBe(false);
+    store.bridgeKillMirror = { planted: true };
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
   test("full ceremony: challenge -> proof -> pending -> approve -> pinned", async () => {
     const key = await genKey();
 

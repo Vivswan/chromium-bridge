@@ -219,6 +219,13 @@ fn admit_own_harness() -> Option<Harness> {
                 "this harness is not in the trusted-client allowlist; refusing to serve \
                  (fail closed). Pair it first: `chromium-bridge pair-client --name <label>`."
             );
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessRefuse)
+                    .surface(crate::audit::Surface::Host)
+                    .name(name.as_deref().unwrap_or("-"))
+                    .outcome("refused")
+                    .detail("not in the trusted-client allowlist"),
+            );
             return None;
         }
         Decision::AdmitUnenrolled => {
@@ -229,9 +236,21 @@ fn admit_own_harness() -> Option<Harness> {
                  the browser. Run `chromium-bridge pair-client` to enroll trusted clients and \
                  turn on enforcement. See SECURITY.md."
             );
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessAdmit)
+                    .surface(crate::audit::Surface::Host)
+                    .name(name.as_deref().unwrap_or("-"))
+                    .outcome("unenrolled"),
+            );
         }
-        Decision::Admit { name } => {
-            log_info!("mcp", "harness admitted as trusted client '{name}'");
+        Decision::Admit { name: matched } => {
+            log_info!("mcp", "harness admitted as trusted client '{matched}'");
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessAdmit)
+                    .surface(crate::audit::Surface::Host)
+                    .name(&matched)
+                    .outcome("ok"),
+            );
         }
     }
 
@@ -314,28 +333,28 @@ pub(crate) fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             // reconnects. Best-effort diagnostics, not enforcement.
             let browser_arg = args.get("browser").and_then(|v| v.as_str());
             let route = session.route_info(browser_arg);
+            // The global kill switch gates EVERY tool call, for every harness
+            // (this dispatcher serves the broker's own stdio harness and all
+            // relays), before any routing or bridge traffic (ADR-0030). Fail
+            // closed on an engaged switch AND on an unreadable record; the
+            // harness connection stays up so the typed refusal is delivered.
             // Tool errors are returned as a *successful* RPC with isError=true
             // in the result (per MCP spec); only protocol errors use the
             // error field.
-            let out = tools::dispatch(session, name, &args);
+            let out = match crate::kill::check() {
+                Ok(()) => tools::dispatch(session, name, &args),
+                Err(e) => tools::error_outcome(&e),
+            };
             let route = route.or_else(|| session.route_info(browser_arg));
-            let conn_s = route
-                .as_ref()
-                .map_or_else(|| "-".to_string(), |(_, g)| g.to_string());
-            let browser_s = route
-                .as_ref()
-                .map_or_else(|| "-".to_string(), |(l, _)| l.clone());
-            let req_s = req_id.to_string();
-            let dur_s = started.elapsed().as_millis().to_string();
-            crate::log::audit(&[
-                ("req", req_s.as_str()),
-                ("conn", conn_s.as_str()),
-                ("browser", browser_s.as_str()),
-                ("tool", name),
-                ("outcome", if out.is_error { "error" } else { "ok" }),
-                ("code", out.error_code.unwrap_or("-")),
-                ("dur_ms", dur_s.as_str()),
-            ]);
+            let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::ToolCall);
+            rec.req = Some(req_id);
+            rec.conn = route.as_ref().map(|(_, g)| *g);
+            rec.name = route.as_ref().map(|(l, _)| l.clone());
+            rec.tool = Some(name.to_string());
+            rec.outcome = Some(if out.is_error { "error" } else { "ok" }.to_string());
+            rec.code = out.error_code.map(str::to_string);
+            rec.dur_ms = Some(started.elapsed().as_millis() as u64);
+            crate::audit::record(rec);
             let result = json!({ "content": out.content, "isError": out.is_error });
             Some(JsonRpc::ok(id, result))
         }
