@@ -1,0 +1,24 @@
+# Path prefixes exempt from the check-typography action.
+#
+# Everything listed here is inherited from upstream (whg517/browser-bridge),
+# which deliberately uses typographic punctuation (em-dashes, ellipses) in
+# comments and docs. Keeping these files byte-identical to upstream keeps
+# `git merge upstream/main` clean. New code outside these prefixes (notably
+# src/, which is ASCII-clean) must pass the check.
+extension/
+docs/
+tests/
+scripts/
+contracts/
+install/
+.github/ISSUE_TEMPLATE/bug.yml
+.github/ISSUE_TEMPLATE/security-change.yml
+.github/workflows/nightly.yml
+.github/workflows/release.yml
+.github/workflows/sbom.yml
+CHANGELOG.md
+CONTRIBUTING.md
+GOVERNANCE.md
+README.md
+SECURITY.md
+deny.toml

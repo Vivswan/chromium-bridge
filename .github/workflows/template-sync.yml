@@ -1,0 +1,34 @@
+# This file is managed by Vivswan/repo-platform.
+# Local edits may be replaced during template updates.
+#
+# Pulls template updates from Vivswan/repo-platform: when a new
+# release is available, opens a PR in this repository applying `copier update`.
+
+name: Template Sync
+
+on:
+  schedule:
+    - cron: "43 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Template release to sync to (defaults to latest)
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    uses: Vivswan/repo-platform/.github/workflows/reusable-template-sync.yml@4f694d4
+    with:
+      version: ${{ inputs.version || '' }}
+    secrets:
+      REPO_PLATFORM_TOKEN: ${{ secrets.REPO_PLATFORM_TOKEN }}
