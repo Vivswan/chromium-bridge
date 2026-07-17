@@ -212,3 +212,75 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   per-action confirmation toasts, and masking are unchanged; the residual risk
   is the wider surface and the removed CSP defense-in-depth layer, accepted as
   the explicit price of the opt-in.
+
+## Rebuild delta: new trust boundaries (stubs)
+
+The workspace/Tauri rebuild
+([ADR-0023](../adr/0023-workspace-monorepo-tauri-app.md)) introduces five
+boundaries that do not exist in the model above. These entries are stubs:
+each names the boundary, who enforces it, and the residual we already know
+about. The full treatment (mechanism, failure modes, adversarial tests)
+lands in the ADR of the phase that builds the component, and this section
+gets folded into the main model then. Until a component ships with its
+mechanism, it must be treated as unenforced.
+
+1. **Harness -> MCP server stdio admission.** Today anything that spawns the
+   binary in MCP mode owns its stdin and is trusted unconditionally (the
+   "MCP client is trusted" assumption). The rebuild adds admission control:
+   the server must identify the client driving it before serving tool
+   calls, keyed against a host-side client allowlist. Enforced by: the MCP
+   server at startup. The mechanism is an open design problem for the
+   pairing ADR: stdio is an anonymous pipe, so the socket layer's kernel
+   peer credentials do not exist here (a pipe endpoint can be inherited or
+   relayed, and a parent PID proves who spawned us, not who is writing to
+   us). If no unforgeable stdio-level check exists on a platform, admission
+   must move to a channel that has one, or the gap must be recorded here as
+   a residual, not papered over. Residual (already known): attestation of
+   any kind identifies a binary, not an intention; a trusted-but-compromised
+   harness is still trusted, and the self-asserted client name is a label,
+   never the authorization key.
+
+2. **The ref-counted broker.** Concurrent multi-client support replaces
+   newest-wins takeover with a broker that owns the browser-facing socket
+   and multiplexes attested clients, exiting when the last one detaches.
+   This is a new persistent same-user surface that did not exist when the
+   server's lifetime equaled one harness's lifetime. Enforced by: the broker
+   process itself; every attach is individually attested, and the socket
+   stays 0600 in the 0700 runtime dir. Residual: the broker aggregates what
+   were separate blast radii (one process now fronts all clients), and it
+   needs its own DoS posture (connection caps, timeouts) because it outlives
+   any one client. On Windows it degrades with the rest of the IPC layer to
+   secret-only.
+
+3. **Host-allowlist writers.** The set of trusted client binaries becomes a
+   persisted allowlist, which means something writes it. Writers: the CLI
+   (`pair`/`revoke`) and the control-panel app. Enforced by: file
+   permissions on the 0700 runtime/config dir, atomic writes under the
+   runtime mutex, and pairing ceremonies for additions. Residual: the
+   allowlist file inherits the same same-user-writer exposure as the
+   native-messaging manifest (threat #4's class); a same-user process that
+   can win a pairing ceremony can add itself. More writers also means more
+   code with write capability to audit.
+
+4. **The app as issuer.** The Tauri control panel can mint pairings and
+   revocations. It is a writer over the allowlist and a requester of
+   enclave operations, never a third trust root: nothing accepts "the app
+   said so" as authorization. Enforced by: the app going through the same
+   `core` write paths and the same presence-gated ceremonies as the CLI;
+   the UI carries no security weight. Residual: a compromised webview can
+   lie about state it displays, can ask for operations, and can decline to
+   request a confirmation at all (denying the operation, which fails
+   closed); what it cannot do is forge or answer the Enclave
+   user-presence prompt that dangerous operations terminate in.
+
+5. **The Touch ID confirmation surface.** Confirmations for the
+   crown-jewel tools (`page_eval`, `page_upload`) move off the
+   page-reachable DOM to a host-side Secure Enclave user-presence gate.
+   This closes the "toast defeatable by the page it guards" residual above
+   for those tools. Enforced by: LocalAuthentication / `SecAccessControl`
+   user-presence on the enrolled Enclave key; the page and the extension
+   can request but cannot satisfy it. Residual: macOS-only; other platforms
+   degrade to an off-DOM, fail-closed extension surface that is better than
+   the in-page toast but not unspoofable in the same way. Prompt fatigue is
+   a real cost and is why only the highest-risk tools route here.
+
