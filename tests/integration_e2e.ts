@@ -29,17 +29,16 @@ import * as path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import puppeteer from "puppeteer-core";
+import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const IS_WINDOWS = process.platform === "win32";
 const BIN = path.join(REPO, "target", "release", `chromium-bridge${IS_WINDOWS ? ".exe" : ""}`);
 const DIST = path.join(REPO, "extension", "dist");
-const CHROME =
-  process.env.CHROME_BIN ||
-  (IS_WINDOWS
-    ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-    : "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+// The guard (assertIsolatedBrowserOrSkip) verifies CHROME_BIN by --version
+// before use; it is only ever an isolated Chrome for Testing here.
+const CHROME = process.env.CHROME_BIN ?? "";
 const HOST_NAME = "com.vivswan.chromium_bridge.host";
 const REG_KEY = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 const LOCK = IS_WINDOWS
@@ -60,21 +59,10 @@ if (process.platform !== "darwin" && !IS_WINDOWS) {
   process.exit(0);
 }
 // SAFETY (do not remove): this launches a NON-HEADLESS Chrome with
-// --load-extension. Driving your daily Google Chrome can capture and then CLOSE
-// your real browser session. Require an ISOLATED Chrome for Testing / Chromium
-// binary via CHROME_BIN - never the everyday browser.
-{
-  const isDailyMac = CHROME.includes("/Google Chrome.app/") && CHROME.endsWith("/Google Chrome");
-  const isDailyWin = /\\Google\\Chrome\\Application\\chrome\.exe$/i.test(CHROME);
-  if (!process.env.CHROME_BIN || isDailyMac || isDailyWin) {
-    console.log(
-      "SKIP: refusing to drive your daily Chrome (it can capture and close your\n" +
-        "real session). Set CHROME_BIN to a Chrome for Testing / Chromium binary\n" +
-        "(see tests/README.md → Safety).",
-    );
-    process.exit(0);
-  }
-}
+// --load-extension; a real browser could capture and then CLOSE your session.
+// The shared guard runs CHROME_BIN --version and refuses anything that does not
+// identify as an isolated Chrome for Testing (see tests/browser-safety.ts).
+assertIsolatedBrowserOrSkip();
 for (const [label, p] of [
   ["release binary", BIN],
   ["extension dist", DIST],

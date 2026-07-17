@@ -19,14 +19,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import puppeteer, { type Target } from "puppeteer-core";
+import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "..");
 // The load-unpacked target is the built bundle. Run
 // `bun run --cwd extension build` first (run_all.ts / just handle this).
 // Override with BB_EXT_DIR to point at a different unpacked extension.
 const EXTENSION_DIR = process.env.BB_EXT_DIR || path.join(REPO, "extension", "dist", "chrome-mv3");
-const CHROME =
-  process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+// The guard (assertIsolatedBrowserOrSkip) verifies CHROME_BIN by --version
+// before use; it is only ever an isolated Chrome for Testing here.
+const CHROME = process.env.CHROME_BIN ?? "";
 
 // SAFETY (do not remove): this launches a NON-HEADLESS Chrome with
 // --load-extension. On macOS, launching your normal Google Chrome while it is
@@ -34,17 +36,8 @@ const CHROME =
 // so the test captures - and on cleanup CLOSES - your real browser session.
 // (This actually happened.) Refuse unless CHROME_BIN points at an ISOLATED
 // browser (Chrome for Testing / Chromium) that is NOT your daily Chrome.
-function assertIsolatedBrowser(bin: string): void {
-  const isDailyChrome = bin.includes("/Google Chrome.app/") && bin.endsWith("/Google Chrome");
-  if (!process.env.CHROME_BIN || isDailyChrome) {
-    console.log(
-      "SKIP: refusing to drive your daily Google Chrome - it can capture and close\n" +
-        "your real session. Set CHROME_BIN to a Chrome for Testing / Chromium binary\n" +
-        "(see tests/README.md → Safety) to run this test.",
-    );
-    process.exit(0);
-  }
-}
+// SAFETY: see tests/browser-safety.ts - the shared guard runs CHROME_BIN
+// --version and refuses anything that is not an isolated Chrome for Testing.
 
 let Pass = 0;
 let Fail = 0;
@@ -60,7 +53,7 @@ function check(cond: boolean, label: string): void {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function main(): Promise<void> {
-  assertIsolatedBrowser(CHROME);
+  assertIsolatedBrowserOrSkip();
   for (const [label, p] of [
     ["extension dir", EXTENSION_DIR],
     ["system Chrome", CHROME],
@@ -102,15 +95,25 @@ async function main(): Promise<void> {
   });
 
   try {
-    // Find OUR extension's service worker (skip built-in extensions like
-    // Hangouts, which also register a background target).
+    // Find OUR extension's service worker. Chrome for Testing ships built-in
+    // component extensions whose service workers ALSO match a naive
+    // type === "service_worker" filter (and would give a wrong extension ID
+    // and wrong permission readout), so select by our distinctive
+    // `nativeMessaging` permission.
     let sw: Target | undefined;
-    for (let i = 0; i < 30; i++) {
-      sw = browser
-        .targets()
-        .find((t) => t.type() === "service_worker" && t.url().startsWith("chrome-extension://"));
-      if (sw) break;
-      await sleep(500);
+    for (let i = 0; i < 30 && !sw; i++) {
+      for (const t of browser.targets().filter((x) => x.type() === "service_worker")) {
+        const w = await t.worker().catch(() => null);
+        if (!w) continue;
+        const perms = (await w
+          .evaluate(() => chrome.runtime.getManifest().permissions ?? [])
+          .catch(() => [])) as string[];
+        if (perms.includes("nativeMessaging")) {
+          sw = t;
+          break;
+        }
+      }
+      if (!sw) await sleep(500);
     }
     check(!!sw, "extension service worker target exists");
     if (!sw) {
@@ -124,7 +127,9 @@ async function main(): Promise<void> {
     const idMatch = sw.url().match(/chrome-extension:\/\/([a-z]+)\//);
     const extId = idMatch?.[1] ?? "";
     console.log("extension ID:", extId);
-    check(/^[a-p]{32}$/.test(extId), "extension ID is 32 lowercase a-p chars");
+    // The manifest key pins the ID even under --load-extension, so assert the
+    // exact pinned value (the native host's allowed_origins depends on it).
+    check(extId === "mkjjlmjbcljpcfkfadfmhblmmddkdihf", "extension loads at the pinned ID");
 
     const worker = await sw.worker();
     if (!worker) throw new Error("service worker target has no worker");
@@ -145,17 +150,14 @@ async function main(): Promise<void> {
       hasConnectNative: typeof chrome.runtime.connectNative,
     }));
     check(apis.hasTabs, "chrome.tabs API available");
-    // scripting / storage / debugger / cookies / connectNative are all
-    // exposed to the extension at runtime, but puppeteer's `worker.evaluate`
-    // context under an automated `--load-extension` launch does NOT reliably
-    // surface them (they read as undefined here even though interactive loads
-    // grant them). Report their presence but don't gate the suite on it -
-    // otherwise the smoke test flakes red purely from the automation harness.
-    // Interactive load is the authoritative permission check (see README).
+    check(apis.hasStorage, "chrome.storage API available");
+    check(apis.hasScripting, "chrome.scripting API available");
+    // connectNative is present but the host connection itself is forbidden
+    // under automated --load-extension; that leg is the manual/integration
+    // step (see README).
     console.log(
-      `  note (automated-load only): scripting=${apis.hasScripting} ` +
-        `storage=${apis.hasStorage} debugger=${apis.hasDebugger} ` +
-        `cookies=${apis.hasCookies} connectNative=${apis.hasConnectNative}`,
+      `  debugger=${apis.hasDebugger} cookies=${apis.hasCookies} ` +
+        `connectNative=${apis.hasConnectNative}`,
     );
 
     console.log("\n✓ Extension loads and service worker boots with expected APIs.");

@@ -15,8 +15,10 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { type Subprocess, spawn } from "bun";
+import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "..");
 // The built bundle (esbuild strips TS types from src/content.ts). Run
@@ -30,8 +32,9 @@ const CONTENT_JS = path.join(
   "content.js",
 );
 const FIXTURES_DIR = path.join(REPO, "tests", "fixtures");
-const CHROME =
-  process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+// The guard (assertIsolatedBrowserOrSkip, called in main) verifies CHROME_BIN
+// by --version before use; it is only ever an isolated Chrome for Testing here.
+const CHROME = process.env.CHROME_BIN ?? "";
 
 /** Resolve a fixture filename to its file:// URL. */
 function fixtureUrl(name: string): string {
@@ -55,8 +58,11 @@ function check(cond: boolean, label: string): void {
 class Chrome {
   proc: Subprocess;
   port: number;
+  userDataDir: string;
   constructor(port = 9444) {
     this.port = port;
+    // Throwaway profile: never touch a real browser profile.
+    this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bb-dom-"));
     this.proc = spawn({
       cmd: [
         CHROME,
@@ -65,6 +71,7 @@ class Chrome {
         "--no-sandbox",
         "--no-first-run",
         "--no-default-browser-check",
+        `--user-data-dir=${this.userDataDir}`,
         `--remote-debugging-port=${port}`,
         "--remote-allow-origins=*",
         "about:blank",
@@ -87,6 +94,11 @@ class Chrome {
   async stop(): Promise<void> {
     try {
       this.proc.kill();
+      // Await exit so Chrome has released the profile before we remove it.
+      await this.proc.exited;
+    } catch {}
+    try {
+      fs.rmSync(this.userDataDir, { recursive: true, force: true });
     } catch {}
   }
 }
@@ -274,26 +286,16 @@ async function invoke(page: Page, op: string, args: any = {}, timeoutMs = 8000):
 
 /** Click a Toast button (Allow/Deny/Cancel) in the page - for testing the
  * high-risk confirmation flow. */
-async function clickToastButton(page: Page, selector: string): Promise<void> {
-  await page.evaluate(`
-    (function(){
-      var btn = document.querySelector('${selector}');
-      if (btn) btn.click();
-    })();
-  `);
-}
 
 // ─── tests ─────────────────────────────────────────────────────────────────
 // (added in the next step)
 
 async function main() {
+  // SAFETY: refuse anything that is not an isolated Chrome for Testing.
+  assertIsolatedBrowserOrSkip();
   // Sanity: content.js source must exist.
   if (!fs.existsSync(CONTENT_JS)) {
     console.error(`content.js not found at ${CONTENT_JS}`);
-    process.exit(2);
-  }
-  if (!fs.existsSync(CHROME)) {
-    console.error(`Chrome not found at ${CHROME}`);
     process.exit(2);
   }
 
@@ -318,12 +320,12 @@ async function runAllTests(page: Page): Promise<void> {
   await testClick(page);
   await testFill(page);
   await testText(page);
-  await testEvalMasked(page);
+  await testEvalRaw(page);
   await testEvalUnmasked(page);
   await testEvalErrorAndSerialize(page);
   await testStorageGet(page);
   await testWaitForNav(page);
-  await testHighRiskToast(page);
+  await testNoInPageToast(page);
   await testPing(page);
   await testShadowDom(page);
   await testIframe(page);
@@ -458,46 +460,30 @@ async function testText(page: Page): Promise<void> {
   check(resp.text.includes("Test Fixture"), "page_text includes page heading");
 }
 
-/** Invoke an op that triggers the eval confirmation Toast, auto-approving it.
- * eval (and submit clicks) block on a Toast; this kicks off the invoke and
- * concurrently clicks Allow when the Toast appears. */
-async function invokeWithEvalApproval(
-  page: Page,
-  op: string,
-  args: any,
-  timeoutMs = 8000,
-): Promise<any> {
-  const clickP = invoke(page, op, args, timeoutMs);
-  // Wait for the eval Toast to appear, then approve it. A dismissed card from
-  // a previous eval lingers in the DOM for its 150ms fade-out (.zcb-toast-out)
-  // and its buttons are inert, so match only cards that are still live, and
-  // find + click in a single evaluation so the card can't be dismissed between
-  // the two steps.
-  for (let i = 0; i < 40; i++) {
-    await new Promise((r) => setTimeout(r, 80));
-    const clicked = await page.evaluate(`
-      (function(){
-        var btn = document.querySelector(".zcb-eval-card:not(.zcb-toast-out) .zcb-toast-allow");
-        if (btn) btn.click();
-        return !!btn;
-      })();
-    `);
-    if (clicked) break;
-  }
-  return clickP;
+/** Run a page_eval op. Since ADR-0027 the content leg no longer confirms (the
+ * SW gate does, off-DOM), so there is no in-page toast to approve - the eval
+ * runs and returns directly. Kept as a named helper so the eval tests read
+ * clearly. */
+function invokeWithEvalApproval(page: Page, op: string, args: any, timeoutMs = 8000): Promise<any> {
+  return invoke(page, op, args, timeoutMs);
 }
 
-// ── test: page_eval (masked) ───────────────────────────────────────────────
-async function testEvalMasked(page: Page): Promise<void> {
-  console.log("\n[test] page_eval - masked return (default)");
+// ── test: page_eval (content leg returns RAW) ──────────────────────────────
+// Since ADR-0027 masking moved to the service worker's egress (egress.ts); the
+// content leg executes and serializes ONLY. So the content result is the RAW
+// value here; the mask is applied in the SW before it leaves the extension
+// (covered by extension/tests/background/egress.test.ts and the real-browser
+// security proof). This test pins that the content leg returns the raw value.
+async function testEvalRaw(page: Page): Promise<void> {
+  console.log("\n[test] page_eval - content leg returns RAW (SW masks on egress)");
   await freshLoad(page, { evalMask: true });
   const resp = await invokeWithEvalApproval(page, "page_eval", {
     code: 'return localStorage.getItem("token");',
   });
   check(!resp.__evalError, "eval runs without JS error");
   check(typeof resp === "string", "eval returned a string");
-  check(!resp.includes("eyJhbGciOiJI"), "masked: JWT prefix not in result");
-  check(resp.includes("••••"), "masked: result contains mask marker");
+  // The content leg does NOT mask; the raw JWT comes back and is masked SW-side.
+  check(resp.includes("eyJhbGciOiJI"), "content leg returns the raw value (masking is SW-side)");
 }
 
 // ── test: page_eval (unmasked) ─────────────────────────────────────────────
@@ -539,24 +525,30 @@ async function testEvalErrorAndSerialize(page: Page): Promise<void> {
   );
 }
 
-// ── test: storage_get ──────────────────────────────────────────────────────
+// ── test: storage_get (content leg returns RAW) ────────────────────────────
+// Like page_eval, storage_get masking moved to the SW egress (ADR-0027,
+// always-on per ADR-0010). The content leg returns RAW values; the SW masks
+// them before they leave (covered by egress.test.ts). This test pins the raw
+// read + the DOM-side shape (found/missing, session vs local).
 async function testStorageGet(page: Page): Promise<void> {
-  console.log("\n[test] storage_get - localStorage read + masking");
+  console.log("\n[test] storage_get - content leg returns RAW (SW masks on egress)");
   await freshLoad(page);
 
-  // Single key with JWT - must be masked.
+  // Single key with JWT - RAW here (masked SW-side).
   const tokenResp = await invoke(page, "storage_get", { type: "local", key: "token" });
   check(tokenResp.found === true, "storage_get found token key");
-  check(!tokenResp.value.includes("eyJhbGciOiJI"), "storage masks JWT value");
-  check(tokenResp.value.includes("••••"), "masked value has marker");
+  check(tokenResp.value.includes("eyJhbGciOiJI"), "content leg returns the raw value");
 
-  // Plain value - not masked (too short / no pattern).
+  // Plain value passes through.
   const plainResp = await invoke(page, "storage_get", { type: "local", key: "plain" });
-  check(plainResp.value === "hello world", "plain value not masked");
+  check(plainResp.value === "hello world", "plain value returned as-is");
 
-  // Hex id - masked.
+  // Hex id - returned raw (the exact seeded value), not masked here.
   const hexResp = await invoke(page, "storage_get", { type: "local", key: "hexid" });
-  check(hexResp.value.includes("••••"), "long hex masked");
+  check(
+    hexResp.value === "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8",
+    "hex id returned raw (exact seeded value, unmasked)",
+  );
 
   // Missing key.
   const missingResp = await invoke(page, "storage_get", { key: "nonexistent" });
@@ -577,32 +569,35 @@ async function testWaitForNav(page: Page): Promise<void> {
   check(resp.readyState === "complete", "nav wait sees complete readyState");
 }
 
-// ── test: high-risk Toast (page_click on submit) ──────────────────────────
-async function testHighRiskToast(page: Page): Promise<void> {
-  console.log("\n[test] high-risk Toast - submit click prompts confirmation");
+// ── test: high-risk click injects NO in-page toast (ADR-0027) ──────────────
+// The high-risk confirmation moved OFF the page-reachable DOM to an
+// extension-owned window; the risk decision + confirmation run in the service
+// worker BEFORE the op reaches the content leg. So the content leg receives a
+// plain page_click and just performs it - it must NOT inject any toast into
+// the page. (The off-DOM confirmation + the click's approved-target binding
+// are proven by tests/security_browser_test.ts and the SW-side gate.test.ts.)
+async function testNoInPageToast(page: Page): Promise<void> {
+  console.log("\n[test] high-risk click injects NO in-page toast (off-DOM, ADR-0027)");
   await freshLoad(page);
   const snap = await invoke(page, "page_snapshot", {});
   const go = snap.nodes.find((n: any) => n.selector?.includes("#go"));
   check(go?.role === "button", "#go is the submit button");
 
-  // Fire the click (will trigger Toast because it's type=submit). Don't await -
-  // it blocks on Toast. Instead, kick it off, then approve via the Toast button.
-  const clickP = invoke(page, "page_click", { ref: go.ref });
-
-  // Wait for the Toast card to appear, then click Allow.
-  await new Promise((r) => setTimeout(r, 200));
-  const hasToast = await page.evaluate(
-    `!!document.querySelector(".zcb-eval-card, .zcb-toast-card")`,
-  );
-  check(hasToast, "high-risk click injected a Toast card");
-
-  // Click Allow (the .zcb-toast-allow button inside any toast card).
-  await clickToastButton(page, ".zcb-toast-card .zcb-toast-allow");
-  const resp = await clickP;
-  // #go has onclick counting via __clickCount.
-  check(!resp.__error, `approved submit click proceeds: ${resp.__error || "ok"}`);
+  const resp = await invoke(page, "page_click", { ref: go.ref });
+  check(!resp.__error, `content click proceeds: ${resp.__error || "ok"}`);
   const count = await page.evaluate("window.__clickCount || 0");
-  check(count >= 1, "approved submit click triggered onclick");
+  check(count >= 1, "content click triggered onclick");
+  // No confirmation UI of any kind was injected: the content leg never creates
+  // the toast host element, and no danger/eval/toast card exists anywhere.
+  const toastDom = await page.evaluate(`
+    (function(){
+      return {
+        host: !!document.getElementById("__zcb_toast_host"),
+        anyCard: !!document.querySelector(".zcb-eval-card, .zcb-toast-card, .zcb-danger, .zcb-toast-allow"),
+      };
+    })();
+  `);
+  check(!toastDom.host && !toastDom.anyCard, "no in-page confirmation UI was injected");
 }
 
 // ── test: ping ─────────────────────────────────────────────────────────────
