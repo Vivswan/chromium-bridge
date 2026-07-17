@@ -11,6 +11,7 @@ content or navigates) · **High** (writes to the page, or reads credentials) ·
 
 | Tool | Risk | Reads | Writes / effect | Credentials? | Chrome perm | User protection |
 |------|------|-------|-----------------|--------------|-------------|-----------------|
+| `list_browsers` | Low | connected browser labels + open-tab counts | — | no | `tabs` (via a routed `tab_list` per browser) | answered by the MCP server; no page access |
 | `tab_list` | Low | tab titles/URLs | — | no | `tabs` | allowlist not required (metadata only) |
 | `tab_focus` | Low | — | activates a tab | no | `tabs` | — |
 | `tab_open` | Medium | — | opens a URL (navigation) | no | `tabs` | allowlist-gated origin |
@@ -32,6 +33,12 @@ submit button or a navigating link (those trigger the confirmation toast).
 
 ## Cross-cutting protections
 
+- **Browser routing never guesses**: with several browsers connected, a tool
+  call must name one via its `browser` argument or it fails
+  (`BROWSER_AMBIGUOUS`); an unknown label fails (`BROWSER_NOT_FOUND`). Each
+  browser's connection is independently authenticated, and a connection that
+  answers another browser's request is dropped
+  (see [ADR-0022](../adr/0022-multi-browser-label-routing.md)).
 - **Allowlist**: page-level ops only run on origins the user approved (per-site
   prompt + `chrome.permissions.request`). `allowAllSites` is an explicit opt-in.
 - **Masking**: `page_text`, `cookie_get`, `storage_get`, and `page_eval` output
