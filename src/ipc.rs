@@ -13,6 +13,11 @@
 //!   [`client_handshake`]): the server sends a random nonce, the client replies
 //!   with HMAC(secret, nonce). The secret never travels on the wire, and a fresh
 //!   nonce per connection makes a captured response useless to replay.
+//! - Before that handshake, each end kernel-attests the other ([`attest_peer`]):
+//!   it resolves the peer's pid from the socket and requires the peer's on-disk
+//!   executable to hash to the same value as its own, so only another instance
+//!   of this exact binary can drive the bridge. A different same-user program is
+//!   rejected at accept, before it can attempt the handshake. See ADR-0020.
 
 use std::fs;
 #[cfg(unix)]
@@ -262,6 +267,200 @@ pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
         }
         Ok(uid)
     }
+}
+
+/// The PID of the process on the other end of a connected Unix-domain socket.
+/// Used by [`attest_peer`] to resolve the peer's on-disk executable.
+///
+/// The kernel records this pid for the process that opened the peer end; it is
+/// stable for the connection even if that process later exits. Resolving the
+/// pid to an executable afterwards, however, is a separate step that can race
+/// with pid reuse if the peer exits mid-connection (e.g. after passing the
+/// descriptor to another process). ADR-0020 records that residual.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn peer_pid(stream: &BridgeStream) -> io::Result<u32> {
+    use std::os::unix::io::AsRawFd;
+
+    let fd = stream.as_raw_fd();
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred = std::mem::MaybeUninit::<libc::ucred>::uninit();
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                cred.as_mut_ptr().cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if len as usize != std::mem::size_of::<libc::ucred>() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected peer-credential size from SO_PEERCRED",
+            ));
+        }
+        let pid = unsafe { cred.assume_init() }.pid;
+        u32::try_from(pid)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "peer pid out of range"))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS has no SO_PEERCRED pid; LOCAL_PEERPID on the AF_UNIX socket
+        // yields the pid of the process that opened the peer end.
+        let mut pid: libc::pid_t = 0;
+        let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                (&mut pid as *mut libc::pid_t).cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if len as usize != std::mem::size_of::<libc::pid_t>() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected peer-pid size from LOCAL_PEERPID",
+            ));
+        }
+        u32::try_from(pid)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "peer pid out of range"))
+    }
+}
+
+/// SHA256 (lowercase hex) of a running process's on-disk executable, named by
+/// pid.
+///
+/// On Linux we hash `/proc/<pid>/exe`, the kernel's magic symlink to the actual
+/// executable inode: it follows to the real backing file even if the path was
+/// later replaced, so once the pid is resolved the digest reflects the running
+/// image (the pid-resolution race is noted on [`peer_pid`]). On macOS (no
+/// `/proc`) we resolve the path with `proc_pidpath` and hash that file, which is
+/// NOT bound to the running image: an attacker who can replace the file at that
+/// path makes us hash the replacement. [`own_exe_hash`] captures our own digest
+/// at startup to blunt that, but the full fix is running-image-bound validation
+/// (`SecCode` by pid). ADR-0020 records this and the code-signature follow-up.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn exe_hash_of_pid(pid: u32) -> io::Result<String> {
+    #[cfg(target_os = "linux")]
+    {
+        hash_file(&PathBuf::from(format!("/proc/{pid}/exe")))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        hash_file(&macos_exe_path(pid)?)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_exe_path(pid: u32) -> io::Result<PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // proc_pidpath returns the path length on success, 0 (with errno) on error.
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    if n <= 0 {
+        return Err(io::Error::last_os_error());
+    }
+    buf.truncate(n as usize);
+    Ok(PathBuf::from(OsStr::from_bytes(&buf)))
+}
+
+/// Stream a file through SHA256 and return the lowercase hex digest.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn hash_file(path: &std::path::Path) -> io::Result<String> {
+    use sha2::Digest;
+
+    let mut f = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(hasher.finalize().as_slice()))
+}
+
+/// SHA256 (hex) of THIS process's own executable, computed once and cached.
+/// This is the trusted identity both ends attest against: a peer is accepted
+/// only when its executable hashes to the same value, i.e. it is another
+/// instance of the same binary. Self and peer are hashed by the identical
+/// mechanism, so an identical binary always yields an identical digest.
+///
+/// [`ensure_own_identity`] primes this at startup, before we accept or dial any
+/// connection, so our notion of "self" is captured from the genuine on-disk
+/// binary and a later replacement of that file cannot redefine it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn own_exe_hash() -> io::Result<&'static str> {
+    use std::sync::OnceLock;
+
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| exe_hash_of_pid(std::process::id()).ok())
+        .as_deref()
+        .ok_or_else(|| io::Error::other("cannot hash own executable"))
+}
+
+/// Prime and validate our own executable identity. Call once at startup, before
+/// accepting or dialing the bridge: it captures the self digest at a known-good
+/// time and fails loudly (rather than silently degrading later) if we cannot
+/// hash our own image, so the caller can refuse to run. Returns the digest for
+/// logging convenience.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn ensure_own_identity() -> io::Result<&'static str> {
+    own_exe_hash()
+}
+
+/// Verify the peer on `stream` is running the same executable as us: resolve its
+/// pid from the kernel, hash its on-disk image, and require it to equal our own
+/// executable's digest. Fails closed on any error: a digest mismatch returns
+/// `PermissionDenied`, and an inability to establish the peer's identity (pid or
+/// hash lookup) propagates that error's own kind. Either way the caller drops
+/// the connection. This is the bridge's trusted-identity allowlist, and the
+/// allowlist is exactly `{our own binary}`.
+///
+/// Both ends run this: the server attests the native host right after accept,
+/// the native host attests the server right after connect. See ADR-0020 for
+/// what this proves and what it cannot.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
+    let pid = peer_pid(stream)?;
+    let peer = exe_hash_of_pid(pid)?;
+    let own = own_exe_hash()?;
+    if identities_match(&peer, own) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("peer executable identity mismatch (pid {pid})"),
+        ))
+    }
+}
+
+/// Whether two hex executable digests name the same binary. Split out so the
+/// accept/reject decision is unit-testable without spawning a second process.
+/// The digests are not secrets, so a plain comparison is fine here.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn identities_match(peer_hex: &str, own_hex: &str) -> bool {
+    peer_hex == own_hex
 }
 
 fn generate_secret() -> String {
@@ -604,5 +803,52 @@ mod tests {
         // our own euid -- exactly what the accept-loop check requires to pass.
         let (a, _b) = UnixStream::pair().unwrap();
         assert_eq!(peer_uid(&a).unwrap(), unsafe { libc::geteuid() });
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn peer_pid_of_local_socketpair_is_current_process() {
+        // Both ends of a socketpair belong to this process, so the kernel
+        // reports our own pid as the peer -- the basis for self-attestation.
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert_eq!(peer_pid(&a).unwrap(), std::process::id());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn own_exe_hash_is_stable_64_hex_chars() {
+        let h = own_exe_hash().unwrap();
+        assert_eq!(h.len(), 64);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        // Cached: a second call yields the same digest.
+        assert_eq!(h, own_exe_hash().unwrap());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn exe_hash_of_own_pid_matches_own_exe_hash() {
+        // Hashing our own pid by the peer mechanism must equal the cached self
+        // hash: self and peer are hashed the identical way, so an identical
+        // binary produces an identical digest.
+        let by_pid = exe_hash_of_pid(std::process::id()).unwrap();
+        assert_eq!(by_pid.as_str(), own_exe_hash().unwrap());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn identities_match_only_on_equal_digests() {
+        assert!(identities_match("abc123", "abc123"));
+        assert!(!identities_match("abc123", "def456"));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn attest_peer_accepts_our_own_process() {
+        // The peer of a local socketpair is this very process, so its executable
+        // is ours: attestation must accept it. The cross-user/foreign-binary
+        // rejection paths are exercised in tests/e2e.py, which cannot be done
+        // from inside a single process (we cannot become a different binary).
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert!(attest_peer(&a).is_ok());
     }
 }

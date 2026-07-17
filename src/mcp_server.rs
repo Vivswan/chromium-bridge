@@ -27,6 +27,23 @@ pub fn run() -> i32 {
         ipc::LockFile::remove();
     });
 
+    // Capture our own executable identity up front, before binding or accepting,
+    // so peer attestation compares against the genuine binary rather than one an
+    // attacker might swap onto disk later. Refuse to run if we cannot hash our
+    // own image. See ADR-0020.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    match ipc::ensure_own_identity() {
+        Ok(hash) => log_info!(
+            "mcp",
+            "bridge peer attestation active (self id {})",
+            &hash[..12]
+        ),
+        Err(e) => {
+            log_error!("mcp", "cannot establish own executable identity: {e}");
+            return 1;
+        }
+    }
+
     // 1. Bind the bridge socket and publish the lock file.
     let (listener, lock) = match ipc::listen() {
         Ok(x) => x,
@@ -100,6 +117,17 @@ pub fn run() -> i32 {
                                 );
                                 continue;
                             }
+                        }
+                    }
+                    // Kernel-attest the peer's executable identity: only another
+                    // instance of THIS binary may drive the bridge, so a
+                    // different same-user program is rejected here, before the
+                    // HMAC handshake. See ADR-0020.
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    {
+                        if let Err(e) = ipc::attest_peer(&stream) {
+                            log_warn!("mcp", "rejected bridge connection: {e}");
+                            continue;
                         }
                     }
                     if let Err(e) = session.attach_connection(stream) {

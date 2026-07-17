@@ -4,8 +4,15 @@
 These tests drive the release binary as real subprocesses:
   - MCP server mode (default), spoken to over JSON-RPC/stdio
   - --native-host mode, spoken to with real Chrome Native-Messaging frames
-  - a mock "extension" that connects over the bridge socket (a Unix-domain
-    socket on Unix, loopback TCP on Windows)
+  - tool round-trips that flow MCP client -> server -> real --native-host
+    subprocess -> "extension" (us, speaking NM frames to the host) and back
+
+Only the real browser-bridge binary can speak the bridge socket now: the MCP
+server kernel-attests each peer's executable (ADR-0020), so a foreign process
+cannot connect as a fake extension. The round-trip tests therefore route
+through a real --native-host subprocess (which passes attestation because it is
+the same binary), and test_foreign_peer_is_rejected confirms that a non-binary
+peer connecting straight to the socket is refused.
 
 They cover the protocol layers (NM framing, MCP JSON-RPC, bridge socket) and
 the request/response correlation, including the new page_eval tool path.
@@ -19,8 +26,6 @@ This is an orchestration test (not a Rust #[test]) on purpose: it exercises
 the full process boundary the way an MCP client and Chrome would, which a unit
 test inside the crate cannot.
 """
-import hashlib
-import hmac
 import json
 import os
 import socket
@@ -145,9 +150,10 @@ class McpClient:
 
 
 def connect_bridge(lf, timeout=5):
-    """Connect to the bridge the way the native host would: a Unix-domain
-    socket on Unix (lf["endpoint"] is its path), loopback TCP on Windows
-    (lf["endpoint"] is "127.0.0.1:<port>")."""
+    """Open a raw connection to the bridge socket (Unix-domain on Unix,
+    loopback TCP on Windows). Used only by test_foreign_peer_is_rejected to
+    simulate a non-browser-bridge process: a real extension never touches this
+    socket, it talks Native-Messaging frames to a --native-host subprocess."""
     if os.name == "nt":
         host, port = lf["endpoint"].rsplit(":", 1)
         return socket.create_connection((host, int(port)), timeout=timeout)
@@ -157,40 +163,26 @@ def connect_bridge(lf, timeout=5):
     return s
 
 
-def mock_extension(lf, responder):
-    """Connect to the bridge socket as the extension would, complete the HMAC
-    challenge-response handshake, then answer requests using
-    `responder(req) -> dict`."""
-    s = connect_bridge(lf)
-    buf = bytearray()
+def start_bridge_host():
+    """Spawn a real `browser-bridge --native-host`, the way Chrome does. It
+    dials the server's bridge socket and passes peer attestation because it is
+    the same binary; the server then drives it. The "extension" side (this test)
+    speaks Native-Messaging frames to the host's stdin/stdout, which the host
+    relays to and from the attested socket."""
+    return subprocess.Popen([BIN, "--native-host"], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    def readline():
-        nonlocal buf
-        while b"\n" not in buf:
-            d = s.recv(4096)
-            if not d:
-                return None
-            buf += d
-        line, _, buf = buf.partition(b"\n")
-        return line
 
-    # Handshake: read the server's challenge, answer with HMAC(secret, nonce).
-    challenge = json.loads(readline())
-    assert challenge.get("type") == "challenge", f"unexpected handshake {challenge}"
-    mac = hmac.new(lf["secret"].encode(), challenge["nonce"].encode(),
-                   hashlib.sha256).hexdigest()
-    s.sendall((json.dumps({"type": "response", "mac": mac}) + "\n").encode())
-
-    def serve_one():
-        line = readline()
-        if line is None:
-            return None
-        req = json.loads(line)
-        resp = responder(req)
-        s.sendall((json.dumps(resp) + "\n").encode())
-        return req
-
-    return s, serve_one
+def serve_bridge_req(nh, responder):
+    """Read one BridgeReq the server forwarded (delivered as an NM frame on the
+    host's stdout), hand it to `responder(req) -> dict`, and write the reply
+    back as an NM frame to the host's stdin. Returns the request, or None on
+    EOF."""
+    req = nm_read(nh)
+    if req is None:
+        return None
+    nm_write(nh, responder(req))
+    return req
 
 
 def test_mcp_handshake_and_tools():
@@ -261,7 +253,7 @@ def test_stale_lock_is_replaced():
 
 
 def test_tab_list_round_trip():
-    print("\n[test] tab_list round-trip via mock extension (TCP bridge)")
+    print("\n[test] tab_list round-trip via real native host")
     try:
         os.remove(LOCK)
     except FileNotFoundError:
@@ -277,24 +269,25 @@ def test_tab_list_round_trip():
             return {"id": req["id"], "ok": True,
                     "data": [{"id": 7, "title": "E2E Tab", "url": "https://x", "active": True}]}
 
-        s, serve = mock_extension(lf, responder)
+        nh = start_bridge_host()
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.1)  # let the mock connect + complete the handshake
+        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
         # serve the single tab_list request the call below will trigger
         served = []
-        t = threading.Thread(target=lambda: served.append(serve()))
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
 
         r = c.call("tab_list", {}, _id=5)
         t.join(timeout=3)
-        check(bool(served), "mock extension received the tab_list BridgeReq")
+        check(bool(served), "native host received the tab_list BridgeReq")
         content = r["result"]["content"][0]["text"]
         data = json.loads(content)
-        check(data[0]["title"] == "E2E Tab", "tab_list result carries mock data")
+        check(data[0]["title"] == "E2E Tab", "tab_list result carries host data")
         check(r["result"].get("isError") is False, "tab_list isError=false")
-        s.close()
+        nh.kill()
+        nh.wait(timeout=3)
     finally:
         try:
             mcp.stdin.close()
@@ -325,13 +318,13 @@ def test_page_eval_round_trip():
             return {"id": req["id"], "ok": True,
                     "data": {"result": 42, "masked": "••••[jwt]"}}
 
-        s, serve = mock_extension(lf, responder)
+        nh = start_bridge_host()
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.1)
+        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
         served = []
-        t = threading.Thread(target=lambda: served.append(serve()))
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
 
         r = c.call("page_eval", {"code": "return 1 + 41"}, _id=7)
@@ -343,7 +336,8 @@ def test_page_eval_round_trip():
               "forwarded args.code matches input")
         content = json.loads(r["result"]["content"][0]["text"])
         check(content.get("result") == 42, "eval result data returned to client")
-        s.close()
+        nh.kill()
+        nh.wait(timeout=3)
     finally:
         try:
             mcp.stdin.close()
@@ -382,13 +376,13 @@ def test_page_snapshot_precise_round_trip():
                 "precise": True,
             }}
 
-        s, serve = mock_extension(lf, responder)
+        nh = start_bridge_host()
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.1)
+        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
         served = []
-        t = threading.Thread(target=lambda: served.append(serve()))
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
 
         r = c.call("page_snapshot_precise", {}, _id=9)
@@ -400,7 +394,8 @@ def test_page_snapshot_precise_round_trip():
         check(content.get("precise") is True, "result carries precise:true flag")
         check(content["nodes"][0]["ref"] == "p1", "precise refs use 'p' prefix")
         check(len(content["nodes"]) == 2, "both nodes returned")
-        s.close()
+        nh.kill()
+        nh.wait(timeout=3)
     finally:
         try:
             mcp.stdin.close()
@@ -435,13 +430,13 @@ def test_cookie_get_round_trip():
                 "count": 1,
             }}
 
-        s, serve = mock_extension(lf, responder)
+        nh = start_bridge_host()
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.1)
+        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
         served = []
-        t = threading.Thread(target=lambda: served.append(serve()))
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
 
         r = c.call("cookie_get", {"url": "https://example.com"}, _id=10)
@@ -456,7 +451,8 @@ def test_cookie_get_round_trip():
               "cookie structure (httpOnly) preserved")
         check("••••" in content["cookies"][0]["value"],
               "cookie value is masked")
-        s.close()
+        nh.kill()
+        nh.wait(timeout=3)
     finally:
         try:
             mcp.stdin.close()
@@ -486,13 +482,13 @@ def test_storage_get_round_trip():
                 "value": "••••[jwt]",
             }}
 
-        s, serve = mock_extension(lf, responder)
+        nh = start_bridge_host()
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.1)
+        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
         served = []
-        t = threading.Thread(target=lambda: served.append(serve()))
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
 
         r = c.call("storage_get", {"type": "local", "key": "auth_token"}, _id=11)
@@ -505,7 +501,8 @@ def test_storage_get_round_trip():
         content = json.loads(r["result"]["content"][0]["text"])
         check(content.get("found") is True, "storage result has found:true")
         check("••••" in content.get("value", ""), "storage value is masked")
-        s.close()
+        nh.kill()
+        nh.wait(timeout=3)
     finally:
         try:
             mcp.stdin.close()
@@ -539,12 +536,13 @@ def test_native_host_mode():
         c.send({"jsonrpc": "2.0", "id": 8, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
 
-        # The MCP server forwards it over TCP -> native host -> stdout as NM frame.
+        # The MCP server forwards it over the bridge socket -> native host ->
+        # stdout as an NM frame.
         frame = nm_read(nh)
         check(frame is not None and frame.get("op") == "tab_list",
               "native host emits BridgeReq as NM frame to extension")
 
-        # Extension replies: write NM frame to native host stdin -> TCP -> MCP.
+        # Extension replies: NM frame -> native host stdin -> bridge socket -> MCP.
         nm_write(nh, {"id": frame["id"], "ok": True,
                       "data": [{"id": 1, "title": "NM Round Trip", "url": "y", "active": True}]})
 
@@ -616,6 +614,54 @@ def test_unknown_method_returns_32601():
         mcp.wait(timeout=3)
 
 
+def test_foreign_peer_is_rejected():
+    print("\n[test] a foreign (non-browser-bridge) peer is refused by attestation")
+    if os.name == "nt":
+        print("  SKIP  attestation is Unix-only (Windows keeps loopback TCP)")
+        return
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        lf = wait_lock(mcp)
+        check(lf is not None, "lock file written")
+        # Connect a raw python process straight to the bridge socket. It is not
+        # the browser-bridge binary, so server-side executable attestation must
+        # drop it BEFORE sending any HMAC challenge: our recv sees a clean EOF.
+        s = connect_bridge(lf)
+        s.settimeout(3)
+        try:
+            data = s.recv(4096)
+        except socket.timeout:
+            data = b"__no_eof__"
+        check(data == b"",
+              "server dropped the foreign peer without a challenge")
+        s.close()
+        # Prove the drop was attestation specifically (not a uid check, a bind
+        # error, or some other cause): the server logs the executable-identity
+        # mismatch to stderr. Draining stdin ends the server so we can read it.
+        mcp.stdin.close()
+        try:
+            _out, err = mcp.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            mcp.kill()
+            _out, err = mcp.communicate()
+        check("identity mismatch" in (err or ""),
+              "server logged an executable-identity mismatch (attestation fired)")
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        try:
+            mcp.wait(timeout=3)
+        except Exception:
+            pass
+
+
 def main():
     ensure_binary()
     print(f"binary: {BIN}")
@@ -627,6 +673,7 @@ def main():
     test_cookie_get_round_trip()
     test_storage_get_round_trip()
     test_native_host_mode()
+    test_foreign_peer_is_rejected()
     test_server_takeover()
     test_unknown_method_returns_32601()
     print(f"\n{'='*40}\n{_passed} passed, {_failed} failed")
