@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Shadow DOM Fixture</title>
+  <link rel="stylesheet" href="_style.css" />
 </head>
 <body>
   <h1>Shadow DOM Test</h1>
 
-  <!-- A normal button outside any shadow root — snapshot SHOULD find it. -->
+  <!-- A normal button outside any shadow root - snapshot SHOULD find it. -->
   <button id="plain">Plain Button</button>
 
   <!-- Open shadow root host. TreeWalker(document.body) does not cross the
@@ -20,15 +22,25 @@
 
   <script>
     (function () {
+      // Document stylesheets do not pierce shadow roots, so each root gets a
+      // small <style> of its own. The custom properties inherit across the
+      // shadow boundary from _style.css, so colors and dark mode stay in sync.
+      var shadowCss =
+        "<style>button{appearance:none;padding:.5rem 1.1rem;" +
+        "border:1px solid var(--accent);border-radius:8px;background:var(--accent);" +
+        "color:var(--accent-text);font:550 15px/1.6 ui-sans-serif,system-ui,sans-serif;" +
+        "cursor:pointer}</style>";
+
       var openHost = document.getElementById("open-host");
       var openRoot = openHost.attachShadow({ mode: "open" });
       openRoot.innerHTML =
+        shadowCss +
         '<button id="shadow-btn" onclick="window.__shadowClicked=true">In Open Shadow</button>';
 
       var closedHost = document.getElementById("closed-host");
       var closedRoot = closedHost.attachShadow({ mode: "closed" });
       closedRoot.innerHTML =
-        '<button id="closed-shadow-btn">In Closed Shadow</button>';
+        shadowCss + '<button id="closed-shadow-btn">In Closed Shadow</button>';
 
       // Expose for assertions (open root is reachable; closed is not).
       window.__openRoot = openRoot;

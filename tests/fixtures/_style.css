@@ -1,0 +1,201 @@
+/*
+ * Shared, purely presentational stylesheet for the browser-test fixtures.
+ *
+ * Rules of this file (keep the test contract intact):
+ *  - Every selector is wrapped in :where() so it has ZERO specificity: any
+ *    rule the extension injects at runtime (the confirmation Toast styles
+ *    itself inline and via classes) wins every specificity contest against
+ *    this sheet. Base properties the Toast leaves unset still inherit, so
+ *    keep the rules here generic and layout-neutral.
+ *  - Never use display:none, visibility:hidden, opacity:0, zero sizes, or
+ *    text-transform here - the snapshot's isVisible() and accessible-name
+ *    logic (extension/src/content/snapshot.ts) read computed style and
+ *    innerText of these elements.
+ *  - No external resources: fixtures load from file:// and must stay offline.
+ */
+
+:where(:root) {
+  color-scheme: light dark;
+  --bg: #eef0f4;
+  --card: #ffffff;
+  --text: #1d2433;
+  --muted: #5b6472;
+  --border: #d7dbe2;
+  --accent: #4f63d2;
+  --accent-text: #ffffff;
+  --accent-soft: #e8ebfa;
+  --ring: rgba(79, 99, 210, 0.35);
+  --shadow: 0 1px 2px rgba(20, 24, 35, 0.06), 0 12px 32px rgba(20, 24, 35, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :where(:root) {
+    --bg: #12141a;
+    --card: #1c1f27;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --border: #333947;
+    --accent: #8b9bf4;
+    --accent-text: #12141a;
+    --accent-soft: #262c40;
+    --ring: rgba(139, 155, 244, 0.4);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+}
+
+:where(html) {
+  background: var(--bg);
+}
+
+/* The body itself is the centered "card" - no wrapper elements needed. */
+:where(body) {
+  box-sizing: border-box;
+  max-width: 40rem;
+  margin: 2.5rem auto;
+  padding: 2rem 2.25rem 2.5rem;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  /* Grid layout gives every existing top-level element its own row with a
+     consistent gap - vertical rhythm without adding DOM wrappers. */
+  display: grid;
+  gap: 0.9rem;
+  justify-items: start;
+}
+
+:where(h1, h2) {
+  margin: 0 0 0.25rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+:where(h1) {
+  font-size: 1.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+  justify-self: stretch;
+}
+
+:where(h2) {
+  font-size: 1.2rem;
+}
+
+:where(button) {
+  appearance: none;
+  padding: 0.5rem 1.1rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+  transition: filter 120ms ease, transform 60ms ease;
+}
+
+:where(button:hover) {
+  filter: brightness(1.08);
+}
+
+:where(button:active) {
+  transform: translateY(1px);
+}
+
+:where(button:focus-visible) {
+  outline: 3px solid var(--ring);
+  outline-offset: 2px;
+}
+
+:where(input[type="text"], input[type="password"]) {
+  box-sizing: border-box;
+  width: min(100%, 22rem);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+:where(input[type="text"], input[type="password"])::placeholder {
+  color: var(--muted);
+}
+
+:where(input[type="text"]:focus, input[type="password"]:focus) {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+:where(a) {
+  color: var(--accent);
+  font-weight: 550;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  border-radius: 4px;
+}
+
+:where(a:focus-visible) {
+  outline: 3px solid var(--ring);
+  outline-offset: 2px;
+}
+
+:where(label) {
+  color: var(--text);
+  font-weight: 550;
+  display: grid;
+  gap: 0.3rem;
+  justify-items: start;
+}
+
+/* Field caption for the aria-labelledby span (page.html). */
+:where(#lbl) {
+  color: var(--muted);
+  font-weight: 550;
+  font-size: 0.9rem;
+  margin-bottom: -0.55rem;
+}
+
+:where(iframe) {
+  width: min(100%, 24rem);
+  height: 130px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+/* Container that receives dynamically inserted buttons (dynamic.html). */
+:where(#container) {
+  display: grid;
+  gap: 0.9rem;
+  justify-items: start;
+}
+
+/* Compact variant for the tiny document inside the iframe. */
+:where(body.frame-child) {
+  box-sizing: border-box;
+  min-height: 100vh;
+  max-width: none;
+  margin: 0;
+  padding: 0.9rem 1.1rem;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--accent-soft);
+}

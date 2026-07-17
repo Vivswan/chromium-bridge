@@ -2,17 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>iframe Fixture</title>
+  <link rel="stylesheet" href="_style.css" />
 </head>
 <body>
   <h1>iframe Test</h1>
 
-  <!-- A top-frame button — snapshot SHOULD find it. -->
+  <!-- A top-frame button - snapshot SHOULD find it. -->
   <button id="top-btn">Top Button</button>
 
   <!-- Same-origin iframe. content.js does not inject into it (no all_frames),
-       so the iframe's button should NOT appear in the main page's snapshot. -->
-  <iframe id="frame" src="iframe-child.html" style="width:200px;height:100px;"></iframe>
+       so the iframe's button should NOT appear in the main page's snapshot.
+       Sizing lives in _style.css (presentation only). -->
+  <iframe id="frame" src="iframe-child.html"></iframe>
 
   <script>
     // Allow tests to know the iframe finished loading.
