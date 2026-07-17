@@ -133,7 +133,17 @@ remains". The extension's revoke clears the pin AND sends a host-directed
 policy, and bumps `host_key_epoch`. The request is durable: it is stored in the
 #32 SW-only trusted storage and re-sent on every connect until the host's
 `enclave_revoked` acknowledgement clears it, so a service-worker death or a
-down port cannot lose it (deletion is idempotent on the host side).
+down port cannot lose it. Retrying is safe only for the key the revoke meant:
+the frame names no key, so once a re-pair has minted a new one, a resend would
+delete that new key or fail the re-pinned bridge closed. Pinning a fresh
+pairing therefore supersedes the pending request. Starting a ceremony does
+not: an abandoned ceremony must leave the deletion pending, or the old key
+would outlive the revoke with nothing left to request its removal. One window
+stays open and is accepted: a reconnect after an out-of-band `pair --reset`
+but before the new pairing is pinned still resends the stale frame and deletes
+the just-minted key. That costs the user one more `pair` run; it can never
+mark the re-pinned bridge compromised, because no resend happens once the new
+pin lands.
 
 The extension also gains a managed path to the trusted-client allowlist through
 two more host-handled control frames, `client_list` and `client_revoke`,
@@ -240,8 +250,10 @@ reason as `HostConfig`: local, single-writer-version, security-relevant.
   service worker every few idle minutes and the native host with it. A
   best-effort send at revoke time would be lost if the port were down. Storing
   the request in the #32 trusted storage and re-sending until acknowledged makes
-  the close-the-asymmetry guarantee hold across the service-worker lifecycle,
-  and deletion being idempotent means the retries are harmless.
+  the close-the-asymmetry guarantee hold across the service-worker lifecycle.
+  Pinning a fresh pairing clears the request, so a resend can never fire at a
+  key the extension has pinned; the pre-pin resend window is named in
+  decision 5.
 
 - **Why the latch and not a stronger tamper defense.** A cryptographic seal or
   an out-of-directory marker would still be deletable or forgeable by the same

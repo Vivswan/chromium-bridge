@@ -385,6 +385,83 @@ describe("ceremony state machine", () => {
     expect(posted.length).toBe(afterAck);
   });
 
+  test("a fresh pairing, once pinned, supersedes a stale host-key deletion request", async () => {
+    const oldKey = await genKey();
+    const newKey = await genKey();
+    await pairAndPin(oldKey);
+    // Revoke while the native port is down: the deletion request cannot be
+    // sent, so only the durable flag records it.
+    detachPort();
+    expect((await revokePin()).ok).toBe(true);
+    expect((await getEnrollmentStatus()).hostRevokePending).toBe(true);
+    // `chromium-bridge pair --reset` ran out of band and minted a NEW enclave
+    // key. The reconnect still resends the stale revoke (the accepted pre-pin
+    // window, ADR-0025) but must not challenge (pairing is paused).
+    attachPort((f) => {
+      posted.push(f as Record<string, unknown>);
+      return true;
+    });
+    let before = posted.length;
+    await onPortConnected();
+    expect(posted.slice(before)).toEqual([{ type: "enclave_revoke" }]);
+    // No ack arrives; the user restarts the ceremony against the new key.
+    expect((await startPairing()).ok).toBe(true);
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(newKey, nonce, context));
+    expect((await approvePending()).ok).toBe(true);
+    // The new pin supersedes the stale request: reconnects send NOTHING - a
+    // resent enclave_revoke would delete the key just pinned (or, once the
+    // host acks it, mark this re-pinned bridge compromised).
+    before = posted.length;
+    await onPortConnected();
+    expect(posted.slice(before)).toEqual([]);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect(st.keyId).toBe(newKey.keyId);
+    expect(st.hostRevokePending).toBeUndefined();
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("approving a pairing clears a stale host-key deletion request", async () => {
+    const key = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    // The durable flag outlives revoke's clearAll and SW death, so a stale
+    // deletion request can still be sitting there when a ceremony reaches
+    // approval; the new pin must supersede it.
+    store.enclaveHostRevokePending = true;
+    expect((await approvePending()).ok).toBe(true);
+    expect((await getEnrollmentStatus()).hostRevokePending).toBeUndefined();
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.slice(before)).toEqual([]);
+    expect((await getEnrollmentStatus()).state).toBe("pinned");
+  });
+
+  test("an abandoned re-pair ceremony does not lose the pending deletion", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    detachPort();
+    expect((await revokePin()).ok).toBe(true);
+    // Pair clicked while the port is still down: the ceremony cannot even
+    // start. The deletion request must survive the attempt - only a PINNED
+    // fresh pairing supersedes it - or the old key would outlive the revoke
+    // with nothing left to request its removal.
+    expect((await startPairing()).ok).toBe(false);
+    expect((await getEnrollmentStatus()).hostRevokePending).toBe(true);
+    attachPort((f) => {
+      posted.push(f as Record<string, unknown>);
+      return true;
+    });
+    const before = posted.length;
+    await onPortConnected();
+    // The revoke is resent first; the un-paused ceremony may re-challenge
+    // after it, which is fine - the deletion request is what must survive.
+    expect(posted[before]).toEqual({ type: "enclave_revoke" });
+    expect((await getEnrollmentStatus()).hostRevokePending).toBe(true);
+  });
+
   test("a host-originated enclave_revoked fails a pinned bridge closed", async () => {
     // The ADR-0025 push: `chromium-bridge revoke` ran out-of-band, the host
     // noticed and pushed enclave_revoked. A pinned extension must flip to the
