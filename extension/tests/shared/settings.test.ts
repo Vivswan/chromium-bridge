@@ -22,6 +22,7 @@ describe("DEFAULTS", () => {
         "hostReverifyMs",
         "pageEvalEnabled",
         "requireEnrollment",
+        "uiLanguage",
         "warnPreciseSnapshot",
       ].sort(),
     );
@@ -41,6 +42,8 @@ describe("DEFAULTS", () => {
     // Periodic host re-verification is opt-in; 0 keeps the session-granularity
     // default (verify at pairing and on demand only).
     expect(DEFAULTS.hostReverifyMs).toBe(0);
+    // Display language defaults to matching the browser.
+    expect(DEFAULTS.uiLanguage).toBe("auto");
   });
 });
 
