@@ -1,3 +1,5 @@
+import "@testing-library/jest-dom/vitest";
+
 // Vitest setup shared by every suite.
 //
 // happy-dom ships no Web Locks implementation (navigator.locks is null), but

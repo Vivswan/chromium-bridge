@@ -119,11 +119,26 @@ export async function resolvePendingAllow(
 // Manual add from the options page. We only persist the glob — MV3 forbids
 // browser.permissions.request outside a user-gesture context, so the actual
 // host permission is requested on first visit via ensureAllowed().
-export async function addAllow(glob: string): Promise<string[]> {
+export async function addAllow(
+  input: string,
+): Promise<{ ok: boolean; list?: string[]; error?: string }> {
+  const glob = canonicalOriginGlob(input);
+  if (!glob) return { ok: false, error: `not a valid http(s) origin: ${input}` };
   const list = await getAllowlist();
   if (!list.includes(glob)) list.push(glob);
   await setAllowlist(list);
-  return list;
+  return { ok: true, list };
+}
+
+/** Reduce any user-submitted URL/origin to protocol://host/* for an http(s)
+ * origin, dropping path/query/credentials, or null if it is not one. Central
+ * validation so the allowlist cannot be seeded with a malformed entry no
+ * ensureAllowed check would ever match, regardless of which surface adds it. */
+export function canonicalOriginGlob(input: unknown): string | null {
+  if (typeof input !== "string" || !input.trim()) return null;
+  const glob = originGlobOf(input.trim());
+  if (!glob) return null;
+  return /^https?:\/\//i.test(glob) ? glob : null;
 }
 
 // Remove a glob and best-effort release its host permission.
