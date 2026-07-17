@@ -11,9 +11,11 @@
 //!
 //! This module is split across:
 //!   - [`catalogue`] — the [`Tool`] struct, [`all`] catalogue, and `schema` helper,
+//!   - [`capabilities`] — the negotiable capability groupings over the catalogue,
 //!   - [`handlers`] — the per-op `build_*` payload fns and arg helpers,
 //!   - this root — [`dispatch`], [`Outcome`], and the `Handler`/`HANDLERS` registry.
 
+pub mod capabilities;
 mod catalogue;
 mod handlers;
 
@@ -22,7 +24,8 @@ use serde_json::{json, Value};
 use crate::error::CallError;
 use crate::session::Session;
 
-pub use catalogue::{all, Tool};
+pub use capabilities::{Capability, CAPABILITIES};
+pub use catalogue::{all, Confirmation, Permission, Risk, Scope, Tool};
 
 use handlers::{
     build_console_get, build_cookie_get, build_empty, build_page_eval, build_page_fill,
@@ -153,7 +156,7 @@ const HANDLERS: &[Handler] = &[
 ];
 
 /// The result of dispatching one tool call: the MCP content blocks, whether it
-/// is an error, and — on error — the stable taxonomy code (contracts/errors.json)
+/// is an error, and — on error — the stable taxonomy code (`error::ERROR_SPECS`)
 /// so the caller can record it in the audit trail without re-parsing the text.
 pub struct Outcome {
     pub content: Value,
@@ -205,7 +208,7 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> Outcome {
             }
         }
         Err(e) => Outcome {
-            // Prefix the stable cross-process code (contracts/errors.json) so
+            // Prefix the stable cross-process code (error::ERROR_SPECS) so
             // clients can branch programmatically, while the text stays
             // human-readable. isError stays true.
             content: json!([{ "type": "text", "text": format!("Error [{}]: {e}", e.code()) }]),

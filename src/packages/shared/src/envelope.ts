@@ -2,22 +2,24 @@
 // the native-messaging boundary, and the request/response types inferred from
 // them.
 //
-// These schemas are the runtime form of contracts/bridge-request.schema.json
-// and contracts/bridge-response.schema.json: the contract files stay the
-// language-neutral source of truth, and the equivalence test
-// (contract-equivalence.test.ts) diffs `z.toJSONSchema()` of these validators
-// against them in CI, so the two cannot drift apart silently.
+// The canonical envelope contract is the Rust wire types (BridgeReq /
+// BridgeResp in src/packages/core/src/protocol.rs, ADR-0028). These schemas are the
+// extension's runtime form of that contract, and the double-derivation diff
+// (scripts/check-envelope-parity.ts, CI + `just ci`) proves them structurally
+// equivalent to the Rust types - modulo the documented erasure rules in
+// json-schema-normalize.ts - so the two cannot drift apart silently.
 
 import { z } from "zod";
 import { type BridgeCommand, isOpName, OP_ARG_SCHEMAS, OpArgsSchema } from "./ops.gen";
 
-// The correlation id: a JS-safe integer (see the contract's `id` note: the
-// extension is a JS runtime, so larger integers have already lost precision
-// in JSON.parse) or a string for forward-compatibility.
+// The correlation id: a JS-safe integer (the extension is a JS runtime, so
+// larger integers have already lost precision in JSON.parse) or a string for
+// forward-compatibility. Deliberately wider than the Rust side's u64-only id
+// (see BridgeReq::id in src/packages/core/src/protocol.rs).
 export const BridgeIdSchema = z.union([z.int(), z.string()]);
 
 // The request envelope (BridgeReq on the wire): { id, op, tabId?, browser?, args }.
-// Mirrors contracts/bridge-request.schema.json.
+// Mirrors the Rust BridgeReq wire type.
 export const BridgeReqSchema = z.strictObject({
   // Correlation id echoed back on the matching BridgeResp.
   id: BridgeIdSchema,
@@ -43,7 +45,7 @@ export const BridgeReqSchema = z.strictObject({
 export type BridgeReqEnvelope = z.infer<typeof BridgeReqSchema>;
 
 // The response envelope posted back to the native host over the Port.
-// Mirrors contracts/bridge-response.schema.json.
+// Mirrors the Rust BridgeResp wire type.
 export const BridgeRespSchema = z.strictObject({
   id: BridgeIdSchema,
   ok: z.boolean(),
@@ -51,7 +53,7 @@ export const BridgeRespSchema = z.strictObject({
   // unconstrained.
   data: z.unknown().optional(),
   // Human-readable failure reason when ok is false. The stable programmatic
-  // code is assigned from contracts/errors.json on the Rust side.
+  // code (errors.gen.ts) is assigned on the Rust side.
   error: z.string().optional(),
 });
 
@@ -90,7 +92,7 @@ function firstIssue(error: z.ZodError): string {
  * Validate one inbound native-messaging frame as a bridge request, fail
  * closed. Three layers, all of which must pass before anything dispatches:
  *
- *   1. the envelope (contracts/bridge-request.schema.json): unknown top-level
+ *   1. the envelope (the Rust BridgeReq wire shape): unknown top-level
  *      fields and unknown args are rejected outright;
  *   2. the op must be in the generated catalogue (OP_NAMES);
  *   3. the args must satisfy that op's validator (required fields, types).

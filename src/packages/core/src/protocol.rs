@@ -222,6 +222,25 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 // 3. Internal bridge envelope (MCP server <-> native host <-> extension)
 // ----------------------------------------------------------------------------
 
+/// The INTERNAL bridge protocol version (MCP server <-> native host <->
+/// extension). This is NOT the MCP JSON-RPC version (that is the date string
+/// "2025-06-18", see docs/adr/0007) and NOT the extension release version
+/// (Cargo is the release version source). It is a small monotonically
+/// increasing integer, bumped only when the bridge wire contract
+/// ([`BridgeReq`]/[`BridgeResp`] shape, hello handshake, op/capability
+/// semantics) changes incompatibly.
+///
+/// Intended compatibility handshake (design; layered on the hello
+/// authentication of docs/adr/0002): on connect, the native host -> MCP
+/// server exchange carries `{hello, protocolVersion, capabilities[]}` - after
+/// the secret is validated, the extension advertises its available capability
+/// ids (see [`crate::tools::CAPABILITIES`]) and its protocol version. On an
+/// incompatible version the server rejects the connection with the
+/// `PROTOCOL_MISMATCH` error (see `error::ERROR_SPECS`) instead of accepting
+/// it and surfacing a confusing "unknown op" later; a tool whose required
+/// capability is not advertised is rejected up front the same way.
+pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;
+
 /// The bridge authentication handshake, exchanged as two NDJSON frames right
 /// after a connection is accepted. The server sends a `Challenge` carrying a
 /// fresh random nonce; the client replies with a `Response` carrying
@@ -321,14 +340,15 @@ pub enum AttachReply {
 /// belongs inside `args`, and a new envelope field needs a protocol-version
 /// bump.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct BridgeReq {
     /// Correlation id, echoed back on the matching [`BridgeResp`]. Assigned
     /// only by the MCP server (a monotonic `AtomicU64` counter starting at
     /// 0), so every id that legitimately appears is a small non-negative
-    /// integer - far inside the contract's JS-safe integer bound. The
-    /// contract (`contracts/bridge-request.schema.json`) is deliberately
-    /// wider (integer-or-string, for forward compatibility); this side stays
+    /// integer - far inside the JS-safe integer bound the extension's Zod
+    /// validator enforces. The extension side stays deliberately wider
+    /// (integer-or-string, for forward compatibility); this side stays
     /// narrow on purpose: a string id can only come from a misbehaving peer,
     /// and rejecting it is fail-closed. Widening would also thread a new id
     /// type through the correlation maps in `session.rs` - if a string id
@@ -340,7 +360,12 @@ pub struct BridgeReq {
     /// extension use camelCase envelope fields).
     #[serde(default, rename = "tabId", skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Value::is_null")]
+    /// The op's argument object, free-form at the envelope layer (each op's
+    /// shape is validated downstream against the tool catalogue; the
+    /// extension enforces the generated Zod validators). Required on the
+    /// wire - an op without arguments sends `{}` (see tools/handlers.rs) -
+    /// so both readers reject a frame that omits it, matching the
+    /// extension's validator.
     pub args: Value,
     /// The label of the browser this request was routed to. The MCP server
     /// resolves the tool call's `browser` argument against its connection
@@ -352,6 +377,7 @@ pub struct BridgeReq {
 
 /// A response from the extension back to the MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct BridgeResp {
     /// Correlation id echoed from the [`BridgeReq`]. `u64` for the same
@@ -833,7 +859,7 @@ mod tests {
         // The cap counts the whole line, newline included. A line whose length
         // equals the cap parses; one byte tighter rejects it rather than
         // truncating. This pins the off-by-one the +1 sentinel guards.
-        let mut wire = br#"{"id":1,"op":"x"}"#.to_vec();
+        let mut wire = br#"{"id":1,"op":"x","args":{}}"#.to_vec();
         wire.push(b'\n');
         let total = wire.len();
 
@@ -859,7 +885,7 @@ mod tests {
                 id: 9,
                 op: "noop".into(),
                 tab_id: None,
-                args: json!(null),
+                args: json!({}),
                 browser: None,
             },
         )
@@ -1055,6 +1081,11 @@ mod tests {
             json!({ "id": "s-1", "op": "tab_list", "args": {} })
         )
         .is_err());
+        // `args` is a required envelope field: every builder sends an object
+        // (`{}` for arg-less ops, see tools/handlers.rs), and the reader
+        // rejects a frame that omits it - the same language the extension's
+        // Zod validator enforces.
+        assert!(serde_json::from_value::<BridgeReq>(json!({ "id": 1, "op": "tab_list" })).is_err());
         assert!(serde_json::from_value::<BridgeResp>(json!({ "id": "s-1", "ok": true })).is_err());
         let req: BridgeReq =
             serde_json::from_value(json!({ "id": 1, "op": "x", "args": { "free": "form" } }))
@@ -1134,24 +1165,14 @@ mod tests {
     }
 
     #[test]
-    fn bridge_envelopes_match_the_contract_schemas() {
-        // contracts/bridge-{request,response}.schema.json are the single
-        // source of truth for the envelope shapes. With deny_unknown_fields
-        // the parity must hold in BOTH directions: a field Rust serializes
-        // that the schema lacks would be rejected by the extension's Zod
-        // validator, and a schema property Rust does not know would be
-        // rejected here. Comparing the fully-populated wire form against the
-        // schema's `properties` keys pins both (this is the test that would
-        // have caught tab_id-vs-tabId).
-        fn schema_keys(raw: &str) -> std::collections::BTreeSet<String> {
-            let schema: Value = serde_json::from_str(raw).unwrap();
-            schema["properties"]
-                .as_object()
-                .unwrap()
-                .keys()
-                .cloned()
-                .collect()
-        }
+    fn bridge_envelope_wire_keys_are_pinned() {
+        // These Rust types ARE the canonical envelope contract (ADR-0028);
+        // the extension's Zod validators are checked against them by the CI
+        // double-derivation diff (scripts/check-envelope-parity.ts). This
+        // test pins the exact wire field names locally, so a rename or an
+        // added field fails `cargo test` immediately (this is the test that
+        // would have caught tab_id-vs-tabId) instead of waiting for the
+        // cross-language diff.
         fn wire_keys<T: Serialize>(v: &T) -> std::collections::BTreeSet<String> {
             serde_json::to_value(v)
                 .unwrap()
@@ -1160,6 +1181,9 @@ mod tests {
                 .keys()
                 .cloned()
                 .collect()
+        }
+        fn expected(keys: &[&str]) -> std::collections::BTreeSet<String> {
+            keys.iter().map(|s| s.to_string()).collect()
         }
 
         let req = BridgeReq {
@@ -1171,10 +1195,10 @@ mod tests {
         };
         assert_eq!(
             wire_keys(&req),
-            schema_keys(include_str!(
-                "../../../../contracts/bridge-request.schema.json"
-            )),
-            "BridgeReq wire fields drifted from contracts/bridge-request.schema.json"
+            expected(&["args", "browser", "id", "op", "tabId"]),
+            "BridgeReq wire fields changed - update the Zod validator \
+             (src/packages/shared/src/envelope.ts) and bump BRIDGE_PROTOCOL_VERSION \
+             if the change is incompatible"
         );
 
         let resp = BridgeResp {
@@ -1185,10 +1209,10 @@ mod tests {
         };
         assert_eq!(
             wire_keys(&resp),
-            schema_keys(include_str!(
-                "../../../../contracts/bridge-response.schema.json"
-            )),
-            "BridgeResp wire fields drifted from contracts/bridge-response.schema.json"
+            expected(&["data", "error", "id", "ok"]),
+            "BridgeResp wire fields changed - update the Zod validator \
+             (src/packages/shared/src/envelope.ts) and bump BRIDGE_PROTOCOL_VERSION \
+             if the change is incompatible"
         );
     }
 

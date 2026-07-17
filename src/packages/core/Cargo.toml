@@ -8,10 +8,29 @@ license.workspace = true
 [dependencies]
 hmac.workspace = true
 libc.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+
+[features]
+# Contract-generation apparatus (ADR-0028): JSON Schema derivation for the
+# bridge envelopes, used only by the emit_envelope_schema example that feeds
+# the CI double-derivation diff (scripts/check-envelope-parity.ts). Off by
+# default and enabled by no binary, so default and release builds never
+# compile schemars (--all-features builds do).
+envelope-schema = ["dep:schemars"]
+
+[[example]]
+name = "emit_envelope_schema"
+required-features = ["envelope-schema"]
+
+# Emits the canonical contract (tools, errors, capabilities, identity,
+# protocol version) as JSON for scripts/gen-ops.ts (`just gen`). Plain
+# serde_json over the library's own data - no feature, no extra deps.
+[[example]]
+name = "emit_contract"
 
 [dev-dependencies]
 proptest.workspace = true

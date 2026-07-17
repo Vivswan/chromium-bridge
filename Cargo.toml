@@ -42,6 +42,11 @@ security-framework-sys = "2"
 # (src/packages/core/src/registration.rs). The vetted wrapper (rust-lang
 # community, windows-sys underneath) instead of hand-rolled Advapi32 FFI.
 winreg = "0.55"
+# Schema derivation for the wire envelopes (ADR-0028): the emit_envelope_schema
+# example (behind the core's `envelope-schema` feature) feeds the CI
+# double-derivation diff against the extension's Zod validators. Excluded from
+# default and release builds - the shipped binary never compiles schemars.
+schemars = "1"
 chromium-bridge-core = { path = "src/packages/core" }
 # Tauri v2 desktop shell (src/apps/desktop only; never a dependency of the
 # security core or the host). Policy per ADR-0023: the GUI layer carries no

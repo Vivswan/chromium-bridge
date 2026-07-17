@@ -1,7 +1,7 @@
 // Roster drift guards (the cloud-speech roster-sync pattern): every entry in
 // the generated catalogue must be owned by exactly one handling surface, and
 // every Chrome permission the catalogue needs must be granted by the
-// manifest. A tool added to contracts/tools.json without a home in the
+// manifest. A tool added to the Rust catalogue (src/packages/core/src/tools/catalogue.rs) without a home in the
 // extension - or a home that quietly stops matching the catalogue - fails
 // here instead of surfacing as a runtime "unknown op".
 

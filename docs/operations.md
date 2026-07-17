@@ -45,7 +45,7 @@ in [cli.md](./cli.md#logging-and-audit-bb_log--bb_log_format)):
 **Structured audit events**: the MCP server emits one audit line for every `tools/call`
 it processes, with per-call fields: `req` (monotonic request id), `tool`, `outcome`
 (`ok`/`error`), `code` (on error, the stable code from
-[`errors.json`](../contracts/errors.json)), and `dur_ms`. With `BB_LOG_FORMAT=json` each
+[`ERROR_SPECS`](../src/packages/core/src/error.rs)), and `dur_ms`. With `BB_LOG_FORMAT=json` each
 line is one JSON object, convenient for machine collection. The leveled logging design is
 in [ADR-0014](./adr/0014-leveled-logging.md).
 
