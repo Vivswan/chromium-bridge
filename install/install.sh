@@ -12,7 +12,7 @@
 # Usage:
 #   ./install.sh                        Build + install everything. The
 #                                       extension ID is fixed (pinned by the
-#                                       `key` in contracts/identity.json), so no
+#                                       `key` in src/packages/core/src/identity.rs), so no
 #                                       ID copy-paste is needed.
 #   ./install.sh --extension-id ID      Override the pinned extension ID.
 #   ./install.sh --browser LIST         Which browsers to target. LIST is
@@ -78,7 +78,7 @@ HOST_NAME="com.vivswan.chromium_bridge.host"
 BINARY_NAME="chromium-bridge"
 
 # Deterministic extension ID, derived from the public `key` in
-# contracts/identity.json (same for everyone, regardless of load path). If you
+# src/packages/core/src/identity.rs (same for everyone, regardless of load path). If you
 # ever change that key, update this to match (or pass --extension-id).
 PINNED_EXTENSION_ID="mkjjlmjbcljpcfkfadfmhblmmddkdihf"
 

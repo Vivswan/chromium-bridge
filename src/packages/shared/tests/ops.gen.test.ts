@@ -1,118 +1,72 @@
-// Parity between the generated catalogue (ops.gen.ts) and its source
-// (contracts/tools.json), plus the per-op validator equivalence: each tool's
-// OP_ARG_SCHEMAS entry must carry exactly the contract's properties and
-// required set. tools/catalogue.rs is checked against the same contract in
-// `cargo test`, so all sides stay aligned or CI fails.
+// Internal consistency of the generated catalogue (ops.gen.ts): the per-op
+// validators, the envelope-level OpArgs union, and the inferred BridgeCommand
+// types must all agree with each other. The catalogue's SOURCE is the Rust
+// core (src/packages/core/src/tools/catalogue.rs); faithful generation is enforced
+// by CI regenerating and diffing the checked-in files (`just gen`
+// idempotency), so these tests own the semantics, not the provenance.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { z } from "zod";
-import type { BridgeCommand, OpName, ToolMeta } from "../src/ops.gen";
-import { OP_ARG_SCHEMAS, OP_NAMES, OpArgsSchema, TOOL_META, TOOLS } from "../src/ops.gen";
-
-interface ContractTool {
-  name: string;
-  uiLabel: string;
-  risk: string;
-  scope: string;
-  permission: string;
-  confirmation: string;
-  inputSchema: {
-    properties?: Record<string, { type: string }>;
-    required?: string[];
-  };
-}
-
-const contract = JSON.parse(
-  readFileSync(resolve(import.meta.dir, "../../../../contracts/tools.json"), "utf8"),
-) as { tools: ContractTool[] };
-
-// `browser` is the server-side routing argument: the MCP server resolves it
-// against its connection registry and never forwards it inside args, so the
-// generator excludes it from the extension-facing shapes.
-const ROUTING_ARGS = new Set(["browser"]);
+import type { BridgeCommand } from "../src/ops.gen";
+import { isOpName, OP_ARG_SCHEMAS, OP_NAMES, OpArgsSchema, TOOL_META } from "../src/ops.gen";
 
 describe("ops catalogue", () => {
-  test("op names are unique", () => {
+  test("op names are unique and recognized by isOpName", () => {
     expect(new Set(OP_NAMES).size).toBe(OP_NAMES.length);
+    for (const op of OP_NAMES) expect(isOpName(op)).toBe(true);
+    expect(isOpName("not_a_tool")).toBe(false);
   });
 
-  test("every tool has an op and a description", () => {
-    for (const t of TOOLS) {
-      expect(t.op.length).toBeGreaterThan(0);
-      expect(t.desc.length).toBeGreaterThan(0);
-    }
+  test("every op has policy metadata and an arg validator", () => {
+    expect(Object.keys(TOOL_META).sort()).toEqual([...OP_NAMES].sort());
+    expect(Object.keys(OP_ARG_SCHEMAS).sort()).toEqual([...OP_NAMES].sort());
   });
 
-  test("matches contracts/tools.json (the source)", () => {
-    const names = contract.tools.map((t) => t.name);
-    const labels = Object.fromEntries(contract.tools.map((t) => [t.name, t.uiLabel]));
-    expect([...OP_NAMES] as string[]).toEqual(names);
-    for (const t of TOOLS) expect(t.desc).toBe(labels[t.op] as string);
-  });
+  // The envelope-level OpArgs bag must be exactly the union of every per-op
+  // validator's properties, each with a matching type and none required
+  // (per-op required-ness is the per-op validators' job). This pins the
+  // generator's two derivations of the same source against each other.
+  test("OpArgsSchema is the union of the per-op validators' props", () => {
+    const unionProps = z.toJSONSchema(OpArgsSchema) as {
+      properties?: Record<string, { type?: string }>;
+      required?: string[];
+      additionalProperties?: unknown;
+    };
+    expect(unionProps.required ?? []).toEqual([]);
+    expect(unionProps.additionalProperties).toBe(false);
 
-  test("TOOL_META matches contracts/tools.json (the source)", () => {
-    // Same set of ops, no extras on either side.
-    expect(Object.keys(TOOL_META).sort()).toEqual(contract.tools.map((t) => t.name).sort());
-
-    for (const t of contract.tools) {
-      expect(TOOL_META[t.name as OpName]).toEqual({
-        risk: t.risk,
-        scope: t.scope,
-        permission: t.permission,
-        confirmation: t.confirmation,
-      } as ToolMeta);
-    }
-  });
-
-  // The generated per-op validators are the runtime form of each tool's
-  // inputSchema. Compare via z.toJSONSchema(): the contract's property set
-  // (minus the routing arg), the required set, and the primitive types. That
-  // is the WHOLE vocabulary the contract uses today; the generator refuses
-  // any other inputSchema keyword (enum, bounds, pattern, ...) outright, so a
-  // richer contract fails generation instead of quietly producing a weaker
-  // validator than this test can see. The validators are also deliberately
-  // STRICTER than the MCP inputSchema in one way - unknown keys are rejected
-  // (fail closed at the extension boundary) - so additionalProperties is
-  // asserted false rather than compared.
-  test("OP_ARG_SCHEMAS carry each tool's inputSchema props/required/types (minus `browser`)", () => {
-    for (const t of contract.tools) {
-      const schema = OP_ARG_SCHEMAS[t.name as OpName];
-      expect(schema).toBeDefined();
-      const emitted = z.toJSONSchema(schema) as {
+    const expected = new Map<string, string | undefined>();
+    for (const op of OP_NAMES) {
+      const emitted = z.toJSONSchema(OP_ARG_SCHEMAS[op]) as {
         properties?: Record<string, { type?: string }>;
-        required?: string[];
         additionalProperties?: unknown;
       };
-
-      const expectedProps = Object.entries(t.inputSchema.properties ?? {}).filter(
-        ([k]) => !ROUTING_ARGS.has(k),
-      );
-      expect(Object.keys(emitted.properties ?? {}).sort()).toEqual(
-        expectedProps.map(([k]) => k).sort(),
-      );
-      for (const [key, prop] of expectedProps) {
-        const emittedType = emitted.properties?.[key]?.type;
-        expect(`${t.name}.${key}:${emittedType}`).toBe(`${t.name}.${key}:${prop.type}`);
-      }
-      const required = (t.inputSchema.required ?? []).filter((k) => !ROUTING_ARGS.has(k));
-      expect([...(emitted.required ?? [])].sort()).toEqual([...required].sort());
+      // Every per-op validator is strict: unknown keys are rejected (fail
+      // closed at the extension boundary).
       expect(emitted.additionalProperties).toBe(false);
+      for (const [key, prop] of Object.entries(emitted.properties ?? {})) {
+        const prior = expected.get(key);
+        if (prior !== undefined) expect(`${key}:${prop.type}`).toBe(`${key}:${prior}`);
+        expected.set(key, prop.type);
+      }
+    }
+    expect(Object.keys(unionProps.properties ?? {}).sort()).toEqual([...expected.keys()].sort());
+    for (const [key, type] of expected) {
+      expect(`${key}:${unionProps.properties?.[key]?.type}`).toBe(`${key}:${type}`);
     }
   });
 
-  // The envelope-level OpArgs union must be exactly the union of every
-  // tool's props (minus the routing arg) - the same set the contract's
-  // $defs/OpArgs declares (that side is enforced by the equivalence test).
-  test("OpArgsSchema is the union of every tool's inputSchema props", () => {
-    const expected = new Set<string>();
-    for (const t of contract.tools) {
-      for (const key of Object.keys(t.inputSchema.properties ?? {})) {
-        if (!ROUTING_ARGS.has(key)) expected.add(key);
-      }
+  // The server-side `browser` routing argument is consumed by the MCP server
+  // and never forwarded inside args; the generator must keep it out of every
+  // extension-facing shape.
+  test("no validator carries the server-consumed `browser` routing arg", () => {
+    expect(
+      Object.keys((z.toJSONSchema(OpArgsSchema) as { properties?: object }).properties ?? {}),
+    ).not.toContain("browser");
+    for (const op of OP_NAMES) {
+      const emitted = z.toJSONSchema(OP_ARG_SCHEMAS[op]) as { properties?: object };
+      expect(Object.keys(emitted.properties ?? {})).not.toContain("browser");
     }
-    expect(Object.keys(OpArgsSchema.shape).sort()).toEqual([...expected].sort());
   });
 
   // Compile-time coverage: these assignments only type-check if BridgeCommand

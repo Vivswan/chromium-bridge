@@ -1,13 +1,11 @@
-// GENERATED from contracts/tools.json by scripts/gen-ops.ts - DO NOT EDIT.
-// Edit the contract, then run `just gen`.
+// GENERATED from the Rust core (src/packages/core/src/tools/catalogue.rs) by
+// scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run `just gen`.
 //
-// The tool catalogue, TS side: op names + UI labels for the options page,
-// policy metadata (risk / scope / permission / confirmation), and the
-// per-op Zod arg validators the extension enforces at the native-messaging
-// boundary. BridgeCommand (the discriminated request union) is INFERRED from
-// the validators, so the compile-time types and the runtime checks cannot
-// drift apart. Rust tools/catalogue.rs is verified against the same contract
-// in `cargo test`.
+// The tool catalogue, TS side: op names, policy metadata (risk / scope /
+// permission / confirmation), and the per-op Zod arg validators the extension
+// enforces at the native-messaging boundary. BridgeCommand (the discriminated
+// request union) is INFERRED from the validators, so the compile-time types
+// and the runtime checks cannot drift apart.
 
 import { z } from "zod";
 
@@ -48,41 +46,7 @@ export function isOpName(op: string): op is OpName {
   return OP_NAME_SET.has(op);
 }
 
-export interface ToolInfo {
-  op: OpName;
-  desc: string;
-}
-
-export const TOOLS: readonly ToolInfo[] = [
-  { op: "list_browsers", desc: "List connected browsers" },
-  { op: "tab_list", desc: "List open tabs" },
-  { op: "tab_focus", desc: "Focus a tab" },
-  { op: "tab_open", desc: "Open a new tab (allowlisted sites only)" },
-  { op: "tab_close", desc: "Close a tab (needs confirmation)" },
-  { op: "page_snapshot", desc: "Snapshot the page's interactive elements" },
-  { op: "page_click", desc: "Click an element" },
-  { op: "page_fill", desc: "Fill a form field" },
-  { op: "page_text", desc: "Read the page's visible text" },
-  { op: "page_screenshot", desc: "Screenshot the visible viewport" },
-  { op: "page_scroll", desc: "Scroll the page" },
-  { op: "page_wait_for", desc: "Wait for a condition" },
-  { op: "page_eval", desc: "Run arbitrary JavaScript (high risk)" },
-  { op: "page_snapshot_precise", desc: "Precise snapshot (uses the debugger)" },
-  { op: "cookie_get", desc: "Read cookies (values masked)" },
-  { op: "storage_get", desc: "Read localStorage/sessionStorage (values masked)" },
-  { op: "page_navigate", desc: "Navigate the current tab (allowlisted sites only)" },
-  { op: "page_back", desc: "Go back" },
-  { op: "page_forward", desc: "Go forward" },
-  { op: "page_reload", desc: "Reload the page" },
-  { op: "page_press", desc: "Press a key (needs confirmation)" },
-  { op: "page_hover", desc: "Hover over an element" },
-  { op: "page_select", desc: "Pick a dropdown option (needs confirmation)" },
-  { op: "console_get", desc: "Read console logs (values masked)" },
-  { op: "page_handle_dialog", desc: "Handle a page dialog (off by default)" },
-  { op: "page_upload", desc: "Upload a local file (very high risk, off by default)" },
-];
-
-// Policy metadata, mirrored from the contract. Consumed by the policy layer
+// Policy metadata, mirrored from the catalogue. Consumed by the policy layer
 // (background/policy.ts) - kept as plain data so it stays import-side-effect-free.
 export type Risk = "critical" | "high" | "low" | "medium";
 export type Scope = "page" | "server" | "tab";
@@ -301,7 +265,7 @@ export const OP_ARG_SCHEMAS = {
   }),
   console_get: z.strictObject({ limit: z.int().optional() }),
   page_handle_dialog: z.strictObject({ action: z.string(), promptText: z.string().optional() }),
-  page_upload: z.strictObject({ selector: z.string(), path: z.string() }),
+  page_upload: z.strictObject({ path: z.string(), selector: z.string() }),
 } as const satisfies Readonly<Record<OpName, z.ZodType>>;
 
 // Per-op request shapes, inferred from the validators. Discriminated on `op`,
@@ -313,9 +277,7 @@ export type BridgeCommand = {
 }[OpName];
 
 // The envelope-level args bag: the union of every tool's inputSchema props,
-// all optional (the per-op validators enforce required-ness). Structurally
-// equivalent to bridge-request.schema.json's $defs/OpArgs - the equivalence
-// test in src/packages/shared enforces that against the contract file.
+// all optional (the per-op validators enforce required-ness).
 export const OpArgsSchema = z.strictObject({
   tabId: z.int().optional(),
   url: z.string().optional(),

@@ -64,10 +64,28 @@ audit:
     cargo deny check
     cargo audit
 
-# Regenerate code from contracts/ (ops.gen.ts + identity.gen.ts into src/packages/shared)
+# Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)
 gen:
     bun scripts/gen-ops.ts
-    bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts
+    bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
+
+# The checked-in generated TS must match what the Rust core emits today
+check-gen: gen
+    git diff --exit-code -- src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
+
+# Envelope double-derivation gate: Rust schemars vs Zod z.toJSONSchema
+check-envelope:
+    bun scripts/check-envelope-parity.ts
+
+# schemars is gen-only tooling: it must never enter a shipped binary's graph
+check-schemars-isolation:
+    #!/usr/bin/env sh
+    set -eu
+    tree="$(cargo tree -e normal -p chromium-bridge --locked)"
+    if printf '%s\n' "$tree" | grep -q schemars; then
+        echo "schemars leaked into the chromium-bridge binary dependency graph" >&2
+        exit 1
+    fi
 
 # Rust unit + integration tests (cargo-nextest, plus doctests)
 test-rust:
@@ -102,7 +120,7 @@ fix-ts:
 ext-test:
     bun run --cwd src/apps/extension test
 
-# Unit-test src/packages/shared: contract equivalence, parity, boundary validators
+# Unit-test src/packages/shared: generated catalogue, boundary validators
 shared-test:
     bun run --cwd src/packages/shared test
 
@@ -120,7 +138,7 @@ test-integration: build-release ext-build
 test: test-rust test-e2e
 
 # Everything CI runs
-ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test ext-build test-e2e check-extension-id check-cjk
+ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test ext-build test-e2e check-extension-id check-cjk check-gen check-envelope check-schemars-isolation
 
 # Install locally (build + copy binary + host manifest)
 install:

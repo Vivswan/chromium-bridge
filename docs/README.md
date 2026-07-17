@@ -19,8 +19,9 @@ project. Code comments answer "what does this code do"; this directory answers
 | [adr/](./adr/) | Architecture Decision Records (ADRs): a traceable record of every "why was this chosen" | Reviewers, future changers |
 
 > The single source of truth for cross-process contracts (tool catalogue,
-> error taxonomy, capabilities, protocol version) is
-> [`contracts/`](../contracts/README.md).
+> error taxonomy, capabilities, protocol version, wire envelopes) is the
+> Rust core; the TS side is generated from it (`just gen`). See
+> [architecture.md section 11](./architecture.md#11-protocol-boundary-contracts-error-taxonomy-and-handshake).
 
 > The **development process** (branch/commit/sync/merge rules) is in the
 > root-level [`CONTRIBUTING.md`](../CONTRIBUTING.md); the quick-reference

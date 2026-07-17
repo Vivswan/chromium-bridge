@@ -36,7 +36,7 @@ Key design points:
 - **Serialization/masking**: `page_eval` takes the value back with CDP `returnByValue`, then reuses `shared/masking.ts` in the SW; `storage_get` reads raw values in the page and masks in the SW (always on, ADR-0010).
 - **screenshot**: under CDP, prefer `Page.captureScreenshot` rather than a page function.
 - **DRY**: `precise.ts` now imports `dbgAttach/dbgDetach/dbgSend/isDebuggable` from `cdp/session.ts` and deletes its private copies, with unchanged behavior.
-- **contracts unchanged**: this is an execution-path switch, not a tool-contract change; `contracts/` and the tool definitions are untouched.
+- **contracts unchanged**: this is an execution-path switch, not a tool-contract change; `contracts/` (superseded by the Rust catalogue, ADR-0028) and the tool definitions are untouched.
 
 ## Alternatives considered
 

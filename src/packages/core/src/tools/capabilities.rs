@@ -1,0 +1,194 @@
+//! The capability catalogue for connection-time negotiation (ADR-0028).
+//! Each capability groups tools that share a Chrome permission / scope; it is
+//! derived conceptually from the tool catalogue (each tool's permission +
+//! scope), with hand-authored groupings and descriptions. On connect, the
+//! extension/host advertise which capability ids are actually available
+//! (permission granted, tool enabled) and the server negotiates against that
+//! list: a tool is callable only if its capability is advertised. The parity
+//! tests below keep this table in lockstep with [`super::catalogue`]: every
+//! bridge-routed tool must be covered by exactly one capability, and each
+//! capability's permissions must equal the union of its tools' permissions.
+
+use super::catalogue::Permission;
+
+/// One negotiable capability: a stable id, the Chrome permissions it needs,
+/// and the tools (from the catalogue) it covers.
+pub struct Capability {
+    pub id: &'static str,
+    pub description: &'static str,
+    pub permissions: &'static [Permission],
+    pub tools: &'static [&'static str],
+}
+
+pub const CAPABILITIES: &[Capability] = &[
+    Capability {
+        id: "tab_control",
+        description:
+            "Enumerate, focus, open, close browser tabs, navigate history (back/forward/reload), \
+             navigate the active tab to a URL, and capture the visible viewport. Opening, \
+             navigating, and history moves are gated by the allowlist; closing a tab is \
+             confirmed in-page.",
+        permissions: &[Permission::Tabs],
+        tools: &[
+            "tab_list",
+            "tab_focus",
+            "tab_open",
+            "tab_close",
+            "page_screenshot",
+            "page_navigate",
+            "page_back",
+            "page_forward",
+            "page_reload",
+        ],
+    },
+    Capability {
+        id: "page_snapshot",
+        description:
+            "Capture the active tab's interactive elements as an accessibility-style tree via \
+             the content script (fast approximation, ~90% coverage).",
+        permissions: &[Permission::Scripting],
+        tools: &["page_snapshot"],
+    },
+    Capability {
+        id: "page_snapshot_precise",
+        description: "Capture the authoritative accessibility tree via Chrome's debugger (CDP \
+             Accessibility.getFullAXTree). Requires the debugger permission and briefly shows \
+             the 'Started debugging this browser' banner.",
+        permissions: &[Permission::Debugger],
+        tools: &["page_snapshot_precise"],
+    },
+    Capability {
+        id: "page_interact",
+        description: "Drive the page: click elements, fill form fields, press keys, hover, choose \
+             <select> options, scroll, and wait for conditions. High-risk clicks, key presses, \
+             and selections trigger an on-page confirmation Toast.",
+        permissions: &[Permission::Scripting],
+        tools: &[
+            "page_click",
+            "page_fill",
+            "page_press",
+            "page_hover",
+            "page_select",
+            "page_scroll",
+            "page_wait_for",
+        ],
+    },
+    Capability {
+        id: "page_read",
+        description: "Read the active tab's visible text content (sensitive fields masked).",
+        permissions: &[Permission::Scripting],
+        tools: &["page_text"],
+    },
+    Capability {
+        id: "page_eval",
+        description:
+            "Execute arbitrary JavaScript on the active tab. Highest-risk capability: every call \
+             requires explicit user approval and return values are masked by default.",
+        permissions: &[Permission::Scripting],
+        tools: &["page_eval"],
+    },
+    Capability {
+        id: "cookie_read",
+        description:
+            "Read cookies (including httpOnly) for allowlisted hosts. Read-only; values are \
+             masked. Backed by chrome.cookies in the service worker.",
+        permissions: &[Permission::Cookies],
+        tools: &["cookie_get"],
+    },
+    Capability {
+        id: "storage_read",
+        description:
+            "Read the active tab's localStorage / sessionStorage (same-origin only). Read-only; \
+             values are always masked.",
+        permissions: &[Permission::Scripting],
+        tools: &["storage_get"],
+    },
+    Capability {
+        id: "console_read",
+        description:
+            "Read recent console output from the active tab via Chrome's debugger. Values are \
+             masked. Briefly shows the 'Started debugging this browser' banner.",
+        permissions: &[Permission::Debugger],
+        tools: &["console_get"],
+    },
+    Capability {
+        id: "dialog_control",
+        description:
+            "Accept or dismiss JavaScript dialogs (alert / confirm / prompt) via Chrome's \
+             debugger. High-risk and OFF by default (must be enabled in settings).",
+        permissions: &[Permission::Debugger],
+        tools: &["page_handle_dialog"],
+    },
+    Capability {
+        id: "file_upload",
+        description: "Attach a local file to a page file input via Chrome's debugger \
+             (DOM.setFileInputFiles). Critical-risk local-file egress vector: OFF by default and \
+             confirmed on every call.",
+        permissions: &[Permission::Debugger],
+        tools: &["page_upload"],
+    },
+];
+
+#[cfg(test)]
+mod tests {
+    use super::super::catalogue::{all, Scope};
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn capability_ids_are_unique_and_described() {
+        let mut ids: Vec<&str> = CAPABILITIES.iter().map(|c| c.id).collect();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "duplicate capability ids");
+        for c in CAPABILITIES {
+            assert!(!c.id.is_empty());
+            assert!(!c.description.is_empty(), "capability {}", c.id);
+            assert!(!c.tools.is_empty(), "capability {}", c.id);
+        }
+    }
+
+    // Every bridge-routed tool must be covered by exactly one capability;
+    // server-scope tools (answered by the MCP server itself, e.g.
+    // list_browsers) need nothing from the browser and have none.
+    #[test]
+    fn every_bridge_tool_is_covered_by_exactly_one_capability() {
+        let mut covered: BTreeMap<&str, &str> = BTreeMap::new();
+        for c in CAPABILITIES {
+            for tool in c.tools {
+                if let Some(prior) = covered.insert(tool, c.id) {
+                    panic!("tool {tool} is in both {prior} and {}", c.id);
+                }
+            }
+        }
+        let expected: BTreeSet<&str> = all()
+            .iter()
+            .filter(|t| t.scope != Scope::Server)
+            .map(|t| t.name)
+            .collect();
+        let got: BTreeSet<&str> = covered.keys().copied().collect();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn capability_permissions_are_the_union_of_tool_permissions() {
+        let permission_of: BTreeMap<&str, &str> = all()
+            .iter()
+            .map(|t| (t.name, t.permission.as_str()))
+            .collect();
+        for c in CAPABILITIES {
+            let from_tools: BTreeSet<&str> = c
+                .tools
+                .iter()
+                .map(|tool| {
+                    *permission_of
+                        .get(tool)
+                        .unwrap_or_else(|| panic!("capability {} lists unknown tool {tool}", c.id))
+                })
+                .collect();
+            let declared: BTreeSet<&str> = c.permissions.iter().map(|p| p.as_str()).collect();
+            assert_eq!(declared, from_tools, "capability {}", c.id);
+        }
+    }
+}

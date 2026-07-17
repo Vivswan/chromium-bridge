@@ -1,7 +1,7 @@
 // The pinned extension ID — the ID Chrome derives from the manifest `key`.
 //
 // The constant itself is generated from the pinned key in
-// contracts/identity.json into @chromium-bridge/shared (identity.gen.ts) by
+// src/packages/core/src/identity.rs into @chromium-bridge/shared (identity.gen.ts) by
 // `just gen`, so it cannot drift from the wxt.config.ts-generated manifest;
 // `scripts/check-extension-id.ts` (a CI gate)
 // keeps `install/install.sh` and `install/install.ps1` in lockstep with the

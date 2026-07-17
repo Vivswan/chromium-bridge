@@ -102,20 +102,57 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - name: Contracts in sync (src/packages/shared *.gen.ts generated from contracts/)
-        run: |
-          bun scripts/gen-ops.ts
-          bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts
-          git diff --exit-code -- src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts \
-            || { echo "::error::generated contract code is stale - run 'just gen' after editing contracts/"; exit 1; }
       - name: Typecheck (extension, tests, scripts, src/packages/shared)
         run: bun run typecheck
       - name: Biome (lint + format)
         run: bunx biome ci .
-      - name: src/packages/shared tests (contract equivalence, parity, boundary validators)
+      - name: src/packages/shared tests (generated catalogue, boundary validators)
         run: bun run --cwd src/packages/shared test
       - run: bun run --cwd src/apps/extension test
       - run: bun run --cwd src/apps/extension build
+      # With dist/ present, check-extension-id.ts also re-asserts the built
+      # manifest's security surface (key, permissions, host access); the
+      # version-consistency job runs it build-free and covers only the
+      # source-level identity parity.
+      - name: Built-manifest security surface
+        run: bun scripts/check-extension-id.ts
+
+  # The Rust core is the canonical cross-process contract (ADR-0028); this job
+  # holds the two checks that need BOTH toolchains: the generated TS must be
+  # exactly what the Rust emitter produces today (regenerate + diff), and the
+  # hand-written Zod envelope validators must be structurally equivalent to
+  # the Rust wire types (double-derivation diff via schemars, which stays
+  # behind a gen-only feature - the shipped binary graph is asserted clean).
+  contract:
+    name: Contract (gen idempotency, envelope double-derivation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: Generated TS in sync with the Rust core (src/packages/shared *.gen.ts)
+        run: |
+          bun scripts/gen-ops.ts
+          bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
+          git diff --exit-code -- src/packages/shared/src/ \
+            || { echo "::error::generated contract code is stale - run 'just gen' after editing the Rust catalogue/taxonomy"; exit 1; }
+      - name: Envelope double-derivation diff (schemars vs z.toJSONSchema)
+        run: bun scripts/check-envelope-parity.ts
+      - name: schemars stays out of every shipped binary's graph
+        run: |
+          # Capture first: a cargo failure must fail the step, not vacuously
+          # satisfy the grep (the default shell has no pipefail).
+          tree="$(cargo tree -e normal -p chromium-bridge --locked)"
+          if grep -q schemars <<<"$tree"; then
+            echo "::error::schemars leaked into the chromium-bridge binary dependency graph"
+            exit 1
+          fi
 
   version-consistency:
     name: Version and extension ID consistency
@@ -359,6 +396,7 @@ jobs:
         rust-windows,
         cargo-vet,
         extension,
+        contract,
         version-consistency,
         tooling,
         linux-install,

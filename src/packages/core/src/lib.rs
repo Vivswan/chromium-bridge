@@ -18,6 +18,7 @@ pub mod cli;
 pub mod doctor;
 pub mod enclave;
 pub mod error;
+pub mod identity;
 pub mod ipc;
 pub mod mcp_server;
 pub mod native_host;

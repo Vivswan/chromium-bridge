@@ -1,49 +1,82 @@
 #!/usr/bin/env bun
 
-// Verify the bridge's identity constants against their sources of truth:
+// Verify the bridge's identity constants against their source of truth, the
+// Rust core (src/packages/core/src/identity.rs, ADR-0028):
 //
-//   - extension id: DERIVED from contracts/identity.json's
-//     `extensionManifestKey` (Chrome's id derivation; src/apps/extension/wxt.config.ts
-//     injects the same key into the generated manifest). The generated
-//     src/packages/shared/src/identity.gen.ts and both installers must carry
-//     exactly that id.
-//   - native-messaging host id: DECLARED in contracts/identity.json. The
-//     generated TS, the Rust host, and both installers must agree, and the id
-//     must satisfy Chrome's charset. Any disagreement makes native messaging
-//     fail silently, so it is asserted here as a CI gate.
+//   - extension id: DERIVED from the pinned manifest key (Chrome's id
+//     derivation; extension/wxt.config.ts injects the same key into the
+//     generated manifest). The generated src/packages/shared/src/identity.gen.ts
+//     and both installers must carry exactly that id.
+//   - native-messaging host id: the generated TS and both installers must
+//     agree with the Rust constant, and the id must satisfy Chrome's charset.
+//     Any disagreement makes native messaging fail silently, so it is
+//     asserted here as a CI gate.
+//
+// This script runs without cargo, so the Rust constants are read from the
+// source text; `just gen` idempotency (CI) separately proves the generated
+// TS is fresh, and the two checks together pin every copy to identity.rs.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  EXTENSION_MANIFEST_KEY,
+  NATIVE_HOST_ID,
+  PINNED_EXTENSION_ID,
+} from "../src/packages/shared/src/identity.gen";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const identityContract = JSON.parse(
-  readFileSync(resolve(root, "contracts/identity.json"), "utf8"),
-) as { nativeMessagingHostId?: unknown; extensionManifestKey?: unknown };
-if (
-  typeof identityContract.extensionManifestKey !== "string" ||
-  identityContract.extensionManifestKey.length === 0
-) {
-  throw new Error("contracts/identity.json has no extensionManifestKey");
+
+let failed = false;
+
+// The Rust source is canonical: the generated TS constants must match its
+// literals exactly.
+const identityRs = readFileSync(resolve(root, "src/packages/core/src/identity.rs"), "utf8");
+const rustKey = identityRs.match(/EXTENSION_MANIFEST_KEY: &str = "([A-Za-z0-9+/=]+)"/)?.[1];
+const rustHostId = identityRs.match(/NATIVE_HOST_ID: &str = "([a-z0-9._]+)"/)?.[1];
+if (rustKey !== EXTENSION_MANIFEST_KEY) {
+  console.error(
+    "identity.gen.ts EXTENSION_MANIFEST_KEY differs from src/packages/core/src/identity.rs",
+  );
+  failed = true;
+}
+if (rustHostId !== NATIVE_HOST_ID) {
+  console.error("identity.gen.ts NATIVE_HOST_ID differs from src/packages/core/src/identity.rs");
+  failed = true;
 }
 
+// Chrome's id derivation: sha256 of the DER key, first 16 bytes, hex mapped
+// onto a-p. Same computation as scripts/gen-ops.ts.
 const hex = createHash("sha256")
-  .update(Buffer.from(identityContract.extensionManifestKey, "base64"))
+  .update(Buffer.from(EXTENSION_MANIFEST_KEY, "base64"))
   .digest("hex")
   .slice(0, 32);
 const derivedId = [...hex]
   .map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)))
   .join("");
+if (PINNED_EXTENSION_ID !== derivedId) {
+  console.error(
+    `identity.gen.ts PINNED_EXTENSION_ID=${PINNED_EXTENSION_ID} but the key derives ${derivedId}`,
+  );
+  failed = true;
+}
+
+// identity.rs also pins the derived id as a Rust constant (the registration
+// engine stamps it into every manifest's allowed_origins); the literal must
+// be exactly what the key derives.
+const rustPinnedId = identityRs.match(/PINNED_EXTENSION_ID: &str = "([a-p]{32})"/)?.[1];
+if (rustPinnedId !== derivedId) {
+  console.error(
+    `identity.rs PINNED_EXTENSION_ID=${rustPinnedId || "missing"} but the key derives ${derivedId}`,
+  );
+  failed = true;
+}
 
 const sources: Array<[string, RegExp]> = [
   ["install/install.sh", /PINNED_EXTENSION_ID="([a-p]{32})"/],
   ["install/install.ps1", /\$ExtensionId\s*=\s*'([a-p]{32})'/],
-  ["src/packages/shared/src/identity.gen.ts", /PINNED_EXTENSION_ID = "([a-p]{32})"/],
-  ["src/packages/core/src/browsers.rs", /PINNED_EXTENSION_ID: &str = "([a-p]{32})"/],
 ];
-
-let failed = false;
 for (const [relativePath, pattern] of sources) {
   const source = readFileSync(resolve(root, relativePath), "utf8");
   const configuredId = source.match(pattern)?.[1];
@@ -57,24 +90,21 @@ for (const [relativePath, pattern] of sources) {
 // extension passes to connectNative (via the generated identity.gen.ts), the
 // id the Rust host expects, and the id the installers write as both the
 // manifest "name" and the manifest filename stem (`$HOST_NAME.json`).
-const hostId = identityContract.nativeMessagingHostId;
 // Chrome's charset for host names: dot-separated segments of [a-z0-9_], so
 // no leading/trailing dots and no empty segments.
-if (typeof hostId !== "string" || !/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(hostId)) {
-  console.error(`contracts/identity.json host id ${String(hostId)} violates Chrome's charset`);
+if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(NATIVE_HOST_ID)) {
+  console.error(`host id ${NATIVE_HOST_ID} violates Chrome's charset`);
   process.exit(1);
 }
 const hostSources: Array<[string, RegExp]> = [
-  ["src/packages/shared/src/identity.gen.ts", /NATIVE_HOST_ID = "([a-z0-9._]+)"/],
-  ["src/packages/core/src/browsers.rs", /HOST_ID: &str = "([a-z0-9._]+)"/],
   ["install/install.sh", /HOST_NAME="([a-z0-9._]+)"/],
   ["install/install.ps1", /\$HostName = '([a-z0-9._]+)'/],
 ];
 for (const [relativePath, pattern] of hostSources) {
   const source = readFileSync(resolve(root, relativePath), "utf8");
   const configured = source.match(pattern)?.[1];
-  if (configured !== hostId) {
-    console.error(`${relativePath}: host id=${configured || "missing"} expected=${hostId}`);
+  if (configured !== NATIVE_HOST_ID) {
+    console.error(`${relativePath}: host id=${configured || "missing"} expected=${NATIVE_HOST_ID}`);
     failed = true;
   }
 }
@@ -105,8 +135,8 @@ if (existsSync(builtManifestPath)) {
     "cookies",
   ];
   const problems: string[] = [];
-  if (built.key !== identityContract.extensionManifestKey) {
-    problems.push("built manifest key differs from contracts/identity.json");
+  if (built.key !== EXTENSION_MANIFEST_KEY) {
+    problems.push("built manifest key differs from src/packages/core/src/identity.rs");
   }
   if (JSON.stringify(built.permissions) !== JSON.stringify(expectPermissions)) {
     problems.push(`built permissions drifted: ${JSON.stringify(built.permissions)}`);
@@ -125,7 +155,7 @@ if (existsSync(builtManifestPath)) {
     problems.push("built manifest declares content_scripts; injection must stay runtime-only");
   }
   if (problems.length > 0) {
-    for (const p of problems) console.error(`src/apps/extension/dist manifest: ${p}`);
+    for (const p of problems) console.error(`extension/dist manifest: ${p}`);
     process.exit(1);
   }
   console.log("built manifest security surface verified (key, permissions, host access)");
@@ -135,6 +165,35 @@ if (existsSync(builtManifestPath)) {
   );
 }
 
+// SINGLE SOURCE: identity.rs is the only Rust file allowed to DEFINE the
+// identity values; everything else (browsers.rs re-exports them for the
+// registration engine) must reference that one site. Test fixtures may spell
+// the literals out to pin derivations, so only const/static string
+// definitions are flagged.
+const browsersRs = readFileSync(resolve(root, "src/packages/core/src/browsers.rs"), "utf8");
+if (
+  !browsersRs.includes("pub use crate::identity::{NATIVE_HOST_ID as HOST_ID, PINNED_EXTENSION_ID};")
+) {
+  console.error(
+    "browsers.rs no longer re-exports the identity constants from identity.rs - " +
+      "restore the re-export rather than redefining them",
+  );
+  failed = true;
+}
+const coreSrc = resolve(root, "src/packages/core/src");
+const duplicateConst = new RegExp(
+  `(?:const|static)\\s+\\w+\\s*:\\s*&str\\s*=\\s*"(?:${NATIVE_HOST_ID.replaceAll(".", "\\.")}|${derivedId})"`,
+);
+for (const entry of readdirSync(coreSrc, { recursive: true }) as string[]) {
+  if (!entry.endsWith(".rs") || entry === "identity.rs") continue;
+  if (duplicateConst.test(readFileSync(resolve(coreSrc, entry), "utf8"))) {
+    console.error(
+      `src/packages/core/src/${entry}: defines a duplicate identity constant (the single source is identity.rs)`,
+    );
+    failed = true;
+  }
+}
+
 if (failed) process.exit(1);
-console.log(`extension id: ${derivedId} (contract key + generated TS + installers consistent)`);
-console.log(`host id: ${hostId} (contract + generated TS + host + installers consistent)`);
+console.log(`extension id: ${derivedId} (Rust key + generated TS + installers consistent)`);
+console.log(`host id: ${NATIVE_HOST_ID} (Rust + generated TS + installers consistent)`);
