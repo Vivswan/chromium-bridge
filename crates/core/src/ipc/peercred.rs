@@ -3,6 +3,9 @@
 //! [`super::platform`]; this module holds the cross-platform policy (pid
 //! range validation, the EPERM-means-alive convention).
 
+// `io` is only touched on the Unix paths (peer credentials + kill(0)); the
+// Windows liveness check goes through platform::windows.
+#[cfg(unix)]
 use std::io;
 
 #[cfg(unix)]
