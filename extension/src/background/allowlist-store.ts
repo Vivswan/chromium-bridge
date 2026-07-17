@@ -3,6 +3,7 @@
 // The allowlist lives in chrome.storage.local (survives SW restarts). A new
 // origin surfaces a badge + pending request that the popup resolves.
 
+import { AllowlistSchema } from "@chromium-bridge/shared";
 import {
   globToPermissionPattern,
   hostFromOriginGlob,
@@ -16,7 +17,14 @@ const STORAGE_KEY = "allowlist";
 
 export async function getAllowlist(): Promise<string[]> {
   const { [STORAGE_KEY]: list } = await chrome.storage.local.get(STORAGE_KEY);
-  return Array.isArray(list) ? list : [];
+  // A record that fails the schema (not an array, or with non-string entries)
+  // degrades to the empty allowlist: nothing is allowed - fail closed.
+  const parsed = AllowlistSchema.safeParse(list ?? []);
+  if (!parsed.success) {
+    console.warn("[bb] stored allowlist is malformed; treating it as empty");
+    return [];
+  }
+  return parsed.data;
 }
 
 export async function setAllowlist(list: string[]) {

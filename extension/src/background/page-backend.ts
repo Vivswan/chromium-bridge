@@ -9,12 +9,13 @@
 // Both backends receive the already-resolved target tab; ensureAllowed and any
 // injection/attach happen inside the backend (preserving dispatch's ordering).
 
+import type { PageOp } from "../shared/page-ops";
 import type { OpArgs } from "../shared/types";
 import { CdpBackend } from "./backends/cdp";
 import { ContentScriptBackend } from "./backends/content-script";
 
 export interface PageBackend {
-  run(op: string, args: OpArgs, tab: chrome.tabs.Tab): Promise<unknown>;
+  run(op: PageOp, args: OpArgs, tab: chrome.tabs.Tab): Promise<unknown>;
 }
 
 const contentScriptBackend = new ContentScriptBackend();
