@@ -6,6 +6,7 @@ import {
   maskNumber,
   maskKeyName,
   maskSensitive,
+  maskErrorMessage,
 } from "./masking";
 
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghij";
@@ -118,5 +119,25 @@ describe("maskSensitive (recursive)", () => {
   test("passes through primitives and arrays", () => {
     expect(maskSensitive(true)).toBe(true);
     expect(maskSensitive([1, 2])).toEqual([1, 2]);
+  });
+});
+
+describe("maskErrorMessage (outer error egress)", () => {
+  test("masks a secret carried in an Error message", () => {
+    const out = maskErrorMessage(new Error(`token ${JWT}`));
+    expect(out).not.toContain(JWT);
+    expect(out).toContain("\u2022\u2022\u2022\u2022");
+  });
+  test("masks a secret in a plain thrown string", () => {
+    expect(maskErrorMessage(`leak ${HEX32} end`)).not.toContain(HEX32);
+  });
+  test("ordinary error messages pass through readably", () => {
+    expect(maskErrorMessage(new Error("user denied: click submit"))).toBe(
+      "user denied: click submit"
+    );
+  });
+  test("null/undefined fall back to a generic message", () => {
+    expect(maskErrorMessage(undefined)).toBe("error");
+    expect(maskErrorMessage(null)).toBe("error");
   });
 });

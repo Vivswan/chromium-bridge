@@ -72,6 +72,16 @@ export function maskKeyName(key: string): string {
   return SENSITIVE_KEY.test(key) ? "••••" + key.slice(-2) : key;
 }
 
+// Stringify + mask a caught error for the outer egress paths (content.ts's
+// __error reply, port.ts's BridgeResp.error). Error messages can embed
+// page-derived data (a getter that throws, a CDP exception description), so
+// both catches route through this one helper and cannot drift out of the
+// masking regime.
+export function maskErrorMessage(e: unknown): string {
+  const message = (e as { message?: unknown } | null | undefined)?.message;
+  return maskString(String(message || e || "error"));
+}
+
 // Recursively mask an arbitrary JSON-ish value (strings, numbers, arrays,
 // objects). Used for eval results and storage dumps.
 export function maskSensitive(value: any): any {

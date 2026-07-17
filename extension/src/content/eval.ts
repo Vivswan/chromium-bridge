@@ -28,26 +28,31 @@ export async function runEval(args: OpArgs) {
   if ((await getSetting("confirmPageEval")) !== false) {
     await confirmWithEvalToast(code);
   }
+  // The mask gate applies to EVERY egress path below - the success value, a
+  // thrown exception, and a failure inside serialization. Exceptions used to
+  // bypass it, so `throw new Error(localStorage.authToken)` carried the secret
+  // out around the mask.
+  const mask = (await getSetting("evalMask")) !== false;
+  const guard = (v: unknown) => (mask ? maskSensitive(v) : v);
   // Execute. Wrap as an async IIFE in the global scope so the code can use
   // await/return and see page globals. `new Function` (not eval) gives us
   // global scope regardless of the strict-mode closure this file runs in.
-  let result: any;
   try {
     const fn = new Function('"use strict";\n' + "return (async () => {\n" + code + "\n})();");
-    result = await fn();
+    const result = await fn();
+    // Serialize inside the try: a getter that throws during serialization must
+    // land in the catch below, not escape unmasked to the outer handler.
+    return guard(serializeResult(result));
   } catch (e: any) {
     // Surface JS errors to the model as structured data, not a throw, so the
     // model can react (e.g. fix the code and retry).
-    return {
+    return guard({
       __evalError: true,
-      name: e?.name || "Error",
+      name: String(e?.name || "Error"),
       message: String(e?.message || e),
       stack: truncate(String(e?.stack || ""), 2000),
-    };
+    });
   }
-  const serialized = serializeResult(result);
-  const mask = await getMaskSetting();
-  return mask ? maskSensitive(serialized) : serialized;
 }
 
 // Safe serialization: handles cycles, DOM nodes, errors, exotic types, and
@@ -116,20 +121,4 @@ function serializeResult(value: any, seen = new WeakSet(), depth = 0): any {
     }
   }
   return String(value);
-}
-
-// Read the eval mask toggle from storage. Default true (mask on). Cached after
-// the first read.
-let _maskCache = true;
-let _maskLoaded = false;
-function getMaskSetting() {
-  if (_maskLoaded) return Promise.resolve(_maskCache);
-  return new Promise((resolve) => {
-    chrome.storage.local.get("evalMask", (r) => {
-      // undefined → default true (mask on)
-      _maskCache = r.evalMask !== false;
-      _maskLoaded = true;
-      resolve(_maskCache);
-    });
-  });
 }
