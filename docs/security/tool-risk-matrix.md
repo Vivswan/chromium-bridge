@@ -23,6 +23,16 @@ content or navigates) · **High** (writes to the page, or reads credentials) ·
 | `page_screenshot` | Medium | viewport pixels | — | possibly (whatever's on screen) | `tabs` | — |
 | `page_scroll` | Low | scroll position | scrolls | no | `scripting` | — |
 | `page_wait_for` | Low | selector/text presence | — | no | `scripting` | — |
+| `page_navigate` | Medium | — | loads an http(s) URL in the active tab | no | `tabs` | allowlist-gated on the destination origin |
+| `page_back` | Low | — | steps the active tab back in history | no | `tabs` | allowlist-gated on the current origin (not the destination, see residual) |
+| `page_forward` | Low | — | steps the active tab forward in history | no | `tabs` | allowlist-gated on the current origin (not the destination, see residual) |
+| `page_reload` | Low | — | reloads the active tab | no | `tabs` | allowlist-gated on the current origin |
+| `page_press` | High | — | sends a synthetic key or combo to the page (may submit/navigate) | no | `scripting` | confirm toast |
+| `page_hover` | Low | — | moves the pointer over an element | no | `scripting` | allowlist-gated |
+| `page_select` | High | — | chooses an option in a `<select>` | no | `scripting` | confirm toast |
+| `console_get` | Medium | recent console output incl. network errors | — | masked | `debugger` | allowlist-gated; output masked; "debugging" banner |
+| `page_handle_dialog` | High | — | **accepts or dismisses** a JS dialog (alert/confirm/prompt) | no | `debugger` | **off by default** (opt-in); allowlist-gated; "debugging" banner |
+| `page_upload` | **Critical** | the named local file's bytes | **attaches a local file** to a file input | possibly (any readable file) | `debugger` | **off by default** (opt-in); allowlist-gated; every-call confirm showing the path; see residual |
 | `page_eval` | **Critical** | anything the page can | **arbitrary JS** in the page | yes (can read tokens/cookies) | `scripting` (host) | **every-call** enlarged confirm toast; result masked; kill-switch in options |
 | `page_snapshot_precise` | Medium | authoritative a11y tree (CDP) | — | no | `debugger` | pre-warn toast; "debugging" infobar flashes |
 | `cookie_get` | High | cookies incl. **httpOnly** | — (read-only) | **yes** | `cookies` | allowlist-scoped; values masked; no `cookie_set` by design |
