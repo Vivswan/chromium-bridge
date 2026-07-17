@@ -1,6 +1,11 @@
 # ADR-0006: In-page Toast for high-risk actions, with a short confirmation-free window
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR-0027](./0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)
+  (the confirmation surface moves off the page-reachable DOM into an
+  extension-owned window; the risk tiering and the click grace window it
+  introduced stand and moved into `confirm/gate.ts`). Phase 8 completes the
+  supersession for `page_eval`/`page_upload` when their approval becomes the
+  Secure Enclave tap.
 - **Date**: 2026-07-07
 
 ## Context
