@@ -97,3 +97,33 @@ are **not** part of the required gate.
   extra review care - see `SECURITY.md`.
 - `upstream` remote is `whg517/browser-bridge`; prefer changes that stay
   mergeable with upstream.
+
+### Security principle: zero trust (the browser is a critical asset)
+
+The user's real, logged-in browser is a critical security boundary: it holds
+live sessions, cookies, and the ability to act as the user. Treat every change
+here under standard cyber-security principles.
+
+- **Trust no party by default - including ourselves.** Do not trust the MCP
+  client, the model, other local processes, the installer, the browser, or any
+  other component of this software just because it is "ours." A component is
+  trusted only for what an unforgeable mechanism proves it is.
+- **Enforce every trust boundary with a mechanism, never an assumption.** Use
+  kernel-attested peer identity (peer-UID / peer-PID -> on-disk binary hash or
+  code signature), constant-time cryptographic checks, and OS-enforced file
+  permissions. A self-reported identity, a value that is merely "hard to
+  guess," or "no other process would do that" is not enforcement.
+- **Assume any same-user process may be hostile.** Design so that driving the
+  browser requires proof of identity, not mere presence on the machine or the
+  ability to read a file. The stated goal is a Codex-level non-abuse
+  guarantee: another program you are running must not be able to use this
+  bridge silently.
+- **Fail closed.** On any ambiguity, missing credential, failed attestation, or
+  unexpected peer, refuse and log to stderr - never proceed degraded.
+- **Never weaken a check for convenience.** Do not add a flag, default, env
+  var, or grace window that bypasses a security gate without an explicit,
+  reviewed decision recorded in `SECURITY.md` / an ADR. Confirmations the user
+  sees in the browser are a feature, not friction to optimize away.
+- **Name the residual risk honestly.** Where a boundary cannot be fully
+  enforced in user space, say so in the threat model rather than implying it is
+  covered.
