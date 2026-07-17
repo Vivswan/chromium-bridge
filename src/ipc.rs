@@ -213,6 +213,48 @@ pub fn listen() -> io::Result<(BridgeListener, LockFile)> {
     Ok((listener, lf))
 }
 
+/// The effective UID of the process on the other end of a freshly-accepted
+/// Unix-domain connection. The server compares this against its own euid to
+/// reject connections from other local users before authenticating them.
+#[cfg(unix)]
+pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
+    use std::os::unix::io::AsRawFd;
+
+    let fd = stream.as_raw_fd();
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred = std::mem::MaybeUninit::<libc::ucred>::uninit();
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                cred.as_mut_ptr().cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { cred.assume_init() }.uid)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS and the BSDs: getpeereid yields the effective uid/gid of the
+        // peer that opened the socket.
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(uid)
+    }
+}
+
 fn generate_secret() -> String {
     #[cfg(windows)]
     {
@@ -387,5 +429,14 @@ mod tests {
     fn socket_path_sits_beside_the_lock_file() {
         assert_eq!(socket_path().file_name().unwrap(), "run.sock");
         assert_eq!(socket_path().parent(), LockFile::path().parent());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn peer_uid_of_local_socketpair_is_current_euid() {
+        // Both ends of a socketpair live in this process, so the peer's uid is
+        // our own euid -- exactly what the accept-loop check requires to pass.
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert_eq!(peer_uid(&a).unwrap(), unsafe { libc::geteuid() });
     }
 }
