@@ -2,6 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-07-16
+- Note (2026-07-17): the keychain label and challenge domain cited below were
+  rebranded under [ADR-0023](0023-workspace-monorepo-tauri-app.md) to
+  `com.vivswan.chromium-bridge.enclave.signing.v1` and
+  `chromium-bridge-enclave-v1`.
 - Extends: [ADR-0019](0019-authenticated-ipc.md) (authenticated socket),
   [ADR-0020](0020-kernel-attested-peer-identity.md) (kernel-attested peers)
 

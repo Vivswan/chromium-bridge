@@ -231,9 +231,9 @@ async function injectStub(page: Page, opts: { evalMask?: boolean } = {}): Promis
  * IIFE re-runs (enables per-test re-injection). */
 async function loadContentJs(page: Page): Promise<void> {
   const src = fs.readFileSync(CONTENT_JS, "utf8");
-  // Clear the load guard so the IIFE's `if (window.__browserBridgeLoaded) return`
+  // Clear the load guard so the IIFE's `if (window.__chromiumBridgeLoaded) return`
   // doesn't short-circuit on re-injection between tests.
-  await page.evaluate("delete window.__browserBridgeLoaded;");
+  await page.evaluate("delete window.__chromiumBridgeLoaded;");
   // Wrap in an IIFE-protecting eval so top-level `return` inside content.js's
   // own IIFE works. content.js is already an IIFE, so direct eval is fine.
   await page.evaluate(src);
