@@ -28,8 +28,37 @@
 
 set -euo pipefail
 
-# shellcheck source=SCRIPTDIR/lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# Repo root, derived from this file's location (scripts/ is a direct child).
+BB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+bb_die() {
+  echo "error: $1" >&2
+  exit "${2:-1}"
+}
+
+# Locate a cargo binary (PATH, then the common Homebrew / rustup spots), set
+# BB_CARGO to its absolute path, and prepend its directory to PATH so the
+# rustc it shells out to is discoverable. Call it as a plain statement (NOT
+# `$(bb_find_cargo)`) - the PATH export must happen in this shell, not a
+# command-substitution subshell.
+bb_find_cargo() {
+  local candidate
+  BB_CARGO=""
+  for candidate in cargo /opt/homebrew/bin/cargo "$HOME/.cargo/bin/cargo"; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      BB_CARGO="$(command -v "$candidate")"
+      break
+    fi
+  done
+  [[ -n "$BB_CARGO" ]] || bb_die "cargo not found. Install Rust (https://rustup.rs) or fix PATH." 2
+  export BB_CARGO
+  local dir
+  dir="$(dirname "$BB_CARGO")"
+  if [[ ":$PATH:" != *":$dir:"* ]]; then
+    export PATH="$dir:$PATH"
+  fi
+}
+
 bb_find_cargo # sets BB_CARGO + puts its dir on PATH (plain call, not subshell)
 
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then

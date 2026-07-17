@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as pinStore from "./enclave-pin";
+import { base64Encode, buildChallengeMessage, computeKeyId } from "./enclave-verify";
 import {
   approvePending,
   attachPort,
@@ -14,7 +15,6 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
-import { base64Encode, buildChallengeMessage, computeKeyId } from "./enclave-verify";
 
 // The ceremony state machine, driven end to end with a mocked chrome and a
 // WebCrypto key standing in for the host's Secure Enclave key. What CANNOT be
@@ -89,8 +89,8 @@ async function proofFrame(key: TestKey, nonce: string, context?: string) {
     await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" },
       key.kp.privateKey,
-      buildChallengeMessage(nonce, context)
-    )
+      buildChallengeMessage(nonce, context),
+    ),
   );
   return {
     type: "enclave_proof",
@@ -163,16 +163,16 @@ describe("pin store", () => {
 
   test("a stored pin whose keyId does not match its pubkey is not a pin", async () => {
     const key = await genKey();
-    store["enclavePin"] = { keyId: "a".repeat(64), pubkeyB64: key.pubkeyB64, pinnedAt: 1 };
+    store.enclavePin = { keyId: "a".repeat(64), pubkeyB64: key.pubkeyB64, pinnedAt: 1 };
     expect(await pinStore.getPin()).toBeNull();
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 
   test("a stored pin whose pubkey does not decode is not a pin", async () => {
     // "QUJD" is canonical base64 for "ABC": 3 bytes, not a 65-byte point.
-    store["enclavePin"] = { keyId: "a".repeat(64), pubkeyB64: "QUJD", pinnedAt: 1 };
+    store.enclavePin = { keyId: "a".repeat(64), pubkeyB64: "QUJD", pinnedAt: 1 };
     expect(await pinStore.getPin()).toBeNull();
-    store["enclavePin"] = { keyId: "short", pubkeyB64: "QUJD", pinnedAt: 1 };
+    store.enclavePin = { keyId: "short", pubkeyB64: "QUJD", pinnedAt: 1 };
     expect(await pinStore.getPin()).toBeNull();
     expect((await enrollmentGate()).allowed).toBe(false);
   });
@@ -381,7 +381,7 @@ describe("ceremony state machine", () => {
   });
 
   test("requireEnrollment=false opens the gate and skips the ceremony", async () => {
-    store["requireEnrollment"] = false;
+    store.requireEnrollment = false;
     expect((await enrollmentGate()).allowed).toBe(true);
     await onPortConnected();
     expect(posted.length).toBe(0);
@@ -447,7 +447,7 @@ describe("ceremony state machine", () => {
     // the op dispatched after the revoke had landed.
     type StorageGet = (
       key: string | string[],
-      cb?: (r: Record<string, unknown>) => void
+      cb?: (r: Record<string, unknown>) => void,
     ) => Promise<Record<string, unknown>> | undefined;
     const local = (globalThis as unknown as { chrome: { storage: { local: { get: StorageGet } } } })
       .chrome.storage.local;
@@ -543,7 +543,7 @@ describe("ceremony state machine", () => {
     const gateP = enrollmentGate(() => {
       // Synchronous view from inside the critical section: the revoke queued
       // below must not have touched the store yet.
-      events.push(store["enclavePin"] ? "dispatched-before-revoke" : "dispatched-after-revoke");
+      events.push(store.enclavePin ? "dispatched-before-revoke" : "dispatched-after-revoke");
     });
     await new Promise((resolve) => setTimeout(resolve, 0)); // confirm is parked on the probe
     const revokeP = revokePin(); // queued behind the running confirm
@@ -571,7 +571,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("a fresh pin is not re-challenged within the interval", async () => {
     const key = await genKey();
     await pairAndPin(key); // pinnedAt = now, counts as the last verification
-    store["hostReverifyMs"] = 3_600_000;
+    store.hostReverifyMs = 3_600_000;
     const before = posted.length;
     await onPortConnected();
     expect(posted.length).toBe(before);
@@ -580,8 +580,8 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("a stale pin is re-challenged on connect and success refreshes the clock", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store["hostReverifyMs"] = 1000;
-    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    store.hostReverifyMs = 1000;
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected();
     const { nonce, context } = lastChallenge();
     const frame = posted[posted.length - 1];
@@ -601,8 +601,8 @@ describe("periodic re-verification (hostReverifyMs)", () => {
     const key = await genKey();
     const attacker = await genKey();
     await pairAndPin(key);
-    store["hostReverifyMs"] = 1000;
-    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    store.hostReverifyMs = 1000;
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected();
     const { nonce, context } = lastChallenge();
     await handleEnclaveFrame(await proofFrame(attacker, nonce, context));
@@ -613,8 +613,8 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("an unanswered periodic prompt leaves the pinned state and gate unchanged", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store["hostReverifyMs"] = 1000;
-    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    store.hostReverifyMs = 1000;
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected(); // challenge out
     // The user cancels the presence prompt: the host reports signing_failed.
     await handleEnclaveFrame({ type: "enclave_error", reason: "signing_failed" });
@@ -626,9 +626,9 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("a newer lastVerifiedAt outweighs an old pinnedAt", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store["hostReverifyMs"] = 1000;
-    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
-    store["enclaveLastVerifiedAt"] = Date.now(); // verified just now
+    store.hostReverifyMs = 1000;
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    store.enclaveLastVerifiedAt = Date.now(); // verified just now
     const before = posted.length;
     await onPortConnected();
     expect(posted.length).toBe(before);
@@ -637,8 +637,8 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("an outstanding challenge suppresses a duplicate periodic challenge", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store["hostReverifyMs"] = 1000;
-    (store["enclavePin"] as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    store.hostReverifyMs = 1000;
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected(); // first stale connect: challenge goes out
     const before = posted.length;
     await onPortConnected(); // second connect while unanswered: no duplicate
@@ -688,7 +688,7 @@ describe("platform scoping (non-Enclave platforms)", () => {
 
   test("a compromised mark still blocks regardless of platform", async () => {
     mockOs = "linux";
-    store["enclaveCompromised"] = { reason: "test", at: Date.now() };
+    store.enclaveCompromised = { reason: "test", at: Date.now() };
     expect((await enrollmentGate()).allowed).toBe(false);
     // The status must report the truth so the UI renders the compromised
     // panel (with its revoke control), not the platform-N/A panel.

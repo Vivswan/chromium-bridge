@@ -18,17 +18,10 @@ updates:
     cooldown:
       default-days: 7
 
-  # Extension (esbuild / typescript / eslint / prettier / @types)
+  # bun workspace (root bun.lock covers extension/, tests/, packages/*).
+  # Dependabot's npm ecosystem reads bun.lock since 2025.
   - package-ecosystem: "npm"
-    directory: "/extension"
-    schedule:
-      interval: "monthly"
-    cooldown:
-      default-days: 7
-
-  # Test harness (puppeteer-core / bun+chrome types / typescript)
-  - package-ecosystem: "npm"
-    directory: "/tests"
+    directory: "/"
     schedule:
       interval: "monthly"
     cooldown:

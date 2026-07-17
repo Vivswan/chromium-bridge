@@ -3,14 +3,14 @@
 // The allowlist lives in chrome.storage.local (survives SW restarts). A new
 // origin surfaces a badge + pending request that the popup resolves.
 
-import { getSetting } from "../shared/settings";
 import {
-  originGlobOf,
-  hostFromOriginGlob,
-  normalizeCookieDomain,
-  matchesAny,
   globToPermissionPattern,
+  hostFromOriginGlob,
+  matchesAny,
+  normalizeCookieDomain,
+  originGlobOf,
 } from "../shared/allowlist";
+import { getSetting } from "../shared/settings";
 
 const STORAGE_KEY = "allowlist";
 
@@ -33,7 +33,7 @@ export async function ensureDomainAllowed(domain: string) {
   const allowed = list.some((glob) => hostFromOriginGlob(glob) === host);
   if (!allowed) {
     throw new Error(
-      `cookie domain not allowed by user: ${domain}. Use a URL for the active allowlisted origin, or approve that exact host first.`
+      `cookie domain not allowed by user: ${domain}. Use a URL for the active allowlisted origin, or approve that exact host first.`,
     );
   }
 }
@@ -89,7 +89,7 @@ function maybeClearBadge() {
 // Resolve a pending approval (called by the popup via the message router).
 export async function resolvePendingAllow(
   id: string,
-  allow: boolean
+  allow: boolean,
 ): Promise<{ ok: boolean; error?: string }> {
   const pending = pendingAllowRequests.get(id);
   if (!pending) return { ok: false, error: "no such pending request" };

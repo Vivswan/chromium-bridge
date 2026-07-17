@@ -4,9 +4,9 @@
 // source of truth in shared/settings.ts — background/content/options all import
 // it; add a new setting there (and to the Settings type), not in three places.
 
-import type { Settings } from "./shared/types";
-import { DEFAULTS } from "./shared/settings";
 import { TOOLS } from "./shared/ops";
+import { DEFAULTS } from "./shared/settings";
+import type { Settings } from "./shared/types";
 
 // Elements are declared in options.html; `$` asserts presence (the page owns
 // its own DOM). Pass a subtype when you need element-specific fields.
@@ -48,7 +48,7 @@ function renderBool(key: string) {
     const checked = (e.target as HTMLInputElement).checked;
     if (warn) warn.style.display = checked ? "none" : "block";
     if (card) card.classList.toggle("danger", !!warn && !checked);
-    saveSetting(key, checked);
+    void saveSetting(key, checked);
   });
 }
 
@@ -94,7 +94,7 @@ function renderNumber(key: string) {
   input.addEventListener("change", (e: Event) => {
     const v = parseInt((e.target as HTMLInputElement).value, 10);
     if (Number.isNaN(v)) return;
-    saveSetting(key, v);
+    void saveSetting(key, v);
   });
 }
 
@@ -139,14 +139,14 @@ async function refreshAllowlist() {
     .map(
       (g) =>
         `<div class="item"><code>${escapeHtml(g)}</code>` +
-        `<button class="danger" data-glob="${escapeAttr(g)}">移除</button></div>`
+        `<button class="danger" data-glob="${escapeAttr(g)}">移除</button></div>`,
     )
     .join("");
   box.querySelectorAll<HTMLButtonElement>("button").forEach((b) => {
     b.onclick = async () => {
       const glob = b.getAttribute("data-glob")!;
       await send({ type: "remove_allow", glob });
-      refreshAllowlist();
+      await refreshAllowlist();
       flashToast("已移除");
     };
   });
@@ -175,9 +175,9 @@ function wireAddSite() {
       return;
     }
     const resp = await send({ type: "add_allow", glob });
-    if (resp && resp.ok) {
+    if (resp?.ok) {
       input.value = "";
-      refreshAllowlist();
+      await refreshAllowlist();
       flashToast("已添加");
     } else {
       flashToast((resp?.error as string) || "添加失败");
@@ -185,7 +185,7 @@ function wireAddSite() {
   }
   btn.onclick = add;
   input.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter") add();
+    if (e.key === "Enter") void add();
   });
 }
 
@@ -234,7 +234,7 @@ async function refreshEnrollment() {
     meta.push(
       st.lastVerifiedAt
         ? `上次手动验证:${new Date(st.lastVerifiedAt).toLocaleString()}`
-        : "尚未手动验证过"
+        : "尚未手动验证过",
     );
     parts.push(`<div class="enroll-meta">${escapeHtml(meta.join(" · "))}</div>`);
     btns.push({
@@ -255,7 +255,7 @@ async function refreshEnrollment() {
     parts.push(`<div class="fp">${escapeHtml(st.fingerprint || "")}</div>`);
     parts.push(
       `<div class="enroll-meta">与终端里 <code>chromium-bridge pair</code> 打印的指纹逐字符对比;` +
-        `任何差异都说明回应挑战的不是你刚配对的那个主机。</div>`
+        `任何差异都说明回应挑战的不是你刚配对的那个主机。</div>`,
     );
     btns.push({
       id: "enroll-approve",
@@ -269,7 +269,7 @@ async function refreshEnrollment() {
     parts.push(`<div class="enroll-err">${escapeHtml(st.compromisedReason || "")}</div>`);
     parts.push(
       `<div class="enroll-meta">回应验证的不是被固定的那把钥匙。先弄清原因(是不是自己 revoke 过、` +
-        `重装过主机),再解除配对并重新运行 <code>chromium-bridge pair</code>。</div>`
+        `重装过主机),再解除配对并重新运行 <code>chromium-bridge pair</code>。</div>`,
     );
     btns.push({
       id: "enroll-revoke",
@@ -301,10 +301,10 @@ async function refreshEnrollment() {
       btns
         .map(
           (b) =>
-            `<button class="${escapeAttr(b.cls)}" id="${escapeAttr(b.id)}">${escapeHtml(b.label)}</button>`
+            `<button class="${escapeAttr(b.cls)}" id="${escapeAttr(b.id)}">${escapeHtml(b.label)}</button>`,
         )
         .join("") +
-      `</div>`
+      `</div>`,
   );
   panel.innerHTML = parts.join("");
 
@@ -317,7 +317,7 @@ async function refreshEnrollment() {
       }
       // Proof/error frames arrive asynchronously; the 2s poll below picks up
       // the state they produce.
-      refreshEnrollment();
+      await refreshEnrollment();
     };
   }
 }
@@ -338,7 +338,7 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 function escapeHtml(s: string) {
-  return String(s).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+  return String(s).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
 }
 function escapeAttr(s: string) {
   return escapeHtml(s);
@@ -346,7 +346,7 @@ function escapeAttr(s: string) {
 
 // ---- init -----------------------------------------------------------------
 
-(async function init() {
+void (async function init() {
   const s = await loadSettings();
 
   // Boolean toggles. The protections (safe on / warned off) show danger styling
@@ -386,7 +386,7 @@ function escapeAttr(s: string) {
     input.addEventListener("change", (e: Event) => {
       const on = (e.target as HTMLInputElement).checked;
       sync(on);
-      saveSetting("cdpMode", on);
+      void saveSetting("cdpMode", on);
     });
   }
 
@@ -407,7 +407,7 @@ function escapeAttr(s: string) {
     input.addEventListener("change", (e: Event) => {
       const on = (e.target as HTMLInputElement).checked;
       sync(on);
-      saveSetting(key, on);
+      void saveSetting(key, on);
     });
   }
 
@@ -454,5 +454,3 @@ function escapeAttr(s: string) {
   await refreshEnrollment();
   setInterval(refreshEnrollment, 2000);
 })();
-
-export {};

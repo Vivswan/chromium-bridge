@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["bun"]
+  },
+  // extension/build.ts is a bun-run build driver, not extension source: it
+  // needs the bun ambient types, which must not leak into the browser-side
+  // src/ typecheck, so it is checked here with the other tooling scripts.
+  "include": ["*.ts", "../extension/build.ts"]
+}

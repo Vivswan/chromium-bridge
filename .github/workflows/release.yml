@@ -59,9 +59,9 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           cache: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          node-version: 20
+          bun-version-file: package.json
 
       - name: Verify tag matches Cargo version
         shell: bash
@@ -89,9 +89,8 @@ jobs:
 
       - name: Build extension bundle
         run: |
-          npm ci
-          npm run build
-        working-directory: extension
+          bun install --frozen-lockfile
+          bun run --cwd extension build
 
       - name: Package release archive
         id: pkg

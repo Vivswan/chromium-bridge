@@ -159,7 +159,7 @@ The extension source is written in **TypeScript** (strict) under
 `extension/src/*.ts` and bundled by **esbuild** into IIFEs in
 `extension/dist/`, with static assets (manifest/HTML/CSS/icons) copied in.
 **The load-unpacked target is `extension/dist/`** (not `extension/`). After
-changing code, run `npm run build` (or `make ext-build`) first. See
+changing code, run `bun run build` (or `just ext-build`) first. See
 [ADR-0012](./adr/0012-typescript-esbuild-extension-build.md).
 
 | Source (`src/`) | Artifact (`dist/`) | Responsibility |
@@ -240,7 +240,7 @@ falling back to the XDG cache otherwise; see
 The extension itself is loaded **load-unpacked** from **`extension/dist/`**
 (the esbuild output: bundled from `src/*.ts` plus copied static assets);
 `install.sh`/`install.ps1` build it first. dist/ is not checked in, so after
-cloning run `npm run build` (or `make ext-build`) first. See
+cloning run `bun run build` (or `just ext-build`) first. See
 [ADR-0012](./adr/0012-typescript-esbuild-extension-build.md).
 
 ## 5. Key data flows
@@ -422,7 +422,7 @@ See [ADR-0010](./adr/0010-cookie-storage-readonly.md).
 | IPC | localhost TCP + lock file | Simple across processes; easy to debug; per-run secret authentication. See [ADR-0002](./adr/0002-three-process-architecture-localhost-tcp.md) |
 | Rust dependencies | serde/serde_json + libc + thiserror | The protocol is still handwritten and tokio is still unused; beyond serde, `libc` (signals/low-level interaction) and `thiserror` (typed errors on the tool path) were added. This revises ADR-0001's old "serde is the only dependency" wording; the minimal-dependency principle stands. See [ADR-0014](./adr/0014-leveled-logging.md) |
 | Extension toolchain | TypeScript + esbuild -> dist/ | strict types + a single dependency bundling to IIFE; load-unpacked target is `extension/dist/`. See [ADR-0012](./adr/0012-typescript-esbuild-extension-build.md) |
-| Engineering gates | Makefile + GitHub Actions | A single task entry point + CI (fmt/clippy -D warnings/eslint/prettier + tests); Cargo is the version's single source. See [ADR-0013](./adr/0013-ci-and-toolchain.md) |
+| Engineering gates | justfile + GitHub Actions | A single task entry point + CI (fmt/clippy -D warnings, Biome, typos/machete + tests); Cargo is the version's single source. See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by the 2026-07 bun/Biome/just migration |
 | Extension platform | MV3 | Mandated by Chrome; Service Worker model |
 | snapshot implementation | content script approximate a11y tree | No infobar; roughly 90% coverage, with the debugger fallback as backstop. See [ADR-0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) |
 | MCP version | 2025-06-18 | The current stable version; the one MCP clients commonly implement. See [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md) |
@@ -450,7 +450,7 @@ A round of engineering standardization reshaped the build, test, and
 observability baseline without changing the tools' runtime behavior. The
 decisions:
 - **[ADR-0012](./adr/0012-typescript-esbuild-extension-build.md)**: the extension moved to TypeScript, bundled by esbuild into `extension/dist/` (the new load-unpacked target).
-- **[ADR-0013](./adr/0013-ci-and-toolchain.md)**: Makefile task entry point + GitHub Actions CI + rustfmt/clippy/eslint/prettier gates + Cargo-sourced version sync.
+- **[ADR-0013](./adr/0013-ci-and-toolchain.md)**: task-runner entry point + GitHub Actions CI + rustfmt/clippy and TS lint/format gates + Cargo-sourced version sync (tooling now just + Biome, 2026-07).
 - **[ADR-0014](./adr/0014-leveled-logging.md)**: `BB_LOG` leveled stderr logging + thiserror typed errors (new `libc` and `thiserror` dependencies).
 
 ## 11. Protocol boundary: error taxonomy and handshake

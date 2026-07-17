@@ -10,15 +10,22 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 
 | Tool | Used for | Notes |
 |------|----------|-------|
-| Rust (cargo) | the `chromium-bridge` binary | stable toolchain; `rustfmt` + `clippy` components |
-| Node.js + npm | bundling the extension | esbuild build → `extension/dist/` |
+| Rust (cargo) | the `chromium-bridge` binary | stable toolchain; `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
+| bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned via the root `package.json` `packageManager` field |
 | Python 3 | protocol e2e tests | stdlib only |
-| bun | DOM-layer tests | runs `tests/dom_test.ts` |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
-| `make` | task runner (optional) | `Makefile` collects every dev task; `make help` lists them. Each recipe is a plain command you can also run by hand |
-| [`shellcheck`](https://www.shellcheck.net/) | linting the shell scripts (optional) | `make lint-scripts`; CI gates it |
+| [`just`](https://just.systems/) | task runner | the `justfile` collects every dev task; `just` lists them. Each recipe is a plain command you can also run by hand |
+| [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `just typos` / `just machete`; CI gates both |
+| [`shellcheck`](https://www.shellcheck.net/) | linting the remaining shell scripts (optional) | `just lint-scripts`; CI gates it |
+
+Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`):
+`bun install` wires a pre-commit hook that runs `just ci`, so a commit that
+would fail CI fails at commit time instead.
 
 ## Layout
+
+The TypeScript side is a bun workspace rooted at the repo top level
+(`package.json` `workspaces`), sharing one `bun.lock` and one `node_modules/`.
 
 ```
 crates/core/         Rust library "chromium-bridge-core": MCP server + native-host bridge
@@ -26,16 +33,21 @@ crates/host/         Rust binary "chromium-bridge" (thin argv dispatch over the 
 extension/
   src/*.ts           TypeScript sources (background/content/options/popup)
   dist/              esbuild output — the load-unpacked target (gitignored)
-  build.mjs          esbuild driver
+  build.ts           esbuild driver (bun)
   manifest.json, *.html, toast.css, icons/   static assets, copied into dist/
-tests/               e2e.py (protocol), dom_test.ts (DOM), ext_test.ts (smoke)
-scripts/             lib.sh (shared helpers) + check-version.sh, sync-version.sh
+packages/shared/     workspace package for contract types / validators / i18n
+                     (scaffold today; the codegen backbone generates into it)
+tests/               e2e.py (protocol), dom_test.ts (DOM), ext_test.ts (smoke),
+                     run_all.ts (orchestrates all suites)
+scripts/             TypeScript tooling, run via bun: gen-ops.ts,
+                     check-version.ts, sync-version.ts, check-extension-id.ts,
+                     lib.ts (shared helpers) + build-repro.sh (deterministic build)
 ```
 
-Shell scripts (`install/install.sh`, `scripts/*.sh`, `tests/run_all.sh`) share
-`scripts/lib.sh` (sourced) for cargo discovery and version parsing — edit the
-candidate list or parsing in one place. They're `shellcheck`-clean (CI gates
-it; `make lint-scripts` locally).
+Two standalone shell scripts remain (`install/install.sh` and
+`scripts/build-repro.sh`, plus the installer's test harness) because they must
+run without a bun toolchain. They're `shellcheck`-clean (CI gates it;
+`just lint-scripts` locally).
 
 Rust dependencies are gated by supply-chain review (`cargo vet`, the
 `cargo-vet` CI job). Adding or bumping a crate fails CI until the new version
@@ -47,44 +59,43 @@ code enters the build without someone choosing to let it in.
 
 ## Common tasks
 
-With `make` (`make help` lists every target):
+With `just` (`just` lists every recipe):
 
 ```sh
-make build          # cargo build --release
-make build-repro    # deterministic release build (scripts/build-repro.sh)
-make test           # rust unit tests + protocol e2e
-make test-browser   # build the extension, then DOM + smoke tests (needs bun + Chrome)
-make ci             # everything CI runs, minus the browser job
-make ext-build      # bundle the extension (src/ → dist/)
-make fmt            # cargo fmt
-make install        # build + install binary + host manifest
+just build          # cargo build --release
+just build-repro    # deterministic release build (scripts/build-repro.sh)
+just test           # rust tests (nextest) + protocol e2e
+just test-browser   # build the extension, then DOM + smoke tests (needs Chrome)
+just ci             # everything CI runs, minus the browser job
+just ext-build      # bundle the extension (src/ → dist/)
+just fmt            # cargo fmt
+just fix-ts         # biome lint+format auto-fix across the workspace
+just install        # build + install binary + host manifest
 ```
 
 Or run the underlying commands directly:
 
 ```sh
 cargo build --release
-cargo test
+cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 python3 tests/e2e.py
-npm --prefix extension ci
-npm --prefix extension run typecheck   # tsc --noEmit
-npm --prefix extension run lint         # eslint
-npm --prefix extension run format:check # prettier
-npm --prefix extension run build        # esbuild → dist/
+bun install
+bun run typecheck               # tsc for extension, tests, scripts, packages/shared
+bunx biome ci .                 # lint + format check (biome.json)
+bun run --cwd extension build   # esbuild → dist/
 ```
 
 ## Working on the extension
 
-The extension is authored in TypeScript and bundled with esbuild. Because
-esbuild only strips types, a correct typing change produces a byte-identical
-bundle — a handy way to prove a refactor is behavior-neutral (diff `dist/*.js`
-against a saved reference).
+The extension is authored in TypeScript and bundled with esbuild (driven by
+`extension/build.ts` under bun). Because esbuild only strips types, a correct
+typing change produces a byte-identical bundle — a handy way to prove a
+refactor is behavior-neutral (diff `dist/*.js` against a saved reference).
 
 ```sh
-cd extension
-npm install
-npm run watch     # rebuild dist/ on change
+bun install
+bun run --cwd extension watch     # rebuild dist/ on change
 ```
 
 Load `extension/dist/` as an unpacked extension in `chrome://extensions`
@@ -93,7 +104,7 @@ the extension card.
 
 ## Testing
 
-Three suites, all wired into `tests/run_all.sh` (and CI):
+Three suites, all wired into `tests/run_all.ts` (and CI):
 
 - **Protocol** (`tests/e2e.py`) — drives the real release binary as
   subprocesses over the actual wire protocols. No browser needed.
@@ -104,8 +115,8 @@ Three suites, all wired into `tests/run_all.sh` (and CI):
   at a different unpacked extension.
 
 ```sh
-bash tests/run_all.sh          # all three (skips browser tests if bun/Chrome absent)
-CHROME_BIN=/path/to/chrome bash tests/run_all.sh
+bun tests/run_all.ts          # all three (skips browser tests if Chrome absent)
+CHROME_BIN=/path/to/chrome bun tests/run_all.ts
 ```
 
 ## Logging
@@ -126,10 +137,10 @@ BB_LOG=error chromium-bridge          # quiet
 ```sh
 # 1. bump the version in Cargo.toml
 # 2. propagate it to the extension manifest + package files
-make sync-version        # ./scripts/sync-version.sh
+just sync-version        # bun scripts/sync-version.ts
 # 3. update CHANGELOG.md (move [Unreleased] items under the new version)
 # 4. gate on a clean tree
-make release             # check-version + full ci
+just release             # check-version + full ci
 # 5. tag — pushing a v* tag triggers .github/workflows/release.yml, which
 #    builds macOS Apple Silicon and Linux x64 tarballs (binary + built
 #    extension + install.sh) and publishes them to GitHub Releases.

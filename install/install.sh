@@ -48,9 +48,9 @@
 #
 # Two modes, auto-detected:
 #   - source checkout (Cargo.toml present): builds the binary (Rust) + the
-#     extension (Node/npm), then installs.
+#     extension (bun), then installs.
 #   - prebuilt release tarball (no Cargo.toml): installs the shipped binary +
-#     extension/dist directly - no Rust or Node needed. The shipped binary is
+#     extension/dist directly - no Rust or bun needed. The shipped binary is
 #     verified against the release's published SHA-256 (and, when an
 #     authenticated `gh` is available, its build provenance attestation)
 #     before anything is installed; on any mismatch the install refuses.
@@ -516,14 +516,38 @@ EOF
 # Prebuilt release tarball (no Cargo.toml) → use the shipped chromium-bridge and
 # extension/dist as-is; no Rust/Node needed.
 
+# Locate a cargo binary (PATH, then the common Homebrew / rustup spots), set
+# BB_CARGO to its absolute path, and prepend its directory to PATH so the
+# rustc it shells out to is discoverable. Call it as a plain statement (NOT
+# `$(bb_find_cargo)`) - the PATH export must happen in this shell, not a
+# command-substitution subshell.
+bb_find_cargo() {
+  local candidate
+  BB_CARGO=""
+  for candidate in cargo /opt/homebrew/bin/cargo "$HOME/.cargo/bin/cargo"; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      BB_CARGO="$(command -v "$candidate")"
+      break
+    fi
+  done
+  [[ -n "$BB_CARGO" ]] || {
+    echo "error: cargo not found. Install Rust (https://rustup.rs) or fix PATH." >&2
+    exit 2
+  }
+  export BB_CARGO
+  local dir
+  dir="$(dirname "$BB_CARGO")"
+  if [[ ":$PATH:" != *":$dir:"* ]]; then
+    export PATH="$dir:$PATH"
+  fi
+}
+
 if [[ -f "$ROOT/Cargo.toml" ]]; then
   PREBUILT=0
   [[ -z "$EXPECTED_SHA256" ]] || {
     echo "error: --expected-sha256 only applies to a prebuilt release archive (this is a source checkout)" >&2
     exit 1
   }
-  # shellcheck source=SCRIPTDIR/../scripts/lib.sh
-  source "$ROOT/scripts/lib.sh"
   bb_find_cargo # sets BB_CARGO + puts its dir on PATH (plain call, not subshell)
   echo "[install] source mode - building with $BB_CARGO"
   "$BB_CARGO" build --release --manifest-path "$ROOT/Cargo.toml"
@@ -537,14 +561,14 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
     }
     echo "[install] reusing existing extension bundle at $DIST_DIR"
   else
-    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-      echo "error: Linux/macOS Node.js + npm are needed to build the extension." >&2
-      echo "       Install Node.js, or build extension/dist elsewhere and pass --skip-extension-build." >&2
+    if ! command -v bun >/dev/null 2>&1; then
+      echo "error: bun is needed to build the extension (https://bun.sh)." >&2
+      echo "       Install bun, or build extension/dist elsewhere and pass --skip-extension-build." >&2
       exit 1
     fi
     echo "[install] building extension bundle (esbuild)..."
-    [[ -d "$ROOT/extension/node_modules" ]] || npm --prefix "$ROOT/extension" install
-    npm --prefix "$ROOT/extension" run build
+    [[ -d "$ROOT/node_modules" ]] || (cd "$ROOT" && bun install --frozen-lockfile)
+    (cd "$ROOT/extension" && bun run build)
     DIST_DIR="$ROOT/extension/dist"
   fi
 else

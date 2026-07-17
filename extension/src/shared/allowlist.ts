@@ -4,7 +4,7 @@
 // The chrome.storage-backed read/write of the allowlist stays in background.ts;
 // only the pure string logic lives here.
 
-// Derive the origin glob ("https://host/*") for a URL, or null if unparseable.
+// Derive the origin glob ("https://host/*") for a URL, or null if unparsable.
 export function originGlobOf(url: string | undefined): string | null {
   try {
     const u = new URL(url!);
@@ -14,7 +14,7 @@ export function originGlobOf(url: string | undefined): string | null {
   }
 }
 
-// Extract the lowercase host from an origin glob, or null if unparseable.
+// Extract the lowercase host from an origin glob, or null if unparsable.
 export function hostFromOriginGlob(glob: string): string | null {
   try {
     return new URL(glob.replace(/\*$/, "")).host.toLowerCase();
@@ -43,7 +43,7 @@ export function simpleMatch(pattern: string, target: string): boolean {
   if (pattern === target) return true;
   if (pattern.endsWith("/*")) {
     const base = pattern.slice(0, -2); // drop "/*"
-    return target === base || target.startsWith(base + "/");
+    return target === base || target.startsWith(`${base}/`);
   }
   if (pattern.endsWith("*")) {
     return target.startsWith(pattern.slice(0, -1));
@@ -54,5 +54,5 @@ export function simpleMatch(pattern: string, target: string): boolean {
 // Convert an origin glob to a chrome.permissions match pattern, or null.
 export function globToPermissionPattern(glob: string): string | null {
   if (typeof glob !== "string" || !glob) return null;
-  return glob.endsWith("/*") ? glob : glob + "*";
+  return glob.endsWith("/*") ? glob : `${glob}*`;
 }

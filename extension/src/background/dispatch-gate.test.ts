@@ -4,7 +4,7 @@ import { assertNotDisabled } from "./dispatch";
 describe("dispatch disable-gate (assertNotDisabled)", () => {
   test("a known disabled tool throws the exact legacy message", () => {
     expect(() => assertNotDisabled("tab_list", ["tab_list"])).toThrow(
-      "tool disabled in settings: tab_list"
+      "tool disabled in settings: tab_list",
     );
   });
 

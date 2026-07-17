@@ -1,5 +1,5 @@
 /**
- * Real end-to-end integration test — the seam e2e.py deliberately mocks.
+ * Real end-to-end integration test - the seam e2e.py deliberately mocks.
  *
  * Exercises the FULL chain with nothing stubbed: MCP client (this) -> real MCP
  * server (release binary) -> localhost TCP bridge -> real native host (release
@@ -20,19 +20,20 @@
  *
  * Run:  BB_REAL_E2E=1 node tests/integration_e2e.ts
  */
+
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createInterface } from "node:readline";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import puppeteer from "puppeteer-core";
-import { execFileSync, spawn } from "child_process";
-import { createHash } from "crypto";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
-import { createInterface } from "readline";
-import { fileURLToPath, pathToFileURL } from "url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const IS_WINDOWS = process.platform === "win32";
-const BIN = path.join(REPO, "target", "release", "chromium-bridge" + (IS_WINDOWS ? ".exe" : ""));
+const BIN = path.join(REPO, "target", "release", `chromium-bridge${IS_WINDOWS ? ".exe" : ""}`);
 const DIST = path.join(REPO, "extension", "dist");
 const CHROME =
   process.env.CHROME_BIN ||
@@ -42,7 +43,10 @@ const CHROME =
 const HOST_NAME = "com.vivswan.chromium_bridge.host";
 const REG_KEY = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 const LOCK = IS_WINDOWS
-  ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData/Local"), "chromium-bridge/run.lock")
+  ? path.join(
+      process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData/Local"),
+      "chromium-bridge/run.lock",
+    )
   : path.join(os.homedir(), "Library/Application Support/chromium-bridge/run.lock");
 const FIXTURE = pathToFileURL(path.join(REPO, "tests", "fixtures", "page.html")).href;
 
@@ -58,7 +62,7 @@ if (process.platform !== "darwin" && !IS_WINDOWS) {
 // SAFETY (do not remove): this launches a NON-HEADLESS Chrome with
 // --load-extension. Driving your daily Google Chrome can capture and then CLOSE
 // your real browser session. Require an ISOLATED Chrome for Testing / Chromium
-// binary via CHROME_BIN — never the everyday browser.
+// binary via CHROME_BIN - never the everyday browser.
 {
   const isDailyMac = CHROME.includes("/Google Chrome.app/") && CHROME.endsWith("/Google Chrome");
   const isDailyWin = /\\Google\\Chrome\\Application\\chrome\.exe$/i.test(CHROME);
@@ -66,7 +70,7 @@ if (process.platform !== "darwin" && !IS_WINDOWS) {
     console.log(
       "SKIP: refusing to drive your daily Chrome (it can capture and close your\n" +
         "real session). Set CHROME_BIN to a Chrome for Testing / Chromium binary\n" +
-        "(see tests/README.md → Safety)."
+        "(see tests/README.md → Safety).",
     );
     process.exit(0);
   }
@@ -82,15 +86,15 @@ for (const [label, p] of [
   }
 }
 
-let _pass = 0;
-let _fail = 0;
+let Pass = 0;
+let Fail = 0;
 function check(cond: boolean, label: string): void {
   if (cond) {
-    _pass++;
-    console.log("  PASS  " + label);
+    Pass++;
+    console.log(`  PASS  ${label}`);
   } else {
-    _fail++;
-    console.log("  FAIL  " + label);
+    Fail++;
+    console.log(`  FAIL  ${label}`);
   }
 }
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -175,11 +179,12 @@ async function main(): Promise<void> {
     else queuedLines.push(line);
   });
   async function recv(): Promise<any> {
-    const line = queuedLines.shift() || (await new Promise<string>((resolve) => lineWaiters.push(resolve)));
+    const line =
+      queuedLines.shift() || (await new Promise<string>((resolve) => lineWaiters.push(resolve)));
     return JSON.parse(line);
   }
   function send(obj: unknown): void {
-    mcp.stdin.write(JSON.stringify(obj) + "\n");
+    mcp.stdin.write(`${JSON.stringify(obj)}\n`);
   }
 
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "bb-e2e-profile-"));
@@ -197,8 +202,8 @@ async function main(): Promise<void> {
     // resolve user-level manifests relative to --user-data-dir, so this works
     // and never touches a real registration (see tests/README.md).
     const testManifest = IS_WINDOWS
-      ? path.join(work, HOST_NAME + ".json")
-      : path.join(profile, "NativeMessagingHosts", HOST_NAME + ".json");
+      ? path.join(work, `${HOST_NAME}.json`)
+      : path.join(profile, "NativeMessagingHosts", `${HOST_NAME}.json`);
     if (!IS_WINDOWS) fs.mkdirSync(path.dirname(testManifest), { recursive: true });
     fs.writeFileSync(
       testManifest,
@@ -208,7 +213,7 @@ async function main(): Promise<void> {
         path: hostPath,
         type: "stdio",
         allowed_origins: [`chrome-extension://${extId}/`],
-      })
+      }),
     );
     if (IS_WINDOWS) writeWindowsRegistration(testManifest);
 
@@ -241,14 +246,14 @@ async function main(): Promise<void> {
       throw new Error(
         `test extension did not load (expected ${expectedWorkerUrl}). ` +
           "Official Google Chrome 137+ ignores --load-extension; point CHROME_BIN " +
-          "to Chrome for Testing or Chromium."
+          "to Chrome for Testing or Chromium.",
       );
     }
 
     if (process.env.BB_REAL_E2E_DEBUG === "1") {
       console.log(
         "[e2e] Chrome targets:",
-        browser.targets().map((target) => `${target.type()} ${target.url()}`)
+        browser.targets().map((target) => `${target.type()} ${target.url()}`),
       );
     }
 
@@ -264,7 +269,7 @@ async function main(): Promise<void> {
       () =>
         new Promise<void>((resolve) => {
           chrome.storage.local.set({ requireEnrollment: false }, () => resolve());
-        })
+        }),
     );
 
     send({
@@ -298,7 +303,7 @@ async function main(): Promise<void> {
     const first = Array.isArray(tabs) && tabs.length >= 1 ? tabs[0] : undefined;
     check(
       !!first && typeof first.id === "number" && typeof first.url === "string",
-      "tab_list returned structured real chrome.tabs data (full round-trip works)"
+      "tab_list returned structured real chrome.tabs data (full round-trip works)",
     );
     check(r.result.isError === false, "tool call not an error");
 
@@ -310,10 +315,10 @@ async function main(): Promise<void> {
       check(true, "isolated: our fixture tab present (fully hermetic)");
     } else {
       console.log(
-        "  NOTE: fixture tab not seen — a running Chrome captured the extension\n" +
+        "  NOTE: fixture tab not seen - a running Chrome captured the extension\n" +
           "        load, so tab_list reflected that session. The round-trip above is\n" +
           "        still real. For full isolation, quit Chrome or point CHROME_BIN at a\n" +
-          "        separate Chromium/Canary before running."
+          "        separate Chromium/Canary before running.",
       );
     }
   } finally {
@@ -328,8 +333,8 @@ async function main(): Promise<void> {
     fs.rmSync(profile, { recursive: true, force: true });
   }
 
-  console.log(`\n${"=".repeat(40)}\n${_pass} passed, ${_fail} failed`);
-  process.exit(_fail > 0 ? 1 : 0);
+  console.log(`\n${"=".repeat(40)}\n${Pass} passed, ${Fail} failed`);
+  process.exit(Fail > 0 ? 1 : 0);
 }
 
 main().catch((e) => {

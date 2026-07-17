@@ -98,46 +98,48 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: extension/package-lock.json
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: npm ci
-        working-directory: extension
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
       - name: Contracts in sync (ops.ts generated from contracts/tools.json)
         run: |
-          node scripts/gen-ops.mjs
-          npm --prefix extension exec prettier -- --write extension/src/shared/ops.ts
+          bun scripts/gen-ops.ts
+          bunx biome format --write extension/src/shared/ops.ts
           git diff --exit-code -- extension/src/shared/ops.ts \
-            || { echo "::error::ops.ts is stale - run 'make gen' after editing contracts/tools.json"; exit 1; }
-      - run: npm run typecheck
-        working-directory: extension
-      - run: npm run lint
-        working-directory: extension
-      - run: npm run format:check
-        working-directory: extension
-      - run: npm test
-        working-directory: extension
-      - run: npm run build
-        working-directory: extension
+            || { echo "::error::ops.ts is stale - run 'just gen' after editing contracts/tools.json"; exit 1; }
+      - name: Typecheck (extension, tests, scripts, packages/shared)
+        run: bun run typecheck
+      - name: Biome (lint + format)
+        run: bunx biome ci .
+      - run: bun run --cwd extension test
+      - run: bun run --cwd extension build
 
   version-consistency:
     name: Version and extension ID consistency
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - run: ./scripts/check-version.sh
-      - run: node scripts/check-extension-id.mjs
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: bun scripts/check-version.ts
+      - run: bun scripts/check-extension-id.ts
 
-  scripts:
-    name: Shell scripts (shellcheck)
+  tooling:
+    name: Tooling hygiene (shellcheck, typos, cargo-machete)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # shellcheck is preinstalled on GitHub's ubuntu runners.
-      - run: shellcheck install/install.sh scripts/*.sh tests/run_all.sh tests/install_verify_test.sh
+      # shellcheck is preinstalled on GitHub's ubuntu runners. Only the
+      # standalone shell scripts remain; the dev tooling is TypeScript now.
+      - run: shellcheck install/install.sh scripts/build-repro.sh tests/install_verify_test.sh
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          # Pinned: these tools' verdicts gate the build. Bump deliberately.
+          tool: typos@1.48.0,cargo-machete@0.9.2
+      - run: typos
+      - run: cargo machete
 
   linux-install:
     name: Linux installer (isolated XDG directories)
@@ -147,15 +149,11 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           cache: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: extension/package-lock.json
-      - run: npm ci
-        working-directory: extension
-      - run: npm run build
-        working-directory: extension
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd extension build
       - name: Install for chrome,chromium,brave,edge (explicit keys)
         run: |
           tmp="$(mktemp -d)"
@@ -256,23 +254,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 20
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
       - uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
         id: chrome
         with:
           chrome-version: stable
-      - run: npm ci
-        working-directory: extension
-      - run: npm run build
-        working-directory: extension
-      - run: npm ci
-        working-directory: tests
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd extension build
       - name: Typecheck tests
-        run: npm run typecheck
-        working-directory: tests
+        run: bun run --cwd tests typecheck
       - name: DOM-layer tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
@@ -302,7 +294,7 @@ jobs:
         cargo-vet,
         extension,
         version-consistency,
-        scripts,
+        tooling,
         linux-install,
         e2e,
         adversarial,

@@ -64,21 +64,22 @@ is authoritative; this file only summarizes.**
 ### Gates
 
 ```sh
-make ci        # rust fmt/clippy/test + extension typecheck/lint/format + protocol e2e + version/gen consistency
+just ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
 ```
 
 Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test`; `npm --prefix extension run typecheck|lint|format:check`,
-`npm --prefix extension test`; `node scripts/gen-ops.mjs` (must leave no diff).
-Browser suites (`make test-browser`) need `CHROME_BIN` -> isolated Chrome and
-are **not** part of the required gate.
+`cargo nextest run`; `bun run typecheck`, `bunx biome ci .`,
+`bun run --cwd extension test`; `bun scripts/gen-ops.ts` (must leave no diff).
+A lefthook pre-commit hook runs `just ci` automatically (`bun install` wires
+it). Browser suites (`just test-browser`) need `CHROME_BIN` -> isolated Chrome
+and are **not** part of the required gate.
 
 ### Project map
 
 | Area | Where | Notes |
 |------|-------|-------|
 | Dev process | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | branch/commit/sync/merge rules (authoritative) |
-| Build & test toolchain | [`docs/development.md`](./docs/development.md) | prerequisites, `make` targets, releasing |
+| Build & test toolchain | [`docs/development.md`](./docs/development.md) | prerequisites, `just` recipes, releasing |
 | Architecture | [`docs/architecture.md`](./docs/architecture.md) | components, protocols, security model |
 | Cross-process contracts | [`contracts/`](./contracts/README.md) | tools, error codes, capabilities, protocol version, envelopes - single source of truth |
 | Operations / CLI | [`docs/operations.md`](./docs/operations.md), [`docs/cli.md`](./docs/cli.md) | `doctor`/`status`, `BB_LOG`/audit |
@@ -91,7 +92,7 @@ are **not** part of the required gate.
 - Tool-call errors use the typed `CallError` (`crates/core/src/error.rs`), mapped to the
   stable codes in [`contracts/errors.json`](./contracts/errors.json).
 - The tool catalogue is generated from [`contracts/tools.json`](./contracts/tools.json)
-  (`make gen` -> `extension/src/shared/ops.ts`); Rust parity is enforced by
+  (`just gen` -> `extension/src/shared/ops.ts`); Rust parity is enforced by
   `cargo test`. Adding a tool touches both sides - see `CONTRIBUTING.md`.
 - Never develop on `main`; work in a git worktree under `.worktree/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge

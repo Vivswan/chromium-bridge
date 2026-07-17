@@ -61,7 +61,7 @@ export function dbgDetach(tabId: number): Promise<void> {
 export function dbgSend<T = unknown>(
   tabId: number,
   method: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
@@ -77,7 +77,7 @@ export function dbgSend<T = unknown>(
 // runs self-contained in the page — it must NOT close over module scope.
 export function buildEvaluateExpression(
   fn: (...args: never[]) => unknown,
-  args: readonly unknown[] = []
+  args: readonly unknown[] = [],
 ): string {
   return `(${fn.toString()}).apply(undefined, ${JSON.stringify(args)})`;
 }
@@ -85,7 +85,7 @@ export function buildEvaluateExpression(
 // Turn a CDP exceptionDetails into a single-line error message.
 export function evalExceptionMessage(details: ExceptionDetails): string {
   const desc = details.exception?.description;
-  if (desc) return desc.split("\n")[0];
+  if (desc) return desc.split("\n")[0] ?? desc;
   return details.text || "evaluation failed";
 }
 
@@ -158,7 +158,7 @@ export class CdpSession {
   async evaluate<T = unknown>(
     fnOrExpr: string | ((...args: never[]) => unknown),
     args: readonly unknown[] = [],
-    opts: { awaitPromise?: boolean } = {}
+    opts: { awaitPromise?: boolean } = {},
   ): Promise<T> {
     const expression =
       typeof fnOrExpr === "function" ? buildEvaluateExpression(fnOrExpr, args) : fnOrExpr;
@@ -178,7 +178,7 @@ export class CdpSession {
   // so callers can map a page exception to structured data (page_eval).
   rawEvaluate(
     expression: string,
-    opts: { awaitPromise?: boolean } = {}
+    opts: { awaitPromise?: boolean } = {},
   ): Promise<EvaluateResponse> {
     return this.send<EvaluateResponse>("Runtime.evaluate", {
       expression,

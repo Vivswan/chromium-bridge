@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PINNED_EXTENSION_ID, diagnoseExtensionId } from "./extension-id";
+import { diagnoseExtensionId, PINNED_EXTENSION_ID } from "./extension-id";
 
 describe("diagnoseExtensionId", () => {
   test("matching id → ok, no error", () => {

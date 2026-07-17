@@ -1,13 +1,28 @@
 // Generate extension/src/shared/ops.ts from contracts/tools.json (the single
-// source of truth for the tool catalogue). Run `make gen` after editing the
+// source of truth for the tool catalogue). Run `just gen` after editing the
 // contract; CI checks the generated file is up to date.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+interface ToolContract {
+  name: string;
+  uiLabel: string;
+  risk: string;
+  scope: string;
+  permission: string;
+  confirmation: string;
+  inputSchema?: {
+    properties?: Record<string, { type: string }>;
+    required?: string[];
+  };
+}
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const contract = JSON.parse(readFileSync(join(root, "contracts/tools.json"), "utf8"));
+const contract = JSON.parse(readFileSync(join(root, "contracts/tools.json"), "utf8")) as {
+  tools: ToolContract[];
+};
 
 const items = contract.tools
   .map((t) => `  { op: ${JSON.stringify(t.name)}, desc: ${JSON.stringify(t.uiLabel)} },`)
@@ -16,7 +31,7 @@ const items = contract.tools
 // Collect the distinct values for each metadata field so the generated union
 // types stay in sync with the contract (add a new risk level in tools.json and
 // it appears here automatically).
-const distinct = (key) =>
+const distinct = (key: "risk" | "scope" | "permission" | "confirmation") =>
   [...new Set(contract.tools.map((t) => t[key]))]
     .sort()
     .map((v) => JSON.stringify(v))
@@ -27,10 +42,11 @@ const scopeUnion = distinct("scope");
 const permissionUnion = distinct("permission");
 const confirmationUnion = distinct("confirmation");
 
-// op names are valid JS identifiers, so emit unquoted keys (matches Prettier's
-// `quoteProps: "as-needed"` default). Each entry is emitted multiline so the
-// generated file stays format-clean regardless of value lengths (Prettier keeps
-// an object expanded when there's a newline right after the opening brace).
+// op names are valid JS identifiers, so emit unquoted keys (matches Biome's
+// `quoteProperties: "as-needed"` default). Each entry is emitted multiline so
+// the generated file stays format-clean regardless of value lengths (the
+// formatter keeps an object expanded when there's a newline right after the
+// opening brace).
 const meta = contract.tools
   .map(
     (t) =>
@@ -39,18 +55,18 @@ const meta = contract.tools
       `    scope: ${JSON.stringify(t.scope)},\n` +
       `    permission: ${JSON.stringify(t.permission)},\n` +
       `    confirmation: ${JSON.stringify(t.confirmation)},\n` +
-      `  },`
+      `  },`,
   )
   .join("\n");
 
 // Discriminated union of every tool's request shape, derived from each tool's
 // inputSchema. Required props → required fields; the rest → optional. This is
 // the compile-time contract the extension narrows on (see shared/types.ts's
-// BridgeReq). Emitted already Prettier-formatted (printWidth 100) so the raw
+// BridgeReq). Emitted already formatter-clean (printWidth 100) so the raw
 // generator output stays diff-clean without a post-format step.
 const PRINT_WIDTH = 100;
 
-const jsonTypeToTs = (jsonType) => {
+const jsonTypeToTs = (jsonType: string): string => {
   switch (jsonType) {
     case "string":
       return "string";
@@ -71,23 +87,26 @@ const jsonTypeToTs = (jsonType) => {
 // what the extension can actually receive.
 const ROUTING_ARGS = new Set(["browser"]);
 
-const commandArm = (t) => {
+const commandArm = (t: ToolContract): string => {
   const schema = t.inputSchema ?? {};
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
   const fields = Object.keys(props)
     .filter((k) => !ROUTING_ARGS.has(k))
-    .map((k) => `${k}${required.has(k) ? "" : "?"}: ${jsonTypeToTs(props[k].type)}`);
+    .map((k) => {
+      const prop = props[k];
+      if (!prop) throw new Error(`gen-ops: missing property schema for ${k}`);
+      return `${k}${required.has(k) ? "" : "?"}: ${jsonTypeToTs(prop.type)}`;
+    });
   const opLit = JSON.stringify(t.name);
   // A tool with no inputSchema props gets a strict empty-object type. `{}` would
-  // trip @typescript-eslint/no-empty-object-type (and it wrongly allows any
-  // non-nullish value); Record<string, never> is the precise "no fields" type
-  // an empty object literal still satisfies.
+  // wrongly allow any non-nullish value (and trips lint); Record<string, never>
+  // is the precise "no fields" type an empty object literal still satisfies.
   const argsInline = fields.length ? `{ ${fields.join("; ")} }` : "Record<string, never>";
 
-  // Mirror Prettier's line-breaking: keep the arm on one line when it fits;
-  // otherwise break the outer object, and break the args object too if its
-  // line still overflows.
+  // Mirror the formatter's line-breaking: keep the arm on one line when it
+  // fits; otherwise break the outer object, and break the args object too if
+  // its line still overflows.
   const single = `  | { op: ${opLit}; args: ${argsInline} }`;
   if (single.length <= PRINT_WIDTH) return single;
 
@@ -102,8 +121,8 @@ const commandArm = (t) => {
 
 const commands = contract.tools.map(commandArm).join("\n");
 
-const out = `// GENERATED from contracts/tools.json by scripts/gen-ops.mjs - DO NOT EDIT.
-// Edit the contract, then run \`make gen\` (or \`node scripts/gen-ops.mjs\`).
+const out = `// GENERATED from contracts/tools.json by scripts/gen-ops.ts - DO NOT EDIT.
+// Edit the contract, then run \`just gen\` (or \`bun scripts/gen-ops.ts\`).
 //
 // The tool catalogue, JS side: op names + Chinese UI labels for the options
 // page, policy metadata (risk / scope / permission / confirmation), and the

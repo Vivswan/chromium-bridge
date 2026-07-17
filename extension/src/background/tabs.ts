@@ -1,8 +1,8 @@
 // Tab resolution, content-script injection, and the tab-level tools
 // (tab_list / tab_focus / tab_open / tab_close).
 
-import type { PageResponse } from "../shared/types";
 import { getSetting } from "../shared/settings";
+import type { PageResponse } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 
 export async function resolveTargetTab(maybeTabId: number | undefined): Promise<chrome.tabs.Tab> {
@@ -124,7 +124,7 @@ export async function tabOpen(url: string) {
 // UX nicety, so a failure here never fails the underlying tab_open.
 async function addToWorkspaceGroup(
   tabId: number,
-  windowId: number | undefined
+  windowId: number | undefined,
 ): Promise<number | undefined> {
   try {
     const groups = await chrome.tabGroups.query(windowId != null ? { windowId } : {});
@@ -154,10 +154,10 @@ export async function tabClose(tabId: number) {
 }
 
 async function confirmTabClose(tab: chrome.tabs.Tab) {
-  if (!tab || !tab.id) throw new Error("tab not found");
+  if (!tab?.id) throw new Error("tab not found");
   if (!tab.url || !/^https?:\/\//i.test(tab.url)) {
     throw new Error(
-      "tab_close can only close http(s) tabs because the close confirmation must be shown in the page"
+      "tab_close can only close http(s) tabs because the close confirmation must be shown in the page",
     );
   }
   await ensureAllowed(tab.url);
@@ -166,8 +166,8 @@ async function confirmTabClose(tab: chrome.tabs.Tab) {
     op: "_confirm_toast",
     args: { message: `Close tab "${tab.title || tab.url}"?` },
   })) as PageResponse;
-  if (resp && resp.__error) throw new Error(resp.__error);
-  if (!resp || resp.approved !== true) {
+  if (resp?.__error) throw new Error(resp.__error);
+  if (resp?.approved !== true) {
     throw new Error("user denied tab_close");
   }
 }

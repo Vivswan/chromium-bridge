@@ -18,7 +18,7 @@ export function waitFor(args: OpArgs) {
         });
       }
     };
-    const finish = (fn: any, value: any) => {
+    const finish = (fn: (value: unknown) => void, value: unknown) => {
       if (done) return;
       done = true;
       window.removeEventListener("load", onLoad, true);
