@@ -124,8 +124,9 @@ pub fn all() -> Vec<Tool> {
             name: "page_eval",
             description:
                 "HIGH RISK — execute arbitrary JavaScript on the active tab. EVERY call shows the \
-                 user the full code in a confirmation prompt and waits for approval; within 60s of \
-                 an approval, same-origin evals run without re-prompting. The return value is \
+                 user the full code in a confirmation prompt and waits for approval; there is no \
+                 silent same-origin grace window for eval, so every page_eval re-prompts. The \
+                 return value is \
                  masked (JWT / long hex / long numbers / token-like strings) by default. This is \
                  the most powerful tool: prefer page_click / page_fill / page_snapshot whenever \
                  possible, and only use page_eval when those cannot achieve the goal (custom \
