@@ -11,13 +11,13 @@
     "tests"
   ],
   "scripts": {
-    "gen": "bun scripts/gen-ops.ts && biome format --write extension/src/shared/ops.ts",
+    "gen": "bun scripts/gen-ops.ts && biome format --write packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts",
     "typecheck": "tsc -p extension && tsc -p tests && tsc -p scripts && tsc -p packages/shared",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "check": "biome check .",
-    "test": "bun run --cwd extension test"
+    "test": "bun run --cwd packages/shared test && bun run --cwd extension test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",

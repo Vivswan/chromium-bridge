@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Vivswan/chromium-bridge/contracts/bridge-request.schema.json",
-  "$comment": "SINGLE SOURCE OF TRUTH for the internal bridge REQUEST envelope shape (BridgeReq). Mirrors extension/src/shared/types.ts:BridgeReq / OpArgs; keep the two in sync (types.ts is not generated from this yet). This describes the CURRENT wide envelope: `op` is a plain string and `args` is a flat bag of optional fields shared across all ops. The typed / discriminated-union form (one args shape per op) is a planned follow-up (roadmap P1#3) and is NOT reflected here.",
+  "$comment": "SINGLE SOURCE OF TRUTH for the internal bridge REQUEST envelope shape (BridgeReq). The runtime validator is the hand-written Zod schema in packages/shared/src/envelope.ts, whose z.toJSONSchema() output is diffed against this file in CI (the equivalence test) - so the TS types are inferred, not hand-synced. OpArgs is the union of every tool's inputSchema properties in tools.json minus the server-consumed `browser` routing argument; the same equivalence test enforces that. This describes the CURRENT wide envelope: `op` is a plain string and `args` is a flat bag of optional fields shared across all ops; the extension additionally narrows args per op against the generated per-op validators (packages/shared/src/ops.gen.ts).",
   "title": "BridgeReq",
   "description": "A request from the MCP server, forwarded through the native host to the extension. Shape: { id, op, tabId?, args }.",
   "type": "object",
@@ -9,16 +9,21 @@
   "additionalProperties": false,
   "properties": {
     "id": {
-      "type": ["integer", "string"],
-      "description": "Correlation id echoed back on the matching BridgeResp. Monotonic integer in practice; string is accepted for forward-compatibility."
+      "anyOf": [
+        { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        { "type": "string" }
+      ],
+      "description": "Correlation id echoed back on the matching BridgeResp. Monotonic integer in practice; string is accepted for forward-compatibility. Integers are bounded to the JS-safe range: the extension is a JS runtime, so anything larger has already lost precision in JSON.parse before validation."
     },
     "op": {
       "type": "string",
       "minLength": 1,
-      "description": "The operation name (a tool's underlying op). Enumerated by contracts/tools.json; kept as a plain string here until the discriminated-union lands."
+      "description": "The operation name (a tool's underlying op). Enumerated by contracts/tools.json; kept as a plain string here, with the per-op narrowing enforced by the generated validators."
     },
     "tabId": {
       "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
       "description": "Optional target tab. When omitted, the handler resolves the active tab."
     },
     "browser": {
@@ -36,21 +41,29 @@
     "OpArgs": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Arguments an op may carry. Every field is optional — each handler reads the ones it needs and validates them at runtime; the Rust side enforces the required ones per each tool's inputSchema in tools.json.",
+      "description": "Arguments an op may carry: the union of every tool's inputSchema properties in tools.json, minus `browser` (consumed by the MCP server for routing, never forwarded). Every field is optional here; the per-op required fields are enforced by the generated per-op validators on the extension side and by the host's payload builders. Integers are bounded to the JS-safe range (see `id`).",
       "properties": {
         "ref": { "type": "string" },
         "selector": { "type": "string" },
         "value": { "type": "string" },
         "code": { "type": "string" },
         "direction": { "type": "string" },
-        "pixels": { "type": "number" },
-        "timeoutMs": { "type": "number" },
+        "pixels": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
         "text": { "type": "string" },
         "nav": { "type": "boolean" },
         "type": { "type": "string" },
         "key": { "type": "string" },
-        "message": { "type": "string" },
-        "tabId": { "type": "integer" },
+        "keys": { "type": "string" },
+        "action": { "type": "string" },
+        "promptText": { "type": "string" },
+        "path": { "type": "string" },
+        "limit": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "tabId": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
         "url": { "type": "string" },
         "domain": { "type": "string" },
         "name": { "type": "string" },

@@ -102,16 +102,18 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - name: Contracts in sync (ops.ts generated from contracts/tools.json)
+      - name: Contracts in sync (packages/shared *.gen.ts generated from contracts/)
         run: |
           bun scripts/gen-ops.ts
-          bunx biome format --write extension/src/shared/ops.ts
-          git diff --exit-code -- extension/src/shared/ops.ts \
-            || { echo "::error::ops.ts is stale - run 'just gen' after editing contracts/tools.json"; exit 1; }
+          bunx biome format --write packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts
+          git diff --exit-code -- packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts \
+            || { echo "::error::generated contract code is stale - run 'just gen' after editing contracts/"; exit 1; }
       - name: Typecheck (extension, tests, scripts, packages/shared)
         run: bun run typecheck
       - name: Biome (lint + format)
         run: bunx biome ci .
+      - name: packages/shared tests (contract equivalence, parity, boundary validators)
+        run: bun run --cwd packages/shared test
       - run: bun run --cwd extension test
       - run: bun run --cwd extension build
 

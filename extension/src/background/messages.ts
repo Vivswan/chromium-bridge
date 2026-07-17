@@ -1,8 +1,13 @@
 // Runtime message router: handles requests from the popup / options page
 // (allowlist approve/add/remove/list, connection status) and the content
 // script's screenshot proxy. Registering this module installs the listener.
+//
+// Every inbound message is parsed against RuntimeMsgSchema before anything
+// acts on it: an unrecognized or malformed message is answered with a refusal
+// (never interpreted loosely), so the router only ever operates on shapes the
+// schema vouches for.
 
-import type { RuntimeMsg } from "../shared/types";
+import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium-bridge/shared";
 import { addAllow, getAllowlist, removeAllow, resolvePendingAllow } from "./allowlist-store";
 import {
   approvePending,
@@ -25,71 +30,77 @@ function fromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
   );
 }
 
-chrome.runtime.onMessage.addListener((msg: RuntimeMsg, sender, sendResponse) => {
-  if (msg?.type === "resolve_allow") {
-    void resolvePendingAllow(msg.id, msg.allow).then((r) => sendResponse(r));
-    return true; // async
-  }
-  if (msg?.type === "get_allowlist") {
-    void getAllowlist().then((list) => sendResponse({ list }));
-    return true;
-  }
-  if (msg?.type === "add_allow") {
-    const glob = msg.glob;
-    if (typeof glob !== "string" || !glob) {
-      sendResponse({ ok: false, error: "missing glob" });
+const ENROLLMENT_ACTIONS = {
+  enroll_pair: startPairing,
+  enroll_verify: verifyPinnedNow,
+  enroll_approve: approvePending,
+  enroll_reject: rejectPending,
+  enroll_revoke: revokePin,
+} as const;
+
+function route(
+  msg: RuntimeMsg,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void,
+): boolean {
+  switch (msg.type) {
+    case "resolve_allow":
+      void resolvePendingAllow(msg.id, msg.allow).then((r) => sendResponse(r));
+      return true; // async
+    case "get_allowlist":
+      void getAllowlist().then((list) => sendResponse({ list }));
+      return true;
+    case "add_allow":
+      void addAllow(msg.glob).then((list) => sendResponse({ ok: true, list }));
+      return true;
+    case "remove_allow":
+      void removeAllow(msg.glob).then((r) => sendResponse({ ok: true, ...r }));
+      return true;
+    case "get_status":
+      sendResponse({ nativeConnected: isNativeConnected() });
       return false;
+    case "get_enrollment":
+      void getEnrollmentStatus().then((st) => sendResponse(st));
+      return true;
+    case "capture_visible_tab":
+      // Content scripts can't call chrome.tabs.captureVisibleTab; proxy here.
+      // The (options, callback) overload captures the active tab of the
+      // current window — no windowId needed.
+      chrome.tabs.captureVisibleTab({ format: "png" }, (dataUrl) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ error: chrome.runtime.lastError.message });
+        } else {
+          sendResponse({ dataUrl });
+        }
+      });
+      return true; // async
+    default: {
+      if (!isEnrollmentAction(msg.type)) {
+        // The schema admits nothing else; a new message type must be added
+        // both there and here, and this fails closed until it is.
+        sendResponse({ ok: false, error: `unhandled message type: ${(msg as RuntimeMsg).type}` });
+        return false;
+      }
+      if (!fromExtensionPage(sender)) {
+        sendResponse({
+          ok: false,
+          error: "enrollment actions are only accepted from extension pages",
+        });
+        return false;
+      }
+      ENROLLMENT_ACTIONS[msg.type]().then((r) => sendResponse(r));
+      return true;
     }
-    void addAllow(glob).then((list) => sendResponse({ ok: true, list }));
-    return true;
   }
-  if (msg?.type === "remove_allow") {
-    void removeAllow(msg.glob).then((r) => sendResponse({ ok: true, ...r }));
-    return true;
-  }
-  if (msg?.type === "get_status") {
-    sendResponse({ nativeConnected: isNativeConnected() });
+}
+
+chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
+  const parsed = RuntimeMsgSchema.safeParse(msg);
+  if (!parsed.success) {
+    // Answer with a refusal (rather than staying silent) so a buggy or
+    // malicious sender gets a deterministic failure instead of a timeout.
+    sendResponse({ ok: false, error: "malformed runtime message" });
     return false;
   }
-  if (msg?.type === "get_enrollment") {
-    void getEnrollmentStatus().then((st) => sendResponse(st));
-    return true;
-  }
-  if (
-    msg?.type === "enroll_pair" ||
-    msg?.type === "enroll_verify" ||
-    msg?.type === "enroll_approve" ||
-    msg?.type === "enroll_reject" ||
-    msg?.type === "enroll_revoke"
-  ) {
-    if (!fromExtensionPage(sender)) {
-      sendResponse({
-        ok: false,
-        error: "enrollment actions are only accepted from extension pages",
-      });
-      return false;
-    }
-    const action = {
-      enroll_pair: startPairing,
-      enroll_verify: verifyPinnedNow,
-      enroll_approve: approvePending,
-      enroll_reject: rejectPending,
-      enroll_revoke: revokePin,
-    }[msg.type];
-    action().then((r) => sendResponse(r));
-    return true;
-  }
-  if (msg?.type === "capture_visible_tab") {
-    // Content scripts can't call chrome.tabs.captureVisibleTab; proxy here.
-    // The (options, callback) overload captures the active tab of the current
-    // window — no windowId needed.
-    chrome.tabs.captureVisibleTab({ format: "png" }, (dataUrl) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ error: chrome.runtime.lastError.message });
-      } else {
-        sendResponse({ dataUrl });
-      }
-    });
-    return true; // async
-  }
+  return route(parsed.data, sender, sendResponse);
 });

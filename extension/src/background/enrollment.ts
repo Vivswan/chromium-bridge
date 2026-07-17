@@ -31,6 +31,11 @@
 //
 // The challenge-on-connect policy lives entirely in onPortConnected below.
 
+import {
+  type EnclaveInboundFrame,
+  EnclaveInboundFrameSchema,
+  EnclaveProofFrameSchema,
+} from "@chromium-bridge/shared";
 import { getSetting } from "../shared/settings";
 import * as pinStore from "./enclave-pin";
 import {
@@ -42,22 +47,12 @@ import {
 
 // ---- frame plumbing ---------------------------------------------------------
 
-const ENCLAVE_FRAME_TYPES = new Set(["enclave_challenge", "enclave_proof", "enclave_error"]);
-
-export interface EnclaveInboundFrame {
-  type: string;
-  [k: string]: unknown;
-}
+export type { EnclaveInboundFrame };
 
 /** True for the three ADR-0021 control frame tags. Bridge requests carry `op`
  * and never a top-level `type`, so nothing legitimate collides. */
 export function isEnclaveFrame(msg: unknown): msg is EnclaveInboundFrame {
-  return (
-    typeof msg === "object" &&
-    msg !== null &&
-    typeof (msg as { type?: unknown }).type === "string" &&
-    ENCLAVE_FRAME_TYPES.has((msg as { type: string }).type)
-  );
+  return EnclaveInboundFrameSchema.safeParse(msg).success;
 }
 
 // The port sender, registered by port.ts while a port is up. Null = not
@@ -303,16 +298,14 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
     console.warn("[bb] dropping unsolicited enclave_proof");
     return;
   }
-  if (
-    typeof frame.sig !== "string" ||
-    typeof frame.key_id !== "string" ||
-    typeof frame.pubkey !== "string"
-  ) {
+  const proofFrame = EnclaveProofFrameSchema.safeParse(frame);
+  if (!proofFrame.success) {
     await pinStore.setLastError("malformed enclave_proof frame from host");
     await updateBadge();
     return;
   }
-  const proof = { sig: frame.sig, key_id: frame.key_id, pubkey: frame.pubkey };
+  const { sig, key_id, pubkey } = proofFrame.data;
+  const proof = { sig, key_id, pubkey };
 
   if (current.mode === "pair") {
     const res = await verifyPairingProof(proof, current.nonce, current.context);

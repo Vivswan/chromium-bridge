@@ -1,5 +1,15 @@
 #!/usr/bin/env bun
 
+// Verify the bridge's identity constants against their sources of truth:
+//
+//   - extension id: DERIVED from extension/manifest.json's `key` (Chrome's id
+//     derivation). The generated packages/shared/src/identity.gen.ts and both
+//     installers must carry exactly that id.
+//   - native-messaging host id: DECLARED in contracts/identity.json. The
+//     generated TS, the Rust host, and both installers must agree, and the id
+//     must satisfy Chrome's charset. Any disagreement makes native messaging
+//     fail silently, so it is asserted here as a CI gate.
+
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -24,7 +34,7 @@ const derivedId = [...hex]
 const sources: Array<[string, RegExp]> = [
   ["install/install.sh", /PINNED_EXTENSION_ID="([a-p]{32})"/],
   ["install/install.ps1", /\$ExtensionId\s*=\s*'([a-p]{32})'/],
-  ["extension/src/shared/extension-id.ts", /PINNED_EXTENSION_ID\s*=\s*"([a-p]{32})"/],
+  ["packages/shared/src/identity.gen.ts", /PINNED_EXTENSION_ID = "([a-p]{32})"/],
 ];
 
 let failed = false;
@@ -38,17 +48,21 @@ for (const [relativePath, pattern] of sources) {
 }
 
 // The native-messaging host id must be one value everywhere: the id the
-// extension passes to connectNative, the id the Rust host expects, and the id
-// the installers write as both the manifest "name" and the manifest filename
-// stem (`$HOST_NAME.json`). Any disagreement makes native messaging fail
-// silently, so it is asserted here alongside the extension id.
-const HOST_ID = "com.vivswan.chromium_bridge.host";
-if (!/^[a-z0-9._]+$/.test(HOST_ID) || HOST_ID.includes("..")) {
-  console.error(`host id ${HOST_ID} violates Chrome's allowed charset`);
-  failed = true;
+// extension passes to connectNative (via the generated identity.gen.ts), the
+// id the Rust host expects, and the id the installers write as both the
+// manifest "name" and the manifest filename stem (`$HOST_NAME.json`).
+const identity = JSON.parse(readFileSync(resolve(root, "contracts/identity.json"), "utf8")) as {
+  nativeMessagingHostId?: unknown;
+};
+const hostId = identity.nativeMessagingHostId;
+// Chrome's charset for host names: dot-separated segments of [a-z0-9_], so
+// no leading/trailing dots and no empty segments.
+if (typeof hostId !== "string" || !/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(hostId)) {
+  console.error(`contracts/identity.json host id ${String(hostId)} violates Chrome's charset`);
+  process.exit(1);
 }
 const hostSources: Array<[string, RegExp]> = [
-  ["extension/src/background/port.ts", /const NATIVE_HOST = "([a-z0-9._]+)"/],
+  ["packages/shared/src/identity.gen.ts", /NATIVE_HOST_ID = "([a-z0-9._]+)"/],
   ["crates/core/src/doctor.rs", /const HOST_NAME: &str = "([a-z0-9._]+)"/],
   ["install/install.sh", /HOST_NAME="([a-z0-9._]+)"/],
   ["install/install.ps1", /\$HostName = '([a-z0-9._]+)'/],
@@ -56,12 +70,12 @@ const hostSources: Array<[string, RegExp]> = [
 for (const [relativePath, pattern] of hostSources) {
   const source = readFileSync(resolve(root, relativePath), "utf8");
   const configured = source.match(pattern)?.[1];
-  if (configured !== HOST_ID) {
-    console.error(`${relativePath}: host id=${configured || "missing"} expected=${HOST_ID}`);
+  if (configured !== hostId) {
+    console.error(`${relativePath}: host id=${configured || "missing"} expected=${hostId}`);
     failed = true;
   }
 }
 
 if (failed) process.exit(1);
-console.log(`extension id: ${derivedId} (manifest key + installers consistent)`);
-console.log(`host id: ${HOST_ID} (extension + host + installers consistent)`);
+console.log(`extension id: ${derivedId} (manifest key + generated TS + installers consistent)`);
+console.log(`host id: ${hostId} (contract + generated TS + host + installers consistent)`);

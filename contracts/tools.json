@@ -1,5 +1,5 @@
 {
-  "$comment": "SINGLE SOURCE OF TRUTH for the tool catalogue. TS ops.ts is GENERATED from this (scripts/gen-ops.mjs); Rust tools.rs is VERIFIED against it (cargo test). Edit here, then regenerate + test.",
+  "$comment": "SINGLE SOURCE OF TRUTH for the tool catalogue. TS packages/shared/src/ops.gen.ts is GENERATED from this (scripts/gen-ops.ts, run via `just gen`); Rust tools/catalogue.rs is VERIFIED against it (cargo test); bridge-request.schema.json's OpArgs must stay the union of these inputSchema properties minus `browser` (enforced by the packages/shared equivalence test). Edit here, then regenerate + test.",
   "tools": [
     {
       "name": "list_browsers",

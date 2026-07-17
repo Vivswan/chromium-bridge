@@ -1,11 +1,15 @@
 // The pinned extension ID — the ID Chrome derives from the manifest `key`.
 //
-// This is the extension-side copy of the single source of truth. It is kept in
-// lockstep with `extension/manifest.json`'s `key`, `install/install.sh`, and
-// `install/install.ps1` by `scripts/check-extension-id.ts` (a CI gate). If you
-// rotate the key (e.g. to adopt a Chrome Web Store-assigned id), update all of
-// them together — the gate fails otherwise.
-export const PINNED_EXTENSION_ID = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
+// The constant itself is generated from the manifest key into
+// @chromium-bridge/shared (identity.gen.ts) by `just gen`, so it cannot drift
+// from `extension/manifest.json`; `scripts/check-extension-id.ts` (a CI gate)
+// keeps `install/install.sh` and `install/install.ps1` in lockstep with the
+// same derivation. If you rotate the key (e.g. to adopt a Chrome Web
+// Store-assigned id), regenerate and update the installers together — the
+// gates fail otherwise.
+import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared";
+
+export { PINNED_EXTENSION_ID };
 
 export interface IdDiagnosis {
   ok: boolean;

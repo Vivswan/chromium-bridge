@@ -9,7 +9,7 @@
 // NOTE: this module is not yet wired into background/dispatch.ts. Wiring is a
 // separate, supervised step; for now this is scaffolding.
 
-import { type Confirmation, type Risk, TOOL_META } from "../shared/ops";
+import { type Confirmation, isOpName, type Risk, TOOL_META } from "@chromium-bridge/shared";
 
 export type ConfirmationChannel = "page-toast" | "extension-ui" | "none";
 
@@ -62,7 +62,7 @@ function confirmationFor(confirmation: Confirmation): {
  * Pure: depends only on its arguments and the static TOOL_META table.
  */
 export function decide(op: string, ctx: PolicyContext): PolicyDecision {
-  const meta = TOOL_META[op];
+  const meta = isOpName(op) ? TOOL_META[op] : undefined;
 
   // Unknown op: fail closed.
   if (!meta) {
