@@ -8,10 +8,10 @@
 # Extension build output
 /extension/dist/
 
-# Local install destination (binaries live in ~/.browser-bridge/, but guard
+# Local install destination (binaries live in ~/.chromium-bridge/, but guard
 # against accidental copies into the repo)
-/browser-bridge
-/browser-bridge.exe
+/chromium-bridge
+/chromium-bridge.exe
 *.dSYM/
 
 # Test scratch
@@ -29,7 +29,7 @@ tests/__pycache__/
 /.worktree/
 
 # Chrome Web Store upload package (built from dist/, never committed)
-/browser-bridge-extension-cws-*.zip
+/chromium-bridge-extension-cws-*.zip
 
 # Playwright MCP scratch
 /.playwright-mcp/

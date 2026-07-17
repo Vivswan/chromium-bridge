@@ -1,8 +1,8 @@
 {
-  "name": "browser-bridge-extension",
+  "name": "chromium-bridge-extension",
   "version": "0.1.0",
   "private": true,
-  "description": "MV3 extension for browser-bridge — bundled from TypeScript with esbuild.",
+  "description": "MV3 extension for chromium-bridge — bundled from TypeScript with esbuild.",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",

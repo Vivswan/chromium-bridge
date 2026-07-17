@@ -1,4 +1,4 @@
-// Shared type declarations for the browser-bridge MV3 extension.
+// Shared type declarations for the chromium-bridge MV3 extension.
 //
 // This module exports interfaces only — no runtime values — and is imported
 // with `import type` by background/content/options/popup. esbuild erases those

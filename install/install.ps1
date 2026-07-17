@@ -1,4 +1,4 @@
-# install.ps1 - build browser-bridge and register the native messaging host for
+# install.ps1 - build chromium-bridge and register the native messaging host for
 # any Chromium-based browser (current Windows user, HKCU).
 
 [CmdletBinding()]
@@ -35,9 +35,9 @@ if ((Test-Path -LiteralPath (Join-Path $Here 'extension')) -or
 } else {
     $Root = Split-Path -Parent $Here
 }
-$HostName = 'com.browser_bridge.host'
-$InstallDir = Join-Path $env:LOCALAPPDATA 'browser-bridge'
-$BinaryName = 'browser-bridge.exe'
+$HostName = 'com.vivswan.chromium_bridge.host'
+$InstallDir = Join-Path $env:LOCALAPPDATA 'chromium-bridge'
+$BinaryName = 'chromium-bridge.exe'
 
 # Registry root each Chromium browser creates for the current user. Every build
 # reads an identical manifest; only this vendor key differs. Single source of
@@ -79,7 +79,7 @@ function Resolve-BrowserSelection {
 }
 
 if ($Uninstall) {
-    Write-Host '[uninstall] removing browser-bridge artifacts'
+    Write-Host '[uninstall] removing chromium-bridge artifacts'
 
     # Uninstall tears down the shared binary + manifest that every registration
     # points at, so remove every known browser's key regardless of -Browser,
@@ -180,7 +180,7 @@ Write-Host "[install] binary installed at $installedBinary"
 $manifestPath = Join-Path $InstallDir "$HostName.json"
 $manifest = [ordered]@{
     name = $HostName
-    description = 'Browser Bridge native messaging host'
+    description = 'Chromium Bridge native messaging host'
     path = $installedBinary
     type = 'stdio'
     allowed_origins = @("chrome-extension://$ExtensionId/")
@@ -209,13 +209,13 @@ Write-Host '2. Register the MCP server with your client. Config below already ha
 Write-Host "   absolute path filled in ($installedBinary) - just paste:"
 Write-Host ''
 Write-Host '   - Claude Code (CLI):'
-Write-Host "       claude mcp add browser-bridge -- `"$installedBinary`""
+Write-Host "       claude mcp add chromium-bridge -- `"$installedBinary`""
 Write-Host ''
 Write-Host '   - Claude Desktop / generic MCP client (mcpServers JSON):'
-Write-Host "       `"browser-bridge`": { `"command`": `"$escapedBinary`", `"args`": [] }"
+Write-Host "       `"chromium-bridge`": { `"command`": `"$escapedBinary`", `"args`": [] }"
 Write-Host ''
 Write-Host '   - Codex (%USERPROFILE%\.codex\config.toml):'
-Write-Host '       [mcp_servers.browser-bridge]'
+Write-Host '       [mcp_servers.chromium-bridge]'
 Write-Host "       command = `"$escapedBinary`""
 Write-Host '       args = []'
 Write-Host '3. Restart your browser, then ask your MCP client to list browser tabs.'

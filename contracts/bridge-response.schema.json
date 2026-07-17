@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/whg517/browser-bridge/contracts/bridge-response.schema.json",
+  "$id": "https://github.com/Vivswan/chromium-bridge/contracts/bridge-response.schema.json",
   "$comment": "SINGLE SOURCE OF TRUTH for the internal bridge RESPONSE envelope shape (BridgeResp). Mirrors extension/src/shared/types.ts:BridgeResp; keep the two in sync (types.ts is not generated from this yet). `error` here is the extension-side free-text string per types.ts; the cross-process stable error CODES live in contracts/errors.json and are applied on the Rust side (see docs/architecture.md §11.1).",
   "title": "BridgeResp",
   "description": "The response posted back from the extension to the native host over the Port. Shape: { id, ok, data?, error? }.",

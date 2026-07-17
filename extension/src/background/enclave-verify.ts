@@ -6,13 +6,13 @@
 // A proof's `sig` is base64 of the raw 64-byte IEEE P1363 r||s ECDSA
 // P-256/SHA-256 signature over
 //
-//   UTF8("browser-bridge-enclave-v1") || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
+//   UTF8("chromium-bridge-enclave-v1") || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
 //
 // `pubkey` is base64 of the 65-byte X9.63 uncompressed point (0x04||X||Y)
 // and `key_id` is the lowercase-hex SHA-256 of those 65 bytes (also the
-// fingerprint the user compares against `browser-bridge pair` output).
+// fingerprint the user compares against `chromium-bridge pair` output).
 
-export const CHALLENGE_DOMAIN = "browser-bridge-enclave-v1";
+export const CHALLENGE_DOMAIN = "chromium-bridge-enclave-v1";
 // Host-enforced bounds on challenge fields (src/enclave.rs); we stay inside
 // them and reject anything outside before touching the crypto.
 export const MAX_NONCE_BYTES = 256;
@@ -139,7 +139,7 @@ export type PairingVerifyResult =
 /** Pairing-time (ceremony) verification. The proof is checked for internal
  * consistency (key_id matches pubkey) and a valid signature by its OWN
  * embedded key. The returned key material is trustworthy ONLY because the
- * user then compares its fingerprint against the `browser-bridge pair`
+ * user then compares its fingerprint against the `chromium-bridge pair`
  * terminal output before it is pinned; outside the ceremony, use
  * verifyProofAgainstPin. */
 export async function verifyPairingProof(

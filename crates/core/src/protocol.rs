@@ -1,4 +1,4 @@
-//! Wire protocols for browser-bridge.
+//! Wire protocols for chromium-bridge.
 //!
 //! Three protocols live here:
 //! 1. Chrome Native Messaging framing (4-byte LE length prefix + UTF-8 JSON)
@@ -378,7 +378,7 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
 ///   nonce, or a second proof over a used nonce, MUST be rejected.
 /// - `enclave_proof { sig, key_id, pubkey }`: `sig` is base64 of the raw
 ///   64-byte IEEE P1363 `r||s` ECDSA P-256/SHA-256 signature over
-///   `UTF8("browser-bridge-enclave-v1") || 0x00 || UTF8(nonce) || 0x00 ||
+///   `UTF8("chromium-bridge-enclave-v1") || 0x00 || UTF8(nonce) || 0x00 ||
 ///   UTF8(context or "")`; `key_id` is the lowercase-hex SHA-256 of the
 ///   65-byte X9.63 public key; `pubkey` is base64 of those 65 bytes. The
 ///   extension MUST verify `sig` against its PINNED key, not against the
@@ -471,7 +471,7 @@ pub fn enclave_control_type(frame: &Value) -> Option<&str> {
 pub fn install_stderr_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = writeln!(io::stderr(), "[browser-bridge] panic: {info}");
+        let _ = writeln!(io::stderr(), "[chromium-bridge] panic: {info}");
         default(info);
     }));
 }

@@ -33,7 +33,7 @@ jobs:
         with:
           path: .
           format: cyclonedx-json
-          output-file: browser-bridge.cdx.json
+          output-file: chromium-bridge.cdx.json
           # Keep a CI artifact; attach to the release explicitly below so the
           # target tag is deterministic on both trigger types.
           upload-artifact: true
@@ -43,5 +43,5 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-          files: browser-bridge.cdx.json
+          files: chromium-bridge.cdx.json
           fail_on_unmatched_files: true

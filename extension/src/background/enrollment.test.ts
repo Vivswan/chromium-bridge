@@ -182,7 +182,7 @@ describe("ceremony state machine", () => {
   test("default state fails closed with pairing instructions", async () => {
     const gate = await enrollmentGate();
     expect(gate.allowed).toBe(false);
-    if (!gate.allowed) expect(gate.reason).toContain("browser-bridge pair");
+    if (!gate.allowed) expect(gate.reason).toContain("chromium-bridge pair");
     expect((await getEnrollmentStatus()).state).toBe("unpaired");
   });
 
@@ -302,7 +302,7 @@ describe("ceremony state machine", () => {
     await handleEnclaveFrame({ type: "enclave_error", reason: "not_enrolled" });
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("unpaired");
-    expect(st.lastError).toContain("browser-bridge pair");
+    expect(st.lastError).toContain("chromium-bridge pair");
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 

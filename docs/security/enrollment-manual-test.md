@@ -22,7 +22,7 @@ or the keychain ACL.
 Record the binary you are testing:
 
 ```sh
-BIN=target/release/browser-bridge
+BIN=target/release/chromium-bridge
 codesign -dv "$BIN"   # must show an identifier, not "adhoc"
 ```
 
@@ -41,7 +41,7 @@ failure; stop and file it.
      fingerprint in 4-character groups. Exit code 0.
    - `"$BIN" enclave-status` now shows the key present, the SAME fingerprint,
      and `enrolled=true granularity=session`.
-   - `ls -l "$HOME/Library/Application Support/browser-bridge/config.json"`:
+   - `ls -l "$HOME/Library/Application Support/chromium-bridge/config.json"`:
      mode is `-rw-------`.
 
 3. **Pair refuses a pre-existing key.** `"$BIN" pair` again.

@@ -1,6 +1,6 @@
 # Security Policy
 
-browser-bridge drives a **real, logged-in Chrome** on the user's machine — it
+chromium-bridge drives a **real, logged-in Chrome** on the user's machine — it
 can read page content, cookies (including httpOnly), and web storage, and can
 execute JavaScript in pages. Security is a first-class concern, not an
 afterthought. This document covers how to report issues and the review bar for
@@ -76,7 +76,7 @@ bridge is a loopback TCP socket that any process on the machine can reach, and
 the only gate is the HMAC challenge-response over the per-run secret in the
 lock file. The lock file gets no explicit restrictive mode on Windows, so the
 secret's confidentiality rests on the default permissions of the per-user
-runtime directory (normally `%LOCALAPPDATA%\browser-bridge`, falling back to
+runtime directory (normally `%LOCALAPPDATA%\chromium-bridge`, falling back to
 the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset). The
 non-abuse goal stated in the threat model (another
 program you are running must not be able to drive the bridge silently) does
