@@ -21,9 +21,10 @@ export async function runEval(args: OpArgs) {
   }
   // Confirm with the user via an enlarged Toast showing the full code, unless
   // the user turned the eval confirmation off (confirmPageEval=false) for
-  // hands-off automation. Reuses lastConfirmed so same-origin eval within 60s of
-  // a prior approval does not re-prompt. NOTE: this confirmation is ADR-0008's
-  // guardrail — disabling it means arbitrary JS runs with no prompt.
+  // hands-off automation. Every page_eval reconfirms: unlike click/submit,
+  // eval is excluded from the same-origin grace window, so there is no silent-
+  // eval window (ADR-0008 update 2026-07-16). NOTE: this confirmation is
+  // ADR-0008's guardrail - disabling it means arbitrary JS runs with no prompt.
   if ((await getSetting("confirmPageEval")) !== false) {
     await confirmWithEvalToast(code);
   }

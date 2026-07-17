@@ -13,7 +13,7 @@ export const DEFAULTS: Settings = {
   confirmPageEval: true, // confirm every page_eval (ADR-0008). Off = run unprompted.
   confirmTabClose: true, // confirm every tab_close. Off = close unprompted.
   warnPreciseSnapshot: true,
-  confirmGraceMs: 60000,
+  confirmGraceMs: 60000, // same-origin re-prompt window for click/submit only; page_eval is excluded and always reconfirms (ADR-0008).
   clickToastTimeoutMs: 30000,
   evalToastTimeoutMs: 45000,
   disabledTools: [], // string[] of tool/op names that are blocked
