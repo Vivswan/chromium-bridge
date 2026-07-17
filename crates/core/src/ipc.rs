@@ -83,7 +83,7 @@ pub(crate) fn runtime_dir() -> PathBuf {
                     .map(|p| p.join("AppData/Local"))
             })
             .unwrap_or_else(std::env::temp_dir);
-        let dir = base.join("browser-bridge");
+        let dir = base.join("chromium-bridge");
         let _ = fs::create_dir_all(&dir);
         dir
     }
@@ -91,10 +91,10 @@ pub(crate) fn runtime_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         let dir = if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(xdg).join("browser-bridge")
+            PathBuf::from(xdg).join("chromium-bridge")
         } else {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join("Library/Application Support/browser-bridge")
+            PathBuf::from(home).join("Library/Application Support/chromium-bridge")
         };
         ensure_private_dir(&dir);
         dir
@@ -103,13 +103,13 @@ pub(crate) fn runtime_dir() -> PathBuf {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let dir = if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-            PathBuf::from(xdg).join("browser-bridge")
+            PathBuf::from(xdg).join("chromium-bridge")
         } else if let Some(xdg_cache) = std::env::var_os("XDG_CACHE_HOME") {
-            PathBuf::from(xdg_cache).join("browser-bridge")
+            PathBuf::from(xdg_cache).join("chromium-bridge")
         } else if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home).join(".cache/browser-bridge")
+            PathBuf::from(home).join(".cache/chromium-bridge")
         } else {
-            std::env::temp_dir().join(format!("browser-bridge-{}", unsafe { libc::geteuid() }))
+            std::env::temp_dir().join(format!("chromium-bridge-{}", unsafe { libc::geteuid() }))
         };
         ensure_private_dir(&dir);
         dir
@@ -1186,7 +1186,7 @@ fn read_lock_or_err() -> io::Result<LockFile> {
     LockFile::read()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "browser-bridge lock file not found — is the MCP server running?",
+            "chromium-bridge lock file not found — is the MCP server running?",
         )
     })
 }
@@ -1423,13 +1423,13 @@ mod tests {
     #[test]
     fn lockfile_serde_roundtrip() {
         let lf = LockFile {
-            endpoint: "/tmp/browser-bridge/run.sock".into(),
+            endpoint: "/tmp/chromium-bridge/run.sock".into(),
             secret: "deadbeef".into(),
             pid: 42,
         };
         let bytes = serde_json::to_vec(&lf).unwrap();
         let back: LockFile = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(back.endpoint, "/tmp/browser-bridge/run.sock");
+        assert_eq!(back.endpoint, "/tmp/chromium-bridge/run.sock");
         assert_eq!(back.secret, "deadbeef");
         assert_eq!(back.pid, 42);
     }
@@ -1503,8 +1503,10 @@ mod tests {
 
     impl ScratchDir {
         fn new(test: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("browser-bridge-test-{}-{test}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!(
+                "chromium-bridge-test-{}-{test}",
+                std::process::id()
+            ));
             fs::create_dir_all(&dir).unwrap();
             ScratchDir(dir)
         }

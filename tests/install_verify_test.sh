@@ -7,7 +7,7 @@
 # by PATH stubs (a `curl` that serves local fixture files and records the URL
 # it was asked for, and a controllable `gh` driven by $GH_MODE so the mandatory
 # online attestation check can be made to pass, fail, or be unavailable). No
-# real network, no real browser profile, no real ~/.browser-bridge is touched.
+# real network, no real browser profile, no real ~/.chromium-bridge is touched.
 
 set -euo pipefail
 
@@ -20,11 +20,11 @@ trap 'rm -rf "$TMP"' EXIT
 TAG="v9.9.9"
 PLATFORM="testos"
 ARCH="testarch"
-NAME="browser-bridge-$TAG-$PLATFORM-$ARCH"
+NAME="chromium-bridge-$TAG-$PLATFORM-$ARCH"
 # The repo the fake archives claim to come from. It differs from the repo
 # pinned in install.sh, so tests must opt in with --release-repo, and one
 # case below proves that omitting the opt-in fails closed.
-FAKE_REPO="example-org/browser-bridge-test"
+FAKE_REPO="example-org/chromium-bridge-test"
 
 # ---- network stubs ----------------------------------------------------------
 # `curl`: serves $CURL_STUB_DIR/<url basename> into the -o target and records
@@ -80,8 +80,8 @@ make_pkg() {
   mkdir -p "$dir/extension/dist"
   echo "fake extension bundle" > "$dir/extension/dist/marker.js"
   # Unique content per test run so a stale artifact can never match.
-  printf 'fake-binary %s %s\n' "$RANDOM" "$(date +%s%N 2>/dev/null || date +%s)" > "$dir/browser-bridge"
-  chmod 0755 "$dir/browser-bridge"
+  printf 'fake-binary %s %s\n' "$RANDOM" "$(date +%s%N 2>/dev/null || date +%s)" > "$dir/chromium-bridge"
+  chmod 0755 "$dir/chromium-bridge"
   {
     echo "repo=$FAKE_REPO"
     echo "tag=$TAG"
@@ -111,7 +111,7 @@ run_install() {
   )
 }
 
-installed_binary() { echo "$1/install/browser-bridge"; }
+installed_binary() { echo "$1/install/chromium-bridge"; }
 
 fail() {
   echo "FAIL: $1" >&2
@@ -129,21 +129,21 @@ new_case() { # $1 = case name; prints the case dir
 
 publish_checksum() { # $1 = case dir, $2 = hash to publish
   mkdir -p "$1/assets"
-  printf '%s  browser-bridge\n' "$2" > "$1/assets/$NAME.binary.sha256"
+  printf '%s  chromium-bridge\n' "$2" > "$1/assets/$NAME.binary.sha256"
 }
 
 # ---- 1. matching published checksum installs (and hits the right URL) -------
 # Online path (no --expected-sha256): the same-origin checksum matches AND the
 # mandatory build-provenance attestation verifies (GH_MODE=ok), so it installs.
 dir="$(new_case match)"
-hash="$(sha256_of "$dir/pkg/browser-bridge")"
+hash="$(sha256_of "$dir/pkg/chromium-bridge")"
 publish_checksum "$dir" "$hash"
 out="$(run_install "$dir" --release-repo "$FAKE_REPO" 2>&1)" \
   || fail "matching checksum: installer exited nonzero: $out"
 [[ -x "$(installed_binary "$dir")" ]] || fail "matching checksum: binary not installed"
 [[ "$(sha256_of "$(installed_binary "$dir")")" == "$hash" ]] \
   || fail "matching checksum: installed bytes differ from verified bytes"
-[[ -f "$dir/nm/com.browser_bridge.host.json" ]] || fail "matching checksum: host manifest missing"
+[[ -f "$dir/nm/com.vivswan.chromium_bridge.host.json" ]] || fail "matching checksum: host manifest missing"
 grep -q "binary sha256 OK" <<< "$out" || fail "matching checksum: no verification line in output"
 grep -q "build provenance attestation OK" <<< "$out" \
   || fail "matching checksum: attestation was not enforced on the online path"
@@ -160,12 +160,12 @@ if out="$(run_install "$dir" --release-repo "$FAKE_REPO" 2>&1)"; then
 fi
 grep -q "CHECKSUM MISMATCH" <<< "$out" || fail "mismatch: no mismatch error: $out"
 [[ ! -e "$(installed_binary "$dir")" ]] || fail "mismatch: binary was installed anyway"
-[[ ! -e "$dir/nm/com.browser_bridge.host.json" ]] || fail "mismatch: host manifest written anyway"
+[[ ! -e "$dir/nm/com.vivswan.chromium_bridge.host.json" ]] || fail "mismatch: host manifest written anyway"
 pass "mismatching checksum fails closed (nothing installed)"
 
 # ---- 3. archive from an unpinned repo refuses without --release-repo --------
 dir="$(new_case fork-repo)"
-hash="$(sha256_of "$dir/pkg/browser-bridge")"
+hash="$(sha256_of "$dir/pkg/chromium-bridge")"
 publish_checksum "$dir" "$hash" # even a matching checksum must not save it
 if out="$(run_install "$dir" 2>&1)"; then
   fail "fork repo: installer trusted a repo not pinned in install.sh"
@@ -207,7 +207,7 @@ pass "unreachable published checksum fails closed"
 # ---- 7. --expected-sha256 works offline -------------------------------------
 dir="$(new_case expected-ok)"
 rm "$dir/pkg/RELEASE.txt" # prove no metadata/network is needed on this path
-hash="$(sha256_of "$dir/pkg/browser-bridge")"
+hash="$(sha256_of "$dir/pkg/chromium-bridge")"
 out="$(run_install "$dir" --expected-sha256 "$hash" 2>&1)" \
   || fail "--expected-sha256 match: installer exited nonzero: $out"
 [[ -x "$(installed_binary "$dir")" ]] || fail "--expected-sha256 match: binary not installed"
@@ -252,14 +252,14 @@ pass "--help covers the new flags"
 # The same-origin checksum matches, but the mandatory provenance check fails
 # (GH_MODE=attest-fail): a matching-but-unattested binary must not install.
 dir="$(new_case attest-fail)"
-hash="$(sha256_of "$dir/pkg/browser-bridge")"
+hash="$(sha256_of "$dir/pkg/chromium-bridge")"
 publish_checksum "$dir" "$hash"
 if out="$(GH_MODE=attest-fail run_install "$dir" --release-repo "$FAKE_REPO" 2>&1)"; then
   fail "attestation failed: installer succeeded on an unattested binary"
 fi
 grep -q "attestation FAILED" <<< "$out" || fail "attestation failed: wrong error: $out"
 [[ ! -e "$(installed_binary "$dir")" ]] || fail "attestation failed: binary installed anyway"
-[[ ! -e "$dir/nm/com.browser_bridge.host.json" ]] || fail "attestation failed: host manifest written anyway"
+[[ ! -e "$dir/nm/com.vivswan.chromium_bridge.host.json" ]] || fail "attestation failed: host manifest written anyway"
 pass "online install with a failed attestation fails closed"
 
 # ---- 13. online install with gh unavailable aborts (no --expected-sha256) ---
@@ -267,7 +267,7 @@ pass "online install with a failed attestation fails closed"
 # anchor, so gh attestation is required; if gh cannot run, refuse rather than
 # trust the checksum alone.
 dir="$(new_case gh-unavailable)"
-hash="$(sha256_of "$dir/pkg/browser-bridge")"
+hash="$(sha256_of "$dir/pkg/chromium-bridge")"
 publish_checksum "$dir" "$hash"
 if out="$(GH_MODE=unavailable run_install "$dir" --release-repo "$FAKE_REPO" 2>&1)"; then
   fail "gh unavailable: installer trusted the same-origin checksum alone"

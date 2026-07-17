@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability (private)
-    url: https://github.com/whg517/browser-bridge/security/advisories/new
+    url: https://github.com/Vivswan/chromium-bridge/security/advisories/new
     about: Please report vulnerabilities privately via a GitHub security advisory, not a public issue.

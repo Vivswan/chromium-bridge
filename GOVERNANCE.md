@@ -1,6 +1,6 @@
 # Governance
 
-How changes get made in browser-bridge. Small project, light process — but the
+How changes get made in chromium-bridge. Small project, light process — but the
 process that exists is enforced by CI, not by memory. See also
 [CONTRIBUTING.md](CONTRIBUTING.md) (dev workflow) and [SECURITY.md](SECURITY.md)
 (security bar).

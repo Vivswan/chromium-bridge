@@ -1,4 +1,4 @@
-# Contributing to browser-bridge
+# Contributing to chromium-bridge
 
 Thanks for your interest. This is a small, security-sensitive project (it drives
 a real logged-in browser), so changes are held to a high bar for correctness and

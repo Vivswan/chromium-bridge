@@ -1,4 +1,4 @@
-// esbuild driver for the browser-bridge MV3 extension.
+// esbuild driver for the chromium-bridge MV3 extension.
 //
 // Bundles src/*.ts → dist/*.js (IIFE, unminified so the unpacked extension
 // stays debuggable) and copies the static assets (manifest, HTML, CSS, icons)

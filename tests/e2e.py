@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end integration tests for browser-bridge.
+"""End-to-end integration tests for chromium-bridge.
 
 These tests drive the release binary as real subprocesses:
   - MCP server mode (default), spoken to over JSON-RPC/stdio
@@ -7,7 +7,7 @@ These tests drive the release binary as real subprocesses:
   - tool round-trips that flow MCP client -> server -> real --native-host
     subprocess -> "extension" (us, speaking NM frames to the host) and back
 
-Only the real browser-bridge binary can speak the bridge socket now: the MCP
+Only the real chromium-bridge binary can speak the bridge socket now: the MCP
 server kernel-attests each peer's executable (ADR-0020), so a foreign process
 cannot connect as a fake extension. The round-trip tests therefore route
 through a real --native-host subprocess (which passes attestation because it is
@@ -20,7 +20,7 @@ the request/response correlation, including the new page_eval tool path.
 Run:
     python3 tests/e2e.py
 Exits 0 on success, 1 on any failure. Requires the release binary at
-target/release/browser-bridge (will build it if missing via cargo).
+target/release/chromium-bridge (will build it if missing via cargo).
 
 This is an orchestration test (not a Rust #[test]) on purpose: it exercises
 the full process boundary the way an MCP client and Chrome would, which a unit
@@ -36,22 +36,22 @@ import threading
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.path.join(REPO, "target", "release", "browser-bridge" + (".exe" if os.name == "nt" else ""))
+BIN = os.path.join(REPO, "target", "release", "chromium-bridge" + (".exe" if os.name == "nt" else ""))
 # Mirror the binary's LockFile::path() (src/ipc.rs).
 _XDG = os.environ.get("XDG_RUNTIME_DIR")
 if os.name == "nt":
     _LOCAL = os.environ.get("LOCALAPPDATA", os.path.expanduser("~/AppData/Local"))
-    LOCK = os.path.join(_LOCAL, "browser-bridge", "run.lock")
+    LOCK = os.path.join(_LOCAL, "chromium-bridge", "run.lock")
 elif sys.platform == "darwin":
     LOCK = (
-        os.path.join(_XDG, "browser-bridge", "run.lock")
+        os.path.join(_XDG, "chromium-bridge", "run.lock")
         if _XDG
-        else os.path.expanduser("~/Library/Application Support/browser-bridge/run.lock")
+        else os.path.expanduser("~/Library/Application Support/chromium-bridge/run.lock")
     )
 else:
     _CACHE = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
-    LOCK = os.path.join(_XDG, "browser-bridge", "run.lock") if _XDG else os.path.join(
-        _CACHE, "browser-bridge", "run.lock"
+    LOCK = os.path.join(_XDG, "chromium-bridge", "run.lock") if _XDG else os.path.join(
+        _CACHE, "chromium-bridge", "run.lock"
     )
 
 _passed = 0
@@ -152,7 +152,7 @@ class McpClient:
 def connect_bridge(lf, timeout=5):
     """Open a raw connection to the bridge socket (Unix-domain on Unix,
     loopback TCP on Windows). Used only by test_foreign_peer_is_rejected to
-    simulate a non-browser-bridge process: a real extension never touches this
+    simulate a non-chromium-bridge process: a real extension never touches this
     socket, it talks Native-Messaging frames to a --native-host subprocess."""
     if os.name == "nt":
         host, port = lf["endpoint"].rsplit(":", 1)
@@ -164,7 +164,7 @@ def connect_bridge(lf, timeout=5):
 
 
 def start_bridge_host(label=None):
-    """Spawn a real `browser-bridge --native-host`, the way Chrome does. It
+    """Spawn a real `chromium-bridge --native-host`, the way Chrome does. It
     dials the server's bridge socket and passes peer attestation because it is
     the same binary; the server then drives it. The "extension" side (this test)
     speaks Native-Messaging frames to the host's stdin/stdout, which the host
@@ -296,7 +296,7 @@ def test_stale_lock_is_replaced():
     print("\n[test] stale lock file is replaced on startup")
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
     with open(LOCK, "w", encoding="utf-8") as f:
-        json.dump({"endpoint": "/nonexistent/browser-bridge/run.sock",
+        json.dump({"endpoint": "/nonexistent/chromium-bridge/run.sock",
                    "secret": "0" * 32, "pid": 4294967295}, f)
     mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True, encoding="utf-8")
@@ -906,7 +906,7 @@ def test_unknown_method_returns_32601():
 
 
 def test_foreign_peer_is_rejected():
-    print("\n[test] a foreign (non-browser-bridge) peer is refused by attestation")
+    print("\n[test] a foreign (non-chromium-bridge) peer is refused by attestation")
     if os.name == "nt":
         print("  SKIP  attestation is Unix-only (Windows keeps loopback TCP)")
         return
@@ -920,7 +920,7 @@ def test_foreign_peer_is_rejected():
         lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
         # Connect a raw python process straight to the bridge socket. It is not
-        # the browser-bridge binary, so server-side executable attestation must
+        # the chromium-bridge binary, so server-side executable attestation must
         # drop it BEFORE sending any HMAC challenge: our recv sees a clean EOF.
         s = connect_bridge(lf)
         s.settimeout(3)

@@ -1,6 +1,6 @@
 # Threat model
 
-What browser-bridge protects, from whom, and what it explicitly does not defend
+What chromium-bridge protects, from whom, and what it explicitly does not defend
 against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 [tool risk matrix](tool-risk-matrix.md).
 
@@ -112,7 +112,7 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    noticing.**
    → The **enrollment ceremony**
    ([ADR-0021](../adr/0021-enrollment-ceremony.md), on by default on macOS):
-   `browser-bridge pair` mints a P-256 key inside the Secure Enclave whose
+   `chromium-bridge pair` mints a P-256 key inside the Secure Enclave whose
    every use requires user presence (Touch ID / password), and performs a
    presence-gated self-test signature; declining it leaves the machine
    unenrolled. The extension pins the public key and verifies

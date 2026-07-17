@@ -1,14 +1,13 @@
-//! browser-bridge — bridge an MCP client (Claude Code, Codex, …) to your real
-//! Chrome.
+//! chromium-bridge-core — bridge an MCP client (Claude Code, Codex, …) to your
+//! real Chromium browser.
 //!
-//! One binary, two modes selected by argv:
+//! One binary (`crates/host`), two modes selected by argv:
 //! - (no args): MCP server (default). Run under your MCP client's server config.
 //! - --native-host: Chrome-spawned bridge subprocess. Chrome launches this
 //!   via the native messaging host manifest; it should never be invoked by hand.
 //!
-//! This crate is structured as a library (`src/lib.rs`) plus a thin binary
-//! (`src/main.rs`). The library exposes every module so the modules are
-//! reachable from integration tests and future consumers.
+//! This library exposes every module so the modules are reachable from the
+//! host binary, integration tests, and future consumers.
 
 #[macro_use]
 pub mod log;

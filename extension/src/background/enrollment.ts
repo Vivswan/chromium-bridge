@@ -10,7 +10,7 @@
 //   unpaired    no pin. Bridge traffic is refused while requireEnrollment is
 //               on. Each connect issues a pairing challenge (unless paused);
 //               on an unenrolled machine that costs one enclave_error round
-//               trip and no prompt, and once `browser-bridge pair` has minted
+//               trip and no prompt, and once `chromium-bridge pair` has minted
 //               a key it raises the single ceremony Touch ID prompt.
 //   pending     a pairing proof verified; the fingerprint awaits the user's
 //               approval in the options page. Still refused.
@@ -207,7 +207,7 @@ async function readGateState(): Promise<Gate> {
       reason:
         `enrollment failed closed: ${compromised.reason}. ` +
         "Bridge disabled until you revoke the pin in the extension options and re-pair " +
-        "(`browser-bridge pair`).",
+        "(`chromium-bridge pair`).",
     };
   }
   if (!(await platformCanEnroll())) return { allowed: true };
@@ -217,13 +217,13 @@ async function readGateState(): Promise<Gate> {
       allowed: false,
       reason:
         "enrollment pending: open the extension options page and approve the host key " +
-        "fingerprint (compare it with the `browser-bridge pair` output)",
+        "fingerprint (compare it with the `chromium-bridge pair` output)",
     };
   }
   return {
     allowed: false,
     reason:
-      "enrollment required: run `browser-bridge pair` on this machine, then approve the " +
+      "enrollment required: run `chromium-bridge pair` on this machine, then approve the " +
       "fingerprint in the extension options page",
   };
 }
@@ -399,7 +399,7 @@ function errorHelp(reason: string, mode: "pair" | "verify"): string {
     case "not_enrolled":
       return (
         "not_enrolled: no enrollment key exists on this machine. " +
-        "Run `browser-bridge pair` in a terminal, then return here."
+        "Run `chromium-bridge pair` in a terminal, then return here."
       );
     case "unsupported_platform":
       return (
@@ -414,7 +414,7 @@ function errorHelp(reason: string, mode: "pair" | "verify"): string {
     case "key_invalid":
       return (
         "key_invalid: the key under the enrollment label is not a single Secure Enclave key. " +
-        "Run `browser-bridge pair --reset` to delete it and mint a fresh one."
+        "Run `chromium-bridge pair --reset` to delete it and mint a fresh one."
       );
     case "keychain_error":
       return "keychain_error: the host could not reach the keychain. Try again.";
@@ -497,7 +497,7 @@ export function rejectPending(): Promise<{ ok: boolean; error?: string }> {
     await pinStore.setPaused(true);
     await pinStore.setLastError(
       "fingerprint rejected; pairing halted. If the fingerprints really differed, " +
-        "something other than your `browser-bridge pair` key answered the challenge; " +
+        "something other than your `chromium-bridge pair` key answered the challenge; " +
         "investigate before pairing again."
     );
     await updateBadge();

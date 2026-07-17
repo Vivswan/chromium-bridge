@@ -1,15 +1,15 @@
-# Privacy Policy — Browser Bridge
+# Privacy Policy — Chromium Bridge
 
 _Last updated: 2026-07-15_
 
-Browser Bridge is an open-source Chrome extension that connects an MCP client
+Chromium Bridge is an open-source Chrome extension that connects an MCP client
 (such as Claude Code, Claude Desktop, or Codex) to your local Chrome through a
 native-messaging host that runs on your own computer. This policy explains what
 the extension accesses and what it does — and does not — do with that data.
 
 ## Summary
 
-**Browser Bridge does not collect, transmit, or sell any personal data.** It has
+**Chromium Bridge does not collect, transmit, or sell any personal data.** It has
 no analytics, no telemetry, and no remote servers. Everything the extension does
 happens on your own machine, and every sensitive action requires your explicit
 approval.
@@ -69,10 +69,10 @@ direction) provide locally — it is never fetched from a remote source.
 
 ## Data sharing and sale
 
-Browser Bridge does **not** sell or share your data with anyone. There is no
+Chromium Bridge does **not** sell or share your data with anyone. There is no
 third party involved.
 
 ## Contact
 
 Questions or concerns: please open an issue at
-<https://github.com/whg517/browser-bridge/issues>.
+<https://github.com/Vivswan/chromium-bridge/issues>.
