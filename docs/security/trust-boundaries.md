@@ -31,6 +31,15 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   writes its stdin. A later reparent fails admission closed, but pipe fd
   inheritance means spawner and stdin-writer are not provably the same; this is
   not kernel attestation of the pipe (see ADR-0024).
+- **Enforcement (revocation, ADR-0025)**: admission is not decided once. A
+  monotonic revocation epoch at `runtime_dir()/revocation.json`, bumped in the
+  same critical section as an allowlist rewrite, is re-read before every
+  in-session request (the broker's per-connection epoch guard) and on a timer
+  for idle connections (the watcher), so a `revoke-client` from any surface
+  drops the revoked harness fail-closed and its re-attach is refused. Every
+  read on these paths fails closed. Deleting `clients.json` alone is detected
+  via the epoch record's one-way enrollment latch and fails closed as
+  tampering; only deleting both files reverts to the ERROR-logged bootstrap.
 - **Enforcement (protocol)**: strict JSON-RPC parsing; unknown methods →
   `-32601`; parse errors surfaced, not fatal; **stdout carries only protocol**
   (diagnostics go to stderr, or a stray write corrupts the stream).

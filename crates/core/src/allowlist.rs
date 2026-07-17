@@ -176,6 +176,15 @@ impl Allowlist {
     /// Add or replace a client. If an entry with the same `name` exists it is
     /// replaced (re-pair / renewal), so pairing the same client twice does not
     /// accumulate stale anchors. Persists atomically under the runtime lock.
+    ///
+    /// The one-way enrollment latch (ADR-0025) is set BEFORE the allowlist is
+    /// written, so a partial failure fails closed rather than open: if the
+    /// latch write succeeds but the `clients.json` write then fails, the next
+    /// admission sees the latch set and no allowlist and refuses as tampering
+    /// (the user re-runs `pair-client`, which completes the write). The reverse
+    /// order would leave a usable allowlist with no deletion evidence, so a
+    /// later `rm clients.json` would silently revert to open. The bump the
+    /// latch carries also nudges running enforcement points to re-read.
     pub fn pair(name: &str, anchor: Anchor) -> io::Result<()> {
         if !crate::ipc::validate_label(name) {
             return Err(io::Error::new(
@@ -192,6 +201,8 @@ impl Allowlist {
                 anchor,
                 added_unix: now_unix(),
             });
+            // Latch first (fail closed on a partial write), then the list.
+            crate::revocation::latch_clients_enrolled_locked()?;
             list.write()
         })
     }
@@ -200,6 +211,21 @@ impl Allowlist {
     /// The file is left in place even when it becomes empty: an empty file
     /// still means "enrolled" (admission enforced, nobody admitted), which is
     /// the fail-closed reading of "the user revoked every client".
+    ///
+    /// The allowlist rewrite is the authoritative act: it is what a re-attach
+    /// reads (refused at once) and what the broker's watcher re-decides every
+    /// tick against. The revocation-epoch bump that follows is a PROMPTNESS
+    /// signal only, accelerating the broker's per-request fast path so a live
+    /// connection is dropped on its next call rather than at the next poll.
+    /// Enforcement therefore does NOT depend on the bump succeeding: if the
+    /// bump write fails, the client is still gone from `clients.json`, so
+    /// re-attach is refused and the watcher (which re-decides unconditionally,
+    /// not on an epoch change) drops the live connection within a poll
+    /// interval. The failure is logged, not swallowed silently. Both writes
+    /// happen under one runtime-lock hold, which serializes them against other
+    /// WRITERS; it does not make them atomic to the broker's lock-free readers,
+    /// which is why the list-first ordering and the unconditional watcher (not
+    /// the lock) are what keep a concurrent reader safe.
     pub fn revoke(name: &str) -> io::Result<bool> {
         ipc::with_runtime_lock(|| {
             let Some(mut list) = Self::load()? else {
@@ -211,6 +237,15 @@ impl Allowlist {
             if removed {
                 list.version = ALLOWLIST_VERSION;
                 list.write()?;
+                if let Err(e) = crate::revocation::bump_locked(crate::revocation::Scope::Clients) {
+                    log_error!(
+                        "allowlist",
+                        "client '{name}' revoked (removed from clients.json), but the \
+                         revocation epoch bump failed ({e}); the broker's per-request fast \
+                         path will not accelerate, but its watcher still drops the \
+                         connection within a poll and re-attach is already refused"
+                    );
+                }
             }
             Ok(removed)
         })
@@ -234,6 +269,34 @@ pub fn decide(list: Option<&Allowlist>, identity: Option<&ClientIdentity>) -> De
             Some(name) => Decision::Admit { name },
             None => Decision::Refuse,
         },
+    }
+}
+
+/// Load the allowlist for an ADMISSION decision, honoring the tamper-evidence
+/// latch (ADR-0025). `latched` is `Revocation::clients_enrolled`: with the
+/// latch set, an ABSENT `clients.json` is no longer the bootstrap posture --
+/// a client allowlist existed on this machine, so its disappearance is a
+/// deletion, and deletion must fail closed instead of silently reverting to
+/// the open pre-enrollment posture (the ADR-0024 residual this closes for the
+/// single-file case). Every other outcome is [`Allowlist::load`] unchanged.
+pub fn load_enforced(latched: bool) -> io::Result<Option<Allowlist>> {
+    apply_latch(Allowlist::load()?, latched)
+}
+
+/// The pure core of [`load_enforced`]: the latch turns "absent list" from
+/// bootstrap into tampering. Factored out so the fail-closed matrix is
+/// unit-testable without touching the runtime directory.
+fn apply_latch(list: Option<Allowlist>, latched: bool) -> io::Result<Option<Allowlist>> {
+    match list {
+        Some(list) => Ok(Some(list)),
+        None if latched => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "clients.json is missing but this machine has enrolled trusted clients \
+             (the revocation record's enrollment latch is set); treating the deletion \
+             as tampering and failing closed. Re-pair with `chromium-bridge pair-client` \
+             to rebuild the allowlist.",
+        )),
+        None => Ok(None),
     }
 }
 
@@ -325,6 +388,11 @@ pub fn run_revoke_client(argv: &[String]) -> i32 {
     match Allowlist::revoke(&name) {
         Ok(true) => {
             println!("revoked trusted client '{name}'");
+            println!(
+                "a live broker drops this client's connections and refuses its re-attach \
+                 (immediately if the revocation epoch advanced, otherwise within the \
+                 broker's next check)"
+            );
             0
         }
         Ok(false) => {
@@ -339,9 +407,18 @@ pub fn run_revoke_client(argv: &[String]) -> i32 {
 }
 
 /// `list-clients`: print the trusted-client allowlist. Returns a process exit
-/// code.
+/// code. Consults the tamper-evidence latch (ADR-0025): an absent allowlist on
+/// a machine whose latch is set is reported as tampering, not as unenrolled.
 pub fn run_list_clients() -> i32 {
-    match Allowlist::load() {
+    let latched = match crate::revocation::Revocation::current() {
+        Ok(rev) => rev.clients_enrolled,
+        Err(e) => {
+            eprintln!("list-clients: could not read the revocation record: {e}");
+            eprintln!("(treating the trust state as suspect; fail closed)");
+            return 1;
+        }
+    };
+    match load_enforced(latched) {
         Ok(None) => {
             println!(
                 "no trusted-client allowlist yet (UNENROLLED: harness admission not enforced)"
@@ -366,7 +443,7 @@ pub fn run_list_clients() -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("list-clients: could not read the allowlist: {e}");
+            eprintln!("list-clients: {e}");
             1
         }
     }
@@ -534,6 +611,20 @@ mod tests {
             serde_json::to_value(Anchor::TeamId("t".into())).unwrap(),
             serde_json::json!({ "kind": "team_id", "value": "t" })
         );
+    }
+
+    #[test]
+    fn latch_turns_an_absent_list_into_tampering() {
+        // Unlatched + absent: the legitimate bootstrap (fresh install).
+        assert!(apply_latch(None, false).unwrap().is_none());
+        // Latched + absent: a client allowlist existed here, so its absence is
+        // a deletion -> fail closed (the ADR-0024 silent-revert residual).
+        let err = apply_latch(None, true).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        // A present list passes through untouched regardless of the latch.
+        let list = list_of(vec![]);
+        assert!(apply_latch(Some(list.clone()), false).unwrap().is_some());
+        assert!(apply_latch(Some(list), true).unwrap().is_some());
     }
 
     #[test]

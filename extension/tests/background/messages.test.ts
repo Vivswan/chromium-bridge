@@ -51,6 +51,10 @@ const GATED: RuntimeMsg[] = [
   { type: "resolve_allow", id: "allow_1", allow: true },
   { type: "get_status" },
   { type: "get_enrollment" },
+  // The ADR-0025 trusted-client admin surface: enumeration and revocation of
+  // the trust set are extension-page only, like every other trust action.
+  { type: "get_clients" },
+  { type: "revoke_client", name: "claude-code" },
   { type: "enroll_pair" },
   { type: "enroll_verify" },
   { type: "enroll_approve" },

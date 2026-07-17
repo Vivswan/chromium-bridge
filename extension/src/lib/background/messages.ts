@@ -21,6 +21,7 @@ import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { addAllow, getAllowlist, removeAllow, resolvePendingAllow } from "./allowlist-store";
+import { requestClientList, revokeTrustedClient } from "./clients";
 import { getPendingConfirm, resolveConfirm } from "./confirm/service";
 import {
   approvePending,
@@ -103,6 +104,17 @@ export function route(
       return false;
     case "get_enrollment":
       void getEnrollmentStatus().then((st) => sendResponse(st));
+      return true;
+    case "get_clients":
+      // ADR-0025: read the host's trusted-client allowlist. Extension-page
+      // senders only (the top-level gate above): a content script must never
+      // enumerate the trust set.
+      void requestClientList().then((r) => sendResponse(r));
+      return true;
+    case "revoke_client":
+      // ADR-0025: revoke one trusted client. Capability reduction only, but
+      // still extension-page gated like every trust-state mutation.
+      void revokeTrustedClient(msg.name).then((r) => sendResponse(r));
       return true;
     case "confirm_ready":
       // The confirmation window (ADR-0027) asking for its payload. Requires the

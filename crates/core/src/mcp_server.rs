@@ -104,7 +104,14 @@ pub fn run() -> i32 {
                     lock.pid,
                     ipc::LockFile::path().display()
                 );
-                return broker::run_broker(listener, session);
+                return broker::run_broker(
+                    listener,
+                    session,
+                    broker::OwnHarness {
+                        identity: harness.client_identity(),
+                        epoch: harness.epoch,
+                    },
+                );
             }
             Ok(ipc::PublishOutcome::LostRace(cur)) => {
                 log_info!(
@@ -131,26 +138,37 @@ pub fn run() -> i32 {
     }
 }
 
-/// The result of admitting our own spawning harness: an optional attested
-/// identity to report when relaying. `None` from [`admit_own_harness`] means
-/// refused (the caller exits non-zero); a `Some(Harness)` whose `identity()` is
-/// `None` means the harness could not be measured but admission was permitted
-/// (unenrolled / Windows).
+/// The result of admitting our own spawning harness. `None` from
+/// [`admit_own_harness`] means refused (the caller exits non-zero); an
+/// admitted harness whose `identity` is `None` could not be measured but
+/// admission was permitted (unenrolled / Windows). `epoch` is the revocation
+/// epoch the admission was decided under (ADR-0025): the broker's own-harness
+/// epoch guard starts from it, and re-decides on any bump.
 struct Harness {
     id: Option<HarnessId>,
+    epoch: u64,
 }
 
 impl Harness {
     fn identity(&self) -> Option<HarnessId> {
         self.id.clone()
     }
+
+    /// The measured identity in the allowlist's input shape, for the broker's
+    /// own-harness revocation rechecks.
+    fn client_identity(&self) -> Option<ipc::ClientIdentity> {
+        self.id.as_ref().map(|h| ipc::ClientIdentity {
+            hash: h.hash.clone(),
+            team_id: h.team_id.clone(),
+        })
+    }
 }
 
 /// Measure and admit the harness that spawned this MCP-server instance over
 /// stdio. Returns `Some(Harness)` when serving is permitted (with the harness
 /// identity to report if we become a relay), or `None` when it is refused (the
-/// caller fails closed). On an unreadable allowlist this fails closed via
-/// `process::exit(1)` rather than degrading to unenrolled.
+/// caller fails closed). On an unreadable allowlist or revocation record this
+/// fails closed via `process::exit(1)` rather than degrading to unenrolled.
 fn admit_own_harness() -> Option<Harness> {
     let name = client_name_from_env();
 
@@ -170,7 +188,20 @@ fn admit_own_harness() -> Option<Harness> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let identity: Option<ipc::ClientIdentity> = None;
 
-    let list = match allowlist::Allowlist::load() {
+    // Read order is load-bearing (ADR-0025): the revocation record FIRST,
+    // then the allowlist, so a concurrent revoke can never be observed as a
+    // new epoch paired with a stale list. Both reads fail closed.
+    let rev = match crate::revocation::Revocation::current() {
+        Ok(rev) => rev,
+        Err(e) => {
+            log_error!(
+                "mcp",
+                "cannot read the revocation record ({e}); refusing to serve (fail closed)"
+            );
+            std::process::exit(1);
+        }
+    };
+    let list = match allowlist::load_enforced(rev.clients_enrolled) {
         Ok(l) => l,
         Err(e) => {
             log_error!(
@@ -209,7 +240,10 @@ fn admit_own_harness() -> Option<Harness> {
         team_id: id.team_id,
         name,
     });
-    Some(Harness { id })
+    Some(Harness {
+        id,
+        epoch: rev.epoch,
+    })
 }
 
 /// The self-asserted client name from [`CLIENT_NAME_ENV`], validated like a
