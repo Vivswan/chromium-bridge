@@ -17,4 +17,4 @@ permissions:
 
 jobs:
   conventional-title:
-    uses: Vivswan/repo-platform/.github/workflows/reusable-pr-title.yml@4f694d4
+    uses: Vivswan/repo-platform/.github/workflows/reusable-pr-title.yml@4f694d4ef5ce170be630bd7e5674174b44407886
