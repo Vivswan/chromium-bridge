@@ -1,13 +1,15 @@
 // In-page confirmation UI (ADR-0006 / ADR-0008): the high-risk click toast,
 // the enlarged page_eval toast, and the informational toast. Also owns the
-// same-origin grace window shared by click and eval confirmations.
+// same-origin grace window used by the click/submit confirmations (page_eval
+// is excluded and always reconfirms).
 
 import { getSetting } from "../shared/settings";
 import { truncate } from "./util";
 import { roleOf, nameOf } from "./snapshot";
 
 // Short-circuit window: a 60s window during which the same kind of high-risk
-// action on the same origin doesn't re-prompt.
+// action on the same origin doesn't re-prompt. Used by click/submit confirms
+// only; page_eval is excluded and always reconfirms.
 let lastConfirmed: { key: string | null; until: number } = { key: null, until: 0 };
 
 export async function confirmWithToast(question: string, actionDesc: string) {
@@ -21,19 +23,14 @@ export async function confirmWithToast(question: string, actionDesc: string) {
   lastConfirmed = { key, until: Date.now() + graceMs };
 }
 
-// Eval confirmation: enlarged Toast with the full code shown. Shares the same
-// lastConfirmed grace window as click/etc. The key is `origin:eval`. Risk note
-// (ADR-0008): within the 60s window, ANY new eval code on the same origin runs
-// silently — accept this because eval is not meant for high-frequency use.
+// Eval confirmation: enlarged Toast with the full code shown. page_eval is the
+// highest-risk action, so it is DELIBERATELY excluded from the same-origin
+// grace window (ADR-0008 update 2026-07-16): every page_eval reconfirms. There
+// is no silent-eval window. The grace window still applies to lower-risk
+// click/submit confirmations via confirmWithToast.
 export async function confirmWithEvalToast(code: string) {
-  const key = `${location.origin}:eval`;
-  const graceMs = await getSetting("confirmGraceMs");
-  if (graceMs > 0 && lastConfirmed.key === key && Date.now() < lastConfirmed.until) {
-    return; // within grace window
-  }
   const approved = await showEvalToast(code, location.href, document.title);
   if (!approved) throw new Error("user denied page_eval");
-  lastConfirmed = { key, until: Date.now() + graceMs };
 }
 
 export function describeForToast(el: HTMLElement) {
