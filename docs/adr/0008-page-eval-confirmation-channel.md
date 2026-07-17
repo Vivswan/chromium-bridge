@@ -1,6 +1,10 @@
 # ADR-0008: page_eval high-risk confirmation channel
 
-- **Status**: Accepted
+- **Status**: Amended by [ADR-0027](./0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)
+  (page_eval still confirms on every call, but the confirmation renders on the
+  extension-owned window instead of an in-page toast). Phase 8 supersedes the
+  channel entirely for page_eval by routing approval through the host Secure
+  Enclave.
 - **Date**: 2026-07-07
 - **Supersedes**: [ADR-0005](./0005-page-eval-disabled-by-default.md) (the "do not implement in v0.1" decision)
 
