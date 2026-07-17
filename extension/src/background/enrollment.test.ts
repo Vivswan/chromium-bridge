@@ -435,6 +435,128 @@ describe("ceremony state machine", () => {
     expect(st.state).toBe("unpaired");
     expect((await enrollmentGate()).allowed).toBe(false);
   });
+
+  test("a revoke queued while the gate is evaluating blocks the in-flight op", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+
+    // Hold the transition queue with a stalled transition (onPortConnected's
+    // first storage read), so the revoke below sits QUEUED - not yet applied -
+    // while the gate's first-pass reads still see the pinned state. The old,
+    // unserialized gate answered "allowed" from exactly this interleaving and
+    // the op dispatched after the revoke had landed.
+    type StorageGet = (
+      key: string | string[],
+      cb?: (r: Record<string, unknown>) => void
+    ) => Promise<Record<string, unknown>> | undefined;
+    const local = (globalThis as unknown as { chrome: { storage: { local: { get: StorageGet } } } })
+      .chrome.storage.local;
+    const realGet = local.get;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    local.get = (k, cb) => {
+      if (typeof cb === "function") {
+        void held.then(() => realGet(k, cb));
+        return undefined;
+      }
+      return held.then(() => realGet(k)) as Promise<Record<string, unknown>>;
+    };
+    const blocker = onPortConnected(); // stalls inside the queue on its first read
+    local.get = realGet; // everything else reads normally
+
+    let dispatched = 0;
+    const gateP = enrollmentGate(() => {
+      dispatched += 1;
+    }); // first pass sees the pinned state
+    const revokeP = revokePin(); // queued behind the blocker, ahead of the gate's re-check
+    await new Promise((resolve) => setTimeout(resolve, 0)); // let the first pass finish
+    release();
+    await Promise.all([blocker, revokeP]);
+
+    const gate = await gateP;
+    expect(gate.allowed).toBe(false);
+    expect(dispatched).toBe(0); // the op never began dispatching
+  });
+
+  test("a compromise mark landing while the gate is mid-evaluation blocks the in-flight op", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+
+    // Stall the gate's platform probe: the first pass has already read
+    // compromised = null when the mark lands, so only the serialized re-check
+    // can honor it. The old, unserialized gate dispatched from the stale
+    // pre-mark answer.
+    const runtime = (
+      globalThis as unknown as {
+        chrome: { runtime: { getPlatformInfo: () => Promise<{ os: string }> } };
+      }
+    ).chrome.runtime;
+    const realProbe = runtime.getPlatformInfo;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    runtime.getPlatformInfo = async () => {
+      await held;
+      return realProbe();
+    };
+
+    let dispatched = 0;
+    const gateP = enrollmentGate(() => {
+      dispatched += 1;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0)); // gate is parked on the probe
+    await pinStore.setCompromised({ reason: "marked mid-gate", at: Date.now() });
+    runtime.getPlatformInfo = realProbe;
+    release();
+
+    const gate = await gateP;
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("failed closed");
+    expect(dispatched).toBe(0); // the op never began dispatching
+  });
+
+  test("a revoke queued during the confirming read runs strictly after the op began", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+
+    // The last interleaving: the transition arrives AFTER the serialized
+    // confirming read has started. The op is then ordered before the
+    // transition by mechanism - its dispatch kickoff runs synchronously
+    // inside the gate's critical section, so the queued revoke cannot apply
+    // first. Stall the confirming read's platform probe (the second probe
+    // call; the first pass takes the first) to queue the revoke mid-confirm.
+    const runtime = (
+      globalThis as unknown as {
+        chrome: { runtime: { getPlatformInfo: () => Promise<{ os: string }> } };
+      }
+    ).chrome.runtime;
+    const realProbe = runtime.getPlatformInfo;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let probeCalls = 0;
+    runtime.getPlatformInfo = async () => {
+      probeCalls += 1;
+      if (probeCalls === 2) await held; // park only the confirming read
+      return realProbe();
+    };
+
+    const events: string[] = [];
+    const gateP = enrollmentGate(() => {
+      // Synchronous view from inside the critical section: the revoke queued
+      // below must not have touched the store yet.
+      events.push(store["enclavePin"] ? "dispatched-before-revoke" : "dispatched-after-revoke");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0)); // confirm is parked on the probe
+    const revokeP = revokePin(); // queued behind the running confirm
+    runtime.getPlatformInfo = realProbe;
+    release();
+
+    const gate = await gateP;
+    await revokeP;
+    expect(gate.allowed).toBe(true);
+    expect(events).toEqual(["dispatched-before-revoke"]);
+    // The revoke still applied afterwards: the pin is gone for the NEXT op.
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
 });
 
 describe("periodic re-verification (hostReverifyMs)", () => {
