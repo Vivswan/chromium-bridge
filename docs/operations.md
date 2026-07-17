@@ -57,6 +57,43 @@ complete eval return values, form fill values); masking happens on the extension
 > **connection id** (the `conn` field, provided by `Session::current_generation()`), so
 > events can be correlated to a specific connection across reconnects.
 
+Since ADR-0030 the same events are also appended to a durable, size-capped
+`audit.log` (0600, in the runtime directory next to the lock file) and read back with
+`chromium-bridge audit`; see [cli.md](./cli.md#logging-and-audit-bb_log--bb_log_format).
+
+## Kill switch: state, and recovering an unreadable record
+
+`chromium-bridge kill` halts all bridge activity until an explicit, user-present
+release; the behavior and the release paths are documented in
+[cli.md](./cli.md#kill-switch-kill--unkill) and
+[ADR-0030](./adr/0030-global-kill-switch-and-audit.md). The latch lives in
+`revocation.json` in the runtime directory, the same record that carries the
+revocation epoch (ADR-0025).
+
+Every enforcement point reads that record fail-closed, so if it becomes
+unreadable (corrupt JSON, unknown fields, bad permissions), the bridge stops
+serving everything: tool calls are refused with `BRIDGE_KILLED`, browser
+connections are severed, fresh instances refuse to start, and both `kill` and
+`unkill` refuse to write (releasing from a state you cannot read would fail
+open, and rebuilding the file silently would mask tampering). `doctor` reports
+the unreadable state and exits non-zero.
+
+Recovery is deliberately manual:
+
+1. Run `chromium-bridge doctor` to confirm the state and find the runtime
+   directory.
+2. Look at `revocation.json` before touching it. If you cannot explain the
+   corruption (a crash mid-write, a disk incident), treat it as a possible
+   tampering indicator and see
+   [incident-response.md](./security/incident-response.md) before proceeding.
+3. Delete `revocation.json` **and** `clients.json` from the runtime directory.
+   Deleting only one is itself detected as tampering (ADR-0025); dropping both
+   is a factory reset of harness trust, back to the loudly-logged unenrolled
+   bootstrap.
+4. Re-pair each trusted client (`chromium-bridge pair-client`), and re-engage
+   the kill switch if you had it on. The extension's enrollment pin is not
+   affected (the host key never lived in these files).
+
 ## Lock file
 
 The bridge socket publishes its port and authenticates peers through a **lock file in the

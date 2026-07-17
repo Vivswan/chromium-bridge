@@ -207,14 +207,22 @@ pub fn dispatch(session: &Session, name: &str, args: &Value) -> Outcome {
                 error_code: None,
             }
         }
-        Err(e) => Outcome {
-            // Prefix the stable cross-process code (error::ERROR_SPECS) so
-            // clients can branch programmatically, while the text stays
-            // human-readable. isError stays true.
-            content: json!([{ "type": "text", "text": format!("Error [{}]: {e}", e.code()) }]),
-            is_error: true,
-            error_code: Some(e.code()),
-        },
+        Err(e) => error_outcome(&e),
+    }
+}
+
+/// The [`Outcome`] for a tool-level error: the stable taxonomy code prefixed
+/// to the human-readable text, `isError` set. Shared by [`dispatch`] and the
+/// pre-dispatch gates (the kill switch, ADR-0030) so every refusal reaches
+/// the model in one shape.
+pub(crate) fn error_outcome(e: &CallError) -> Outcome {
+    Outcome {
+        // Prefix the stable cross-process code (error::ERROR_SPECS) so
+        // clients can branch programmatically, while the text stays
+        // human-readable. isError stays true.
+        content: json!([{ "type": "text", "text": format!("Error [{}]: {e}", e.code()) }]),
+        is_error: true,
+        error_code: Some(e.code()),
     }
 }
 

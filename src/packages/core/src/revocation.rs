@@ -50,6 +50,15 @@
 //! can write (see ADR-0025 for the full argument). What the latch buys is that
 //! a single-file deletion -- the accidental case, and the lazy attack -- is
 //! detected and refused loudly rather than silently obeyed.
+//!
+//! ## The kill switch rides in this record (ADR-0030)
+//!
+//! The global kill switch's latch (`killed`, plus its `kill_epoch` marker)
+//! lives in this same file, written by [`set_killed_locked`] in one atomic
+//! write with its epoch bump. Unlike the epoch, the latch IS the authority
+//! for the kill state; keeping it in the atomically-written record is what
+//! lets every existing fail-closed read of this file double as a kill-state
+//! read. See `crates/core/src/kill.rs` for the enforcement surface.
 
 use std::io;
 
@@ -89,6 +98,20 @@ pub struct Revocation {
     /// latch set, an absent `clients.json` is tampering, not bootstrap.
     #[serde(default)]
     pub clients_enrolled: bool,
+    /// The global kill switch (ADR-0030). While set, every enforcement point
+    /// refuses all bridge activity. Unlike the epoch, this flag IS the
+    /// authority for the kill state: there is no second file to re-read. It
+    /// lives in this record on purpose -- the record is written atomically, so
+    /// no reader can ever observe the kill without the epoch bump that
+    /// accompanies it (the broker's per-request fast path skips work only on
+    /// an unchanged epoch, which this invariant makes sound).
+    #[serde(default)]
+    pub killed: bool,
+    /// Epoch of the last kill-switch transition, either direction (0 = never).
+    /// The native host watches it to know when to re-read `killed` and push
+    /// the state to the extension.
+    #[serde(default)]
+    pub kill_epoch: u64,
 }
 
 impl Revocation {
@@ -193,6 +216,29 @@ pub(crate) fn bump(scope: Scope) -> io::Result<u64> {
     ipc::with_runtime_lock(|| bump_locked(scope))
 }
 
+/// Flip the kill switch (ADR-0030): set `killed`, stamp `kill_epoch`, and
+/// bump the global epoch, all in ONE atomic write under the caller-held
+/// runtime lock. One write is the load-bearing part: the kill and its epoch
+/// bump can never be observed separately, so an enforcement point that skips
+/// re-reading on an unchanged epoch cannot miss a kill.
+///
+/// Fails on an unreadable existing record, in BOTH directions, rather than
+/// rebuilding the file (rebuilding would mask tampering):
+/// - engaging: the caller should tell the user the bridge is ALREADY refusing
+///   everything (a corrupt record fails every enforcement read closed), so
+///   the kill's goal already holds;
+/// - releasing: an unkill from an unknown state would be a fail-open, so it
+///   is refused; recovery is documented in docs/operations.md.
+pub(crate) fn set_killed_locked(killed: bool) -> io::Result<u64> {
+    let mut rev = Revocation::current()?;
+    rev.version = REVOCATION_VERSION;
+    rev.epoch += 1;
+    rev.killed = killed;
+    rev.kill_epoch = rev.epoch;
+    rev.write_locked()?;
+    Ok(rev.epoch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,16 +250,34 @@ mod tests {
         assert_eq!(rev.clients_epoch, 0);
         assert_eq!(rev.host_key_epoch, 0);
         assert!(!rev.clients_enrolled);
+        assert!(!rev.killed, "a fresh install is not killed");
+        assert_eq!(rev.kill_epoch, 0);
+    }
+
+    #[test]
+    fn kill_fields_default_when_absent_from_an_older_record() {
+        // A record written before the kill switch existed (no killed /
+        // kill_epoch fields) still parses, reading as not-killed: the fields
+        // were added with serde defaults so a Phase-5 file stays valid.
+        let old = serde_json::json!({
+            "version": 1, "epoch": 3, "clients_epoch": 3,
+            "host_key_epoch": 0, "clients_enrolled": true
+        });
+        let rev: Revocation = serde_json::from_value(old).unwrap();
+        assert!(!rev.killed);
+        assert_eq!(rev.kill_epoch, 0);
     }
 
     #[test]
     fn serde_roundtrip_preserves_every_field() {
         let rev = Revocation {
             version: REVOCATION_VERSION,
-            epoch: 7,
+            epoch: 8,
             clients_epoch: 6,
             host_key_epoch: 7,
             clients_enrolled: true,
+            killed: true,
+            kill_epoch: 8,
         };
         let bytes = serde_json::to_vec(&rev).unwrap();
         let back: Revocation = serde_json::from_slice(&bytes).unwrap();
@@ -268,8 +332,33 @@ mod proptests {
         rev
     }
 
+    /// The pure core of [`set_killed_locked`], factored the same way.
+    fn set_killed_pure(mut rev: Revocation, killed: bool) -> Revocation {
+        rev.version = REVOCATION_VERSION;
+        rev.epoch += 1;
+        rev.killed = killed;
+        rev.kill_epoch = rev.epoch;
+        rev
+    }
+
+    /// One mutation of the record: an epoch bump for a scope, or a kill-switch
+    /// transition. Mixing them in one property pins that the mutations cannot
+    /// disturb each other's markers.
+    #[derive(Debug, Clone, Copy)]
+    enum Mutation {
+        Bump(Scope),
+        SetKilled(bool),
+    }
+
     fn arb_scope() -> impl Strategy<Value = Scope> {
         prop_oneof![Just(Scope::Clients), Just(Scope::HostKey)]
+    }
+
+    fn arb_mutation() -> impl Strategy<Value = Mutation> {
+        prop_oneof![
+            arb_scope().prop_map(Mutation::Bump),
+            any::<bool>().prop_map(Mutation::SetKilled),
+        ]
     }
 
     proptest! {
@@ -295,6 +384,45 @@ mod proptests {
                 prop_assert_eq!(rev.host_key_epoch, last_host);
                 prop_assert!(rev.clients_epoch <= rev.epoch);
                 prop_assert!(rev.host_key_epoch <= rev.epoch);
+            }
+        }
+
+        /// Interleaving kill transitions with scope bumps keeps every
+        /// invariant: the epoch stays strictly monotonic, `killed` always
+        /// reflects the LAST transition, `kill_epoch` equals the epoch of that
+        /// transition and never runs ahead of the counter, and a kill
+        /// transition never disturbs the other scope markers (nor bumps the
+        /// kill marker).
+        #[test]
+        fn kill_transitions_interleave_soundly(
+            muts in prop::collection::vec(arb_mutation(), 1..64)
+        ) {
+            let mut rev = Revocation::default();
+            let mut last_epoch = rev.epoch;
+            let mut want_killed = false;
+            let mut want_kill_epoch = 0u64;
+            for m in muts {
+                let (before_clients, before_host) = (rev.clients_epoch, rev.host_key_epoch);
+                let before_kill = rev.kill_epoch;
+                match m {
+                    Mutation::Bump(scope) => {
+                        rev = bump_pure(rev, scope);
+                        prop_assert_eq!(rev.kill_epoch, before_kill,
+                            "a scope bump must not move the kill marker");
+                    }
+                    Mutation::SetKilled(k) => {
+                        rev = set_killed_pure(rev, k);
+                        want_killed = k;
+                        want_kill_epoch = rev.epoch;
+                        prop_assert_eq!(rev.clients_epoch, before_clients);
+                        prop_assert_eq!(rev.host_key_epoch, before_host);
+                    }
+                }
+                prop_assert!(rev.epoch > last_epoch, "epoch must strictly increase");
+                last_epoch = rev.epoch;
+                prop_assert_eq!(rev.killed, want_killed);
+                prop_assert_eq!(rev.kill_epoch, want_kill_epoch);
+                prop_assert!(rev.kill_epoch <= rev.epoch);
             }
         }
 

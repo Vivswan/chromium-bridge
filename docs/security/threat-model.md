@@ -265,12 +265,14 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 ## Rebuild delta: new trust boundaries
 
 The workspace/Tauri rebuild
-([ADR-0023](../adr/0023-workspace-monorepo-tauri-app.md)) introduces five
+([ADR-0023](../adr/0023-workspace-monorepo-tauri-app.md)) introduces six
 boundaries that do not exist in the model above. Boundaries 1-3 shipped with
 Phase 4 and are described here as delivered (mechanism, enforcement point,
 residual); see [ADR-0024](../adr/0024-multi-client-attested-pairing-and-broker.md)
-for the full treatment. Boundaries 4 and 5 remain stubs for later phases and
-must be treated as unenforced until their components ship.
+for the full treatment. Boundary 6 shipped with Phase 10
+([ADR-0030](../adr/0030-global-kill-switch-and-audit.md)). Boundaries 4 and 5
+remain stubs for later phases and must be treated as unenforced until their
+components ship.
 
 1. **Harness -> MCP server stdio admission (delivered, ADR-0024).** The
    server no longer trusts whatever spawned it. Before serving a single tool
@@ -370,4 +372,46 @@ must be treated as unenforced until their components ship.
    degrade to an off-DOM, fail-closed extension surface that is better than
    the in-page toast but not unspoofable in the same way. Prompt fatigue is
    a real cost and is why only the highest-risk tools route here.
+
+6. **The global kill switch and the audit trail (delivered, ADR-0030).**
+   One latch (`killed` in `runtime_dir()/revocation.json`, flipped
+   atomically with an epoch bump) halts all bridge activity from any
+   trusted surface: the CLI (`kill`/`unkill`), the extension options page
+   (host-mediated `kill_engage`/`kill_release` control frames), and the
+   future app through the same `core` calls. Enforced independently at
+   four layers so no single check is load-bearing: every `tools/call` from
+   every harness is refused with the stable `BRIDGE_KILLED` code at the
+   shared dispatcher; the broker's watcher severs every live browser
+   connection within a tick and browser attaches are refused at admission;
+   a native host that starts while killed (or with the record unreadable)
+   never dials the broker and serves only the control plane, which is what
+   keeps the extension's release reachable; and the extension's own gate
+   refuses on its SW-only mirror. Release is explicit, never automatic, and
+   requires proof of user presence (`kill::release` demands a
+   `PresenceAttestation` only `crates/core/src/presence.rs` can construct):
+   Touch ID once Phase 8 wires LocalAuthentication; until then a typed
+   confirmation on a real terminal for the CLI (a piped stdin is refused
+   outright) and the options page's confirmation dialog for the extension,
+   attested by the native-messaging channel. A hardware refusal never falls
+   back to a floor, and failed or unavailable auth leaves the switch
+   engaged. Both transitions refuse on an unreadable record (releasing from
+   an unknown state would fail open). Alongside it, every security decision --
+   admissions, refusals, confirmations shown/allowed/denied, revocations
+   per surface, kill transitions, tool calls -- is recorded to stderr and
+   to a bounded 0600 `audit.log` (strict-parsed JSON lines, size-capped
+   rotation), read by `chromium-bridge audit` and, for the extension's own
+   events, mirrored into a bounded ring behind #32 for the read-only
+   options panel. The trail is strictly log-after-decide and can never fail
+   a decision (drop-on-failure with a visible counter). Residuals: the
+   latch shares the revocation record's same-user-writer exposure (a
+   same-user process can release the switch, exactly as it can delete the
+   trust files -- threat #4's class); the pre-Phase-8 presence floors attest
+   intent rather than hardware (a same-user process can drive a pty, and
+   the extension floor is a channel-attested claim), so they stop silent,
+   scripted, and accidental unkills, not that hostile process -- every
+   release is audited with the rung that authorized it; engagement has a
+   bounded sub-second
+   window (one watcher tick) for in-flight work, which the severed sockets
+   then drain; and the audit trail is best-effort by design, so a broken
+   sink yields visible gaps rather than blocked decisions.
 

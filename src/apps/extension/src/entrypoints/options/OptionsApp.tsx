@@ -7,7 +7,9 @@ import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/hooks/useI18n";
 import { useSettings } from "@/hooks/useSettings";
 import type { UiLanguage } from "@/lib/i18n";
+import { AuditPanel } from "./AuditPanel";
 import { EnrollmentPanel } from "./EnrollmentPanel";
+import { KillSwitchPanel } from "./KillSwitchPanel";
 import { SiteList } from "./SiteList";
 import { TrustedClientsPanel } from "./TrustedClientsPanel";
 
@@ -85,6 +87,10 @@ export function OptionsApp() {
           onChange={(v) => void update("uiLanguage", v)}
         />
       </header>
+
+      <Section title={t("options.section_kill")}>
+        <KillSwitchPanel />
+      </Section>
 
       <Section title={t("options.section_security")}>
         <SettingRow
@@ -258,6 +264,10 @@ export function OptionsApp() {
           onChange={(v) => void toggleAllowAll(v)}
         />
         <SiteList />
+      </Section>
+
+      <Section title={t("options.section_audit")}>
+        <AuditPanel />
       </Section>
     </div>
   );

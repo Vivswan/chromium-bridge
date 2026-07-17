@@ -29,6 +29,13 @@ pub enum Command {
     /// `uninstall ...`: reverse exactly the registrations this project
     /// wrote. Flags are parsed by [`uninstall_args`] in the handler.
     Uninstall,
+    /// `kill`: engage the global kill switch (ADR-0030).
+    Kill,
+    /// `unkill`: explicitly release the global kill switch.
+    Unkill,
+    /// `audit [--limit <n>]`: print the on-disk audit trail (read-only).
+    /// Flags are parsed by the handler for a rich error message.
+    Audit,
     /// `-h` / `--help`.
     Help,
     /// Anything unrecognized: print help, exit non-zero.
@@ -96,6 +103,11 @@ pub fn parse(args: &[String]) -> Command {
         Some("revoke-client") => Command::RevokeClient,
         Some("list-clients") if rest.len() == 1 => Command::ListClients,
         Some("uninstall") => Command::Uninstall,
+        Some("kill") if rest.len() == 1 => Command::Kill,
+        Some("unkill") if rest.len() == 1 => Command::Unkill,
+        // `audit` takes --limit, parsed by the handler (audit_args) so a bad
+        // flag reports a clear error rather than a bare help dump.
+        Some("audit") => Command::Audit,
         Some(_) => Command::Unknown,
     }
 }
@@ -340,6 +352,9 @@ pub fn print_help() {
          chromium-bridge revoke-client --name <label>   Untrust a client\n    \
          chromium-bridge list-clients   Print the trusted-client allowlist\n    \
          chromium-bridge uninstall [--manifest-dir <dir>]\n                                Remove exactly the registrations this project wrote\n                                (re-pass any --manifest-dir you registered)\n    \
+         chromium-bridge kill           ENGAGE the global kill switch: refuse all bridge\n                                activity, sever browser connections, survive restarts\n    \
+         chromium-bridge unkill         Explicitly release the kill switch\n                                (interactive confirmation on the terminal)\n    \
+         chromium-bridge audit [--limit <n>]\n                                Print the audit trail (default: last 200 records)\n    \
          chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, …) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
@@ -416,6 +431,10 @@ mod tests {
         );
         assert_eq!(parse(&args(&["revoke"])), Command::Revoke);
         assert_eq!(parse(&args(&["enclave-status"])), Command::EnclaveStatus);
+        assert_eq!(parse(&args(&["kill"])), Command::Kill);
+        assert_eq!(parse(&args(&["unkill"])), Command::Unkill);
+        assert_eq!(parse(&args(&["audit"])), Command::Audit);
+        assert_eq!(parse(&args(&["audit", "--limit", "5"])), Command::Audit);
     }
 
     #[test]
@@ -495,5 +514,13 @@ mod tests {
             vec!["/a".to_string()]
         );
         assert!(uninstall_args(&args(&["uninstall", "--browser", "chrome"])).is_err());
+    }
+
+    #[test]
+    fn kill_switch_verbs_are_strict() {
+        // The kill switch verbs are deliberately strict: no flags, no
+        // arguments, so a typo can never half-engage or half-release it.
+        assert_eq!(parse(&args(&["kill", "--force"])), Command::Unknown);
+        assert_eq!(parse(&args(&["unkill", "now"])), Command::Unknown);
     }
 }

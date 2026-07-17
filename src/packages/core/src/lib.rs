@@ -12,6 +12,7 @@
 #[macro_use]
 pub mod log;
 pub mod allowlist;
+pub mod audit;
 pub mod broker;
 pub mod browsers;
 pub mod cli;
@@ -20,8 +21,10 @@ pub mod enclave;
 pub mod error;
 pub mod identity;
 pub mod ipc;
+pub mod kill;
 pub mod mcp_server;
 pub mod native_host;
+pub mod presence;
 pub mod protocol;
 pub mod registration;
 pub mod revocation;

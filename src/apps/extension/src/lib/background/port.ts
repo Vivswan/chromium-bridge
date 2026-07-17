@@ -6,6 +6,7 @@ import { NATIVE_HOST_ID, parseBridgeReq } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskErrorMessage } from "../shared/masking";
+import * as auditLog from "./audit-log";
 import * as clients from "./clients";
 import { dispatch } from "./dispatch";
 import {
@@ -16,6 +17,7 @@ import {
   isEnclaveFrame,
   onPortConnected,
 } from "./enrollment";
+import * as kill from "./kill";
 
 let port: Browser.runtime.Port | null = null;
 let portOk = false; // did the most recent connect succeed?
@@ -37,11 +39,20 @@ export function connectNative() {
     console.log("[bb] native host connected");
     port.onMessage.addListener(onNativeMessage);
     port.onDisconnect.addListener(onNativeDisconnect);
-    // Hand the enrollment ceremony (ADR-0021) and the trusted-client admin
-    // exchange (ADR-0025) the fresh port. Enrollment decides whether this
-    // connect needs a pairing challenge or a pending host-key deletion.
+    // Hand the enrollment ceremony (ADR-0021), the trusted-client admin
+    // exchange (ADR-0025), and the kill-switch/audit surfaces (ADR-0030) the
+    // fresh port. Enrollment decides whether this connect needs a pairing
+    // challenge or a pending host-key deletion.
     attachPort(postFrame);
     clients.attachPort(postFrame);
+    kill.attachPort(postFrame);
+    auditLog.attachPort(postFrame);
+    // Pull the kill state on every connect (ADR-0030): this is what clears a
+    // stale "killed" mirror after a CLI unkill that happened while the SW
+    // slept (the host pushes transitions and bad startup states, but the
+    // alive direction is deliberately pull-based). The result routes through
+    // handleKillFrame like any other kill_status_result.
+    void kill.requestKillStatus();
     void onPortConnected();
   } catch (e) {
     portOk = false;
@@ -67,6 +78,8 @@ function onNativeDisconnect(_p: Browser.runtime.Port) {
   port = null;
   detachPort();
   clients.detachPort();
+  kill.detachPort();
+  auditLog.detachPort();
   const err = browser.runtime.lastError;
   console.warn("[bb] native host disconnected:", err?.message || "unknown");
   // Chrome kills the host process when the Port drops. Reconnect so a fresh
@@ -95,6 +108,13 @@ function onNativeMessage(msg: unknown) {
   // page's outstanding request. Same trust posture as the enclave frames.
   if (clients.isAdminFrame(msg)) {
     clients.handleAdminFrame(msg);
+    return;
+  }
+  // Kill-switch state (ADR-0030): the reply to a kill control frame, or the
+  // host's unsolicited startup/transition push. Either way it updates the
+  // SW-only mirror the request gate reads.
+  if (kill.isKillStatusFrame(msg)) {
+    void kill.handleKillFrame(msg);
     return;
   }
   // Everything else must be a well-formed BridgeReq: envelope shape, a known

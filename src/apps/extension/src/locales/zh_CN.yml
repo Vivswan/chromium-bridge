@@ -56,6 +56,8 @@ options:
   section_timeouts: "确认超时与宽限窗口"
   section_tools: "工具启用"
   section_sites: "允许的站点（允许列表）"
+  section_kill: "紧急停止开关"
+  section_audit: "审计日志"
 
 settings:
   require_enrollment_title: "要求主机配对（Secure Enclave 注册）"
@@ -174,3 +176,30 @@ tools:
   console_get: "读取控制台日志（遮蔽）"
   page_handle_dialog: "响应页面对话框（默认关闭）"
   page_upload: "上传本地文件（极高风险，默认关闭）"
+
+kill:
+  desc: "一个能立即停止所有桥接活动的总开关：现有浏览器连接被切断，所有工具调用被拒绝，且该状态在重启后仍然保持。只有显式解除（在此处或运行 `chromium-bridge unkill`）才能重新启用桥接。"
+  engage: "启用紧急停止"
+  release: "解除紧急停止"
+  state_alive: "桥接运行中"
+  state_killed: "已停止：所有桥接活动均被拒绝"
+  state_unknown: "状态不可读：为安全起见已拒绝一切活动（请查看 `chromium-bridge doctor`）"
+  state_unmirrored: "尚未从主机收到状态"
+  updated: "最近更新：$1"
+  release_confirm: "解除紧急停止开关？MCP 客户端将能够再次操作此浏览器。"
+  failed: "紧急停止请求失败：$1"
+  no_reply: "原生主机没有响应"
+
+audit:
+  desc: "此扩展最近做出的安全决定：确认、配对批准、撤销、紧急停止开关变更。只读；持久记录保存在主机上（`chromium-bridge audit`）。"
+  empty: "尚无审计事件。"
+  kind_confirm_shown: "已显示确认框"
+  kind_confirm_allowed: "确认已批准"
+  kind_confirm_denied: "确认已拒绝"
+  kind_enroll_approved: "配对指纹已批准"
+  kind_enroll_rejected: "配对指纹已拒绝"
+  kind_enroll_revoked: "配对已撤销（解除配对）"
+  kind_client_revoked: "受信任客户端已撤销"
+  kind_kill_engaged: "已请求启用紧急停止"
+  kind_kill_released: "已请求解除紧急停止"
+  kind_kill_status_changed: "紧急停止状态已变更"

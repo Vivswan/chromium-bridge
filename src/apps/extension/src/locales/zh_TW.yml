@@ -56,6 +56,8 @@ options:
   section_timeouts: "確認逾時與寬限期"
   section_tools: "工具啟用"
   section_sites: "允許的網站（允許清單）"
+  section_kill: "緊急停止開關"
+  section_audit: "稽核日誌"
 
 settings:
   require_enrollment_title: "要求主機配對（Secure Enclave 註冊）"
@@ -174,3 +176,30 @@ tools:
   console_get: "讀取主控台日誌（遮罩）"
   page_handle_dialog: "回應頁面對話方塊（預設關閉）"
   page_upload: "上傳本機檔案（極高風險，預設關閉）"
+
+kill:
+  desc: "一個能立即停止所有橋接活動的總開關：現有瀏覽器連線會被切斷，所有工具呼叫都會被拒絕，且該狀態在重新啟動後仍然保持。只有明確解除（在此處或執行 `chromium-bridge unkill`）才能重新啟用橋接。"
+  engage: "啟用緊急停止"
+  release: "解除緊急停止"
+  state_alive: "橋接運作中"
+  state_killed: "已停止：所有橋接活動均被拒絕"
+  state_unknown: "狀態無法讀取：為安全起見已拒絕一切活動（請查看 `chromium-bridge doctor`）"
+  state_unmirrored: "尚未從主機收到狀態"
+  updated: "最近更新：$1"
+  release_confirm: "解除緊急停止開關？MCP 用戶端將能夠再次操作此瀏覽器。"
+  failed: "緊急停止請求失敗：$1"
+  no_reply: "原生主機沒有回應"
+
+audit:
+  desc: "此擴充功能最近做出的安全決定：確認、配對核准、撤銷、緊急停止開關變更。唯讀；持久紀錄保存在主機上（`chromium-bridge audit`）。"
+  empty: "尚無稽核事件。"
+  kind_confirm_shown: "已顯示確認框"
+  kind_confirm_allowed: "確認已核准"
+  kind_confirm_denied: "確認已拒絕"
+  kind_enroll_approved: "配對指紋已核准"
+  kind_enroll_rejected: "配對指紋已拒絕"
+  kind_enroll_revoked: "配對已撤銷（解除配對）"
+  kind_client_revoked: "受信任用戶端已撤銷"
+  kind_kill_engaged: "已請求啟用緊急停止"
+  kind_kill_released: "已請求解除緊急停止"
+  kind_kill_status_changed: "緊急停止狀態已變更"

@@ -23,6 +23,7 @@ export const ERROR_CODES = [
   "CONNECTION_LOST",
   "BROWSER_AMBIGUOUS",
   "BROWSER_NOT_FOUND",
+  "BRIDGE_KILLED",
   "INTERNAL_ERROR",
 ] as const;
 
@@ -132,6 +133,12 @@ export const ERROR_META: Readonly<Record<ErrorCode, ErrorMeta>> = {
     category: "connection",
     retryable: true,
     message: "No connected browser has that label (see list_browsers).",
+  },
+  BRIDGE_KILLED: {
+    category: "permission",
+    retryable: false,
+    message:
+      "The bridge kill switch is engaged (or its state is unreadable); all bridge activity is refused until a trusted surface explicitly releases it.",
   },
   INTERNAL_ERROR: {
     category: "internal",
