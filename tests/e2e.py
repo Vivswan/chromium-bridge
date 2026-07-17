@@ -168,9 +168,37 @@ def start_bridge_host():
     dials the server's bridge socket and passes peer attestation because it is
     the same binary; the server then drives it. The "extension" side (this test)
     speaks Native-Messaging frames to the host's stdin/stdout, which the host
-    relays to and from the attested socket."""
-    return subprocess.Popen([BIN, "--native-host"], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    relays to and from the attested socket.
+
+    A daemon thread drains the host's stderr and sets `nh.ready` when the host
+    logs its handshake-complete marker, so callers wait on a real readiness
+    signal (wait_host_ready) instead of guessing with a sleep. Draining also
+    keeps the stderr pipe from filling during a test."""
+    nh = subprocess.Popen([BIN, "--native-host"], stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    nh.ready = threading.Event()
+
+    def drain_stderr():
+        for line in nh.stderr:
+            if b"bridge handshake complete" in line:
+                nh.ready.set()
+
+    threading.Thread(target=drain_stderr, daemon=True).start()
+    return nh
+
+
+def wait_host_ready(nh, timeout=5):
+    """Block until the native host reports a completed bridge handshake, or fail
+    loudly on timeout (that is a real regression, not something to sleep past).
+    On timeout, reap the host so a failing test does not leak the subprocess."""
+    if not nh.ready.wait(timeout):
+        nh.kill()
+        try:
+            nh.wait(timeout=3)
+        except Exception:
+            pass
+        raise TimeoutError(
+            f"native host did not complete the bridge handshake within {timeout}s")
 
 
 def serve_bridge_req(nh, responder):
@@ -273,7 +301,7 @@ def test_tab_list_round_trip():
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
+        wait_host_ready(nh)  # let the host connect, attest, and complete the handshake
         # serve the single tab_list request the call below will trigger
         served = []
         t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
@@ -322,7 +350,7 @@ def test_page_eval_round_trip():
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
+        wait_host_ready(nh)  # let the host connect, attest, and complete the handshake
         served = []
         t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
@@ -380,7 +408,7 @@ def test_page_snapshot_precise_round_trip():
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
+        wait_host_ready(nh)  # let the host connect, attest, and complete the handshake
         served = []
         t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
@@ -434,7 +462,7 @@ def test_cookie_get_round_trip():
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
+        wait_host_ready(nh)  # let the host connect, attest, and complete the handshake
         served = []
         t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
@@ -486,7 +514,7 @@ def test_storage_get_round_trip():
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        time.sleep(0.3)  # let the host connect, attest, and complete the handshake
+        wait_host_ready(nh)  # let the host connect, attest, and complete the handshake
         served = []
         t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
         t.start()
@@ -522,11 +550,10 @@ def test_native_host_mode():
     try:
         lf = wait_lock(mcp)
         check(lf is not None, "lock file written")
-        # Launch --native-host the way Chrome would. Pass a fake origin as argv[1].
-        # Binary mode (no text=True) since NM framing is raw bytes.
-        nh = subprocess.Popen([BIN, "--native-host"], stdin=subprocess.PIPE,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(0.3)  # let it connect + complete the handshake
+        # Launch --native-host the way Chrome would; it dials the bridge and
+        # attests. Binary mode (no text=True) since NM framing is raw bytes.
+        nh = start_bridge_host()
+        wait_host_ready(nh)  # let it connect, attest, and complete the handshake
 
         c = McpClient(mcp)
         c.initialize()
