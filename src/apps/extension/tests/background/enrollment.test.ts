@@ -590,7 +590,10 @@ describe("ceremony state machine", () => {
     const realGet = local.get;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
+    let signalQueueParked!: () => void;
+    const queueParked = new Promise<void>((resolve) => (signalQueueParked = resolve));
     local.get = (k, cb) => {
+      signalQueueParked(); // the queued transition is at the held read, provably
       if (typeof cb === "function") {
         void held.then(() => realGet(k, cb));
         return undefined;
@@ -598,14 +601,25 @@ describe("ceremony state machine", () => {
       return held.then(() => realGet(k)) as Promise<Record<string, unknown>>;
     };
     const blocker = onPortConnected(); // stalls inside the queue on its first read
-    local.get = realGet; // everything else reads normally
+    await queueParked; // it has actually stalled - only now is the queue held
+    // Everything else reads normally, but flag the pin read: with the queue
+    // parked, the only reader left is the gate's first pass, and the mock get
+    // snapshots the value synchronously at call time, so once it fires the
+    // first pass's "pinned" answer can no longer be changed by the revoke
+    // applying later.
+    let signalPinRead!: () => void;
+    const pinRead = new Promise<void>((resolve) => (signalPinRead = resolve));
+    local.get = (k, cb) => {
+      if ((typeof k === "string" ? [k] : k).includes("enclavePin")) signalPinRead();
+      return realGet(k, cb);
+    };
 
     let dispatched = 0;
     const gateP = enrollmentGate(() => {
       dispatched += 1;
     }); // first pass sees the pinned state
     const revokeP = revokePin(); // queued behind the blocker, ahead of the gate's re-check
-    await new Promise((resolve) => setTimeout(resolve, 0)); // let the first pass finish
+    await pinRead; // the first pass has actually snapshotted the pin
     release();
     await Promise.all([blocker, revokeP]);
 
@@ -628,7 +642,10 @@ describe("ceremony state machine", () => {
     const realProbe = runtime.getPlatformInfo;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
+    let signalParked!: () => void;
+    const parked = new Promise<void>((resolve) => (signalParked = resolve));
     runtime.getPlatformInfo = async () => {
+      signalParked(); // the gate is here, provably
       await held;
       return realProbe();
     };
@@ -637,7 +654,7 @@ describe("ceremony state machine", () => {
     const gateP = enrollmentGate(() => {
       dispatched += 1;
     });
-    await new Promise((resolve) => setTimeout(resolve, 0)); // gate is parked on the probe
+    await parked; // the gate has actually reached the stalled probe
     await pinStore.setCompromised({ reason: "marked mid-gate", at: Date.now() });
     runtime.getPlatformInfo = realProbe;
     release();
@@ -664,10 +681,15 @@ describe("ceremony state machine", () => {
     const realProbe = runtime.getPlatformInfo;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
+    let signalParked!: () => void;
+    const parked = new Promise<void>((resolve) => (signalParked = resolve));
     let probeCalls = 0;
     runtime.getPlatformInfo = async () => {
       probeCalls += 1;
-      if (probeCalls === 2) await held; // park only the confirming read
+      if (probeCalls === 2) {
+        signalParked(); // the confirming read is here, provably
+        await held; // park only the confirming read
+      }
       return realProbe();
     };
 
@@ -677,7 +699,7 @@ describe("ceremony state machine", () => {
       // below must not have touched the store yet.
       events.push(store.enclavePin ? "dispatched-before-revoke" : "dispatched-after-revoke");
     });
-    await new Promise((resolve) => setTimeout(resolve, 0)); // confirm is parked on the probe
+    await parked; // the confirming read has actually reached the parked probe
     const revokeP = revokePin(); // queued behind the running confirm
     runtime.getPlatformInfo = realProbe;
     release();
