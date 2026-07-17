@@ -42,6 +42,12 @@ jobs:
     env:
       ARCH: ${{ matrix.arch }}
       PLATFORM: ${{ matrix.platform }}
+      # Pass the tag through the environment, never spliced into a run: script.
+      # A crafted workflow_dispatch `tag` input cannot break out of a shell
+      # command when it arrives as $RELEASE_TAG instead of being interpolated
+      # into the script text. The Verify step below also constrains its shape
+      # (this workflow has contents/id-token/attestations write).
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -60,7 +66,14 @@ jobs:
       - name: Verify tag matches Cargo version
         shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$RELEASE_TAG"
+          # Fail closed on an unexpected tag shape before any later step uses it
+          # in a filename. Env-indirection already blocks shell injection; this
+          # keeps the tag to the release grammar (vMAJOR.MINOR.PATCH[-suffix]).
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "refusing malformed release tag: $TAG"
+            exit 1
+          fi
           VER="${TAG#v}"          # strip leading v
           CORE="${VER%%-*}"       # strip any -dev/-rc pre-release suffix
           CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
@@ -84,7 +97,7 @@ jobs:
         id: pkg
         shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$RELEASE_TAG"
           NAME="browser-bridge-${TAG}-${PLATFORM}-${ARCH}"
           mkdir -p "$NAME/extension"
           cp -r extension/dist "$NAME/extension/dist"
@@ -146,7 +159,7 @@ jobs:
         id: extzip
         if: matrix.platform == 'macos'
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$RELEASE_TAG"
           NAME="browser-bridge-extension-${TAG}"
           # Zip the built bundle with a top-level `dist/` folder so users can
           # point "Load unpacked" straight at the extracted directory.
