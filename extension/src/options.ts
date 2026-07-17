@@ -402,6 +402,7 @@ function escapeAttr(s: string) {
     "confirmGraceMs",
     "clickToastTimeoutMs",
     "evalToastTimeoutMs",
+    "hostReverifyMs",
   ] as (keyof Settings)[]) {
     const input = $<HTMLInputElement>(key);
     input.value = String(s[key]);

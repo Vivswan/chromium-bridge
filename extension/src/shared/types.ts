@@ -24,6 +24,7 @@ export interface Settings {
   cdpMode: boolean;
   groupTabs: boolean;
   requireEnrollment: boolean;
+  hostReverifyMs: number;
 }
 
 // A request from the native host, forwarded to the right tab's content script.
