@@ -6,6 +6,11 @@
   rebranded under [ADR-0023](0023-workspace-monorepo-tauri-app.md) to
   `com.vivswan.chromium-bridge.enclave.signing.v1` and
   `chromium-bridge-enclave-v1`.
+- Extended by (2026-07-17): [ADR-0025](0025-any-side-revocation-epoch.md) adds
+  an extension-driven key-deletion path (`enclave_revoke`) and a
+  host-originated `enclave_revoked` push so a pinned extension fails closed on
+  a revocation without waiting for the opt-in reverify. The ceremony and its
+  three original control frames stand unchanged.
 - Extends: [ADR-0019](0019-authenticated-ipc.md) (authenticated socket),
   [ADR-0020](0020-kernel-attested-peer-identity.md) (kernel-attested peers)
 

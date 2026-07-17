@@ -13,6 +13,20 @@ use super::peercred::pid_is_alive;
 use super::socket::{listen, BridgeListener};
 
 /// Per-process runtime info the MCP server publishes for the native host.
+///
+/// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records
+/// (decided in ADR-0025): the lock file is the one file read across BINARY
+/// VERSIONS at the same instant — during an upgrade, a still-installed older
+/// build (Chrome keeps spawning the manifest's host; a harness keeps spawning
+/// its configured server) reads the lock a newer broker wrote, and a strict
+/// parser would take the whole bridge down for the upgrade window if a field
+/// were ever added. Leniency is safe here because the lock file is DISCOVERY,
+/// not authorization: whatever it says, every connection still passes the
+/// peer-UID check, mutual attestation, and the HMAC handshake, so an unknown
+/// field can admit nobody. Forward-compat rule: fields may only be added such
+/// that old readers stay correct ignoring them; a change old readers must NOT
+/// survive gets a NEW FILENAME (`run.lock` -> `run.v2.lock`), so old binaries
+/// see "no lock" and fail closed to no-bridge instead of misreading.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockFile {
     /// How the native host reaches the server. On Unix this is the filesystem

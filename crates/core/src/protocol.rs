@@ -485,6 +485,19 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
 /// - `enclave_error { reason }`: stable codes `unsupported_platform`,
 ///   `not_enrolled`, `invalid_challenge`, `key_invalid`, `keychain_error`,
 ///   `signing_failed`.
+/// - `enclave_revoke {}` (extension -> host, ADR-0025): delete the enrollment
+///   key from the keychain, remove the recorded policy, and bump the
+///   revocation epoch. Deletion is not presence-gated (ADR-0021: it only ever
+///   reduces capability). Answered with `enclave_revoked` on success (also
+///   when no key existed -- the requested end state holds either way) or
+///   `enclave_error { keychain_error }` on failure.
+/// - `enclave_revoked {}` (host -> extension, ADR-0025): the enrollment key is
+///   gone. Sent as the acknowledgement of `enclave_revoke`, and PUSHED
+///   host-originated when the host observes the key was revoked out-of-band
+///   (`chromium-bridge revoke`, `pair --reset`), so a pinned extension flips
+///   to its fail-closed compromised state without waiting for an opt-in
+///   reverify. The extension treats it as capability reduction only: with a
+///   pin it marks the bridge compromised; without one it is a no-op.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EnclaveControl {
@@ -501,6 +514,58 @@ pub enum EnclaveControl {
     EnclaveError {
         reason: String,
     },
+    /// Extension -> host: delete the enrollment key (ADR-0025). An empty
+    /// struct variant so `deny_unknown_fields` applies (unit variants of
+    /// internally tagged enums silently skip it).
+    EnclaveRevoke {},
+    /// Host -> extension: the enrollment key is gone (ack or proactive push).
+    EnclaveRevoked {},
+}
+
+/// Host-admin control frames (ADR-0025), spoken over the native-messaging
+/// channel and handled by the native host itself, exactly like
+/// [`EnclaveControl`]: never forwarded to the MCP server, and dropped if the
+/// server leg tries to inject one. They give the extension's options UI a
+/// managed path to the trusted-client allowlist:
+///
+/// - `client_list {}` -> `client_list_result { ok, enrolled, clients, error? }`
+///   Read-only. `enrolled` mirrors the CLI's unenrolled/enrolled distinction;
+///   `clients` reuses the on-disk entry shape (`{name, anchor: {kind, value},
+///   added_unix}`). A load failure (including the ADR-0025 tamper case) comes
+///   back as `ok: false` with the error text -- the UI shows it, nothing is
+///   guessed.
+/// - `client_revoke { name }` -> `client_revoke_result { ok, error? }`
+///   Removes one trusted client and bumps the revocation epoch in the same
+///   critical section, so a live broker drops that client's connections.
+///
+/// Trust: these frames arrive only from the extension Chrome connected to
+/// this host (`allowed_origins`), and everything they can do -- enumerate or
+/// revoke trust -- is already available to any same-user process via the CLI
+/// (`list-clients`, `revoke-client`), so the frames add no capability beyond
+/// a new path to capability REDUCTION. See ADR-0025.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AdminControl {
+    /// Extension -> host: report the trusted-client allowlist.
+    ClientList {},
+    /// Host -> extension: the allowlist (or the load error, fail closed).
+    ClientListResult {
+        ok: bool,
+        /// Whether admission is enforced (an allowlist exists). `false` with
+        /// `ok: true` is the unenrolled bootstrap posture.
+        enrolled: bool,
+        clients: Vec<crate::allowlist::ClientEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Extension -> host: revoke one trusted client by name.
+    ClientRevoke { name: String },
+    /// Host -> extension: the revocation outcome.
+    ClientRevokeResult {
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 /// How the native host's stdin->socket pump must treat one inbound frame.
@@ -513,19 +578,31 @@ pub enum FrameDisposition {
         nonce: String,
         context: Option<String>,
     },
+    /// A well-formed `enclave_revoke` (ADR-0025): delete the enrollment key
+    /// locally, bump the revocation epoch, reply `enclave_revoked`.
+    RevokeHostKey,
+    /// A well-formed `client_list` (ADR-0025): report the allowlist.
+    ClientList,
+    /// A well-formed `client_revoke` (ADR-0025): revoke the named client.
+    ClientRevoke { name: String },
     /// A control-frame `type` that is not addressed to the host (a stray
-    /// proof/error) — drop it, never forward it.
+    /// proof/error/revoked/result, or a malformed host-directed frame with no
+    /// defined error reply) — drop it, never forward it.
     Drop(&'static str),
-    /// Carries a control-frame `type` but does not parse as that frame:
+    /// Carries the `enclave_challenge` type but does not parse as that frame:
     /// reply `enclave_error { reason: "invalid_challenge" }`, do not forward.
     Malformed,
+    /// Carries a `client_*` request type but does not parse as that frame:
+    /// reply the matching `*_result { ok: false }`, do not forward.
+    MalformedAdmin(&'static str),
 }
 
 /// Classify one native-messaging frame for the pump. Pure, so the
 /// handled-vs-forwarded decision is unit-testable without a socket. Keyed on
-/// the exact `type` tags of [`EnclaveControl`]: bridge requests carry `op`
-/// (no `type`), and the socket handshake frames (`challenge`/`response`)
-/// never traverse the pump, so nothing legitimate collides.
+/// the exact `type` tags of [`EnclaveControl`] and [`AdminControl`]: bridge
+/// requests carry `op` (no `type`), and the socket handshake frames
+/// (`challenge`/`response`) never traverse the pump, so nothing legitimate
+/// collides.
 pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
     let tag = frame.get("type").and_then(Value::as_str);
     match tag {
@@ -535,24 +612,53 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
             }
             _ => FrameDisposition::Malformed,
         },
+        Some("enclave_revoke") => match serde_json::from_value(frame.clone()) {
+            Ok(EnclaveControl::EnclaveRevoke {}) => FrameDisposition::RevokeHostKey,
+            // No error-reply contract exists for a malformed revoke (the
+            // genuine extension sends the exact empty shape); dropping it
+            // fails closed without inventing a misleading reason code.
+            _ => FrameDisposition::Drop("malformed enclave_revoke"),
+        },
+        Some("client_list") => match serde_json::from_value(frame.clone()) {
+            Ok(AdminControl::ClientList {}) => FrameDisposition::ClientList,
+            _ => FrameDisposition::MalformedAdmin("client_list"),
+        },
+        Some("client_revoke") => match serde_json::from_value(frame.clone()) {
+            Ok(AdminControl::ClientRevoke { name }) => FrameDisposition::ClientRevoke { name },
+            _ => FrameDisposition::MalformedAdmin("client_revoke"),
+        },
         Some("enclave_proof") => FrameDisposition::Drop("enclave_proof"),
         Some("enclave_error") => FrameDisposition::Drop("enclave_error"),
+        Some("enclave_revoked") => FrameDisposition::Drop("enclave_revoked"),
+        Some("client_list_result") => FrameDisposition::Drop("client_list_result"),
+        Some("client_revoke_result") => FrameDisposition::Drop("client_revoke_result"),
         _ => FrameDisposition::Forward,
     }
 }
 
-/// The [`EnclaveControl`] `type` tag carried by `frame`, or `None` for
-/// everything else. The native host's socket->stdout pump uses this to drop
-/// enclave control frames arriving FROM the MCP server: the ceremony runs
-/// strictly between the extension and the host itself (a challenge originates
-/// only in the extension, a proof/error only in the host), so the server leg
-/// has no legitimate reason to ever carry one. Zero trust applies to our own
-/// server too — an attested-but-misbehaving server must not be able to inject
-/// an `enclave_error` that burns the extension's outstanding nonce or
-/// provokes a false fail-closed "compromised" mark (ADR-0021).
-pub fn enclave_control_type(frame: &Value) -> Option<&str> {
+/// The host-control `type` tag carried by `frame` — any [`EnclaveControl`] or
+/// [`AdminControl`] tag — or `None` for everything else. The native host's
+/// socket->stdout pump uses this to drop control frames arriving FROM the MCP
+/// server: the ceremony and the admin exchange run strictly between the
+/// extension and the host itself, so the server leg has no legitimate reason
+/// to ever carry one. Zero trust applies to our own server too — an
+/// attested-but-misbehaving server must not be able to inject an
+/// `enclave_error` that burns the extension's outstanding nonce, an
+/// `enclave_revoked` that provokes a false fail-closed "compromised" mark, or
+/// a forged `client_list_result` (ADR-0021/0025).
+pub fn host_control_type(frame: &Value) -> Option<&str> {
     match frame.get("type").and_then(Value::as_str) {
-        tag @ Some("enclave_challenge" | "enclave_proof" | "enclave_error") => tag,
+        tag @ Some(
+            "enclave_challenge"
+            | "enclave_proof"
+            | "enclave_error"
+            | "enclave_revoke"
+            | "enclave_revoked"
+            | "client_list"
+            | "client_list_result"
+            | "client_revoke"
+            | "client_revoke_result",
+        ) => tag,
         _ => None,
     }
 }
@@ -963,7 +1069,7 @@ mod tests {
                 .is_ok()
         );
 
-        // Enclave control frames: all three variants reject an unexpected
+        // Enclave control frames: all five variants reject an unexpected
         // field, and a challenge carrying one is classified Malformed
         // (answered with an error), never signed.
         assert!(serde_json::from_value::<EnclaveControl>(
@@ -978,10 +1084,53 @@ mod tests {
             json!({ "type": "enclave_error", "reason": "r", "extra": 1 })
         )
         .is_err());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "enclave_revoke", "extra": 1 })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "enclave_revoked", "extra": 1 })
+        )
+        .is_err());
+        assert!(
+            serde_json::from_value::<EnclaveControl>(json!({ "type": "enclave_revoke" })).is_ok()
+        );
+        assert!(
+            serde_json::from_value::<EnclaveControl>(json!({ "type": "enclave_revoked" })).is_ok()
+        );
         assert!(matches!(
             classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 })),
             FrameDisposition::Malformed
         ));
+
+        // Admin control frames (ADR-0025): every variant rejects an
+        // unexpected field, with positive controls.
+        for (bad, good) in [
+            (
+                json!({ "type": "client_list", "extra": 1 }),
+                json!({ "type": "client_list" }),
+            ),
+            (
+                json!({ "type": "client_revoke", "name": "codex", "extra": 1 }),
+                json!({ "type": "client_revoke", "name": "codex" }),
+            ),
+            (
+                json!({ "type": "client_revoke_result", "ok": true, "extra": 1 }),
+                json!({ "type": "client_revoke_result", "ok": true }),
+            ),
+            (
+                json!({ "type": "client_list_result", "ok": true, "enrolled": false,
+                        "clients": [], "extra": 1 }),
+                json!({ "type": "client_list_result", "ok": true, "enrolled": false,
+                        "clients": [] }),
+            ),
+        ] {
+            assert!(
+                serde_json::from_value::<AdminControl>(bad.clone()).is_err(),
+                "should reject: {bad}"
+            );
+            assert!(serde_json::from_value::<AdminControl>(good).is_ok());
+        }
     }
 
     #[test]
@@ -1140,30 +1289,121 @@ mod tests {
     }
 
     #[test]
-    fn enclave_control_type_matches_exactly_the_three_control_tags() {
+    fn classify_handles_revoke_and_admin_frames_locally() {
+        // A well-formed enclave_revoke is handled by the host (ADR-0025).
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_revoke" })),
+            FrameDisposition::RevokeHostKey
+        ));
+        // A malformed one is dropped: no error-reply contract exists for it,
+        // and dropping fails closed without a misleading reason code.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_revoke", "extra": 1 })),
+            FrameDisposition::Drop(_)
+        ));
+        // A stray enclave_revoked from the extension is dropped (it is a
+        // host-originated frame only).
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "enclave_revoked" })),
+            FrameDisposition::Drop("enclave_revoked")
+        ));
+
+        // Admin requests classify to their handlers...
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "client_list" })),
+            FrameDisposition::ClientList
+        ));
+        match classify_nm_frame(&json!({ "type": "client_revoke", "name": "codex" })) {
+            FrameDisposition::ClientRevoke { name } => assert_eq!(name, "codex"),
+            other => panic!("expected ClientRevoke, got {other:?}"),
+        }
+        // ...malformed admin requests get the matching {ok:false} reply...
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "client_list", "extra": 1 })),
+            FrameDisposition::MalformedAdmin("client_list")
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "client_revoke" })),
+            FrameDisposition::MalformedAdmin("client_revoke")
+        ));
+        // ...and stray result frames from the browser side are dropped.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "client_list_result", "ok": true })),
+            FrameDisposition::Drop("client_list_result")
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "client_revoke_result", "ok": true })),
+            FrameDisposition::Drop("client_revoke_result")
+        ));
+    }
+
+    #[test]
+    fn admin_control_serde_roundtrips() {
+        use crate::allowlist::{Anchor, ClientEntry};
+        let result = AdminControl::ClientListResult {
+            ok: true,
+            enrolled: true,
+            clients: vec![ClientEntry {
+                name: "claude-code".into(),
+                anchor: Anchor::TeamId("3ZMH96L4V9".into()),
+                added_unix: 42,
+            }],
+            error: None,
+        };
+        let v = serde_json::to_value(&result).unwrap();
+        assert_eq!(v["type"], "client_list_result");
+        assert_eq!(v["clients"][0]["anchor"]["kind"], "team_id");
+        // `error: None` is omitted on the wire.
+        assert!(v.get("error").is_none());
+        let back: AdminControl = serde_json::from_value(v).unwrap();
+        assert!(matches!(
+            back,
+            AdminControl::ClientListResult { ok: true, .. }
+        ));
+
+        let revoke_err = AdminControl::ClientRevokeResult {
+            ok: false,
+            error: Some("no trusted client named 'x'".into()),
+        };
+        let v = serde_json::to_value(&revoke_err).unwrap();
+        assert_eq!(v["type"], "client_revoke_result");
+        assert_eq!(v["ok"], false);
+        let back: AdminControl = serde_json::from_value(v).unwrap();
+        assert!(matches!(
+            back,
+            AdminControl::ClientRevokeResult { ok: false, .. }
+        ));
+    }
+
+    #[test]
+    fn host_control_type_matches_exactly_the_control_tags() {
+        // Every host-handled control tag is recognized (the socket->stdout
+        // pump drops all of them when the server leg tries to inject one)...
+        for tag in [
+            "enclave_challenge",
+            "enclave_proof",
+            "enclave_error",
+            "enclave_revoke",
+            "enclave_revoked",
+            "client_list",
+            "client_list_result",
+            "client_revoke",
+            "client_revoke_result",
+        ] {
+            assert_eq!(
+                host_control_type(&json!({ "type": tag })),
+                Some(tag),
+                "tag {tag} must be recognized as host control"
+            );
+        }
+        // ...while bridge traffic and near-misses pass through untouched.
         assert_eq!(
-            enclave_control_type(&json!({ "type": "enclave_challenge", "nonce": "n" })),
-            Some("enclave_challenge")
-        );
-        assert_eq!(
-            enclave_control_type(&json!({ "type": "enclave_proof" })),
-            Some("enclave_proof")
-        );
-        assert_eq!(
-            enclave_control_type(&json!({ "type": "enclave_error", "reason": "r" })),
-            Some("enclave_error")
-        );
-        // Bridge traffic and near-misses pass through untouched.
-        assert_eq!(
-            enclave_control_type(&json!({ "id": 1, "op": "tab_list" })),
+            host_control_type(&json!({ "id": 1, "op": "tab_list" })),
             None
         );
-        assert_eq!(
-            enclave_control_type(&json!({ "type": "enclave_other" })),
-            None
-        );
-        assert_eq!(enclave_control_type(&json!({ "type": 5 })), None);
-        assert_eq!(enclave_control_type(&json!("enclave_error")), None);
+        assert_eq!(host_control_type(&json!({ "type": "enclave_other" })), None);
+        assert_eq!(host_control_type(&json!({ "type": 5 })), None);
+        assert_eq!(host_control_type(&json!("enclave_error")), None);
     }
 }
 

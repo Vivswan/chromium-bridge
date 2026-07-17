@@ -257,6 +257,10 @@ export function onPortConnected(): Promise<void> {
     // the gate is already blocking every request, so there is no ceremony to
     // drive.
     if (!(await hardenStorageAccess()).ok) return;
+    // ADR-0025: an unpair that could not reach the host yet (port was down,
+    // SW died) is retried on every connect until the host acknowledges the
+    // key deletion. Independent of the gate/ceremony state below.
+    await maybeSendPendingHostRevoke();
     await updateBadge();
     if ((await getSetting("requireEnrollment")) !== true) return;
     if (!(await platformCanEnroll())) return; // no Enclave here; no ceremony
@@ -270,6 +274,18 @@ export function onPortConnected(): Promise<void> {
     if (await pinStore.getPaused()) return; // user halted pairing; manual restart only
     await issueChallenge("pair");
   });
+}
+
+/** Resend the not-yet-acknowledged host key-deletion request (ADR-0025). The
+ * durable flag is cleared only by the host's `enclave_revoked` ack, so a lost
+ * frame or a dead SW just means another send here; deletion is idempotent on
+ * the host side. */
+async function maybeSendPendingHostRevoke(): Promise<void> {
+  if (!postFrame) return;
+  if (!(await pinStore.getHostRevokePending())) return;
+  if (postFrame({ type: "enclave_revoke" })) {
+    console.log("[bb] requested host enrollment-key deletion (pending ack)");
+  }
 }
 
 /** Optional lazy re-verification (hostReverifyMs > 0): on connect, when the
@@ -306,9 +322,32 @@ export function handleEnclaveFrame(msg: EnclaveInboundFrame): Promise<void> {
   return serialized(async () => {
     if (msg.type === "enclave_proof") return handleProof(msg);
     if (msg.type === "enclave_error") return handleError(msg);
-    // The host never sends a challenge toward the browser; drop it.
+    if (msg.type === "enclave_revoked") return handleRevoked();
+    // The host never sends a challenge (or a revoke request) toward the
+    // browser; drop it.
     console.warn("[bb] dropping unexpected", msg.type, "frame from native host");
   });
+}
+
+/** The host says the enrollment key is gone (ADR-0025): the acknowledgement
+ * of our own `enclave_revoke`, or a host-originated push after an
+ * out-of-band `chromium-bridge revoke` / `pair --reset`. Pure capability
+ * reduction, so the (unauthenticated) frame is safe to honor: with a pin it
+ * fails the bridge closed until the user re-pairs; without one it only
+ * settles the pending-unpair bookkeeping. */
+async function handleRevoked(): Promise<void> {
+  if (await pinStore.getHostRevokePending()) {
+    await pinStore.setHostRevokePending(false);
+    console.log("[bb] host acknowledged the enrollment-key deletion");
+  }
+  const pin = await pinStore.getPin();
+  if (!pin) return; // nothing pinned: nothing to fail closed
+  await pinStore.setCompromised({
+    reason: "the host's enrollment key was revoked (host-originated notice)",
+    at: Date.now(),
+  });
+  console.error("[bb] host enrollment key revoked; bridge disabled until re-pair");
+  await updateBadge();
 }
 
 async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
@@ -522,16 +561,28 @@ export function rejectPending(): Promise<{ ok: boolean; error?: string }> {
   });
 }
 
-/** Forget the pin and all ceremony records. Pairing does not auto-restart
- * afterwards (paused), so revoking never triggers a surprise Touch ID
- * prompt; the user starts the next ceremony from the options page. */
+/** Forget the pin and all ceremony records, and ask the host to delete its
+ * enclave key too (ADR-0025: unpairing from either side leaves NO usable
+ * credential behind - previously an extension-side revoke left the host's
+ * keychain key alive). The deletion request is durable: if the port is down
+ * it is stored and resent on every connect until the host acknowledges.
+ * Pairing does not auto-restart afterwards (paused), so revoking never
+ * triggers a surprise Touch ID prompt; the user starts the next ceremony
+ * from the options page. */
 export function revokePin(): Promise<{ ok: boolean }> {
   return serialized(async () => {
     clearOutstanding();
     await pinStore.clearAll();
     await pinStore.setPaused(true);
+    // Only where an enclave key can exist: on other platforms there is no
+    // host key to delete, and queueing the request would just resend a
+    // frame the host answers with unsupported_platform forever.
+    if (await platformCanEnroll()) {
+      await pinStore.setHostRevokePending(true);
+      await maybeSendPendingHostRevoke();
+    }
     await updateBadge();
-    console.log("[bb] enrollment pin revoked");
+    console.log("[bb] enrollment pin revoked; host key deletion requested");
     return { ok: true };
   });
 }
@@ -554,6 +605,9 @@ export interface EnrollmentStatus {
   compromisedReason?: string;
   lastError?: string;
   paused?: boolean;
+  /** ADR-0025: an unpair's host-key deletion has not been acknowledged yet
+   * (it completes on the next host connection). */
+  hostRevokePending?: boolean;
 }
 
 export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
@@ -568,6 +622,7 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
     platformSupported,
     lastError: lastError ?? undefined,
     paused: await pinStore.getPaused(),
+    hostRevokePending: (await pinStore.getHostRevokePending()) || undefined,
   };
   if (compromised) {
     return {

@@ -28,6 +28,7 @@ export function EnrollmentPanel() {
         "enclaveCompromised",
         "enclaveLastError",
         "enclaveLastVerifiedAt",
+        "enclaveHostRevokePending",
         "requireEnrollment",
       ];
       if (area === "local" && keys.some((k) => k in changes)) void refresh();
@@ -149,6 +150,10 @@ export function EnrollmentPanel() {
             </Button>
           </Actions>
         </>
+      )}
+
+      {st.hostRevokePending && (
+        <div className="mt-2 text-xs text-muted">{t("enroll.host_revoke_pending")}</div>
       )}
 
       {st.lastError && (
