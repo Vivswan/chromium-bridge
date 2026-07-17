@@ -134,7 +134,7 @@
     <input type="checkbox" id="requireEnrollment" />
     <div class="body">
       <div class="title">要求主机配对(Secure Enclave 注册)</div>
-      <div class="desc">开启时,只有完成一次配对仪式并固定了主机公钥后,桥接请求才会被执行(ADR-0021)。配对能阻止静默配对——恶意的 <code>claude mcp add</code> 或任何未经你批准的主机都无法驱动浏览器;配合下方「立即验证」也能发现主机被替换。它<b>不能</b>阻止已配对之后同用户进程的静默替换(那需要每操作 Touch ID,是另一个未实现的可选层级)。仅 macOS 支持;在其他系统上开启此项会使桥接一直保持阻断。</div>
+      <div class="desc">开启时,只有完成一次配对仪式并固定了主机公钥后,桥接请求才会被执行(ADR-0021)。配对能阻止静默配对——恶意的 <code>claude mcp add</code> 或任何未经你批准的主机都无法驱动浏览器;配合下方「立即验证」也能发现主机被替换。它<b>不能</b>阻止已配对之后同用户进程的静默替换(那需要每操作 Touch ID,是另一个未实现的可选层级)。仅 macOS 有 Secure Enclave:其他平台上配对不可用,此项<b>不会</b>阻断桥接——桥接以基础认证运行(Linux:UDS + peer-UID + HMAC + 二进制签名校验;Windows:仅 HMAC),主机被替换的残余风险见威胁模型。判定用的是浏览器自身的平台信息,不采信主机的自述,因此 macOS 上的主机谎称「不支持」不能绕过配对。</div>
       <div class="warn" id="requireEnrollment-warn" style="display:none">⚠ 关闭后,任何能写 MCP 配置的本地进程都可能在你不知情时建立并使用桥接。</div>
     </div>
   </div>
