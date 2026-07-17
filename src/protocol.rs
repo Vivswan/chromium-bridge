@@ -149,27 +149,55 @@ impl JsonRpc {
     }
 }
 
+/// Hard cap on a single inbound MCP NDJSON line, the same 64 MB order of
+/// magnitude [`nm_read_frame`] and [`bridge_read`] clamp to (counting the whole
+/// line, trailing newline included). The MCP client is trusted, but the most
+/// likely real attack on this system is prompt-injection hijacking that client
+/// (a web page telling the model to misbehave), so the client stdio leg must
+/// not be able to exhaust memory with one newline-less line either.
+pub const MCP_MAX_LINE: usize = 64 * 1024 * 1024;
+
 /// Read one NDJSON line from `r` and parse it as JSON-RPC. Returns `Ok(None)`
-/// on EOF (client gone → shut down).
+/// on EOF (client gone → shut down). The line is bounded to [`MCP_MAX_LINE`];
+/// an overrun fails closed with `InvalidData` rather than buffering unbounded.
 pub fn mcp_read<R: io::BufRead>(r: &mut R) -> io::Result<Option<JsonRpc>> {
-    let mut line = Vec::new();
-    let n = r.read_until(b'\n', &mut line)?;
-    if n == 0 {
-        return Ok(None);
+    mcp_read_capped(r, MCP_MAX_LINE)
+}
+
+fn mcp_read_capped<R: io::BufRead>(r: &mut R, max_line: usize) -> io::Result<Option<JsonRpc>> {
+    // Loop (not recurse) over skipped blank lines: a client flooding blank
+    // lines must not grow the stack, which under panic=abort would abort the
+    // process.
+    loop {
+        let mut line = Vec::new();
+        // Take bounds how many bytes read_until will pull in. The +1 sentinel
+        // byte lets a full-but-legal line (exactly at the cap) be told apart
+        // from one that ran past it: only an overrun leaves line.len() above
+        // max_line.
+        let n = (&mut *r)
+            .take(max_line as u64 + 1)
+            .read_until(b'\n', &mut line)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if line.len() > max_line {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "mcp frame exceeds the line-length cap",
+            ));
+        }
+        // Trim a trailing newline; tolerate CRLF.
+        while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let msg: JsonRpc = serde_json::from_slice(&line).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("mcp json decode: {e}"))
+        })?;
+        return Ok(Some(msg));
     }
-    // Trim a trailing newline; tolerate CRLF.
-    while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
-        line.pop();
-    }
-    if line.is_empty() {
-        // Blank line: treat as no-op, signal "retry" via None-with-flag.
-        // Simplest: return an empty-payload parse attempt that will fail.
-        // Instead we recurse once to skip.
-        return mcp_read(r);
-    }
-    let msg: JsonRpc = serde_json::from_slice(&line)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("mcp json decode: {e}")))?;
-    Ok(Some(msg))
 }
 
 /// Write one JSON-RPC message as a single NDJSON line (LF-terminated).
@@ -398,9 +426,40 @@ mod tests {
     }
 
     #[test]
-    fn mcp_read_skips_blank_lines() {
+    fn mcp_read_rejects_a_line_over_the_cap() {
+        // A newline-less client line longer than the cap is rejected instead of
+        // being buffered in full (the memory-exhaustion path on the client
+        // leg). A tiny cap keeps the test fast; mcp_read wires the real 64 MB.
+        let mut r = Cursor::new(vec![b'x'; 64]); // no newline, cap is 16
+        let err = mcp_read_capped(&mut r, 16).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn mcp_read_cap_boundary_is_exact() {
+        // The cap counts the whole line, newline included. A line whose length
+        // equals the cap parses; one byte tighter rejects it. Pins the
+        // off-by-one the +1 sentinel guards.
+        let mut wire = br#"{"jsonrpc":"2.0","id":1}"#.to_vec();
+        wire.push(b'\n');
+        let total = wire.len();
+
+        let got = mcp_read_capped(&mut Cursor::new(wire.clone()), total).unwrap();
+        assert_eq!(got.unwrap().id, Some(json!(1)));
+
+        let err = mcp_read_capped(&mut Cursor::new(wire), total - 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn mcp_read_skips_blank_lines_without_recursing() {
+        // A large flood of blank lines: the iterative loop skips them in
+        // constant stack, whereas the old `return mcp_read(r)` recursion would
+        // grow the stack once per blank and overflow (aborting under
+        // panic=abort). Sized well past any plausible stack depth, so a
+        // regression back to recursion makes this test crash rather than pass.
+        let mut buf = vec![b'\n'; 200_000];
         let msg = JsonRpc::ok(json!(2), json!({}));
-        let mut buf = b"\n\n".to_vec();
         mcp_write(&mut buf, &msg).unwrap();
         let got = mcp_read(&mut Cursor::new(buf)).unwrap().unwrap();
         assert_eq!(got.id, Some(json!(2)));
@@ -453,10 +512,11 @@ mod tests {
 
     #[test]
     fn bridge_read_skips_blank_lines_without_recursing() {
-        // Blank lines are skipped iteratively, so a flood of them cannot grow
-        // the stack (which would abort under panic=abort). A few leading blanks
-        // still resolve to the first real frame.
-        let mut wire = b"\n\n\r\n".to_vec();
+        // A large flood of blank lines is skipped iteratively, in constant
+        // stack; a recursive skip would grow the stack once per blank and
+        // overflow (aborting under panic=abort). Sized well past any plausible
+        // stack depth, so a regression to recursion crashes rather than passes.
+        let mut wire = vec![b'\n'; 200_000];
         bridge_write(
             &mut wire,
             &BridgeReq {
