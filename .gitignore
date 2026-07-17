@@ -20,6 +20,10 @@ src/apps/extension/.wxt/
 # Downloaded isolated Chrome for Testing (browser suites; never committed)
 /tests/.chrome-for-testing/
 
+# Tauri desktop shell (src/apps/desktop): gen/ holds the capability schemas
+# tauri-build writes on every compile.
+/src/apps/desktop/gen/
+
 # Local install destination (binaries live in ~/.chromium-bridge/, but guard
 # against accidental copies into the repo)
 /chromium-bridge

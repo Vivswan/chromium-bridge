@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the Tauri APP binary only. Deliberately DIFFERENT from
+  entitlements/host.entitlements (no keychain-access-groups): the app never
+  touches the Enclave, and the difference makes the post-bundle codesign
+  dumps unambiguous about whether the bundler re-signed the nested host with
+  the app's entitlements (ADR-0026 records the observed behavior).
+
+  com.apple.security.get-task-allow is deliberately absent here too.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.application-identifier</key>
+  <string>3ZMH96L4V9.com.vivswan.chromium-bridge</string>
+</dict>
+</plist>

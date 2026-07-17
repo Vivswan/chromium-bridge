@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist for the HELPER BUNDLE that wraps the chromium-bridge host inside
+  the desktop app: Contents/Helpers/chromium-bridge.app. The host carries
+  restricted entitlements (application-identifier, keychain-access-groups),
+  and macOS only honors those on a bundle's main executable with an
+  embedded.provisionprofile - a bare nested binary is killed at exec
+  (ADR-0026 records the experiment). scripts/desktop-bundle.ts assembles the
+  bundle; this file is its only static piece.
+
+  LSUIElement: the helper is exec'd directly (by Chrome via the
+  native-messaging manifest, or by the user for `pair`), never launched as a
+  GUI app; keep it out of the Dock if anything ever does launch it.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.vivswan.chromium-bridge</string>
+  <key>CFBundleExecutable</key>
+  <string>chromium-bridge</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleName</key>
+  <string>Chromium Bridge Host</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>10.15</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
