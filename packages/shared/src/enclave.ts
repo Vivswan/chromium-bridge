@@ -1,6 +1,7 @@
-// Shapes for the ADR-0021 enclave enrollment ceremony: the control frames
-// exchanged with the native host over the native-messaging port, and the
-// records the extension persists in chrome.storage.local.
+// Shapes for the ADR-0021 enclave enrollment ceremony and the ADR-0025
+// revocation/admin exchange: the control frames exchanged with the native
+// host over the native-messaging port, and the records the extension persists
+// in chrome.storage.local.
 //
 // Frames are loose objects (the host may add fields; unknown extras are
 // ignored), because the security decision is made from the validated fields
@@ -11,7 +12,16 @@
 
 import { z } from "zod";
 
-export const ENCLAVE_FRAME_TYPES = ["enclave_challenge", "enclave_proof", "enclave_error"] as const;
+export const ENCLAVE_FRAME_TYPES = [
+  "enclave_challenge",
+  "enclave_proof",
+  "enclave_error",
+  // ADR-0025: extension -> host key-deletion request, and the host-originated
+  // "the key is gone" notice/ack. Both classify as ceremony traffic; the
+  // handlers drop the directions that make no sense inbound.
+  "enclave_revoke",
+  "enclave_revoked",
+] as const;
 
 // Classification only: is this native-messaging frame ceremony traffic
 // (carries `type`) rather than a bridge request (carries `op`)? A frame that
@@ -40,6 +50,51 @@ export const EnclaveErrorFrameSchema = z.looseObject({
 });
 
 export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
+
+// ---- ADR-0025: trusted-client admin frames (host-handled) --------------------
+
+export const ADMIN_RESULT_FRAME_TYPES = ["client_list_result", "client_revoke_result"] as const;
+
+// Classification for the admin replies the host sends back. Requests
+// (client_list / client_revoke) are outbound only and never classify inbound.
+export const AdminInboundFrameSchema = z.looseObject({
+  type: z.enum(ADMIN_RESULT_FRAME_TYPES),
+});
+
+export type AdminInboundFrame = z.infer<typeof AdminInboundFrameSchema>;
+
+// One trusted MCP client, in the host's on-disk entry shape. The anchor is
+// the authorization key (attested image hash or macOS signing Team ID); the
+// name is a human-facing label.
+export const TrustedClientSchema = z.looseObject({
+  name: z.string().min(1),
+  anchor: z.looseObject({
+    kind: z.enum(["hash", "team_id"]),
+    value: z.string().min(1),
+  }),
+  added_unix: z.number().optional(),
+});
+
+export type TrustedClient = z.infer<typeof TrustedClientSchema>;
+
+export const ClientListResultSchema = z.looseObject({
+  type: z.literal("client_list_result"),
+  ok: z.boolean(),
+  // Whether admission is enforced (an allowlist exists on the host).
+  enrolled: z.boolean(),
+  clients: z.array(TrustedClientSchema),
+  error: z.string().optional(),
+});
+
+export type ClientListResult = z.infer<typeof ClientListResultSchema>;
+
+export const ClientRevokeResultSchema = z.looseObject({
+  type: z.literal("client_revoke_result"),
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+
+export type ClientRevokeResult = z.infer<typeof ClientRevokeResultSchema>;
 
 const KEY_ID_HEX = /^[0-9a-f]{64}$/;
 

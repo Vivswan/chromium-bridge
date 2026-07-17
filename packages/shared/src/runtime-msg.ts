@@ -28,6 +28,16 @@ export const RuntimeMsgSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("remove_allow"), glob: z.string().min(1) }),
   z.strictObject({ type: z.literal("get_status") }),
   z.strictObject({ type: z.literal("get_enrollment") }),
+  // The ADR-0025 trusted-client admin surface: read the list, revoke one.
+  // Both are relayed to the native host as control frames; the router
+  // additionally requires an extension-page sender (a content script must
+  // never enumerate or mutate the trust set). The name is validated like a
+  // host-side label so a malformed value never reaches the wire.
+  z.strictObject({ type: z.literal("get_clients") }),
+  z.strictObject({
+    type: z.literal("revoke_client"),
+    name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/),
+  }),
   // The ADR-0021 pairing ceremony actions.
   z.strictObject({ type: z.literal("enroll_pair") }),
   z.strictObject({ type: z.literal("enroll_verify") }),

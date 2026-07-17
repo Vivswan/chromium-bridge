@@ -818,6 +818,86 @@ def c8_browser_gated_todo():
 
 
 # ---------------------------------------------------------------------------
+# C10 - revoke mid-dispatch: the epoch guard drops the harness fail-closed
+# ---------------------------------------------------------------------------
+
+def c10_revoke_mid_dispatch():
+    print("\n[C10] revoke mid-session (LIVE: epoch guard drops the harness, broker recovers)")
+    if os.name == "nt":
+        skip("C10 uses the Unix harness-attestation path")
+        return
+    adv._rm_lock()
+    adv._rm_clients()
+    broker = None
+    nh = None
+    try:
+        # A paired client with a live broker + browser, driving normally.
+        adv._pair_client("--name", "pytest", "--this-parent")
+        broker = adv.start_server()
+        if not check(e2e.wait_lock(broker) is not None, "C10 broker up"):
+            return
+        cb = mcp_ready(broker)
+        nh = start_host()
+        if not check(wait_ready(nh), "C10 browser attached"):
+            return
+        check(round_trip_ok(cb, nh, title="C10-before", _id=1000),
+              "C10 the paired client drives the bridge before the revoke")
+
+        # Revoke mid-session from the CLI surface. The next request must be
+        # dropped by the per-request epoch guard (fail closed), observed as
+        # EOF on the broker's stdout rather than a response.
+        subprocess.run([e2e.BIN, "revoke-client", "--name", "pytest"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cb.send({"jsonrpc": "2.0", "id": 1001, "method": "tools/call",
+                 "params": {"name": "tab_list", "arguments": {}}})
+        line = bounded("C10 revoked call", lambda: broker.stdout.readline(), 10)
+        check(line == "", "C10 the revoked harness's next call gets EOF (fail closed)")
+        try:
+            broker.wait(timeout=8)
+        except Exception:
+            pass
+        check(broker.poll() is not None, "C10 the broker for the revoked harness exits")
+
+        # Re-pair and confirm the bridge fully recovers for a trusted client.
+        # A fresh server binding the socket also proves no wedged owner was
+        # left holding it after the revoked broker exited.
+        adv._pair_client("--name", "pytest", "--this-parent")
+        broker2 = adv.start_server()
+        try:
+            if check(e2e.wait_lock(broker2, timeout=8) is not None,
+                     "C10 a re-paired client becomes a fresh broker"):
+                cb2 = mcp_ready(broker2)
+                nh2 = start_host()
+                try:
+                    if check(wait_ready(nh2), "C10 browser re-attaches to the new broker"):
+                        check(round_trip_ok(cb2, nh2, title="C10-after", _id=1002),
+                              "C10 the bridge fully recovers after the revoke")
+                finally:
+                    close_host(nh2)
+        finally:
+            adv._reap(broker2)
+    finally:
+        close_host(nh)
+        adv._reap(broker)
+        adv._rm_clients()
+
+
+def c11_revoke_during_sw_death_browser_gated():
+    print("\n[C11] revoke during MV3 service-worker death (SKIP: browser-gated)")
+    # The extension side of the revoke path -- a host-originated enclave_revoked
+    # arriving across an MV3 service-worker restart, and the durable
+    # host-revoke-pending flag being re-sent on the next connect -- can only be
+    # exercised end to end in an ISOLATED browser (the SW lifecycle, storage.local
+    # durability, and the native-messaging port are Chrome-owned). The
+    # socket/process half (epoch guard, host key deletion, the push trigger) is
+    # covered by C10, the Rust unit tests, and adversarial A17/A18; the
+    # extension half by the vitest fakeBrowser suite (enrollment.test.ts,
+    # clients.test.ts). The full cross-process interleaving is the isolated
+    # security_browser_test's job (CHROME_BIN), never the real browser.
+    skip("C11 browser-gated (isolated Chrome); covered piecewise by C10 + unit/adv suites")
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     e2e.ensure_binary()          # build with the real environment if missing
@@ -833,6 +913,8 @@ def main():
         c6_peer_death_in_handshake_window()
         c7_stale_lock_and_socket()
         c9_relay_attach_drop_churn()
+        c10_revoke_mid_dispatch()
+        c11_revoke_during_sw_death_browser_gated()
         c8_browser_gated_todo()
     finally:
         shutil.rmtree(rundir, ignore_errors=True)

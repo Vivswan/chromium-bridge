@@ -29,6 +29,7 @@ const COMPROMISED_KEY = "enclaveCompromised";
 const PAUSED_KEY = "enclavePairingPaused";
 const LAST_ERROR_KEY = "enclaveLastError";
 const LAST_VERIFIED_KEY = "enclaveLastVerifiedAt";
+const HOST_REVOKE_PENDING_KEY = "enclaveHostRevokePending";
 
 async function read(key: string): Promise<unknown> {
   const { [key]: v } = await browser.storage.local.get(key);
@@ -121,7 +122,24 @@ export async function setLastVerifiedAt(at: number): Promise<void> {
   await browser.storage.local.set({ [LAST_VERIFIED_KEY]: at });
 }
 
-/** Revoke: forget the pin and every ceremony record. */
+/** ADR-0025: a revoke here must also delete the HOST's enclave key (closing
+ * the asymmetry where unpairing left a live keychain key behind). The request
+ * rides a control frame on the native-messaging port; this durable flag
+ * survives MV3 SW death and port gaps, and is cleared only by the host's
+ * `enclave_revoked` acknowledgement - until then, every port connect resends
+ * the request (deletion is idempotent on the host side). */
+export async function getHostRevokePending(): Promise<boolean> {
+  return (await read(HOST_REVOKE_PENDING_KEY)) === true;
+}
+
+export async function setHostRevokePending(on: boolean): Promise<void> {
+  if (on) await browser.storage.local.set({ [HOST_REVOKE_PENDING_KEY]: true });
+  else await browser.storage.local.remove(HOST_REVOKE_PENDING_KEY);
+}
+
+/** Revoke: forget the pin and every ceremony record. The host-revoke-pending
+ * flag deliberately survives this: it is the durable carrier of the
+ * still-unacknowledged key-deletion request. */
 export async function clearAll(): Promise<void> {
   await browser.storage.local.remove([
     PIN_KEY,

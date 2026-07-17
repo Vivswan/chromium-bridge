@@ -25,4 +25,20 @@ export interface EnrollmentStatusView {
   compromisedReason?: string;
   lastError?: string;
   paused?: boolean;
+  /** ADR-0025: the host-key deletion of an unpair has not been acknowledged
+   * yet; it completes on the next host connection. */
+  hostRevokePending?: boolean;
+}
+
+/** The SW's answer to get_clients (ADR-0025), mirroring
+ * lib/background/clients.ts ClientListView. */
+export interface ClientListView {
+  ok: boolean;
+  enrolled?: boolean;
+  clients?: Array<{
+    name: string;
+    anchor: { kind: "hash" | "team_id"; value: string };
+    added_unix?: number;
+  }>;
+  error?: string;
 }

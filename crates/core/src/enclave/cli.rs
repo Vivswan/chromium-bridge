@@ -51,6 +51,7 @@ pub fn run_pair(reset: bool) -> i32 {
                 // Clear it now so a failure later in this run cannot leave a
                 // config claiming enrolled=true with no key behind it.
                 HostConfig::remove();
+                bump_host_key_epoch();
                 println!("removed the previous enrollment key.");
             }
             Err(e) => {
@@ -118,18 +119,28 @@ pub fn run_pair(reset: bool) -> i32 {
 }
 
 /// `chromium-bridge revoke` (also `pair --reset` uses the same deletion):
-/// delete the enrollment key and the recorded policy. Fail-closed by
-/// construction — after this, proofs can no longer be produced, so a pinned
-/// extension refuses the bridge until the user re-pairs.
+/// delete the enrollment key and the recorded policy, and bump the revocation
+/// epoch's host-key marker (ADR-0025) so a live native host notices and
+/// pushes the `enclave_revoked` frame to the extension -- the pinned
+/// extension flips to its fail-closed state without waiting for an opt-in
+/// reverify. Fail-closed by construction — after this, proofs can no longer
+/// be produced, so a pinned extension refuses the bridge until the user
+/// re-pairs.
 pub fn run_revoke() -> i32 {
     match EnrollmentKey::revoke() {
         Ok(true) => {
             HostConfig::remove();
+            bump_host_key_epoch();
             println!("enrollment key revoked. re-run `chromium-bridge pair` to re-enroll.");
+            println!(
+                "a connected extension is notified and fails closed; \
+                 otherwise it notices on its next connect."
+            );
             0
         }
         Ok(false) => {
             HostConfig::remove();
+            bump_host_key_epoch();
             println!("no enrollment key found; nothing to revoke.");
             0
         }
@@ -137,6 +148,22 @@ pub fn run_revoke() -> i32 {
             println!("revoke failed: {e}");
             1
         }
+    }
+}
+
+/// Bump the revocation epoch's host-key marker after a key deletion. The
+/// deletion itself is the authoritative act (the keychain is the ground
+/// truth); a failed bump only loses the proactive push a connected host would
+/// otherwise send, so it is reported, not fatal. A pinned extension still
+/// fails closed on its next key verification (its stored pin outlives the key,
+/// and the missing key can no longer answer a challenge).
+fn bump_host_key_epoch() {
+    if let Err(e) = crate::revocation::bump(crate::revocation::Scope::HostKey) {
+        eprintln!(
+            "warning: the enrollment key is gone, but the revocation epoch could not be \
+             bumped ({e}); a connected extension will not get a proactive notice and will \
+             instead notice at its next pinned-key verification"
+        );
     }
 }
 

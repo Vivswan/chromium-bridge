@@ -21,5 +21,6 @@ pub mod ipc;
 pub mod mcp_server;
 pub mod native_host;
 pub mod protocol;
+pub mod revocation;
 pub mod session;
 pub mod tools;
