@@ -889,14 +889,33 @@ fn verify_mac(key: &[u8], msg: &[u8], provided_hex: &str) -> io::Result<()> {
         .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "hmac mismatch"))
 }
 
+/// Decode a hex string to bytes, or `None` on any odd length or non-hex
+/// character. Operates on raw bytes via [`slice::chunks_exact`] rather than
+/// `str` slicing: the input is an attacker-controlled handshake field, and
+/// `&s[i..i + 2]` would panic when a multi-byte UTF-8 character straddles the
+/// two-byte boundary. Under `panic = "abort"` that panic would take down the
+/// whole MCP server, so this must reject bad input rather than trust it.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+    let bytes = s.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+    bytes
+        .chunks_exact(2)
+        .map(|pair| Some(hex_nibble(pair[0])? << 4 | hex_nibble(pair[1])?))
         .collect()
+}
+
+/// Value of a single ASCII hex digit, or `None` for any other byte. Notably a
+/// leading `+`, which `u8::from_str_radix` accepts (so the old decoder took
+/// "+f" as 0x0f), is rejected here: the handshake MAC is strict two-digit hex.
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Server side: run the challenge-response over a freshly-accepted connection,
@@ -1007,6 +1026,46 @@ mod tests {
         // Odd length and non-hex digits are rejected, not silently truncated.
         assert_eq!(hex_decode("abc"), None);
         assert_eq!(hex_decode("zz"), None);
+        // A signed nibble is not hex: `u8::from_str_radix` would have accepted
+        // "+f" as 0x0f, but the handshake MAC is strict two-digit hex only.
+        assert_eq!(hex_decode("+f"), None);
+        // A multi-byte UTF-8 character makes the byte length even while landing
+        // a chunk boundary mid-codepoint. The old `&s[i..i + 2]` slicing
+        // panicked here (aborting the server under panic=abort); now it is a
+        // clean rejection. "é" is two UTF-8 bytes, so "aé" has byte length 3
+        // (odd) and "ééf" (5 bytes) is odd too; use a 4-byte even case.
+        assert_eq!(hex_decode("éé"), None); // 4 bytes, none of them ASCII hex
+        assert_eq!(hex_decode("aé"), None); // 3 bytes: odd length
+        assert_eq!(hex_decode("a\u{00e9}b"), None); // 4 bytes, non-hex middle
+                                                    // A 4-byte emoji is even-length but not hex.
+        assert_eq!(hex_decode("😀"), None);
+    }
+
+    /// Fuzz the handshake MAC decoder. It runs on an attacker-controlled field
+    /// in the accept path, so it must reject or decode every input without
+    /// panicking -- including multi-byte UTF-8 that lands mid-codepoint on a
+    /// two-byte chunk boundary, the abort-the-server bug this guards against.
+    /// Arbitrary strings are built from `any::<char>()` to avoid pulling in
+    /// proptest's `regex-syntax` feature (see `protocol.rs` proptests).
+    mod hex_fuzz {
+        use super::super::{hex_decode, hex_encode};
+        use proptest::prelude::*;
+
+        fn arb_string() -> impl Strategy<Value = String> {
+            prop::collection::vec(any::<char>(), 0..16).prop_map(|cs| cs.into_iter().collect())
+        }
+
+        proptest! {
+            #[test]
+            fn never_panics(s in arb_string()) {
+                let _ = hex_decode(&s);
+            }
+
+            #[test]
+            fn encode_decode_roundtrips(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
+                prop_assert_eq!(hex_decode(&hex_encode(&bytes)), Some(bytes));
+            }
+        }
     }
 
     #[test]
