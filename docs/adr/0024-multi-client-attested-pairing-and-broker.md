@@ -166,6 +166,18 @@ becomes strict the moment it is turned on:
 - **An empty enrolled list admits nobody.** `revoke-client` leaves the file in
   place when the last entry goes: "the user revoked every client" reads as a
   locked bridge, not a reset to the open posture.
+- **But DELETING the file is not the same as revoking.** Enforcement is not
+  monotonic against a same-user writer: `rm clients.json` reverts an enrolled
+  bridge to the unenrolled bootstrap posture, because deletion is
+  indistinguishable from never-enrolled and the bootstrap needs that (the
+  absent-file case is what lets a first install work). So "a load failure fails
+  closed" must not be read as "enforcement is durable against the same-user
+  writer": corruption fails closed, deletion reverts to open. This is inside the
+  conceded same-user boundary (a process that can delete the file can also plant
+  a manifest or re-run our binary), and it is loudly ERROR-logged on the next
+  start, but it is a real asymmetry -- named in the residuals below and a
+  candidate for the Phase 5 tamper-evidence work (it is the same class as the
+  trust-state-tampering residual, follow-up #32).
 
 The decision itself is a pure function, `allowlist::decide(list, identity)`,
 exhaustively unit-tested apart from any I/O.
@@ -189,9 +201,13 @@ resource posture (constants in `crates/core/src/broker.rs`):
   connection is legitimately idle for long stretches.
 - A per-relay token bucket (`RATE_BURST = 128.0`,
   `RATE_REFILL_PER_SEC = 128.0`): a relay that floods past it is dropped, fail
-  closed; it may reconnect. The relay is already attested and allowlisted, so
-  this is defense in depth against a compromised or misbehaving harness
-  saturating the shared broker, not the primary control.
+  closed; it may reconnect. The bucket is per-connection and resets on
+  reconnect, so the effective steady-state ceiling against a
+  compromised-but-allowlisted harness is roughly the bucket size times the
+  reconnect rate (itself bounded by the handshake + attestation cost of each
+  new connection). That is deliberately a defense-in-depth bound on the damage
+  rate, not the primary control: the relay is already attested and allowlisted,
+  and revocation, not the rate limit, is the lever that removes its trust.
 
 ### 7. Verification
 
@@ -346,6 +362,17 @@ resource posture (constants in `crates/core/src/broker.rs`):
   ERROR on every start. Enrollment is the user's act; we do not auto-enroll
   the first spawner, because a silent trust-on-first-use would hand the slot
   to whichever process races first.
+- **Deleting `clients.json` reverts to bootstrap; enforcement is not durable
+  against the same-user writer.** Corruption fails closed, but deletion cannot:
+  an absent file is how a first install legitimately starts unenrolled, so
+  `rm clients.json` silently drops an enrolled bridge back to the open
+  bootstrap posture (loudly ERROR-logged on the next start). This lives inside
+  the conceded same-user boundary -- a process that can unlink the file can
+  also plant a native-messaging manifest or re-run our binary -- but it means
+  the allowlist is not tamper-evident. Making enrollment tamper-evident (so a
+  deletion is detectable rather than silently permissive) is Phase 5
+  tamper-evidence work, the same class as the trust-state-tampering residual
+  (follow-up #32).
 - **Wedged-broker liveness.** A broker that is alive and attested but stops
   accepting leaves a new instance retrying its bounded attempts (6, with
   150 ms sleeps) and then exiting with a clear error. It cannot and must not
