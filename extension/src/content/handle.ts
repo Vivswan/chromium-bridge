@@ -1,12 +1,12 @@
 // Dispatch an inbound { op, args } message to the right content-script handler.
 
 import type { ContentMsg } from "../shared/types";
-import { snapshot } from "./snapshot";
-import { click, fill, text, screenshot, scroll, press, hover, select } from "./actions";
-import { waitFor } from "./wait";
+import { click, fill, hover, press, screenshot, scroll, select, text } from "./actions";
 import { runEval } from "./eval";
+import { snapshot } from "./snapshot";
 import { storageGet } from "./storage";
-import { showToast, showInfoToast } from "./toast";
+import { showInfoToast, showToast } from "./toast";
+import { waitFor } from "./wait";
 
 export async function handle(msg: ContentMsg) {
   const { op, args } = msg;

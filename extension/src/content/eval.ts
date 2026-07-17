@@ -2,11 +2,11 @@
 // scope after an enlarged confirmation toast. Result is safely serialized and
 // (by default) masked before returning.
 
-import type { OpArgs } from "../shared/types";
-import { getSetting } from "../shared/settings";
 import { maskSensitive } from "../shared/masking";
-import { truncate } from "./util";
+import { getSetting } from "../shared/settings";
+import type { OpArgs } from "../shared/types";
 import { confirmWithEvalToast } from "./toast";
+import { truncate } from "./util";
 
 export async function runEval(args: OpArgs) {
   const code = args.code;
@@ -38,35 +38,35 @@ export async function runEval(args: OpArgs) {
   // await/return and see page globals. `new Function` (not eval) gives us
   // global scope regardless of the strict-mode closure this file runs in.
   try {
-    const fn = new Function('"use strict";\n' + "return (async () => {\n" + code + "\n})();");
+    const fn = new Function(`"use strict";\nreturn (async () => {\n${code}\n})();`);
     const result = await fn();
     // Serialize inside the try: a getter that throws during serialization must
     // land in the catch below, not escape unmasked to the outer handler.
     return guard(serializeResult(result));
-  } catch (e: any) {
+  } catch (e) {
     // Surface JS errors to the model as structured data, not a throw, so the
     // model can react (e.g. fix the code and retry).
+    const err = e as { name?: unknown; message?: unknown; stack?: unknown } | null | undefined;
     return guard({
       __evalError: true,
-      name: String(e?.name || "Error"),
-      message: String(e?.message || e),
-      stack: truncate(String(e?.stack || ""), 2000),
+      name: String(err?.name || "Error"),
+      message: String(err?.message || e),
+      stack: truncate(String(err?.stack || ""), 2000),
     });
   }
 }
 
 // Safe serialization: handles cycles, DOM nodes, errors, exotic types, and
 // truncates very large payloads. Returns JSON-serializable data.
-function serializeResult(value: any, seen = new WeakSet(), depth = 0): any {
+function serializeResult(value: unknown, seen = new WeakSet<object>(), depth = 0): unknown {
   if (depth > 50) return "[depth limit]";
   if (value === null || value === undefined) return value;
-  const t = typeof value;
-  if (t === "string") return truncate(value, 10000);
-  if (t === "number" || t === "boolean") return value;
-  if (t === "bigint") return `[BigInt:${value.toString()}]`;
-  if (t === "symbol") return `[Symbol:${value.toString()}]`;
-  if (t === "function") return `[function:${value.name || "anonymous"}]`;
-  if (t === "object") {
+  if (typeof value === "string") return truncate(value, 10000);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "bigint") return `[BigInt:${value.toString()}]`;
+  if (typeof value === "symbol") return `[Symbol:${value.toString()}]`;
+  if (typeof value === "function") return `[function:${value.name || "anonymous"}]`;
+  if (typeof value === "object") {
     // Error → structured
     if (value instanceof Error) {
       return { __error: true, name: value.name, message: value.message };
@@ -89,7 +89,7 @@ function serializeResult(value: any, seen = new WeakSet(), depth = 0): any {
       }
       // Plain object: enumerate own keys. Map/Set/Date get special tags.
       if (value instanceof Map) {
-        const obj: any = {};
+        const obj: Record<string, unknown> = {};
         let i = 0;
         for (const [k, v] of value) {
           obj[String(k)] = serializeResult(v, seen, depth + 1);
@@ -106,14 +106,15 @@ function serializeResult(value: any, seen = new WeakSet(), depth = 0): any {
       }
       if (value instanceof Date) return { __Date: value.toISOString() };
       if (value instanceof RegExp) return { __RegExp: value.toString() };
-      const out: any = {};
+      const rec = value as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
       let count = 0;
-      for (const key of Object.keys(value)) {
+      for (const key of Object.keys(rec)) {
         if (count++ > 1000) {
           out.__truncated = true;
           break;
         }
-        out[key] = serializeResult(value[key], seen, depth + 1);
+        out[key] = serializeResult(rec[key], seen, depth + 1);
       }
       return out;
     } finally {

@@ -4,8 +4,8 @@
 // here. Values are ALWAYS masked (independent of the eval mask toggle) because
 // storage reads are silent. See ADR-0010.
 
-import type { OpArgs } from "../shared/types";
 import { maskString } from "../shared/masking";
+import type { OpArgs } from "../shared/types";
 
 export function storageGet(args: OpArgs) {
   const type = args.type === "session" ? "session" : "local";
@@ -13,8 +13,8 @@ export function storageGet(args: OpArgs) {
   let store: Storage;
   try {
     store = type === "session" ? window.sessionStorage : window.localStorage;
-  } catch (e: any) {
-    throw new Error(`storage unavailable: ${e.message}`, { cause: e });
+  } catch (e) {
+    throw new Error(`storage unavailable: ${(e as Error).message}`, { cause: e });
   }
   if (key !== undefined && key !== null && key !== "") {
     const raw = store.getItem(key);

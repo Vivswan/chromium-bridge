@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-  CHALLENGE_DOMAIN,
   base64Decode,
   base64Encode,
   buildChallengeMessage,
+  CHALLENGE_DOMAIN,
   computeKeyId,
   fingerprintDisplay,
   generateNonce,
@@ -37,7 +37,7 @@ async function genKey(): Promise<TestKey> {
 
 async function signB64(key: TestKey, message: Uint8Array): Promise<string> {
   const sig = new Uint8Array(
-    await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key.kp.privateKey, message)
+    await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key.kp.privateKey, message),
   );
   expect(sig.length).toBe(64);
   return base64Encode(sig);
@@ -70,7 +70,7 @@ describe("buildChallengeMessage", () => {
 
   test("absent context signs the same bytes as empty context", () => {
     expect(Array.from(buildChallengeMessage("n"))).toEqual(
-      Array.from(buildChallengeMessage("n", ""))
+      Array.from(buildChallengeMessage("n", "")),
     );
   });
 
@@ -124,7 +124,7 @@ describe("field parsing", () => {
   test("computeKeyId matches the SHA-256 known-answer vector", async () => {
     // SHA-256 of the empty string.
     expect(await computeKeyId(new Uint8Array(0))).toBe(
-      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     );
   });
 
@@ -184,7 +184,7 @@ describe("verifyProofAgainstPin (steady state)", () => {
       "n",
       "c",
       key.pubkeyB64,
-      key.keyId
+      key.keyId,
     );
     expect(res.ok).toBe(true);
   });
@@ -197,7 +197,7 @@ describe("verifyProofAgainstPin (steady state)", () => {
       "n",
       undefined,
       pinned.pubkeyB64,
-      pinned.keyId
+      pinned.keyId,
     );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toContain("pinned");
@@ -227,7 +227,7 @@ describe("verifyProofAgainstPin (steady state)", () => {
       "fresh-nonce",
       undefined,
       key.pubkeyB64,
-      key.keyId
+      key.keyId,
     );
     expect(res.ok).toBe(false);
   });

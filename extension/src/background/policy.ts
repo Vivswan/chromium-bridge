@@ -9,7 +9,7 @@
 // NOTE: this module is not yet wired into background/dispatch.ts. Wiring is a
 // separate, supervised step; for now this is scaffolding.
 
-import { TOOL_META, type Confirmation, type Risk } from "../shared/ops";
+import { type Confirmation, type Risk, TOOL_META } from "../shared/ops";
 
 export type ConfirmationChannel = "page-toast" | "extension-ui" | "none";
 

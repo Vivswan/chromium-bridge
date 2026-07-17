@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-  isDebuggable,
-  NON_DEBUGGABLE,
   buildEvaluateExpression,
   evalExceptionMessage,
+  isDebuggable,
+  NON_DEBUGGABLE,
 } from "./session";
 
 describe("isDebuggable", () => {
@@ -35,20 +35,20 @@ describe("isDebuggable", () => {
 describe("buildEvaluateExpression", () => {
   test("stringifies the function and applies it to JSON args", () => {
     function greet(name: string) {
-      return "hi " + name;
+      return `hi ${name}`;
     }
     const expr = buildEvaluateExpression(greet as (...a: never[]) => unknown, ["bob"]);
     expect(expr).toContain("greet");
     expect(expr).toContain('.apply(undefined, ["bob"])');
     // The produced expression is itself valid JS that evaluates to the result.
-    // eslint-disable-next-line no-eval
+    // biome-ignore lint/security/noGlobalEval: the test's whole point is executing the built expression
     expect(eval(expr)).toBe("hi bob");
   });
 
   test("defaults to an empty args array", () => {
     const expr = buildEvaluateExpression((() => 42) as (...a: never[]) => unknown);
     expect(expr).toContain(".apply(undefined, [])");
-    // eslint-disable-next-line no-eval
+    // biome-ignore lint/security/noGlobalEval: the test's whole point is executing the built expression
     expect(eval(expr)).toBe(42);
   });
 });
@@ -59,7 +59,7 @@ describe("evalExceptionMessage", () => {
       evalExceptionMessage({
         text: "Uncaught",
         exception: { description: "ReferenceError: x is not defined\n    at <anonymous>" },
-      })
+      }),
     ).toBe("ReferenceError: x is not defined");
   });
 

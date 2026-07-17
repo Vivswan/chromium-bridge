@@ -2,9 +2,9 @@
 // and Chrome kills the host process whenever the port closes, so we reconnect
 // automatically on startup and after any disconnect.
 
+import { maskErrorMessage } from "../shared/masking";
 import type { BridgeReq } from "../shared/types";
 import { dispatch } from "./dispatch";
-import { maskErrorMessage } from "../shared/masking";
 import {
   attachPort,
   detachPort,
@@ -104,14 +104,14 @@ function onNativeMessage(msg: BridgeReq) {
       // A rejection message can embed page-derived data (a CDP evaluate
       // exception carries the page's error description), so this egress is
       // masked like any other.
-      (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err))
+      (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err)),
     );
   }).then(
     (gate) => {
       if (!gate.allowed) sendResponse(msg.id, false, undefined, gate.reason);
     },
     // Gate errors are ambiguity, and ambiguity refuses.
-    (err) => sendResponse(msg.id, false, undefined, `enrollment gate error: ${String(err)}`)
+    (err) => sendResponse(msg.id, false, undefined, `enrollment gate error: ${String(err)}`),
   );
 }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -6,15 +6,22 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const manifest = JSON.parse(readFileSync(resolve(root, "extension/manifest.json"), "utf8"));
+const manifest = JSON.parse(readFileSync(resolve(root, "extension/manifest.json"), "utf8")) as {
+  key?: unknown;
+};
 if (typeof manifest.key !== "string" || manifest.key.length === 0) {
   throw new Error("extension/manifest.json has no public key");
 }
 
-const hex = createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex").slice(0, 32);
-const derivedId = [...hex].map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16))).join("");
+const hex = createHash("sha256")
+  .update(Buffer.from(manifest.key, "base64"))
+  .digest("hex")
+  .slice(0, 32);
+const derivedId = [...hex]
+  .map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)))
+  .join("");
 
-const sources = [
+const sources: Array<[string, RegExp]> = [
   ["install/install.sh", /PINNED_EXTENSION_ID="([a-p]{32})"/],
   ["install/install.ps1", /\$ExtensionId\s*=\s*'([a-p]{32})'/],
   ["extension/src/shared/extension-id.ts", /PINNED_EXTENSION_ID\s*=\s*"([a-p]{32})"/],
@@ -40,7 +47,7 @@ if (!/^[a-z0-9._]+$/.test(HOST_ID) || HOST_ID.includes("..")) {
   console.error(`host id ${HOST_ID} violates Chrome's allowed charset`);
   failed = true;
 }
-const hostSources = [
+const hostSources: Array<[string, RegExp]> = [
   ["extension/src/background/port.ts", /const NATIVE_HOST = "([a-z0-9._]+)"/],
   ["crates/core/src/doctor.rs", /const HOST_NAME: &str = "([a-z0-9._]+)"/],
   ["install/install.sh", /HOST_NAME="([a-z0-9._]+)"/],

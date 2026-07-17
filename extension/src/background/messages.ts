@@ -3,8 +3,7 @@
 // script's screenshot proxy. Registering this module installs the listener.
 
 import type { RuntimeMsg } from "../shared/types";
-import { getAllowlist, resolvePendingAllow, addAllow, removeAllow } from "./allowlist-store";
-import { isNativeConnected } from "./port";
+import { addAllow, getAllowlist, removeAllow, resolvePendingAllow } from "./allowlist-store";
 import {
   approvePending,
   getEnrollmentStatus,
@@ -13,6 +12,7 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
+import { isNativeConnected } from "./port";
 
 // The enrollment actions change the extension's trust anchor, so they are
 // accepted only from the extension's own pages (popup/options), never from a
@@ -27,11 +27,11 @@ function fromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
 
 chrome.runtime.onMessage.addListener((msg: RuntimeMsg, sender, sendResponse) => {
   if (msg?.type === "resolve_allow") {
-    resolvePendingAllow(msg.id, msg.allow).then((r) => sendResponse(r));
+    void resolvePendingAllow(msg.id, msg.allow).then((r) => sendResponse(r));
     return true; // async
   }
   if (msg?.type === "get_allowlist") {
-    getAllowlist().then((list) => sendResponse({ list }));
+    void getAllowlist().then((list) => sendResponse({ list }));
     return true;
   }
   if (msg?.type === "add_allow") {
@@ -40,11 +40,11 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMsg, sender, sendResponse) => 
       sendResponse({ ok: false, error: "missing glob" });
       return false;
     }
-    addAllow(glob).then((list) => sendResponse({ ok: true, list }));
+    void addAllow(glob).then((list) => sendResponse({ ok: true, list }));
     return true;
   }
   if (msg?.type === "remove_allow") {
-    removeAllow(msg.glob).then((r) => sendResponse({ ok: true, ...r }));
+    void removeAllow(msg.glob).then((r) => sendResponse({ ok: true, ...r }));
     return true;
   }
   if (msg?.type === "get_status") {
@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMsg, sender, sendResponse) => 
     return false;
   }
   if (msg?.type === "get_enrollment") {
-    getEnrollmentStatus().then((st) => sendResponse(st));
+    void getEnrollmentStatus().then((st) => sendResponse(st));
     return true;
   }
   if (

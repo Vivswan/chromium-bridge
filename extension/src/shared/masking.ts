@@ -32,12 +32,12 @@ export function maskPatterns(s: string): string {
   // letter+digit requirement keeps it off long natural-language words.
   // Best-effort only (see maskPatterns note / SECURITY.md).
   out = out.replace(/\b[A-Za-z0-9_-]{32,}\b/g, (m) =>
-    /[A-Za-z]/.test(m) && /\d/.test(m) ? "••••[token]" : m
+    /[A-Za-z]/.test(m) && /\d/.test(m) ? "••••[token]" : m,
   );
   // Bearer / key-like patterns
   out = out.replace(
     /(?:bearer|token|password|secret|api[_-]?key)\s*[:=]\s*\S+/gi,
-    "••••[redacted]"
+    "••••[redacted]",
   );
   return out;
 }
@@ -69,7 +69,7 @@ export function maskNumber(n: number): number | string {
 
 // Mask a key NAME (not value) when it hints at a secret.
 export function maskKeyName(key: string): string {
-  return SENSITIVE_KEY.test(key) ? "••••" + key.slice(-2) : key;
+  return SENSITIVE_KEY.test(key) ? `••••${key.slice(-2)}` : key;
 }
 
 // Stringify + mask a caught error for the outer egress paths (content.ts's
@@ -84,17 +84,17 @@ export function maskErrorMessage(e: unknown): string {
 
 // Recursively mask an arbitrary JSON-ish value (strings, numbers, arrays,
 // objects). Used for eval results and storage dumps.
-export function maskSensitive(value: any): any {
+export function maskSensitive(value: unknown): unknown {
   if (value === null || value === undefined) return value;
-  const t = typeof value;
-  if (t === "string") return maskString(value);
-  if (t === "number") return maskNumber(value);
-  if (t === "boolean") return value;
+  if (typeof value === "string") return maskString(value);
+  if (typeof value === "number") return maskNumber(value);
+  if (typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.map(maskSensitive);
-  if (t === "object") {
-    const out: any = {};
-    for (const k of Object.keys(value)) {
-      out[maskKeyName(k)] = maskSensitive(value[k]);
+  if (typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(rec)) {
+      out[maskKeyName(k)] = maskSensitive(rec[k]);
     }
     return out;
   }

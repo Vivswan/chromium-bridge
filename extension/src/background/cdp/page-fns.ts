@@ -35,7 +35,7 @@ export function pageSnapshot(refAttr: string): {
   title: string;
 } {
   function truncate(s: string, n: number): string {
-    return s.length > n ? s.slice(0, n) + "…" : s;
+    return s.length > n ? `${s.slice(0, n)}…` : s;
   }
   const INTERACTIVE_TAGS = new Set([
     "a",
@@ -106,7 +106,7 @@ export function pageSnapshot(refAttr: string): {
       if (parts) return truncate(parts, 120);
     }
     const aria = el.getAttribute("aria-label");
-    if (aria && aria.trim()) return truncate(aria.trim(), 120);
+    if (aria?.trim()) return truncate(aria.trim(), 120);
     const labelFor = el.id ? document.querySelector<HTMLElement>(`label[for="${el.id}"]`) : null;
     if (labelFor) {
       const t = (labelFor.innerText || "").trim();
@@ -117,7 +117,7 @@ export function pageSnapshot(refAttr: string): {
       const t = (wrapping.innerText || "").trim();
       if (t) return truncate(t, 120);
     }
-    if (el.title && el.title.trim()) return truncate(el.title.trim(), 120);
+    if (el.title?.trim()) return truncate(el.title.trim(), 120);
     const txt = (el.innerText || el.textContent || "").trim();
     if (txt) return truncate(txt, 120);
     const placeholder = el.getAttribute("placeholder");
@@ -136,7 +136,7 @@ export function pageSnapshot(refAttr: string): {
     return undefined;
   }
   function isVisible(el: HTMLElement): boolean {
-    if (!el || !el.getClientRects) return false;
+    if (!el?.getClientRects) return false;
     const rects = el.getClientRects();
     if (rects.length === 0) return false;
     const style = getComputedStyle(el);
@@ -201,8 +201,7 @@ export function pageSnapshot(refAttr: string): {
     acceptNode: (el) =>
       isInteractive(el as HTMLElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
   });
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const el = node as HTMLElement;
     if (!isVisible(el)) continue;
     const ref = assignRef(el);
@@ -220,12 +219,12 @@ export function pageSnapshot(refAttr: string): {
 // --- page_text -------------------------------------------------------------
 export function pageText(): { text: string; url: string } {
   function truncate(s: string, n: number): string {
-    return s.length > n ? s.slice(0, n) + "…" : s;
+    return s.length > n ? `${s.slice(0, n)}…` : s;
   }
   const cloneSrc = document.body.cloneNode(true) as HTMLElement;
-  cloneSrc
-    .querySelectorAll<HTMLInputElement>("input[type=password]")
-    .forEach((i) => (i.value = "••••••"));
+  cloneSrc.querySelectorAll<HTMLInputElement>("input[type=password]").forEach((i) => {
+    i.value = "••••••";
+  });
   const txt = (cloneSrc.innerText || "").replace(/\b\d{12,19}\b/g, "••••••");
   return { text: truncate(txt, 20000), url: location.href };
 }
@@ -370,10 +369,10 @@ export function readStorage(args: { type?: string; key?: string }):
 // DOM. Mirrors resolveTarget + roleOf/nameOf from the content path.
 export function probeClickTarget(
   refAttr: string,
-  args: { ref?: string; selector?: string }
+  args: { ref?: string; selector?: string },
 ): { tagName: string; role: string; type: string; hasHref: boolean; name: string } {
   function truncate(s: string, n: number): string {
-    return s.length > n ? s.slice(0, n) + "…" : s;
+    return s.length > n ? `${s.slice(0, n)}…` : s;
   }
   function resolveTarget(): HTMLElement {
     if (args.ref) {
@@ -408,13 +407,13 @@ export function probeClickTarget(
   }
   function nameOf(el: HTMLElement): string {
     const aria = el.getAttribute("aria-label");
-    if (aria && aria.trim()) return truncate(aria.trim(), 120);
+    if (aria?.trim()) return truncate(aria.trim(), 120);
     const labelFor = el.id ? document.querySelector<HTMLElement>(`label[for="${el.id}"]`) : null;
     if (labelFor) {
       const t = (labelFor.innerText || "").trim();
       if (t) return truncate(t, 120);
     }
-    if (el.title && el.title.trim()) return truncate(el.title.trim(), 120);
+    if (el.title?.trim()) return truncate(el.title.trim(), 120);
     const txt = (el.innerText || el.textContent || "").trim();
     if (txt) return truncate(txt, 120);
     const placeholder = el.getAttribute("placeholder");
@@ -433,7 +432,7 @@ export function probeClickTarget(
 
 export function doClick(
   refAttr: string,
-  args: { ref?: string; selector?: string }
+  args: { ref?: string; selector?: string },
 ): { clicked: string | undefined; role: string } {
   function resolveTarget(): HTMLElement {
     if (args.ref) {
@@ -476,7 +475,7 @@ export function doClick(
 // --- page_fill -------------------------------------------------------------
 export function doFill(
   refAttr: string,
-  args: { ref?: string; selector?: string; value?: string }
+  args: { ref?: string; selector?: string; value?: string },
 ): { filled: string | undefined } {
   function resolveTarget(): HTMLElement {
     if (args.ref) {
@@ -524,8 +523,8 @@ export function doPress(args: { keys: string }): { pressed: string } {
   const mods = new Set(parts.map((p) => p.toLowerCase()));
   function codeFor(k: string): string {
     if (k.length === 1) {
-      if (/[a-zA-Z]/.test(k)) return "Key" + k.toUpperCase();
-      if (/[0-9]/.test(k)) return "Digit" + k;
+      if (/[a-zA-Z]/.test(k)) return `Key${k.toUpperCase()}`;
+      if (/[0-9]/.test(k)) return `Digit${k}`;
       if (k === " ") return "Space";
     }
     const named: Record<string, string> = {
@@ -567,7 +566,7 @@ export function doPress(args: { keys: string }): { pressed: string } {
         shiftKey: combo.shiftKey,
         altKey: combo.altKey,
         metaKey: combo.metaKey,
-      })
+      }),
     );
   dispatch("keydown");
   if (combo.key.length === 1) dispatch("keypress");
@@ -578,7 +577,7 @@ export function doPress(args: { keys: string }): { pressed: string } {
 // --- page_hover ------------------------------------------------------------
 export function doHover(
   refAttr: string,
-  args: { ref?: string; selector?: string }
+  args: { ref?: string; selector?: string },
 ): { hovered: string | undefined; role: string } {
   function resolveTarget(): HTMLElement {
     if (args.ref) {
@@ -617,7 +616,7 @@ export function doHover(
   el.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, cancelable: true }));
   el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
   el.dispatchEvent(
-    new MouseEvent("mouseenter", { bubbles: false, cancelable: true, view: window })
+    new MouseEvent("mouseenter", { bubbles: false, cancelable: true, view: window }),
   );
   el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, view: window }));
   return { hovered: args.ref || args.selector, role: roleOf(el) };
@@ -626,7 +625,7 @@ export function doHover(
 // --- page_select -----------------------------------------------------------
 export function doSelect(
   refAttr: string,
-  args: { ref?: string; selector?: string; value?: string }
+  args: { ref?: string; selector?: string; value?: string },
 ): { selected: string; text: string } {
   function resolveTarget(): HTMLElement {
     if (args.ref) {
@@ -648,11 +647,12 @@ export function doSelect(
   const opts = Array.from(sel.options);
   let idx = opts.findIndex((o) => o.value === value);
   if (idx < 0) idx = opts.findIndex((o) => (o.textContent || "").trim() === value);
-  if (idx < 0) throw new Error(`page_select: no option matching "${value}"`);
+  const opt = opts[idx];
+  if (!opt) throw new Error(`page_select: no option matching "${value}"`);
   sel.selectedIndex = idx;
   sel.dispatchEvent(new Event("input", { bubbles: true }));
   sel.dispatchEvent(new Event("change", { bubbles: true }));
-  return { selected: opts[idx].value, text: (opts[idx].textContent || "").trim() };
+  return { selected: opt.value, text: (opt.textContent || "").trim() };
 }
 
 // --- confirmation toasts (no content script) -------------------------------// Both return a Promise<boolean>; the backend evaluates them with
@@ -711,10 +711,10 @@ export function evalToast(
   code: string,
   url: string,
   tabTitle: string,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<boolean> {
   function truncate(s: string, n: number): string {
-    return s.length > n ? s.slice(0, n) + "…" : s;
+    return s.length > n ? `${s.slice(0, n)}…` : s;
   }
   return new Promise((resolve) => {
     const host = document.createElement("div");

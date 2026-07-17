@@ -32,13 +32,13 @@
 // The challenge-on-connect policy lives entirely in onPortConnected below.
 
 import { getSetting } from "../shared/settings";
+import * as pinStore from "./enclave-pin";
 import {
+  fingerprintDisplay,
   generateNonce,
   verifyPairingProof,
   verifyProofAgainstPin,
-  fingerprintDisplay,
 } from "./enclave-verify";
-import * as pinStore from "./enclave-pin";
 
 // ---- frame plumbing ---------------------------------------------------------
 
@@ -87,7 +87,7 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
   const next = transitionChain.then(fn, fn);
   transitionChain = next.then(
     () => undefined,
-    () => undefined
+    () => undefined,
   );
   return next;
 }
@@ -127,7 +127,7 @@ async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; e
     void pinStore
       .setLastError(
         `no answer to the ${mode} challenge within ${CHALLENGE_TIMEOUT_MS / 1000}s ` +
-          "(presence prompt unanswered, or the host hung)"
+          "(presence prompt unanswered, or the host hung)",
       )
       .then(updateBadge);
   }, CHALLENGE_TIMEOUT_MS);
@@ -347,7 +347,7 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
     current.nonce,
     current.context,
     pin.pubkeyB64,
-    pin.keyId
+    pin.keyId,
   );
   if (res.ok) {
     await pinStore.setLastVerifiedAt(Date.now());
@@ -498,7 +498,7 @@ export function rejectPending(): Promise<{ ok: boolean; error?: string }> {
     await pinStore.setLastError(
       "fingerprint rejected; pairing halted. If the fingerprints really differed, " +
         "something other than your `chromium-bridge pair` key answered the challenge; " +
-        "investigate before pairing again."
+        "investigate before pairing again.",
     );
     await updateBadge();
     return { ok: true };

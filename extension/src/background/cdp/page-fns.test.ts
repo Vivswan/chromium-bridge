@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { REF_ATTR, pageSnapshot, doClick, probeClickTarget } from "./page-fns";
 import { REF_ATTR as CONTENT_REF_ATTR } from "../../content/refs";
+import { doClick, pageSnapshot, probeClickTarget, REF_ATTR } from "./page-fns";
 import { buildEvaluateExpression } from "./session";
 
 describe("REF_ATTR", () => {

@@ -29,5 +29,3 @@ declare global {
     return true; // keep the channel open for the async response
   });
 })();
-
-export {};

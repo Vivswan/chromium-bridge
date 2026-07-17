@@ -192,7 +192,7 @@ The project renamed from the upstream `browser-bridge` to `chromium-bridge`
 
 - native-messaging host id: `com.vivswan.chromium_bridge.host` (also the
   manifest filename stem and the extension's `connectNative` argument;
-  `scripts/check-extension-id.mjs` asserts all copies agree),
+  `scripts/check-extension-id.ts` asserts all copies agree),
 - enclave keychain label: `com.vivswan.chromium-bridge.enclave.signing.v1`,
 - enclave challenge domain: `chromium-bridge-enclave-v1` (host and extension
   changed together; no enrolled key predated the rename, so there was no key

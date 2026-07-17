@@ -147,18 +147,24 @@ if (Test-Path -LiteralPath (Join-Path $Root 'Cargo.toml')) {
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
     $binarySource = Join-Path $Root "target\release\$BinaryName"
 
-    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    if (-not $npm) {
-        throw 'npm.cmd not found. Install Node.js from https://nodejs.org and run this installer again.'
+    $bun = Get-Command bun.exe -ErrorAction SilentlyContinue
+    if (-not $bun) {
+        throw 'bun.exe not found. Install bun from https://bun.sh and run this installer again.'
     }
     Write-Host '[install] building extension bundle (esbuild)...'
     $extensionDir = Join-Path $Root 'extension'
-    if (-not (Test-Path -LiteralPath (Join-Path $extensionDir 'node_modules'))) {
-        & $npm.Source --prefix $extensionDir install
-        if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules'))) {
+        Push-Location $Root
+        & $bun.Source install --frozen-lockfile
+        $bunExit = $LASTEXITCODE
+        Pop-Location
+        if ($bunExit -ne 0) { throw "bun install failed with exit code $bunExit" }
     }
-    & $npm.Source --prefix $extensionDir run build
-    if ($LASTEXITCODE -ne 0) { throw "extension build failed with exit code $LASTEXITCODE" }
+    Push-Location $extensionDir
+    & $bun.Source run build
+    $bunExit = $LASTEXITCODE
+    Pop-Location
+    if ($bunExit -ne 0) { throw "extension build failed with exit code $bunExit" }
     $distDir = Join-Path $extensionDir 'dist'
 } else {
     Write-Host '[install] prebuilt mode - using shipped binary and extension'
