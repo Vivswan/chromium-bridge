@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the BUNDLED chromium-bridge HOST binary (the Secure
+  Enclave toucher). scripts/desktop-bundle.ts signs the helper bundle
+  (Contents/Helpers/chromium-bridge.app) with this file AFTER the Tauri
+  bundler runs: the bundler re-signs everything it places with the APP's
+  entitlements, so the host's own signature must be applied post-bundle,
+  inside-out (ADR-0026).
+
+  com.apple.security.get-task-allow is DELIBERATELY ABSENT: it would let any
+  same-user process attach a debugger and read this process's memory while it
+  holds Enclave material - a zero-trust regression. scripts/
+  check-desktop-signing.ts fails the build if it ever appears.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.application-identifier</key>
+  <string>3ZMH96L4V9.com.vivswan.chromium-bridge</string>
+  <key>keychain-access-groups</key>
+  <array>
+    <string>3ZMH96L4V9.com.vivswan.chromium-bridge</string>
+  </array>
+</dict>
+</plist>

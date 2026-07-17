@@ -20,6 +20,21 @@ build-release:
 build-repro:
     ./scripts/build-repro.sh
 
+# Build + sign the Tauri desktop shell with the bundled host (macOS, ADR-0026)
+desktop-bundle:
+    bun scripts/desktop-bundle.ts
+
+# Verify the signed desktop bundle's entitlement chain (app + nested host)
+desktop-check:
+    bun scripts/check-desktop-signing.ts
+
+# Touch ID proof for the bundled host (USER-RUN: raises a real Touch ID
+# prompt). Builds + verifies the bundle, then enrolls the enclave key via the
+# BUNDLED host binary; on success the machine is genuinely enrolled. Undo
+# with the same binary's `revoke` subcommand.
+desktop-touchid-proof: desktop-bundle
+    "target/release/bundle/macos/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair
+
 # Format Rust sources
 fmt:
     cargo fmt
