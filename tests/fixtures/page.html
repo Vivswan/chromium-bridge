@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Chromium Bridge DOM Test Fixture</title>
+  <link rel="stylesheet" href="_style.css" />
   <style>
-    /* Hidden element — snapshot must filter it out. */
+    /* Hidden element - snapshot must filter it out. */
     .hidden { display: none; }
-    /* aria-hidden element — also filtered. */
+    /* aria-hidden element - also filtered. */
     .ax-hidden { }
   </style>
 </head>
@@ -22,7 +24,7 @@
   <input id="cb" type="checkbox" aria-label="Agree">
   <input id="rb" type="radio" name="x" aria-label="Option A">
 
-  <!-- Password field — page_text must mask its value. -->
+  <!-- Password field - page_text must mask its value. -->
   <input id="pw" type="password" value="supersecret">
 
   <!-- Labelled-by input (accessible-name via aria-labelledby). -->
@@ -32,7 +34,7 @@
   <!-- Wrapped-in-label input (accessible-name via <label>). -->
   <label>Username <input id="user" type="text"></label>
 
-  <!-- Hidden elements — must NOT appear in snapshot. -->
+  <!-- Hidden elements - must NOT appear in snapshot. -->
   <button id="hidden-btn" class="hidden" style="display:none">Invisible</button>
   <div aria-hidden="true">
     <button id="ax-hidden-btn">Ax Hidden</button>
