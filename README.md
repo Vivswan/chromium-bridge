@@ -31,9 +31,18 @@ JavaScript in your pages. The guardrails that keep that safe:
 - **Read-only credentials.** Cookies and storage can be *read* (always masked —
   JWTs, long hex, long digit runs), never written. There is no `cookie_set` /
   `storage_set` by design.
-- **Authenticated bridge.** The localhost TCP socket authenticates each
-  connection with a per-run secret in a `0600` lock file; the native-host
-  manifest pins the extension ID.
+- **Authenticated bridge.** No connection between the two host processes is
+  served until it answers an HMAC challenge over a per-run secret. On
+  macOS/Linux the bridge is a private Unix-domain socket (no listening port),
+  and the server also checks the peer's UID and kernel-attests that the peer
+  runs this same binary; the native-host manifest pins the extension ID.
+
+**Platform support:** the strong bridge guarantees (portless Unix-domain
+socket, peer-UID check, kernel attestation of the peer binary) exist on macOS
+and Linux only. On Windows the bridge is a loopback TCP socket that any local
+process can reach, gated only by the HMAC secret in the lock file, and the
+server warns about this at startup. Windows support is best-effort; treat it
+accordingly. Details in [SECURITY.md](./SECURITY.md#platform-support).
 
 Full details: **[SECURITY.md](./SECURITY.md)** ·
 [threat model](./docs/security/threat-model.md) ·
@@ -195,12 +204,13 @@ Grouped from the single source of truth,
 
 ## How it works
 
-One Rust binary, two modes, joined by a localhost socket:
+One Rust binary, two modes, joined by a local socket:
 
 ```
 MCP client ──stdio MCP──▶ browser-bridge (MCP server, Rust)
 (Claude Code,             │
- Codex, …)                │ localhost TCP (NDJSON, per-run secret auth)
+ Codex, …)                │ bridge socket (NDJSON, HMAC auth; Unix-domain
+                          │ socket on macOS/Linux, loopback TCP on Windows)
                           ▼
                    browser-bridge --native-host  ◀── spawned by Chrome
                           │
@@ -211,7 +221,7 @@ MCP client ──stdio MCP──▶ browser-bridge (MCP server, Rust)
 
 - **MCP server (default mode)** — launched by your MCP client over stdio.
   Speaks JSON-RPC 2.0 (MCP protocol `2025-06-18`). Owns session state and the
-  TCP socket, published via a lock file.
+  bridge socket, published via a lock file.
 - **`--native-host`** — launched *by Chrome* via the host manifest. A thin
   bridge translating Chrome's native-messaging frames (4-byte LE length + JSON)
   to NDJSON on the socket.
@@ -232,7 +242,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md) ·
 |---|---|
 | **macOS** | Apple Silicon (arm64) prebuilt. Intel builds from source (Rosetta 2 runs x86_64 on Apple Silicon, not the arm64 build on Intel). |
 | **Linux** | x64 prebuilt; any Chromium-based browser. |
-| **Windows** | x64 prebuilt (native, no admin). |
+| **Windows** | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./SECURITY.md#platform-support). |
 | **Browser** | Any Chromium-based browser, Manifest V3 |
 | **MCP protocol** | `2025-06-18` ([ADR-0007](./docs/adr/0007-mcp-protocol-version-2025-06-18.md)) |
 | **Internal bridge protocol** | `1` (see [contracts/protocol-version.json](./contracts/protocol-version.json)) |
