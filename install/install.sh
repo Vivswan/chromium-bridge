@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# install.sh — build browser-bridge and register the Chrome native messaging host.
+# install.sh - build browser-bridge and register the native messaging host for
+# any Chromium-based browser.
 #
 # Usage:
 #   ./install.sh                        Build + install everything. The
@@ -7,8 +8,18 @@
 #                                       `key` in extension/manifest.json), so no
 #                                       ID copy-paste is needed.
 #   ./install.sh --extension-id ID      Override the pinned extension ID.
-#   ./install.sh --browser chrome       Linux: install for chrome, chromium,
-#                                       or both (default: auto-detect).
+#   ./install.sh --browser LIST         Which browsers to target. LIST is
+#                                       `auto` (every known browser whose config
+#                                       dir exists; the default), `all` (every
+#                                       known browser), or a comma-separated set
+#                                       of keys chrome,chromium,brave,edge,
+#                                       vivaldi,opera (`both`=chrome,chromium).
+#   ./install.sh --nm-dir DIR           Escape hatch: install into this exact
+#                                       NativeMessagingHosts dir (repeatable).
+#                                       Targets any Chromium browser not in the
+#                                       table above; overrides --browser. Pass
+#                                       the same --nm-dir to --uninstall to
+#                                       remove this registration.
 #   ./install.sh --skip-extension-build Reuse an existing extension/dist. Useful
 #                                       in WSL when only the Rust toolchain is
 #                                       installed in Linux.
@@ -17,16 +28,18 @@
 #                                       CLI on PATH). Off by default; other clients
 #                                       get ready-to-paste config printed instead.
 #   ./install.sh --uninstall            Remove what this installer placed (binary,
-#                                       run-host wrapper, native-host manifest,
-#                                       run.lock). Leaves Chrome and the loaded
-#                                       extension untouched.
+#                                       run-host wrapper, run.lock, and the
+#                                       native-host manifest for every known
+#                                       browser). Re-pass any --nm-dir target to
+#                                       clear it too. Leaves the browser and the
+#                                       loaded extension untouched.
 #
 # Two modes, auto-detected:
 #   - source checkout (Cargo.toml present): builds the binary (Rust) + the
 #     extension (Node/npm), then installs.
 #   - prebuilt release tarball (no Cargo.toml): installs the shipped binary +
 #     extension/dist directly — no Rust or Node needed.
-# macOS/Linux + Google Chrome or Chromium.
+# macOS/Linux + any Chromium-based browser.
 
 set -euo pipefail
 
@@ -51,6 +64,7 @@ PINNED_EXTENSION_ID="mkjjlmjbcljpcfkfadfmhblmmddkdihf"
 
 EXTENSION_ID="$PINNED_EXTENSION_ID"
 BROWSER="auto"
+declare -a NM_DIRS_EXPLICIT=()
 SKIP_EXTENSION_BUILD="${BB_SKIP_EXTENSION_BUILD:-0}"
 UNINSTALL=0
 REGISTER_CLAUDE=0
@@ -64,7 +78,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --browser)
       BROWSER="${2:-}"
-      [[ -n "$BROWSER" ]] || { echo "error: --browser requires chrome, chromium, or both" >&2; exit 1; }
+      [[ -n "$BROWSER" ]] || { echo "error: --browser requires auto, all, both, or a comma-separated list of browser keys" >&2; exit 1; }
+      shift 2
+      ;;
+    --nm-dir)
+      [[ -n "${2:-}" ]] || { echo "error: --nm-dir requires a directory path" >&2; exit 1; }
+      NM_DIRS_EXPLICIT+=("$2")
       shift 2
       ;;
     --skip-extension-build)
@@ -80,7 +99,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -104,7 +123,6 @@ declare -a LOCK_DIRS=()
 case "$OS" in
   Darwin)
     INSTALL_DIR="${BB_INSTALL_DIR:-$HOME/.browser-bridge}"
-    NM_DIRS+=("${BB_NM_DIR:-$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts}")
     [[ -n "${XDG_RUNTIME_DIR:-}" ]] && LOCK_DIRS+=("$XDG_RUNTIME_DIR/browser-bridge")
     LOCK_DIRS+=("$HOME/Library/Application Support/browser-bridge")
     ;;
@@ -114,40 +132,110 @@ case "$OS" in
     [[ -n "${XDG_RUNTIME_DIR:-}" ]] && LOCK_DIRS+=("$XDG_RUNTIME_DIR/browser-bridge")
     [[ -n "${XDG_CACHE_HOME:-}" ]] && LOCK_DIRS+=("$XDG_CACHE_HOME/browser-bridge")
     LOCK_DIRS+=("$HOME/.cache/browser-bridge")
-    if [[ -n "${BB_NM_DIR:-}" ]]; then
-      NM_DIRS+=("$BB_NM_DIR")
-    else
-      if [[ "$BROWSER" == "auto" ]]; then
-        if [[ "$UNINSTALL" == "1" ]]; then
-          # We cannot know which browser was targeted at install time, so clean
-          # the manifest from both candidate locations (the file is uniquely
-          # named for this project, so this is safe).
-          BROWSER="both"
-        elif command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || [[ -d "$CONFIG_HOME/google-chrome" ]]; then
-          BROWSER="chrome"
-        elif command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || [[ -d "$CONFIG_HOME/chromium" ]]; then
-          BROWSER="chromium"
-        else
-          BROWSER="chrome"
-          echo "[install] no Linux browser detected; installing manifest for Google Chrome"
-        fi
-      fi
-      case "$BROWSER" in
-        chrome) NM_DIRS+=("$CONFIG_HOME/google-chrome/NativeMessagingHosts") ;;
-        chromium) NM_DIRS+=("$CONFIG_HOME/chromium/NativeMessagingHosts") ;;
-        both)
-          NM_DIRS+=("$CONFIG_HOME/google-chrome/NativeMessagingHosts")
-          NM_DIRS+=("$CONFIG_HOME/chromium/NativeMessagingHosts")
-          ;;
-        *) echo "error: --browser must be chrome, chromium, or both" >&2; exit 1 ;;
-      esac
-    fi
     ;;
   *)
     echo "error: unsupported platform: $OS (use install.ps1 on Windows)" >&2
     exit 1
     ;;
 esac
+
+# ---- Chromium browser table ----------------------------------------------
+# Every Chromium build reads an identical native-messaging manifest (same pinned
+# extension ID + allowed_origins); only the per-user NativeMessagingHosts dir
+# differs. This table is the single source of truth for the browsers we know by
+# name; the --nm-dir escape hatch targets any Chromium browser not listed here.
+BB_BROWSER_KEYS="chrome chromium brave edge vivaldi opera"
+
+# Echo the NativeMessagingHosts dir for browser $1 on this OS, or return 1 for an
+# unknown key. macOS and Linux entries stay in the same order as BB_BROWSER_KEYS.
+bb_nm_dir_for() {
+  case "$OS" in
+    Darwin)
+      case "$1" in
+        chrome)   echo "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts" ;;
+        chromium) echo "$HOME/Library/Application Support/Chromium/NativeMessagingHosts" ;;
+        brave)    echo "$HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts" ;;
+        edge)     echo "$HOME/Library/Application Support/Microsoft Edge/NativeMessagingHosts" ;;
+        vivaldi)  echo "$HOME/Library/Application Support/Vivaldi/NativeMessagingHosts" ;;
+        opera)    echo "$HOME/Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts" ;;
+        *) return 1 ;;
+      esac
+      ;;
+    Linux)
+      case "$1" in
+        chrome)   echo "$CONFIG_HOME/google-chrome/NativeMessagingHosts" ;;
+        chromium) echo "$CONFIG_HOME/chromium/NativeMessagingHosts" ;;
+        brave)    echo "$CONFIG_HOME/BraveSoftware/Brave-Browser/NativeMessagingHosts" ;;
+        edge)     echo "$CONFIG_HOME/microsoft-edge/NativeMessagingHosts" ;;
+        vivaldi)  echo "$CONFIG_HOME/vivaldi/NativeMessagingHosts" ;;
+        opera)    echo "$CONFIG_HOME/opera/NativeMessagingHosts" ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+}
+
+# Resolve a --browser selector into a space-separated list of table keys:
+#   all  -> every known browser
+#   both -> chrome chromium (backward-compatible alias)
+#   auto -> browsers whose config dir (the parent of the NM dir) already exists;
+#           falls back to chrome so a fresh machine still gets a working manifest
+#   else -> a comma-separated list of table keys, each validated
+# Prints the keys on stdout; on an unknown key prints an error and returns 1.
+bb_resolve_selection() {
+  case "$1" in
+    all)  echo "$BB_BROWSER_KEYS" ;;
+    both) echo "chrome chromium" ;;
+    auto)
+      local key found=""
+      for key in $BB_BROWSER_KEYS; do
+        [[ -d "$(dirname "$(bb_nm_dir_for "$key")")" ]] && found="$found $key"
+      done
+      if [[ -n "$found" ]]; then
+        echo "$found"
+      else
+        echo "[install] no Chromium browser config dir found; defaulting to Google Chrome" >&2
+        echo chrome
+      fi
+      ;;
+    *)
+      local IFS=', ' key out=""
+      for key in $1; do
+        [[ -n "$key" ]] || continue
+        bb_nm_dir_for "$key" >/dev/null 2>&1 || { echo "error: unknown --browser key: '$key'" >&2; return 1; }
+        out="$out $key"
+      done
+      [[ -n "$out" ]] || { echo "error: --browser selected no known browser: '$1'" >&2; return 1; }
+      echo "$out"
+      ;;
+  esac
+}
+
+# Collect explicit target dirs: --nm-dir (repeatable) and the BB_NM_DIR env
+# override. These are the escape hatch for a Chromium browser not in the table.
+declare -a EXPLICIT_DIRS=()
+[[ -n "${BB_NM_DIR:-}" ]] && EXPLICIT_DIRS+=("$BB_NM_DIR")
+if [[ ${#NM_DIRS_EXPLICIT[@]} -gt 0 ]]; then
+  EXPLICIT_DIRS+=("${NM_DIRS_EXPLICIT[@]}")
+fi
+
+if [[ "$UNINSTALL" == "1" ]]; then
+  # Uninstall removes the shared binary + wrapper, so every manifest that could
+  # point at them must go: every known browser dir plus any explicit dir. The
+  # manifest is uniquely named for this project, so scanning all of them is safe.
+  read -ra ALL_KEYS <<< "$BB_BROWSER_KEYS"
+  for key in "${ALL_KEYS[@]}"; do NM_DIRS+=("$(bb_nm_dir_for "$key")"); done
+  if [[ ${#EXPLICIT_DIRS[@]} -gt 0 ]]; then
+    NM_DIRS+=("${EXPLICIT_DIRS[@]}")
+  fi
+elif [[ ${#EXPLICIT_DIRS[@]} -gt 0 ]]; then
+  # Explicit dirs take over install selection; --browser is ignored.
+  NM_DIRS+=("${EXPLICIT_DIRS[@]}")
+else
+  SELECTION="$(bb_resolve_selection "$BROWSER")" || exit 1
+  read -ra SELECTED_KEYS <<< "$SELECTION"
+  for key in "${SELECTED_KEYS[@]}"; do NM_DIRS+=("$(bb_nm_dir_for "$key")"); done
+fi
 
 # ---- uninstall ------------------------------------------------------------
 # Reverses exactly what the install path above lays down: the binary and
@@ -208,7 +296,7 @@ if [[ "$UNINSTALL" == "1" ]]; then
   if [[ "$removed" == "0" ]]; then
     echo "[uninstall] nothing to remove — already clean"
   fi
-  echo "[uninstall] done. Chrome and the loaded extension were left untouched;"
+  echo "[uninstall] done. Your browser and the loaded extension were left untouched;"
   echo "[uninstall] if you loaded the unpacked extension, remove it yourself via"
   echo "[uninstall] chrome://extensions."
   exit 0
