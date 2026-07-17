@@ -9,10 +9,10 @@
 # obvious in review (see SECURITY.md).
 /crates/core/src/ipc/ @vivswan
 /crates/core/src/protocol.rs @vivswan
-/extension/src/background/allowlist-store.ts @vivswan
-/extension/src/content/eval.ts @vivswan
-/extension/src/content/toast.ts @vivswan
-/extension/manifest.json @vivswan
+/extension/src/lib/background/allowlist-store.ts @vivswan
+/extension/src/lib/content/eval.ts @vivswan
+/extension/src/lib/content/toast.ts @vivswan
+/extension/wxt.config.ts @vivswan
 /install/ @vivswan
 /SECURITY.md @vivswan
 /docs/security/ @vivswan

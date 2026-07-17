@@ -2,20 +2,23 @@
   "name": "chromium-bridge-extension",
   "version": "0.1.0",
   "private": true,
-  "description": "MV3 extension for chromium-bridge - bundled from TypeScript with esbuild.",
+  "description": "MV3 extension for chromium-bridge - built with WXT.",
   "type": "module",
   "scripts": {
-    "build": "bun build.ts",
-    "watch": "bun build.ts --watch",
+    "dev": "wxt",
+    "build": "wxt build",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "postinstall": "wxt prepare"
   },
   "dependencies": {
     "@chromium-bridge/shared": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14",
     "@types/chrome": "^0.2.2",
-    "esbuild": "^0.25.0"
+    "happy-dom": "^20.4.0",
+    "vitest": "^4.0.18",
+    "wxt": "^0.20.13"
   }
 }

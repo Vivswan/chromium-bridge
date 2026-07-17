@@ -21,7 +21,14 @@ import { type Subprocess, spawn } from "bun";
 const REPO = path.resolve(import.meta.dir, "..");
 // The built bundle (esbuild strips TS types from src/content.ts). Run
 // `bun run --cwd extension build` first; `run_all.ts` / `just` do this.
-const CONTENT_JS = path.join(REPO, "extension", "dist", "content.js");
+const CONTENT_JS = path.join(
+  REPO,
+  "extension",
+  "dist",
+  "chrome-mv3",
+  "content-scripts",
+  "content.js",
+);
 const FIXTURES_DIR = path.join(REPO, "tests", "fixtures");
 const CHROME =
   process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";

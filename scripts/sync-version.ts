@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-// Propagate the crate version (Cargo.toml, the source of truth) into the
-// extension manifest and package files, then verify consistency.
+// Propagate the crate version (Cargo.toml, the source of truth) into
+// extension/package.json (the WXT-generated manifest reads its version from
+// there), then verify consistency.
 //
 // Usage: bump the version in Cargo.toml, then run `just sync-version`
 // (or `bun scripts/sync-version.ts`) and commit the result.
@@ -26,7 +27,6 @@ function setJsonVersion(relativePath: string) {
   console.log(`updated ${relativePath}`);
 }
 
-setJsonVersion("extension/manifest.json");
 setJsonVersion("extension/package.json");
 
 // Refresh bun.lock so the workspace lockfile records the new version.
