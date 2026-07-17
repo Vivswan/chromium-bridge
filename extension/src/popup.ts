@@ -6,6 +6,8 @@
 //      this must happen in the popup (a user-gesture context), since service
 //      workers cannot request permissions.
 
+import { PendingAllowSchema } from "@chromium-bridge/shared";
+
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
@@ -56,11 +58,10 @@ async function refreshList() {
 }
 
 async function refreshPending() {
-  const { pendingAllow } = (await chrome.storage.local.get("pendingAllow")) as {
-    pendingAllow?: { id?: string; glob?: string };
-  };
-  if (pendingAllow?.id && pendingAllow.glob) {
-    const { id, glob } = pendingAllow;
+  const { pendingAllow } = await chrome.storage.local.get("pendingAllow");
+  const parsed = PendingAllowSchema.safeParse(pendingAllow);
+  if (parsed.success) {
+    const { id, glob } = parsed.data;
     $("pending").style.display = "block";
     $("pending-glob").textContent = glob;
     $("allow").onclick = () => resolvePending(id, glob, true);
@@ -128,5 +129,3 @@ $("open-settings").addEventListener("click", () => {
 void refreshStatus();
 void refreshList();
 void refreshPending();
-
-export {};

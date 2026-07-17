@@ -69,7 +69,8 @@ just ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/te
 
 Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
 `cargo nextest run`; `bun run typecheck`, `bunx biome ci .`,
-`bun run --cwd extension test`; `bun scripts/gen-ops.ts` (must leave no diff).
+`bun run --cwd packages/shared test`, `bun run --cwd extension test`;
+`bun scripts/gen-ops.ts` (must leave no diff); `bun scripts/check-extension-id.ts`.
 A lefthook pre-commit hook runs `just ci` automatically (`bun install` wires
 it). Browser suites (`just test-browser`) need `CHROME_BIN` -> isolated Chrome
 and are **not** part of the required gate.
@@ -92,8 +93,11 @@ and are **not** part of the required gate.
 - Tool-call errors use the typed `CallError` (`crates/core/src/error.rs`), mapped to the
   stable codes in [`contracts/errors.json`](./contracts/errors.json).
 - The tool catalogue is generated from [`contracts/tools.json`](./contracts/tools.json)
-  (`just gen` -> `extension/src/shared/ops.ts`); Rust parity is enforced by
-  `cargo test`. Adding a tool touches both sides - see `CONTRIBUTING.md`.
+  (`just gen` -> `packages/shared/src/ops.gen.ts`, with Zod validators the
+  extension enforces at its trust boundaries); Rust parity is enforced by
+  `cargo test`, and the Zod envelope schemas are verified equivalent to
+  `contracts/*.schema.json` in CI. Adding a tool touches both sides - see
+  `CONTRIBUTING.md`.
 - Never develop on `main`; work in a git worktree under `.worktree/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge
   PR. Security-critical surfaces (`crates/core/src/ipc/`,

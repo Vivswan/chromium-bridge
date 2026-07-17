@@ -4,7 +4,7 @@
 // source of truth in shared/settings.ts — background/content/options all import
 // it; add a new setting there (and to the Settings type), not in three places.
 
-import { TOOLS } from "./shared/ops";
+import { salvageSettings, TOOLS } from "@chromium-bridge/shared";
 import { DEFAULTS } from "./shared/settings";
 import type { Settings } from "./shared/types";
 
@@ -19,7 +19,9 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 async function loadSettings(): Promise<Settings> {
   const keys = Object.keys(DEFAULTS);
   const stored = await chrome.storage.local.get(keys);
-  return { ...DEFAULTS, ...stored };
+  // Field-by-field salvage: a stored value that fails its schema falls back
+  // to that field's default instead of being rendered as-is.
+  return salvageSettings(stored);
 }
 
 async function saveSetting(key: string, value: unknown) {

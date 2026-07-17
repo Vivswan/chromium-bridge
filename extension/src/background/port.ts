@@ -2,8 +2,8 @@
 // and Chrome kills the host process whenever the port closes, so we reconnect
 // automatically on startup and after any disconnect.
 
+import { NATIVE_HOST_ID, parseBridgeReq } from "@chromium-bridge/shared";
 import { maskErrorMessage } from "../shared/masking";
-import type { BridgeReq } from "../shared/types";
 import { dispatch } from "./dispatch";
 import {
   attachPort,
@@ -13,8 +13,6 @@ import {
   isEnclaveFrame,
   onPortConnected,
 } from "./enrollment";
-
-const NATIVE_HOST = "com.vivswan.chromium_bridge.host";
 
 let port: chrome.runtime.Port | null = null;
 let portOk = false; // did the most recent connect succeed?
@@ -31,7 +29,7 @@ export function connectNative() {
     reconnectTimer = null;
   }
   try {
-    port = chrome.runtime.connectNative(NATIVE_HOST);
+    port = chrome.runtime.connectNative(NATIVE_HOST_ID);
     portOk = true;
     console.log("[bb] native host connected");
     port.onMessage.addListener(onNativeMessage);
@@ -79,7 +77,7 @@ function scheduleReconnect() {
   }, 2000);
 }
 
-function onNativeMessage(msg: BridgeReq) {
+function onNativeMessage(msg: unknown) {
   // Enclave control frames (ADR-0021) are ceremony traffic between the
   // extension and the host itself; they carry `type`, not `op`, and are never
   // dispatched as bridge ops.
@@ -87,31 +85,36 @@ function onNativeMessage(msg: BridgeReq) {
     void handleEnclaveFrame(msg);
     return;
   }
-  // Each message is a BridgeReq: { id, op, tabId?, args }. Guard defensively —
-  // it crosses the native-messaging boundary.
-  if (!msg || typeof msg.id === "undefined" || !msg.op) {
-    console.warn("[bb] malformed BridgeReq", msg);
+  // Everything else must be a well-formed BridgeReq: envelope shape, a known
+  // op, and args that satisfy that op's validator (see parseBridgeReq). This
+  // crosses the native-messaging boundary, so anything malformed is refused
+  // here - answered when an id can be correlated, dropped otherwise.
+  const parsed = parseBridgeReq(msg);
+  if (!parsed.ok) {
+    console.warn("[bb] refusing bridge request:", parsed.error);
+    if (parsed.id !== undefined) sendResponse(parsed.id, false, undefined, parsed.error);
     return;
   }
+  const req = parsed.req;
   // Fail closed (ADR-0021): while enrollment is required and unsatisfied,
   // every bridge request is refused right here and never reaches dispatch().
   // The dispatch kickoff is passed INTO the gate so it starts inside the
   // gate's serialized critical section: a revoke or compromise mark can then
   // never land between "gate said allowed" and "dispatch began".
   enrollmentGate(() => {
-    dispatch(msg).then(
-      (data) => sendResponse(msg.id, true, data),
+    dispatch(req).then(
+      (data) => sendResponse(req.id, true, data),
       // A rejection message can embed page-derived data (a CDP evaluate
       // exception carries the page's error description), so this egress is
       // masked like any other.
-      (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err)),
+      (err) => sendResponse(req.id, false, undefined, maskErrorMessage(err)),
     );
   }).then(
     (gate) => {
-      if (!gate.allowed) sendResponse(msg.id, false, undefined, gate.reason);
+      if (!gate.allowed) sendResponse(req.id, false, undefined, gate.reason);
     },
     // Gate errors are ambiguity, and ambiguity refuses.
-    (err) => sendResponse(msg.id, false, undefined, `enrollment gate error: ${String(err)}`),
+    (err) => sendResponse(req.id, false, undefined, `enrollment gate error: ${String(err)}`),
   );
 }
 
