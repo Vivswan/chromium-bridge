@@ -21,7 +21,8 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
 
 - **Direction of trust**: this is the one boundary defended against *local*
   peers — any process that could try to reach the bridge.
-- **Enforcement** (see [ADR-0019](../adr/0019-authenticated-ipc.md)):
+- **Enforcement** (see [ADR-0019](../adr/0019-authenticated-ipc.md) and
+  [ADR-0020](../adr/0020-kernel-attested-peer-identity.md)):
   - **No listening port** (Unix): the bridge is a **0600 Unix-domain socket**
     inside a 0700 per-user directory, so there is no localhost port for another
     process to connect to, and the filesystem mode keeps other users out.
@@ -29,12 +30,27 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   - **Peer-UID check**: on `accept`, the server reads the connecting peer's UID
     from the kernel (`getpeereid` / `SO_PEERCRED`) and drops any connection not
     from its own UID, before authentication.
+  - **Kernel-attested executable identity** (Linux/macOS): still before
+    authentication, each end resolves the peer's PID from the socket
+    (`SO_PEERCRED` / `LOCAL_PEERPID`), hashes the peer's on-disk executable
+    (`/proc/<pid>/exe` / `proc_pidpath`), and requires it to equal its own
+    binary's hash. A different same-user program is rejected here. On Linux this
+    binds to the running inode (subject to a narrow pid-reuse race); on macOS it
+    is best-effort (see the residual below). Attestation is **mutual**: the
+    server attests the host after `accept`, the host attests the server after
+    `connect`.
   - **HMAC challenge-response**: the server sends a fresh random nonce; the host
     replies with `HMAC-SHA256(secret, nonce)`, verified in constant time. The
     per-run secret (0600 lock file) never travels on the wire, and the
     per-connection nonce defeats replay.
   - Each connection is size-checked NDJSON; the newest authenticated connection
     replaces the previous writer.
+  - **Residual risk**: neither a hash nor a code signature can distinguish the
+    legitimate browser-spawned host from the same binary re-run by a same-user
+    attacker — the bytes are identical. Closing that requires browser/extension-
+    side pairing (trust-on-first-use in the extension settings). Separately, the
+    macOS check is best-effort until the `SecCode`-by-pid follow-up lands (it
+    re-opens a path rather than binding to the running image). See ADR-0020.
 
 ## ③ Chrome ↔ native host  (Native Messaging framing)
 
@@ -66,8 +82,8 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
 ## Invariants that must not regress
 
 - stdout on either binary mode = protocol bytes only.
-- The bridge never serves a connection that failed the peer-UID check or the
-  HMAC handshake.
+- The bridge never serves a connection that failed the peer-UID check, the
+  executable-identity attestation, or the HMAC handshake.
 - The host manifest's `allowed_origins` always pins exactly our extension ID.
 - No page-level tool runs on a non-allowlisted origin (absent `allowAllSites`).
 - No tool writes cookies or web storage.
