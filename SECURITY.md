@@ -58,6 +58,50 @@ Key invariants:
 - **Bridge auth** — the localhost TCP bridge authenticates each connection with
   a per-run secret from a 0600 lock file.
 
+## page_eval and confirmation defaults (fail-safe)
+
+`page_eval` runs arbitrary JavaScript in a real, logged-in page, so its
+defaults are set to fail safe (ADR-0008, update 2026-07-16):
+
+- **Every `page_eval` call reconfirms.** The in-page confirmation toast (showing
+  the full code, target URL, and tab title) is shown on every call. `page_eval`
+  is deliberately excluded from the same-origin grace window, so there is no
+  silent-eval window: one approval never covers a later, different payload.
+- **The grace window is click-only.** `confirmGraceMs` (default 60000ms) lets a
+  repeated same-origin click/submit skip re-prompting within the window. It does
+  not apply to `page_eval`. Those clicks are lower-risk and observable in the UI.
+
+These defaults are user-configurable knobs, not removed gates. A power user can
+still relax them, and doing so is an explicit, informed choice:
+
+| Setting | Default | Relaxing it means | Residual risk you accept |
+|---------|---------|-------------------|--------------------------|
+| `confirmPageEval` | `true` | `false` = `page_eval` runs with no prompt | Arbitrary JS executes silently on approved origins |
+| `pageEvalEnabled` | `true` | `false` = `page_eval` refused entirely | (hardening, not a relaxation) |
+| `confirmGraceMs` | `60000` | Larger = longer click/submit silence window; `0` = every click reconfirms | A same-origin click/submit within the window is silent (never eval) |
+
+The Options page shows an explicit warning on the `confirmPageEval` toggle. The
+site allowlist (per-origin) and `pageEvalEnabled` (global kill switch) remain in
+force regardless of these settings.
+
+## Masking is heuristic and best-effort
+
+Cookie, storage, and `page_eval`-result masking (`extension/src/shared/masking.ts`)
+is a **heuristic, best-effort** filter, not a guarantee. It targets common
+secret shapes (JWTs, long hex, long digit runs, opaque base64url tokens of >=32
+chars containing both a letter and a digit, and `bearer`/`key=` assignments) and
+redacts sensitive-looking key names. The token rule keys off length plus the
+presence of a letter and a digit, not a true entropy measure, so it can both
+over-mask (a long mixed letter+digit identifier that is not secret) and
+under-mask. It will miss secrets that do not match these shapes: short tokens,
+secrets below the length thresholds, all-letter or all-digit tokens, tokens
+broken up by characters outside the matched set (whitespace, `.`, `/`, `+`,
+`=`), or application-specific formats. Masking reduces accidental leakage into
+the model context and logs; it is not a substitute for treating any `page_eval`
+result or storage dump as potentially sensitive. Masking can be disabled per
+surface (`evalMask`), which removes this filter entirely.
+
+
 ## Security-relevant changes (review bar)
 
 A change is **security-relevant** — and must carry the
