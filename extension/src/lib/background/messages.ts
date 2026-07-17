@@ -12,6 +12,7 @@ import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { addAllow, getAllowlist, removeAllow, resolvePendingAllow } from "./allowlist-store";
+import { getPendingConfirm, resolveConfirm } from "./confirm/service";
 import {
   approvePending,
   getEnrollmentStatus,
@@ -31,6 +32,23 @@ function fromExtensionPage(sender: Browser.runtime.MessageSender): boolean {
     typeof sender.url === "string" &&
     sender.url.startsWith(`chrome-extension://${browser.runtime.id}/`)
   );
+}
+
+// The confirmation verdict may come ONLY from the confirmation window
+// itself - not merely any extension page - shrinking the surface that can
+// approve an action to the one document the service opened.
+function fromConfirmPage(sender: Browser.runtime.MessageSender): boolean {
+  if (sender.id !== browser.runtime.id || typeof sender.url !== "string") return false;
+  // Exact document match (origin + path), not a prefix test: a prefix would
+  // also admit /confirm.htmlfoo or /confirm.html/...; query/hash stay free.
+  try {
+    const url = new URL(sender.url);
+    return (
+      url.origin === `chrome-extension://${browser.runtime.id}` && url.pathname === "/confirm.html"
+    );
+  } catch {
+    return false;
+  }
 }
 
 const ENROLLMENT_ACTIONS = {
@@ -65,15 +83,26 @@ function route(
     case "get_enrollment":
       void getEnrollmentStatus().then((st) => sendResponse(st));
       return true;
-    case "capture_visible_tab":
-      // Content scripts can't call browser.tabs.captureVisibleTab; proxy here.
-      // The (options, callback) overload captures the active tab of the
-      // current window — no windowId needed.
-      browser.tabs.captureVisibleTab({ format: "png" }).then(
-        (dataUrl) => sendResponse({ dataUrl }),
-        (e: unknown) => sendResponse({ error: e instanceof Error ? e.message : String(e) }),
-      );
-      return true; // async
+    case "confirm_ready":
+      // The confirmation window (ADR-0027) asking for its payload. ONLY from
+      // the confirmation window: a content script (or any other page) must
+      // never see what is pending.
+      if (!fromConfirmPage(sender)) {
+        sendResponse({ ok: false, error: "confirmations are extension-page-only" });
+        return false;
+      }
+      sendResponse({ payload: getPendingConfirm(msg.id) });
+      return false;
+    case "confirm_resolve":
+      // The user's verdict, ONLY from the confirmation window - this
+      // restriction is what makes page-side auto-approval impossible (the
+      // page can neither see nor answer the request).
+      if (!fromConfirmPage(sender)) {
+        sendResponse({ ok: false, error: "confirmations are extension-page-only" });
+        return false;
+      }
+      sendResponse(resolveConfirm(msg.id, msg.approved));
+      return false;
     default: {
       if (!isEnrollmentAction(msg.type)) {
         // The schema admits nothing else; a new message type must be added

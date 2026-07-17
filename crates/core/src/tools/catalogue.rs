@@ -42,7 +42,8 @@ pub fn all() -> Vec<Tool> {
         Tool {
             name: "tab_close",
             description:
-                "Close an http(s) tab after showing a user-confirmation prompt in that page.",
+                "Close an http(s) tab after the user approves it in the extension's confirmation \
+                 window.",
             input_schema: bridge_schema(
                 &["tabId"],
                 &[("tabId", "integer", "Tab id from tab_list")],
@@ -255,8 +256,9 @@ pub fn all() -> Vec<Tool> {
                  \"Control+A\". Dispatched as a synthetic keyboard event to the focused element, \
                  so page JavaScript handlers see it; the event is not trusted, so it may not \
                  trigger a native default action such as submitting a form (use page_click on the \
-                 submit control for that). Every press shows an on-page confirmation prompt, \
-                 because a keypress can submit or trigger an action.",
+                 submit control for that). Every press shows a user-confirmation prompt (in \
+                 the extension's own window), because a keypress can submit or trigger an \
+                 action.",
             input_schema: bridge_schema(
                 &["keys"],
                 &[(
@@ -291,8 +293,8 @@ pub fn all() -> Vec<Tool> {
                 "Choose an option in a <select> drop-down on the active tab. Prefer `ref` (from \
                  page_snapshot); fall back to `selector`. `value` matches an option by its value \
                  attribute, or by its visible text when no value matches. Fires input and change \
-                 events so frameworks react. Shows an on-page confirmation prompt, because it \
-                 changes form state.",
+                 events so frameworks react. Shows a user-confirmation prompt (in the \
+                 extension's own window), because it changes form state.",
             input_schema: bridge_schema(
                 &["value"],
                 &[
@@ -359,8 +361,9 @@ pub fn all() -> Vec<Tool> {
                  (<input type=file>) on the active tab so the page can upload it. `selector` \
                  targets the file input; `path` is the absolute local file path. This can \
                  exfiltrate private local files to a web page, so it is OFF by default (enable in \
-                 the extension settings) and EVERY call shows an on-page confirmation prompt \
-                 displaying the exact file path before it proceeds. Uses Chrome's debugger (CDP \
+                 the extension settings) and EVERY call shows a user-confirmation prompt (in \
+                 the extension's own window) displaying the exact file path before it \
+                 proceeds. Uses Chrome's debugger (CDP \
                  DOM.setFileInputFiles); the 'Started debugging this browser' banner flashes \
                  while it runs. Do not use this unless the user explicitly asked to upload that \
                  specific file.",

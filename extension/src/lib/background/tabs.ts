@@ -4,8 +4,8 @@
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
-import type { PageResponse } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
+import { confirmWithUser } from "./confirm/service";
 
 export async function resolveTargetTab(maybeTabId: number | undefined): Promise<Browser.tabs.Tab> {
   if (maybeTabId) {
@@ -29,14 +29,6 @@ export async function injectIfNeeded(tabId: number) {
       target: { tabId },
       files: ["/content-scripts/content.js"],
     });
-    try {
-      await browser.scripting.insertCSS({
-        target: { tabId },
-        files: ["/toast.css"],
-      });
-    } catch (_) {
-      // CSS injection can fail on some pages; not fatal.
-    }
   }
 }
 
@@ -157,19 +149,29 @@ export async function tabClose(tabId: number) {
 
 async function confirmTabClose(tab: Browser.tabs.Tab) {
   if (!tab?.id) throw new Error("tab not found");
+  // Scope stays: only http(s) tabs on allowlisted origins may be closed. The
+  // confirmation itself no longer needs the page (it shows on the
+  // extension-owned surface, ADR-0027), but closing tabs outside the approved
+  // origins would widen the tool beyond what the user granted.
   if (!tab.url || !/^https?:\/\//i.test(tab.url)) {
-    throw new Error(
-      "tab_close can only close http(s) tabs because the close confirmation must be shown in the page",
-    );
+    throw new Error("tab_close can only close http(s) tabs");
   }
   await ensureAllowed(tab.url);
-  await injectIfNeeded(tab.id);
-  const resp = (await browser.tabs.sendMessage(tab.id, {
-    op: "_confirm_toast",
-    args: { message: `Close tab "${tab.title || tab.url}"?` },
-  })) as PageResponse;
-  if (resp?.__error) throw new Error(resp.__error);
-  if (resp?.approved !== true) {
+  const approved = await confirmWithUser({
+    kind: "tab_close",
+    origin: new URL(tab.url).origin,
+    tabTitle: tab.title || "",
+    detail: tab.title || tab.url,
+    timeoutMs: await getSetting("clickToastTimeoutMs"),
+  });
+  if (!approved) {
     throw new Error("user denied tab_close");
+  }
+  // The confirmation held the pipeline open; if the tab meanwhile navigated
+  // to a different origin, closing it is no longer what the user approved.
+  const current = await browser.tabs.get(tab.id);
+  const originNow = current.url ? new URL(current.url).origin : "";
+  if (originNow !== new URL(tab.url).origin) {
+    throw new Error("the tab navigated while the close confirmation was open; re-issue tab_close");
   }
 }

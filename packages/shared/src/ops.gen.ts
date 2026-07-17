@@ -87,7 +87,7 @@ export const TOOLS: readonly ToolInfo[] = [
 export type Risk = "critical" | "high" | "low" | "medium";
 export type Scope = "page" | "server" | "tab";
 export type Permission = "cookies" | "debugger" | "scripting" | "tabs";
-export type Confirmation = "every-call" | "high-risk" | "none" | "page-toast" | "warn";
+export type Confirmation = "every-call" | "high-risk" | "none" | "warn";
 
 export interface ToolMeta {
   risk: Risk;
@@ -125,7 +125,7 @@ export const TOOL_META: Readonly<Record<OpName, ToolMeta>> = {
     risk: "high",
     scope: "tab",
     permission: "tabs",
-    confirmation: "page-toast",
+    confirmation: "every-call",
   },
   page_snapshot: {
     risk: "low",
@@ -221,7 +221,7 @@ export const TOOL_META: Readonly<Record<OpName, ToolMeta>> = {
     risk: "high",
     scope: "page",
     permission: "scripting",
-    confirmation: "page-toast",
+    confirmation: "every-call",
   },
   page_hover: {
     risk: "low",
@@ -233,7 +233,7 @@ export const TOOL_META: Readonly<Record<OpName, ToolMeta>> = {
     risk: "high",
     scope: "page",
     permission: "scripting",
-    confirmation: "page-toast",
+    confirmation: "every-call",
   },
   console_get: {
     risk: "medium",

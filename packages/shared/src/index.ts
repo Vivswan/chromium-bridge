@@ -6,6 +6,7 @@
 // (`just gen`); everything else is hand-written and, where a contracts/
 // *.schema.json exists, verified equivalent to it in CI.
 
+export * from "./confirm";
 export * from "./enclave";
 export * from "./envelope";
 export * from "./identity.gen";
