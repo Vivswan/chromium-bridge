@@ -4,28 +4,23 @@
 // restarts), mirroring allowlist-store.ts. The single-use challenge nonce is
 // deliberately NOT here: it stays in service-worker memory only
 // (see enrollment.ts), so a persisted copy can never be replayed against.
+//
+// Record shapes are the Zod schemas in @chromium-bridge/shared (enclave.ts
+// there); every read parses against them, and key records additionally pass
+// the cryptographic self-check below. Anything that fails either is treated
+// as absent - which fails closed at the enrollment gate.
 
+import {
+  type CompromisedMark,
+  CompromisedMarkSchema,
+  type EnclavePin,
+  EnclavePinSchema,
+  type PendingPairing,
+  PendingPairingSchema,
+} from "@chromium-bridge/shared";
 import { computeKeyId, parsePubkey } from "./enclave-verify";
 
-export interface EnclavePin {
-  keyId: string; // lowercase-hex SHA-256 of the pubkey (the fingerprint)
-  pubkeyB64: string; // base64 of the 65-byte X9.63 point
-  pinnedAt: number;
-}
-
-/** A ceremony proof that verified but has not been user-approved yet. */
-export interface PendingPairing {
-  keyId: string;
-  pubkeyB64: string;
-  at: number;
-}
-
-/** Set when a pinned-key verification failed: the bridge fails closed until
- * the user revokes the pin and re-pairs. */
-export interface CompromisedMark {
-  reason: string;
-  at: number;
-}
+export type { CompromisedMark, EnclavePin, PendingPairing };
 
 const PIN_KEY = "enclavePin";
 const PENDING_KEY = "enclavePending";
@@ -33,8 +28,6 @@ const COMPROMISED_KEY = "enclaveCompromised";
 const PAUSED_KEY = "enclavePairingPaused";
 const LAST_ERROR_KEY = "enclaveLastError";
 const LAST_VERIFIED_KEY = "enclaveLastVerifiedAt";
-
-const KEY_ID_HEX = /^[0-9a-f]{64}$/;
 
 async function read(key: string): Promise<unknown> {
   const { [key]: v } = await chrome.storage.local.get(key);
@@ -45,16 +38,7 @@ async function read(key: string): Promise<unknown> {
  * pubkey decodes to a real 65-byte X9.63 point and its SHA-256 equals the
  * stored keyId. A corrupt or hand-edited record is treated as absent (which
  * fails closed at the gate), never as a pin. */
-async function validKeyRecord(v: unknown): Promise<boolean> {
-  const rec = v as { keyId?: unknown; pubkeyB64?: unknown } | undefined;
-  if (
-    !rec ||
-    typeof rec.keyId !== "string" ||
-    !KEY_ID_HEX.test(rec.keyId) ||
-    typeof rec.pubkeyB64 !== "string"
-  ) {
-    return false;
-  }
+async function keyRecordIsWhole(rec: { keyId: string; pubkeyB64: string }): Promise<boolean> {
   try {
     const pub = parsePubkey(rec.pubkeyB64);
     if ((await computeKeyId(pub)) !== rec.keyId) {
@@ -69,10 +53,8 @@ async function validKeyRecord(v: unknown): Promise<boolean> {
 }
 
 export async function getPin(): Promise<EnclavePin | null> {
-  const v = (await read(PIN_KEY)) as Partial<EnclavePin> | undefined;
-  if (v && typeof v.pinnedAt === "number" && (await validKeyRecord(v))) {
-    return v as EnclavePin;
-  }
+  const parsed = EnclavePinSchema.safeParse(await read(PIN_KEY));
+  if (parsed.success && (await keyRecordIsWhole(parsed.data))) return parsed.data;
   return null;
 }
 
@@ -81,10 +63,8 @@ export async function setPin(pin: EnclavePin): Promise<void> {
 }
 
 export async function getPending(): Promise<PendingPairing | null> {
-  const v = (await read(PENDING_KEY)) as Partial<PendingPairing> | undefined;
-  if (v && typeof v.at === "number" && (await validKeyRecord(v))) {
-    return v as PendingPairing;
-  }
+  const parsed = PendingPairingSchema.safeParse(await read(PENDING_KEY));
+  if (parsed.success && (await keyRecordIsWhole(parsed.data))) return parsed.data;
   return null;
 }
 
@@ -97,11 +77,8 @@ export async function clearPending(): Promise<void> {
 }
 
 export async function getCompromised(): Promise<CompromisedMark | null> {
-  const v = (await read(COMPROMISED_KEY)) as Partial<CompromisedMark> | undefined;
-  if (v && typeof v.reason === "string" && typeof v.at === "number") {
-    return v as CompromisedMark;
-  }
-  return null;
+  const parsed = CompromisedMarkSchema.safeParse(await read(COMPROMISED_KEY));
+  return parsed.success ? parsed.data : null;
 }
 
 export async function setCompromised(mark: CompromisedMark): Promise<void> {

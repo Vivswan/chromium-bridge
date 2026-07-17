@@ -44,10 +44,10 @@ audit:
     cargo deny check
     cargo audit
 
-# Regenerate code from contracts/ (ops.ts from tools.json)
+# Regenerate code from contracts/ (ops.gen.ts + identity.gen.ts into packages/shared)
 gen:
     bun scripts/gen-ops.ts
-    bunx biome format --write extension/src/shared/ops.ts
+    bunx biome format --write packages/shared/src/ops.gen.ts packages/shared/src/identity.gen.ts
 
 # Rust unit + integration tests (cargo-nextest, plus doctests)
 test-rust:
@@ -82,6 +82,10 @@ fix-ts:
 ext-test:
     bun run --cwd extension test
 
+# Unit-test packages/shared: contract equivalence, parity, boundary validators
+shared-test:
+    bun run --cwd packages/shared test
+
 # DOM + smoke tests (needs bun + Chrome; builds first)
 test-browser: ext-build
     cd tests && bun dom_test.ts
@@ -95,7 +99,7 @@ test-integration: build ext-build
 test: test-rust test-e2e
 
 # Everything CI runs
-ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts ext-test ext-build test-e2e
+ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test ext-build test-e2e check-extension-id
 
 # Install locally (build + copy binary + host manifest)
 install:

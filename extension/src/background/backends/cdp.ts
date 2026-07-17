@@ -5,8 +5,10 @@
 // masking and the same-origin grace window are handled here in the SW so they
 // match the content-script path.
 
+import { unreachable } from "@chromium-bridge/shared";
 import { truncate } from "../../content/util";
 import { maskSensitive, maskString } from "../../shared/masking";
+import type { PageOp } from "../../shared/page-ops";
 import { getSetting } from "../../shared/settings";
 import type { OpArgs } from "../../shared/types";
 import { ensureAllowed } from "../allowlist-store";
@@ -51,7 +53,7 @@ function originOf(url: string | undefined): string {
 }
 
 export class CdpBackend implements PageBackend {
-  async run(op: string, args: OpArgs, tab: chrome.tabs.Tab): Promise<unknown> {
+  async run(op: PageOp, args: OpArgs, tab: chrome.tabs.Tab): Promise<unknown> {
     // Preserve dispatch's ordering: allowlist check, then do the work.
     await ensureAllowed(tab.url);
     if (!isDebuggable(tab.url)) {
@@ -133,7 +135,9 @@ export class CdpBackend implements PageBackend {
         return await this.pageEval(session, args, tab);
 
       default:
-        throw new Error(`CDP backend: unsupported op ${op}`);
+        // Exhaustiveness backstop: adding an op to PAGE_OPS without a case
+        // here fails to compile.
+        return unreachable(op);
     }
   }
 

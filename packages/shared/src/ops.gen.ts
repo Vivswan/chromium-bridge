@@ -1,17 +1,59 @@
 // GENERATED from contracts/tools.json by scripts/gen-ops.ts - DO NOT EDIT.
-// Edit the contract, then run `just gen` (or `bun scripts/gen-ops.ts`).
+// Edit the contract, then run `just gen`.
 //
-// The tool catalogue, JS side: op names + Chinese UI labels for the options
+// The tool catalogue, TS side: op names + Chinese UI labels for the options
 // page, policy metadata (risk / scope / permission / confirmation), and the
-// per-tool request shapes (BridgeCommand, derived from each inputSchema).
-// tools.rs is verified against the same contract in `cargo test`.
+// per-op Zod arg validators the extension enforces at the native-messaging
+// boundary. BridgeCommand (the discriminated request union) is INFERRED from
+// the validators, so the compile-time types and the runtime checks cannot
+// drift apart. Rust tools/catalogue.rs is verified against the same contract
+// in `cargo test`.
+
+import { z } from "zod";
+
+export const OP_NAMES = [
+  "list_browsers",
+  "tab_list",
+  "tab_focus",
+  "tab_open",
+  "tab_close",
+  "page_snapshot",
+  "page_click",
+  "page_fill",
+  "page_text",
+  "page_screenshot",
+  "page_scroll",
+  "page_wait_for",
+  "page_eval",
+  "page_snapshot_precise",
+  "cookie_get",
+  "storage_get",
+  "page_navigate",
+  "page_back",
+  "page_forward",
+  "page_reload",
+  "page_press",
+  "page_hover",
+  "page_select",
+  "console_get",
+  "page_handle_dialog",
+  "page_upload",
+] as const;
+
+export type OpName = (typeof OP_NAMES)[number];
+
+const OP_NAME_SET: ReadonlySet<string> = new Set(OP_NAMES);
+
+export function isOpName(op: string): op is OpName {
+  return OP_NAME_SET.has(op);
+}
 
 export interface ToolInfo {
-  op: string;
+  op: OpName;
   desc: string;
 }
 
-export const TOOLS: ToolInfo[] = [
+export const TOOLS: readonly ToolInfo[] = [
   { op: "list_browsers", desc: "列出已连接的浏览器" },
   { op: "tab_list", desc: "列出所有标签页" },
   { op: "tab_focus", desc: "切换到指定标签页" },
@@ -40,9 +82,6 @@ export const TOOLS: ToolInfo[] = [
   { op: "page_upload", desc: "上传本地文件(极高危,需开启)" },
 ];
 
-// All op names, for enumeration / consistency checks.
-export const OP_NAMES: string[] = TOOLS.map((t) => t.op);
-
 // Policy metadata, mirrored from the contract. Consumed by the policy layer
 // (background/policy.ts) - kept as plain data so it stays import-side-effect-free.
 export type Risk = "critical" | "high" | "low" | "medium";
@@ -57,7 +96,7 @@ export interface ToolMeta {
   confirmation: Confirmation;
 }
 
-export const TOOL_META: Record<string, ToolMeta> = {
+export const TOOL_META: Readonly<Record<OpName, ToolMeta>> = {
   list_browsers: {
     risk: "low",
     scope: "server",
@@ -216,39 +255,89 @@ export const TOOL_META: Record<string, ToolMeta> = {
   },
 };
 
-// Per-tool request shapes, derived from each tool's inputSchema. Discriminated
-// on `op`, so consumers (background/dispatch.ts) narrow the args to exactly the
-// fields that tool accepts. shared/types.ts intersects this with the request
-// envelope ({ id, tabId? }) to form BridgeReq. Required schema props map to
-// required fields; the rest are optional. JSON-Schema string→string,
-// integer/number→number, boolean→boolean.
-export type BridgeCommand =
-  | { op: "list_browsers"; args: Record<string, never> }
-  | { op: "tab_list"; args: Record<string, never> }
-  | { op: "tab_focus"; args: { tabId: number } }
-  | { op: "tab_open"; args: { url: string } }
-  | { op: "tab_close"; args: { tabId: number } }
-  | { op: "page_snapshot"; args: Record<string, never> }
-  | { op: "page_click"; args: { ref?: string; selector?: string } }
-  | { op: "page_fill"; args: { ref?: string; selector?: string; value: string } }
-  | { op: "page_text"; args: Record<string, never> }
-  | { op: "page_screenshot"; args: Record<string, never> }
-  | { op: "page_scroll"; args: { direction?: string; pixels?: number } }
-  | {
-      op: "page_wait_for";
-      args: { nav?: boolean; selector?: string; text?: string; timeoutMs?: number };
-    }
-  | { op: "page_eval"; args: { code: string } }
-  | { op: "page_snapshot_precise"; args: { frameId?: string } }
-  | { op: "cookie_get"; args: { domain?: string; name?: string; url?: string } }
-  | { op: "storage_get"; args: { key?: string; type?: string } }
-  | { op: "page_navigate"; args: { url: string } }
-  | { op: "page_back"; args: Record<string, never> }
-  | { op: "page_forward"; args: Record<string, never> }
-  | { op: "page_reload"; args: Record<string, never> }
-  | { op: "page_press"; args: { keys: string } }
-  | { op: "page_hover"; args: { ref?: string; selector?: string } }
-  | { op: "page_select"; args: { ref?: string; selector?: string; value: string } }
-  | { op: "console_get"; args: { limit?: number } }
-  | { op: "page_handle_dialog"; args: { action: string; promptText?: string } }
-  | { op: "page_upload"; args: { selector: string; path: string } };
+// Per-op arg validators, derived from each tool's inputSchema (minus the
+// server-consumed `browser` routing arg). The extension parses an inbound
+// request's args against its op's validator before dispatching - fail closed.
+export const OP_ARG_SCHEMAS = {
+  list_browsers: z.strictObject({}),
+  tab_list: z.strictObject({}),
+  tab_focus: z.strictObject({ tabId: z.int() }),
+  tab_open: z.strictObject({ url: z.string() }),
+  tab_close: z.strictObject({ tabId: z.int() }),
+  page_snapshot: z.strictObject({}),
+  page_click: z.strictObject({ ref: z.string().optional(), selector: z.string().optional() }),
+  page_fill: z.strictObject({
+    ref: z.string().optional(),
+    selector: z.string().optional(),
+    value: z.string(),
+  }),
+  page_text: z.strictObject({}),
+  page_screenshot: z.strictObject({}),
+  page_scroll: z.strictObject({ direction: z.string().optional(), pixels: z.int().optional() }),
+  page_wait_for: z.strictObject({
+    nav: z.boolean().optional(),
+    selector: z.string().optional(),
+    text: z.string().optional(),
+    timeoutMs: z.int().optional(),
+  }),
+  page_eval: z.strictObject({ code: z.string() }),
+  page_snapshot_precise: z.strictObject({ frameId: z.string().optional() }),
+  cookie_get: z.strictObject({
+    domain: z.string().optional(),
+    name: z.string().optional(),
+    url: z.string().optional(),
+  }),
+  storage_get: z.strictObject({ key: z.string().optional(), type: z.string().optional() }),
+  page_navigate: z.strictObject({ url: z.string() }),
+  page_back: z.strictObject({}),
+  page_forward: z.strictObject({}),
+  page_reload: z.strictObject({}),
+  page_press: z.strictObject({ keys: z.string() }),
+  page_hover: z.strictObject({ ref: z.string().optional(), selector: z.string().optional() }),
+  page_select: z.strictObject({
+    ref: z.string().optional(),
+    selector: z.string().optional(),
+    value: z.string(),
+  }),
+  console_get: z.strictObject({ limit: z.int().optional() }),
+  page_handle_dialog: z.strictObject({ action: z.string(), promptText: z.string().optional() }),
+  page_upload: z.strictObject({ selector: z.string(), path: z.string() }),
+} as const satisfies Readonly<Record<OpName, z.ZodType>>;
+
+// Per-op request shapes, inferred from the validators. Discriminated on `op`,
+// so consumers (background/dispatch.ts) narrow the args to exactly the fields
+// that tool accepts. envelope.ts intersects this with the request envelope to
+// form BridgeReq.
+export type BridgeCommand = {
+  [K in OpName]: { op: K; args: z.infer<(typeof OP_ARG_SCHEMAS)[K]> };
+}[OpName];
+
+// The envelope-level args bag: the union of every tool's inputSchema props,
+// all optional (the per-op validators enforce required-ness). Structurally
+// equivalent to bridge-request.schema.json's $defs/OpArgs - the equivalence
+// test in packages/shared enforces that against the contract file.
+export const OpArgsSchema = z.strictObject({
+  tabId: z.int().optional(),
+  url: z.string().optional(),
+  ref: z.string().optional(),
+  selector: z.string().optional(),
+  value: z.string().optional(),
+  direction: z.string().optional(),
+  pixels: z.int().optional(),
+  nav: z.boolean().optional(),
+  text: z.string().optional(),
+  timeoutMs: z.int().optional(),
+  code: z.string().optional(),
+  frameId: z.string().optional(),
+  domain: z.string().optional(),
+  name: z.string().optional(),
+  key: z.string().optional(),
+  type: z.string().optional(),
+  keys: z.string().optional(),
+  limit: z.int().optional(),
+  action: z.string().optional(),
+  promptText: z.string().optional(),
+  path: z.string().optional(),
+});
+
+export type OpArgs = z.infer<typeof OpArgsSchema>;

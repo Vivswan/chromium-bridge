@@ -7,11 +7,14 @@
 # - extension/: converted with the Phase 7 extension rehaul.
 # - docs/ and README.md: Chinese-language docs owned by the translation
 #   pass; historical ADRs keep their original text. Cleaned in Phase 11.
-# - contracts/: tool descriptions are a cross-process contract; Phase 2
-#   owns changes there.
+# - contracts/tools.json: the tool descriptions still carry em-dashes, and
+#   they are byte-verified against the Rust catalogue (matches_contract), so
+#   converting them is a coordinated contract + crates/core change - it rides
+#   with the deny_unknown_fields follow-up, not Phase 2. The rest of
+#   contracts/ is checked.
 # - CHANGELOG.md: generated release history, never edited by hand.
 extension/
 docs/
-contracts/
+contracts/tools.json
 CHANGELOG.md
 README.md

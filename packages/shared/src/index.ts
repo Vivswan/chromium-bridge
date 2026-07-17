@@ -1,8 +1,16 @@
-// @chromium-bridge/shared - shared contract types, validators, and i18n.
+// @chromium-bridge/shared - contract-derived types, Zod validators, and (from
+// the extension rehaul onward) the i18n runtime, shared by the extension, the
+// app UI, and tooling.
 //
-// Deliberately empty: the codegen/parity backbone (plan Phase 2) generates the
-// Zod validators and contract types into this package, and the extension
-// rehaul (Phase 7) adds the i18n runtime. This scaffold exists so workspace
-// wiring, typecheck, and lint cover the package from day one.
+// The *.gen.ts modules are generated from contracts/ by scripts/gen-ops.ts
+// (`just gen`); everything else is hand-written and, where a contracts/
+// *.schema.json exists, verified equivalent to it in CI.
 
-export {};
+export * from "./enclave";
+export * from "./envelope";
+export * from "./identity.gen";
+export * from "./ops.gen";
+export * from "./runtime-msg";
+export * from "./settings";
+export * from "./storage";
+export * from "./util";
