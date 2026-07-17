@@ -14,10 +14,14 @@
 //!   with HMAC(secret, nonce). The secret never travels on the wire, and a fresh
 //!   nonce per connection makes a captured response useless to replay.
 //! - Before that handshake, each end kernel-attests the other ([`attest_peer`]):
-//!   it resolves the peer's pid from the socket and requires the peer's on-disk
-//!   executable to hash to the same value as its own, so only another instance
-//!   of this exact binary can drive the bridge. A different same-user program is
-//!   rejected at accept, before it can attempt the handshake. See ADR-0020.
+//!   it asks the kernel who the peer is and requires the peer to be running the
+//!   same executable image as itself. On Linux that identity is the SHA256 of
+//!   `/proc/<pid>/exe`; on macOS it is the code-directory hash of the peer's
+//!   running image, taken from its kernel audit token via the Security framework
+//!   (running-image-bound, so it survives a re-open TOCTOU). Only another
+//!   instance of this exact binary can drive the bridge; a different same-user
+//!   program is rejected at accept, before it can attempt the handshake. See
+//!   ADR-0020.
 
 use std::fs;
 #[cfg(unix)]
@@ -270,7 +274,9 @@ pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
 }
 
 /// The PID of the process on the other end of a connected Unix-domain socket.
-/// Used by [`attest_peer`] to resolve the peer's on-disk executable.
+/// On Linux [`attest_peer`] uses it to resolve the peer's on-disk executable; on
+/// macOS it is only the fallback identity source when the kernel audit token is
+/// unavailable (see [`codesign`]).
 ///
 /// The kernel records this pid for the process that opened the peer end; it is
 /// stable for the connection even if that process later exits. Resolving the
@@ -340,49 +346,20 @@ pub fn peer_pid(stream: &BridgeStream) -> io::Result<u32> {
 }
 
 /// SHA256 (lowercase hex) of a running process's on-disk executable, named by
-/// pid.
-///
-/// On Linux we hash `/proc/<pid>/exe`, the kernel's magic symlink to the actual
-/// executable inode: it follows to the real backing file even if the path was
-/// later replaced, so once the pid is resolved the digest reflects the running
-/// image (the pid-resolution race is noted on [`peer_pid`]). On macOS (no
-/// `/proc`) we resolve the path with `proc_pidpath` and hash that file, which is
-/// NOT bound to the running image: an attacker who can replace the file at that
-/// path makes us hash the replacement. [`own_exe_hash`] captures our own digest
-/// at startup to blunt that, but the full fix is running-image-bound validation
-/// (`SecCode` by pid). ADR-0020 records this and the code-signature follow-up.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// pid, on Linux. We hash `/proc/<pid>/exe`, the kernel's magic symlink to the
+/// actual executable inode: it follows to the real backing file even if the path
+/// was later replaced, so once the pid is resolved the digest reflects the
+/// running image (the pid-resolution race is noted on [`peer_pid`]). macOS does
+/// not use this: it attests the running image directly through the Security
+/// framework (see [`codesign`]), which is bound to the running image and needs no
+/// path re-open.
+#[cfg(target_os = "linux")]
 fn exe_hash_of_pid(pid: u32) -> io::Result<String> {
-    #[cfg(target_os = "linux")]
-    {
-        hash_file(&PathBuf::from(format!("/proc/{pid}/exe")))
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        hash_file(&macos_exe_path(pid)?)
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn macos_exe_path(pid: u32) -> io::Result<PathBuf> {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-
-    let pid = libc::pid_t::try_from(pid)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
-    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    // proc_pidpath returns the path length on success, 0 (with errno) on error.
-    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    if n <= 0 {
-        return Err(io::Error::last_os_error());
-    }
-    buf.truncate(n as usize);
-    Ok(PathBuf::from(OsStr::from_bytes(&buf)))
+    hash_file(&PathBuf::from(format!("/proc/{pid}/exe")))
 }
 
 /// Stream a file through SHA256 and return the lowercase hex digest.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn hash_file(path: &std::path::Path) -> io::Result<String> {
     use sha2::Digest;
 
@@ -399,17 +376,19 @@ fn hash_file(path: &std::path::Path) -> io::Result<String> {
     Ok(hex_encode(hasher.finalize().as_slice()))
 }
 
-/// SHA256 (hex) of THIS process's own executable, computed once and cached.
-/// This is the trusted identity both ends attest against: a peer is accepted
-/// only when its executable hashes to the same value, i.e. it is another
-/// instance of the same binary. Self and peer are hashed by the identical
-/// mechanism, so an identical binary always yields an identical digest.
+/// This process's own executable identity, computed once and cached. It is the
+/// trusted value both ends attest against: a peer is accepted only when its
+/// running image yields the same identity, i.e. it is another instance of the
+/// same binary. Self and peer are measured by the identical mechanism, so an
+/// identical image always yields an identical value.
 ///
-/// [`ensure_own_identity`] primes this at startup, before we accept or dial any
-/// connection, so our notion of "self" is captured from the genuine on-disk
-/// binary and a later replacement of that file cannot redefine it.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn own_exe_hash() -> io::Result<&'static str> {
+/// On Linux the identity is the SHA256 of the on-disk executable; on macOS it is
+/// the code-directory hash (cdhash) of the running image, read from the Security
+/// framework. [`ensure_own_identity`] primes the cache at startup, before we
+/// accept or dial any connection, so our notion of "self" is fixed from the
+/// genuine binary and a later on-disk replacement cannot redefine it.
+#[cfg(target_os = "linux")]
+fn own_identity() -> io::Result<&'static str> {
     use std::sync::OnceLock;
 
     static CACHE: OnceLock<Option<String>> = OnceLock::new();
@@ -419,48 +398,378 @@ fn own_exe_hash() -> io::Result<&'static str> {
         .ok_or_else(|| io::Error::other("cannot hash own executable"))
 }
 
-/// Prime and validate our own executable identity. Call once at startup, before
-/// accepting or dialing the bridge: it captures the self digest at a known-good
-/// time and fails loudly (rather than silently degrading later) if we cannot
-/// hash our own image, so the caller can refuse to run. Returns the digest for
-/// logging convenience.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn ensure_own_identity() -> io::Result<&'static str> {
-    own_exe_hash()
+#[cfg(target_os = "macos")]
+fn own_identity() -> io::Result<&'static str> {
+    use std::sync::OnceLock;
+
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| codesign::own_cdhash().ok())
+        .as_deref()
+        .ok_or_else(|| io::Error::other("cannot compute own code-directory hash"))
 }
 
-/// Verify the peer on `stream` is running the same executable as us: resolve its
-/// pid from the kernel, hash its on-disk image, and require it to equal our own
-/// executable's digest. Fails closed on any error: a digest mismatch returns
-/// `PermissionDenied`, and an inability to establish the peer's identity (pid or
-/// hash lookup) propagates that error's own kind. Either way the caller drops
-/// the connection. This is the bridge's trusted-identity allowlist, and the
+/// The peer's running-image identity, measured the same way as [`own_identity`].
+#[cfg(target_os = "linux")]
+fn peer_identity(stream: &BridgeStream) -> io::Result<String> {
+    exe_hash_of_pid(peer_pid(stream)?)
+}
+
+#[cfg(target_os = "macos")]
+fn peer_identity(stream: &BridgeStream) -> io::Result<String> {
+    codesign::peer_cdhash(stream)
+}
+
+/// Prime and validate our own executable identity. Call once at startup, before
+/// accepting or dialing the bridge: it fixes the self identity at a known-good
+/// time and fails loudly (rather than silently degrading later) if we cannot
+/// measure our own image, so the caller can refuse to run. Returns the identity
+/// for logging convenience.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn ensure_own_identity() -> io::Result<&'static str> {
+    own_identity()
+}
+
+/// Verify the peer on `stream` is running the same executable image as us, and
+/// fail closed otherwise. Measure the peer's identity from the kernel's view of
+/// it and require it to equal our own: a mismatch returns `PermissionDenied`, and
+/// an inability to establish the peer's identity propagates that error's own
+/// kind. Either way the caller drops the connection. The trusted-identity
 /// allowlist is exactly `{our own binary}`.
 ///
-/// Both ends run this: the server attests the native host right after accept,
-/// the native host attests the server right after connect. See ADR-0020 for
-/// what this proves and what it cannot.
+/// Both ends run this: the server attests the native host right after accept, the
+/// native host attests the server right after connect. See ADR-0020 for what this
+/// proves and what it cannot.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
-    let pid = peer_pid(stream)?;
-    let peer = exe_hash_of_pid(pid)?;
-    let own = own_exe_hash()?;
+    let peer = peer_identity(stream)?;
+    let own = own_identity()?;
     if identities_match(&peer, own) {
         Ok(())
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("peer executable identity mismatch (pid {pid})"),
+            "peer executable identity mismatch",
         ))
     }
 }
 
-/// Whether two hex executable digests name the same binary. Split out so the
+/// Whether two hex identity digests name the same image. Split out so the
 /// accept/reject decision is unit-testable without spawning a second process.
 /// The digests are not secrets, so a plain comparison is fine here.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn identities_match(peer_hex: &str, own_hex: &str) -> bool {
     peer_hex == own_hex
+}
+
+/// Running-image-bound peer attestation on macOS via the Security framework:
+/// identify the peer by its kernel audit token, validate its dynamic code
+/// signature, and read its code-directory hash (cdhash). Unlike re-opening a
+/// path, the audit token names the running image, so this closes both the path
+/// re-open TOCTOU and the pid-reuse race. cdhash works for ad-hoc-signed builds
+/// (it is the hash of the code pages), so it is enforceable on unsigned dev and
+/// CI binaries too; Team-ID / designated-requirement pinning is the follow-up for
+/// when a real signing identity lands. All FFI is hand-declared to avoid adding
+/// crates (keeps cargo-deny clean). See ADR-0020.
+#[cfg(target_os = "macos")]
+mod codesign {
+    use std::ffi::c_void;
+    use std::io;
+
+    use super::BridgeStream;
+
+    type CFTypeRef = *const c_void;
+    type CFAllocatorRef = *const c_void;
+    type CFDataRef = *const c_void;
+    type CFStringRef = *const c_void;
+    type CFNumberRef = *const c_void;
+    type CFDictionaryRef = *const c_void;
+    type CFIndex = isize;
+    type OSStatus = i32;
+    type SecCSFlags = u32;
+    type SecCodeRef = *mut c_void;
+    type SecStaticCodeRef = *mut c_void;
+
+    const DEFAULT_FLAGS: SecCSFlags = 0; // kSecCSDefaultFlags
+    const ERR_SEC_SUCCESS: OSStatus = 0;
+    const KCF_NUMBER_SINT32: CFIndex = 3; // kCFNumberSInt32Type
+
+    // From <sys/un.h>: getsockopt level/name for the peer's audit token.
+    const SOL_LOCAL: libc::c_int = 0;
+    const LOCAL_PEERTOKEN: libc::c_int = 0x006;
+
+    // audit_token_t from <bsm/audit.h> is `unsigned int val[8]`, layout-identical
+    // to `[u32; 8]`; we treat it as opaque bytes and never read the fields.
+    const AUDIT_TOKEN_LEN: usize = 8;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFAllocatorDefault: CFAllocatorRef;
+        static kCFTypeDictionaryKeyCallBacks: c_void;
+        static kCFTypeDictionaryValueCallBacks: c_void;
+        fn CFRelease(cf: CFTypeRef);
+        fn CFDataCreate(allocator: CFAllocatorRef, bytes: *const u8, length: CFIndex) -> CFDataRef;
+        fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
+        fn CFDataGetLength(data: CFDataRef) -> CFIndex;
+        fn CFNumberCreate(
+            allocator: CFAllocatorRef,
+            the_type: CFIndex,
+            value_ptr: *const c_void,
+        ) -> CFNumberRef;
+        fn CFDictionaryCreate(
+            allocator: CFAllocatorRef,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: CFIndex,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> CFDictionaryRef;
+        fn CFDictionaryGetValue(dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
+    }
+
+    #[link(name = "Security", kind = "framework")]
+    extern "C" {
+        static kSecGuestAttributeAudit: CFStringRef;
+        static kSecGuestAttributePid: CFStringRef;
+        static kSecCodeInfoUnique: CFStringRef;
+        fn SecCodeCopySelf(flags: SecCSFlags, self_out: *mut SecCodeRef) -> OSStatus;
+        fn SecCodeCopyGuestWithAttributes(
+            host: SecCodeRef,
+            attributes: CFDictionaryRef,
+            flags: SecCSFlags,
+            guest: *mut SecCodeRef,
+        ) -> OSStatus;
+        fn SecCodeCopyStaticCode(
+            code: SecCodeRef,
+            flags: SecCSFlags,
+            static_out: *mut SecStaticCodeRef,
+        ) -> OSStatus;
+        fn SecCodeCheckValidity(
+            code: SecCodeRef,
+            flags: SecCSFlags,
+            requirement: *const c_void,
+        ) -> OSStatus;
+        fn SecCodeCopySigningInformation(
+            code: SecStaticCodeRef,
+            flags: SecCSFlags,
+            information: *mut CFDictionaryRef,
+        ) -> OSStatus;
+    }
+
+    /// Owns a +1 Core Foundation reference and releases it on drop, so every early
+    /// return on the error paths below still balances its retain.
+    struct Cf(CFTypeRef);
+
+    impl Drop for Cf {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { CFRelease(self.0) };
+            }
+        }
+    }
+
+    enum GuestKey {
+        Audit,
+        Pid,
+    }
+
+    fn osstatus_err(context: &str, status: OSStatus) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{context} failed (OSStatus {status})"),
+        )
+    }
+
+    /// The cdhash of THIS process's running image.
+    pub fn own_cdhash() -> io::Result<String> {
+        let mut me: SecCodeRef = std::ptr::null_mut();
+        let st = unsafe { SecCodeCopySelf(DEFAULT_FLAGS, &mut me) };
+        if st != ERR_SEC_SUCCESS {
+            return Err(osstatus_err("SecCodeCopySelf", st));
+        }
+        if me.is_null() {
+            return Err(io::Error::other("SecCodeCopySelf returned null on success"));
+        }
+        let _me = Cf(me as CFTypeRef);
+        validate_and_cdhash(me, "self")
+    }
+
+    /// The cdhash of the process on the other end of `stream`, identified by its
+    /// kernel audit token so the measurement binds to the running image (closing
+    /// the path re-open TOCTOU and the pid-reuse race). We fall back to
+    /// identifying by pid ONLY when the kernel reports the audit-token option
+    /// itself is unsupported (`ENOPROTOOPT`, older systems without
+    /// `LOCAL_PEERTOKEN`); the pid path is still running-image-validated by
+    /// `SecCodeCheckValidity` but reopens the narrow pid-reuse race (ADR-0020).
+    /// Any OTHER audit-token failure (short read, permission error) fails closed
+    /// rather than silently downgrading.
+    pub fn peer_cdhash(stream: &BridgeStream) -> io::Result<String> {
+        use std::os::unix::io::AsRawFd;
+
+        let fd = stream.as_raw_fd();
+        match peer_audit_token(fd) {
+            Ok(token) => peer_cdhash_via_audit(&token),
+            Err(e) if e.raw_os_error() == Some(libc::ENOPROTOOPT) => {
+                peer_cdhash_via_pid(super::peer_pid(stream)?)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn peer_audit_token(fd: libc::c_int) -> io::Result<[u32; AUDIT_TOKEN_LEN]> {
+        let mut token = [0u32; AUDIT_TOKEN_LEN];
+        let mut len = std::mem::size_of_val(&token) as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                SOL_LOCAL,
+                LOCAL_PEERTOKEN,
+                token.as_mut_ptr().cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if len as usize != std::mem::size_of_val(&token) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected audit-token size from LOCAL_PEERTOKEN",
+            ));
+        }
+        Ok(token)
+    }
+
+    fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(token.as_ptr().cast::<u8>(), std::mem::size_of_val(token))
+        };
+        let data =
+            unsafe { CFDataCreate(kCFAllocatorDefault, bytes.as_ptr(), bytes.len() as CFIndex) };
+        if data.is_null() {
+            return Err(io::Error::other("CFDataCreate for audit token failed"));
+        }
+        let _data = Cf(data);
+        guest_cdhash(GuestKey::Audit, data)
+    }
+
+    fn peer_cdhash_via_pid(pid: u32) -> io::Result<String> {
+        let pid = libc::pid_t::try_from(pid)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
+        let num = unsafe {
+            CFNumberCreate(
+                kCFAllocatorDefault,
+                KCF_NUMBER_SINT32,
+                (&pid as *const libc::pid_t).cast(),
+            )
+        };
+        if num.is_null() {
+            return Err(io::Error::other("CFNumberCreate for pid failed"));
+        }
+        let _num = Cf(num);
+        guest_cdhash(GuestKey::Pid, num)
+    }
+
+    /// Build the one-entry guest-attribute dictionary, copy the peer's SecCode,
+    /// validate its running signature, and return its cdhash.
+    fn guest_cdhash(key: GuestKey, value: CFTypeRef) -> io::Result<String> {
+        let key_ref = unsafe {
+            match key {
+                GuestKey::Audit => kSecGuestAttributeAudit,
+                GuestKey::Pid => kSecGuestAttributePid,
+            }
+        };
+        let keys: [*const c_void; 1] = [key_ref];
+        let values: [*const c_void; 1] = [value];
+        let attrs = unsafe {
+            CFDictionaryCreate(
+                kCFAllocatorDefault,
+                keys.as_ptr(),
+                values.as_ptr(),
+                1,
+                std::ptr::addr_of!(kCFTypeDictionaryKeyCallBacks),
+                std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
+            )
+        };
+        if attrs.is_null() {
+            return Err(io::Error::other(
+                "CFDictionaryCreate for guest attributes failed",
+            ));
+        }
+        let _attrs = Cf(attrs);
+
+        let mut guest: SecCodeRef = std::ptr::null_mut();
+        let st = unsafe {
+            SecCodeCopyGuestWithAttributes(std::ptr::null_mut(), attrs, DEFAULT_FLAGS, &mut guest)
+        };
+        if st != ERR_SEC_SUCCESS {
+            return Err(osstatus_err("SecCodeCopyGuestWithAttributes", st));
+        }
+        if guest.is_null() {
+            return Err(io::Error::other(
+                "SecCodeCopyGuestWithAttributes returned null on success",
+            ));
+        }
+        let _guest = Cf(guest as CFTypeRef);
+
+        validate_and_cdhash(guest, "peer")
+    }
+
+    /// Validate a dynamic `SecCode`'s running signature, then return its cdhash.
+    /// The validity check is the running-image-bound step: it verifies the code
+    /// pages match the signature of the process actually executing.
+    fn validate_and_cdhash(code: SecCodeRef, what: &str) -> io::Result<String> {
+        let st = unsafe { SecCodeCheckValidity(code, DEFAULT_FLAGS, std::ptr::null()) };
+        if st != ERR_SEC_SUCCESS {
+            return Err(osstatus_err(&format!("SecCodeCheckValidity ({what})"), st));
+        }
+        cdhash_of_code(code)
+    }
+
+    fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
+        let mut static_code: SecStaticCodeRef = std::ptr::null_mut();
+        let st = unsafe { SecCodeCopyStaticCode(code, DEFAULT_FLAGS, &mut static_code) };
+        if st != ERR_SEC_SUCCESS {
+            return Err(osstatus_err("SecCodeCopyStaticCode", st));
+        }
+        if static_code.is_null() {
+            return Err(io::Error::other(
+                "SecCodeCopyStaticCode returned null on success",
+            ));
+        }
+        let _static = Cf(static_code as CFTypeRef);
+
+        let mut info: CFDictionaryRef = std::ptr::null();
+        let st = unsafe { SecCodeCopySigningInformation(static_code, DEFAULT_FLAGS, &mut info) };
+        if st != ERR_SEC_SUCCESS {
+            return Err(osstatus_err("SecCodeCopySigningInformation", st));
+        }
+        if info.is_null() {
+            return Err(io::Error::other(
+                "SecCodeCopySigningInformation returned null on success",
+            ));
+        }
+        let _info = Cf(info);
+
+        // Borrowed reference (Get-rule): do not release.
+        let cdhash = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) } as CFDataRef;
+        if cdhash.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "code has no cdhash (unsigned?)",
+            ));
+        }
+        let len = unsafe { CFDataGetLength(cdhash) };
+        let ptr = unsafe { CFDataGetBytePtr(cdhash) };
+        if len <= 0 || ptr.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "code-directory hash is empty",
+            ));
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+        Ok(super::hex_encode(bytes))
+    }
 }
 
 fn generate_secret() -> String {
@@ -814,24 +1123,51 @@ mod tests {
         assert_eq!(peer_pid(&a).unwrap(), std::process::id());
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn own_exe_hash_is_stable_64_hex_chars() {
-        let h = own_exe_hash().unwrap();
+    fn own_identity_is_a_sha256_hex_digest() {
+        let h = own_identity().unwrap();
         assert_eq!(h.len(), 64);
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
         // Cached: a second call yields the same digest.
-        assert_eq!(h, own_exe_hash().unwrap());
+        assert_eq!(h, own_identity().unwrap());
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     #[test]
-    fn exe_hash_of_own_pid_matches_own_exe_hash() {
+    fn own_identity_is_a_stable_cdhash_hex() {
+        // On macOS the identity is the running image's cdhash. On Apple Silicon
+        // every build is at least ad-hoc signed, so this resolves even for
+        // unsigned dev/CI binaries.
+        let h = own_identity().unwrap();
+        assert!(!h.is_empty());
+        assert_eq!(h.len() % 2, 0);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(h, own_identity().unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cdhash_matches_itself_but_not_a_mutated_one() {
+        // The core comparison: our own cdhash accepts itself and rejects a
+        // one-nibble-different value (a stand-in for a different binary's cdhash).
+        // A real different-but-signed peer (python3) is rejected in tests/e2e.py.
+        let own = own_identity().unwrap();
+        assert!(identities_match(own, own));
+        let mut mutated = String::from(own);
+        let last = mutated.pop().unwrap();
+        mutated.push(if last == '0' { '1' } else { '0' });
+        assert!(!identities_match(&mutated, own));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn peer_identity_of_own_pid_matches_own_identity() {
         // Hashing our own pid by the peer mechanism must equal the cached self
-        // hash: self and peer are hashed the identical way, so an identical
+        // identity: self and peer are measured the identical way, so an identical
         // binary produces an identical digest.
         let by_pid = exe_hash_of_pid(std::process::id()).unwrap();
-        assert_eq!(by_pid.as_str(), own_exe_hash().unwrap());
+        assert_eq!(by_pid.as_str(), own_identity().unwrap());
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -844,10 +1180,12 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attest_peer_accepts_our_own_process() {
-        // The peer of a local socketpair is this very process, so its executable
-        // is ours: attestation must accept it. The cross-user/foreign-binary
-        // rejection paths are exercised in tests/e2e.py, which cannot be done
-        // from inside a single process (we cannot become a different binary).
+        // The peer of a local socketpair is this very process, so its running
+        // image is ours: attestation must accept it. On macOS this exercises the
+        // real audit-token -> SecCode -> cdhash path end to end. The
+        // foreign-binary rejection path is exercised in tests/e2e.py, which cannot
+        // be done from inside a single process (we cannot become a different
+        // binary).
         let (a, _b) = UnixStream::pair().unwrap();
         assert!(attest_peer(&a).is_ok());
     }
