@@ -17,6 +17,18 @@ use crate::protocol::{bridge_write, nm_read_frame, nm_write_frame};
 use serde_json::Value;
 
 pub fn run() -> i32 {
+    // Capture our own executable identity before dialing, so attesting the
+    // server compares against the genuine binary and we fail fast if we cannot
+    // hash our own image. See ADR-0020.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Err(e) = ipc::ensure_own_identity() {
+        log_error!(
+            "native-host",
+            "cannot establish own executable identity: {e}"
+        );
+        return 1;
+    }
+
     // Connect to the MCP server's bridge socket (reads the lock file).
     let stream = match ipc::connect() {
         Ok(s) => s,
@@ -28,6 +40,18 @@ pub fn run() -> i32 {
         }
     };
     log_info!("native-host", "connected to MCP server bridge socket");
+
+    // Kernel-attest the SERVER before speaking the handshake or forwarding any
+    // frames: require it to be another instance of THIS binary. Fail closed so
+    // a hostile same-user process cannot impersonate the MCP server. See
+    // ADR-0020.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        if let Err(e) = ipc::attest_peer(&stream) {
+            log_error!("native-host", "server attestation failed: {e}");
+            return 1;
+        }
+    }
 
     // Build the buffered halves the pumps will reuse, then authenticate over
     // them BEFORE any pumping. Doing the handshake on the same buffers the
