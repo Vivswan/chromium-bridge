@@ -31,12 +31,17 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     from the kernel (`getpeereid` / `SO_PEERCRED`) and drops any connection not
     from its own UID, before authentication.
   - **Kernel-attested executable identity** (Linux/macOS): still before
-    authentication, each end resolves the peer's PID from the socket
-    (`SO_PEERCRED` / `LOCAL_PEERPID`), hashes the peer's on-disk executable
-    (`/proc/<pid>/exe` / `proc_pidpath`), and requires it to equal its own
-    binary's hash. A different same-user program is rejected here. On Linux this
-    binds to the running inode (subject to a narrow pid-reuse race); on macOS it
-    is best-effort (see the residual below). Attestation is **mutual**: the
+    authentication, each end takes a kernel-attested identity for the peer and
+    requires it to match its own running image. On Linux it resolves the peer PID
+    (`SO_PEERCRED`) and hashes `/proc/<pid>/exe` (bound to the running inode,
+    subject to a narrow pid-reuse race on resolution). On macOS it identifies the
+    peer by its kernel **audit token** (`LOCAL_PEERTOKEN`), validates the running
+    code with `SecCodeCheckValidity`, and compares its `cdhash` -- bound to the
+    running image, closing both the path re-open TOCTOU and the pid-reuse race.
+    (Only if the kernel reports the audit-token option unsupported --
+    `ENOPROTOOPT`, older systems -- does it fall back to a pid-identified
+    `SecCode`, where the narrow pid-reuse race remains; any other error fails
+    closed.) A different same-user program is rejected here. Attestation is **mutual**: the
     server attests the host after `accept`, the host attests the server after
     `connect`.
   - **HMAC challenge-response**: the server sends a fresh random nonce; the host
@@ -47,10 +52,11 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     replaces the previous writer.
   - **Residual risk**: neither a hash nor a code signature can distinguish the
     legitimate browser-spawned host from the same binary re-run by a same-user
-    attacker — the bytes are identical. Closing that requires browser/extension-
-    side pairing (trust-on-first-use in the extension settings). Separately, the
-    macOS check is best-effort until the `SecCode`-by-pid follow-up lands (it
-    re-opens a path rather than binding to the running image). See ADR-0020.
+    attacker: the bytes, and the cdhash, are identical. Closing that requires
+    browser/extension-side pairing (trust-on-first-use in the extension
+    settings). On macOS, trust is pinned to one exact cdhash; Team-ID /
+    designated-requirement pinning (to also accept a separate trusted build) is a
+    deferred follow-up, not a gap in the same-binary bridge. See ADR-0020.
 
 ## ③ Chrome ↔ native host  (Native Messaging framing)
 
