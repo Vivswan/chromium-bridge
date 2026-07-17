@@ -1,4 +1,4 @@
-# browser-bridge
+# chromium-bridge
 
 Let any **MCP client** — Claude Code, Claude Desktop, Codex, or anything that
 speaks the Model Context Protocol — drive **your real Chrome**: your tabs, your
@@ -16,7 +16,7 @@ install.
 
 ## 🔒 Security first — read this
 
-browser-bridge drives a **real, authenticated Chrome**. It can read page
+chromium-bridge drives a **real, authenticated Chrome**. It can read page
 content, cookies (including `httpOnly`), and web storage, and can run
 JavaScript in your pages. The guardrails that keep that safe:
 
@@ -60,7 +60,7 @@ needs *no Rust and no Node.js*.
 ### 1. Get the binary + extension
 
 Download the archive for your platform from the
-**[latest release](https://github.com/whg517/browser-bridge/releases/latest)**,
+**[latest release](https://github.com/Vivswan/chromium-bridge/releases/latest)**,
 then run the bundled installer. `install.sh` auto-detects the prebuilt tarball
 and installs the shipped binary + extension directly.
 
@@ -68,13 +68,13 @@ and installs the shipped binary + extension directly.
 <summary><b>macOS (Apple Silicon) / Linux x64</b></summary>
 
 ```sh
-tar xzf browser-bridge-*-macos-arm64.tar.gz   # or -linux-x64
-cd browser-bridge-*-macos-arm64
+tar xzf chromium-bridge-*-macos-arm64.tar.gz   # or -linux-x64
+cd chromium-bridge-*-macos-arm64
 ./install.sh
 ```
 
-Installs the binary to `~/.browser-bridge/` (macOS) or
-`~/.local/share/browser-bridge/` (Linux) and writes the native-messaging host
+Installs the binary to `~/.chromium-bridge/` (macOS) or
+`~/.local/share/chromium-bridge/` (Linux) and writes the native-messaging host
 manifest with the pinned extension ID already trusted.
 
 > **macOS Gatekeeper:** the prebuilt binary is not yet notarized. The installer
@@ -88,12 +88,12 @@ manifest with the pinned extension ID already trusted.
 <summary><b>Windows x64</b></summary>
 
 ```powershell
-Expand-Archive browser-bridge-*-windows-x64.zip -DestinationPath .
-cd browser-bridge-*-windows-x64
+Expand-Archive chromium-bridge-*-windows-x64.zip -DestinationPath .
+cd chromium-bridge-*-windows-x64
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Installs `browser-bridge.exe` to `%LOCALAPPDATA%\browser-bridge\` and registers
+Installs `chromium-bridge.exe` to `%LOCALAPPDATA%\chromium-bridge\` and registers
 the host under the Native Messaging registry key of each detected Chromium
 browser (pick specific ones with `-Browser chrome,brave`, or point at any other
 with `-NmRegistry`). No admin rights needed.
@@ -106,7 +106,7 @@ with `-NmRegistry`). No admin rights needed.
 <summary><b>Build from source (needs Rust + Node.js/npm)</b></summary>
 
 ```sh
-git clone https://github.com/whg517/browser-bridge && cd browser-bridge
+git clone https://github.com/Vivswan/chromium-bridge && cd chromium-bridge
 ./install/install.sh            # --browser auto|all|chrome,chromium,brave,... | --nm-dir DIR
 ```
 
@@ -115,7 +115,7 @@ See [docs/development.md](./docs/development.md) for the full build/test loop.
 </details>
 
 > Only need the extension (binary already installed)? Grab
-> `browser-bridge-extension-<tag>.zip` from the same release and unzip it — it
+> `chromium-bridge-extension-<tag>.zip` from the same release and unzip it — it
 > contains a top-level `dist/` you can load directly.
 
 <details>
@@ -146,8 +146,8 @@ inside the archive it checks. To rule out a tampered archive entirely, verify
 the archive before running anything from it:
 
 ```sh
-shasum -a 256 -c browser-bridge-<tag>-<platform>-<arch>.tar.gz.sha256
-gh attestation verify browser-bridge-<tag>-<platform>-<arch>.tar.gz --repo <owner>/<repo>
+shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.tar.gz.sha256
+gh attestation verify chromium-bridge-<tag>-<platform>-<arch>.tar.gz --repo <owner>/<repo>
 ```
 
 The binary itself builds reproducibly, so you can also re-derive its hash from
@@ -159,7 +159,7 @@ the same platform the release targets, then:
 ```sh
 git checkout <tag>
 ./scripts/build-repro.sh
-shasum -a 256 target/release/browser-bridge   # compare with the release's .binary.sha256
+shasum -a 256 target/release/chromium-bridge   # compare with the release's .binary.sha256
 ```
 
 Two honest limits. Reproducibility is verified across clean rebuilds and
@@ -191,14 +191,14 @@ stdio). Use an **absolute path**; most clients don't expand `~`.
 
 - **Claude Code (CLI):**
   ```sh
-  claude mcp add browser-bridge -- "$HOME/.browser-bridge/browser-bridge"
+  claude mcp add chromium-bridge -- "$HOME/.chromium-bridge/chromium-bridge"
   ```
-- **Claude Desktop / generic (`mcpServers` JSON):** copy the `browser-bridge`
+- **Claude Desktop / generic (`mcpServers` JSON):** copy the `chromium-bridge`
   entry from [`mcp-config.example.json`](./install/mcp-config.example.json).
 - **Codex (`~/.codex/config.toml`):**
   ```toml
-  [mcp_servers.browser-bridge]
-  command = "/absolute/path/to/browser-bridge"
+  [mcp_servers.chromium-bridge]
+  command = "/absolute/path/to/chromium-bridge"
   args = []
   ```
 
@@ -206,7 +206,7 @@ stdio). Use an **absolute path**; most clients don't expand `~`.
 
 Restart Chrome so it loads the native-host manifest, then reconnect your MCP
 client and ask: **"list my browser tabs."** The first time you target a new
-site, click the Browser Bridge toolbar icon and approve it.
+site, click the Chromium Bridge toolbar icon and approve it.
 
 > On **WSL**: if your everyday browser is Windows Chrome, install on Windows and
 > point the WSL client at the `.exe` via `/mnt/c` — don't install a Linux host.
@@ -279,16 +279,16 @@ one unlabeled slot for now. See
 One Rust binary, two modes, joined by a local socket:
 
 ```
-MCP client ──stdio MCP──▶ browser-bridge (MCP server, Rust)
+MCP client ──stdio MCP──▶ chromium-bridge (MCP server, Rust)
 (Claude Code,             │
  Codex, …)                │ bridge socket (NDJSON, HMAC auth; Unix-domain
                           │ socket on macOS/Linux, loopback TCP on Windows)
                           ▼
-                   browser-bridge --native-host  ◀── spawned by Chrome
+                   chromium-bridge --native-host  ◀── spawned by Chrome
                           │
                           │ chrome.runtime.connectNative
                           ▼
-                   Browser Bridge extension (MV3) ──▶ your page
+                   Chromium Bridge extension (MV3) ──▶ your page
 ```
 
 - **MCP server (default mode)** — launched by your MCP client over stdio.
@@ -363,7 +363,7 @@ Environment variables read at launch (source: `src/log.rs`, [docs/cli.md](./docs
 Run the built-in read-only self-check first:
 
 ```sh
-browser-bridge doctor    # or: browser-bridge status
+chromium-bridge doctor    # or: chromium-bridge status
 ```
 
 It reports whether the server is reachable, the lock-file port/pid, and common

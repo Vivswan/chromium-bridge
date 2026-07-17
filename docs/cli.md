@@ -1,20 +1,20 @@
-# CLI and troubleshooting: browser-bridge
+# CLI and troubleshooting: chromium-bridge
 
-> This doc covers the subcommands of the `browser-bridge` binary and the common
+> This doc covers the subcommands of the `chromium-bridge` binary and the common
 > troubleshooting paths. Components and process boundaries are in
 > [architecture.md](./architecture.md); install artifact paths are in
 > [architecture.md section 4.3](./architecture.md#43-install-artifacts).
 
 ## Subcommand overview
 
-`browser-bridge` is a single binary with subcommand dispatch (see [ADR-0001](./adr/0001-use-rust-single-binary.md)):
+`chromium-bridge` is a single binary with subcommand dispatch (see [ADR-0001](./adr/0001-use-rust-single-binary.md)):
 
 | Invocation | Mode | Description |
 |------|------|------|
-| `browser-bridge` (no arguments) | MCP server | Default mode: listens on TCP, holds session state, dispatches tools. Spawned by the MCP client. |
-| `browser-bridge --native-host` | native host | Thin bridge: stdin/stdout NM frames <-> TCP NDJSON. Spawned by Chrome (via the wrapper). |
-| `browser-bridge doctor` (alias `status`) | read-only diagnostics | Prints an environment and connectivity self-check; does not start a server and does not change any state. |
-| `browser-bridge --help` | help | Usage information. |
+| `chromium-bridge` (no arguments) | MCP server | Default mode: listens on TCP, holds session state, dispatches tools. Spawned by the MCP client. |
+| `chromium-bridge --native-host` | native host | Thin bridge: stdin/stdout NM frames <-> TCP NDJSON. Spawned by Chrome (via the wrapper). |
+| `chromium-bridge doctor` (alias `status`) | read-only diagnostics | Prints an environment and connectivity self-check; does not start a server and does not change any state. |
+| `chromium-bridge --help` | help | Usage information. |
 
 ## doctor / status (read-only self-check)
 
@@ -31,7 +31,7 @@ It reports:
 - **MCP server reachability**: a single localhost probe against the `127.0.0.1:<port>` from the
   lock file, reporting whether the server is listening (`reachable` / `not reachable`).
 - **native host manifest**: whether Chrome's native messaging host manifest
-  (`com.browser_bridge.host.json`) is in place (paths in [architecture.md section 4.3](./architecture.md#43-install-artifacts)).
+  (`com.vivswan.chromium_bridge.host.json`) is in place (paths in [architecture.md section 4.3](./architecture.md#43-install-artifacts)).
 
 ### How to interpret "server not reachable"
 
@@ -41,7 +41,7 @@ probe against that port failed. Common causes and what to do:
 1. **The MCP server is not running**: the MCP server is spawned by the MCP client (such as
    Claude Code) inside its session. If the client is not running, or that server is not
    configured or not started, nothing is listening on the port. -> Confirm the client has
-   loaded the browser-bridge MCP server configuration and is in a running session.
+   loaded the chromium-bridge MCP server configuration and is in a running session.
 2. **Stale lock file**: the previous server exited abnormally and left the lock file behind
    (its port/pid are no longer valid). A new server detects and replaces a stale lock file at
    startup (see [architecture.md section 9](./architecture.md#9-known-limitations)); if no live server

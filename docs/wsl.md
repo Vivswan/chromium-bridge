@@ -1,6 +1,6 @@
 # WSL usage guide
 
-WSL can run browser-bridge in two ways. Which one to pick depends on **which
+WSL can run chromium-bridge in two ways. Which one to pick depends on **which
 operating system Chrome runs in**. The MCP server, the native host Chrome
 launches, and Chrome itself must all belong to the same operating system
 environment.
@@ -20,8 +20,8 @@ on) runs in WSL, while the daily browser is still Windows Chrome.
 Example `~/.codex/config.toml` for Codex:
 
 ```toml
-[mcp_servers.browser-bridge]
-command = "/mnt/c/Users/YOUR_WINDOWS_USER/AppData/Local/browser-bridge/browser-bridge.exe"
+[mcp_servers.chromium-bridge]
+command = "/mnt/c/Users/YOUR_WINDOWS_USER/AppData/Local/chromium-bridge/chromium-bridge.exe"
 args = []
 ```
 
@@ -44,22 +44,22 @@ WSL checkout of the repo:
 
 Default install locations:
 
-- MCP server: `~/.local/share/browser-bridge/browser-bridge`
+- MCP server: `~/.local/share/chromium-bridge/chromium-bridge`
 - Google Chrome manifest:
-  `~/.config/google-chrome/NativeMessagingHosts/com.browser_bridge.host.json`
+  `~/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json`
 - Chromium manifest:
-  `~/.config/chromium/NativeMessagingHosts/com.browser_bridge.host.json`
-- Runtime lock file: `$XDG_RUNTIME_DIR/browser-bridge/run.lock`; without
-  `XDG_RUNTIME_DIR` it falls back to `$XDG_CACHE_HOME/browser-bridge/run.lock`
-  or `~/.cache/browser-bridge/run.lock`
+  `~/.config/chromium/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json`
+- Runtime lock file: `$XDG_RUNTIME_DIR/chromium-bridge/run.lock`; without
+  `XDG_RUNTIME_DIR` it falls back to `$XDG_CACHE_HOME/chromium-bridge/run.lock`
+  or `~/.cache/chromium-bridge/run.lock`
 
 Load the current WSL repo's `extension/dist` in Linux Chrome/Chromium at
 `chrome://extensions`, then configure the MCP client to run the
 Linux-installed binary:
 
 ```toml
-[mcp_servers.browser-bridge]
-command = "/home/YOUR_WSL_USER/.local/share/browser-bridge/browser-bridge"
+[mcp_servers.chromium-bridge]
+command = "/home/YOUR_WSL_USER/.local/share/chromium-bridge/chromium-bridge"
 args = []
 ```
 
@@ -74,5 +74,5 @@ args = []
 
 When connection problems appear, first confirm Chrome, the native host, and
 the MCP server all land on the same side, then check Windows'
-`%LOCALAPPDATA%\browser-bridge\run.lock` or the Linux XDG lock file
+`%LOCALAPPDATA%\chromium-bridge\run.lock` or the Linux XDG lock file
 respectively.

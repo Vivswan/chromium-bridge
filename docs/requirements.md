@@ -1,4 +1,4 @@
-# Requirements: browser-bridge
+# Requirements: chromium-bridge
 
 > Let MCP clients (such as Claude Code and Codex) operate **the real Chrome
 > the user is already using** (real tabs, real login state, real cookies)
@@ -75,11 +75,11 @@ right of the page; no response within 30 seconds rejects automatically; after
 approval, same-origin actions of the same kind get a 60-second grace window.
 
 ### US-5: Developer extension integration
-> As an MCP client user, I want to plug browser-bridge in as an MCP server so
+> As an MCP client user, I want to plug chromium-bridge in as an MCP server so
 > that saying "list my tabs" in a conversation just works.
 
-Acceptance: after adding browser-bridge to the client's MCP server
-configuration, the client's connection management UI shows `browser-bridge`
+Acceptance: after adding chromium-bridge to the client's MCP server
+configuration, the client's connection management UI shows `chromium-bridge`
 as connected and the tools are callable.
 
 ## 4. Functional requirements
@@ -159,7 +159,7 @@ as connected and the tools are callable.
 ## 8. Acceptance criteria (v0.1)
 
 1. `install.sh` (macOS/Linux) or `install.ps1` (Windows) runs through, the extension loads, and the host manifest is registered
-2. The MCP client shows `browser-bridge` as connected
+2. The MCP client shows `chromium-bridge` as connected
 3. The AI says "list my tabs" in a conversation -> sees the real tab list
 4. The AI says "screenshot the current page" -> the AI can analyze the screenshot
 5. The AI says "type XXX in the search box and click search" -> it really executes in the user's browser; the submit shows a confirmation Toast
