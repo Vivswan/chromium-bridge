@@ -588,6 +588,74 @@ def test_native_host_mode():
         mcp.wait(timeout=5)
 
 
+def test_enclave_control_frames():
+    """The native host must answer enclave control frames itself (ADR-0021)
+    and never forward them over the bridge socket. Only challenges that fail
+    validation BEFORE any keychain access are sent here, so this test never
+    raises a Touch ID prompt even on a machine that has run `pair`; the
+    well-formed signing path is presence-gated by design and covered by the
+    manual test script (docs/security/enrollment-manual-test.md)."""
+    print("\n[test] enclave control frames are answered locally, not forwarded")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        nh = start_bridge_host()
+        wait_host_ready(nh)
+
+        # A challenge whose nonce fails validation (embedded NUL) is answered
+        # by the host with enclave_error/invalid_challenge — locally, without
+        # touching the keychain.
+        nm_write(nh, {"type": "enclave_challenge", "nonce": "bad\x00nonce"})
+        reply = nm_read(nh)
+        check(reply is not None and reply.get("type") == "enclave_error",
+              "invalid challenge answered with enclave_error")
+        check(reply is not None and reply.get("reason") == "invalid_challenge",
+              "reason is invalid_challenge")
+
+        # A structurally malformed control frame (missing nonce) also gets a
+        # local invalid_challenge error rather than being forwarded.
+        nm_write(nh, {"type": "enclave_challenge"})
+        reply = nm_read(nh)
+        check(reply is not None and reply.get("type") == "enclave_error"
+              and reply.get("reason") == "invalid_challenge",
+              "malformed control frame answered locally")
+
+        # A stray proof frame is dropped: no reply, and the pump keeps
+        # working. Prove both with a normal tool round trip afterwards — if
+        # the stray frame had been forwarded, it would desynchronize the
+        # bridge correlation and this round trip would fail.
+        nm_write(nh, {"type": "enclave_proof", "sig": "x", "key_id": "y",
+                      "pubkey": "z"})
+        c = McpClient(mcp)
+        c.initialize()
+        c.initialized()
+        c.send({"jsonrpc": "2.0", "id": 31, "method": "tools/call",
+                "params": {"name": "tab_list", "arguments": {}}})
+        frame = nm_read(nh)
+        check(frame is not None and frame.get("op") == "tab_list",
+              "pump still forwards ordinary frames after control traffic")
+        nm_write(nh, {"id": frame["id"], "ok": True,
+                      "data": [{"id": 1, "title": "After Control", "url": "u",
+                                "active": True}]})
+        r = c.recv()
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "After Control",
+              "round trip completes; stray proof frame was dropped, not forwarded")
+        nh.kill()
+        nh.wait(timeout=3)
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=5)
+
+
 def test_server_takeover():
     print("\n[test] new MCP server supplants the previous server")
     try:
@@ -864,6 +932,7 @@ def main():
     test_cookie_get_round_trip()
     test_storage_get_round_trip()
     test_native_host_mode()
+    test_enclave_control_frames()
     test_foreign_peer_is_rejected()
     test_server_takeover()
     test_takeover_leaves_new_socket_connectable()

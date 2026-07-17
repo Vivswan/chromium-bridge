@@ -27,3 +27,14 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 opt-level = "z"
 lto = true
 panic = "abort"
+
+# Secure Enclave enrollment key (src/enclave.rs). The vetted wrapper crate is
+# used instead of hand-rolled Security.framework FFI; OSX_10_15 is required
+# for the data-protection keychain, the only keychain that can hold
+# Secure Enclave keys. The -sys crate is a direct dependency only for the
+# SecAccessControl flag constants the wrapper does not re-export, and
+# core-foundation only for reading key attributes (token-id validation).
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+security-framework = { version = "3", features = ["OSX_10_15"] }
+security-framework-sys = "2"
