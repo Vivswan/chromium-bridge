@@ -7,8 +7,8 @@
 
 # Security-critical surfaces - called out explicitly so changes here are
 # obvious in review (see SECURITY.md).
-/src/ipc.rs @vivswan
-/src/protocol.rs @vivswan
+/crates/core/src/ipc/ @vivswan
+/crates/core/src/protocol.rs @vivswan
 /extension/src/background/allowlist-store.ts @vivswan
 /extension/src/content/eval.ts @vivswan
 /extension/src/content/toast.ts @vivswan
