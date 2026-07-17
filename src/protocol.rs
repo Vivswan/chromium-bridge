@@ -6,7 +6,7 @@
 //! 2. MCP JSON-RPC 2.0 messages (NDJSON over stdio) — used between the MCP
 //!    server and the MCP client.
 //! 3. The internal "bridge" envelope — request/response exchanged between the
-//!    MCP server and the native-host subprocess over a localhost TCP socket
+//!    MCP server and the native-host subprocess over the bridge socket
 //!    (newline-delimited JSON).
 
 use std::io::{self, Read, Write};
@@ -186,6 +186,26 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 // ----------------------------------------------------------------------------
 // 3. Internal bridge envelope (MCP server <-> native host <-> extension)
 // ----------------------------------------------------------------------------
+
+/// The bridge authentication handshake, exchanged as two NDJSON frames right
+/// after a connection is accepted. The server sends a `Challenge` carrying a
+/// fresh random nonce; the client replies with a `Response` carrying
+/// HMAC-SHA256(secret, nonce), proving it knows the per-run secret without
+/// ever putting the secret on the wire. The optional `label` lets a client
+/// name the browser it fronts; multi-browser routing is a later phase, so the
+/// label is carried through the handshake and otherwise ignored today.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Handshake {
+    Challenge {
+        nonce: String,
+    },
+    Response {
+        mac: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+}
 
 /// A request from the MCP server to the extension, exchanged over the
 /// localhost TCP socket as newline-delimited JSON. Carries an `id` the
@@ -368,6 +388,41 @@ mod tests {
         assert_eq!(got.op, "page_click");
         assert_eq!(got.tab_id, Some(3));
         assert_eq!(got.args, json!({ "ref": "e3" }));
+    }
+
+    #[test]
+    fn handshake_challenge_and_response_roundtrip() {
+        // Challenge frame carries the tagged type + nonce.
+        let chal = Handshake::Challenge {
+            nonce: "abc123".into(),
+        };
+        let mut buf = Vec::new();
+        bridge_write(&mut buf, &chal).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&buf[..buf.len() - 1]).unwrap(),
+            json!({ "type": "challenge", "nonce": "abc123" })
+        );
+        let back: Handshake = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();
+        assert!(matches!(back, Handshake::Challenge { nonce } if nonce == "abc123"));
+
+        // Response frame: label is optional and omitted when None.
+        let resp = Handshake::Response {
+            mac: "deadbeef".into(),
+            label: None,
+        };
+        let mut buf = Vec::new();
+        bridge_write(&mut buf, &resp).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&buf[..buf.len() - 1]).unwrap(),
+            json!({ "type": "response", "mac": "deadbeef" })
+        );
+        // A response with no label deserializes with label defaulted to None.
+        let back: Handshake = bridge_read(&mut Cursor::new(
+            b"{\"type\":\"response\",\"mac\":\"x\"}\n".to_vec(),
+        ))
+        .unwrap()
+        .unwrap();
+        assert!(matches!(back, Handshake::Response { label: None, .. }));
     }
 }
 

@@ -1,10 +1,10 @@
 //! Native-host mode: the `--native-host` subprocess spawned by Chrome.
 //!
 //! It is intentionally dumb. Two threads:
-//! - stdin -> TCP: read native-messaging frames, forward each JSON value as an
-//!   NDJSON line over the bridge socket.
-//! - TCP -> stdout: read NDJSON lines from the bridge socket, frame each as a
-//!   native-messaging message on stdout.
+//! - stdin -> socket: read native-messaging frames, forward each JSON value as
+//!   an NDJSON line over the bridge socket.
+//! - socket -> stdout: read NDJSON lines from the bridge socket, frame each as
+//!   a native-messaging message on stdout.
 //!
 //! All real logic lives in the MCP server on the other side of the socket.
 //! EOF on stdin (Chrome disconnected) is our shutdown signal.
@@ -17,7 +17,7 @@ use crate::protocol::{bridge_write, nm_read_frame, nm_write_frame};
 use serde_json::Value;
 
 pub fn run() -> i32 {
-    // Connect to the MCP server's localhost TCP socket (reads the lock file).
+    // Connect to the MCP server's bridge socket (reads the lock file).
     let stream = match ipc::connect() {
         Ok(s) => s,
         Err(e) => {
@@ -29,23 +29,34 @@ pub fn run() -> i32 {
     };
     log_info!("native-host", "connected to MCP server bridge socket");
 
-    let stream_clone = match stream.try_clone() {
+    // Build the buffered halves the pumps will reuse, then authenticate over
+    // them BEFORE any pumping. Doing the handshake on the same buffers the
+    // pumps keep guarantees the challenge/response never mixes with forwarded
+    // frames and that no byte read during the handshake is lost.
+    let read_half = match stream.try_clone() {
         Ok(s) => s,
         Err(e) => {
             log_error!("native-host", "clone stream: {e}");
             return 1;
         }
     };
+    let mut reader = BufReader::new(read_half);
+    let mut writer = BufWriter::new(stream);
+    if let Err(e) = ipc::client_handshake(&mut reader, &mut writer, None) {
+        log_error!("native-host", "bridge handshake failed: {e}");
+        return 1;
+    }
+    log_info!("native-host", "bridge handshake complete");
 
     // Shutdown policy: the native host has no useful work to do if EITHER
     // direction of the bridge breaks. When Chrome closes the port (stdin EOF)
-    // we must exit; when the MCP server drops our TCP connection (e.g. a new
+    // we must exit; when the MCP server drops our connection (e.g. a new
     // server instance supplanted the old one) we ALSO must exit promptly, so
     // that Chrome observes the port closing and the extension reconnects
     // against the freshly-written lock file.
     //
     // Earlier code tried to coordinate the two threads with a channel and
-    // joined both handles. That deadlocks when the TCP side dies: the stdin
+    // joined both handles. That deadlocks when the socket side dies: the stdin
     // thread is blocked inside nm_read_frame waiting for a frame that Chrome
     // (still alive) will never send, so the join never returns. The process
     // lingers as a zombie holding an open stdin/stdout pair, which means the
@@ -55,12 +66,11 @@ pub fn run() -> i32 {
     // Fix: let whichever thread finishes first terminate the whole process.
     // process::exit runs no destructors, but our writers flush after every
     // frame, so no buffered data is lost on the normal close paths.
-    let tcp_out = stream;
 
-    // Thread A: stdin -> TCP
+    // Thread A: stdin -> socket
     thread::spawn(move || {
         let mut stdin = io::stdin();
-        let mut tcp = BufWriter::new(tcp_out);
+        let mut sock = writer;
         loop {
             let frame: Option<Value> = match nm_read_frame(&mut stdin) {
                 Ok(v) => v,
@@ -77,37 +87,39 @@ pub fn run() -> i32 {
                     break;
                 }
             };
-            if let Err(e) = bridge_write(&mut tcp, &frame) {
-                log_warn!("native-host", "tcp write error: {e}");
+            if let Err(e) = bridge_write(&mut sock, &frame) {
+                log_warn!("native-host", "bridge write error: {e}");
                 break;
             }
         }
         // Either side breaking means this process is done. Exit immediately so
         // Chrome tears down the port and the extension reconnects.
-        log_debug!("native-host", "stdin->TCP thread ending; exiting process");
+        log_debug!(
+            "native-host",
+            "stdin->socket thread ending; exiting process"
+        );
         std::process::exit(0);
     });
 
-    // Thread B: TCP -> stdout. This thread is the main one; if IT exits we
+    // Thread B: socket -> stdout. This thread is the main one; if IT exits we
     // simply fall through to the return below (which also ends the process).
+    // The handshake is already complete, so every line here is a real frame
+    // bound for Chrome.
     let stdout = io::stdout();
     let out_handle = thread::spawn(move || {
-        let tcp_in = BufReader::new(stream_clone);
-        let mut lines = tcp_in.lines();
+        let mut lines = reader.lines();
         // stdout must be flushed after every frame; acquire a single locked,
         // buffered writer for the whole thread (single-writer discipline).
         let mut out = BufWriter::new(stdout.lock());
         loop {
-            // The first line is the hello/auth. Bridge the rest verbatim,
-            // since the MCP server only cares about JSON values.
             let line = match lines.next() {
                 Some(Ok(l)) => l,
                 Some(Err(e)) => {
-                    log_warn!("native-host", "tcp read error: {e}");
+                    log_warn!("native-host", "bridge read error: {e}");
                     break;
                 }
                 None => {
-                    log_info!("native-host", "tcp EOF");
+                    log_info!("native-host", "bridge EOF");
                     break;
                 }
             };
@@ -117,25 +129,21 @@ pub fn run() -> i32 {
             let value: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(e) => {
-                    log_warn!("native-host", "tcp line not json: {e}");
+                    log_warn!("native-host", "bridge line not json: {e}");
                     continue;
                 }
             };
-            // Skip the hello line (auth) — it never goes to Chrome.
-            if value.get("hello").is_some() {
-                continue;
-            }
             if let Err(e) = nm_write_frame(&mut out, &value) {
                 log_warn!("native-host", "stdout write error: {e}");
                 break;
             }
         }
-        log_debug!("native-host", "TCP->stdout thread ending");
+        log_debug!("native-host", "socket->stdout thread ending");
     });
 
-    // Block until the TCP->stdout thread ends. The stdin->TCP thread will
+    // Block until the socket->stdout thread ends. The stdin->socket thread will
     // have already called process::exit(0) on its own close path; if it
-    // hasn't, we exit here once the TCP side closes.
+    // hasn't, we exit here once the socket side closes.
     let _ = out_handle.join();
     log_debug!("native-host", "exit");
     std::process::exit(0);
