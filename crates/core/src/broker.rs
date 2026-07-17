@@ -450,7 +450,16 @@ fn admit_client(
         hash: h.hash.clone(),
         team_id: h.team_id.clone(),
     });
-    let reported_name = harness.as_ref().and_then(|h| h.name.clone());
+    // The relay-reported harness name is a self-asserted label, never used for
+    // authorization. Re-validate it at this trust boundary before it reaches a
+    // log line: no log-injection path is reachable today (bridge_read frames
+    // are single NDJSON lines and log_* escape), but validate at every boundary
+    // rather than trust the peer's string. A malformed name is dropped to "-".
+    let reported_name = harness
+        .as_ref()
+        .and_then(|h| h.name.as_deref())
+        .filter(|n| ipc::validate_label(n))
+        .map(str::to_string);
     match allowlist::decide(list.as_ref(), identity.as_ref()) {
         Decision::Refuse => {
             log_warn!(
