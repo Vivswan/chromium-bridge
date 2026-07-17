@@ -10,7 +10,7 @@ security-relevant changes.
 
 **Please do not open a public issue for security problems.**
 
-Report privately via GitHub's **[Report a vulnerability](https://github.com/whg517/browser-bridge/security/advisories/new)**
+Report privately via GitHub's **[Report a vulnerability](https://github.com/Vivswan/chromium-bridge/security/advisories/new)**
 (Security → Advisories) on this repository. Include:
 
 - what an attacker can do (impact) and the trust boundary crossed,
