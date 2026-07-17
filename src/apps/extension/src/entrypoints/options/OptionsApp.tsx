@@ -1,4 +1,4 @@
-import { TOOLS } from "@chromium-bridge/shared";
+import { OP_NAMES } from "@chromium-bridge/shared";
 import { useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { LanguagePicker } from "@/components/app/LanguagePicker";
@@ -224,26 +224,23 @@ export function OptionsApp() {
       <Section title={t("options.section_tools")}>
         <div className="mb-3 text-muted">{t("settings.tools_desc")}</div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {TOOLS.map((tool) => {
-            const enabled = !settings.disabledTools.includes(tool.op);
+          {OP_NAMES.map((op) => {
+            const enabled = !settings.disabledTools.includes(op);
             return (
-              <div
-                key={tool.op}
-                className="flex items-start gap-2.5 rounded-lg border border-edge p-3"
-              >
+              <div key={op} className="flex items-start gap-2.5 rounded-lg border border-edge p-3">
                 <Switch
                   checked={enabled}
-                  aria-label={tool.op}
+                  aria-label={op}
                   onCheckedChange={(on) => {
                     const next = on
-                      ? settings.disabledTools.filter((o) => o !== tool.op)
-                      : [...settings.disabledTools, tool.op];
+                      ? settings.disabledTools.filter((o) => o !== op)
+                      : [...settings.disabledTools, op];
                     void update("disabledTools", next);
                   }}
                 />
                 <div className="min-w-0">
-                  <div className="font-mono text-xs font-semibold">{tool.op}</div>
-                  <div className="text-[11px] text-faint">{t(`tools.${tool.op}`)}</div>
+                  <div className="font-mono text-xs font-semibold">{op}</div>
+                  <div className="text-[11px] text-faint">{t(`tools.${op}`)}</div>
                 </div>
               </div>
             );

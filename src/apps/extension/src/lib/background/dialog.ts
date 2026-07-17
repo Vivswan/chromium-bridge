@@ -7,7 +7,7 @@
 // cannot render an in-page confirmation Toast the way page_click / page_eval do
 // — there is no surface to draw on while the dialog is up. The explicit
 // settings opt-in is therefore the gate (fail-closed: no opt-in, no dialog
-// handling). See the tool description in contracts/tools.json.
+// handling). See the tool description in src/packages/core/src/tools/catalogue.rs.
 //
 // A dialog is only handleable if the debugger was attached (Page domain
 // enabled) when it opened; that is the case under CDP mode, whose registry

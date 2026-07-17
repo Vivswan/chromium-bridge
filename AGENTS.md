@@ -82,7 +82,7 @@ and are **not** part of the required gate.
 | Dev process | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | branch/commit/sync/merge rules (authoritative) |
 | Build & test toolchain | [`docs/development.md`](./docs/development.md) | prerequisites, `just` recipes, releasing |
 | Architecture | [`docs/architecture.md`](./docs/architecture.md) | components, protocols, security model |
-| Cross-process contracts | [`contracts/`](./contracts/README.md) | tools, error codes, capabilities, protocol version, envelopes - single source of truth |
+| Cross-process contracts | [`docs/architecture.md` section 11](./docs/architecture.md#11-protocol-boundary-contracts-error-taxonomy-and-handshake) | the Rust core is the single source (ADR-0028); tools, error codes, capabilities, protocol version, envelopes |
 | Operations / CLI | [`docs/operations.md`](./docs/operations.md), [`docs/cli.md`](./docs/cli.md) | `doctor`/`status`, `BB_LOG`/audit |
 | Tests & browser safety | [`tests/README.md`](./tests/README.md) | suites + the `CHROME_BIN` isolation rule |
 
@@ -91,13 +91,17 @@ and are **not** part of the required gate.
 - **stdout is protocol** in both binary modes - all diagnostics go to stderr
   via the `log_*!` macros (`src/packages/core/src/log.rs`), never bare `eprintln!`.
 - Tool-call errors use the typed `CallError` (`src/packages/core/src/error.rs`), mapped to the
-  stable codes in [`contracts/errors.json`](./contracts/errors.json).
-- The tool catalogue is generated from [`contracts/tools.json`](./contracts/tools.json)
-  (`just gen` -> `src/packages/shared/src/ops.gen.ts`, with Zod validators the
-  extension enforces at its trust boundaries); Rust parity is enforced by
-  `cargo test`, and the Zod envelope schemas are verified equivalent to
-  `contracts/*.schema.json` in CI. Adding a tool touches both sides - see
-  `CONTRIBUTING.md`.
+  stable codes in `ERROR_SPECS` (same file, the canonical taxonomy).
+- The Rust core is the canonical cross-process contract (ADR-0028): the tool
+  catalogue (`src/packages/core/src/tools/catalogue.rs`), error taxonomy,
+  capabilities, protocol version, and identity generate the TS side
+  (`just gen` -> `src/packages/shared/src/*.gen.ts`, with Zod validators the
+  extension enforces at its trust boundaries; CI fails on a stale diff), and
+  the hand-written Zod envelope validators are checked against the Rust
+  wire types by the double-derivation diff (`just check-envelope`):
+  structural equivalence, modulo a short list of deliberate, individually
+  asserted parser asymmetries. Adding a
+  tool touches both sides - see `CONTRIBUTING.md`.
 - Never develop on `main`; work in a git worktree under `.worktree/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge
   PR. Security-critical surfaces (`src/packages/core/src/ipc/`,

@@ -1,11 +1,101 @@
-//! The tool catalogue: the [`Tool`] struct, the [`all`] catalogue, and the
-//! [`schema`] helper used to build each tool's JSON-Schema `inputSchema`.
+//! The tool catalogue: the canonical, cross-process description of every tool
+//! the bridge exposes (ADR-0028). Each [`Tool`] carries its MCP-facing name,
+//! description, and JSON-Schema `inputSchema`, plus the policy metadata
+//! (risk / scope / permission / confirmation) the extension's policy layer
+//! enforces. The TypeScript side is generated from this module (`just gen`
+//! runs the `emit-contract` example and feeds `scripts/gen-ops.ts`), so a
+//! tool's identity lives here and only here.
 
 use serde_json::{json, Value};
+
+/// How much damage a misused call can do, driving the extension's policy UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Risk {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl Risk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Risk::Low => "low",
+            Risk::Medium => "medium",
+            Risk::High => "high",
+            Risk::Critical => "critical",
+        }
+    }
+}
+
+/// Where the tool acts: answered by the MCP server itself, against a tab, or
+/// inside a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Server,
+    Tab,
+    Page,
+}
+
+impl Scope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::Server => "server",
+            Scope::Tab => "tab",
+            Scope::Page => "page",
+        }
+    }
+}
+
+/// The Chrome extension permission the tool's implementation needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    Tabs,
+    Scripting,
+    Debugger,
+    Cookies,
+}
+
+impl Permission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Permission::Tabs => "tabs",
+            Permission::Scripting => "scripting",
+            Permission::Debugger => "debugger",
+            Permission::Cookies => "cookies",
+        }
+    }
+}
+
+/// When the extension must ask the user before executing the tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confirmation {
+    None,
+    Warn,
+    HighRisk,
+    EveryCall,
+}
+
+impl Confirmation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Confirmation::None => "none",
+            Confirmation::Warn => "warn",
+            Confirmation::HighRisk => "high-risk",
+            Confirmation::EveryCall => "every-call",
+        }
+    }
+}
 
 /// A tool exposed over MCP.
 pub struct Tool {
     pub name: &'static str,
+    pub risk: Risk,
+    pub scope: Scope,
+    pub permission: Permission,
+    pub confirmation: Confirmation,
+    /// The model-facing description. English is canonical; any localization
+    /// happens in UI tiers, never here.
     pub description: &'static str,
     pub input_schema: Value,
 }
@@ -14,6 +104,10 @@ pub fn all() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_browsers",
+            risk: Risk::Low,
+            scope: Scope::Server,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description:
                 "List the browsers currently connected to the bridge. Returns each browser's \
                  label and its open-tab count. When more than one browser is connected, every \
@@ -22,11 +116,19 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "tab_list",
+            risk: Risk::Low,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description: "List all open browser tabs. Returns id, title, url, and which is active.",
             input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "tab_focus",
+            risk: Risk::Low,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description: "Bring a tab to the foreground (make it active).",
             input_schema: bridge_schema(
                 &["tabId"],
@@ -35,12 +137,20 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "tab_open",
+            risk: Risk::Medium,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description:
                 "Open a URL in a new tab. The host domain must be in the user's allowlist.",
             input_schema: bridge_schema(&["url"], &[("url", "string", "Absolute URL to open")]),
         },
         Tool {
             name: "tab_close",
+            risk: Risk::High,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::EveryCall,
             description:
                 "Close an http(s) tab after the user approves it in the extension's confirmation \
                  window.",
@@ -51,6 +161,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_snapshot",
+            risk: Risk::Low,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::None,
             description:
                 "Capture the active tab's interactive elements as an accessibility-style tree. \
                  Each node has a stable `ref` (e.g. \"e3\"), a role, an accessible name, and a \
@@ -59,6 +173,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_click",
+            risk: Risk::High,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::HighRisk,
             description:
                 "Click an element on the active tab. Prefer passing `ref` (from page_snapshot); \
                  fall back to `selector`. Clicking a submit button or a link triggers a \
@@ -77,6 +195,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_fill",
+            risk: Risk::High,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::None,
             description:
                 "Type a value into a form field on the active tab. Prefer `ref`; fall back to \
                  `selector`. Password fields are masked in logs/history.",
@@ -91,17 +213,29 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_text",
+            risk: Risk::Medium,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::None,
             description:
                 "Return the visible text content of the active tab (sensitive fields masked).",
             input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "page_screenshot",
+            risk: Risk::Medium,
+            scope: Scope::Page,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description: "Capture the visible viewport of the active tab as a PNG (base64).",
             input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "page_scroll",
+            risk: Risk::Low,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::None,
             description:
                 "Scroll the active tab. Pass `direction` (up|down|top|bottom) or `pixels`.",
             input_schema: bridge_schema(
@@ -118,6 +252,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_wait_for",
+            risk: Risk::Low,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::None,
             description:
                 "Wait until a condition is met on the active tab, or until timeout. One of: \
                  `selector` exists, `text` appears, or `nav` waits for page load completion.",
@@ -137,6 +275,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_eval",
+            risk: Risk::Critical,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::EveryCall,
             description:
                 "HIGH RISK - execute arbitrary JavaScript on the active tab. EVERY call shows the \
                  user the full code in a confirmation prompt and waits for approval; there is no \
@@ -155,6 +297,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_snapshot_precise",
+            risk: Risk::Medium,
+            scope: Scope::Page,
+            permission: Permission::Debugger,
+            confirmation: Confirmation::Warn,
             description:
                 "Like page_snapshot, but uses Chrome's debugger (CDP Accessibility.getFullAXTree) \
                  to capture the AUTHORITATIVE accessibility tree - accurate for shadow DOM and \
@@ -175,6 +321,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "cookie_get",
+            risk: Risk::High,
+            scope: Scope::Tab,
+            permission: Permission::Cookies,
+            confirmation: Confirmation::None,
             description:
                 "Read cookies for the active tab (or a url/domain you specify). Includes httpOnly \
                  cookies (the main reason to use this over document.cookie). Scoped to hosts in \
@@ -197,6 +347,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "storage_get",
+            risk: Risk::High,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::None,
             description:
                 "Read the page's localStorage or sessionStorage (where frameworks like Auth0 / \
                  NextAuth / Firebase store tokens). Must run on the active tab; same-origin \
@@ -217,6 +371,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_navigate",
+            risk: Risk::Medium,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description:
                 "Navigate the active tab to an http(s) URL. The host domain must be in the user's \
                  allowlist. This loads in the CURRENT tab (use tab_open to open a new tab \
@@ -232,6 +390,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_back",
+            risk: Risk::Low,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description:
                 "Navigate the active tab back one step in its session history (the browser Back \
                  button). Errors if there is nothing to go back to.",
@@ -239,6 +401,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_forward",
+            risk: Risk::Low,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description:
                 "Navigate the active tab forward one step in its session history (the browser \
                  Forward button). Errors if there is nothing to go forward to.",
@@ -246,11 +412,19 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_reload",
+            risk: Risk::Low,
+            scope: Scope::Tab,
+            permission: Permission::Tabs,
+            confirmation: Confirmation::None,
             description: "Reload the active tab (the browser Reload button).",
             input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "page_press",
+            risk: Risk::High,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::EveryCall,
             description:
                 "Send a keyboard key or combo to the active tab, e.g. \"Enter\", \"Escape\", or \
                  \"Control+A\". Dispatched as a synthetic keyboard event to the focused element, \
@@ -271,6 +445,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_hover",
+            risk: Risk::Low,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::None,
             description:
                 "Move the pointer over an element on the active tab (dispatches pointerover / \
                  mouseover / mouseenter / mousemove), revealing hover menus or tooltips. Prefer \
@@ -289,6 +467,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_select",
+            risk: Risk::High,
+            scope: Scope::Page,
+            permission: Permission::Scripting,
+            confirmation: Confirmation::EveryCall,
             description:
                 "Choose an option in a <select> drop-down on the active tab. Prefer `ref` (from \
                  page_snapshot); fall back to `selector`. `value` matches an option by its value \
@@ -318,6 +500,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "console_get",
+            risk: Risk::Medium,
+            scope: Scope::Page,
+            permission: Permission::Debugger,
+            confirmation: Confirmation::Warn,
             description: "Return recent console output from the active tab, captured via Chrome's \
                  debugger. Includes browser-logged entries (network, security, and deprecation \
                  warnings, which the debugger replays on attach) plus any console.* calls and \
@@ -333,6 +519,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_handle_dialog",
+            risk: Risk::High,
+            scope: Scope::Page,
+            permission: Permission::Debugger,
+            confirmation: Confirmation::Warn,
             description:
                 "Respond to a JavaScript dialog (alert / confirm / prompt) on the active tab: \
                  `action` is \"accept\" or \"dismiss\", with optional `promptText` for a \
@@ -356,6 +546,10 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "page_upload",
+            risk: Risk::Critical,
+            scope: Scope::Page,
+            permission: Permission::Debugger,
+            confirmation: Confirmation::EveryCall,
             description:
                 "CRITICAL RISK - attach a LOCAL file from the user's disk to a file input \
                  (<input type=file>) on the active tab so the page can upload it. `selector` \
@@ -406,8 +600,7 @@ fn schema(required: &[&str], props: &[(&str, &str, &str)]) -> Value {
 
 /// The optional `browser` routing argument every bridge-backed tool accepts
 /// (which connected browser to run on). One tuple so the wording is identical
-/// across the whole catalogue - the contract parity test compares it
-/// byte-for-byte against contracts/tools.json.
+/// across the whole catalogue.
 const BROWSER_PROP: (&str, &str, &str) = (
     "browser",
     "string",
@@ -444,42 +637,41 @@ mod tests {
         assert_eq!(all().len(), 26);
     }
 
-    // contracts/tools.json is the single source of truth for the catalogue.
-    // tools.rs is verified against it here; the TS ops.ts is generated from it.
-    #[test]
-    fn matches_contract() {
-        let contract: Value =
-            serde_json::from_str(include_str!("../../../../../contracts/tools.json")).unwrap();
-        let ctools = contract["tools"].as_array().unwrap();
-        let cnames: Vec<&str> = ctools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        let tools = all();
-        let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-        assert_eq!(
-            names, cnames,
-            "tools.rs names/order must match contracts/tools.json (run `just gen`)"
-        );
-        for t in &tools {
-            let c = ctools.iter().find(|c| c["name"] == t.name).unwrap();
-            assert_eq!(
-                c["description"].as_str().unwrap(),
-                t.description,
-                "description mismatch for {} vs contract",
-                t.name
-            );
-            assert_eq!(
-                &t.input_schema, &c["inputSchema"],
-                "inputSchema mismatch for {} vs contract",
-                t.name
-            );
-        }
-    }
-
     #[test]
     fn every_tool_has_object_schema() {
         for t in all() {
             assert_eq!(t.input_schema["type"], "object", "tool {}", t.name);
             assert!(t.input_schema["properties"].is_object(), "tool {}", t.name);
             assert!(t.input_schema["required"].is_array(), "tool {}", t.name);
+        }
+    }
+
+    // The catalogue is the canonical contract; the descriptions ship to the
+    // model and (with the schemas) into the generated TS validators, so they
+    // must be present, English-canonical, and plain ASCII (the repo-wide
+    // typography convention).
+    #[test]
+    fn descriptions_are_nonempty_ascii() {
+        for t in all() {
+            assert!(!t.description.is_empty(), "tool {}", t.name);
+            assert!(
+                t.description.is_ascii(),
+                "tool {} description contains non-ASCII text",
+                t.name
+            );
+        }
+    }
+
+    // Every bridge-routed tool must accept the shared `browser` routing arg
+    // with the shared wording; the server-scope tool must not.
+    #[test]
+    fn bridge_tools_carry_the_browser_prop() {
+        for t in all() {
+            let has_browser = t.input_schema["properties"].get("browser").is_some();
+            match t.scope {
+                Scope::Server => assert!(!has_browser, "tool {}", t.name),
+                _ => assert!(has_browser, "tool {}", t.name),
+            }
         }
     }
 

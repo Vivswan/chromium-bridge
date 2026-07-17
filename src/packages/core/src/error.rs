@@ -57,25 +57,202 @@ pub enum CallError {
 }
 
 impl CallError {
+    /// The taxonomy entry for this variant. Returning a reference into
+    /// [`specs`] (rather than a bare string) makes it impossible for a
+    /// variant to map to a code the taxonomy has never heard of: the match
+    /// below can only name existing entries, and the compiler forces a new
+    /// variant to pick one.
+    pub fn spec(&self) -> &'static ErrorSpec {
+        match self {
+            CallError::NotConnected => &specs::NOT_CONNECTED,
+            CallError::Write(_) => &specs::CONNECTION_LOST,
+            CallError::Timeout(_) => &specs::RESPONSE_TIMEOUT,
+            CallError::Disconnected => &specs::CONNECTION_LOST,
+            CallError::UnknownTool(_) => &specs::INVALID_ARGUMENT,
+            CallError::InvalidBrowserArg(_) => &specs::INVALID_ARGUMENT,
+            CallError::AmbiguousBrowser(_) => &specs::BROWSER_AMBIGUOUS,
+            CallError::BrowserNotFound(..) => &specs::BROWSER_NOT_FOUND,
+            CallError::Extension(_) => &specs::EXECUTION_FAILED,
+        }
+    }
+
     /// The stable, cross-process error code for this variant.
     ///
     /// These strings are the contract between the Rust server and the
-    /// extension: they are the `code` values in `contracts/errors.json`
-    /// (verified by the `codes_match_contract` test below) and are meant for
-    /// programmatic handling by clients, while `Display` stays human-facing.
+    /// extension: they are the `code` values in [`ERROR_SPECS`] (the canonical
+    /// cross-process taxonomy) and are meant for programmatic handling by
+    /// clients, while `Display` stays human-facing.
     pub fn code(&self) -> &'static str {
+        self.spec().code
+    }
+}
+
+/// The broad family an error code belongs to, for coarse programmatic
+/// handling (a `connection` failure suggests reconnecting, a `permission`
+/// failure suggests the extension's settings, ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    Protocol,
+    Connection,
+    Permission,
+    User,
+    Execution,
+    Internal,
+}
+
+impl ErrorCategory {
+    pub fn as_str(self) -> &'static str {
         match self {
-            CallError::NotConnected => "NOT_CONNECTED",
-            CallError::Write(_) => "CONNECTION_LOST",
-            CallError::Timeout(_) => "RESPONSE_TIMEOUT",
-            CallError::Disconnected => "CONNECTION_LOST",
-            CallError::UnknownTool(_) => "INVALID_ARGUMENT",
-            CallError::InvalidBrowserArg(_) => "INVALID_ARGUMENT",
-            CallError::AmbiguousBrowser(_) => "BROWSER_AMBIGUOUS",
-            CallError::BrowserNotFound(..) => "BROWSER_NOT_FOUND",
-            CallError::Extension(_) => "EXECUTION_FAILED",
+            ErrorCategory::Protocol => "protocol",
+            ErrorCategory::Connection => "connection",
+            ErrorCategory::Permission => "permission",
+            ErrorCategory::User => "user",
+            ErrorCategory::Execution => "execution",
+            ErrorCategory::Internal => "internal",
         }
     }
+}
+
+/// One entry in the cross-process error taxonomy.
+pub struct ErrorSpec {
+    /// The stable code, for programmatic handling. Never renamed once
+    /// released; retire a code rather than repurposing it.
+    pub code: &'static str,
+    pub category: ErrorCategory,
+    /// Whether retrying the same call can plausibly succeed without the user
+    /// or the caller changing anything first.
+    pub retryable: bool,
+    /// The user/model-facing default message for the code.
+    pub message: &'static str,
+}
+
+/// Declares the named taxonomy entries and the iterable [`ERROR_SPECS`]
+/// table from one list: every constant in [`specs`] is in the table by
+/// construction, so a variant mapping ([`CallError::spec`]) can only name a
+/// code the generator and the extension will also see, and the code string
+/// is always the constant's own name.
+macro_rules! error_taxonomy {
+    ($($name:ident { category: $category:ident, retryable: $retryable:literal, message: $message:expr $(,)? }),* $(,)?) => {
+        /// The named taxonomy entries. Each is a `pub const` so [`CallError::spec`]
+        /// can reference entries directly - a mapping to a nonexistent code cannot
+        /// compile - while [`ERROR_SPECS`] stays the one iterable table the
+        /// generator and the tests consume.
+        pub mod specs {
+            use super::{ErrorCategory, ErrorSpec};
+
+            $(pub const $name: ErrorSpec = ErrorSpec {
+                code: stringify!($name),
+                category: ErrorCategory::$category,
+                retryable: $retryable,
+                message: $message,
+            };)*
+        }
+
+        /// The canonical cross-process error taxonomy (ADR-0028): the single source
+        /// of the stable codes shared by the Rust server (via [`CallError::code`])
+        /// and the extension (via the generated `src/packages/shared/src/errors.gen.ts`).
+        /// Some codes are assigned only on the Rust side, some only by the extension;
+        /// they live in one table so neither side can invent a code the other has
+        /// never heard of.
+        pub const ERROR_SPECS: &[ErrorSpec] = &[$(specs::$name),*];
+    };
+}
+
+error_taxonomy! {
+    INVALID_ARGUMENT {
+        category: Protocol,
+        retryable: false,
+        message: "The tool arguments were missing or invalid.",
+    },
+    NOT_CONNECTED {
+        category: Connection,
+        retryable: true,
+        message: "The browser extension is not connected (is it loaded and Chrome running?).",
+    },
+    PROTOCOL_MISMATCH {
+        category: Protocol,
+        retryable: false,
+        message:
+            "The extension and server protocol versions are incompatible; reload or upgrade the \
+         extension.",
+    },
+    EXTENSION_NOT_READY {
+        category: Connection,
+        retryable: true,
+        message: "The extension service worker is not ready yet; retry shortly.",
+    },
+    SITE_NOT_ALLOWED {
+        category: Permission,
+        retryable: false,
+        message: "The target origin is not in the user's allowlist.",
+    },
+    HOST_PERMISSION_MISSING {
+        category: Permission,
+        retryable: false,
+        message: "The extension lacks host permission for the target origin.",
+    },
+    TOOL_DISABLED {
+        category: Permission,
+        retryable: false,
+        message: "This tool is disabled in the extension settings.",
+    },
+    USER_DENIED {
+        category: User,
+        retryable: false,
+        message: "The user rejected the action.",
+    },
+    CONFIRMATION_TIMEOUT {
+        category: User,
+        retryable: true,
+        message: "The confirmation prompt timed out without a decision.",
+    },
+    TAB_NOT_FOUND {
+        category: Execution,
+        retryable: false,
+        message: "The target tab could not be found.",
+    },
+    UNSUPPORTED_PAGE {
+        category: Execution,
+        retryable: false,
+        message: "The tool cannot run on this page (e.g. chrome://, the Web Store, or a \
+          DevTools-attached tab).",
+    },
+    EXECUTION_FAILED {
+        category: Execution,
+        retryable: false,
+        message: "The extension executed the operation but it failed.",
+    },
+    PAYLOAD_TOO_LARGE {
+        category: Protocol,
+        retryable: false,
+        message: "The message exceeded the native-messaging size limit.",
+    },
+    RESPONSE_TIMEOUT {
+        category: Connection,
+        retryable: true,
+        message: "The extension did not respond in time.",
+    },
+    CONNECTION_LOST {
+        category: Connection,
+        retryable: true,
+        message: "The bridge connection was lost while awaiting a response.",
+    },
+    BROWSER_AMBIGUOUS {
+        category: Protocol,
+        retryable: false,
+        message: "More than one browser is connected; pass the `browser` argument to pick one \
+          (see list_browsers).",
+    },
+    BROWSER_NOT_FOUND {
+        category: Connection,
+        retryable: true,
+        message: "No connected browser has that label (see list_browsers).",
+    },
+    INTERNAL_ERROR {
+        category: Internal,
+        retryable: false,
+        message: "An unexpected internal error occurred.",
+    },
 }
 
 #[cfg(test)]
@@ -98,96 +275,57 @@ mod tests {
             .contains("did not respond"));
     }
 
-    // contracts/errors.json is the single source of truth for cross-process
-    // error codes. Each CallError variant's `code()` is verified against it
-    // here (mirrors `tools::matches_contract`).
+    // ERROR_SPECS is the single source of truth for cross-process error
+    // codes (the TS constants are generated from it). Every CallError variant
+    // must map into the table.
     #[test]
-    fn codes_match_contract() {
+    fn every_variant_code_is_in_the_taxonomy() {
         use std::io;
 
-        // One real instance of every CallError variant, paired with its name.
-        // (The compiler forces this list to stay exhaustive: adding a variant
-        // without a code() arm won't compile, and this test then fails if the
-        // contract mapping is missing.)
-        let cases: &[(&str, CallError)] = &[
-            ("NotConnected", CallError::NotConnected),
-            (
-                "Write",
-                CallError::Write(io::Error::new(io::ErrorKind::BrokenPipe, "x")),
-            ),
-            ("Timeout", CallError::Timeout(Duration::from_secs(1))),
-            ("Disconnected", CallError::Disconnected),
-            ("UnknownTool", CallError::UnknownTool("t".into())),
-            (
-                "InvalidBrowserArg",
-                CallError::InvalidBrowserArg("123".into()),
-            ),
-            (
-                "AmbiguousBrowser",
-                CallError::AmbiguousBrowser("brave, chrome".into()),
-            ),
-            (
-                "BrowserNotFound",
-                CallError::BrowserNotFound("edge".into(), "brave, chrome".into()),
-            ),
-            ("Extension", CallError::Extension("boom".into())),
+        // One real instance of every CallError variant. (The compiler forces
+        // this list to stay exhaustive in spirit: adding a variant without a
+        // code() arm won't compile, and a new code without a taxonomy entry
+        // fails here.)
+        let cases: &[CallError] = &[
+            CallError::NotConnected,
+            CallError::Write(io::Error::new(io::ErrorKind::BrokenPipe, "x")),
+            CallError::Timeout(Duration::from_secs(1)),
+            CallError::Disconnected,
+            CallError::UnknownTool("t".into()),
+            CallError::InvalidBrowserArg("123".into()),
+            CallError::AmbiguousBrowser("brave, chrome".into()),
+            CallError::BrowserNotFound("edge".into(), "brave, chrome".into()),
+            CallError::Extension("boom".into()),
         ];
-
-        let path = format!(
-            "{}/../../../contracts/errors.json",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-        let contract: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let errors = contract["errors"].as_array().expect("errors array");
-
-        // (a) every code() maps to a code that exists in errors.json.
-        let known: Vec<&str> = errors.iter().map(|e| e["code"].as_str().unwrap()).collect();
-        for (name, err) in cases {
+        for err in cases {
             assert!(
-                known.contains(&err.code()),
-                "code {} for variant {name} not found in contracts/errors.json",
+                ERROR_SPECS.iter().any(|s| s.code == err.code()),
+                "code {} has no ERROR_SPECS entry",
                 err.code()
             );
         }
+    }
 
-        // (b) the mapping agrees with the `rust` arrays: a variant maps to a
-        // code iff that code's `rust` array lists the variant.
-        for (name, err) in cases {
-            let entry = errors
-                .iter()
-                .find(|e| e["code"].as_str() == Some(err.code()))
-                .unwrap_or_else(|| panic!("no entry for code {}", err.code()));
-            let rust = entry["rust"]
-                .as_array()
-                .unwrap_or_else(|| panic!("code {} has no `rust` array", err.code()));
-            let listed: Vec<&str> = rust.iter().map(|v| v.as_str().unwrap()).collect();
+    #[test]
+    fn taxonomy_codes_are_unique_and_well_formed() {
+        let mut codes: Vec<&str> = ERROR_SPECS.iter().map(|s| s.code).collect();
+        let total = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), total, "duplicate error codes present");
+        for spec in ERROR_SPECS {
             assert!(
-                listed.contains(name),
-                "variant {name} maps to {} but that code's `rust` array is {listed:?}",
-                err.code()
+                spec.code
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c == '_'),
+                "code {} is not SCREAMING_SNAKE_CASE",
+                spec.code
             );
-        }
-
-        // …and the reverse: every variant named in a `rust` array is covered
-        // by exactly one of our cases with the matching code.
-        for entry in errors {
-            let Some(rust) = entry["rust"].as_array() else {
-                continue;
-            };
-            let code = entry["code"].as_str().unwrap();
-            for v in rust {
-                let vname = v.as_str().unwrap();
-                let matched = cases
-                    .iter()
-                    .find(|(name, _)| *name == vname)
-                    .unwrap_or_else(|| panic!("errors.json lists unknown rust variant {vname}"));
-                assert_eq!(
-                    matched.1.code(),
-                    code,
-                    "variant {vname} should map to {code}"
-                );
-            }
+            assert!(
+                !spec.message.is_empty(),
+                "code {} has no message",
+                spec.code
+            );
         }
     }
 }

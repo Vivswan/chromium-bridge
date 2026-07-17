@@ -11,16 +11,11 @@
 
 use std::path::{Path, PathBuf};
 
-/// Native-messaging host id. It is the manifest's `name` field, the manifest
-/// filename stem (`<HOST_ID>.json`), and on Windows the final registry-key
-/// segment. Declared in `contracts/identity.json`;
-/// `scripts/check-extension-id.ts` asserts every copy agrees.
-pub const HOST_ID: &str = "com.vivswan.chromium_bridge.host";
-
-/// The extension ID every registration trusts in `allowed_origins`. Derived
-/// from the pinned public key in `contracts/identity.json` (Chrome's id
-/// derivation); `scripts/check-extension-id.ts` asserts this copy matches.
-pub const PINNED_EXTENSION_ID: &str = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
+// The identity constants this resolver stamps into every registration.
+// `crate::identity` is the single definition site (ADR-0028); re-exported
+// here under the resolver's vocabulary so registration/doctor keep one
+// import for "which host, which extension, which paths".
+pub use crate::identity::{NATIVE_HOST_ID as HOST_ID, PINNED_EXTENSION_ID};
 
 /// The Chromium-family browsers we know how to register with by name. Any
 /// other Chromium build is reachable through the installer's explicit

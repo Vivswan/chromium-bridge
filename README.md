@@ -219,8 +219,8 @@ site, click the Chromium Bridge toolbar icon and approve it.
 
 ## What you can do — 16 tools
 
-Grouped from the single source of truth,
-[`contracts/tools.json`](./contracts/tools.json):
+Grouped from the single source of truth, the Rust tool catalogue
+([`src/packages/core/src/tools/catalogue.rs`](./src/packages/core/src/tools/catalogue.rs)):
 
 ### Browsers
 | Tool | Does | Risk |
@@ -322,7 +322,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md) ·
 | **Windows** | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./SECURITY.md#platform-support). |
 | **Browser** | Any Chromium-based browser, Manifest V3 |
 | **MCP protocol** | `2025-06-18` ([ADR-0007](./docs/adr/0007-mcp-protocol-version-2025-06-18.md)) |
-| **Internal bridge protocol** | `1` (see [contracts/protocol-version.json](./contracts/protocol-version.json)) |
+| **Internal bridge protocol** | `1` (`BRIDGE_PROTOCOL_VERSION` in [src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs)) |
 
 Every Chromium browser reads the same native-messaging manifest (same pinned
 extension ID, same `allowed_origins`); only the per-user `NativeMessagingHosts`
@@ -389,7 +389,6 @@ in Claude Code) and the extension's Service Worker console at
 | [docs/release.md](./docs/release.md) | Tag-driven releases, prebuilt tarballs + checksums, SBOM |
 | [docs/wsl.md](./docs/wsl.md) | The two modes: Windows Chrome interop and WSLg |
 | [docs/adr/](./docs/adr/) | Architecture Decision Records (ADRs): every "why was this chosen" |
-| [contracts/](./contracts/README.md) | Tool catalogue, error codes, capabilities, protocol version (source of truth for cross-process contracts) |
 
 <details>
 <summary>Testing & project layout</summary>
@@ -407,8 +406,10 @@ Independent suites across two languages, run together with
 
 See [tests/README.md](./tests/README.md). Rough source layout: `src/` (Rust:
 `main.rs` mode dispatch, `protocol.rs`, `ipc.rs`, `native_host.rs`,
-`mcp_server.rs`, `tools/`, `session.rs`), `src/apps/extension/src/` (TypeScript →
-`dist/` via esbuild), `contracts/` (cross-process contracts), `docs/`.
+`mcp_server.rs`, `tools/`, `session.rs`; the cross-process contracts live
+in `src/packages/core` and generate the TS side, see architecture.md
+section 11), `src/apps/extension/src/` (TypeScript → `dist/` via esbuild),
+`docs/`.
 </details>
 
 ---

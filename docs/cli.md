@@ -136,7 +136,7 @@ environment variables control the output:
 **Audit events**: the MCP server emits one audit line for every `tools/call` it processes,
 with per-call fields: `req` (monotonic request id), `tool` (tool name), `outcome`
 (`ok`/`error`), `code` (on error, the stable error code from
-[errors.json](../contracts/errors.json), otherwise `-`), and `dur_ms` (duration).
+[`ERROR_SPECS` in error.rs](../src/packages/core/src/error.rs), otherwise `-`), and `dur_ms` (duration).
 
 ```text
 # BB_LOG_FORMAT default (text)
@@ -145,9 +145,9 @@ with per-call fields: `req` (monotonic request id), `tool` (tool name), `outcome
 {"kind":"audit","ts":1721000000000,"req":"7","tool":"page_eval","outcome":"error","code":"EXECUTION_FAILED","dur_ms":8}
 ```
 
-Error codes and the error taxonomy are in [architecture.md section 11.1](./architecture.md#111-error-taxonomy-errorsjson).
+Error codes and the error taxonomy are in [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs).
 
 ## Related
 
 - Connection lifecycle and disconnect/reconnect semantics: [architecture.md section 5.2](./architecture.md#52-native-host-reconnect-flow).
-- Error taxonomy (`NOT_CONNECTED` / disconnect class): [architecture.md section 11.1](./architecture.md#111-error-taxonomy-errorsjson).
+- Error taxonomy (`NOT_CONNECTED` / disconnect class): [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs).

@@ -99,24 +99,29 @@ window you didn't start yourself: stop and ask first.
 
 A new tool touches both sides (see architecture.md §10):
 
-1. **Add it to [`contracts/tools.json`](contracts/tools.json)** - the single
-   source for the catalogue (name, description, uiLabel, risk, scope,
-   permission, confirmation, inputSchema). Run `just gen` to regenerate
-   `src/packages/shared/src/ops.gen.ts`, and bump the count in
-   `tool_count_is_pinned`. A new arg name must also be mirrored into
-   `bridge-request.schema.json`'s `OpArgs`, and the tool needs a home in
-   `capabilities.json` - the src/packages/shared tests point at whichever of
-   these you miss.
-2. Add the matching `Tool` definition (`src/packages/core/src/tools/catalogue.rs`)
-   and a `HANDLERS` registry entry + `build_*` payload fn
-   (`src/packages/core/src/tools/handlers.rs`). The `matches_contract` and
-   `registry_covers_catalogue` tests (`cargo test`) enforce parity with the
-   contract.
+1. **Add it to the Rust catalogue**
+   ([`src/packages/core/src/tools/catalogue.rs`](src/packages/core/src/tools/catalogue.rs)) -
+   the single source for the tool's identity (name, description, risk, scope,
+   permission, confirmation, inputSchema). Give it a `HANDLERS` registry entry
+   + `build_*` payload fn (`src/packages/core/src/tools/handlers.rs`) and a home in
+   [`src/packages/core/src/tools/capabilities.rs`](src/packages/core/src/tools/capabilities.rs),
+   and bump the count in `tool_count_is_pinned`. The `registry_covers_catalogue`
+   and capability-parity tests (`cargo test`) point at whichever you miss.
+2. Run `just gen` to regenerate the TS side
+   (`src/packages/shared/src/*.gen.ts`); CI fails if the generated files are
+   stale. A new arg that widens the envelope's args bag is picked up
+   automatically; a new envelope FIELD is a protocol change (see
+   `BridgeReq` in `src/packages/core/src/protocol.rs` and the envelope parity
+   gate, `just check-envelope`).
 3. Give the op a home in the extension: `SW_OPS` + a `dispatchSw` case in
-   `src/apps/extension/src/background/dispatch.ts`, or `PAGE_OPS`
-   (`src/apps/extension/src/shared/page-ops.ts`) + cases in `content/handle.ts` and
-   `backends/cdp.ts`. The roster test and the exhaustive switches fail until
-   the partition is complete.
+   `src/apps/extension/src/lib/background/dispatch.ts`, or `PAGE_OPS`
+   (`src/apps/extension/src/lib/shared/page-ops.ts`) + cases in
+   `src/apps/extension/src/lib/content/handle.ts` and
+   `src/apps/extension/src/lib/background/backends/cdp.ts`. The roster test
+   and the exhaustive switches fail until the partition is complete. Add its
+   UI label to the locale bundles (`tools.<op>` in
+   `src/apps/extension/src/locales/*.yml`); the key-parity test fails until
+   every locale has it.
 4. Give it a risk row in the [tool risk matrix](docs/security/tool-risk-matrix.md).
 5. Extend `tests/protocol/e2e.py` (and `dom_test.ts` for DOM ops).
 
