@@ -3,6 +3,12 @@
 - **状态**:Superseded by [ADR-0008](./0008-page-eval-confirmation-channel.md)
 - **日期**:2026-07-07
 
+> Note (current state): the title "page_eval disabled by default" is historical.
+> page_eval is now implemented and enabled by default WITH a per-call
+> confirmation (superseded by ADR-0008; every call reconfirms unless the user
+> sets confirmPageEval=false). It is not disabled by default. This file is kept
+> for the original v0.1 "do not implement" rationale and attack-surface analysis.
+
 > **已 superseded**:本 ADR 决定"v0.1 不实现 page_eval"。v0.1 交付后进入阶段二,
 > [ADR-0008](./0008-page-eval-confirmation-channel.md) 实现了 page_eval 的高危确认通道。
 > 本文档保留作为历史记录,记录当时的取舍与攻击面分析(仍有效)。
