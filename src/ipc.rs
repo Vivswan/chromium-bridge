@@ -215,12 +215,47 @@ pub enum PublishOutcome {
 /// live server published since the caller last looked (two servers starting
 /// at once), nothing is touched and `LostRace` reports the current owner -
 /// binding anyway would unlink that server's freshly-bound socket, the exact
-/// takeover bug this serialization exists to prevent. Stale state from a dead
-/// owner is cleared before binding.
+/// takeover bug this serialization exists to prevent. "Another live server"
+/// means a pid that both is alive and attests as our own binary
+/// ([`attest_pid`]); stale state - a dead owner, or a lock whose pid was
+/// reused by some unrelated process - is cleared before binding.
 pub fn listen_and_publish() -> io::Result<PublishOutcome> {
     let _guard = RuntimeMutex::acquire()?;
     if let Ok(Some(cur)) = LockFile::read() {
         if cur.pid != std::process::id() && pid_is_alive(cur.pid) {
+            // A live pid alone does not make the lock current: the pid is a
+            // number read from disk, and after a crash the OS may have reused
+            // it for an unrelated process. Defer (LostRace) only to a pid
+            // PROVEN to be running our own binary. A pid that does not attest
+            // is never signaled and its lock is superseded (removed below,
+            // under this mutex) rather than obeyed. That covers both a
+            // mismatch (a reused pid, or a different release of this binary
+            // after an upgrade) and an unmeasurable target (commonly a pid
+            // reused by another user's process, whose image we cannot read -
+            // deferring to it would brick startup for as long as that pid
+            // lives). If the owner really was a live server we could not
+            // verify, it is not taken down: it keeps its existing connections
+            // and merely stops being named by the lock, and the extension
+            // converges to the new server on its next reconnect. Windows has
+            // no attestation (see SECURITY.md "Platform support") and keeps
+            // the liveness-only behavior.
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            match attest_pid(cur.pid) {
+                Ok(()) => return Ok(PublishOutcome::LostRace(cur)),
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied => log_warn!(
+                    "ipc",
+                    "lock file names live pid {}, which runs a different binary; \
+                     superseding the lock",
+                    cur.pid
+                ),
+                Err(e) => log_warn!(
+                    "ipc",
+                    "lock file names live pid {} whose identity could not be verified \
+                     ({e}); superseding the lock",
+                    cur.pid
+                ),
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             return Ok(PublishOutcome::LostRace(cur));
         }
     }
@@ -600,6 +635,22 @@ fn peer_identity(stream: &BridgeStream) -> io::Result<String> {
     codesign::peer_cdhash(stream)
 }
 
+/// The running-image identity of an arbitrary process named by pid, measured
+/// the same way as [`own_identity`]. Unlike [`peer_identity`] there is no
+/// connected socket to bind the measurement to, so this inherently carries
+/// the pid-reuse race noted on [`peer_pid`]: callers must treat a positive
+/// match as the only signal that grants trust, and every failure as "not our
+/// process".
+#[cfg(target_os = "linux")]
+fn pid_identity(pid: u32) -> io::Result<String> {
+    exe_hash_of_pid(pid)
+}
+
+#[cfg(target_os = "macos")]
+fn pid_identity(pid: u32) -> io::Result<String> {
+    codesign::pid_cdhash(pid)
+}
+
 /// Prime and validate our own executable identity. Call once at startup, before
 /// accepting or dialing the bridge: it fixes the self identity at a known-good
 /// time and fails loudly (rather than silently degrading later) if we cannot
@@ -640,6 +691,121 @@ pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn identities_match(peer_hex: &str, own_hex: &str) -> bool {
     peer_hex == own_hex
+}
+
+/// Verify the process named by `pid` is running the same executable image as
+/// us - [`attest_peer`], but keyed by pid instead of by a connected socket.
+/// The takeover path uses this before SIGTERMing the pid recorded in the lock
+/// file: that pid is just a number read from disk, and with a stale lock plus
+/// OS pid reuse it can name an arbitrary, innocent process. A mismatch
+/// returns `PermissionDenied`; an unmeasurable target propagates its own
+/// error. Either way the caller must NOT signal the pid (the safety red line:
+/// never kill a pid you have not verified).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn attest_pid(pid: u32) -> io::Result<()> {
+    let target = pid_identity(pid)?;
+    let own = own_identity()?;
+    if identities_match(&target, own) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "pid executable identity mismatch",
+        ))
+    }
+}
+
+/// Attest the pid named in the lock file and terminate it, binding the SIGTERM
+/// to the exact process instance we attested wherever the platform allows.
+///
+/// Linux (kernel >= 5.3): `pidfd_open` pins the running instance BEFORE
+/// attestation, and `pidfd_send_signal` targets that pinned instance, so a pid
+/// the OS reuses after we open the descriptor can never be signaled: the send
+/// returns `ESRCH` against the now-dead original instead of hitting the reused
+/// pid. The only window left is between reading the pid from the lock file and
+/// `pidfd_open`; `attest_pid` runs after the open and fails closed if the pid
+/// already names a different binary, so no unverified process is signaled.
+/// Kernels without `pidfd_open` (`ENOSYS`, < 5.3) fall back to attest-then-kill.
+///
+/// macOS has no `pidfd` equivalent, so it attests then signals by pid number;
+/// its residual pid-reuse race is now only the interval between attesting our
+/// own instance and the `kill` (see `supplant_prior_server` and ADR-0020).
+///
+/// Returns `Ok(())` once SIGTERM was delivered to an attested instance, or the
+/// instance was already gone (`ESRCH`, the safe outcome). Returns the
+/// attestation error (fail closed, never signaled) when the pid does not attest
+/// as our binary.
+#[cfg(target_os = "linux")]
+pub fn attest_and_terminate(pid: u32) -> io::Result<()> {
+    let Some(cpid) = checked_pid(pid) else {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid pid"));
+    };
+    // Pin the exact process instance before measuring or signaling it.
+    let pidfd = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_open,
+            cpid as libc::c_long,
+            0 as libc::c_long,
+        )
+    };
+    if pidfd < 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENOSYS) {
+            // Pre-5.3 kernel: no instance-bound signal available. Fall back to
+            // attest-then-kill (the same microsecond residual macOS documents).
+            attest_pid(pid)?;
+            unsafe { libc::kill(cpid, libc::SIGTERM) };
+            return Ok(());
+        }
+        // pidfd_open failed otherwise (e.g. ESRCH: the pid already exited).
+        // Nothing to signal; fail closed without signaling.
+        return Err(err);
+    }
+    let pidfd = pidfd as libc::c_int;
+    // Measure AFTER pinning. A pid reused before pidfd_open is caught here (a
+    // different binary -> PermissionDenied, no signal). A pid reused after
+    // pidfd_open cannot be hit: the descriptor still names the original,
+    // now-dead instance, so the send below returns ESRCH.
+    let signaled = match attest_pid(pid) {
+        Err(e) => Err(e),
+        Ok(()) => {
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    pidfd as libc::c_long,
+                    libc::SIGTERM as libc::c_long,
+                    std::ptr::null_mut::<libc::siginfo_t>(),
+                    0 as libc::c_long,
+                )
+            };
+            if rc < 0 {
+                let e = io::Error::last_os_error();
+                // ESRCH: the attested instance already exited (the pid may have
+                // been reused by now). Safe outcome: no innocent process was
+                // signaled.
+                if e.raw_os_error() == Some(libc::ESRCH) {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            } else {
+                Ok(())
+            }
+        }
+    };
+    unsafe { libc::close(pidfd) };
+    signaled
+}
+
+/// macOS variant of [`attest_and_terminate`]: no `pidfd`, so attest then signal
+/// by pid number. Documented micro-residual, see the function above.
+#[cfg(target_os = "macos")]
+pub fn attest_and_terminate(pid: u32) -> io::Result<()> {
+    attest_pid(pid)?;
+    if let Some(cpid) = checked_pid(pid) {
+        unsafe { libc::kill(cpid, libc::SIGTERM) };
+    }
+    Ok(())
 }
 
 /// Running-image-bound peer attestation on macOS via the Security framework:
@@ -790,7 +956,7 @@ mod codesign {
         match peer_audit_token(fd) {
             Ok(token) => peer_cdhash_via_audit(&token),
             Err(e) if e.raw_os_error() == Some(libc::ENOPROTOOPT) => {
-                peer_cdhash_via_pid(super::peer_pid(stream)?)
+                pid_cdhash(super::peer_pid(stream)?)
             }
             Err(e) => Err(e),
         }
@@ -833,7 +999,12 @@ mod codesign {
         guest_cdhash(GuestKey::Audit, data)
     }
 
-    fn peer_cdhash_via_pid(pid: u32) -> io::Result<String> {
+    /// The cdhash of the running image of the process named by `pid`,
+    /// validated by `SecCodeCheckValidity`. Also the audit-token fallback for
+    /// [`peer_cdhash`], and the pid-keyed identity behind [`super::attest_pid`];
+    /// identifying by pid (rather than audit token) reopens the narrow
+    /// pid-reuse race recorded in ADR-0020.
+    pub(super) fn pid_cdhash(pid: u32) -> io::Result<String> {
         let pid = libc::pid_t::try_from(pid)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
         let num = unsafe {
@@ -1694,5 +1865,48 @@ mod tests {
         // binary).
         let (a, _b) = UnixStream::pair().unwrap();
         assert!(attest_peer(&a).is_ok());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn attest_pid_accepts_self_and_rejects_a_foreign_binary() {
+        // Self: the pid-keyed measurement of this very process must match the
+        // cached self identity.
+        assert!(attest_pid(std::process::id()).is_ok());
+
+        // Foreign: a child WE spawned (a specific, verified pid - never a
+        // pattern match) running a different binary must be rejected with
+        // PermissionDenied, the caller's do-not-signal signal.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let err = attest_pid(child.id()).expect_err("a foreign binary must not attest");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn attest_and_terminate_refuses_a_foreign_binary() {
+        // The takeover signal path must not deliver SIGTERM to a pid that does
+        // not attest as our binary (the red line: never kill an unverified
+        // pid). Spawn a specific, verified child we own, running a different
+        // binary, and confirm attest_and_terminate fails closed AND leaves it
+        // alive. (Delivery to our OWN instance is exercised end to end by the
+        // real two-server takeover in tests/e2e.py, which cannot run inside a
+        // unit test without signaling the test process itself.)
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let err =
+            attest_and_terminate(child.id()).expect_err("a foreign binary must not be signaled");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        // Not signaled: the foreign child is still alive.
+        assert!(pid_is_alive(child.id()));
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
