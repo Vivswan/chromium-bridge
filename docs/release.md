@@ -1,77 +1,94 @@
-# 发布:tag 驱动的发布流水线
+# Releasing: the tag-driven release pipeline
 
-> 本文说明 browser-bridge 如何发布:打 tag 触发预编译产物、校验和、双模式安装脚本,
-> 以及解耦的 SBOM 工作流。版本纪律见 [compatibility.md](./compatibility.md);
-> 安装产物路径见 [architecture.md §4.3](./architecture.md#43-安装产物)。
+> This doc explains how browser-bridge is released: pushing a tag triggers
+> prebuilt artifacts, checksums, and the dual-mode install script, plus a
+> decoupled SBOM workflow. Version discipline is in
+> [compatibility.md](./compatibility.md); install artifact paths are in
+> [architecture.md section 4.3](./architecture.md#43-install-artifacts).
 
-## 触发方式:打 tag
+## Trigger: push a tag
 
-发布由 **git tag** 驱动(`.github/workflows/release.yml`,`on: push: tags: ["v*"]`,
-另有 `workflow_dispatch` 手动入口):
+Releases are driven by a **git tag** (`.github/workflows/release.yml`,
+`on: push: tags: ["v*"]`, with a `workflow_dispatch` manual entry point as well):
 
 ```bash
 git tag v0.1.0 && git push --tags
 ```
 
-流水线的第一步是**版本一致性校验**:tag 去掉前导 `v` 和任何 `-dev`/`-rc` 预发布后缀后,
-其核心版本必须等于 `Cargo.toml` 的 `version`,否则直接失败。Cargo 是版本单源
-(见 [ADR-0013](./adr/0013-ci-and-toolchain.md))。带后缀的 tag(如 `v0.1.0-rc.1`)
-会被标记为 prerelease。
+The pipeline's first step is a **version consistency check**: after stripping the leading
+`v` and any `-dev`/`-rc` prerelease suffix from the tag, its core version must equal the
+`version` in `Cargo.toml`, otherwise the run fails immediately. Cargo is the single
+version source (see [ADR-0013](./adr/0013-ci-and-toolchain.md)). Tags with a suffix (such
+as `v0.1.0-rc.1`) are marked as prereleases.
 
-## 构建矩阵与预编译 tarball
+## Build matrix and prebuilt tarballs
 
-release.yml 在矩阵上构建(当前 `macos-14/arm64` 与 `ubuntu-22.04/x64`;Intel macOS 因
-托管 runner 稀缺**有意省略**,Linux 用较老 glibc 基线以扩大兼容)。每个目标:
+release.yml builds on a matrix (currently `macos-14/arm64` and `ubuntu-22.04/x64`; Intel
+macOS is **deliberately omitted** because hosted runners are scarce, and Linux uses an
+older glibc baseline to widen compatibility). For each target:
 
-1. `cargo build --release` 出二进制。
-2. `npm ci && npm run build` 出扩展 bundle(`extension/dist/`)。
-3. 打包成 `browser-bridge-<tag>-<platform>-<arch>.tar.gz`,内含二进制、
-   `extension/dist`、`install.sh`、`mcp-config.example.json`、`LICENSE`、`README.md`。
-4. 生成 `.tar.gz.sha256` 校验和(`shasum` 或 `sha256sum`)。
-5. 用 `softprops/action-gh-release` 创建 GitHub Release,附上 tarball + `.sha256`,
-   并自动生成 release notes。
+1. `cargo build --release` produces the binary.
+2. `npm ci && npm run build` produces the extension bundle (`extension/dist/`).
+3. Everything is packed into `browser-bridge-<tag>-<platform>-<arch>.tar.gz`, containing
+   the binary, `extension/dist`, `install.sh`, `mcp-config.example.json`, `LICENSE`, and
+   `README.md`.
+4. A `.tar.gz.sha256` checksum is generated (`shasum` or `sha256sum`).
+5. `softprops/action-gh-release` creates the GitHub Release with the tarball + `.sha256`
+   attached, and auto-generates release notes.
 
-用户因此**不需要 Rust/Node 工具链**即可安装。所有第三方 Action 都固定到 commit SHA(供应链治理)。
+Users therefore **do not need a Rust/Node toolchain** to install. All third-party Actions
+are pinned to commit SHAs (supply-chain governance).
 
-## 双模式 install.sh
+## Dual-mode install.sh
 
-同一份 `install.sh` 自动区分两种模式:
+The same `install.sh` automatically distinguishes two modes:
 
-- **源码模式**(存在 `Cargo.toml`):现场用 Rust 构建二进制、用 Node/npm 构建扩展,再安装。
-- **预编译模式**(无 `Cargo.toml`,即解压 release tarball 后):直接安装随包附带的二进制与
-  `extension/dist`,**不需要** Rust 或 Node。
+- **Source mode** (a `Cargo.toml` is present): builds the binary with Rust and the
+  extension with Node/npm on the spot, then installs.
+- **Prebuilt mode** (no `Cargo.toml`, i.e. after unpacking a release tarball): installs
+  the bundled binary and `extension/dist` directly, requiring **neither** Rust nor Node.
 
-两种模式都注册 Chrome native messaging host manifest(`allowed_origins` 写死扩展 ID),
-细节见 [architecture.md §4.3](./architecture.md#43-安装产物) 与
-[operations.md](./operations.md)。Windows 用 `install.ps1`(见 [ADR-0015](./adr/0015-windows-support.md))。
+Both modes register the Chrome native messaging host manifest (`allowed_origins` is
+hard-coded to the extension ID); details are in
+[architecture.md section 4.3](./architecture.md#43-install-artifacts) and
+[operations.md](./operations.md). Windows uses `install.ps1` (see
+[ADR-0015](./adr/0015-windows-support.md)).
 
-## SBOM:解耦的 CycloneDX 工作流
+## SBOM: a decoupled CycloneDX workflow
 
-`.github/workflows/sbom.yml` 独立于 release.yml,触发于 `release: published`(即 release
-**已创建之后**):
+`.github/workflows/sbom.yml` is independent of release.yml and triggers on
+`release: published` (that is, **after** the release has been created):
 
-- 用 `anchore/sbom-action` 从**提交的锁文件**(`Cargo.lock` + `extension/package-lock.json`)
-  生成 CycloneDX JSON(`browser-bridge.cdx.json`),扫描声明的依赖而非已安装的树
-  (fresh checkout 没有 `node_modules/target`)。
-- 把 SBOM 作为资产附加到对应 tag 的 Release。
+- It uses `anchore/sbom-action` to generate CycloneDX JSON
+  (`browser-bridge.cdx.json`) from the **committed lock files** (`Cargo.lock` +
+  `extension/package-lock.json`), scanning declared dependencies rather than an installed
+  tree (a fresh checkout has no `node_modules`/`target`).
+- It attaches the SBOM as an asset to the Release for the corresponding tag.
 
-**为什么解耦**:SBOM 工作流与二进制发布分离,因此 SBOM 工具异常**永远不会阻塞**二进制发布。
+**Why decoupled**: the SBOM workflow is separated from the binary release, so an SBOM
+tooling failure can **never block** a binary release.
 
-## SemVer 规则
+## SemVer rules
 
-1.0 之前也守兼容纪律,不把 `0.x` 当作任意破坏兼容的借口:
+Compatibility discipline holds before 1.0 too; `0.x` is not treated as a license to break
+compatibility at will:
 
-- **Patch**:bug 修复、内部重构、日志改进;不改工具参数与安全语义。
-- **Minor**:新增工具、新增可选字段、新增 capability、新增配置;向后兼容。
-- **Major**:删除/改名工具、改字段含义、改默认权限、放宽安全边界、不兼容 Bridge protocol
-  或扩展版本(对应内部桥接协议版本 bump,见 [compatibility.md](./compatibility.md))。
+- **Patch**: bug fixes, internal refactors, logging improvements; no changes to tool
+  parameters or security semantics.
+- **Minor**: new tools, new optional fields, new capabilities, new configuration;
+  backward compatible.
+- **Major**: removing/renaming tools, changing field meanings, changing default
+  permissions, loosening a security boundary, or an incompatible Bridge protocol or
+  extension version (corresponding to an internal bridge protocol version bump, see
+  [compatibility.md](./compatibility.md)).
 
-## 尚未落地(诚实说明)
+## Not yet in place (honest statement)
 
-- macOS **真实集成测试进入 release gate**:需真实浏览器,尚未纳入发布门禁。
+- macOS **real integration tests in the release gate**: they need a real browser and are
+  not part of the release gate yet.
 
-## 相关
+## Related
 
-- 运维与诊断:[operations.md](./operations.md)。
-- 版本与握手:[compatibility.md](./compatibility.md)。
-- CI 与工具链:[ADR-0013](./adr/0013-ci-and-toolchain.md)。
+- Operations and diagnostics: [operations.md](./operations.md).
+- Versions and the handshake: [compatibility.md](./compatibility.md).
+- CI and toolchain: [ADR-0013](./adr/0013-ci-and-toolchain.md).

@@ -1,61 +1,54 @@
-# ADR-0018:AI 标签页归入「Browser Bridge」分组(工作区)
+# ADR-0018: AI tabs go into a "Browser Bridge" tab group (workspace)
 
-- **状态**:Accepted
-- **日期**:2026-07-16
+- **Status**: Accepted
+- **Date**: 2026-07-16
 
-## 背景
+## Context
 
-browser-bridge 驱动的是用户**真实的浏览器**,AI 用 `tab_open` 打开的标签页会和用户
-自己的标签页混在一起,难以分辨、难以一次性收回,操作也容易误伤用户正在用的页面。
+browser-bridge drives the user's **real browser**, so tabs the AI opens with `tab_open` mix in with the user's own tabs: hard to tell apart, hard to reclaim in one motion, and operations can easily hit a page the user is actively using.
 
-其他工具(如 Codex 连接本地浏览器)采用的一个常见做法是:把 AI 打开的标签页放进一个
-**命名的标签分组(Chrome Tab Group)**,在里面操作。好处:
+A common approach in other tools (such as Codex connecting to a local browser) is to put AI-opened tabs into a **named tab group (Chrome Tab Group)** and operate inside it. The benefits:
 
-1. **隔离不干扰**:AI 的标签页与用户的视觉分开;
-2. **透明可收回**:用户一眼看到"这些是 AI 的",可整组折叠/关闭;
-3. **多 Agent 友好**:是"每会话一个工作区"的最轻量形态(仍共享同一浏览器 profile 与登录态)。
+1. **Isolation without interference**: the AI's tabs are visually separated from the user's;
+2. **Transparent and reclaimable**: the user sees at a glance "these are the AI's" and can collapse or close the whole group;
+3. **Multi-agent friendly**: it is the lightest form of "one workspace per session" (still sharing the same browser profile and login state).
 
-## 决策
+## Decision
 
-`tab_open` 打开的标签页**自动归入一个名为「Browser Bridge」的标签分组**(蓝色),
-同窗口内复用已存在的同名分组,不存在则创建并命名/上色。
+Tabs opened by `tab_open` are **automatically placed into a tab group named "Browser Bridge"** (blue). Within the same window an existing group of that name is reused; otherwise one is created, named, and colored.
 
-- 由设置 `groupTabs` 控制,**默认开启**;可在 Options 页关闭。
-- 需要新权限 **`tabGroups`**(用于给分组命名/上色;`chrome.tabs.group()` 本身属 `tabs`)。
-- 分组是 **best-effort 的 UX**:分组失败(异常、受限页面)只 `console.warn`,**绝不**让
-  `tab_open` 因此失败。
-- `tab_list` 的返回值新增 `groupId` 字段(未分组为 `undefined`),便于 AI/用户识别归属。
+- Controlled by the `groupTabs` setting, **on by default**; can be turned off on the Options page.
+- Needs the new **`tabGroups`** permission (for naming/coloring the group; `chrome.tabs.group()` itself belongs to `tabs`).
+- Grouping is **best-effort UX**: a grouping failure (exception, restricted page) only gets a `console.warn` and **never** fails `tab_open`.
+- `tab_list`'s return value gains a `groupId` field (`undefined` when ungrouped), so the AI/user can identify ownership.
 
-## 考虑过的替代方案
+## Alternatives considered
 
-### 方案 A:硬隔离——所有页面操作只允许作用在分组内的标签
-- **优点**:更强的"沙箱"语义
-- **缺点**:改变现有定位语义(常对 active tab 操作,而 active tab 未必在组内),易造成意外失败
-- **未被选**:本次只做"组织 + 可见性",不改操作定位;硬隔离留作后续(需配合会话隔离)
+### Option A: hard isolation, allowing page operations only on tabs inside the group
+- **Pros**: stronger "sandbox" semantics
+- **Cons**: changes the existing targeting semantics (operations often target the active tab, which may not be in the group), inviting surprise failures
+- **Not chosen**: this round does "organization + visibility" only, without changing operation targeting; hard isolation is left for later (it needs session isolation alongside)
 
-### 方案 B:新增独立的 `tab_group` 工具(显式建组/移入/聚焦)
-- **优点**:控制更细
-- **缺点**:属**契约变更**(要动 `contracts/tools.json` + Rust 目录 + 代码生成)
-- **未被选**:本次先做零契约变更的自动分组;显式工具可作为后续增量
+### Option B: a separate `tab_group` tool (explicit create/move/focus)
+- **Pros**: finer control
+- **Cons**: it is a **contract change** (touching `contracts/tools.json`, the Rust catalogue, and code generation)
+- **Not chosen**: start with zero-contract-change automatic grouping; an explicit tool can come later as an increment
 
-### 方案 C:独立 browser context(类隐身)
-- **排除**:那是"另一套 cookie/登录态"的隔离,与"复用用户真实登录态"的产品目标相悖,
-  且不是可见的标签分组
+### Option C: a separate browser context (incognito-like)
+- **Rejected**: that isolates "a different set of cookies/login state", which contradicts the product goal of reusing the user's real login state, and it is not a visible tab group
 
-## 后果
+## Consequences
 
-### 正面
-- AI 标签页集中、可见、可整组收回;不再散落打扰用户
-- 单 Agent 也直接受益;并为将来"每会话一个工作区"的多 Agent 隔离打下基础
-- 零契约变更,纯扩展侧改动,Rust/协议不动
+### Positive
+- AI tabs are grouped, visible, and reclaimable as a unit; they no longer scatter and disturb the user
+- A single agent benefits immediately, and it lays the groundwork for future "one workspace per session" multi-agent isolation
+- Zero contract change: a pure extension-side change, Rust/protocol untouched
 
-### 负面 / 权衡
-- 新增 `tabGroups` 权限(低风险:仅组织标签,不涉及页面内容/cookie 等数据面);上架
-  Chrome Web Store 时权限变更会触发重新审核与用户重新授权
-- **不解决连接层的多 Agent 问题**:单锁文件 + 抢占式 kill + 单 native 连接依旧存在
-  (那是连接层,本 ADR 是浏览器内的组织层,属不同层次)
+### Negative / trade-offs
+- The new `tabGroups` permission (low risk: it only organizes tabs and touches no page-content/cookie data plane); on the Chrome Web Store, a permission change triggers re-review and users re-granting
+- **Does not solve the connection-layer multi-agent problem**: the single lock file, preemptive kill, and single native connection remain (that is the connection layer; this ADR is the in-browser organization layer, a different level)
 
-## 与其他 ADR 的关系
+## Relationship to other ADRs
 
-- 与 [ADR-0004](./0004-allowlist-with-optional-host-permissions.md) 正交:分组不改变白名单/授权
-- 与"multi-client broker"(见 [GOVERNANCE.md](../../GOVERNANCE.md) 的 RFC 示例)互补而非替代
+- Orthogonal to [ADR-0004](./0004-allowlist-with-optional-host-permissions.md): grouping does not change the allowlist/grants
+- Complements, not replaces, the "multi-client broker" (see the RFC example in [GOVERNANCE.md](../../GOVERNANCE.md))

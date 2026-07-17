@@ -1,121 +1,122 @@
-# ADR-0008:page_eval 高危确认通道
+# ADR-0008: page_eval high-risk confirmation channel
 
-- **状态**:Accepted
-- **日期**:2026-07-07
-- **取代**:[ADR-0005](./0005-page-eval-disabled-by-default.md)(v0.1 不实现的决定)
+- **Status**: Accepted
+- **Date**: 2026-07-07
+- **Supersedes**: [ADR-0005](./0005-page-eval-disabled-by-default.md) (the "do not implement in v0.1" decision)
 
-## 背景
+## Context
 
-[ADR-0005](./0005-page-eval-disabled-by-default.md) 决定 v0.1 完全不实现 `page_eval`。理由是攻击面太大——任意 JS 执行能窃取 token、Cookie、以用户身份发请求。v0.1 先把基础架构和安全模型跑稳。
+[ADR-0005](./0005-page-eval-disabled-by-default.md) decided that v0.1 would not implement `page_eval` at all. The rationale was the attack surface: arbitrary JS execution can steal tokens and cookies and send requests as the user. v0.1 first proved the base architecture and security model.
 
-v0.1 已交付并验证(协议层 e2e PASS),进入阶段二。现在要补 `page_eval`,但必须满足 ADR-0005 当时设的前提条件:**高危确认通道 + 返回值脱敏**。
+v0.1 has shipped and been verified (protocol-level e2e PASS), and phase two has begun. `page_eval` is now due, but it must satisfy the preconditions ADR-0005 set at the time: **a high-risk confirmation channel plus return-value masking**.
 
-## 决策
+## Decision
 
-**实现 `page_eval`,采用页面内放大版 Toast 确认 + 同源 60s 免确认 + 可配置返回值脱敏(默认开):**
+**Implement `page_eval` with an enlarged in-page confirmation Toast, a same-origin 60s confirmation-free window, and configurable return-value masking (on by default):**
 
-| 维度 | 实现 |
+| Dimension | Implementation |
 |------|------|
-| **确认 UI** | 页面内放大版 Toast(区别于普通 Toast 的警告色调),显示完整代码(`<pre>` 可滚动)+ 目标域名 + tab 标题 + Allow/Deny,30s 超时拒绝 |
-| **免确认窗口** | 复用现有 `lastConfirmed` 机制,key = `${origin}:eval`,批准后 60 秒同源 eval 不再弹 |
-| **执行方式** | `new Function('"use strict"; return (async () => { <code> })()')()`——全局作用域,支持 await/return |
-| **返回值脱敏** | content.js 在结果离开页面上下文**前**就脱敏(避免原始 token 走 IPC 链路)。正则覆盖 JWT/长hex/长数字/敏感关键字,递归处理。开关存 `chrome.storage.local`(`evalMask`),默认 true,popup 可关 |
+| **Confirmation UI** | Enlarged in-page Toast (warning color scheme, distinct from the ordinary Toast) showing the full code (scrollable `<pre>`), the target domain, the tab title, and Allow/Deny; denies on a 30s timeout |
+| **Confirmation-free window** | Reuses the existing `lastConfirmed` mechanism, key = `${origin}:eval`; after approval, same-origin evals do not prompt for 60 seconds |
+| **Execution method** | `new Function('"use strict"; return (async () => { <code> })()')()`: global scope, supports await/return |
+| **Return-value masking** | content.js masks the result **before** it leaves the page context (so raw tokens never travel the IPC chain). Regexes cover JWTs/long hex/long numbers/sensitive keys, applied recursively. The switch lives in `chrome.storage.local` (`evalMask`), default true, can be turned off in the popup |
 
-## 考虑过的替代方案
+## Alternatives considered
 
-### 方案 A:专用扩展窗口(chrome.windows.create)
-- **优点**:不被页面 CSS 干扰;代码长也能完整看
-- **缺点**:实现复杂(SW ↔ window 通信);多一个窗口打断流程;窗口可能被遮挡
-- **未被选**:用户选了页面内 Toast,复用现有机制更轻
+### Option A: dedicated extension window (chrome.windows.create)
+- **Pros**: immune to page CSS; long code is fully visible
+- **Cons**: complex to build (SW <-> window communication); an extra window interrupts the flow; the window can be occluded
+- **Not chosen**: the user picked the in-page Toast; reusing the existing mechanism is lighter
 
-### 方案 B:每次 eval 都确认(无免确认窗口)
-- **优点**:最安全
-- **缺点**:连续 eval 烦人;eval 不该高频但调试场景可能连续执行
-- **未被选**:用户选了同源 60s 免确认,与现有 Toast 机制一致
+### Option B: confirm every eval (no confirmation-free window)
+- **Pros**: safest
+- **Cons**: consecutive evals get annoying; eval should not be high-frequency, but debugging scenarios may run it repeatedly
+- **Not chosen**: the user picked the same-origin 60s window, consistent with the existing Toast mechanism
 
-### 方案 C:popup 预授权开关(勾选后所有 eval 静默)
-- **排除**:攻击面回到"全开放"水平,违背高危确认初衷
+### Option C: pre-authorization switch in the popup (once checked, all evals are silent)
+- **Rejected**: the attack surface returns to "fully open", defeating the point of high-risk confirmation
 
-### 返回值脱敏的替代
-- **不脱敏**:实现最简,但 token/cookie/密钥可能进 AI 上下文和日志,泄露风险大
-- **强制脱敏**:最安全,但偶尔误伤正常数据
-- **可配置(默认开)**:用户选这个,平衡灵活与安全
+### Alternatives for return-value masking
+- **No masking**: simplest, but tokens/cookies/keys could enter the AI context and logs; high leak risk
+- **Forced masking**: safest, but occasionally mangles legitimate data
+- **Configurable (default on)**: the user chose this, balancing flexibility and safety
 
-## 执行方式的技术选择:Function 构造器
+## The execution-method choice: the Function constructor
 
-**为什么不用 `eval(code)`**:
-- eval 受调用点作用域限制(在 content script 闭包里调 eval,看不到页面全局变量)
-- strict mode 下 eval 有自己的作用域,赋值不外泄
+**Why not `eval(code)`**:
+- eval is bound to the call-site scope (calling eval inside the content script closure cannot see the page's globals)
+- In strict mode eval gets its own scope; assignments do not escape
 
-**为什么用 `new Function`**:
-- 在全局作用域执行,能访问页面全局(window 上的变量、框架的 API)
-- 支持 `return` 和 `await`(包装成 async IIFE)
-- 封装:`new Function('"use strict"; return (async () => { ' + code + ' })()')()`
+**Why `new Function`**:
+- Executes in the global scope, so it can reach the page's globals (variables on window, framework APIs)
+- Supports `return` and `await` (wrapped as an async IIFE)
+- Wrapping: `new Function('"use strict"; return (async () => { ' + code + ' })()')()`
 
-**已知限制**:
-- 难以可靠设置执行超时(Function 构造器跑起来后,JS 单线程无法外部中断)。留作未来
-- 代码语法错误会在调用时抛 `SyntaxError`,需 try/catch 并把错误信息返回
+**Known limitations**:
+- A reliable execution timeout is hard (once the Function constructor is running, single-threaded JS cannot be interrupted from outside). Left for the future
+- Syntax errors in the code throw `SyntaxError` at call time; try/catch is needed to return the error message
 
-## 返回值序列化的边缘情况
+## Return-value serialization edge cases
 
-eval 可能返回任意类型,需要 `serializeResult` 安全处理:
+eval can return any type; `serializeResult` must handle them safely:
 
-| 类型 | 处理 |
+| Type | Handling |
 |------|------|
-| 循环引用对象 | WeakSet 跟踪,遇已访问则替换为 `"[Circular]"` |
-| DOM 节点 | 替换为 `"<Element tag#id>"` |
-| Error | 序列化为 `{name, message, stack?}` |
+| Objects with circular references | Track with a WeakSet; already-visited nodes become `"[Circular]"` |
+| DOM nodes | Replaced with `"<Element tag#id>"` |
+| Error | Serialized as `{name, message, stack?}` |
 | Symbol / BigInt / function | `.toString()` |
-| Promise | 自动 await(已是 async 包装) |
-| 超长(>10KB) | 截断 + `"[truncated]"` |
+| Promise | Awaited automatically (already async-wrapped) |
+| Oversized (>10KB) | Truncated with `"[truncated]"` |
 
-## ⚠️ 风险标注:免确认窗口对 eval 的风险高于 click
+## Risk note: the confirmation-free window is riskier for eval than for click
 
-**同源 60s 免确认意味着**:用户批准第一次 eval 后,60 秒内**完全不同的第二次 eval 会静默执行**。
+**The same-origin 60s window means**: after the user approves the first eval, a **completely different second eval within 60 seconds runs silently**.
 
-对比 click 场景:click 的"同类动作"(比如连续点 5 个链接)至少是相似操作;eval 的两次调用**毫无关联**——第一次可能是 `document.title`,第二次可能是 `fetch('/transfer', {...})`。
+Compare the click case: click's "same kind of action" (say, clicking 5 links in a row) is at least a similar operation; two eval calls are **entirely unrelated**. The first might be `document.title`, the second might be `fetch('/transfer', {...})`.
 
-**接受这个风险的理由**:
-1. eval 不该高频使用(工具描述强制 AI 优先尝试 page_click/page_fill)
-2. 用户批准第一次时已经在看完整代码,有知情
-3. 真正担心可在 popup 关闭整个 eval 能力(留作未来开关,本方案不做)
+**Why this risk was accepted**:
+1. eval should not be high-frequency (the tool description forces the AI to try page_click/page_fill first)
+2. When the user approves the first call they are looking at the full code, so they are informed
+3. Anyone genuinely worried can disable the whole eval capability in the popup (left as a future switch; not part of this design)
 
-这个风险会在工具描述里向 AI 说明,也在 README 的安全模型表里标注。
+This risk is stated to the AI in the tool description and marked in the README's security-model table.
 
-## 更新(2026-07-15):新增可关闭开关 `confirmPageEval`(默认开)
+## Update (2026-07-15): new opt-out switch `confirmPageEval` (default on)
 
-本 ADR 原先在"方案 C"里**排除**了"预授权后静默 eval"。实践中,browser-bridge 的核心场景就是**让 AI 全自动驱动浏览器**,每次 `page_eval` 都要人工点"允许执行"会打断自动化(`tab_close` 同理)。因此新增两个设置(均默认 **true**,保持原有"每次确认"行为):
+This ADR originally **rejected** "silent eval after pre-authorization" as option C. In practice, browser-bridge's core scenario is **letting the AI drive the browser fully automatically**, and requiring a human "Allow" click on every `page_eval` breaks the automation (`tab_close` likewise). Two settings were therefore added (both defaulting to **true**, preserving the original confirm-every-time behavior):
 
-| 设置 | 关闭后 | 默认 |
+| Setting | When turned off | Default |
 |------|--------|------|
-| `confirmPageEval` | `page_eval` 不再弹确认,直接执行任意 JS | 开 |
-| `confirmTabClose` | `tab_close` 不再弹「Close tab?」 | 开 |
+| `confirmPageEval` | `page_eval` no longer prompts; arbitrary JS runs directly | on |
+| `confirmTabClose` | `tab_close` no longer prompts "Close tab?" | on |
 
-与当初排除的"方案 C"的区别,也是接受它的理由:
-1. **默认开**——不改变任何现有用户的安全姿态;必须用户**主动**关闭。
-2. **Options 页醒目警告**——关 `confirmPageEval` 的卡片明确写"AI 将无提示直接执行任意 JS";这是**知情**选择。
-3. **一致性**——高危三类(点击 / eval / 关标签)现在都有各自的确认开关(`confirmHighRiskClick` / `confirmPageEval` / `confirmTabClose`),语义统一,不再是"点击可关、eval 关不掉"的割裂。
-4. 白名单(站点级)与 `pageEvalEnabled`(总开关)两道闸不受影响。
+The differences from the originally rejected option C, and the reasons for accepting it:
+1. **Default on**: no existing user's security posture changes; the user has to turn it off **deliberately**.
+2. **Prominent warning on the Options page**: the card for turning off `confirmPageEval` states plainly "the AI will execute arbitrary JS with no prompt"; this is an **informed** choice.
+3. **Consistency**: the three high-risk kinds (click / eval / tab close) now each have their own confirmation switch (`confirmHighRiskClick` / `confirmPageEval` / `confirmTabClose`), with uniform semantics, instead of the split state where clicks could be relaxed but eval could not.
+4. The allowlist (site level) and `pageEvalEnabled` (master switch) remain in force as the other two gates.
 
-关掉 `confirmPageEval` 等于回到"任意 JS 无提示执行"的攻击面——这一点在开关警告与本节均已标注,由用户自行权衡。
+Turning off `confirmPageEval` restores the "arbitrary JS with no prompt" attack surface; this is noted both in the switch's warning and here, and the trade-off is the user's to make.
 
 ## Update (2026-07-16): page_eval excluded from the same-origin grace window (fail-safe default)
 
-This addendum is written in ASCII English; the historical body above is left
-as-is.
+(When this addendum was written the body above was still Chinese; the whole
+file has since been translated to English.)
 
 This update reverses the original grace-window choice for page_eval and turns
-the rejected option into the shipped one. ADR-0008 first rejected 方案 B
-("每次 eval 都确认", every eval reconfirms with no grace window) and instead
+the rejected option into the shipped one. ADR-0008 first rejected option B
+("confirm every eval", every eval reconfirms with no grace window) and instead
 reused the same-origin 60s grace window keyed `origin:eval`, so that after one
 approval any further eval on that origin within the window ran with no prompt.
-The risk note above ("免确认窗口对 eval 的风险高于 click") already recorded why
-that is dangerous: the two calls one approval covers can be unrelated,
-`document.title` one time and `fetch('/transfer', ...)` the next.
+The risk note above ("the confirmation-free window is riskier for eval than
+for click") already recorded why that is dangerous: the two calls one approval
+covers can be unrelated, `document.title` one time and
+`fetch('/transfer', ...)` the next.
 
 The zero-trust principle in AGENTS.md ("never weaken a check for convenience")
 treats a silent same-origin window as exactly that kind of relaxation, so it
-cannot stay the default. page_eval now behaves the way 方案 B described: every
+cannot stay the default. page_eval now behaves the way option B described: every
 call reconfirms, and it is excluded from the grace window entirely. The one
 exception is the explicit opt-out `confirmPageEval=false` (from the 2026-07-15
 update above), which a user sets deliberately. The grace window
@@ -139,34 +140,34 @@ This is the explicit, reviewed relaxation-of-a-default record the zero-trust
 rule requires. Superseding only the eval portion of the grace-window decision;
 the rest of ADR-0008 stands.
 
-## 后果
+## Consequences
 
-### 正面
-- **能力补全**:复杂交互(CustomEvent、SPA 路由、读 JS 变量、canvas)能搞定
-- **脱敏防泄露**:返回值离开页面前就处理,token 不走 IPC 链路
-- **复用现有机制**:Toast + lastConfirmed + storage 开关,代码增量可控
+### Positive
+- **Capability completed**: complex interactions (CustomEvent, SPA routing, reading JS variables, canvas) become possible
+- **Masking prevents leaks**: return values are processed before leaving the page, so tokens never travel the IPC chain
+- **Reuses existing mechanisms**: Toast + lastConfirmed + storage switches keep the code delta contained
   (see Update 2026-07-16: eval no longer uses lastConfirmed / the grace window)
 
-### 负面
-- **攻击面增大**:任意 JS 执行能力引入,即使有确认,用户误批一次就泄
-- **免确认窗口风险**:如上所述,比 click 场景高
+### Negative
+- **Larger attack surface**: arbitrary JS execution arrives; even with confirmation, one mistaken approval leaks
+- **Confirmation-free window risk**: as described above, higher than the click case
   (superseded by Update 2026-07-16: eval is excluded from the grace window and always reconfirms; this risk no longer applies to eval)
-- **脱敏可能误伤**:长数字 ID、正常的长 hex(如哈希值)会被遮罩,用户可关开关
-- **无执行超时**:死循环 eval 会挂住工具调用(120s session 超时会兜底,但页面卡住)
+- **Masking can mangle**: long numeric IDs and legitimate long hex (such as hashes) get masked; the user can turn the switch off
+- **No execution timeout**: an infinite-loop eval hangs the tool call (the 120s session timeout backstops it, but the page stays stuck)
 
-### 中性
-- page_eval 不在 `tools/list` 默认排序靠前,描述强制 AI 谨慎使用
+### Neutral
+- page_eval is not ranked early in the default `tools/list` ordering, and its description forces the AI to use it sparingly
 
-## 实施
+## Implementation
 
-- `src/tools.rs`:加 Tool 定义 + dispatch 分支
-- `extension/content.js`:`runEval()` + `confirmWithEvalToast()` + `serializeResult()` + `maskSensitive()` + `getMaskSetting()`
-- `extension/toast.css`:`.zcb-eval-card` / `.zcb-eval-code` / `.zcb-eval-meta` 警告色调
-- `extension/popup.html/js`:脱敏开关
-- 文档:requirements FR-3 加 page_eval;architecture §7 补 Function 选择
+- `src/tools.rs`: add the Tool definition and the dispatch branch
+- `extension/content.js`: `runEval()` + `confirmWithEvalToast()` + `serializeResult()` + `maskSensitive()` + `getMaskSetting()`
+- `extension/toast.css`: `.zcb-eval-card` / `.zcb-eval-code` / `.zcb-eval-meta` warning color scheme
+- `extension/popup.html/js`: the masking switch
+- Docs: requirements FR-3 gains page_eval; architecture section 7 gains the Function-constructor choice
 
-## 与其他 ADR 的关系
+## Relationship to other ADRs
 
-- **取代 [ADR-0005](./0005-page-eval-disabled-by-default.md)**:ADR-0005 的"v0.1 不实现"决定被本 ADR 推翻;ADR-0005 改状态为 Superseded by #0008
-- **配合 [ADR-0006](./0006-toast-confirmation-for-high-risk.md)**:复用 Toast 机制,但 eval 的 Toast 更大、显示代码、警告色调
-- **配合 [ADR-0004](./0004-allowlist-with-optional-host-permissions.md)**:白名单仍是第一层(站点级),eval Toast 是动作级第二层
+- **Supersedes [ADR-0005](./0005-page-eval-disabled-by-default.md)**: ADR-0005's "do not implement in v0.1" decision is overturned by this ADR; ADR-0005's status changes to Superseded by #0008
+- **With [ADR-0006](./0006-toast-confirmation-for-high-risk.md)**: reuses the Toast mechanism, but eval's Toast is larger, shows the code, and uses the warning color scheme
+- **With [ADR-0004](./0004-allowlist-with-optional-host-permissions.md)**: the allowlist remains the first layer (site level); the eval Toast is the action-level second layer
