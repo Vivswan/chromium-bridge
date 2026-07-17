@@ -119,9 +119,12 @@ export class CdpSession {
     } catch (e) {
       const msg = String((e as Error).message || e);
       if (/another debugger/i.test(msg)) {
-        throw new Error("该标签页已打开 DevTools,CDP 模式无法附加。请关闭 DevTools 后重试。", {
-          cause: e,
-        });
+        throw new Error(
+          "CDP mode cannot attach: DevTools is open on this tab. Close DevTools and retry.",
+          {
+            cause: e,
+          },
+        );
       }
       throw e;
     }

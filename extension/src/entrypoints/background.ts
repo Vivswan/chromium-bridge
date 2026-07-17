@@ -1,6 +1,8 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 import { installCdpLifecycleListeners } from "@/lib/background/cdp/registry";
+import { installConfirmationProvider } from "@/lib/background/confirm/service";
+import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
 import { connectNative } from "@/lib/background/port";
@@ -29,6 +31,11 @@ export default defineBackground(() => {
   // CDP mode (ADR-0017): tear down debugger sessions when a tab closes, when
   // Chrome detaches us, or when the user turns cdpMode off.
   installCdpLifecycleListeners();
+
+  // The off-DOM confirmation surface (ADR-0027). Without a provider the
+  // confirmation service denies everything, so install it before any bridge
+  // traffic can arrive.
+  installConfirmationProvider(new ExtensionWindowProvider());
 
   browser.runtime.onStartup.addListener(connectNative);
   browser.runtime.onInstalled.addListener(connectNative);

@@ -91,7 +91,8 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
       .sendMessage(tab.id!, {
         op: "_info_toast",
         args: {
-          message: "即将精确扫描页面 — Chrome 顶部会显示『调试中』横幅,扫描后自动消失(约 1 秒)。",
+          message:
+            "About to take a precise page snapshot - Chrome will briefly show a 'debugging' banner (about 1 second).",
         },
       })
       .catch(() => true /* content script missing → proceed anyway */);
@@ -120,7 +121,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
       const msg = String((e as Error).message || e);
       if (/another debugger/i.test(msg)) {
         throw new Error(
-          "该标签页已打开 DevTools,page_snapshot_precise 无法附加。请关闭 DevTools 后重试。",
+          "page_snapshot_precise cannot attach: DevTools is open on this tab. Close DevTools and retry.",
           { cause: e },
         );
       }

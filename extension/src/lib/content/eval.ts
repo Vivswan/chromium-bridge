@@ -1,11 +1,11 @@
-// page_eval (high-risk, ADR-0008) — execute arbitrary JS in the page's global
-// scope after an enlarged confirmation toast. Result is safely serialized and
-// (by default) masked before returning.
+// page_eval, content-script leg (cdpMode off): execute arbitrary JS in the
+// page's global scope and return a safely-serialized result. The settings
+// gate (pageEvalEnabled) and the user confirmation run in the SERVICE WORKER
+// (confirm/gate.ts, on the extension-owned surface - ADR-0027) before this
+// message ever arrives, and the result is masked SW-side on egress
+// (background/egress.ts); this module only executes and serializes.
 
-import { maskSensitive } from "../shared/masking";
-import { getSetting } from "../shared/settings";
 import type { OpArgs } from "../shared/types";
-import { confirmWithEvalToast } from "./toast";
 import { truncate } from "./util";
 
 export async function runEval(args: OpArgs) {
@@ -13,46 +13,26 @@ export async function runEval(args: OpArgs) {
   if (typeof code !== "string" || !code.trim()) {
     throw new Error("page_eval needs non-empty `code`");
   }
-  // Global kill switch: if the user disabled page_eval in settings, refuse
-  // before any code runs (and before any confirmation prompt).
-  const evalEnabled = await getSetting("pageEvalEnabled");
-  if (evalEnabled === false) {
-    throw new Error("page_eval disabled in settings");
-  }
-  // Confirm with the user via an enlarged Toast showing the full code, unless
-  // the user turned the eval confirmation off (confirmPageEval=false) for
-  // hands-off automation. Every page_eval reconfirms: unlike click/submit,
-  // eval is excluded from the same-origin grace window, so there is no silent-
-  // eval window (ADR-0008 update 2026-07-16). NOTE: this confirmation is
-  // ADR-0008's guardrail - disabling it means arbitrary JS runs with no prompt.
-  if ((await getSetting("confirmPageEval")) !== false) {
-    await confirmWithEvalToast(code);
-  }
-  // The mask gate applies to EVERY egress path below - the success value, a
-  // thrown exception, and a failure inside serialization. Exceptions used to
-  // bypass it, so `throw new Error(localStorage.authToken)` carried the secret
-  // out around the mask.
-  const mask = (await getSetting("evalMask")) !== false;
-  const guard = (v: unknown) => (mask ? maskSensitive(v) : v);
   // Execute. Wrap as an async IIFE in the global scope so the code can use
   // await/return and see page globals. `new Function` (not eval) gives us
   // global scope regardless of the strict-mode closure this file runs in.
   try {
     const fn = new Function(`"use strict";\nreturn (async () => {\n${code}\n})();`);
     const result = await fn();
-    // Serialize inside the try: a getter that throws during serialization must
-    // land in the catch below, not escape unmasked to the outer handler.
-    return guard(serializeResult(result));
+    // Serialize inside the try: a getter that throws during serialization
+    // must land in the catch below, not escape to the outer handler.
+    return serializeResult(result);
   } catch (e) {
     // Surface JS errors to the model as structured data, not a throw, so the
-    // model can react (e.g. fix the code and retry).
+    // model can react (e.g. fix the code and retry). The SW masks every
+    // field of this shape too - a thrown secret must not bypass the mask.
     const err = e as { name?: unknown; message?: unknown; stack?: unknown } | null | undefined;
-    return guard({
+    return {
       __evalError: true,
       name: String(err?.name || "Error"),
       message: String(err?.message || e),
       stack: truncate(String(err?.stack || ""), 2000),
-    });
+    };
   }
 }
 

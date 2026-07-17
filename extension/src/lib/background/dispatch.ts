@@ -5,12 +5,17 @@
 // partition the catalogue exactly (enforced by the roster drift test).
 
 import { isOpName, type OpName, unreachable } from "@chromium-bridge/shared";
+import type { Browser } from "wxt/browser";
+import { browser } from "wxt/browser";
 import { isPageOp } from "../shared/page-ops";
 import { getSetting } from "../shared/settings";
 import type { BridgeReq } from "../shared/types";
+import { ensureAllowed } from "./allowlist-store";
+import { preflightPageOp } from "./confirm/gate";
 import { consoleGet } from "./console";
 import { cookieGet } from "./cookies";
 import { handleDialog } from "./dialog";
+import { maskOpResult } from "./egress";
 import { selectBackend } from "./page-backend";
 import { decide } from "./policy";
 import { snapshotPrecise } from "./precise";
@@ -76,6 +81,30 @@ export function assertNotDisabled(op: string | undefined, disabledTools: string[
   }
 }
 
+/** Re-fetch a tab and require its origin to still match the one the
+ * allowlist check and any confirmation were based on (fail closed on a
+ * navigation raced against the pipeline). Exported for tests. */
+export async function recheckTab(tab: Browser.tabs.Tab): Promise<Browser.tabs.Tab> {
+  if (tab.id == null) throw new Error("target tab has no id");
+  const current = await browser.tabs.get(tab.id);
+  if (originOf(current.url) !== originOf(tab.url)) {
+    throw new Error(
+      "the tab navigated to a different origin while the request was being " +
+        "confirmed; re-issue the call against the new page",
+    );
+  }
+  return current;
+}
+
+function originOf(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}
+
 export async function dispatch(req: BridgeReq): Promise<unknown> {
   // Tool enable/disable gate: if the op is in the user's disabledTools list,
   // reject before doing anything.
@@ -85,15 +114,27 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
   if (isSwReq(req)) return await dispatchSw(req);
 
   if (isPageOp(req.op)) {
-    // Page-level ops. Resolve the target tab, then run through the selected
-    // backend: the content script (default) or CDP / browser.debugger when the
-    // user turned cdpMode on (ADR-0017). The backend owns ensureAllowed +
-    // injection/attach, so dispatch's ordering (resolve tab → ensureAllowed →
-    // run) is preserved either way.
+    // Page-level ops, one pipeline for both backends:
+    //   resolve tab -> allowlist -> preflight (risk + confirmation, on the
+    //   extension-owned surface) -> re-validate the tab -> backend act
+    //   (content script or CDP per cdpMode, ADR-0017) -> egress masking.
+    // Policy never lives in a backend, so it cannot drift between them.
     const tab = await resolveTargetTab(req.tabId);
+    await ensureAllowed(tab.url);
     const cdpMode = (await getSetting("cdpMode")) === true;
     const backend = selectBackend(cdpMode);
-    return await backend.run(req.op, req.args, tab);
+    const guard = await preflightPageOp(req.op, req.args, tab, backend);
+    // A confirmation can hold the pipeline open for tens of seconds, during
+    // which the tab may navigate ANYWHERE. Re-fetch the SAME tab (by id, so
+    // an active-tab switch cannot substitute a different one) and fail
+    // closed if its origin is no longer what was checked and confirmed.
+    const current = await recheckTab(tab);
+    // Bind the act to the approved origin: the backends enforce this INSIDE
+    // the page, atomically with the act, closing the residual race between
+    // this recheck and the backend's evaluate/message.
+    guard.expectOrigin = originOf(tab.url);
+    const result = await backend.run(req.op, req.args, current, guard);
+    return await maskOpResult(req.op, result);
   }
 
   // What remains is the server scope (list_browsers): answered by the MCP
