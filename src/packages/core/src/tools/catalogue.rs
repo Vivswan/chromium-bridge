@@ -138,7 +138,7 @@ pub fn all() -> Vec<Tool> {
         Tool {
             name: "page_eval",
             description:
-                "HIGH RISK — execute arbitrary JavaScript on the active tab. EVERY call shows the \
+                "HIGH RISK - execute arbitrary JavaScript on the active tab. EVERY call shows the \
                  user the full code in a confirmation prompt and waits for approval; there is no \
                  silent same-origin grace window for eval, so every page_eval re-prompts. The \
                  return value is \
@@ -157,7 +157,7 @@ pub fn all() -> Vec<Tool> {
             name: "page_snapshot_precise",
             description:
                 "Like page_snapshot, but uses Chrome's debugger (CDP Accessibility.getFullAXTree) \
-                 to capture the AUTHORITATIVE accessibility tree — accurate for shadow DOM and \
+                 to capture the AUTHORITATIVE accessibility tree - accurate for shadow DOM and \
                  complex ARIA where the content-script approximation misses. The user is warned \
                  first (a brief on-page notice); Chrome then shows a 'Started debugging this \
                  browser' banner on all tabs for ~1 second while the snapshot is taken, then it \
@@ -178,7 +178,7 @@ pub fn all() -> Vec<Tool> {
             description:
                 "Read cookies for the active tab (or a url/domain you specify). Includes httpOnly \
                  cookies (the main reason to use this over document.cookie). Scoped to hosts in \
-                 the user's allowlist — unauthorized hosts silently return nothing. Read-only; \
+                 the user's allowlist - unauthorized hosts silently return nothing. Read-only; \
                  there is no cookie_set (writing httpOnly cookies is a session-fixation risk). \
                  Values are masked (JWT / long hex / long numbers) before being returned. If you \
                  omit url/domain/name, cookies for the active tab's URL are returned.",
@@ -202,7 +202,7 @@ pub fn all() -> Vec<Tool> {
                  NextAuth / Firebase store tokens). Must run on the active tab; same-origin \
                  only (cross-origin iframes are not readable). Pass `key` to fetch one entry, \
                  or omit it to dump all entries (capped at 500). Values are ALWAYS masked \
-                 (JWT / long hex / long numbers) — this masking is not toggleable. Read-only.",
+                 (JWT / long hex / long numbers) - this masking is not toggleable. Read-only.",
             input_schema: bridge_schema(
                 &[],
                 &[
@@ -406,7 +406,7 @@ fn schema(required: &[&str], props: &[(&str, &str, &str)]) -> Value {
 
 /// The optional `browser` routing argument every bridge-backed tool accepts
 /// (which connected browser to run on). One tuple so the wording is identical
-/// across the whole catalogue — the contract parity test compares it
+/// across the whole catalogue - the contract parity test compares it
 /// byte-for-byte against contracts/tools.json.
 const BROWSER_PROP: (&str, &str, &str) = (
     "browser",

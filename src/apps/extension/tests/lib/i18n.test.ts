@@ -52,6 +52,20 @@ describe("resolveUiLocale", () => {
   });
 });
 
+describe("native language names", () => {
+  // The picker shows every language in that language itself, always - the
+  // escape hatch for a user stuck in a UI they cannot read. These values must
+  // never be translated or moved into the locale bundles.
+  test("each language names itself, untranslated", async () => {
+    const { NATIVE_LANGUAGE_NAMES } = await import("@/lib/native-language-names");
+    expect(NATIVE_LANGUAGE_NAMES).toEqual({
+      en: "English",
+      zh_CN: "简体中文",
+      zh_TW: "繁體中文",
+    });
+  });
+});
+
 describe("t + initI18n", () => {
   test("resolves the chosen locale, falling back to English per key", async () => {
     await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });

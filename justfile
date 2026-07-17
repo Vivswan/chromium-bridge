@@ -105,7 +105,7 @@ test-integration: build-release ext-build
 test: test-rust test-e2e
 
 # Everything CI runs
-ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test ext-build test-e2e check-extension-id
+ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test ext-build test-e2e check-extension-id check-cjk
 
 # Install locally (build + copy binary + host manifest)
 install:
@@ -122,6 +122,10 @@ check-version:
 # Verify the manifest key and installer extension IDs agree
 check-extension-id:
     bun scripts/check-extension-id.ts
+
+# Verify CJK text stays inside the zh locale files and translated docs
+check-cjk:
+    bun scripts/check-cjk.ts
 
 # Pre-release gate: versions consistent + full CI green
 release: check-version check-extension-id ci

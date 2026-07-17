@@ -1,8 +1,8 @@
 // GENERATED from contracts/tools.json by scripts/gen-ops.ts - DO NOT EDIT.
 // Edit the contract, then run `just gen`.
 //
-// The tool catalogue, TS side: op names + Chinese UI labels for the options
-// page, policy metadata (risk / scope / permission / confirmation), and the
+// The tool catalogue, TS side: op names + UI labels for the options page,
+// policy metadata (risk / scope / permission / confirmation), and the
 // per-op Zod arg validators the extension enforces at the native-messaging
 // boundary. BridgeCommand (the discriminated request union) is INFERRED from
 // the validators, so the compile-time types and the runtime checks cannot
@@ -54,32 +54,32 @@ export interface ToolInfo {
 }
 
 export const TOOLS: readonly ToolInfo[] = [
-  { op: "list_browsers", desc: "列出已连接的浏览器" },
-  { op: "tab_list", desc: "列出所有标签页" },
-  { op: "tab_focus", desc: "切换到指定标签页" },
-  { op: "tab_open", desc: "打开新标签页(需白名单)" },
-  { op: "tab_close", desc: "关闭标签页(带确认)" },
-  { op: "page_snapshot", desc: "快照页面可交互元素" },
-  { op: "page_click", desc: "点击元素" },
-  { op: "page_fill", desc: "填写表单字段" },
-  { op: "page_text", desc: "读取页面可见文本" },
-  { op: "page_screenshot", desc: "截取可视区域" },
-  { op: "page_scroll", desc: "滚动页面" },
-  { op: "page_wait_for", desc: "等待条件满足" },
-  { op: "page_eval", desc: "执行任意 JS(高危)" },
-  { op: "page_snapshot_precise", desc: "精确快照(走 debugger)" },
-  { op: "cookie_get", desc: "读取 Cookie(脱敏)" },
-  { op: "storage_get", desc: "读取 localStorage/sessionStorage(脱敏)" },
-  { op: "page_navigate", desc: "导航当前标签页(需白名单)" },
-  { op: "page_back", desc: "后退" },
-  { op: "page_forward", desc: "前进" },
-  { op: "page_reload", desc: "刷新页面" },
-  { op: "page_press", desc: "按键(带确认)" },
-  { op: "page_hover", desc: "悬停元素" },
-  { op: "page_select", desc: "选择下拉项(带确认)" },
-  { op: "console_get", desc: "读取控制台日志(脱敏)" },
-  { op: "page_handle_dialog", desc: "响应页面对话框(需开启)" },
-  { op: "page_upload", desc: "上传本地文件(极高危,需开启)" },
+  { op: "list_browsers", desc: "List connected browsers" },
+  { op: "tab_list", desc: "List open tabs" },
+  { op: "tab_focus", desc: "Focus a tab" },
+  { op: "tab_open", desc: "Open a new tab (allowlisted sites only)" },
+  { op: "tab_close", desc: "Close a tab (needs confirmation)" },
+  { op: "page_snapshot", desc: "Snapshot the page's interactive elements" },
+  { op: "page_click", desc: "Click an element" },
+  { op: "page_fill", desc: "Fill a form field" },
+  { op: "page_text", desc: "Read the page's visible text" },
+  { op: "page_screenshot", desc: "Screenshot the visible viewport" },
+  { op: "page_scroll", desc: "Scroll the page" },
+  { op: "page_wait_for", desc: "Wait for a condition" },
+  { op: "page_eval", desc: "Run arbitrary JavaScript (high risk)" },
+  { op: "page_snapshot_precise", desc: "Precise snapshot (uses the debugger)" },
+  { op: "cookie_get", desc: "Read cookies (values masked)" },
+  { op: "storage_get", desc: "Read localStorage/sessionStorage (values masked)" },
+  { op: "page_navigate", desc: "Navigate the current tab (allowlisted sites only)" },
+  { op: "page_back", desc: "Go back" },
+  { op: "page_forward", desc: "Go forward" },
+  { op: "page_reload", desc: "Reload the page" },
+  { op: "page_press", desc: "Press a key (needs confirmation)" },
+  { op: "page_hover", desc: "Hover over an element" },
+  { op: "page_select", desc: "Pick a dropdown option (needs confirmation)" },
+  { op: "console_get", desc: "Read console logs (values masked)" },
+  { op: "page_handle_dialog", desc: "Handle a page dialog (off by default)" },
+  { op: "page_upload", desc: "Upload a local file (very high risk, off by default)" },
 ];
 
 // Policy metadata, mirrored from the contract. Consumed by the policy layer

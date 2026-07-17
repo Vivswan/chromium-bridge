@@ -152,8 +152,8 @@ const opArgsFields = [...unionProps.entries()]
 const opsOut = `// GENERATED from contracts/tools.json by scripts/gen-ops.ts - DO NOT EDIT.
 // Edit the contract, then run \`just gen\`.
 //
-// The tool catalogue, TS side: op names + Chinese UI labels for the options
-// page, policy metadata (risk / scope / permission / confirmation), and the
+// The tool catalogue, TS side: op names + UI labels for the options page,
+// policy metadata (risk / scope / permission / confirmation), and the
 // per-op Zod arg validators the extension enforces at the native-messaging
 // boundary. BridgeCommand (the discriminated request union) is INFERRED from
 // the validators, so the compile-time types and the runtime checks cannot
