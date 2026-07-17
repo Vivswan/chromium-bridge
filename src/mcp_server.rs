@@ -18,13 +18,15 @@ pub fn run() -> i32 {
 
     // Handle termination signals gracefully so we always remove the lock file
     // on the way out (a stale lock is harmless but confuses diagnostics, and a
-    // supplanted server should clean up after itself). This must run BEFORE we
-    // spawn any worker threads: it blocks SIGTERM/SIGINT process-wide, and only
-    // threads created afterwards inherit that blocked mask — otherwise the
-    // kernel could deliver the signal to an unmasked worker and terminate us
-    // before the handler thread runs.
+    // supplanted server should clean up after itself). Ownership-guarded: if a
+    // successor has already taken over, the lock and socket on disk are the
+    // NEW server's, and removing them would take the working bridge down. This
+    // must run BEFORE we spawn any worker threads: it blocks SIGTERM/SIGINT
+    // process-wide, and only threads created afterwards inherit that blocked
+    // mask — otherwise the kernel could deliver the signal to an unmasked
+    // worker and terminate us before the handler thread runs.
     install_signal_cleanup(|| {
-        ipc::LockFile::remove();
+        ipc::LockFile::remove_if_owned();
     });
 
     // Capture our own executable identity up front, before binding or accepting,
@@ -44,42 +46,76 @@ pub fn run() -> i32 {
         }
     }
 
-    // 1. Bind the bridge socket and publish the lock file.
-    let (listener, lock) = match ipc::listen() {
-        Ok(x) => x,
-        Err(e) => {
-            log_error!("mcp", "failed to bind bridge socket: {e}");
-            return 1;
+    // 1. Take over from any prior MCP server instance, then bind and publish.
+    // The MCP client may spawn a fresh server per session; if the previous one
+    // is still alive, the native host keeps talking to IT (it doesn't follow
+    // lock-file changes), so the new server's tool calls would report
+    // "extension not connected". Kill the old instance so the native host's
+    // connection drops and the extension reconnects against our lock.
+    //
+    // The sequencing is load-bearing: the dying server's cleanup unlinks the
+    // socket path, so the takeover must fully complete before we bind. An
+    // earlier version bound first and then supplanted, which left the new
+    // listener bound to an already-unlinked inode — the reconnecting native
+    // host got ENOENT and the bridge stayed down until both processes were
+    // restarted by hand. The SIGTERM-and-wait runs OUTSIDE the runtime mutex
+    // (the dying server's own cleanup needs that mutex to finish);
+    // listen_and_publish then re-checks under the mutex and reports LostRace
+    // if yet another server published meanwhile, in which case we supplant
+    // that one too (newest server wins, bounded retries).
+    let mut lost_races = 0;
+    let (listener, lock) = loop {
+        if let Ok(Some(prev)) = ipc::LockFile::read() {
+            if prev.pid != std::process::id() && ipc::pid_is_alive(prev.pid) {
+                log_info!("mcp", "supplanting prior MCP server pid {}", prev.pid);
+                // SIGTERM -> old server cleans up its own lock and socket and
+                // exits -> its listener closes -> native host gets EOF -> SW
+                // onDisconnect -> reconnect spawns a fresh host -> reads OUR
+                // lock. Give it a moment to die and clean up.
+                terminate_process(prev.pid);
+                for _ in 0..50 {
+                    if !ipc::pid_is_alive(prev.pid) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if ipc::pid_is_alive(prev.pid) {
+                    // Proceed anyway: listen_and_publish clears its files and
+                    // binds over them, and its exit cleanup is ownership-
+                    // guarded, so it cannot remove what will by then be OUR
+                    // lock and socket.
+                    log_warn!(
+                        "mcp",
+                        "prior MCP server pid {} did not exit in time; proceeding",
+                        prev.pid
+                    );
+                }
+            }
+        }
+        match ipc::listen_and_publish() {
+            Ok(ipc::PublishOutcome::Published(listener, lock)) => break (listener, lock),
+            Ok(ipc::PublishOutcome::LostRace(cur)) => {
+                lost_races += 1;
+                if lost_races > 3 {
+                    log_error!(
+                        "mcp",
+                        "another MCP server (pid {}) keeps publishing concurrently; giving up",
+                        cur.pid
+                    );
+                    return 1;
+                }
+                log_info!(
+                    "mcp",
+                    "another MCP server (pid {}) published concurrently; supplanting it",
+                    cur.pid
+                );
+            }
+            Err(e) => {
+                log_error!("mcp", "failed to bind and publish bridge socket: {e}");
+                return 1;
+            }
         }
     };
-    // Take over from any prior MCP server instance. The MCP client may spawn a
-    // fresh server per session; if the previous one is still alive, the native host
-    // will keep talking to IT (it doesn't follow lock-file changes), so the
-    // new server's tool calls report "extension not connected". Kill the old
-    // instance first so the native host's connection drops, forcing the
-    // extension to reconnect against our new lock.
-    if let Ok(Some(prev)) = ipc::LockFile::read() {
-        if prev.pid != lock.pid && pid_is_alive(prev.pid) {
-            log_info!("mcp", "supplanting prior MCP server pid {}", prev.pid);
-            // SIGTERM -> old server's stdin loop ends -> it removes the lock and
-            // exits -> its listener closes -> native host gets EOF -> SW
-            // onDisconnect -> reconnect spawns a fresh host -> reads OUR lock.
-            terminate_process(prev.pid);
-            // Give it a moment to die and clean up its lock.
-            for _ in 0..50 {
-                if !pid_is_alive(prev.pid) {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            // Remove any stale lock the old instance didn't clean up.
-            ipc::LockFile::remove();
-        }
-    }
-    if let Err(e) = lock.write() {
-        log_error!("mcp", "failed to write lock file: {e}");
-        return 1;
-    }
     log_info!(
         "mcp",
         "bridge listening at {} (pid {}) lock at {}",
@@ -170,8 +206,9 @@ pub fn run() -> i32 {
         // None means notification (no response).
     }
 
-    // stdin EOF: the MCP client disconnected. Remove lock file.
-    ipc::LockFile::remove();
+    // stdin EOF: the MCP client disconnected. Remove the lock file — unless a
+    // successor has already replaced it (ownership-guarded, see above).
+    ipc::LockFile::remove_if_owned();
     0
 }
 
@@ -295,106 +332,15 @@ fn next_request_id() -> u64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Whether a process with the given pid is alive. Used by the takeover logic.
-/// `kill(pid, 0)` checks existence without delivering a signal.
-fn pid_is_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        let Some(pid) = unix_pid(pid) else {
-            return false;
-        };
-        let result = unsafe { libc::kill(pid, 0) };
-        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
-    #[cfg(windows)]
-    {
-        windows_process::is_alive(pid)
-    }
-    #[cfg(all(not(unix), not(windows)))]
-    {
-        let _ = pid;
-        false
-    }
-}
-
-#[cfg(unix)]
-fn unix_pid(pid: u32) -> Option<libc::pid_t> {
-    // POSIX reserves zero and negative values for process groups or broadcast
-    // signalling. Reject values that cannot be represented as pid_t instead
-    // of truncating (u32::MAX would otherwise become -1 and signal every
-    // process the current user is allowed to terminate).
-    libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)
-}
-
 fn terminate_process(pid: u32) {
     #[cfg(unix)]
-    if let Some(pid) = unix_pid(pid) {
+    if let Some(pid) = ipc::checked_pid(pid) {
         unsafe {
             libc::kill(pid, libc::SIGTERM);
         }
     }
     #[cfg(windows)]
-    windows_process::terminate(pid);
+    ipc::windows_process::terminate(pid);
     #[cfg(all(not(unix), not(windows)))]
     let _ = pid;
-}
-
-#[cfg(all(test, unix))]
-mod unix_process_tests {
-    use super::unix_pid;
-
-    #[test]
-    fn rejects_group_and_overflow_pid_values() {
-        assert_eq!(unix_pid(0), None);
-        assert_eq!(unix_pid(u32::MAX), None);
-    }
-
-    #[test]
-    fn accepts_current_process_pid() {
-        assert_eq!(
-            unix_pid(std::process::id()),
-            Some(std::process::id() as libc::pid_t)
-        );
-    }
-}
-
-#[cfg(windows)]
-mod windows_process {
-    use std::ffi::c_void;
-
-    type Handle = *mut c_void;
-    const PROCESS_TERMINATE: u32 = 0x0001;
-    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    const STILL_ACTIVE: u32 = 259;
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn OpenProcess(access: u32, inherit_handle: i32, process_id: u32) -> Handle;
-        fn GetExitCodeProcess(process: Handle, exit_code: *mut u32) -> i32;
-        fn TerminateProcess(process: Handle, exit_code: u32) -> i32;
-        fn CloseHandle(object: Handle) -> i32;
-    }
-
-    pub fn is_alive(pid: u32) -> bool {
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() {
-                return false;
-            }
-            let mut exit_code = 0;
-            let ok = GetExitCodeProcess(handle, &mut exit_code) != 0;
-            CloseHandle(handle);
-            ok && exit_code == STILL_ACTIVE
-        }
-    }
-
-    pub fn terminate(pid: u32) {
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !handle.is_null() {
-                let _ = TerminateProcess(handle, 0);
-                CloseHandle(handle);
-            }
-        }
-    }
 }
