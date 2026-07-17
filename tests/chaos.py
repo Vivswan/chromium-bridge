@@ -479,8 +479,8 @@ def _settle_fds(pid, timeout=10):
 # C4 - concurrent server starts settle to exactly one reachable bridge
 # ---------------------------------------------------------------------------
 
-def c4_concurrent_servers_settle():
-    print("\n[C4] concurrent server starts settle to one reachable bridge (LIVE)")
+def c4_concurrent_servers_coexist():
+    print("\n[C4] concurrent starts coexist as one broker + relays (LIVE)")
     rounds = 3
     servers_per_round = 6
     for rnd in range(1, rounds + 1):
@@ -488,38 +488,104 @@ def c4_concurrent_servers_settle():
         servers = [adv.start_server() for _ in range(servers_per_round)]
         nh = None
         try:
-            # Takeover churn: racing servers supplant each other under the
-            # runtime mutex until exactly one remains and the lock names it.
-            deadline = time.time() + 30
-            alive, lf, winner = servers, None, None
+            # Coexistence (ADR-0024): no instance SIGTERMs another. Under the
+            # runtime mutex exactly one binds the socket (the broker); the rest
+            # attach as relays. All of them stay alive.
+            deadline = time.time() + 20
+            lf = None
             while time.time() < deadline:
                 alive = [s for s in servers if s.poll() is None]
-                if len(alive) == 1:
-                    lf = e2e.wait_lock(alive[0], timeout=2)
-                    if lf is not None:
-                        winner = alive[0]
-                        break
+                lf = e2e.wait_lock(timeout=1)
+                if lf is not None and len(alive) == len(servers):
+                    break
                 time.sleep(0.2)
-            if not check(len(alive) == 1 and winner is not None,
-                         f"C4 round {rnd}: exactly one server survives ({len(alive)} alive)"):
+            alive = [s for s in servers if s.poll() is None]
+            check(len(alive) == len(servers),
+                  f"C4 round {rnd}: all {servers_per_round} instances coexist ({len(alive)} alive)")
+            if not check(lf is not None, f"C4 round {rnd}: exactly one broker owns the lock"):
                 continue
-            check(lf.get("pid") == winner.pid, f"C4 round {rnd}: lock names the survivor")
+            owner = next((s for s in servers if s.pid == lf.get("pid")), None)
+            check(owner is not None, f"C4 round {rnd}: the lock names one of the instances")
             if os.name != "nt":
                 check(os.path.exists(lf["endpoint"]),
-                      f"C4 round {rnd}: survivor's socket exists on disk")
+                      f"C4 round {rnd}: broker's socket exists on disk")
 
-            # The load-bearing assertion e2e cannot make as strongly: the
-            # winner's socket must actually ROUND-TRIP a real attested host +
-            # tool call, not merely exist.
-            c = mcp_ready(winner)
+            # The load-bearing assertion: the broker's socket round-trips a real
+            # attested host + tool call driven from a RELAY (not just the broker),
+            # proving the multiplex path is live under concurrent startup.
+            relay = next((s for s in servers if owner is not None and s.pid != owner.pid), owner)
+            c = mcp_ready(relay)
             nh = start_host()
-            if check(wait_ready(nh), f"C4 round {rnd}: a native host handshakes through the survivor"):
-                check(round_trip_ok(c, nh, title="C4 Survivor", _id=400 + rnd),
-                      f"C4 round {rnd}: tool call round-trips through the survivor's socket")
+            if check(wait_ready(nh), f"C4 round {rnd}: a native host handshakes through the broker"):
+                check(round_trip_ok(c, nh, title="C4 Coexist", _id=400 + rnd),
+                      f"C4 round {rnd}: a relay's tool call round-trips through the broker")
         finally:
             close_host(nh)
             for s in servers:
                 adv._reap(s)
+
+
+def c9_relay_attach_drop_churn():
+    print("\n[C9] relay attach/drop churn: broker ref-count stays healthy (LIVE)")
+    if os.name == "nt":
+        skip("C9 uses the Unix broker/relay coexistence path")
+        return
+    adv._rm_lock()
+    # A stable broker keeps a browser attached the whole time.
+    broker = adv.start_server()
+    nh = None
+    relays = []
+    try:
+        if not check(e2e.wait_lock(broker) is not None, "C9 broker up"):
+            return
+        cb = mcp_ready(broker)
+        nh = start_host()
+        if not check(wait_ready(nh), "C9 browser attached to the broker"):
+            return
+
+        # Churn: repeatedly spawn a batch of relays and drop them abruptly. The
+        # broker must survive every attach/detach cycle (ref-count never
+        # underflows or wedges) and keep serving the browser throughout.
+        for cycle in range(4):
+            batch = [adv.start_server() for _ in range(3)]
+            relays = batch
+            time.sleep(0.6)
+            alive = [s for s in batch if s.poll() is None]
+            check(len(alive) == len(batch), f"C9 cycle {cycle}: relays attached and coexist")
+            check(broker.poll() is None, f"C9 cycle {cycle}: broker survives the attach")
+            # Drop them hard (SIGKILL) to stress the detach/ref-count path.
+            for s in batch:
+                sigkill(s)
+            for s in batch:
+                try:
+                    s.wait(timeout=3)
+                except Exception:
+                    pass
+            relays = []
+            time.sleep(0.4)
+            check(broker.poll() is None, f"C9 cycle {cycle}: broker survives the abrupt relay drop")
+            # The broker still owns the lock and still drives the browser.
+            lf = e2e.wait_lock(broker, timeout=2)
+            check(lf is not None and lf.get("pid") == broker.pid,
+                  f"C9 cycle {cycle}: broker still owns the lock after churn")
+            check(round_trip_ok(cb, nh, title=f"C9-{cycle}", _id=900 + cycle),
+                  f"C9 cycle {cycle}: broker still round-trips a tool call")
+
+        # Finally, detach the last harness (the broker's own): it must exit and
+        # remove the lock (ref-count reaches zero).
+        broker.stdin.close()
+        try:
+            broker.wait(timeout=10)
+        except Exception:
+            pass
+        check(broker.poll() is not None, "C9 broker exits once its last harness detaches")
+        check(not os.path.exists(e2e.LOCK), "C9 broker removed its lock on final exit")
+    finally:
+        close_host(nh)
+        for s in relays:
+            adv._reap(s)
+        adv._reap(broker)
+
 
 
 # ---------------------------------------------------------------------------
@@ -762,10 +828,11 @@ def main():
         c1_abrupt_drop_mid_request()
         c2_truncated_nm_frame()
         c3_reconnect_storm()
-        c4_concurrent_servers_settle()
+        c4_concurrent_servers_coexist()
         c5_server_killed_mid_request()
         c6_peer_death_in_handshake_window()
         c7_stale_lock_and_socket()
+        c9_relay_attach_drop_churn()
         c8_browser_gated_todo()
     finally:
         shutil.rmtree(rundir, ignore_errors=True)

@@ -110,6 +110,41 @@ pub fn run() -> i32 {
         log_error!("native-host", "bridge handshake failed: {e}");
         return 1;
     }
+    // Declare our role to the broker: a native host fronting a browser. The
+    // browser label was already MAC-signed in the handshake response, so this
+    // frame only carries the role. The broker replies with an AttachReply;
+    // anything but Accepted (a capacity/version refusal, or a closed socket)
+    // means we exit so Chrome tears down the port and the extension reconnects.
+    if let Err(e) =
+        crate::protocol::bridge_write(&mut writer, &crate::protocol::AttachRequest::Browser)
+    {
+        log_error!("native-host", "attach declaration failed: {e}");
+        return 1;
+    }
+    match crate::protocol::bridge_read::<_, crate::protocol::AttachReply>(&mut reader) {
+        Ok(Some(crate::protocol::AttachReply::Accepted)) => {}
+        Ok(Some(other)) => {
+            log_error!(
+                "native-host",
+                "broker did not accept this browser attach: {other:?}"
+            );
+            return 1;
+        }
+        Ok(None) => {
+            log_error!(
+                "native-host",
+                "broker closed before accepting the browser attach"
+            );
+            return 1;
+        }
+        Err(e) => {
+            log_error!(
+                "native-host",
+                "reading the broker's attach reply failed: {e}"
+            );
+            return 1;
+        }
+    }
     log_info!(
         "native-host",
         "bridge handshake complete (label '{}')",

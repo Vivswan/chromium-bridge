@@ -1,0 +1,61 @@
+[package]
+name = "chromium-bridge-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace so the fuzz crate (nightly + libFuzzer only) never enters
+# the main `cargo build`/`cargo test` graph. The root Cargo.toml also lists it
+# under [workspace].exclude.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+chromium-bridge-core = { path = "../crates/core" }
+
+[profile.release]
+debug = 1
+
+# One binary per wire parser at a trust boundary. Each feeds arbitrary bytes to
+# the real decoder and asserts (implicitly, via libFuzzer catching a panic or
+# abort) that no input crashes it -- the robustness guarantee for a parser that
+# runs on a security boundary under `panic = "abort"`.
+[[bin]]
+name = "nm_frame"
+path = "fuzz_targets/nm_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_jsonrpc"
+path = "fuzz_targets/mcp_jsonrpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge_envelope"
+path = "fuzz_targets/bridge_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handshake"
+path = "fuzz_targets/handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attach"
+path = "fuzz_targets/attach.rs"
+test = false
+doc = false
+bench = false
