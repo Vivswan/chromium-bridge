@@ -2,6 +2,20 @@
   "$comment": "SINGLE SOURCE OF TRUTH for the tool catalogue. TS ops.ts is GENERATED from this (scripts/gen-ops.mjs); Rust tools.rs is VERIFIED against it (cargo test). Edit here, then regenerate + test.",
   "tools": [
     {
+      "name": "list_browsers",
+      "uiLabel": "列出已连接的浏览器",
+      "risk": "low",
+      "scope": "server",
+      "permission": "tabs",
+      "confirmation": "none",
+      "description": "List the browsers currently connected to the bridge. Returns each browser's label and its open-tab count. When more than one browser is connected, every other tool needs a `browser` argument set to one of these labels.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
       "name": "tab_list",
       "uiLabel": "列出所有标签页",
       "risk": "low",
@@ -10,7 +24,12 @@
       "confirmation": "none",
       "description": "List all open browser tabs. Returns id, title, url, and which is active.",
       "inputSchema": {
-        "properties": {},
+        "properties": {
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
+          }
+        },
         "required": [],
         "type": "object"
       }
@@ -28,6 +47,10 @@
           "tabId": {
             "description": "Tab id from tab_list",
             "type": "integer"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
           }
         },
         "required": [
@@ -48,6 +71,10 @@
         "properties": {
           "url": {
             "description": "Absolute URL to open",
+            "type": "string"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
             "type": "string"
           }
         },
@@ -70,6 +97,10 @@
           "tabId": {
             "description": "Tab id from tab_list",
             "type": "integer"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
           }
         },
         "required": [
@@ -87,7 +118,12 @@
       "confirmation": "none",
       "description": "Capture the active tab's interactive elements as an accessibility-style tree. Each node has a stable `ref` (e.g. \"e3\"), a role, an accessible name, and a fallback CSS selector. Use the `ref` in page_click/page_fill when possible.",
       "inputSchema": {
-        "properties": {},
+        "properties": {
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
+          }
+        },
         "required": [],
         "type": "object"
       }
@@ -108,6 +144,10 @@
           },
           "selector": {
             "description": "CSS selector fallback",
+            "type": "string"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
             "type": "string"
           }
         },
@@ -136,6 +176,10 @@
           "value": {
             "description": "Text to type into the field",
             "type": "string"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
           }
         },
         "required": [
@@ -153,7 +197,12 @@
       "confirmation": "none",
       "description": "Return the visible text content of the active tab (sensitive fields masked).",
       "inputSchema": {
-        "properties": {},
+        "properties": {
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
+          }
+        },
         "required": [],
         "type": "object"
       }
@@ -167,7 +216,12 @@
       "confirmation": "none",
       "description": "Capture the visible viewport of the active tab as a PNG (base64).",
       "inputSchema": {
-        "properties": {},
+        "properties": {
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
+          }
+        },
         "required": [],
         "type": "object"
       }
@@ -189,6 +243,10 @@
           "pixels": {
             "description": "Number of pixels to scroll (positive = down)",
             "type": "integer"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
           }
         },
         "required": [],
@@ -220,6 +278,10 @@
           "timeoutMs": {
             "description": "Max wait in ms (default 30000)",
             "type": "integer"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
           }
         },
         "required": [],
@@ -238,6 +300,10 @@
         "properties": {
           "code": {
             "description": "JavaScript code to execute",
+            "type": "string"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
             "type": "string"
           }
         },
@@ -259,6 +325,10 @@
         "properties": {
           "frameId": {
             "description": "Optional: limit to a specific frame's tree",
+            "type": "string"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
             "type": "string"
           }
         },
@@ -287,6 +357,10 @@
           "url": {
             "description": "Return cookies that would be sent to this URL",
             "type": "string"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+            "type": "string"
           }
         },
         "required": [],
@@ -309,6 +383,10 @@
           },
           "type": {
             "description": "\"local\" (default) or \"session\"",
+            "type": "string"
+          },
+          "browser": {
+            "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
             "type": "string"
           }
         },

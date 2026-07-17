@@ -12,6 +12,7 @@ export interface ToolInfo {
 }
 
 export const TOOLS: ToolInfo[] = [
+  { op: "list_browsers", desc: "列出已连接的浏览器" },
   { op: "tab_list", desc: "列出所有标签页" },
   { op: "tab_focus", desc: "切换到指定标签页" },
   { op: "tab_open", desc: "打开新标签页(需白名单)" },
@@ -35,7 +36,7 @@ export const OP_NAMES: string[] = TOOLS.map((t) => t.op);
 // Policy metadata, mirrored from the contract. Consumed by the policy layer
 // (background/policy.ts) — kept as plain data so it stays import-side-effect-free.
 export type Risk = "critical" | "high" | "low" | "medium";
-export type Scope = "page" | "tab";
+export type Scope = "page" | "server" | "tab";
 export type Permission = "cookies" | "debugger" | "scripting" | "tabs";
 export type Confirmation = "every-call" | "high-risk" | "none" | "page-toast" | "warn";
 
@@ -47,6 +48,12 @@ export interface ToolMeta {
 }
 
 export const TOOL_META: Record<string, ToolMeta> = {
+  list_browsers: {
+    risk: "low",
+    scope: "server",
+    permission: "tabs",
+    confirmation: "none",
+  },
   tab_list: {
     risk: "low",
     scope: "tab",
@@ -146,6 +153,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 // required fields; the rest are optional. JSON-Schema string→string,
 // integer/number→number, boolean→boolean.
 export type BridgeCommand =
+  | { op: "list_browsers"; args: Record<string, never> }
   | { op: "tab_list"; args: Record<string, never> }
   | { op: "tab_focus"; args: { tabId: number } }
   | { op: "tab_open"; args: { url: string } }

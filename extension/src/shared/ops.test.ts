@@ -94,7 +94,10 @@ describe("ops catalogue", () => {
     for (const t of contract.tools) {
       const props = t.inputSchema.properties ?? {};
       const required = new Set(t.inputSchema.required ?? []);
-      const keys = Object.keys(props);
+      // `browser` is the server-side routing argument: the MCP server resolves
+      // it against its connection registry and never forwards it inside args,
+      // so the generator excludes it from the extension-facing shapes.
+      const keys = Object.keys(props).filter((k) => k !== "browser");
 
       // Every tool appears as its own arm.
       expect(union).toContain(`op: ${JSON.stringify(t.name)};`);

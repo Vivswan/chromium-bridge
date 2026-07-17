@@ -6,7 +6,7 @@
       "category": "protocol",
       "retryable": false,
       "message": "The tool arguments were missing or invalid.",
-      "rust": ["UnknownTool"]
+      "rust": ["UnknownTool", "InvalidBrowserArg"]
     },
     {
       "code": "NOT_CONNECTED",
@@ -95,6 +95,20 @@
       "retryable": true,
       "message": "The bridge connection was lost while awaiting a response.",
       "rust": ["Disconnected", "Write"]
+    },
+    {
+      "code": "BROWSER_AMBIGUOUS",
+      "category": "protocol",
+      "retryable": false,
+      "message": "More than one browser is connected; pass the `browser` argument to pick one (see list_browsers).",
+      "rust": ["AmbiguousBrowser"]
+    },
+    {
+      "code": "BROWSER_NOT_FOUND",
+      "category": "connection",
+      "retryable": true,
+      "message": "No connected browser has that label (see list_browsers).",
+      "rust": ["BrowserNotFound"]
     },
     {
       "code": "INTERNAL_ERROR",

@@ -284,20 +284,34 @@ fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             // structured audit event (tool, outcome, taxonomy code, duration).
             let req_id = next_request_id();
             let started = std::time::Instant::now();
-            // Capture the connection generation this call will run over, so the
-            // audit line can be correlated with a specific native-host
-            // connection across reconnects. `"-"` when no host is attached.
-            let conn_gen = session.current_generation();
-            let conn_s = conn_gen.map_or_else(|| "-".to_string(), |g| g.to_string());
+            // Capture where this call would be routed (browser label +
+            // connection generation), so the audit line can be correlated
+            // with a specific browser and native-host connection across
+            // reconnects. Best-effort diagnostics, not enforcement: the
+            // snapshot is taken outside the routing lock, so a reconnect
+            // racing the call can leave it one generation stale. The
+            // post-dispatch retry covers the common miss (a host that
+            // attached during the call's startup wait); `"-"` when still
+            // unroutable.
+            let browser_arg = args.get("browser").and_then(|v| v.as_str());
+            let route = session.route_info(browser_arg);
             // Tool errors are returned as a *successful* RPC with isError=true
             // in the result (per MCP spec); only protocol errors use the
             // error field.
             let out = tools::dispatch(session, name, &args);
+            let route = route.or_else(|| session.route_info(browser_arg));
+            let conn_s = route
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |(_, g)| g.to_string());
+            let browser_s = route
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |(l, _)| l.clone());
             let req_s = req_id.to_string();
             let dur_s = started.elapsed().as_millis().to_string();
             crate::log::audit(&[
                 ("req", req_s.as_str()),
                 ("conn", conn_s.as_str()),
+                ("browser", browser_s.as_str()),
                 ("tool", name),
                 ("outcome", if out.is_error { "error" } else { "ok" }),
                 ("code", out.error_code.unwrap_or("-")),

@@ -13,26 +13,40 @@ pub struct Tool {
 pub fn all() -> Vec<Tool> {
     vec![
         Tool {
+            name: "list_browsers",
+            description:
+                "List the browsers currently connected to the bridge. Returns each browser's \
+                 label and its open-tab count. When more than one browser is connected, every \
+                 other tool needs a `browser` argument set to one of these labels.",
+            input_schema: schema(&[], &[]),
+        },
+        Tool {
             name: "tab_list",
             description: "List all open browser tabs. Returns id, title, url, and which is active.",
-            input_schema: schema(&[], &[]),
+            input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "tab_focus",
             description: "Bring a tab to the foreground (make it active).",
-            input_schema: schema(&["tabId"], &[("tabId", "integer", "Tab id from tab_list")]),
+            input_schema: bridge_schema(
+                &["tabId"],
+                &[("tabId", "integer", "Tab id from tab_list")],
+            ),
         },
         Tool {
             name: "tab_open",
             description:
                 "Open a URL in a new tab. The host domain must be in the user's allowlist.",
-            input_schema: schema(&["url"], &[("url", "string", "Absolute URL to open")]),
+            input_schema: bridge_schema(&["url"], &[("url", "string", "Absolute URL to open")]),
         },
         Tool {
             name: "tab_close",
             description:
                 "Close an http(s) tab after showing a user-confirmation prompt in that page.",
-            input_schema: schema(&["tabId"], &[("tabId", "integer", "Tab id from tab_list")]),
+            input_schema: bridge_schema(
+                &["tabId"],
+                &[("tabId", "integer", "Tab id from tab_list")],
+            ),
         },
         Tool {
             name: "page_snapshot",
@@ -40,7 +54,7 @@ pub fn all() -> Vec<Tool> {
                 "Capture the active tab's interactive elements as an accessibility-style tree. \
                  Each node has a stable `ref` (e.g. \"e3\"), a role, an accessible name, and a \
                  fallback CSS selector. Use the `ref` in page_click/page_fill when possible.",
-            input_schema: schema(&[], &[]),
+            input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "page_click",
@@ -48,7 +62,7 @@ pub fn all() -> Vec<Tool> {
                 "Click an element on the active tab. Prefer passing `ref` (from page_snapshot); \
                  fall back to `selector`. Clicking a submit button or a link triggers a \
                  user-confirmation prompt.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &[],
                 &[
                     (
@@ -65,7 +79,7 @@ pub fn all() -> Vec<Tool> {
             description:
                 "Type a value into a form field on the active tab. Prefer `ref`; fall back to \
                  `selector`. Password fields are masked in logs/history.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &["value"],
                 &[
                     ("ref", "string", "Element ref from page_snapshot"),
@@ -78,18 +92,18 @@ pub fn all() -> Vec<Tool> {
             name: "page_text",
             description:
                 "Return the visible text content of the active tab (sensitive fields masked).",
-            input_schema: schema(&[], &[]),
+            input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "page_screenshot",
             description: "Capture the visible viewport of the active tab as a PNG (base64).",
-            input_schema: schema(&[], &[]),
+            input_schema: bridge_schema(&[], &[]),
         },
         Tool {
             name: "page_scroll",
             description:
                 "Scroll the active tab. Pass `direction` (up|down|top|bottom) or `pixels`.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &[],
                 &[
                     ("direction", "string", "One of: up, down, top, bottom"),
@@ -106,7 +120,7 @@ pub fn all() -> Vec<Tool> {
             description:
                 "Wait until a condition is met on the active tab, or until timeout. One of: \
                  `selector` exists, `text` appears, or `nav` waits for page load completion.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &[],
                 &[
                     (
@@ -133,7 +147,7 @@ pub fn all() -> Vec<Tool> {
                  events, reading framework state, SPA routing, canvas/WebGL, etc.). Code runs in \
                  the page's global scope, wrapped as `async`, so you can `await` and `return` a \
                  value. Async results are awaited. Errors are returned as {name, message}.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &["code"],
                 &[("code", "string", "JavaScript code to execute")],
             ),
@@ -149,7 +163,7 @@ pub fn all() -> Vec<Tool> {
                  disappears. Cannot run on chrome:// / web store pages, or tabs with DevTools \
                  open. Refs use a 'p' prefix (p1, p2...) and work with page_click / page_fill \
                  unchanged. Use this when page_snapshot misses elements or roles look wrong.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &[],
                 &[(
                     "frameId",
@@ -167,7 +181,7 @@ pub fn all() -> Vec<Tool> {
                  there is no cookie_set (writing httpOnly cookies is a session-fixation risk). \
                  Values are masked (JWT / long hex / long numbers) before being returned. If you \
                  omit url/domain/name, cookies for the active tab's URL are returned.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &[],
                 &[
                     (
@@ -188,7 +202,7 @@ pub fn all() -> Vec<Tool> {
                  only (cross-origin iframes are not readable). Pass `key` to fetch one entry, \
                  or omit it to dump all entries (capped at 500). Values are ALWAYS masked \
                  (JWT / long hex / long numbers) — this masking is not toggleable. Read-only.",
-            input_schema: schema(
+            input_schema: bridge_schema(
                 &[],
                 &[
                     ("type", "string", "\"local\" (default) or \"session\""),
@@ -221,6 +235,26 @@ fn schema(required: &[&str], props: &[(&str, &str, &str)]) -> Value {
     })
 }
 
+/// The optional `browser` routing argument every bridge-backed tool accepts
+/// (which connected browser to run on). One tuple so the wording is identical
+/// across the whole catalogue — the contract parity test compares it
+/// byte-for-byte against contracts/tools.json.
+const BROWSER_PROP: (&str, &str, &str) = (
+    "browser",
+    "string",
+    "Optional: which connected browser to run this on - a label from list_browsers. Required \
+     when more than one browser is connected.",
+);
+
+/// Like [`schema`], with the shared [`BROWSER_PROP`] appended. Used by every
+/// tool whose call is routed over a bridge connection; `list_browsers` itself
+/// (answered by the server, no routing) keeps the plain [`schema`].
+fn bridge_schema(required: &[&str], props: &[(&str, &str, &str)]) -> Value {
+    let mut with_browser = props.to_vec();
+    with_browser.push(BROWSER_PROP);
+    schema(required, &with_browser)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +272,7 @@ mod tests {
     #[test]
     fn tool_count_is_pinned() {
         // Bump deliberately when adding/removing a tool (keeps docs honest).
-        assert_eq!(all().len(), 15);
+        assert_eq!(all().len(), 16);
     }
 
     // contracts/tools.json is the single source of truth for the catalogue.
