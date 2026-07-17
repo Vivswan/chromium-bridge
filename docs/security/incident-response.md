@@ -56,7 +56,7 @@ ready:
 
 - **Disable a single tool**: on the extension Options page, add the affected tool to
   `disabledTools` (maps to `TOOL_DISABLED`, see
-  [errors.json](../../contracts/errors.json)); a high-risk tool such as `page_eval`
+  [`ERROR_SPECS` in error.rs](../../src/packages/core/src/error.rs)); a high-risk tool such as `page_eval`
   should be disabled first.
 - **Revoke the allowlist / turn off all-sites**: in Options / the popup, remove the
   authorization for the affected origins, and confirm `allowAllSites` is off (see

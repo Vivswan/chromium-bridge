@@ -31,7 +31,7 @@ Tabs opened by `tab_open` are **automatically placed into a tab group named "Bro
 
 ### Option B: a separate `tab_group` tool (explicit create/move/focus)
 - **Pros**: finer control
-- **Cons**: it is a **contract change** (touching `contracts/tools.json`, the Rust catalogue, and code generation)
+- **Cons**: it is a **contract change** (touching `contracts/tools.json` - superseded by the Rust catalogue, ADR-0028 - and code generation)
 - **Not chosen**: start with zero-contract-change automatic grouping; an explicit tool can come later as an increment
 
 ### Option C: a separate browser context (incognito-like)

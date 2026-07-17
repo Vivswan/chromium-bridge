@@ -12,7 +12,7 @@
     "scripts"
   ],
   "scripts": {
-    "gen": "bun scripts/gen-ops.ts && biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts",
+    "gen": "bun scripts/gen-ops.ts && biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts",
     "typecheck": "tsc -p src/apps/extension && tsc -p tests/browser && tsc -p scripts && tsc -p src/packages/shared",
     "build": "bun run --cwd src/packages/shared typecheck && bun run --cwd src/apps/extension build && tsc -p scripts && cargo build --workspace",
     "lint": "biome lint .",

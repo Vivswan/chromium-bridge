@@ -1,20 +1,17 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "wxt";
+import { EXTENSION_MANIFEST_KEY } from "../../packages/shared/src/identity.gen";
 import { MANIFEST_PERMISSIONS } from "./src/lib/shared/manifest-permissions";
 
-// contracts/identity.json is the single source of truth for the pinned
-// manifest `key`. The extension ID Chrome derives from it is what the native-
-// messaging host manifest pins in `allowed_origins`, so the key ships in
-// EVERY build (this extension is distributed as load-unpacked, not through a
-// store): a build without it would get a path-derived ID and be rejected by
-// the host. scripts/check-extension-id.ts verifies every copy of the derived
-// ID against this same contract.
-const identity = JSON.parse(
-  readFileSync(resolve(__dirname, "../../../contracts/identity.json"), "utf8"),
-) as { extensionManifestKey: string };
+// The pinned manifest `key` comes from the Rust core's identity constants
+// (src/packages/core/src/identity.rs, via the generated identity.gen.ts). The
+// extension ID Chrome derives from it is what the native-messaging host
+// manifest pins in `allowed_origins`, so the key ships in EVERY build (this
+// extension is distributed as load-unpacked, not through a store): a build
+// without it would get a path-derived ID and be rejected by the host.
+// scripts/check-extension-id.ts verifies every copy of the derived ID
+// against the same source.
 
 export default defineConfig({
   srcDir: "src",
@@ -34,7 +31,7 @@ export default defineConfig({
     // UI additionally honors the user's chosen display language (lib/i18n).
     default_locale: "en",
     description: "__MSG_extDescription__",
-    key: identity.extensionManifestKey,
+    key: EXTENSION_MANIFEST_KEY,
     // The extension relies on modern MV3 storage + scripting behavior; 116 is
     // the floor the pre-rehaul build targeted and remains the supported
     // minimum. The #32 trust-state isolation uses storage.local.setAccessLevel

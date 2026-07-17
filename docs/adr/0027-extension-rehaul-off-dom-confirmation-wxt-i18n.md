@@ -151,7 +151,9 @@ honestly.
 ### WXT, React, and runtime i18n
 
 The build moves to WXT. `wxt.config.ts` generates the manifest per browser,
-injects the pinned `key` from `contracts/identity.json` (so the derived
+injects the pinned `key` from the identity contract (`contracts/identity.json`
+at the time of this record; `src/packages/core/src/identity.rs` since ADR-0028) (so
+the derived
 extension ID `mkjjlmjbcljpcfkfadfmhblmmddkdihf` is unchanged), and keeps the
 exact permission set, the empty `host_permissions`, the optional `<all_urls>`,
 and the runtime-registered (not manifest-declared) content script.

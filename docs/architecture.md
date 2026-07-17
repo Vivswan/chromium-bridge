@@ -453,46 +453,97 @@ decisions:
 - **[ADR-0013](./adr/0013-ci-and-toolchain.md)**: task-runner entry point + GitHub Actions CI + rustfmt/clippy and TS lint/format gates + Cargo-sourced version sync (tooling now just + Biome, 2026-07).
 - **[ADR-0014](./adr/0014-leveled-logging.md)**: `BB_LOG` leveled stderr logging + thiserror typed errors (new `libc` and `thiserror` dependencies).
 
-## 11. Protocol boundary: error taxonomy and handshake
+## 11. Protocol boundary contracts: error taxonomy and handshake
 
-The cross-process contracts are centralized in
-[`contracts/`](../contracts/README.md) (the single source of truth), and
-runtime behavior is validated against them. This section ties together the
-three contracts related to the protocol boundary.
+The cross-process contracts live in the Rust core, the single source of
+truth ([ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md)); the
+TypeScript side is generated from it, and runtime behavior is validated
+against it. The canonical modules and their derived artifacts:
 
-### 11.1 Error taxonomy (errors.json)
+- **Tool catalogue** (`src/packages/core/src/tools/catalogue.rs`): each tool's
+  name, English model-facing description, JSON-Schema `inputSchema`, and
+  policy metadata (risk / scope / permission / confirmation). `just gen`
+  runs the core's `emit_contract` example and `scripts/gen-ops.ts` to
+  produce `src/packages/shared/src/ops.gen.ts`: op names, policy metadata, and
+  a Zod arg validator per tool. The `BridgeCommand` request union is
+  inferred from those validators, so the compile-time types and the runtime
+  checks are the same artifact. CI regenerates and fails on any diff, so
+  the checked-in TS cannot drift from the Rust source. UI labels are
+  deliberately NOT part of the contract; they are extension UI copy
+  (`tools.<op>` keys in `src/apps/extension/src/locales/*.yml`).
+- **Error taxonomy** (`ERROR_SPECS` in `src/packages/core/src/error.rs`): the
+  stable cross-process `code`s with `category`, `retryable`, and the
+  user/model-facing `message`. `CallError::code()` maps the Rust tool-call
+  errors into the table (`cargo test` enforces membership), and
+  `src/packages/shared/src/errors.gen.ts` gives the extension the same codes.
+- **Capabilities** (`src/packages/core/src/tools/capabilities.rs`): the
+  negotiable groupings over the catalogue, emitted into
+  `src/packages/shared/src/protocol.gen.ts`. `cargo test` enforces that every
+  bridge-routed tool is covered by exactly one capability and each
+  capability's permissions equal the union of its tools' permissions.
+- **Protocol version** (`BRIDGE_PROTOCOL_VERSION` in
+  `src/packages/core/src/protocol.rs`): the internal bridge protocol integer,
+  also emitted into `protocol.gen.ts`.
+- **Identity** (`src/packages/core/src/identity.rs`): the native-messaging host
+  id and the pinned extension manifest key, emitted into
+  `src/packages/shared/src/identity.gen.ts` (the extension imports
+  `NATIVE_HOST_ID` for `connectNative`, `EXTENSION_MANIFEST_KEY` for the
+  built manifest, and `PINNED_EXTENSION_ID`, derived from the key, for its
+  startup self-check). `scripts/check-extension-id.ts` (`just
+  check-extension-id`, part of `just ci`) verifies the installers and the
+  built manifest against the same values.
+- **Wire envelopes** (`BridgeReq` / `BridgeResp` in
+  `src/packages/core/src/protocol.rs`): the Rust types ARE the envelope
+  contract. The extension enforces hand-written Zod validators
+  (`src/packages/shared/src/envelope.ts`), and the double-derivation gate
+  (`scripts/check-envelope-parity.ts`, `just check-envelope`) holds the
+  two structurally equivalent in CI: schemars derives a schema from the
+  Rust types (behind the gen-only `envelope-schema` feature, never in a
+  shipped binary), `z.toJSONSchema` derives one from the Zod side, and
+  both are normalized through the documented rules in
+  `src/packages/shared/src/json-schema-normalize.ts` before an exact diff.
+  The parsers deliberately differ in a few places (Option null-arms,
+  JS-safe integer bounds, the id's forward-compat string arm); each such
+  asymmetry is erased only when it exactly matches the approved form
+  recorded there, so any drift beyond the recorded decisions fails CI. No
+  generated schema is checked in anywhere.
+
+This section ties together the contracts related to the protocol boundary.
+
+### 11.1 Error taxonomy (ERROR_SPECS)
 
 At the tool-call boundary, Rust's typed error `CallError` (see section 4.1,
-`error.rs`) maps to the stable `code`s in
-[`contracts/errors.json`](../contracts/errors.json); `cargo test` validates
-the mapping against that file, and the extension side normalizes its own
-failures to the same set of `code`s. The `code` is for programmatic decisions
-(it carries `category` and `retryable`); what the model/user sees is the
-`message`. This way the "three connection-layer failures"
+`error.rs`) maps to the stable `code`s in `ERROR_SPECS` (same file);
+`cargo test` validates the mapping, and the extension side normalizes its
+own failures to the same set of `code`s (generated into `errors.gen.ts`).
+The `code` is for programmatic decisions (it carries `category` and
+`retryable`); what the model/user sees is the `message`. This way the
+"three connection-layer failures"
 (`NOT_CONNECTED` / `EXTENSION_NOT_READY` / `CONNECTION_LOST`) have one shared
 meaning across the three processes instead of each telling its own story.
 
-### 11.2 Capability / version handshake (capabilities.json + protocol-version.json)
+### 11.2 Capability / version handshake (capabilities.rs + BRIDGE_PROTOCOL_VERSION)
 
 On top of the internal bridge protocol of section 3.3, connection setup
 **intends** one more step beyond the `hello` secret authentication of section
 3.3: capability + version negotiation.
 
 - The native host / extension reports the internal protocol version it
-  supports per [`protocol-version.json`](../contracts/protocol-version.json)
-  (currently `1`) and its available capability set (see
-  [`capabilities.json`](../contracts/capabilities.json); capabilities are
-  conceptually derived from the `permission`/`scope` notions in `tools.json`).
+  supports (`BRIDGE_PROTOCOL_VERSION`, currently `1`) and its available
+  capability set (see `src/packages/core/src/tools/capabilities.rs`; capabilities
+  are conceptually derived from the catalogue's `permission`/`scope`
+  fields).
 - Incompatible version -> **fail fast** with `PROTOCOL_MISMATCH` (see
-  errors.json) and a clear message, rather than accepting the connection and
-  blowing up late on some `tools/call` with "unknown op".
+  `ERROR_SPECS`) and a clear message, rather than accepting the connection
+  and blowing up late on some `tools/call` with "unknown op".
 - A tool whose required capability was not advertised -> reject that tool
   call up front instead of dispatching an op the extension cannot handle.
 
 Note the three distinct "versions": the MCP JSON-RPC version `2025-06-18`
 (section 3.2 / [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md)),
-the internal bridge protocol version (an integer, protocol-version.json), and
-the extension release version (Cargo-sourced). They are all different.
+the internal bridge protocol version (an integer,
+`BRIDGE_PROTOCOL_VERSION`), and the extension release version
+(Cargo-sourced). They are all different.
 
 > To troubleshoot these two links at runtime (whether the connection is
 > reachable; whether the lock file/port/manifest are in place), use the
