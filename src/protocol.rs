@@ -443,6 +443,22 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
     }
 }
 
+/// The [`EnclaveControl`] `type` tag carried by `frame`, or `None` for
+/// everything else. The native host's socket->stdout pump uses this to drop
+/// enclave control frames arriving FROM the MCP server: the ceremony runs
+/// strictly between the extension and the host itself (a challenge originates
+/// only in the extension, a proof/error only in the host), so the server leg
+/// has no legitimate reason to ever carry one. Zero trust applies to our own
+/// server too — an attested-but-misbehaving server must not be able to inject
+/// an `enclave_error` that burns the extension's outstanding nonce or
+/// provokes a false fail-closed "compromised" mark (ADR-0021).
+pub fn enclave_control_type(frame: &Value) -> Option<&str> {
+    match frame.get("type").and_then(Value::as_str) {
+        tag @ Some("enclave_challenge" | "enclave_proof" | "enclave_error") => tag,
+        _ => None,
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Utilities
 // ----------------------------------------------------------------------------
@@ -772,6 +788,33 @@ mod tests {
             classify_nm_frame(&json!({ "type": "enclave_error", "reason": "r" })),
             FrameDisposition::Drop("enclave_error")
         ));
+    }
+
+    #[test]
+    fn enclave_control_type_matches_exactly_the_three_control_tags() {
+        assert_eq!(
+            enclave_control_type(&json!({ "type": "enclave_challenge", "nonce": "n" })),
+            Some("enclave_challenge")
+        );
+        assert_eq!(
+            enclave_control_type(&json!({ "type": "enclave_proof" })),
+            Some("enclave_proof")
+        );
+        assert_eq!(
+            enclave_control_type(&json!({ "type": "enclave_error", "reason": "r" })),
+            Some("enclave_error")
+        );
+        // Bridge traffic and near-misses pass through untouched.
+        assert_eq!(
+            enclave_control_type(&json!({ "id": 1, "op": "tab_list" })),
+            None
+        );
+        assert_eq!(
+            enclave_control_type(&json!({ "type": "enclave_other" })),
+            None
+        );
+        assert_eq!(enclave_control_type(&json!({ "type": 5 })), None);
+        assert_eq!(enclave_control_type(&json!("enclave_error")), None);
     }
 }
 
