@@ -99,16 +99,57 @@ eval 可能返回任意类型,需要 `serializeResult` 安全处理:
 
 关掉 `confirmPageEval` 等于回到"任意 JS 无提示执行"的攻击面——这一点在开关警告与本节均已标注,由用户自行权衡。
 
+## Update (2026-07-16): page_eval excluded from the same-origin grace window (fail-safe default)
+
+This addendum is written in ASCII English (the surrounding ADR text is
+historical and left untouched).
+
+The original decision (see "方案 B" above and the risk note "免确认窗口对 eval
+的风险高于 click") kept a same-origin 60s grace window for page_eval, keyed
+`origin:eval`: after one approval, any further eval on that origin within the
+window ran with no prompt. Under the zero-trust principle in AGENTS.md
+("never weaken a check for convenience; a silent window is a relaxation") this
+silent-eval window is not acceptable as a default. The two eval calls in a
+window are unrelated (the risk note itself gives `document.title` vs
+`fetch('/transfer', ...)` as the example), so a single approval must not cover
+a later, different payload.
+
+Decision: **page_eval is excluded from the grace window entirely. Every
+page_eval call reconfirms** (unless the user has turned confirmation off via
+`confirmPageEval=false`, which is the separate, explicit opt-out documented in
+the 2026-07-15 update above). The grace window (`confirmGraceMs`, default
+60000ms) is retained for the lower-risk click/submit confirmations, where the
+repeated action is at least similar and observable in the UI. No new knob is
+added; `confirmGraceMs` simply no longer applies to eval.
+
+What each remaining setting relaxes, and the residual the user accepts:
+
+| Setting | Default | Relaxes | Residual if changed |
+|---------|---------|---------|---------------------|
+| `confirmPageEval` | `true` | Off = page_eval runs with no prompt at all | Arbitrary JS executes silently; user owns this by opting in (Options warning is explicit) |
+| `confirmGraceMs` | `60000` | Applies to click/submit only; a same-origin re-click within the window does not re-prompt | A second same-origin click/submit within the window is silent. Does NOT affect eval |
+
+Code: `extension/src/content/toast.ts` (`confirmWithEvalToast` no longer reads
+or writes `lastConfirmed`), `extension/src/background/backends/cdp.ts`
+(`pageEval` confirm block drops the grace check), and
+`extension/src/content/eval.ts` / `extension/src/shared/settings.ts` comments.
+
+This is the explicit, reviewed relaxation-of-a-default record the zero-trust
+rule requires. Superseding only the eval portion of the grace-window decision;
+the rest of ADR-0008 stands.
+
 ## 后果
 
 ### 正面
 - **能力补全**:复杂交互(CustomEvent、SPA 路由、读 JS 变量、canvas)能搞定
 - **脱敏防泄露**:返回值离开页面前就处理,token 不走 IPC 链路
 - **复用现有机制**:Toast + lastConfirmed + storage 开关,代码增量可控
+  (see Update 2026-07-16: eval no longer uses lastConfirmed / the grace window)
 
 ### 负面
 - **攻击面增大**:任意 JS 执行能力引入,即使有确认,用户误批一次就泄
 - **免确认窗口风险**:如上所述,比 click 场景高
+  (superseded by Update 2026-07-16: eval is excluded from the grace window and always reconfirms; this risk no longer applies to eval)
 - **脱敏可能误伤**:长数字 ID、正常的长 hex(如哈希值)会被遮罩,用户可关开关
 - **无执行超时**:死循环 eval 会挂住工具调用(120s session 超时会兜底,但页面卡住)
 
