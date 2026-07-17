@@ -128,8 +128,11 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   only to the per-action confirmations on high-risk ops. Closing this needs the
   extension to verify the host it is paired with (trust-on-first-use
   host-identity pairing in the extension settings), which is tracked separately.
-- The `page_eval` **60s grace window** lets *unrelated* same-origin code run
-  without re-prompting (see [ADR-0008](../adr/0008-page-eval-confirmation-channel.md)).
+- The **high-risk click grace window** lets *unrelated* same-origin code run
+  without re-prompting: after one approved submit or link click, the same origin
+  and action kind skip the toast for 60s (see
+  [ADR-0006](../adr/0006-toast-confirmation-for-high-risk.md)). `page_eval` is not
+  in this window; it reconfirms on every call.
 - Masking is heuristic — it can miss a novel secret format or over-mask benign
   data.
 - `page_snapshot_precise` briefly attaches the debugger (infobar flash).
