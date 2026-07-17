@@ -1,0 +1,11 @@
+chromium-bridge
+Copyright Vivswan Shah (https://github.com/Vivswan)
+
+This project incorporates code from browser-bridge
+(https://github.com/whg517/browser-bridge), licensed under the Apache
+License, Version 2.0; a copy is provided in LICENSE-APACHE. The project
+was forked from upstream commit a06387f2614fbe128d5c3882d2b43b01071c569e;
+the pre-fork commits remain in this repository's history.
+
+The project as a whole is distributed under the Individual and Small
+Organization License 1.0.0; see LICENSE.
