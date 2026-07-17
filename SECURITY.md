@@ -203,6 +203,15 @@ The project renamed from the upstream `browser-bridge` to `chromium-bridge`
 An install registered under the old host id stops working until re-installed;
 that is a naming change, not a security regression.
 
+Upgrading from a pre-rebrand install: the new tooling (installer, uninstaller,
+`revoke`) only touches new-labeled artifacts, so it will not clean up an old
+`com.browser_bridge.host.json` manifest, the old `browser-bridge` runtime
+directory, or an Enclave key under the old
+`com.browser-bridge.enclave.signing.v1` label. Those leftovers grant no
+capability (the challenge domains differ, an old pin fails closed, and the new
+host reports `not_enrolled`), but to remove them run the OLD uninstaller and
+`browser-bridge revoke` with the old binary before switching over.
+
 ## Security-relevant changes (review bar)
 
 A change is **security-relevant** - and must carry the
