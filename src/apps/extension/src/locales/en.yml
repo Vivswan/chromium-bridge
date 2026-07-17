@@ -19,9 +19,6 @@ common:
 lang:
   label: "Display language"
   auto: "Match browser"
-  en: "English"
-  zh_CN: "Simplified Chinese"
-  zh_TW: "Traditional Chinese"
 
 popup:
   status_connected: "Connected to bridge"

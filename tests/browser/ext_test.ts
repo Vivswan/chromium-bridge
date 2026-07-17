@@ -161,6 +161,90 @@ async function main(): Promise<void> {
         `connectNative=${apis.hasConnectNative}`,
     );
 
+    // ---- i18n: English default, three locales, native-name picker ----------
+    // CJK is written as \u escapes so the check-cjk gate's allowlist stays
+    // limited to the locale bundles and the native-names module.
+    const NATIVE = {
+      zh_CN: "\u7B80\u4F53\u4E2D\u6587", // jian ti zhong wen
+      zh_TW: "\u7E41\u9AD4\u4E2D\u6587", // fan ti zhong wen
+    };
+    const LANG_LABEL = {
+      en: "Display language",
+      zh_CN: "\u663E\u793A\u8BED\u8A00",
+      zh_TW: "\u986F\u793A\u8A9E\u8A00",
+    };
+
+    const page = await browser.newPage();
+    await page.goto(`chrome-extension://${extId}/options.html`, { waitUntil: "networkidle0" });
+
+    const bodyText = async (): Promise<string> =>
+      await page.evaluate(() => document.body.innerText);
+
+    // Fresh throwaway profile, nothing stored: the UI must come up in
+    // English, whatever the machine's locale is.
+    check((await bodyText()).includes(LANG_LABEL.en), "fresh profile renders English");
+    check(
+      (await page.evaluate(() => document.documentElement.lang)) === "en",
+      "fresh profile html lang is en",
+    );
+
+    // The picker names each language in that language, in every locale.
+    await page.click('[aria-labelledby="lang-label"]');
+    await page.waitForSelector('[role="option"]');
+    const optionText = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[role="option"]'), (o) => o.textContent ?? "").join(
+        "|",
+      ),
+    );
+    check(optionText.includes("English"), "picker lists English natively");
+    check(optionText.includes(NATIVE.zh_CN), "picker lists Simplified Chinese natively");
+    check(optionText.includes(NATIVE.zh_TW), "picker lists Traditional Chinese natively");
+    await page.keyboard.press("Escape");
+
+    // Each locale renders and the swap is reactive (storage.onChanged).
+    for (const locale of ["zh_CN", "zh_TW"] as const) {
+      await page.evaluate((l) => chrome.storage.local.set({ uiLanguage: l }), locale);
+      await page
+        .waitForFunction(
+          (want: string) => document.body.innerText.includes(want),
+          { timeout: 5000 },
+          LANG_LABEL[locale],
+        )
+        .catch(() => {});
+      check((await bodyText()).includes(LANG_LABEL[locale]), `${locale} locale renders`);
+      // Native names stay untranslated under this locale too.
+      await page.click('[aria-labelledby="lang-label"]');
+      await page.waitForSelector('[role="option"]');
+      const opts = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('[role="option"]'), (o) => o.textContent ?? "").join(
+          "|",
+        ),
+      );
+      check(
+        opts.includes("English") && opts.includes(NATIVE.zh_CN) && opts.includes(NATIVE.zh_TW),
+        `picker stays native-named under ${locale}`,
+      );
+      await page.keyboard.press("Escape");
+    }
+
+    // No CJK on the English surface: the options page must not leak zh
+    // strings (the tool catalogue labels once did).
+    await page.evaluate(() => chrome.storage.local.set({ uiLanguage: "en" }));
+    await page
+      .waitForFunction(
+        (want: string) => document.body.innerText.includes(want),
+        { timeout: 5000 },
+        LANG_LABEL.en,
+      )
+      .catch(() => {});
+    const enText = await bodyText();
+    // Keep in sync with the authoritative gate in scripts/check-cjk.ts.
+    const cjk = enText.match(
+      /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\u3000-\u303F\u3200-\u33FF\uFE30-\uFE4F\uFF00-\uFFEF]/u,
+    );
+    check(cjk === null, `English surface carries no CJK${cjk ? ` (found ${cjk[0]})` : ""}`);
+    await page.close();
+
     console.log("\n✓ Extension loads and service worker boots with expected APIs.");
     console.log("  Native-messaging bridge requires interactive verification (see README).");
   } finally {

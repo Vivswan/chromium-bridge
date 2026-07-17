@@ -167,11 +167,19 @@ at startup under a Web Lock.
 
 Strings move into a runtime bundle in English, Simplified Chinese, and
 Traditional Chinese (`src/locales/*.yml`, compiled by `@wxt-dev/i18n`). A
-`uiLanguage` setting chooses the display language; `auto` resolves from the
-browser (`zh` to `zh_CN`, `zh-Hant`/`TW`/`HK`/`MO` to `zh_TW`). The swap is
-sequence-guarded, and each key falls back to English if a locale lacks it. A
-CI test fails if any key is missing from one of the three locales or if a
-`$n` placeholder drifts between them.
+`uiLanguage` setting chooses the display language and defaults to `en`:
+English is the canonical language on every surface, and a Chinese UI is an
+explicit user choice, never inherited from the environment. The opt-in `auto`
+value resolves from the browser (`zh` to `zh_CN`, `zh-Hant`/`TW`/`HK`/`MO` to
+`zh_TW`, anything else to `en`). The language picker renders each option in
+its own language (the native names in `src/lib/native-language-names.ts`),
+never translated into the active locale, so a user facing a UI they cannot
+read can always find the way back. The swap
+is sequence-guarded, and each key falls back to English if a locale lacks it.
+A CI test fails if any key is missing from one of the three locales or if a
+`$n` placeholder drifts between them, and the `check-cjk` gate
+(`scripts/check-cjk.ts`) fails CI on any CJK text outside the zh locale
+files, translated docs, and the native-name constants.
 
 ## Alternatives considered
 

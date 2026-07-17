@@ -42,8 +42,9 @@ describe("DEFAULTS", () => {
     // Periodic host re-verification is opt-in; 0 keeps the session-granularity
     // default (verify at pairing and on demand only).
     expect(DEFAULTS.hostReverifyMs).toBe(0);
-    // Display language defaults to matching the browser.
-    expect(DEFAULTS.uiLanguage).toBe("auto");
+    // Display language defaults to English on every surface; browser-locale
+    // matching ("auto") and Chinese are explicit choices.
+    expect(DEFAULTS.uiLanguage).toBe("en");
   });
 });
 

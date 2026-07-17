@@ -7,14 +7,8 @@
 # - src/apps/extension/: converted with the Phase 7 extension rehaul.
 # - docs/ and README.md: Chinese-language docs owned by the translation
 #   pass; historical ADRs keep their original text. Cleaned in Phase 11.
-# - contracts/tools.json: the tool descriptions still carry em-dashes, and
-#   they are byte-verified against the Rust catalogue (matches_contract), so
-#   converting them is a coordinated contract + src/packages/core change - it rides
-#   with the deny_unknown_fields follow-up, not Phase 2. The rest of
-#   contracts/ is checked.
 # - CHANGELOG.md: generated release history, never edited by hand.
 src/apps/extension/
 docs/
-contracts/tools.json
 CHANGELOG.md
 README.md
