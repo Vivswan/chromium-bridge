@@ -25,10 +25,13 @@ export default defineConfig({
     description:
       "Let an MCP client (Claude Code, Codex, ...) operate your real Chrome - your tabs and logins. You approve new sites and risky actions.",
     key: identity.extensionManifestKey,
-    // storage.local.setAccessLevel (the #32 trust-state isolation) needs a
-    // current Chrome; the API throws on older versions and the enrollment
-    // gate then fails closed (see lib/background/trusted-storage.ts).
-    minimum_chrome_version: "130",
+    // The extension relies on modern MV3 storage + scripting behavior; 116 is
+    // the floor the pre-rehaul build targeted and remains the supported
+    // minimum. The #32 trust-state isolation uses storage.local.setAccessLevel
+    // (available since Chrome 102); if a browser somehow lacks it the call
+    // throws and the enrollment gate fails closed rather than degrading (see
+    // lib/background/trusted-storage.ts), so the floor need not encode it.
+    minimum_chrome_version: "116",
     permissions: [...MANIFEST_PERMISSIONS],
     host_permissions: [],
     optional_host_permissions: ["<all_urls>"],
