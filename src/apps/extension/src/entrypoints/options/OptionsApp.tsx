@@ -243,7 +243,7 @@ export function OptionsApp() {
                 />
                 <div className="min-w-0">
                   <div className="font-mono text-xs font-semibold">{tool.op}</div>
-                  <div className="text-[11px] text-faint">{tool.desc}</div>
+                  <div className="text-[11px] text-faint">{t(`tools.${tool.op}`)}</div>
                 </div>
               </div>
             );
