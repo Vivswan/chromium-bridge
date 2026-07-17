@@ -1,12 +1,24 @@
-# install.ps1 — build browser-bridge and register the Chrome native messaging
-# host for the current Windows user.
+# install.ps1 - build browser-bridge and register the native messaging host for
+# any Chromium-based browser (current Windows user, HKCU).
 
 [CmdletBinding()]
 param(
     [ValidatePattern('^[a-p]{32}$')]
     [string]$ExtensionId = 'mkjjlmjbcljpcfkfadfmhblmmddkdihf',
+    # Which browsers to register the native host for: "auto" (every known
+    # browser present in the registry; the default), "all" (every known
+    # browser), "both" (chrome,chromium), or a comma-separated list of keys:
+    # chrome,chromium,brave,edge,vivaldi,opera.
+    [string]$Browser = 'auto',
+    # Escape hatch: register under these exact NativeMessagingHosts registry
+    # keys. Targets any Chromium browser not in the table and overrides
+    # -Browser. Pass an array for more than one, e.g. -NmRegistry 'keyA','keyB'
+    # (a single "keyA,keyB" string is one literal key, not split). Re-pass the
+    # same keys to -Uninstall to remove these registrations.
+    [string[]]$NmRegistry,
     # Remove exactly what this installer places (binary, native-host manifest,
-    # HKCU registry key, run.lock) and leave Chrome and the extension untouched.
+    # HKCU registry keys for every known browser, run.lock) and leave the browser
+    # and extension untouched. Re-pass any -NmRegistry key to clear it too.
     [switch]$Uninstall
 )
 
@@ -27,16 +39,60 @@ $HostName = 'com.browser_bridge.host'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'browser-bridge'
 $BinaryName = 'browser-bridge.exe'
 
+# Registry root each Chromium browser creates for the current user. Every build
+# reads an identical manifest; only this vendor key differs. Single source of
+# truth for the browsers we know by name; -NmRegistry targets any other.
+$BrowserRoots = [ordered]@{
+    chrome   = 'HKCU:\Software\Google\Chrome'
+    chromium = 'HKCU:\Software\Chromium'
+    brave    = 'HKCU:\Software\BraveSoftware\Brave-Browser'
+    edge     = 'HKCU:\Software\Microsoft\Edge'
+    vivaldi  = 'HKCU:\Software\Vivaldi'
+    opera    = 'HKCU:\Software\Opera Software'
+}
+
+function Get-NativeHostKey {
+    param([string]$Browser)
+    "$($BrowserRoots[$Browser])\NativeMessagingHosts\$HostName"
+}
+
+function Resolve-BrowserSelection {
+    param([string]$Selector)
+    switch ($Selector) {
+        'all'  { return @($BrowserRoots.Keys) }
+        'both' { return @('chrome', 'chromium') }
+        'auto' {
+            $found = @($BrowserRoots.Keys | Where-Object { Test-Path -LiteralPath $BrowserRoots[$_] })
+            if ($found.Count -gt 0) { return $found }
+            Write-Host '[install] no Chromium browser detected in registry; defaulting to Google Chrome'
+            return @('chrome')
+        }
+        default {
+            $keys = @($Selector -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+            if ($keys.Count -eq 0) { throw "-Browser selected no known browser: '$Selector'" }
+            foreach ($key in $keys) {
+                if (-not $BrowserRoots.Contains($key)) { throw "unknown -Browser key: '$key'" }
+            }
+            return $keys
+        }
+    }
+}
+
 if ($Uninstall) {
     Write-Host '[uninstall] removing browser-bridge artifacts'
 
-    # Registry key this installer created (mirrors the Set-Item below).
-    $registryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
-    if (Test-Path -LiteralPath $registryPath) {
-        Remove-Item -LiteralPath $registryPath -Force
-        Write-Host "[uninstall] removed registry key: $registryPath"
-    } else {
-        Write-Host "[uninstall] not present: $registryPath"
+    # Uninstall tears down the shared binary + manifest that every registration
+    # points at, so remove every known browser's key regardless of -Browser,
+    # plus any explicit -NmRegistry keys.
+    $uninstallKeys = @($BrowserRoots.Keys | ForEach-Object { Get-NativeHostKey $_ })
+    if ($NmRegistry) { $uninstallKeys += $NmRegistry }
+    foreach ($registryPath in $uninstallKeys) {
+        if (Test-Path -LiteralPath $registryPath) {
+            Remove-Item -LiteralPath $registryPath -Force
+            Write-Host "[uninstall] removed registry key: $registryPath"
+        } else {
+            Write-Host "[uninstall] not present: $registryPath"
+        }
     }
 
     # Files placed under $InstallDir: the manifest, the binary, and the run.lock
@@ -63,9 +119,17 @@ if ($Uninstall) {
         Write-Host "[uninstall] removed empty dir: $InstallDir"
     }
 
-    Write-Host '[uninstall] done. Chrome and the loaded extension were left untouched;'
+    Write-Host '[uninstall] done. Your browser and the loaded extension were left untouched;'
     Write-Host '[uninstall] remove the unpacked extension yourself via chrome://extensions if desired.'
     return
+}
+
+# Resolve install targets before any build or filesystem change, so an invalid
+# -Browser fails fast instead of leaving a half-installed binary and manifest.
+$targetKeys = if ($NmRegistry) {
+    @($NmRegistry)
+} else {
+    @(Resolve-BrowserSelection $Browser | ForEach-Object { Get-NativeHostKey $_ })
 }
 
 function Find-Cargo {
@@ -128,11 +192,12 @@ $manifestJson = $manifest | ConvertTo-Json -Depth 4
     [System.Text.UTF8Encoding]::new($false)
 )
 
-$registryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
-New-Item -Path $registryPath -Force | Out-Null
-Set-Item -Path $registryPath -Value $manifestPath
-Write-Host "[install] native host registered at $registryPath"
 Write-Host "[install] manifest written to $manifestPath"
+foreach ($registryPath in $targetKeys) {
+    New-Item -Path $registryPath -Force | Out-Null
+    Set-Item -Path $registryPath -Value $manifestPath
+    Write-Host "[install] native host registered at $registryPath"
+}
 
 # Backslashes must be doubled inside JSON/TOML double-quoted strings.
 $escapedBinary = $installedBinary -replace '\\', '\\'
@@ -153,4 +218,4 @@ Write-Host '   - Codex (%USERPROFILE%\.codex\config.toml):'
 Write-Host '       [mcp_servers.browser-bridge]'
 Write-Host "       command = `"$escapedBinary`""
 Write-Host '       args = []'
-Write-Host '3. Restart Chrome, then ask your MCP client to list browser tabs.'
+Write-Host '3. Restart your browser, then ask your MCP client to list browser tabs.'
