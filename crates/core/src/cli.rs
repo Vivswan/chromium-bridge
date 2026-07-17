@@ -16,10 +16,39 @@ pub enum Command {
     Revoke,
     /// `enclave-status`: read-only enrollment state report.
     EnclaveStatus,
+    /// `pair-client ...`: add or replace a trusted MCP-client harness in the
+    /// allowlist (ADR-0024). Flags are parsed by [`pair_client_args`] in the
+    /// handler, so a rich error can be reported instead of a bare help dump.
+    PairClient,
+    /// `revoke-client --name <label>`: remove a trusted client.
+    RevokeClient,
+    /// `list-clients`: print the trusted-client allowlist.
+    ListClients,
     /// `-h` / `--help`.
     Help,
     /// Anything unrecognized: print help, exit non-zero.
     Unknown,
+}
+
+/// The parsed arguments of `pair-client`. The anchor is exactly one of an
+/// explicit hash, an explicit Team ID, or a measurement of this invocation's
+/// parent process (`--this-parent`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct PairClientArgs {
+    pub name: String,
+    pub anchor: AnchorSpec,
+}
+
+/// How `pair-client` was told to identify the client to trust.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AnchorSpec {
+    /// Pin an explicit attested image hash (lowercase hex).
+    Hash(String),
+    /// Pin an explicit macOS signing Team ID.
+    TeamId(String),
+    /// Measure this invocation's parent process and pin its hash. Lets a user
+    /// enroll the client they launched `pair-client` from.
+    ThisParent,
 }
 
 /// Chrome launches a Windows native-messaging host directly and appends the
@@ -53,8 +82,97 @@ pub fn parse(args: &[String]) -> Command {
         Some("pair") if rest.len() == 2 && rest[1] == "--reset" => Command::Pair { reset: true },
         Some("revoke") if rest.len() == 1 => Command::Revoke,
         Some("enclave-status") if rest.len() == 1 => Command::EnclaveStatus,
+        // The client-allowlist subcommands take their own flags, parsed by the
+        // handler (pair_client_args) so a bad combination reports a clear error
+        // rather than a bare help dump.
+        Some("pair-client") => Command::PairClient,
+        Some("revoke-client") => Command::RevokeClient,
+        Some("list-clients") if rest.len() == 1 => Command::ListClients,
         Some(_) => Command::Unknown,
     }
+}
+
+/// Parse the flags of `pair-client`: a required `--name <label>` and exactly one
+/// anchor source (`--hash <hex>`, `--team-id <id>`, or `--this-parent`).
+/// Returns a clear error string on any missing, repeated, or conflicting flag
+/// (the handler prints it and exits non-zero -- fail loud, never guess).
+pub fn pair_client_args(args: &[String]) -> Result<PairClientArgs, String> {
+    let mut name: Option<String> = None;
+    let mut hash: Option<String> = None;
+    let mut team_id: Option<String> = None;
+    let mut this_parent = false;
+
+    // Skip argv[0] (binary) and argv[1] ("pair-client").
+    let mut it = args.iter().skip(2);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--name" => {
+                if name.is_some() {
+                    return Err("--name given more than once".into());
+                }
+                name = Some(take_value(&mut it, "--name")?);
+            }
+            "--hash" => {
+                if hash.is_some() {
+                    return Err("--hash given more than once".into());
+                }
+                hash = Some(take_value(&mut it, "--hash")?);
+            }
+            "--team-id" => {
+                if team_id.is_some() {
+                    return Err("--team-id given more than once".into());
+                }
+                team_id = Some(take_value(&mut it, "--team-id")?);
+            }
+            "--this-parent" => this_parent = true,
+            other => return Err(format!("unexpected argument {other:?}")),
+        }
+    }
+
+    let name = name.ok_or("pair-client requires --name <label>")?;
+    let anchor = match (hash, team_id, this_parent) {
+        (Some(h), None, false) => AnchorSpec::Hash(h),
+        (None, Some(t), false) => AnchorSpec::TeamId(t),
+        (None, None, true) => AnchorSpec::ThisParent,
+        (None, None, false) => {
+            return Err(
+                "pair-client needs one of --hash <hex>, --team-id <id>, or --this-parent".into(),
+            )
+        }
+        _ => return Err("pair-client accepts only ONE of --hash, --team-id, --this-parent".into()),
+    };
+    Ok(PairClientArgs { name, anchor })
+}
+
+/// The `--name <label>` of `revoke-client`. Same strictness as
+/// [`pair_client_args`].
+pub fn revoke_client_name(args: &[String]) -> Result<String, String> {
+    let mut name: Option<String> = None;
+    let mut it = args.iter().skip(2);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--name" => {
+                if name.is_some() {
+                    return Err("--name given more than once".into());
+                }
+                name = Some(take_value(&mut it, "--name")?);
+            }
+            other => return Err(format!("unexpected argument {other:?}")),
+        }
+    }
+    name.ok_or_else(|| "revoke-client requires --name <label>".into())
+}
+
+/// Pull the value following a flag, rejecting a missing value or a following
+/// flag (`--x --y`) as an error rather than swallowing the next flag.
+fn take_value<'a, I: Iterator<Item = &'a String>>(
+    it: &mut I,
+    flag: &str,
+) -> Result<String, String> {
+    it.next()
+        .filter(|v| !v.starts_with("--"))
+        .cloned()
+        .ok_or_else(|| format!("{flag} requires a value"))
 }
 
 /// Extract the `--label <name>` argument of `--native-host` mode: the browser
@@ -100,6 +218,9 @@ pub fn print_help() {
          chromium-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
          chromium-bridge revoke         Delete the enrollment key (fails closed)\n    \
          chromium-bridge enclave-status Print the enrollment state\n    \
+         chromium-bridge pair-client --name <label> (--this-parent | --hash <hex> | --team-id <id>)\n                                Trust an MCP-client harness (ADR-0024)\n    \
+         chromium-bridge revoke-client --name <label>   Untrust a client\n    \
+         chromium-bridge list-clients   Print the trusted-client allowlist\n    \
          chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, …) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \

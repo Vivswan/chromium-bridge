@@ -5,6 +5,8 @@
 - Amends: [ADR-0002](0002-three-process-architecture-localhost-tcp.md)
   (the three-process architecture stands; only the bridge transport and
   authentication described there are replaced)
+- Extended by: [ADR-0024](0024-multi-client-attested-pairing-and-broker.md)
+  (harness-admission boundary + the ref-counted broker)
 
 ## Context
 

@@ -5,6 +5,9 @@ members = ["crates/core", "crates/host"]
 # the host binary. Future members (e.g. a Tauri app) must be added here only
 # by an explicit decision, so `cargo test` stays the gate for the core.
 default-members = ["crates/core", "crates/host"]
+# `fuzz/` is its own (nightly + libFuzzer) workspace; keep it out of the main
+# build/test graph so a stable `cargo` build never tries to compile it.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

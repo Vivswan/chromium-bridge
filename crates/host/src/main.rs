@@ -10,7 +10,7 @@
 //!   subcommands (health report and the enrollment ceremony, ADR-0021).
 
 use chromium_bridge_core::cli::{parse, print_help, Command};
-use chromium_bridge_core::{doctor, enclave, mcp_server, native_host};
+use chromium_bridge_core::{allowlist, doctor, enclave, mcp_server, native_host};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -24,6 +24,9 @@ fn main() {
         Command::Pair { reset } => enclave::run_pair(reset),
         Command::Revoke => enclave::run_revoke(),
         Command::EnclaveStatus => enclave::run_status(),
+        Command::PairClient => allowlist::run_pair_client(&args),
+        Command::RevokeClient => allowlist::run_revoke_client(&args),
+        Command::ListClients => allowlist::run_list_clients(),
         Command::McpServer => mcp_server::run(),
         Command::Unknown => {
             print_help();

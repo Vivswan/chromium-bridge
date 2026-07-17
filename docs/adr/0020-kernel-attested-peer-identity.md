@@ -4,6 +4,8 @@
 - Date: 2026-07-16
 - Extends: [ADR-0019](0019-authenticated-ipc.md) (adds a check; the UDS +
   peer-UID + HMAC design there stands unchanged)
+- Extended by: [ADR-0024](0024-multi-client-attested-pairing-and-broker.md)
+  (harness-admission boundary + the ref-counted broker)
 
 ## Context
 

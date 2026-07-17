@@ -30,8 +30,8 @@
 //!   cross-process [`RuntimeMutex`], bind-and-publish).
 //! - [`peercred`]: kernel-reported peer credentials (uid/pid) and process
 //!   liveness.
-//! - [`attest`]: executable-identity attestation policy (self vs peer vs pid)
-//!   and the attested-terminate takeover path.
+//! - [`attest`]: executable-identity attestation policy (self vs peer vs pid),
+//!   plus harness (parent) attestation for the trusted-client allowlist.
 //! - [`handshake`]: the HMAC challenge-response and browser-label validation.
 //! - [`rand`]: OS-CSPRNG secrets and hex encoding.
 //! - [`platform`]: the per-OS mechanisms (Linux `/proc` hashing + SO_PEERCRED,
@@ -48,8 +48,23 @@ mod platform;
 mod rand;
 mod socket;
 
+/// A harness's kernel-attested code identity, the input to the trusted-client
+/// allowlist decision ([`crate::allowlist`]). `hash` is the attested image
+/// hash (macOS `cdhash`, Linux `/proc/<pid>/exe` SHA256), always present.
+/// `team_id` is the macOS signing Team ID, present only for a Team-ID-signed
+/// image (always `None` on Linux and for ad-hoc / unsigned builds). Defined
+/// here (not in the Unix-only `attest` module) so it is nameable on every
+/// platform, including the Windows build where no attestation exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIdentity {
+    pub hash: String,
+    pub team_id: Option<String>,
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use attest::{attest_and_terminate, attest_peer, attest_pid, ensure_own_identity};
+pub use attest::attest_parent;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use attest::{attest_peer, attest_pid, ensure_own_identity};
 pub use handshake::{client_handshake, server_handshake, validate_label};
 pub use lockfile::{listen_and_publish, LockFile, PublishOutcome};
 #[cfg(unix)]
@@ -63,5 +78,5 @@ pub use peercred::pid_is_alive;
 pub use platform::windows::windows_process;
 pub use socket::{connect, BridgeListener, BridgeStream};
 
-pub(crate) use lockfile::runtime_dir;
+pub(crate) use lockfile::{read_capped, runtime_dir, with_runtime_lock, write_private_atomic};
 pub(crate) use rand::{generate_secret, hex_encode};

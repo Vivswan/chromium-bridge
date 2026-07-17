@@ -16,6 +16,17 @@ thiserror.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 
+# `loom` model-checks the broker's ref-count concurrency (crates/core/src/broker.rs).
+# It is only built under `--cfg loom`, which swaps the ref-count's Mutex/Condvar
+# for loom's instrumented versions; a normal build never pulls it in.
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+[lints.rust]
+# `loom` is an explicit, self-set cfg (see the loom dev-dependency above), not a
+# typo; teach check-cfg about it so a normal build does not warn on the gates.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
 security-framework.workspace = true
