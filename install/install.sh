@@ -344,6 +344,11 @@ fi
 # ---- install binary -------------------------------------------------------
 
 mkdir -p "$INSTALL_DIR"
+# Owner-only, enforced rather than left to umask: this dir holds the binary and
+# run-host.sh wrapper the browser launches, so a group- or world-writable mode
+# would let another account swap them out. Matches ensure_private_dir (0700) in
+# src/ipc.rs. The browser runs as this same user, so it can still traverse here.
+chmod 0700 "$INSTALL_DIR"
 TMP_BIN="$INSTALL_DIR/$BINARY_NAME.tmp.$$"
 cp "$BIN_SRC" "$TMP_BIN"
 chmod 0755 "$TMP_BIN"
