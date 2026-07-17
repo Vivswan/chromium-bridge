@@ -1,6 +1,6 @@
 # Security Policy
 
-chromium-bridge drives a **real, logged-in Chrome** on the user's machine — it
+chromium-bridge drives a **real, logged-in Chrome** on the user's machine - it
 can read page content, cookies (including httpOnly), and web storage, and can
 execute JavaScript in pages. Security is a first-class concern, not an
 afterthought. This document covers how to report issues and the review bar for
@@ -33,27 +33,27 @@ socket accepting an unauthenticated peer; privilege escalation via the native
 messaging host.
 
 Out of scope: anything requiring a pre-compromised machine or a malicious MCP
-client the user themselves configured (the MCP client is trusted by design —
+client the user themselves configured (the MCP client is trusted by design -
 see the [threat model](docs/security/threat-model.md)).
 
 ## The security model (summary)
 
 See [docs/security/](docs/security/) for the full picture:
 
-- [threat-model.md](docs/security/threat-model.md) — actors, assets, what's
+- [threat-model.md](docs/security/threat-model.md) - actors, assets, what's
   trusted vs not.
-- [trust-boundaries.md](docs/security/trust-boundaries.md) — the process/protocol
+- [trust-boundaries.md](docs/security/trust-boundaries.md) - the process/protocol
   boundaries and how each is enforced.
-- [tool-risk-matrix.md](docs/security/tool-risk-matrix.md) — every tool's blast
+- [tool-risk-matrix.md](docs/security/tool-risk-matrix.md) - every tool's blast
   radius and protections.
 
 Key invariants:
 
-- **stdout is protocol** — the binary never prints diagnostics there; only
+- **stdout is protocol** - the binary never prints diagnostics there; only
   framed/NDJSON messages (a stray write corrupts the stream).
-- **Read-only credential access** — cookies/storage can be read (masked), never
+- **Read-only credential access** - cookies/storage can be read (masked), never
   written. There is no `cookie_set`/`storage_set` by design.
-- **Approve-per-origin + confirm high-risk** — page ops need an allowlisted
+- **Approve-per-origin + confirm high-risk** - page ops need an allowlisted
   origin; submit/link clicks, `page_eval`, and tab close prompt the user.
 - **Bridge auth.** No bridge connection is served until it answers an HMAC
   challenge over a per-run secret from the lock file (0600 on macOS/Linux).
@@ -185,12 +185,30 @@ Known gaps, stated plainly:
   extraction, as above.
 - `install.ps1` (Windows) performs no verification yet.
 
+## Identifiers (rebrand, 2026-07)
+
+The project renamed from the upstream `browser-bridge` to `chromium-bridge`
+(ADR-0023). The security-relevant identifiers are now:
+
+- native-messaging host id: `com.vivswan.chromium_bridge.host` (also the
+  manifest filename stem and the extension's `connectNative` argument;
+  `scripts/check-extension-id.mjs` asserts all copies agree),
+- enclave keychain label: `com.vivswan.chromium-bridge.enclave.signing.v1`,
+- enclave challenge domain: `chromium-bridge-enclave-v1` (host and extension
+  changed together; no enrolled key predated the rename, so there was no key
+  migration),
+- the extension id `mkjjlmjbcljpcfkfadfmhblmmddkdihf` is derived from the
+  manifest `key` and did not change.
+
+An install registered under the old host id stops working until re-installed;
+that is a naming change, not a security regression.
+
 ## Security-relevant changes (review bar)
 
-A change is **security-relevant** — and must carry the
+A change is **security-relevant** - and must carry the
 [security-change](.github/ISSUE_TEMPLATE/security-change.yml) checklist, update
 the [tool risk matrix](docs/security/tool-risk-matrix.md), and (if it moves a
-trust boundary) the [threat model](docs/security/threat-model.md) — if it:
+trust boundary) the [threat model](docs/security/threat-model.md) - if it:
 
 - adds/broadens a Chrome permission or host permission,
 - adds a way to read new sensitive data, or any write capability,

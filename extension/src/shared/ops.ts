@@ -1,4 +1,4 @@
-// GENERATED from contracts/tools.json by scripts/gen-ops.mjs — DO NOT EDIT.
+// GENERATED from contracts/tools.json by scripts/gen-ops.mjs - DO NOT EDIT.
 // Edit the contract, then run `make gen` (or `node scripts/gen-ops.mjs`).
 //
 // The tool catalogue, JS side: op names + Chinese UI labels for the options
@@ -44,7 +44,7 @@ export const TOOLS: ToolInfo[] = [
 export const OP_NAMES: string[] = TOOLS.map((t) => t.op);
 
 // Policy metadata, mirrored from the contract. Consumed by the policy layer
-// (background/policy.ts) — kept as plain data so it stays import-side-effect-free.
+// (background/policy.ts) - kept as plain data so it stays import-side-effect-free.
 export type Risk = "critical" | "high" | "low" | "medium";
 export type Scope = "page" | "server" | "tab";
 export type Permission = "cookies" | "debugger" | "scripting" | "tabs";

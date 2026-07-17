@@ -1,4 +1,4 @@
-# cargo-deny config — supply-chain gate for the Rust crate.
+# cargo-deny config - supply-chain gate for the Rust crate.
 # Run: cargo deny check   (CI: .github/workflows/security.yml)
 
 [advisories]
@@ -9,7 +9,7 @@ yanked = "deny"
 version = 2
 # The crate is Apache-2.0; only allow permissive, compatible licenses in deps.
 # Only the licenses currently present in the dependency tree. A new license
-# here fails the check on purpose — review it before widening the list.
+# here fails the check on purpose - review it before widening the list.
 allow = [
   "Apache-2.0",
   "MIT",

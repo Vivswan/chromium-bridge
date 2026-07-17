@@ -50,7 +50,7 @@
 #   - source checkout (Cargo.toml present): builds the binary (Rust) + the
 #     extension (Node/npm), then installs.
 #   - prebuilt release tarball (no Cargo.toml): installs the shipped binary +
-#     extension/dist directly — no Rust or Node needed. The shipped binary is
+#     extension/dist directly - no Rust or Node needed. The shipped binary is
 #     verified against the release's published SHA-256 (and, when an
 #     authenticated `gh` is available, its build provenance attestation)
 #     before anything is installed; on any mismatch the install refuses.
@@ -302,7 +302,7 @@ if [[ "$UNINSTALL" == "1" ]]; then
   echo "[uninstall] removing chromium-bridge artifacts on $OS"
   removed=0
 
-  # Native-host manifest(s) — the file we wrote, named uniquely for this project.
+  # Native-host manifest(s) - the file we wrote, named uniquely for this project.
   for NM_DIR in "${NM_DIRS[@]}"; do
     MANIFEST="$NM_DIR/$HOST_NAME.json"
     if [[ -f "$MANIFEST" ]]; then
@@ -355,7 +355,7 @@ if [[ "$UNINSTALL" == "1" ]]; then
   done
 
   if [[ "$removed" == "0" ]]; then
-    echo "[uninstall] nothing to remove — already clean"
+    echo "[uninstall] nothing to remove - already clean"
   fi
   echo "[uninstall] done. Your browser and the loaded extension were left untouched;"
   echo "[uninstall] if you loaded the unpacked extension, remove it yourself via"
@@ -525,7 +525,7 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
   # shellcheck source=SCRIPTDIR/../scripts/lib.sh
   source "$ROOT/scripts/lib.sh"
   bb_find_cargo # sets BB_CARGO + puts its dir on PATH (plain call, not subshell)
-  echo "[install] source mode — building with $BB_CARGO"
+  echo "[install] source mode - building with $BB_CARGO"
   "$BB_CARGO" build --release --manifest-path "$ROOT/Cargo.toml"
   BIN_SRC="$ROOT/target/release/$BINARY_NAME"
 
@@ -542,14 +542,14 @@ if [[ -f "$ROOT/Cargo.toml" ]]; then
       echo "       Install Node.js, or build extension/dist elsewhere and pass --skip-extension-build." >&2
       exit 1
     fi
-    echo "[install] building extension bundle (esbuild)…"
+    echo "[install] building extension bundle (esbuild)..."
     [[ -d "$ROOT/extension/node_modules" ]] || npm --prefix "$ROOT/extension" install
     npm --prefix "$ROOT/extension" run build
     DIST_DIR="$ROOT/extension/dist"
   fi
 else
   PREBUILT=1
-  echo "[install] prebuilt mode — using shipped binary + extension (no build)"
+  echo "[install] prebuilt mode - using shipped binary + extension (no build)"
   BIN_SRC="$ROOT/$BINARY_NAME"
   DIST_DIR="$ROOT/extension/dist"
   [[ -f "$BIN_SRC" ]] || { echo "error: prebuilt binary not found at $BIN_SRC" >&2; exit 1; }
@@ -648,21 +648,21 @@ echo "[install]   allowed_origins: $ORIGINS"
 # The MCP server command every client points at (absolute; no PATH/~ needed).
 SERVER_CMD="$INSTALL_DIR/$BINARY_NAME"
 
-# Optionally register with Claude Code through its official CLI — the only safe
+# Optionally register with Claude Code through its official CLI - the only safe
 # auto-writer. We never hand-edit a client's JSON/TOML config; for the other
 # clients we print a ready-to-paste block with the path already filled in.
 CLAUDE_HINT="(re-run with --register-claude-code to add this automatically)"
 if command -v claude >/dev/null 2>&1; then
   if [[ "$REGISTER_CLAUDE" == "1" ]]; then
     if claude mcp list 2>/dev/null | grep -q 'chromium-bridge'; then
-      echo "[install] Claude Code already has 'chromium-bridge' — left as is"
+      echo "[install] Claude Code already has 'chromium-bridge' - left as is"
       CLAUDE_HINT="(already registered ✓)"
     elif claude mcp add chromium-bridge -- "$SERVER_CMD" >/dev/null 2>&1; then
       echo "[install] registered 'chromium-bridge' with Claude Code"
       CLAUDE_HINT="(added automatically ✓)"
     else
-      echo "[install] warning: 'claude mcp add' failed — add it by hand (below)" >&2
-      CLAUDE_HINT="(auto-add failed — run the command below)"
+      echo "[install] warning: 'claude mcp add' failed - add it by hand (below)" >&2
+      CLAUDE_HINT="(auto-add failed - run the command below)"
     fi
   fi
 else
@@ -672,18 +672,18 @@ fi
 cat <<TIP
 
 ────────────────────────────────────────────────────────────────────
-NEXT STEPS  (no extension-ID copying — it's pinned to $EXTENSION_ID)
+NEXT STEPS  (no extension-ID copying - it's pinned to $EXTENSION_ID)
 ────────────────────────────────────────────────────────────────────
 1. Load the extension:
    - Open chrome://extensions → enable "Developer mode" (top right)
    - "Load unpacked" → select: $DIST_DIR
-   (Verify the ID under the name is $EXTENSION_ID — the manifest already
+   (Verify the ID under the name is $EXTENSION_ID - the manifest already
     trusts it, so nothing to patch.)
 
 2. Register the MCP server with your client. The binary is at:
      $SERVER_CMD
    (run with no arguments; speaks MCP over stdio). Config below already has the
-   absolute path filled in — just paste:
+   absolute path filled in - just paste:
 
    • Claude Code (CLI):
        claude mcp add chromium-bridge -- "$SERVER_CMD"

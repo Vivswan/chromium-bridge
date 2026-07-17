@@ -2,8 +2,8 @@ name: SBOM
 
 # Generate a CycloneDX Software Bill of Materials from the committed lockfiles
 # (Cargo.lock + extension/package-lock.json) and attach it to the GitHub
-# Release. Runs on `release: published` — i.e. AFTER release.yml has created the
-# release — so it never races the binary publish and a SBOM-tooling failure can
+# Release. Runs on `release: published` - i.e. AFTER release.yml has created the
+# release - so it never races the binary publish and a SBOM-tooling failure can
 # never block shipping the binary. Scans declared dependencies from lockfiles,
 # not an installed tree (a fresh checkout has no node_modules/target).
 on:

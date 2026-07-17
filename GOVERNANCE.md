@@ -1,6 +1,6 @@
 # Governance
 
-How changes get made in chromium-bridge. Small project, light process — but the
+How changes get made in chromium-bridge. Small project, light process - but the
 process that exists is enforced by CI, not by memory. See also
 [CONTRIBUTING.md](CONTRIBUTING.md) (dev workflow) and [SECURITY.md](SECURITY.md)
 (security bar).
@@ -60,7 +60,7 @@ masking, bridge auth, the lock file/secret, or widens `page_eval` (full list in
   why localhost TCP, why a given confirmation UI). Status: Proposed / Accepted /
   Superseded / Deprecated.
 - **RFC** (open a discussion/issue) is for proposing a *significant change*
-  before building it — multi-client broker, a write capability, adopting Tokio,
+  before building it - multi-client broker, a write capability, adopting Tokio,
   a new protocol version, Edge/Firefox support, enterprise policy. Flow:
   `RFC → discussion → accepted/rejected → implement → ADR records the outcome`.
 
@@ -80,7 +80,7 @@ target state, and what should trigger addressing it.
 ## Repository root is reference-locked
 
 The files at the repository root are intentionally minimal, and most of them
-**cannot move** without breaking tooling — a future "tidy-up" that relocates them
+**cannot move** without breaking tooling - a future "tidy-up" that relocates them
 will silently break the build or lint gates. Before moving anything at root,
 know why it is there:
 
@@ -106,6 +106,6 @@ lint/build gates still find their config.
 
 `Cargo.toml` is the single source of truth; `make sync-version` propagates it.
 Tagging `vX.Y.Z` triggers the release build. SemVer discipline applies even
-pre-1.0 — a `0.x` bump is not a license to break compatibility silently
+pre-1.0 - a `0.x` bump is not a license to break compatibility silently
 (tool removal/rename, permission widening, protocol breaks are "major"-shaped).
 See [docs/development.md](docs/development.md#releasing).
