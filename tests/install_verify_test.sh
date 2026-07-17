@@ -5,9 +5,9 @@
 # Fully isolated: runs against a fake release layout in a temp dir with HOME,
 # BB_INSTALL_DIR, and --nm-dir all pointed inside it, and the network replaced
 # by PATH stubs (a `curl` that serves local fixture files and records the URL
-# it was asked for, and a `gh` that always fails so the attestation check is
-# deterministically skipped). No real network, no real browser profile, no
-# real ~/.browser-bridge is ever touched.
+# it was asked for, and a controllable `gh` driven by $GH_MODE so the mandatory
+# online attestation check can be made to pass, fail, or be unavailable). No
+# real network, no real browser profile, no real ~/.browser-bridge is touched.
 
 set -euo pipefail
 
@@ -29,8 +29,9 @@ FAKE_REPO="example-org/browser-bridge-test"
 # ---- network stubs ----------------------------------------------------------
 # `curl`: serves $CURL_STUB_DIR/<url basename> into the -o target and records
 # the requested URL in $CURL_STUB_DIR/last-url; exits 22 (like --fail on 404)
-# when the fixture is missing. `gh`: always fails, so install.sh's
-# gh-availability probe makes it skip the attestation check.
+# when the fixture is missing. `gh`: a controllable stub driven by $GH_MODE -
+# "ok" (available, attestation verifies), "attest-fail" (available, attestation
+# verify fails), or "unavailable" (every call fails, as if gh is not installed).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -50,7 +51,18 @@ cp "$fixture" "$out"
 STUB
 cat > "$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-exit 1
+# Controllable gh stub. $GH_MODE selects behavior:
+#   ok           availability probes succeed AND `attestation verify` succeeds
+#   attest-fail  probes succeed but `attestation verify` fails (bad provenance)
+#   unavailable  every call fails, as if gh were not usable
+case "${GH_MODE:-unavailable}" in
+  ok)
+    exit 0 ;;
+  attest-fail)
+    [[ "${1:-}" == "attestation" && "${2:-}" == "verify" ]] && exit 1
+    exit 0 ;;
+  *) exit 1 ;;
+esac
 STUB
 chmod 0755 "$TMP/bin/curl" "$TMP/bin/gh"
 
@@ -90,6 +102,7 @@ run_install() {
     cd "$case_dir/pkg"
     PATH="$TMP/bin:$PATH" \
     CURL_STUB_DIR="$case_dir/assets" \
+    GH_MODE="${GH_MODE:-ok}" \
     HOME="$case_dir/home" \
     BB_INSTALL_DIR="$case_dir/install" \
     XDG_DATA_HOME="$case_dir/home/.local/share" \
@@ -120,6 +133,8 @@ publish_checksum() { # $1 = case dir, $2 = hash to publish
 }
 
 # ---- 1. matching published checksum installs (and hits the right URL) -------
+# Online path (no --expected-sha256): the same-origin checksum matches AND the
+# mandatory build-provenance attestation verifies (GH_MODE=ok), so it installs.
 dir="$(new_case match)"
 hash="$(sha256_of "$dir/pkg/browser-bridge")"
 publish_checksum "$dir" "$hash"
@@ -130,10 +145,12 @@ out="$(run_install "$dir" --release-repo "$FAKE_REPO" 2>&1)" \
   || fail "matching checksum: installed bytes differ from verified bytes"
 [[ -f "$dir/nm/com.browser_bridge.host.json" ]] || fail "matching checksum: host manifest missing"
 grep -q "binary sha256 OK" <<< "$out" || fail "matching checksum: no verification line in output"
+grep -q "build provenance attestation OK" <<< "$out" \
+  || fail "matching checksum: attestation was not enforced on the online path"
 want_url="https://github.com/$FAKE_REPO/releases/download/$TAG/$NAME.binary.sha256"
 [[ "$(cat "$dir/assets/last-url")" == "$want_url" ]] \
   || fail "matching checksum: fetched $(cat "$dir/assets/last-url"), wanted $want_url"
-pass "matching published checksum installs, fetched from the pinned release URL"
+pass "matching published checksum + attestation installs, fetched from the pinned release URL"
 
 # ---- 2. mismatching published checksum refuses ------------------------------
 dir="$(new_case mismatch)"
@@ -231,4 +248,32 @@ grep -q "loaded extension untouched" <<< "$help_out" || fail "--help lost the --
 grep -q "a fork's release you already trust" <<< "$help_out" || fail "--help truncates the --release-repo text"
 pass "--help covers the new flags"
 
-echo "ALL PASS (11/11 install verification cases)"
+# ---- 12. online install with a FAILED attestation aborts --------------------
+# The same-origin checksum matches, but the mandatory provenance check fails
+# (GH_MODE=attest-fail): a matching-but-unattested binary must not install.
+dir="$(new_case attest-fail)"
+hash="$(sha256_of "$dir/pkg/browser-bridge")"
+publish_checksum "$dir" "$hash"
+if out="$(GH_MODE=attest-fail run_install "$dir" --release-repo "$FAKE_REPO" 2>&1)"; then
+  fail "attestation failed: installer succeeded on an unattested binary"
+fi
+grep -q "attestation FAILED" <<< "$out" || fail "attestation failed: wrong error: $out"
+[[ ! -e "$(installed_binary "$dir")" ]] || fail "attestation failed: binary installed anyway"
+[[ ! -e "$dir/nm/com.browser_bridge.host.json" ]] || fail "attestation failed: host manifest written anyway"
+pass "online install with a failed attestation fails closed"
+
+# ---- 13. online install with gh unavailable aborts (no --expected-sha256) ---
+# Without an out-of-band hash, the same-origin checksum is not an independent
+# anchor, so gh attestation is required; if gh cannot run, refuse rather than
+# trust the checksum alone.
+dir="$(new_case gh-unavailable)"
+hash="$(sha256_of "$dir/pkg/browser-bridge")"
+publish_checksum "$dir" "$hash"
+if out="$(GH_MODE=unavailable run_install "$dir" --release-repo "$FAKE_REPO" 2>&1)"; then
+  fail "gh unavailable: installer trusted the same-origin checksum alone"
+fi
+grep -q "cannot independently verify" <<< "$out" || fail "gh unavailable: wrong error: $out"
+[[ ! -e "$(installed_binary "$dir")" ]] || fail "gh unavailable: binary installed anyway"
+pass "online install with gh unavailable fails closed (checksum alone is not trusted)"
+
+echo "ALL PASS (13/13 install verification cases)"
