@@ -26,11 +26,11 @@ describe("policy.decide", () => {
     expect(d.confirmationChannel).toBe("extension-ui");
   });
 
-  test("a page-toast tool confirms via the in-page toast channel", () => {
+  test("tab_close confirms via the extension surface (every-call)", () => {
     const d = decide("tab_close", { disabledTools: [] });
     expect(d.allowed).toBe(true);
     expect(d.requiresConfirmation).toBe(true);
-    expect(d.confirmationChannel).toBe("page-toast");
+    expect(d.confirmationChannel).toBe("extension-ui");
   });
 
   test("an unknown op fails closed", () => {

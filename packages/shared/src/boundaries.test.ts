@@ -20,8 +20,9 @@ describe("RuntimeMsgSchema", () => {
       { type: "add_allow", glob: "https://example.com/*" },
       { type: "remove_allow", glob: "https://example.com/*" },
       { type: "get_status" },
-      { type: "capture_visible_tab" },
       { type: "get_enrollment" },
+      { type: "confirm_ready", id: "confirm_1" },
+      { type: "confirm_resolve", id: "confirm_1", approved: false },
       { type: "enroll_pair" },
       { type: "enroll_verify" },
       { type: "enroll_approve" },
@@ -36,6 +37,9 @@ describe("RuntimeMsgSchema", () => {
       null,
       "get_status",
       { type: "unknown_type" },
+      { type: "capture_visible_tab" }, // removed: screenshots are SW-captured
+      { type: "confirm_resolve", id: "confirm_1" }, // missing approved
+      { type: "confirm_ready", id: "" }, // empty id
       { type: "resolve_allow", id: "x" }, // missing allow
       { type: "resolve_allow", id: "", allow: true }, // empty id
       { type: "add_allow" }, // missing glob

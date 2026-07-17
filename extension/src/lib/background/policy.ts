@@ -11,7 +11,7 @@
 
 import { type Confirmation, isOpName, type Risk, TOOL_META } from "@chromium-bridge/shared";
 
-export type ConfirmationChannel = "page-toast" | "extension-ui" | "none";
+export type ConfirmationChannel = "extension-ui" | "none";
 
 export interface PolicyDecision {
   allowed: boolean;
@@ -31,14 +31,13 @@ export interface PolicyContext {
 const UNKNOWN_RISK: Risk = "critical";
 
 /**
- * Map a tool's `confirmation` field to whether a call must be confirmed and via
- * which channel.
+ * Map a tool's `confirmation` field to whether a call must be confirmed and
+ * via which channel. Since ADR-0027 every confirmation shows on the
+ * extension-owned surface; "none" is the only other channel.
  *
- * - "none"                        → no confirmation
- * - "page-toast"                  → confirm, in-page toast
- * - "every-call" | "grace-window" → confirm, extension UI
- * - anything else (e.g. "high-risk", "warn") also requires confirmation and
- *   defaults to the extension UI channel (fail-safe for future contract values)
+ * - "none"      -> no confirmation
+ * - everything else ("every-call", "high-risk", "warn", and any value added
+ *   to the contract later) -> confirm via the extension UI (fail-safe).
  */
 function confirmationFor(confirmation: Confirmation): {
   requiresConfirmation: boolean;
@@ -47,11 +46,7 @@ function confirmationFor(confirmation: Confirmation): {
   switch (confirmation) {
     case "none":
       return { requiresConfirmation: false, confirmationChannel: "none" };
-    case "page-toast":
-      return { requiresConfirmation: true, confirmationChannel: "page-toast" };
     default:
-      // "every-call", "grace-window", "high-risk", "warn", and any value added
-      // to the contract later: require confirmation via the extension UI.
       return { requiresConfirmation: true, confirmationChannel: "extension-ui" };
   }
 }

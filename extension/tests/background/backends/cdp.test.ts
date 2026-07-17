@@ -1,56 +1,48 @@
+// evalResponseToPayload normalizes a raw Runtime.evaluate response into the
+// page_eval result shape. Masking of both paths (value and exception) happens
+// downstream in egress.ts - see tests/background/egress.test.ts.
+
 import { describe, expect, test } from "vitest";
 import { evalResponseToPayload } from "@/lib/background/backends/cdp";
 
-const JWT =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpM";
-
 describe("evalResponseToPayload", () => {
-  test("an exception carrying a secret egresses masked", () => {
-    const out: any = evalResponseToPayload(
-      {
-        exceptionDetails: {
-          text: "Uncaught",
-          exception: { className: "Error", description: `Error: ${JWT}\n    at <anonymous>:1:7` },
+  test("an exception becomes structured __evalError data", () => {
+    const out = evalResponseToPayload({
+      exceptionDetails: {
+        text: "Uncaught",
+        exception: {
+          className: "TypeError",
+          description: "TypeError: boom\n    at <anonymous>:1:7",
         },
-      } as any,
-      true,
-    );
+      },
+    }) as { __evalError: boolean; name: string; message: string; stack: string };
     expect(out.__evalError).toBe(true);
-    expect(out.name).toBe("Error");
-    expect(out.message).not.toContain(JWT);
-    expect(out.message).toContain("••••");
-    expect(out.stack).not.toContain(JWT);
+    expect(out.name).toBe("TypeError");
+    expect(out.message).toBe("TypeError: boom");
+    expect(out.stack).toContain("at <anonymous>");
   });
 
-  test("exceptionDetails.text is the fallback and is masked too", () => {
-    const out: any = evalResponseToPayload(
-      { exceptionDetails: { text: `boom ${JWT}` } } as any,
-      true,
-    );
+  test("exceptionDetails.text is the fallback description", () => {
+    const out = evalResponseToPayload({ exceptionDetails: { text: "boom" } }) as {
+      __evalError: boolean;
+      message: string;
+    };
     expect(out.__evalError).toBe(true);
-    expect(out.message).not.toContain(JWT);
+    expect(out.message).toBe("boom");
   });
 
-  test("success values pass the same gate", () => {
-    const out: any = evalResponseToPayload(
-      { result: { value: { jwt: JWT, note: "hi" } } } as any,
-      true,
-    );
-    expect(JSON.stringify(out)).not.toContain(JWT);
-    expect(out.note).toBe("hi");
+  test("a success value passes through as-is", () => {
+    expect(evalResponseToPayload({ result: { value: { a: 1 } } })).toEqual({ a: 1 });
   });
 
-  test("mask=false (explicit opt-out) leaves both paths raw", () => {
-    const err: any = evalResponseToPayload(
-      { exceptionDetails: { text: `boom ${JWT}` } } as any,
-      false,
-    );
-    expect(err.message).toContain(JWT);
-    const ok: any = evalResponseToPayload({ result: { value: JWT } } as any, false);
-    expect(ok).toBe(JWT);
+  test("very long exception descriptions are truncated in the stack", () => {
+    const out = evalResponseToPayload({
+      exceptionDetails: { text: `x${"y".repeat(3000)}` },
+    }) as { stack: string };
+    expect(out.stack.length).toBeLessThanOrEqual(2003);
   });
 
   test("an empty response resolves to undefined", () => {
-    expect(evalResponseToPayload({} as any, true)).toBeUndefined();
+    expect(evalResponseToPayload({})).toBeUndefined();
   });
 });

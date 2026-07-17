@@ -28,6 +28,10 @@ export interface ContentMsg {
   op: string;
   args: OpArgs & { message?: string };
   tabId?: number;
+  /** What the SW preflight authorized (confirm/gate.ts): the approved
+   * origin (enforced against location.origin before any act) and, for
+   * clicks, the approved target descriptor. */
+  guard?: { expectOrigin?: string; clickExpect?: import("../dom/page-api").ClickProbe };
 }
 
 // The reply a content-script op sends back. Ops return varied payloads, so the
