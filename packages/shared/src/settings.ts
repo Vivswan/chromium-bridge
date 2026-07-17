@@ -44,6 +44,11 @@ export const SettingsSchema = z.object({
   // than this many ms (lazy check, no scheduler; each re-verify prompts
   // Touch ID).
   hostReverifyMs: z.int().nonnegative().default(0),
+  // The extension UI's display language (ADR-0027 i18n). "auto" resolves from
+  // the browser UI language (zh -> zh_CN, zh-Hant/TW/HK/MO -> zh_TW, else en).
+  // Distinct from Chrome's own default_locale: this is the user's explicit
+  // choice for in-extension UI.
+  uiLanguage: z.enum(["auto", "en", "zh_CN", "zh_TW"]).default("auto"),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

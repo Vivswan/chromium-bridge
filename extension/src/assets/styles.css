@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (we toggle .dark on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic tokens -> CSS vars, so utilities like bg-page / text-body flip
+   with the .dark class instead of duplicating every color. */
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-edge: var(--edge);
+  --color-edge-soft: var(--edge-soft);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-danger: var(--danger);
+  --color-danger-strong: var(--danger-strong);
+  --color-danger-surface: var(--danger-surface);
+  --color-warn-edge: var(--warn-edge);
+  --color-warn-surface: var(--warn-surface);
+}
+
+:root {
+  --page: #ffffff;
+  --surface: #ffffff;
+  --body: #111827;
+  --muted: #6b7280;
+  --faint: #9ca3af;
+  --edge: #e5e7eb;
+  --edge-soft: #f3f4f6;
+  --brand: #2e8b57;
+  --brand-strong: #276b46;
+  --danger: #dc2626;
+  --danger-strong: #b91c1c;
+  --danger-surface: #fffbfb;
+  --warn-edge: #f0c674;
+  --warn-surface: #fff8e1;
+}
+
+.dark {
+  --page: #15181c;
+  --surface: #1e2228;
+  --body: #e6e8eb;
+  --muted: #9aa3af;
+  --faint: #6b7280;
+  --edge: #333a44;
+  --edge-soft: #262b32;
+  --brand: #3fa76a;
+  --brand-strong: #348a58;
+  --danger: #f87171;
+  --danger-strong: #fca5a5;
+  --danger-surface: #2a1414;
+  --warn-edge: #6b5a1e;
+  --warn-surface: #2b2718;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: var(--page);
+  color: var(--body);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
