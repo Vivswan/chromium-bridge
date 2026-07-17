@@ -54,7 +54,13 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    → Observed page content is *data*, not commands, to the agent. Independently,
    high-risk actions (submit/link click, `page_eval`, tab close) require an
    **in-page user confirmation** the page cannot forge or auto-dismiss, and
-   `page_eval` confirms **every call** showing the full code.
+   `page_eval` confirms **every call** showing the full code. This per-action
+   prompt covers the high-risk ops only. Low-risk ops (navigate, `page_text`,
+   `tab_list`, and masked cookie or storage reads) run with no per-action
+   prompt, so a driver that already reaches the extension can navigate, read
+   masked page content, and enumerate tabs without the user seeing each step.
+   The confirmation is a gate on the dangerous actions, not a promise that
+   nothing happens silently.
 
 3. **Credential/token exfiltration.**
    → Cookies/storage are **read-only** (no set), **allowlist-scoped**, and
@@ -72,7 +78,15 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    via the Security framework -- so a *different* same-user program is rejected
    before it can authenticate), and an **HMAC-SHA256 challenge-response** in which
    the per-run secret never crosses the wire and a fresh nonce defeats replay.
-   Attestation is mutual (host and server attest each other). See
+   Attestation is mutual (host and server attest each other). The peer-UID check
+   and the executable attestation are Unix only. On Windows the bridge is a
+   loopback TCP socket with neither check (both are compiled only for Unix), so
+   any local process can reach the port and the only barrier is the HMAC secret
+   in the lock file. That lock file gets no explicit restrictive mode on Windows;
+   it relies on the default per-user permissions of its `LOCALAPPDATA`
+   directory. So on Windows the protection rests on the secret staying
+   confidential, not on kernel-attested peer identity: a local user who reads
+   the lock file can drive the bridge. See
    [ADR-0019](../adr/0019-authenticated-ipc.md) and
    [ADR-0020](../adr/0020-kernel-attested-peer-identity.md). **Not covered:** a
    same-user attacker who re-executes *our own* binary is byte-identical to the
@@ -100,6 +114,20 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 
 ## Residual risks (accepted, tracked)
 
+- **Native-messaging manifest substitution (the host-to-extension hop is
+  unauthenticated).** The bridge authenticates the host-to-server socket hop
+  with the peer-UID check, attestation, and HMAC, but nothing authenticates the
+  native host to the extension. The host manifest sits in a user-writable
+  directory, so a same-user attacker can rewrite its `path` to point the browser
+  at a malicious host binary. The browser then launches that binary, and it
+  speaks native messaging straight to the real extension, issuing `BridgeReq`s
+  without ever touching the authenticated socket. `allowed_origins` pins which
+  extension may open the host, but nothing pins which host the extension will
+  accept. So the "no unauthorized driver" guarantee is not complete on this leg:
+  a same-user attacker who swaps the manifest can drive the extension, subject
+  only to the per-action confirmations on high-risk ops. Closing this needs the
+  extension to verify the host it is paired with (trust-on-first-use
+  host-identity pairing in the extension settings), which is tracked separately.
 - The `page_eval` **60s grace window** lets *unrelated* same-origin code run
   without re-prompting (see [ADR-0008](../adr/0008-page-eval-confirmation-channel.md)).
 - Masking is heuristic — it can miss a novel secret format or over-mask benign
