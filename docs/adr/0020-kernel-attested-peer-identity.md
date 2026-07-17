@@ -30,19 +30,27 @@ Before authenticating, each end **kernel-attests the other's executable
 identity** and serves the connection only if the peer is running the same binary
 as itself.
 
-1. **Peer PID from the kernel.** On a connected Unix-domain socket, read the
-   peer's PID: `SO_PEERCRED` on Linux (the same struct that carries the UID),
-   `LOCAL_PEERPID` via `getsockopt(SOL_LOCAL, ...)` on macOS. This is kernel
-   testimony, not a self-reported value.
+1. **Ask the kernel who the peer is.** On a connected Unix-domain socket, take a
+   kernel-attested identity for the peer: `SO_PEERCRED` (the pid, in the same
+   struct that carries the UID) on Linux; the **audit token** via
+   `getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN)` on macOS, falling back to
+   `LOCAL_PEERPID` only if the audit token is unavailable. Either way this is
+   kernel testimony, not a self-reported value.
 
-2. **Resolve and hash the peer's on-disk executable.** On Linux, hash
-   `/proc/<pid>/exe`; on macOS, resolve the path with `proc_pidpath` and hash the
-   file. SHA256, streamed.
+2. **Measure the peer's running image.** On Linux, hash `/proc/<pid>/exe` (the
+   kernel's magic symlink to the running inode) with streamed SHA256. On macOS,
+   obtain a `SecCode` for the peer with `SecCodeCopyGuestWithAttributes` keyed on
+   `kSecGuestAttributeAudit` (the audit token), validate its running signature
+   with `SecCodeCheckValidity`, and read its code-directory hash (`cdhash`, key
+   `kSecCodeInfoUnique`). The audit token names the *running* image, so the macOS
+   measurement is bound to the process actually executing, not to a re-openable
+   path.
 
-3. **Require it to equal our own executable's hash.** We hash our own image by
-   the identical mechanism (`/proc/self`-equivalent for our PID), cached once.
-   The "trusted-identity allowlist" is therefore exactly `{our own binary}`: a
-   peer is accepted only if it is another instance of the same bytes.
+3. **Require it to equal our own image's measurement.** We measure ourselves by
+   the identical mechanism (`/proc/self`-equivalent on Linux; `SecCodeCopySelf`
+   then cdhash on macOS), cached once. The "trusted-identity allowlist" is
+   therefore exactly `{our own binary}`: a peer is accepted only if it is another
+   instance of the same code.
 
 4. **Fail closed, mutually.** On mismatch or any inability to establish the
    peer's identity, drop the connection and log to stderr. The server attests the
@@ -85,32 +93,43 @@ as itself.
   descriptor elsewhere. That window is small and the attack is sophisticated
   (fd-passing plus precise reuse timing), and to pass it the reused pid must be a
   genuine copy of our binary anyway; it is recorded as a residual, not closed.
+  On macOS the audit-token path closes even this race (below).
 
-- **Self identity is captured at startup.** `own_exe_hash` is primed by
+- **Self identity is captured at startup.** `own_identity` is primed by
   `ensure_own_identity` at process start, before we bind, accept, or dial, so our
-  notion of "self" reflects the genuine on-disk binary. A later replacement of
-  the binary file cannot redefine "self" and then be accepted as a matching peer.
+  notion of "self" reflects the genuine image (Linux SHA256 of the on-disk
+  binary; macOS cdhash of the running image). A later replacement of the binary
+  file cannot redefine "self" and then be accepted as a matching peer.
 
-- **SHA256 now; macOS is best-effort until code-signing.** The task considered
-  SHA256 or a macOS code-signature / Team-ID check (`SecStaticCodeCheckValidity`).
-  We ship SHA256-of-self because it works on both Linux and macOS today and its
-  accept path is testable. **On macOS it is not fully enforced**, though: with no
-  `/proc`, we resolve the path with `proc_pidpath` and re-open it, which is not
-  bound to the running image. Startup self-capture defeats the simple
-  "replace-the-binary-then-run-it" bypass (the replacement no longer matches our
-  captured self hash), but the deeper problem remains: the path contents need not
-  represent the running image at all. A peer can `exec` a malicious image from an
-  inode and then leave (or restore) the genuine binary at the path it reports, so
-  when we open that path we hash the genuine bytes while other code runs.
-  Fully closing this needs a running-image-bound API: `SecCode` validation *by
-  pid* (`SecCodeCopyGuestWithAttributes` + `SecCodeCheckValidity` against a
-  designated requirement, or comparing the kernel-reported cdhash), which is both
-  stronger and TOCTOU-safe. That is the macOS follow-up and should replace the
-  path-rehash; a code-signature check is also only meaningful once the binary is
-  Team-ID signed, and the signing pipeline is not yet in place.
+- **macOS: audit token + `SecCode` cdhash, running-image-bound.** Rather than
+  re-opening a path (which need not represent the running image at all -- a peer
+  can `exec` a malicious image from an inode and leave the genuine binary at the
+  path it reports), macOS identifies the peer by its kernel **audit token** and
+  measures it through the Security framework. The audit token names the running
+  image, so `SecCodeCopyGuestWithAttributes(kSecGuestAttributeAudit, ...)`
+  followed by `SecCodeCheckValidity` verifies the code *actually executing*, and
+  its `cdhash` (`kSecCodeInfoUnique`) is compared to our own
+  (`SecCodeCopySelf` -> cdhash). This closes both the path re-open TOCTOU and the
+  pid-reuse race in one move. cdhash is the hash of the code pages, present on
+  ad-hoc-signed binaries -- and on Apple Silicon the toolchain ad-hoc-signs every
+  build at link time -- so this is enforceable and testable on unsigned dev and
+  CI binaries today, no signing pipeline required. If the kernel reports the
+  audit-token option itself is unsupported (`getsockopt` returns `ENOPROTOOPT`,
+  older systems without `LOCAL_PEERTOKEN`), we fall back to identifying the guest
+  by pid (`kSecGuestAttributePid`), which is still running-image-validated by
+  `SecCodeCheckValidity` but reopens the narrow pid-reuse race. Any *other*
+  audit-token failure (a short read, a permission error) fails closed rather than
+  downgrading. **Follow-up:** Team-ID / designated-requirement pinning
+  (accepting a signing identity rather than one exact cdhash) is deferred until a
+  real signing identity lands; it is what would let a signed release and a local
+  build trust each other. Until then the allowlist is one exact cdhash, which is
+  correct for the same-binary bridge and is what makes a *different* image
+  (even a validly Apple-signed one, e.g. `python3`) fail closed. The FFI is
+  hand-declared against the Security and CoreFoundation frameworks so no new
+  crate enters the dependency graph.
 
-- **Plain comparison of the two digests.** Unlike the HMAC tag (a secret,
-  compared in constant time), the executable hashes are not secrets, so a
+- **Plain comparison of the identities.** Unlike the HMAC tag (a secret, compared
+  in constant time), the executable hashes and cdhashes are not secrets, so a
   short-circuiting `==` leaks nothing useful.
 
 - **Mutual, not server-only.** The host must also know it is talking to the real
@@ -125,13 +144,17 @@ Positive:
   `accept`, before it can attempt the HMAC handshake. This is the meaningful
   raise over ADR-0019: reaching the socket and reading the secret is no longer
   enough; you must be our binary.
-- On Linux the bridge speaks only to another instance of itself in both
-  directions, subject to the narrow pid-reuse race noted above. On macOS this is
-  best-effort (the path re-open is not running-image-bound); see the residuals.
+- On both Linux and macOS the bridge speaks only to another instance of itself in
+  both directions. On macOS the audit-token + `SecCode` path is bound to the
+  running image, closing the path re-open TOCTOU and the pid-reuse race; on Linux
+  the `/proc/<pid>/exe` inode measurement is bound to the running image but leaves
+  the narrow pid-reuse race on pid resolution (see the residuals).
 - The e2e suite is more realistic: round-trips flow through a real
-  `--native-host` subprocess, and an adversarial test
+  `--native-host` subprocess (waiting on the host's real handshake-complete
+  signal, not a fixed sleep), and an adversarial test
   (`test_foreign_peer_is_rejected`) asserts a raw non-binary peer is dropped
-  without a challenge.
+  without a challenge -- on macOS this exercises the full audit-token -> `SecCode`
+  -> cdhash rejection of a validly Apple-signed but different binary.
 
 Negative / accepted:
 
@@ -139,30 +162,41 @@ Negative / accepted:
   socket from Python; they must spawn the real host binary. This is a direct
   consequence of the check working, and we did **not** add a test-only bypass
   (that would violate the zero-trust "never weaken a check" rule).
-- On macOS the check is **best-effort, not fully enforced**: the path re-open is
-  not bound to the running image, so it does not achieve the same guarantee as
-  Linux until the `SecCode`-by-pid follow-up lands (see "Why these choices").
-- Pid resolution can race with pid reuse if a peer exits mid-connection after
-  passing its descriptor to another process (narrow; see "Why these choices").
+- macOS trust is pinned to one exact `cdhash` (our own). Team-ID /
+  designated-requirement pinning -- which would let a signed release and a
+  separate local build trust each other -- is deferred until a real signing
+  identity lands. For the same-binary bridge, one-cdhash is the correct, tighter
+  policy; the deferral only means we do not yet accept a *different* trusted
+  build.
+- Linux pid resolution can race with pid reuse if a peer exits mid-connection
+  after passing its descriptor to another process (narrow; see "Why these
+  choices"). The macOS pid *fallback* shares this narrow race, but only when the
+  kernel audit token is unavailable.
 - Windows (loopback TCP) and non-Linux/macOS Unix are not attested, consistent
   with ADR-0019's peer-UID posture, which is also Unix-only.
 
 Irreducible (named honestly, per the zero-trust principle):
 
 - A same-user attacker who **re-executes our own binary** (`browser-bridge
-  --native-host`, or a copy of it) is byte-identical to the legitimate host. No
-  executable hash, and no code signature, can distinguish "the host the browser
-  spawned" from "the same binary an attacker ran." Closing that requires binding
-  trust to the browser/extension side (the native-messaging manifest already
-  limits which extension can spawn the host, and a trust-on-first-use pairing in
-  the extension settings would bind a per-install approval). That work is tracked
-  separately; this ADR does not claim to cover it.
+  --native-host`, or a copy of it) is byte-identical to the legitimate host, so
+  it has the same SHA256 and the same cdhash. No executable hash, and no code
+  signature, can distinguish "the host the browser spawned" from "the same binary
+  an attacker ran." Nor can any of this stop code injection (`ptrace`, dylib
+  insertion) into the already-approved running process. Closing those requires
+  binding trust to the browser/extension side (the native-messaging manifest
+  already limits which extension can spawn the host, and a trust-on-first-use
+  pairing in the extension settings would bind a per-install approval) and, for
+  injection, hardened-runtime / Secure-Enclave-backed measures. That work is
+  tracked separately (extension pairing; Stage B); this ADR does not claim to
+  cover it.
 
 ## Implementation pointers
 
-- `src/ipc.rs`: `peer_pid`, `exe_hash_of_pid`, `own_exe_hash`, `attest_peer`,
-  `identities_match`.
+- `src/ipc.rs`: `peer_pid`, `own_identity`, `peer_identity`, `attest_peer`,
+  `identities_match`; the macOS `codesign` submodule holds the audit-token +
+  Security-framework FFI (`peer_cdhash`, `own_cdhash`).
 - `src/mcp_server.rs`: accept loop attests the host after the peer-UID check.
 - `src/native_host.rs`: attests the server right after `connect`.
-- `tests/e2e.py`: round-trips route through a real `--native-host` process;
-  `test_foreign_peer_is_rejected` covers the reject path.
+- `tests/e2e.py`: round-trips route through a real `--native-host` process and
+  wait on its handshake-complete signal; `test_foreign_peer_is_rejected` covers
+  the reject path.
