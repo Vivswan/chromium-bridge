@@ -219,9 +219,10 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 /// after a connection is accepted. The server sends a `Challenge` carrying a
 /// fresh random nonce; the client replies with a `Response` carrying
 /// HMAC-SHA256(secret, nonce), proving it knows the per-run secret without
-/// ever putting the secret on the wire. The optional `label` lets a client
-/// name the browser it fronts; multi-browser routing is a later phase, so the
-/// label is carried through the handshake and otherwise ignored today.
+/// ever putting the secret on the wire. The optional `label` names the browser
+/// the client fronts; the server keys its connection registry by it, which is
+/// what lets several browsers stay attached at once. The label rides inside
+/// the signed response and is honored only after the HMAC verifies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Handshake {
@@ -247,6 +248,12 @@ pub struct BridgeReq {
     pub tab_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub args: Value,
+    /// The label of the browser this request was routed to. The MCP server
+    /// resolves the tool call's `browser` argument against its connection
+    /// registry and stamps the outcome here, so the envelope records which
+    /// browser was addressed. Omitted when unset (older peers, tests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<String>,
 }
 
 /// A response from the extension back to the MCP server.
@@ -562,6 +569,7 @@ mod tests {
             op: "page_click".into(),
             tab_id: Some(3),
             args: json!({ "ref": "e3" }),
+            browser: Some("brave".into()),
         };
         let mut buf = Vec::new();
         bridge_write(&mut buf, &req).unwrap();
@@ -570,6 +578,19 @@ mod tests {
         assert_eq!(got.op, "page_click");
         assert_eq!(got.tab_id, Some(3));
         assert_eq!(got.args, json!({ "ref": "e3" }));
+        assert_eq!(got.browser.as_deref(), Some("brave"));
+
+        // A request without the browser field (older peer) deserializes with
+        // browser defaulted to None, and None is omitted on the wire.
+        let bare: BridgeReq = bridge_read(&mut Cursor::new(
+            b"{\"id\":1,\"op\":\"tab_list\",\"args\":{}}\n".to_vec(),
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(bare.browser, None);
+        let mut buf = Vec::new();
+        bridge_write(&mut buf, &bare).unwrap();
+        assert!(!String::from_utf8(buf).unwrap().contains("browser"));
     }
 
     #[test]
@@ -614,6 +635,7 @@ mod tests {
                 op: "noop".into(),
                 tab_id: None,
                 args: json!(null),
+                browser: None,
             },
         )
         .unwrap();
@@ -866,8 +888,9 @@ mod proptests {
             op in arb_string(),
             tab_id in prop::option::of(any::<i64>()),
             args in arb_json(),
+            browser in prop::option::of(arb_string()),
         ) {
-            let req = BridgeReq { id, op, tab_id, args };
+            let req = BridgeReq { id, op, tab_id, args, browser };
             let mut buf = Vec::new();
             bridge_write(&mut buf, &req).unwrap();
             let got: BridgeReq = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();

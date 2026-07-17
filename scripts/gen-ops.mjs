@@ -64,13 +64,20 @@ const jsonTypeToTs = (jsonType) => {
   }
 };
 
+// Args that exist only for the MCP server: `browser` picks which connected
+// browser a call routes to and is consumed there - it is never forwarded
+// inside the bridge request's args (bridge-request.schema.json's OpArgs stays
+// strict). Excluded here so the extension-facing request shapes describe only
+// what the extension can actually receive.
+const ROUTING_ARGS = new Set(["browser"]);
+
 const commandArm = (t) => {
   const schema = t.inputSchema ?? {};
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
-  const fields = Object.keys(props).map(
-    (k) => `${k}${required.has(k) ? "" : "?"}: ${jsonTypeToTs(props[k].type)}`
-  );
+  const fields = Object.keys(props)
+    .filter((k) => !ROUTING_ARGS.has(k))
+    .map((k) => `${k}${required.has(k) ? "" : "?"}: ${jsonTypeToTs(props[k].type)}`);
   const opLit = JSON.stringify(t.name);
   // A tool with no inputSchema props gets a strict empty-object type. `{}` would
   // trip @typescript-eslint/no-empty-object-type (and it wrongly allows any
