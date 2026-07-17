@@ -9,11 +9,11 @@
 //! All real logic lives in the MCP server on the other side of the socket.
 //! EOF on stdin (Chrome disconnected) is our shutdown signal.
 
-use std::io::{self, BufRead, BufReader, BufWriter};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::thread;
 
 use crate::ipc;
-use crate::protocol::{bridge_write, nm_read_frame, nm_write_frame};
+use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use serde_json::Value;
 
 pub fn run() -> i32 {
@@ -131,37 +131,10 @@ pub fn run() -> i32 {
     // bound for Chrome.
     let stdout = io::stdout();
     let out_handle = thread::spawn(move || {
-        let mut lines = reader.lines();
         // stdout must be flushed after every frame; acquire a single locked,
         // buffered writer for the whole thread (single-writer discipline).
         let mut out = BufWriter::new(stdout.lock());
-        loop {
-            let line = match lines.next() {
-                Some(Ok(l)) => l,
-                Some(Err(e)) => {
-                    log_warn!("native-host", "bridge read error: {e}");
-                    break;
-                }
-                None => {
-                    log_info!("native-host", "bridge EOF");
-                    break;
-                }
-            };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let value: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    log_warn!("native-host", "bridge line not json: {e}");
-                    continue;
-                }
-            };
-            if let Err(e) = nm_write_frame(&mut out, &value) {
-                log_warn!("native-host", "stdout write error: {e}");
-                break;
-            }
-        }
+        pump_socket_to_stdout(&mut reader, &mut out);
         log_debug!("native-host", "socket->stdout thread ending");
     });
 
@@ -171,4 +144,94 @@ pub fn run() -> i32 {
     let _ = out_handle.join();
     log_debug!("native-host", "exit");
     std::process::exit(0);
+}
+
+/// Pump NDJSON lines from the bridge socket to stdout as native-messaging
+/// frames. Reads through [`bridge_read`], so every line is bounded by
+/// `BRIDGE_MAX_LINE`: the server passed attestation, but zero trust means even
+/// an attested peer must not be able to exhaust memory with one newline-less
+/// line. Any read error — an over-cap line included — fails closed: the pump
+/// ends, the process exits, and Chrome tears the port down.
+fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
+    loop {
+        let value: Value = match bridge_read(reader) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                log_info!("native-host", "bridge EOF");
+                break;
+            }
+            Err(e) => {
+                log_warn!("native-host", "bridge read error: {e}");
+                break;
+            }
+        };
+        if let Err(e) = nm_write_frame(out, &value) {
+            log_warn!("native-host", "stdout write error: {e}");
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::BRIDGE_MAX_LINE;
+    use std::io::Cursor;
+
+    #[test]
+    fn over_cap_line_on_receive_leg_is_rejected() {
+        // One line just past the cap, followed by a perfectly valid frame: the
+        // pump must fail closed at the over-cap line (stop, emit nothing, not
+        // even the later valid frame). The old `reader.lines()` pump buffered
+        // the giant line unbounded (the OOM path), skipped it as malformed,
+        // and would have emitted the trailing frame — so this pins both the
+        // cap and the fail-closed stop.
+        let mut input = Vec::with_capacity(BRIDGE_MAX_LINE + 32);
+        input.resize(BRIDGE_MAX_LINE + 1, b'x');
+        input.extend_from_slice(b"\n{\"after\":true}\n");
+        let mut out = Vec::new();
+        pump_socket_to_stdout(&mut Cursor::new(input), &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn valid_lines_are_framed_until_the_over_cap_line() {
+        // A legal frame, then an over-cap line, then another legal frame: the
+        // first goes out as native messaging, and the pump stops at the
+        // poisoned line — the frame after it must never be emitted.
+        let mut input = b"{\"ok\":true}\n".to_vec();
+        input.resize(input.len() + BRIDGE_MAX_LINE + 1, b'x');
+        input.extend_from_slice(b"\n{\"after\":true}\n");
+        let mut out = Vec::new();
+        pump_socket_to_stdout(&mut Cursor::new(input), &mut out);
+
+        let mut cur = Cursor::new(out);
+        let frame = nm_read_frame(&mut cur).unwrap().unwrap();
+        assert_eq!(frame, serde_json::json!({ "ok": true }));
+        // Nothing after the first frame: the over-cap line was rejected.
+        assert!(nm_read_frame(&mut cur).unwrap().is_none());
+    }
+
+    #[test]
+    fn malformed_json_fails_closed() {
+        // Malformed JSON used to be skip-and-continue; it now ends the pump
+        // (fail closed against an attested-but-hostile peer), so the valid
+        // frame after it must not be emitted.
+        let mut out = Vec::new();
+        pump_socket_to_stdout(
+            &mut Cursor::new(b"not-json\n{\"id\":2}\n".to_vec()),
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn blank_lines_are_skipped_and_eof_ends_the_pump() {
+        let mut out = Vec::new();
+        pump_socket_to_stdout(&mut Cursor::new(b"\n\n{\"id\":1}\n".to_vec()), &mut out);
+        let mut cur = Cursor::new(out);
+        let frame = nm_read_frame(&mut cur).unwrap().unwrap();
+        assert_eq!(frame, serde_json::json!({ "id": 1 }));
+        assert!(nm_read_frame(&mut cur).unwrap().is_none());
+    }
 }
