@@ -32,6 +32,7 @@
 
 - **统一 ref**:CDP 的 `page_snapshot` 跑与 `content/snapshot.ts` **相同的 DOM 遍历算法**(不是 AX 树 —— 那是 `page_snapshot_precise`),打**相同的 `data-zcb-ref="eN"`** 属性。因此 CDP 与 content 两条路径的 ref 完全互通,`page_click`/`page_fill` 通过 DOM 属性查找即可解析。
 - **无 content script 的确认**:高危 click 与 `page_eval` 的确认 Toast 通过 `Runtime.evaluate`(`awaitPromise:true`)在页面里构建并 resolve 用户选择;因为 CDP 模式下不注入 `toast.css`,Toast 样式内联。设置门槛(`confirmHighRiskClick`/`pageEvalEnabled`/`evalMask`)、60s 同源免确认宽限期(`confirmGraceMs`)、`isHighRiskClick` 判定,全部与 content 路径一致,宽限期状态保存在 SW。
+  - Superseded in part by the ADR-0008 update 2026-07-16: `page_eval` no longer uses the `confirmGraceMs` grace window in either path and reconfirms on every call. `confirmGraceMs` now applies to high-risk clicks/submits only. The rest of this bullet (settings gates, inline Toast, `isHighRiskClick`, SW-held state) still holds, and the click grace window remains consistent between the CDP and content paths.
 - **序列化/脱敏**:`page_eval` 用 CDP `returnByValue` 拿回值,再在 SW 复用 `shared/masking.ts` 脱敏;`storage_get` 在页面读原始值、在 SW 脱敏(始终开启,ADR-0010)。
 - **screenshot**:CDP 下优先用 `Page.captureScreenshot`,不走页面函数。
 - **DRY**:`precise.ts` 改为从 `cdp/session.ts` import `dbgAttach/dbgDetach/dbgSend/isDebuggable`,删除私有副本,行为不变。
