@@ -95,11 +95,12 @@ pub fn connect() -> io::Result<BridgeStream> {
     })
 }
 
-#[cfg(test)]
+// The only test here exercises the Unix socket path; on Windows the module
+// would be empty, so it is gated out entirely.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn socket_path_sits_beside_the_lock_file() {
         assert_eq!(socket_path().file_name().unwrap(), "run.sock");
