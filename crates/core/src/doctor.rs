@@ -13,7 +13,7 @@ use crate::ipc::LockFile;
 
 /// Native-messaging host id, as written by the installers (`install.sh` /
 /// `install.ps1`). The manifest file is `<HOST_NAME>.json`.
-const HOST_NAME: &str = "com.browser_bridge.host";
+const HOST_NAME: &str = "com.vivswan.chromium_bridge.host";
 
 /// Plain facts gathered for the report. Kept free of I/O so `render` is pure
 /// and unit-testable.
@@ -57,7 +57,7 @@ fn manifest_path() -> PathBuf {
         let base = std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        base.join("browser-bridge").join(file)
+        base.join("chromium-bridge").join(file)
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -132,7 +132,7 @@ fn gather() -> Report {
 /// Pure rendering of a gathered report into the printed health text.
 fn render(r: &Report) -> String {
     let mut out = String::new();
-    out.push_str(&format!("browser-bridge doctor — v{}\n", r.version));
+    out.push_str(&format!("chromium-bridge doctor — v{}\n", r.version));
     out.push_str(&format!("platform:        {}/{}\n", r.os, r.arch));
 
     out.push_str(&format!("lock file:       {}\n", r.lock_path.display()));
@@ -174,7 +174,7 @@ fn render(r: &Report) -> String {
     out.push_str(
         "\nnote: the checks above cover the MCP server + native-host bridge only.\n\
          They do NOT confirm the Chrome extension is loaded and connected. Verify\n\
-         that via the Browser Bridge toolbar icon (approve the target site) and\n\
+         that via the Chromium Bridge toolbar icon (approve the target site) and\n\
          the extension's Service Worker console at chrome://extensions.\n",
     );
 
@@ -225,11 +225,11 @@ mod tests {
             lock_path: PathBuf::from("/tmp/run.lock"),
             lock_present: true,
             lock_error: None,
-            endpoint: Some("/tmp/browser-bridge/run.sock".into()),
+            endpoint: Some("/tmp/chromium-bridge/run.sock".into()),
             pid: Some(4242),
             secret_len: Some(32),
             reachable: Some(true),
-            manifest_path: PathBuf::from("/tmp/com.browser_bridge.host.json"),
+            manifest_path: PathBuf::from("/tmp/com.vivswan.chromium_bridge.host.json"),
             manifest_present: true,
         }
     }
@@ -240,7 +240,7 @@ mod tests {
         let text = render(&r);
         assert!(text.contains("v1.2.3"));
         assert!(text.contains("macos/aarch64"));
-        assert!(text.contains("endpoint: /tmp/browser-bridge/run.sock"));
+        assert!(text.contains("endpoint: /tmp/chromium-bridge/run.sock"));
         assert!(text.contains("pid:     4242"));
         assert!(text.contains("<redacted, 32 chars>"));
         // The real secret value must never appear.
@@ -258,7 +258,7 @@ mod tests {
             version: "1.2.3",
             os: "linux",
             arch: "x86_64",
-            lock_path: PathBuf::from("/run/user/1000/browser-bridge.lock"),
+            lock_path: PathBuf::from("/run/user/1000/chromium-bridge.lock"),
             lock_present: false,
             lock_error: None,
             endpoint: None,
@@ -266,7 +266,7 @@ mod tests {
             secret_len: None,
             reachable: None,
             manifest_path: PathBuf::from(
-                "/home/u/.config/google-chrome/NativeMessagingHosts/com.browser_bridge.host.json",
+                "/home/u/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
             ),
             manifest_present: false,
         };

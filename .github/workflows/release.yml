@@ -98,7 +98,7 @@ jobs:
         shell: bash
         run: |
           TAG="$RELEASE_TAG"
-          NAME="browser-bridge-${TAG}-${PLATFORM}-${ARCH}"
+          NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
           mkdir -p "$NAME/extension"
           cp -r extension/dist "$NAME/extension/dist"
           cp install/mcp-config.example.json LICENSE README.md "$NAME/"
@@ -115,15 +115,15 @@ jobs:
             echo "arch=${ARCH}"
           } > "$NAME/RELEASE.txt"
           if [ "$PLATFORM" = "windows" ]; then
-            cp target/release/browser-bridge.exe "$NAME/"
-            BIN_FILE="browser-bridge.exe"
+            cp target/release/chromium-bridge.exe "$NAME/"
+            BIN_FILE="chromium-bridge.exe"
             cp install/install.ps1 "$NAME/"
             7z a -tzip "$NAME.zip" "$NAME" > /dev/null
             sha256sum "$NAME.zip" > "$NAME.zip.sha256"
             ARCHIVE="$NAME.zip"
           else
-            cp target/release/browser-bridge "$NAME/"
-            BIN_FILE="browser-bridge"
+            cp target/release/chromium-bridge "$NAME/"
+            BIN_FILE="chromium-bridge"
             cp install/install.sh "$NAME/"
             tar czf "$NAME.tar.gz" "$NAME"
             if command -v shasum >/dev/null 2>&1; then
@@ -160,7 +160,7 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           TAG="$RELEASE_TAG"
-          NAME="browser-bridge-extension-${TAG}"
+          NAME="chromium-bridge-extension-${TAG}"
           # Zip the built bundle with a top-level `dist/` folder so users can
           # point "Load unpacked" straight at the extracted directory.
           (cd extension && zip -r "../$NAME.zip" dist)

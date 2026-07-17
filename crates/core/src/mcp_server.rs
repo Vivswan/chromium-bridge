@@ -229,7 +229,7 @@ fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
                 "protocolVersion": "2025-06-18",
                 "capabilities": { "tools": {} },
                 "serverInfo": {
-                    "name": "browser-bridge",
+                    "name": "chromium-bridge",
                     "version": env!("CARGO_PKG_VERSION"),
                 }
             }),

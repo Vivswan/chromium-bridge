@@ -133,7 +133,7 @@ mod tests {
             ("Extension", CallError::Extension("boom".into())),
         ];
 
-        let path = format!("{}/contracts/errors.json", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/../../contracts/errors.json", env!("CARGO_MANIFEST_DIR"));
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let contract: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let errors = contract["errors"].as_array().expect("errors array");

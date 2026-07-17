@@ -254,7 +254,7 @@ async function refreshEnrollment() {
     parts.push(`<div class="enroll-state bad">等待批准:对比指纹。</div>`);
     parts.push(`<div class="fp">${escapeHtml(st.fingerprint || "")}</div>`);
     parts.push(
-      `<div class="enroll-meta">与终端里 <code>browser-bridge pair</code> 打印的指纹逐字符对比;` +
+      `<div class="enroll-meta">与终端里 <code>chromium-bridge pair</code> 打印的指纹逐字符对比;` +
         `任何差异都说明回应挑战的不是你刚配对的那个主机。</div>`
     );
     btns.push({
@@ -269,7 +269,7 @@ async function refreshEnrollment() {
     parts.push(`<div class="enroll-err">${escapeHtml(st.compromisedReason || "")}</div>`);
     parts.push(
       `<div class="enroll-meta">回应验证的不是被固定的那把钥匙。先弄清原因(是不是自己 revoke 过、` +
-        `重装过主机),再解除配对并重新运行 <code>browser-bridge pair</code>。</div>`
+        `重装过主机),再解除配对并重新运行 <code>chromium-bridge pair</code>。</div>`
     );
     btns.push({
       id: "enroll-revoke",

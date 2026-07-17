@@ -1,5 +1,5 @@
 {
-  "name": "browser-bridge-tests",
+  "name": "chromium-bridge-tests",
   "version": "0.1.0",
   "description": "Browser-bridge test harnesses: DOM-layer (bun + Chrome CDP) and extension smoke (puppeteer).",
   "private": true,

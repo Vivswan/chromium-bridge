@@ -32,18 +32,18 @@ import { fileURLToPath, pathToFileURL } from "url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const IS_WINDOWS = process.platform === "win32";
-const BIN = path.join(REPO, "target", "release", "browser-bridge" + (IS_WINDOWS ? ".exe" : ""));
+const BIN = path.join(REPO, "target", "release", "chromium-bridge" + (IS_WINDOWS ? ".exe" : ""));
 const DIST = path.join(REPO, "extension", "dist");
 const CHROME =
   process.env.CHROME_BIN ||
   (IS_WINDOWS
     ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
     : "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
-const HOST_NAME = "com.browser_bridge.host";
+const HOST_NAME = "com.vivswan.chromium_bridge.host";
 const REG_KEY = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 const LOCK = IS_WINDOWS
-  ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData/Local"), "browser-bridge/run.lock")
-  : path.join(os.homedir(), "Library/Application Support/browser-bridge/run.lock");
+  ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData/Local"), "chromium-bridge/run.lock")
+  : path.join(os.homedir(), "Library/Application Support/chromium-bridge/run.lock");
 const FIXTURE = pathToFileURL(path.join(REPO, "tests", "fixtures", "page.html")).href;
 
 // ── preflight (opt-in) ─────────────────────────────────────────────────────
@@ -202,7 +202,7 @@ async function main(): Promise<void> {
       testManifest,
       JSON.stringify({
         name: HOST_NAME,
-        description: "browser-bridge integration test",
+        description: "chromium-bridge integration test",
         path: hostPath,
         type: "stdio",
         allowed_origins: [`chrome-extension://${extId}/`],

@@ -24,7 +24,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "browser-bridge"
+name = "cfg-if"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "chromium-bridge"
+version = "0.1.0"
+dependencies = [
+ "chromium-bridge-core",
+]
+
+[[package]]
+name = "chromium-bridge-core"
 version = "0.1.0"
 dependencies = [
  "core-foundation",
@@ -38,12 +51,6 @@ dependencies = [
  "sha2",
  "thiserror",
 ]
-
-[[package]]
-name = "cfg-if"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "cmov"

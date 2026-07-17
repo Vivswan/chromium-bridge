@@ -1,6 +1,6 @@
 # Path prefixes exempt from the check-typography action.
 #
-# Everything listed here is inherited from upstream (whg517/browser-bridge),
+# Everything listed here is inherited from upstream (Vivswan/chromium-bridge),
 # which deliberately uses typographic punctuation (em-dashes, ellipses) in
 # comments and docs. Keeping these files byte-identical to upstream keeps
 # `git merge upstream/main` clean. New code outside these prefixes (notably

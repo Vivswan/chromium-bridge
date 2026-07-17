@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fault-injection / chaos suite for browser-bridge's runtime paths.
+"""Fault-injection / chaos suite for chromium-bridge's runtime paths.
 
 The mock e2e suite drives the happy path: every peer behaves, every frame is
 whole, every process exits on cue. Real bugs hide in the OTHER paths - a peer
@@ -131,7 +131,7 @@ _HOST_READY = b"bridge handshake complete"
 
 
 def start_host(label=None):
-    """Spawn `browser-bridge --native-host` the way Chrome does, in binary mode
+    """Spawn `chromium-bridge --native-host` the way Chrome does, in binary mode
     (native-messaging framing is raw bytes). Isolation-guarded via adversarial's
     precondition so it can never dial the developer's real socket. Sets
     `nh.connected` when the host logs the post-connect marker and `nh.ready` when

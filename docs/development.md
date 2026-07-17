@@ -10,7 +10,7 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 
 | Tool | Used for | Notes |
 |------|----------|-------|
-| Rust (cargo) | the `browser-bridge` binary | stable toolchain; `rustfmt` + `clippy` components |
+| Rust (cargo) | the `chromium-bridge` binary | stable toolchain; `rustfmt` + `clippy` components |
 | Node.js + npm | bundling the extension | esbuild build → `extension/dist/` |
 | Python 3 | protocol e2e tests | stdlib only |
 | bun | DOM-layer tests | runs `tests/dom_test.ts` |
@@ -113,8 +113,8 @@ Both binary modes log to **stderr** (stdout carries the wire protocols). Set the
 level with `BB_LOG`:
 
 ```sh
-BB_LOG=debug browser-bridge          # verbose
-BB_LOG=error browser-bridge          # quiet
+BB_LOG=debug chromium-bridge          # verbose
+BB_LOG=error chromium-bridge          # quiet
 # default is info
 ```
 

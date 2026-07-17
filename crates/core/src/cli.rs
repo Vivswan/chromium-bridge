@@ -25,7 +25,7 @@ pub enum Command {
 /// Chrome launches a Windows native-messaging host directly and appends the
 /// calling extension origin (plus a parent-window handle) to its command
 /// line. Native-host manifests have no `args` field, so the Windows installer
-/// points straight at browser-bridge.exe and this origin selects host mode.
+/// points straight at chromium-bridge.exe and this origin selects host mode.
 /// Unix installs keep using the explicit `--native-host` wrapper argument.
 pub fn is_native_host_mode(args: &[String]) -> bool {
     if args.get(1).map(String::as_str) == Some("--native-host") {
@@ -91,16 +91,16 @@ pub fn native_host_label(args: &[String]) -> Result<Option<String>, String> {
 
 pub fn print_help() {
     eprintln!(
-        "browser-bridge {version}\n\
+        "chromium-bridge {version}\n\
          Bridge an MCP client to a real Chrome via an extension + native host.\n\n\
          USAGE:\n    \
-         browser-bridge                Run as MCP server (for your MCP client)\n    \
-         browser-bridge doctor         Print a read-only health report (alias: status)\n    \
-         browser-bridge pair           Enroll: mint the Secure Enclave key (macOS)\n    \
-         browser-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
-         browser-bridge revoke         Delete the enrollment key (fails closed)\n    \
-         browser-bridge enclave-status Print the enrollment state\n    \
-         browser-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
+         chromium-bridge                Run as MCP server (for your MCP client)\n    \
+         chromium-bridge doctor         Print a read-only health report (alias: status)\n    \
+         chromium-bridge pair           Enroll: mint the Secure Enclave key (macOS)\n    \
+         chromium-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
+         chromium-bridge revoke         Delete the enrollment key (fails closed)\n    \
+         chromium-bridge enclave-status Print the enrollment state\n    \
+         chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, …) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
          --native-host via the host manifest. You normally never invoke either \
@@ -114,7 +114,7 @@ mod tests {
     use super::{is_native_host_mode, native_host_label, parse, Command};
 
     fn args(list: &[&str]) -> Vec<String> {
-        std::iter::once("browser-bridge")
+        std::iter::once("chromium-bridge")
             .chain(list.iter().copied())
             .map(String::from)
             .collect()
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn label_argument_is_parsed_and_validated() {
         let argv = |rest: &[&str]| -> Vec<String> {
-            std::iter::once("browser-bridge")
+            std::iter::once("chromium-bridge")
                 .chain(rest.iter().copied())
                 .map(String::from)
                 .collect()
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn chrome_windows_origin_is_recognized() {
         assert!(is_native_host_mode(&[
-            "browser-bridge.exe".into(),
+            "chromium-bridge.exe".into(),
             "chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/".into(),
             "--parent-window=123".into(),
         ]));

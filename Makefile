@@ -1,4 +1,4 @@
-# browser-bridge developer tasks. `make help` lists them.
+# chromium-bridge developer tasks. `make help` lists them.
 # Requires: cargo, python3. Optional: bun + Chrome (browser tests), shellcheck.
 # Every recipe is a plain command you can also run by hand (see docs/development.md).
 

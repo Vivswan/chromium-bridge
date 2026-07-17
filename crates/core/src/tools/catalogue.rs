@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn matches_contract() {
         let contract: Value =
-            serde_json::from_str(include_str!("../../contracts/tools.json")).unwrap();
+            serde_json::from_str(include_str!("../../../../contracts/tools.json")).unwrap();
         let ctools = contract["tools"].as_array().unwrap();
         let cnames: Vec<&str> = ctools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         let tools = all();

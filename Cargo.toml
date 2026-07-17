@@ -1,27 +1,37 @@
-[package]
-name = "browser-bridge"
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/host"]
+# Keep the default build/test/clippy surface pinned to the security core and
+# the host binary. Future members (e.g. a Tauri app) must be added here only
+# by an explicit decision, so `cargo test` stays the gate for the core.
+default-members = ["crates/core", "crates/host"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Bridge an MCP client to your real Chrome via an extension + native messaging host"
 license = "Apache-2.0"
 
-[[bin]]
-name = "browser-bridge"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 hmac = "0.13"
 libc = "0.2.186"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = { version = "0.11", default-features = false }
 thiserror = "2.0.18"
-
-[dev-dependencies]
 # Property-based testing for the protocol parsing boundary. Kept lean
 # (no `fork`/`timeout`/`regex-syntax` features) so it spawns no processes and
 # its dependency tree stays within the licenses allowed by `deny.toml`.
 proptest = { version = "1", default-features = false, features = ["std"] }
+# Secure Enclave enrollment key (crates/core/src/enclave.rs). The vetted
+# wrapper crate is used instead of hand-rolled Security.framework FFI;
+# OSX_10_15 is required for the data-protection keychain, the only keychain
+# that can hold Secure Enclave keys. The -sys crate is a direct dependency
+# only for the SecAccessControl flag constants the wrapper does not re-export,
+# and core-foundation only for reading key attributes (token-id validation).
+core-foundation = "0.10"
+security-framework = { version = "3", features = ["OSX_10_15"] }
+security-framework-sys = "2"
+chromium-bridge-core = { path = "crates/core" }
 
 # codegen-units=1 and strip=symbols also serve reproducibility: one codegen
 # unit removes parallel-codegen variance, and stripping drops the symbol/debug
@@ -34,14 +44,3 @@ lto = true
 panic = "abort"
 codegen-units = 1
 strip = "symbols"
-
-# Secure Enclave enrollment key (src/enclave.rs). The vetted wrapper crate is
-# used instead of hand-rolled Security.framework FFI; OSX_10_15 is required
-# for the data-protection keychain, the only keychain that can hold
-# Secure Enclave keys. The -sys crate is a direct dependency only for the
-# SecAccessControl flag constants the wrapper does not re-export, and
-# core-foundation only for reading key attributes (token-id validation).
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.10"
-security-framework = { version = "3", features = ["OSX_10_15"] }
-security-framework-sys = "2"

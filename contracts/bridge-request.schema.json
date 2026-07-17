@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/whg517/browser-bridge/contracts/bridge-request.schema.json",
+  "$id": "https://github.com/Vivswan/chromium-bridge/contracts/bridge-request.schema.json",
   "$comment": "SINGLE SOURCE OF TRUTH for the internal bridge REQUEST envelope shape (BridgeReq). Mirrors extension/src/shared/types.ts:BridgeReq / OpArgs; keep the two in sync (types.ts is not generated from this yet). This describes the CURRENT wide envelope: `op` is a plain string and `args` is a flat bag of optional fields shared across all ops. The typed / discriminated-union form (one args shape per op) is a planned follow-up (roadmap P1#3) and is NOT reflected here.",
   "title": "BridgeReq",
   "description": "A request from the MCP server, forwarded through the native host to the extension. Shape: { id, op, tabId?, args }.",

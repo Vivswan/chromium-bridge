@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh - build browser-bridge and register the native messaging host for
+# install.sh - build chromium-bridge and register the native messaging host for
 # any Chromium-based browser.
 #
 # Usage:
@@ -67,8 +67,8 @@ if [[ -d "$HERE/extension" || -f "$HERE/Cargo.toml" ]]; then
 else
   ROOT="$(cd "$HERE/.." && pwd)"
 fi
-HOST_NAME="com.browser_bridge.host"
-BINARY_NAME="browser-bridge"
+HOST_NAME="com.vivswan.chromium_bridge.host"
+BINARY_NAME="chromium-bridge"
 
 # Deterministic extension ID, derived from the public `key` in
 # extension/manifest.json (same for everyone, regardless of load path). If you
@@ -80,7 +80,7 @@ PINNED_EXTENSION_ID="mkjjlmjbcljpcfkfadfmhblmmddkdihf"
 # ID above, so nothing inside a downloaded archive can redirect verification
 # to a repository an attacker controls. Installing a fork's release requires
 # the user to say so explicitly with --release-repo.
-PINNED_RELEASE_REPO="whg517/browser-bridge"
+PINNED_RELEASE_REPO="Vivswan/chromium-bridge"
 
 # ---- platform + args ------------------------------------------------------
 
@@ -168,16 +168,16 @@ declare -a TARGET_DIRS=()
 declare -a LOCK_DIRS=()
 case "$OS" in
   Darwin)
-    INSTALL_DIR="${BB_INSTALL_DIR:-$HOME/.browser-bridge}"
-    [[ -n "${XDG_RUNTIME_DIR:-}" ]] && LOCK_DIRS+=("$XDG_RUNTIME_DIR/browser-bridge")
-    LOCK_DIRS+=("$HOME/Library/Application Support/browser-bridge")
+    INSTALL_DIR="${BB_INSTALL_DIR:-$HOME/.chromium-bridge}"
+    [[ -n "${XDG_RUNTIME_DIR:-}" ]] && LOCK_DIRS+=("$XDG_RUNTIME_DIR/chromium-bridge")
+    LOCK_DIRS+=("$HOME/Library/Application Support/chromium-bridge")
     ;;
   Linux)
-    INSTALL_DIR="${BB_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/browser-bridge}"
+    INSTALL_DIR="${BB_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/chromium-bridge}"
     CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-    [[ -n "${XDG_RUNTIME_DIR:-}" ]] && LOCK_DIRS+=("$XDG_RUNTIME_DIR/browser-bridge")
-    [[ -n "${XDG_CACHE_HOME:-}" ]] && LOCK_DIRS+=("$XDG_CACHE_HOME/browser-bridge")
-    LOCK_DIRS+=("$HOME/.cache/browser-bridge")
+    [[ -n "${XDG_RUNTIME_DIR:-}" ]] && LOCK_DIRS+=("$XDG_RUNTIME_DIR/chromium-bridge")
+    [[ -n "${XDG_CACHE_HOME:-}" ]] && LOCK_DIRS+=("$XDG_CACHE_HOME/chromium-bridge")
+    LOCK_DIRS+=("$HOME/.cache/chromium-bridge")
     ;;
   *)
     echo "error: unsupported platform: $OS (use install.ps1 on Windows)" >&2
@@ -299,7 +299,7 @@ fi
 # anything this project did not create.
 
 if [[ "$UNINSTALL" == "1" ]]; then
-  echo "[uninstall] removing browser-bridge artifacts on $OS"
+  echo "[uninstall] removing chromium-bridge artifacts on $OS"
   removed=0
 
   # Native-host manifest(s) — the file we wrote, named uniquely for this project.
@@ -442,7 +442,7 @@ EOF
       echo "error: Refusing to install." >&2
       return 1
     fi
-    name="browser-bridge-$tag-$platform-$arch"
+    name="chromium-bridge-$tag-$platform-$arch"
 
     command -v curl >/dev/null 2>&1 || {
       echo "error: curl is required to fetch the published checksum (or pass --expected-sha256)" >&2
@@ -513,7 +513,7 @@ EOF
 
 # ---- source vs prebuilt ---------------------------------------------------
 # Source checkout (Cargo.toml present) → build the binary + extension.
-# Prebuilt release tarball (no Cargo.toml) → use the shipped browser-bridge and
+# Prebuilt release tarball (no Cargo.toml) → use the shipped chromium-bridge and
 # extension/dist as-is; no Rust/Node needed.
 
 if [[ -f "$ROOT/Cargo.toml" ]]; then
@@ -633,7 +633,7 @@ for i in "${!TARGET_DIRS[@]}"; do
   cat > "$MANIFEST" <<EOF
 {
   "name": "$HOST_NAME",
-  "description": "Browser Bridge native messaging host",
+  "description": "Chromium Bridge native messaging host",
   "path": "$WRAPPER",
   "type": "stdio",
   "allowed_origins": $ORIGINS
@@ -654,11 +654,11 @@ SERVER_CMD="$INSTALL_DIR/$BINARY_NAME"
 CLAUDE_HINT="(re-run with --register-claude-code to add this automatically)"
 if command -v claude >/dev/null 2>&1; then
   if [[ "$REGISTER_CLAUDE" == "1" ]]; then
-    if claude mcp list 2>/dev/null | grep -q 'browser-bridge'; then
-      echo "[install] Claude Code already has 'browser-bridge' — left as is"
+    if claude mcp list 2>/dev/null | grep -q 'chromium-bridge'; then
+      echo "[install] Claude Code already has 'chromium-bridge' — left as is"
       CLAUDE_HINT="(already registered ✓)"
-    elif claude mcp add browser-bridge -- "$SERVER_CMD" >/dev/null 2>&1; then
-      echo "[install] registered 'browser-bridge' with Claude Code"
+    elif claude mcp add chromium-bridge -- "$SERVER_CMD" >/dev/null 2>&1; then
+      echo "[install] registered 'chromium-bridge' with Claude Code"
       CLAUDE_HINT="(added automatically ✓)"
     else
       echo "[install] warning: 'claude mcp add' failed — add it by hand (below)" >&2
@@ -686,19 +686,19 @@ NEXT STEPS  (no extension-ID copying — it's pinned to $EXTENSION_ID)
    absolute path filled in — just paste:
 
    • Claude Code (CLI):
-       claude mcp add browser-bridge -- "$SERVER_CMD"
+       claude mcp add chromium-bridge -- "$SERVER_CMD"
        $CLAUDE_HINT
 
    • Claude Desktop / generic MCP client (mcpServers JSON):
-       "browser-bridge": { "command": "$SERVER_CMD", "args": [] }
+       "chromium-bridge": { "command": "$SERVER_CMD", "args": [] }
 
    • Codex (~/.codex/config.toml):
-       [mcp_servers.browser-bridge]
+       [mcp_servers.chromium-bridge]
        command = "$SERVER_CMD"
        args = []
 
 3. Restart Chrome (so it picks up the native messaging host manifest).
 
 4. In your MCP client, try "list my browser tabs". Approve new sites via the
-   Browser Bridge toolbar icon when prompted.
+   Chromium Bridge toolbar icon when prompted.
 TIP

@@ -18,7 +18,7 @@ export interface IdDiagnosis {
  *
  * The native-messaging host's manifest pins the expected id in
  * `allowed_origins`, so if the loaded extension has a different id, Chrome
- * rejects the native connection and browser-bridge cannot work. This surfaces
+ * rejects the native connection and chromium-bridge cannot work. This surfaces
  * that failure loudly at startup instead of leaving the user to guess.
  *
  * We compare ids only — `chrome.runtime.getManifest()` strips the `key` field
@@ -42,7 +42,7 @@ export function diagnoseExtensionId(
     message:
       `extension id mismatch: running=${runtimeId} expected=${expected}. ` +
       `The native-messaging host pins the expected id in allowed_origins, so this ` +
-      `extension will be REJECTED and browser-bridge cannot connect. Likely cause: ` +
+      `extension will be REJECTED and chromium-bridge cannot connect. Likely cause: ` +
       `you loaded a build whose manifest lacks the pinned \`key\` (Chrome then derives ` +
       `a path-based id), or a Chrome Web Store build with a store-assigned id. Fix: load ` +
       `the built extension/dist that contains the pinned key, or update the pinned id ` +
