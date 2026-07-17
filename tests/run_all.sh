@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run all browser-bridge tests: protocol layer (e2e.py) + DOM layer (dom_test.ts).
+# Run all chromium-bridge tests: protocol layer (e2e.py) + DOM layer (dom_test.ts).
 # Exits 0 only if ALL tests pass.
 #
 # Requirements:
@@ -23,7 +23,7 @@ FAILED=0
 bb_find_cargo
 CARGO="$BB_CARGO"
 
-echo "═══ browser-bridge test suite ═══"
+echo "═══ chromium-bridge test suite ═══"
 echo "(1/4) build release binary"
 "$CARGO" build --release --manifest-path "$REPO/Cargo.toml" || { echo "BUILD FAILED"; exit 1; }
 

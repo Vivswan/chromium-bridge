@@ -1,15 +1,16 @@
-//! browser-bridge — thin binary entry point.
+//! chromium-bridge — thin binary entry point.
 //!
-//! All logic lives in the `browser_bridge` library crate (`src/lib.rs`); this
-//! binary only selects a mode from argv and forwards to the library:
+//! All logic lives in the `chromium_bridge_core` library crate
+//! (`crates/core`); this binary only selects a mode from argv and forwards to
+//! the library:
 //! - (no args): MCP server (default). Run under your MCP client's server config.
 //! - --native-host: Chrome-spawned bridge subprocess. Chrome launches this
 //!   via the native messaging host manifest; it should never be invoked by hand.
 //! - doctor/status, pair [--reset], revoke, enclave-status: user-run
 //!   subcommands (health report and the enrollment ceremony, ADR-0021).
 
-use browser_bridge::cli::{parse, print_help, Command};
-use browser_bridge::{doctor, enclave, mcp_server, native_host};
+use chromium_bridge_core::cli::{parse, print_help, Command};
+use chromium_bridge_core::{doctor, enclave, mcp_server, native_host};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

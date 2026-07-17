@@ -62,7 +62,7 @@ function showToast(question: string) {
     const card = document.createElement("div");
     card.className = "zcb-toast-card zcb-danger";
     card.innerHTML = `
-        <div class="zcb-toast-title">⚠ Browser Bridge</div>
+        <div class="zcb-toast-title">⚠ Chromium Bridge</div>
         <div class="zcb-toast-q"></div>
         <div class="zcb-toast-actions">
           <button class="zcb-toast-deny">Deny</button>
@@ -96,7 +96,7 @@ function showEvalToast(code: string, url: string, tabTitle: string) {
     const card = document.createElement("div");
     card.className = "zcb-toast-card zcb-danger zcb-eval-card";
     card.innerHTML = `
-        <div class="zcb-toast-title">⚠ Browser Bridge: 执行确认</div>
+        <div class="zcb-toast-title">⚠ Chromium Bridge: 执行确认</div>
         <div class="zcb-eval-meta"></div>
         <pre class="zcb-eval-code"></pre>
         <div class="zcb-eval-warn">上面的代码将在该页面以你的身份运行,可能读取 token / Cookie / 发起请求。</div>
@@ -147,7 +147,7 @@ export function showInfoToast(message: string) {
     const card = document.createElement("div");
     card.className = "zcb-toast-card zcb-info-card";
     card.innerHTML = `
-        <div class="zcb-info-title">Browser Bridge</div>
+        <div class="zcb-info-title">Chromium Bridge</div>
         <div class="zcb-info-text"></div>
         <div class="zcb-info-actions">
           <button class="zcb-info-cancel">取消</button>

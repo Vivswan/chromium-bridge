@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>Browser Bridge 设置</title>
+  <title>Chromium Bridge 设置</title>
   <style>
     :root {
       --fg: #111827; --muted: #6b7280; --faint: #9ca3af;
@@ -124,7 +124,7 @@
 </head>
 <body>
   <header>
-    <h1>Browser Bridge 设置</h1>
+    <h1>Chromium Bridge 设置</h1>
     <div class="sub">所有更改即时保存。安全类开关请谨慎调整。</div>
   </header>
 
@@ -193,7 +193,7 @@
 
   <!-- ===== 主机配对 ===== -->
   <h2>主机配对(Secure Enclave)</h2>
-  <div class="sub">流程:先在终端运行 <code>browser-bridge pair</code>(会弹 Touch ID,并打印公钥指纹),然后点击下方「开始配对」,再次通过 Touch ID 后,这里会显示主机的指纹。<b>逐字符对比两处指纹,一致才批准</b>;批准后公钥被固定。请注意默认行为的边界:主机身份只在<b>配对时</b>(有人在场)和你<b>手动「立即验证」时</b>被验证,重连<b>不会</b>自动重新验证——每次验证都要弹 Touch ID,而 MV3 每几分钟就重连一次,逐次验证不可用(ADR-0021)。因此配对之后主机若被同用户进程替换,默认不会被自动发现,直到你手动验证、开启下方的定期重新验证,或未来的每操作确认层级。</div>
+  <div class="sub">流程:先在终端运行 <code>chromium-bridge pair</code>(会弹 Touch ID,并打印公钥指纹),然后点击下方「开始配对」,再次通过 Touch ID 后,这里会显示主机的指纹。<b>逐字符对比两处指纹,一致才批准</b>;批准后公钥被固定。请注意默认行为的边界:主机身份只在<b>配对时</b>(有人在场)和你<b>手动「立即验证」时</b>被验证,重连<b>不会</b>自动重新验证——每次验证都要弹 Touch ID,而 MV3 每几分钟就重连一次,逐次验证不可用(ADR-0021)。因此配对之后主机若被同用户进程替换,默认不会被自动发现,直到你手动验证、开启下方的定期重新验证,或未来的每操作确认层级。</div>
   <div class="panel" id="enroll-panel">
     <div class="row"><span class="unit">加载中…</span></div>
   </div>
@@ -211,7 +211,7 @@
   <div class="card" id="card-groupTabs">
     <input type="checkbox" id="groupTabs" />
     <div class="body">
-      <div class="title">把 AI 打开的标签页归入「Browser Bridge」分组</div>
+      <div class="title">把 AI 打开的标签页归入「Chromium Bridge」分组</div>
       <div class="desc">通过 tab_open 打开的标签页会自动放进一个命名的标签分组,和你自己的标签页视觉隔离,可整组折叠/关闭。默认开启(ADR-0018)。</div>
     </div>
   </div>

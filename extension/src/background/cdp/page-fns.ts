@@ -671,7 +671,7 @@ export function confirmToast(question: string, timeoutMs: number): Promise<boole
       "box-shadow:0 10px 30px rgba(0,0,0,.16);padding:14px 16px;width:360px;" +
       "font-family:-apple-system,system-ui,sans-serif;font-size:13px;line-height:1.5;";
     const title = document.createElement("div");
-    title.textContent = "⚠ Browser Bridge";
+    title.textContent = "⚠ Chromium Bridge";
     title.style.cssText = "font-weight:700;margin-bottom:6px;color:#b91c1c;";
     const q = document.createElement("div");
     q.textContent = question;
@@ -728,7 +728,7 @@ export function evalToast(
       "box-shadow:0 10px 30px rgba(0,0,0,.16);padding:14px 16px;width:360px;" +
       "font-family:-apple-system,system-ui,sans-serif;font-size:13px;line-height:1.5;";
     const title = document.createElement("div");
-    title.textContent = "⚠ Browser Bridge: 执行确认 (CDP)";
+    title.textContent = "⚠ Chromium Bridge: 执行确认 (CDP)";
     title.style.cssText = "font-weight:700;color:#b91c1c;margin-bottom:6px;";
     const meta = document.createElement("div");
     meta.textContent = `${truncate(url || "", 60)} · 「${truncate(tabTitle || "无标题", 40)}」`;

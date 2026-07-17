@@ -103,10 +103,10 @@ export async function pageReload() {
   return { reloaded: tab.id };
 }
 
-// Name + color of the tab group browser-bridge collects its tabs into, so the
+// Name + color of the tab group chromium-bridge collects its tabs into, so the
 // AI's tabs are visually separated from the user's and can be collapsed/closed
 // as a unit. See ADR-0018.
-const WORKSPACE_TITLE = "Browser Bridge";
+const WORKSPACE_TITLE = "Chromium Bridge";
 const WORKSPACE_COLOR = "blue";
 
 export async function tabOpen(url: string) {
@@ -119,7 +119,7 @@ export async function tabOpen(url: string) {
   return { opened: t.id, url, groupId };
 }
 
-// Add a tab to the "Browser Bridge" workspace group in its window, creating the
+// Add a tab to the "Chromium Bridge" workspace group in its window, creating the
 // group (named + colored) if it doesn't exist yet. Best-effort: grouping is a
 // UX nicety, so a failure here never fails the underlying tab_open.
 async function addToWorkspaceGroup(

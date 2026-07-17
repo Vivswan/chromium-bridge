@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adversarial break-in regression suite for browser-bridge.
+"""Adversarial break-in regression suite for chromium-bridge.
 
 This is the socket-level attacker's view of the bridge. It drives the real
 release binary as subprocesses (reusing tests/e2e.py's harness) and tries to
@@ -97,9 +97,9 @@ def isolate():
     # and any HOME fallback must be isolated too.
     if sys.platform == "darwin":
         os.environ["HOME"] = rundir
-    # The lock lives at <XDG_RUNTIME_DIR>/browser-bridge/run.lock on every unix
+    # The lock lives at <XDG_RUNTIME_DIR>/chromium-bridge/run.lock on every unix
     # (src/ipc.rs runtime_dir). Recompute it and steer e2e's helpers at it.
-    lock = os.path.join(rundir, "browser-bridge", "run.lock")
+    lock = os.path.join(rundir, "chromium-bridge", "run.lock")
     e2e.LOCK = lock
 
     # Hard precondition: refuse to run if isolation did not take. The
@@ -263,7 +263,7 @@ def a1_rogue_python_peer():
     try:
         lf = e2e.wait_lock(srv)
         check(lf is not None, "A1 server up, lock written in isolated dir")
-        # A raw python process is not the browser-bridge binary. Server-side
+        # A raw python process is not the chromium-bridge binary. Server-side
         # attestation must drop it BEFORE any challenge byte: recv sees EOF.
         s = e2e.connect_bridge(lf)
         s.settimeout(3)

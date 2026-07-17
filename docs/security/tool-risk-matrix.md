@@ -1,6 +1,6 @@
 # Tool risk matrix
 
-Every tool browser-bridge exposes, with its risk level, what it can read/change,
+Every tool chromium-bridge exposes, with its risk level, what it can read/change,
 whether it touches credentials, the Chrome permission it needs, and how the user
 is protected. This is the reference for security review: **adding or changing a
 tool means updating this table** (see [SECURITY.md](../../SECURITY.md)).

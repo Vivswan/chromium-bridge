@@ -30,12 +30,12 @@ use crate::protocol::EnclaveControl;
 /// `pair` CLI mints under this label and the Chrome-spawned `--native-host`
 /// process finds the key by searching for it. Versioned so a future algorithm
 /// change can mint under a new label without colliding with the old key.
-pub const KEY_LABEL: &str = "com.browser-bridge.enclave.signing.v1";
+pub const KEY_LABEL: &str = "com.vivswan.chromium-bridge.enclave.signing.v1";
 
 /// Domain-separation prefix for challenge signatures. Binds every signature
 /// this key produces to the enrollment protocol, so a proof can never be
 /// replayed as a signature over some other meaning of the same bytes.
-pub const CHALLENGE_DOMAIN: &str = "browser-bridge-enclave-v1";
+pub const CHALLENGE_DOMAIN: &str = "chromium-bridge-enclave-v1";
 
 /// Bounds on attacker-supplied challenge fields (the extension relays them
 /// from its own logic today, but zero trust says bound them anyway).
@@ -48,7 +48,7 @@ pub const MAX_CONTEXT_LEN: usize = 4096;
 pub enum EnclaveError {
     #[error("Secure Enclave enrollment is only supported on macOS")]
     Unsupported,
-    #[error("no enrollment key found — run `browser-bridge pair` first")]
+    #[error("no enrollment key found — run `chromium-bridge pair` first")]
     NotEnrolled,
     #[error("invalid challenge: {0}")]
     InvalidChallenge(&'static str),
@@ -688,7 +688,7 @@ fn challenge_proof(nonce: &str, context: Option<&str>) -> Result<EnclaveControl,
 // CLI: pair / revoke / enclave-status
 // ----------------------------------------------------------------------------
 
-/// `browser-bridge pair [--reset]`: the user-present half of the enrollment
+/// `chromium-bridge pair [--reset]`: the user-present half of the enrollment
 /// ceremony. Mints the Enclave key (or reports the existing one), runs a
 /// presence-gated self-test signature so the user proves Touch ID works right
 /// now, and prints the public key + fingerprint for the user to compare
@@ -720,9 +720,9 @@ pub fn run_pair(reset: bool) -> i32 {
             println!(
                 "an enrollment key already exists on this machine; nothing was changed.\n\
                  pairing only completes with a freshly minted key, so to (re-)enroll run:\n\
-                 \n    browser-bridge pair --reset\n\
+                 \n    chromium-bridge pair --reset\n\
                  \n\
-                 to inspect the current key, run: browser-bridge enclave-status\n\
+                 to inspect the current key, run: chromium-bridge enclave-status\n\
                  if you never enrolled this machine yourself, treat the existing key as\n\
                  untrusted and run the reset."
             );
@@ -800,7 +800,7 @@ pub fn run_pair(reset: bool) -> i32 {
     0
 }
 
-/// `browser-bridge revoke` (also `pair --reset` uses the same deletion):
+/// `chromium-bridge revoke` (also `pair --reset` uses the same deletion):
 /// delete the enrollment key and the recorded policy. Fail-closed by
 /// construction — after this, proofs can no longer be produced, so a pinned
 /// extension refuses the bridge until the user re-pairs.
@@ -808,7 +808,7 @@ pub fn run_revoke() -> i32 {
     match EnrollmentKey::revoke() {
         Ok(true) => {
             HostConfig::remove();
-            println!("enrollment key revoked. re-run `browser-bridge pair` to re-enroll.");
+            println!("enrollment key revoked. re-run `chromium-bridge pair` to re-enroll.");
             0
         }
         Ok(false) => {
@@ -823,9 +823,9 @@ pub fn run_revoke() -> i32 {
     }
 }
 
-/// `browser-bridge enclave-status`: read-only report on the enrollment state.
+/// `chromium-bridge enclave-status`: read-only report on the enrollment state.
 pub fn run_status() -> i32 {
-    println!("browser-bridge enclave-status");
+    println!("chromium-bridge enclave-status");
     if cfg!(target_os = "macos") {
         println!("platform:   macos (Secure Enclave supported)");
     } else {
@@ -843,11 +843,11 @@ pub fn run_status() -> i32 {
             }
             Err(e) => println!("key:        present, but public key unreadable: {e}"),
         },
-        Ok(None) => println!("key:        none (run `browser-bridge pair`)"),
+        Ok(None) => println!("key:        none (run `chromium-bridge pair`)"),
         Err(EnclaveError::Unsupported) => println!("key:        n/a"),
         Err(e @ EnclaveError::KeyInvalid(_)) => println!(
             "key:        REJECTED — {e}\n            treat it as untrusted; \
-             run `browser-bridge pair --reset` to replace it"
+             run `chromium-bridge pair --reset` to replace it"
         ),
         Err(e) => println!("key:        lookup failed: {e}"),
     }

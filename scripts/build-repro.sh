@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-repro.sh - deterministic release build of the browser-bridge binary.
+# build-repro.sh - deterministic release build of the chromium-bridge binary.
 #
 # Wraps `cargo build --release --locked` with the environment that makes the
 # binary build deterministically: verified byte-identical across clean

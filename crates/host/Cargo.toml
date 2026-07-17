@@ -1,0 +1,13 @@
+[package]
+name = "chromium-bridge"
+version.workspace = true
+edition.workspace = true
+description = "Bridge an MCP client to your real Chromium browser via an extension + native messaging host"
+license.workspace = true
+
+[[bin]]
+name = "chromium-bridge"
+path = "src/main.rs"
+
+[dependencies]
+chromium-bridge-core.workspace = true

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for the browser-bridge shell scripts. Source it, don't run it:
+# Shared helpers for the chromium-bridge shell scripts. Source it, don't run it:
 #
 #   source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"   # from scripts/
 #

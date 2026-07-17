@@ -38,9 +38,12 @@ Chromium Bridge (adopted from `whg517/browser-bridge`, Apache-2.0) is a Rust
 MCP server + native-messaging host + MV3 extension that lets an MCP client
 drive the user's real Chromium browser (Brave, Chrome). This is small,
 security-sensitive software: it acts in a logged-in browser, so correctness
-and the safety model come first. Internal identifiers (crate name, binary
-name, `com.browser_bridge.host`) intentionally keep the upstream
-`browser-bridge` naming to stay mergeable with upstream.
+and the safety model come first. Identifiers are OUR OWN (a deliberate
+divergence from upstream, ADR-0023): crate/binary `chromium-bridge`,
+native-messaging host id `com.vivswan.chromium_bridge.host`, enclave keychain
+label `com.vivswan.chromium-bridge.enclave.signing.v1`. Upstream fixes are
+manual ports now, not clean merges; `LICENSE` and git history keep the
+upstream name.
 
 **The full development process is [`CONTRIBUTING.md`](./CONTRIBUTING.md) - it
 is authoritative; this file only summarizes.**
@@ -95,8 +98,9 @@ are **not** part of the required gate.
   PR. Security-critical surfaces (`src/ipc.rs`, `src/protocol.rs`, allowlist,
   eval/toast content scripts, `extension/manifest.json`, `install/`) deserve
   extra review care - see `SECURITY.md`.
-- `upstream` remote is `whg517/browser-bridge`; prefer changes that stay
-  mergeable with upstream.
+- `upstream` remote is `whg517/browser-bridge`. The rebrand (ADR-0023) ended
+  the keep-mergeable-with-upstream policy: port upstream fixes manually and
+  by judgment, do not shape our changes around a clean `git merge`.
 
 ### Security principle: zero trust (the browser is a critical asset)
 

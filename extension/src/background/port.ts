@@ -14,7 +14,7 @@ import {
   onPortConnected,
 } from "./enrollment";
 
-const NATIVE_HOST = "com.browser_bridge.host";
+const NATIVE_HOST = "com.vivswan.chromium_bridge.host";
 
 let port: chrome.runtime.Port | null = null;
 let portOk = false; // did the most recent connect succeed?
