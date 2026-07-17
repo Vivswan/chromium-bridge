@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   sync:
-    uses: Vivswan/repo-platform/.github/workflows/reusable-template-sync.yml@4f694d4
+    uses: Vivswan/repo-platform/.github/workflows/reusable-template-sync.yml@4f694d4ef5ce170be630bd7e5674174b44407886
     with:
       version: ${{ inputs.version || '' }}
     secrets:
