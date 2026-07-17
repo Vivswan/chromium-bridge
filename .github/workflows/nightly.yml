@@ -56,3 +56,37 @@ jobs:
         # The smoke test needs a non-headless browser (MV3 SW reliability), so
         # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
         run: xvfb-run -a bun tests/ext_test.ts
+
+  # Mutation testing lives here rather than in the PR gate because a full
+  # cargo-mutants pass is far too slow for every PR. Missed mutants (exit 2)
+  # are reported, not fatal: they measure test quality and get fixed
+  # deliberately, whereas a baseline build/test failure is a real break.
+  mutants:
+    name: Mutation testing (cargo-mutants, scheduled)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: cargo-mutants
+      - name: cargo mutants (missed mutants reported, not fatal)
+        run: |
+          rc=0
+          cargo mutants --no-shuffle || rc=$?
+          echo "== outcome summary =="
+          for f in missed timeout unviable; do
+            if [ -s "mutants.out/$f.txt" ]; then
+              echo "-- $f --"
+              cat "mutants.out/$f.txt"
+            fi
+          done
+          # Exit 2 means the tests missed some mutants: informational here.
+          # Anything else (baseline build/test failure, usage error) is real.
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            exit "$rc"
+          fi
