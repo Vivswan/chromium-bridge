@@ -4,6 +4,7 @@
 
 import type { BridgeReq } from "../shared/types";
 import { dispatch } from "./dispatch";
+import { maskErrorMessage } from "../shared/masking";
 
 const NATIVE_HOST = "com.browser_bridge.host";
 
@@ -62,7 +63,10 @@ function onNativeMessage(msg: BridgeReq) {
   }
   dispatch(msg).then(
     (data) => sendResponse(msg.id, true, data),
-    (err) => sendResponse(msg.id, false, undefined, String(err?.message || err || "error"))
+    // A rejection message can embed page-derived data (a CDP evaluate
+    // exception carries the page's error description), so this egress is
+    // masked like any other.
+    (err) => sendResponse(msg.id, false, undefined, maskErrorMessage(err))
   );
 }
 
