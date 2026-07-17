@@ -55,6 +55,13 @@ const GATED: RuntimeMsg[] = [
   // the trust set are extension-page only, like every other trust action.
   { type: "get_clients" },
   { type: "revoke_client", name: "claude-code" },
+  // The ADR-0030 kill switch and audit ring: reading the state, toggling the
+  // switch, and reading the trail are all extension-page only. set_kill is
+  // the crown jewel here - a page that could send it would be able to UNKILL.
+  { type: "get_kill" },
+  { type: "set_kill", on: false },
+  { type: "set_kill", on: true },
+  { type: "get_audit" },
   { type: "enroll_pair" },
   { type: "enroll_verify" },
   { type: "enroll_approve" },

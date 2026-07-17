@@ -96,6 +96,73 @@ export const ClientRevokeResultSchema = z.looseObject({
 
 export type ClientRevokeResult = z.infer<typeof ClientRevokeResultSchema>;
 
+// ---- ADR-0030: kill-switch frames and the SW-only mirror ---------------------
+
+// The host's answer to kill_status / kill_engage / kill_release, ALSO pushed
+// unsolicited at host startup and on observed transitions. `ok: false` (state
+// unreadable host-side) deliberately carries no `killed` claim; the extension
+// treats it as unknown and fails closed.
+export const KillStatusResultSchema = z.looseObject({
+  type: z.literal("kill_status_result"),
+  ok: z.boolean(),
+  killed: z.boolean().optional(),
+  error: z.string().optional(),
+});
+
+export type KillStatusResult = z.infer<typeof KillStatusResultSchema>;
+
+/** Classification only: is this frame the kill-status result? */
+export function isKillStatusFrame(msg: unknown): msg is KillStatusResult {
+  return KillStatusResultSchema.safeParse(msg).success;
+}
+
+// The extension-side mirror of the host's kill state, persisted in the #32
+// SW-only trusted storage. STRICT: a record with unexpected fields (or a
+// non-record value) is tampering evidence and the gate refuses on it rather
+// than treating it as absent - absent means "never heard from the host"
+// (allowed locally; the host side enforces), so mapping garbage to absent
+// would fail OPEN.
+export const KillMirrorSchema = z.strictObject({
+  state: z.enum(["alive", "killed", "unknown"]),
+  at: z.number(),
+});
+
+export type KillMirror = z.infer<typeof KillMirrorSchema>;
+
+// ---- ADR-0030: the extension-side audit ring ---------------------------------
+
+// The audit kinds the extension records locally (and forwards to the host's
+// on-disk trail via the audit_event control frame, which the host accepts
+// only for the extension-owned confirm_*/enroll_* kinds).
+export const AUDIT_EVENT_KINDS = [
+  "confirm_shown",
+  "confirm_allowed",
+  "confirm_denied",
+  "enroll_approved",
+  "enroll_rejected",
+  "enroll_revoked",
+  "client_revoked",
+  "kill_engaged",
+  "kill_released",
+  "kill_status_changed",
+] as const;
+
+export type AuditEventKind = (typeof AUDIT_EVENT_KINDS)[number];
+
+// One entry of the ring in trusted storage. Strict, like every stored trust
+// record: an entry that fails this shape is dropped on read (the ring is
+// display-only, so dropping is safe and fail-closed for the panel).
+export const AuditEntrySchema = z.strictObject({
+  at: z.number(),
+  kind: z.enum(AUDIT_EVENT_KINDS),
+  outcome: z.string().max(256).optional(),
+  tool: z.string().max(256).optional(),
+  name: z.string().max(256).optional(),
+  detail: z.string().max(512).optional(),
+});
+
+export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+
 const KEY_ID_HEX = /^[0-9a-f]{64}$/;
 
 // The pinned enrollment key: the extension-side trust anchor.

@@ -54,6 +54,26 @@ pub enum CallError {
     /// The extension executed the op and reported a failure of its own.
     #[error("{0}")]
     Extension(String),
+
+    /// The global kill switch is engaged (ADR-0030): every tool call is
+    /// refused until a trusted surface explicitly releases it. Never
+    /// retry-until-cleared territory for a client: the state changes only by
+    /// an explicit human act.
+    #[error(
+        "the bridge kill switch is engaged — all bridge activity is refused until it is \
+         explicitly released (`chromium-bridge unkill`, or the extension's options page)"
+    )]
+    Killed,
+
+    /// The kill state could not be read (a corrupt or unreadable revocation
+    /// record). Ambiguity fails closed: with the latch unknowable, the call is
+    /// refused exactly as if the switch were engaged. Field 0 is the read
+    /// error.
+    #[error(
+        "the bridge kill state could not be read ({0}); failing closed — \
+         see `chromium-bridge doctor` and docs/operations.md for recovery"
+    )]
+    KillStateUnknown(String),
 }
 
 impl CallError {
@@ -73,6 +93,8 @@ impl CallError {
             CallError::AmbiguousBrowser(_) => &specs::BROWSER_AMBIGUOUS,
             CallError::BrowserNotFound(..) => &specs::BROWSER_NOT_FOUND,
             CallError::Extension(_) => &specs::EXECUTION_FAILED,
+            CallError::Killed => &specs::BRIDGE_KILLED,
+            CallError::KillStateUnknown(_) => &specs::BRIDGE_KILLED,
         }
     }
 
@@ -248,6 +270,11 @@ error_taxonomy! {
         retryable: true,
         message: "No connected browser has that label (see list_browsers).",
     },
+    BRIDGE_KILLED {
+        category: Permission,
+        retryable: false,
+        message: "The bridge kill switch is engaged (or its state is unreadable); all bridge activity is refused until a trusted surface explicitly releases it.",
+    },
     INTERNAL_ERROR {
         category: Internal,
         retryable: false,
@@ -296,6 +323,8 @@ mod tests {
             CallError::AmbiguousBrowser("brave, chrome".into()),
             CallError::BrowserNotFound("edge".into(), "brave, chrome".into()),
             CallError::Extension("boom".into()),
+            CallError::Killed,
+            CallError::KillStateUnknown("corrupt".into()),
         ];
         for err in cases {
             assert!(

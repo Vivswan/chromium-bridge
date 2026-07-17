@@ -16,7 +16,45 @@
 | `chromium-bridge doctor` (alias `status`) | read-only diagnostics | Prints an environment and connectivity self-check; does not start a server and does not change any state. |
 | `chromium-bridge doctor --fix` | repair | Repairs (or first-registers) the native-messaging manifests for your Chromium browsers. The only mutating form of doctor. |
 | `chromium-bridge uninstall` | removal | Removes exactly the registrations this project wrote, nothing else. |
+| `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release ([ADR-0030](./adr/0030-global-kill-switch-and-audit.md)). |
+| `chromium-bridge unkill` | kill switch | Releases the kill switch, after an interactive confirmation on the terminal. Refuses a piped stdin, and refuses if the state cannot be read (see [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record)). |
+| `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
 | `chromium-bridge --help` | help | Usage information. |
+
+## Kill switch (kill / unkill)
+
+`chromium-bridge kill` is the emergency brake: one command that stops every
+MCP client from driving every connected browser, at once.
+
+- Live browser connections are severed within about a second, and new ones
+  are refused. In-flight tool calls fail fast with `CONNECTION_LOST`.
+- Every subsequent tool call, from every attached client, is refused with the
+  stable `BRIDGE_KILLED` error code. Clients stay connected so they can show
+  you the refusal instead of dying silently.
+- The state is persisted (in `revocation.json`, next to the lock file) and
+  survives restarts, reconnects, and reboots.
+- The extension's options page shows the state and has the same switch; a web
+  page cannot see or touch it.
+
+Nothing releases the switch on its own. `chromium-bridge unkill` (or the
+options-page toggle) is the only way back, and releasing demands proof of
+user presence ([ADR-0030](./adr/0030-global-kill-switch-and-audit.md)): once
+Phase 8 wires LocalAuthentication this is Touch ID; until then `unkill` asks
+you to type an explicit confirmation on a real terminal, and refuses outright
+when its stdin is a pipe, so no script or background program can quietly
+reopen the bridge through the CLI. The options-page release carries the same
+floor as its own confirmation dialog. Every release attempt is audited with
+the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`,
+`auth=extension_confirm`), whether it was granted, refused at the presence
+gate, or refused by an unwritable record after presence passed.
+
+If either command reports that the revocation record is unreadable, see the
+recovery section in
+[operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record);
+until then, everything keeps failing closed.
+
+`doctor` prints the kill state and exits non-zero while the switch is
+engaged or its state is unreadable.
 
 ## doctor / status (read-only self-check)
 
@@ -133,17 +171,37 @@ environment variables control the output:
 | `BB_LOG` | `error` \| `warn` \| `info` (default) \| `debug` | Log threshold. `info` and above print audit lines; set `warn`/`error` to silence auditing. |
 | `BB_LOG_FORMAT` | `text` (default) \| `json` | Format of audit lines. `json` emits one JSON object per line, convenient for machine collection. |
 
-**Audit events**: the MCP server emits one audit line for every `tools/call` it processes,
-with per-call fields: `req` (monotonic request id), `tool` (tool name), `outcome`
-(`ok`/`error`), `code` (on error, the stable error code from
-[`ERROR_SPECS` in error.rs](../src/packages/core/src/error.rs), otherwise `-`), and `dur_ms` (duration).
+**Audit events (stderr)**: every security decision emits one audit line -- tool calls
+(with `req`, `tool`, `outcome`, and on error the stable `code` from
+[`ERROR_SPECS` in error.rs](../src/packages/core/src/error.rs), plus `dur_ms`),
+harness admissions and refusals, client pairing and revocation, host-key
+revocations, kill-switch transitions, and the extension's confirmation and
+enrollment decisions (forwarded over the port). The same events are appended as
+strict JSON records to a durable, size-capped `audit.log` (0600, in the runtime
+directory next to the lock file), which survives the short-lived processes that
+write it.
 
 ```text
 # BB_LOG_FORMAT default (text)
-[AUDIT] ts=1721000000000 req=7 tool=page_click outcome=ok code=- dur_ms=12
+[AUDIT] ts=1721000000000 kind=tool_call req=7 tool=page_click outcome=ok dur_ms=12
 # BB_LOG_FORMAT=json
-{"kind":"audit","ts":1721000000000,"req":"7","tool":"page_eval","outcome":"error","code":"EXECUTION_FAILED","dur_ms":8}
+{"kind":"audit","ts":1721000000000,"kind":"tool_call","req":"7","tool":"page_eval","outcome":"error","code":"EXECUTION_FAILED","dur_ms":"8"}
 ```
+
+Read the durable trail with the read-only subcommand:
+
+```text
+$ chromium-bridge audit --limit 20
+2026-07-17 19:04:11.201Z  kill_engage     surface=cli outcome=ok
+2026-07-17 19:04:12.480Z  tool_call       tool=tab_list outcome=error code=BRIDGE_KILLED dur_ms=0
+2026-07-17 19:05:02.913Z  kill_release    surface=extension outcome=ok
+```
+
+A record the reader cannot parse is shown as `UNRECOGNIZED RECORD` and counted,
+never guessed at; a `dropped=n` field marks records lost to a failed write (a
+full disk, for example). Recording never blocks or fails an operation -- the
+trail observes decisions, it does not gate them
+([ADR-0030](./adr/0030-global-kill-switch-and-audit.md)).
 
 Error codes and the error taxonomy are in [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs).
 

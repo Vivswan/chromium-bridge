@@ -40,6 +40,19 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   read on these paths fails closed. Deleting `clients.json` alone is detected
   via the epoch record's one-way enrollment latch and fails closed as
   tampering; only deleting both files reverts to the ERROR-logged bootstrap.
+- **Enforcement (kill switch, ADR-0030)**: the same record carries the global
+  kill latch, written atomically with its epoch bump. While it is set (or the
+  record is unreadable), every `tools/call` from every harness -- the
+  broker's own and every relay, which share one dispatcher -- is answered
+  with the stable `BRIDGE_KILLED` taxonomy code before any routing. The
+  harness connection deliberately stays up so the refusal is delivered as a
+  typed error rather than an opaque disconnect. Release is explicit
+  (`unkill`, the options page, or the app through the same `core` call),
+  demands a user-presence attestation (Touch ID after Phase 8; a typed
+  terminal confirmation or the options page's dialog until then, with a
+  piped stdin refused outright), and refuses on an unreadable record. Both
+  transitions are audited; releases carry the auth path that authorized
+  them.
 - **Enforcement (protocol)**: strict JSON-RPC parsing; unknown methods →
   `-32601`; parse errors surfaced, not fatal; **stdout carries only protocol**
   (diagnostics go to stderr, or a stray write corrupts the stream).
@@ -92,6 +105,13 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     surface (ADR-0024): at most 16 distinct browser labels and 8 harness
     clients, at most 32 connections mid-handshake, a 10 s handshake+attach
     read timeout, and a per-relay rate limit.
+  - **Kill switch (ADR-0030)**: while the latch is set, the broker's watcher
+    severs every live browser connection within its one-second tick
+    (draining in-flight calls into typed failures) and browser attaches are
+    refused at admission. An unreadable revocation record gets the same
+    treatment: with the kill state unknowable, no browser connection may
+    stand. Relays stay attached; their calls are refused typed at
+    boundary ①.
   - **Windows downgrade**: Windows has no std Unix-domain socket, so the bridge
     is a loopback TCP socket, and neither the peer-UID check nor the attestation
     is compiled in (both are Unix only). Any local process can open the loopback
@@ -120,6 +140,24 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   outbound cap; single-writer + flush-per-frame on stdout; `panic = "abort"` +
   stderr panic hook so a panic can't corrupt the frame stream. Shutdown on stdin
   EOF.
+- **Host-handled control frames (ADR-0021/0025/0030)**: the enrollment
+  ceremony, the client-admin exchange, the kill frames
+  (`kill_status`/`kill_engage`/`kill_release` -> `kill_status_result`), and
+  the fire-and-forget `audit_event` are answered by the host itself and never
+  forwarded to the MCP server; the same frame types arriving FROM the server
+  leg are dropped as injections. `audit_event` is additionally
+  kind-whitelisted (only the extension-owned confirmation/enrollment kinds)
+  and the host stamps the surface itself, so the browser leg cannot forge a
+  host-side event into the audit trail. `kill_release` is the one admin frame
+  that restores capability rather than reducing it; ADR-0030 records why the
+  options page qualifies as a trusted surface for it, the gating that keeps a
+  web page away from it, and the user-presence gate in front of the release
+  itself (the options page's confirmation dialog is the pre-Phase-8 floor;
+  Touch ID replaces it host-side when Phase 8 lands). While the kill latch is
+  set the host runs a
+  control-plane-only mode: it never dials the broker, drops bridge frames,
+  and keeps exactly these control frames working so the release stays
+  reachable.
 - **Residual (host-to-extension is unauthenticated)**: `allowed_origins` pins
   which extension may open the host, but nothing pins which host the extension
   will accept. The manifest lives in a user-writable directory, so a same-user
@@ -158,6 +196,15 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     `requireEnrollment`, or the allowlist. The enrollment gate fails closed
     until the restriction lands. Residual: a sub-millisecond cold-start window
     before the async restriction resolves (see the threat model).
+  - **Kill-switch mirror and audit ring (ADR-0030)**: the SW-only mirror of
+    the host's kill state and the extension's audit ring live in the same
+    confined storage. The request gate refuses while the mirror reads
+    killed, unknown, or malformed (garbage never maps to the permissive
+    absent state); the mirror is written only from the host's
+    `kill_status_result` frames, never from a runtime message. The router
+    accepts `get_kill`/`set_kill`/`get_audit` only from the extension's own
+    pages, so no page or content script can read the state, toggle the
+    switch, or read the trail.
   - **Isolation**: content scripts run in the isolated world; `page_eval` uses a
     `Function` constructor (not the content script's scope) and its result is
     serialized safely (cycles/DOM/exotic types) before masking. Both page
@@ -184,6 +231,13 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   authenticated. See boundary ③.)
 - No page-level tool runs on a non-allowlisted origin (absent `allowAllSites`).
 - No tool writes cookies or web storage.
+- While the kill switch is engaged, or its record is unreadable, no tool call
+  is served and no browser connection stands; the switch clears only by an
+  explicit release from a trusted surface, never automatically
+  ([ADR-0030](../adr/0030-global-kill-switch-and-audit.md)).
+- The audit trail never gates a decision: recording is log-after-decide, and
+  a failed write drops the record (visibly, via the dropped counter) rather
+  than failing the operation in either direction.
 
 Changing any of these is a **security-relevant change** (see
 [SECURITY.md](../../SECURITY.md)).

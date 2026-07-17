@@ -57,6 +57,8 @@ options:
   section_timeouts: "Confirmation timeouts and grace window"
   section_tools: "Tool enablement"
   section_sites: "Allowed sites (allowlist)"
+  section_kill: "Kill switch"
+  section_audit: "Audit log"
 
 settings:
   require_enrollment_title: "Require host pairing (Secure Enclave enrollment)"
@@ -177,3 +179,30 @@ tools:
   console_get: "Read console logs (values masked)"
   page_handle_dialog: "Handle a page dialog (off by default)"
   page_upload: "Upload a local file (very high risk, off by default)"
+
+kill:
+  desc: "One switch that halts ALL bridge activity, everywhere: live browser connections are severed, every tool call is refused, and the state survives restarts. Only an explicit release (here, or `chromium-bridge unkill`) turns the bridge back on."
+  engage: "Engage kill switch"
+  release: "Release kill switch"
+  state_alive: "Bridge active"
+  state_killed: "KILLED: all bridge activity is refused"
+  state_unknown: "State unreadable: failing closed (see `chromium-bridge doctor`)"
+  state_unmirrored: "No state received from the host yet"
+  updated: "Last update: $1"
+  release_confirm: "Release the kill switch? MCP clients will be able to drive this browser again."
+  failed: "Kill switch request failed: $1"
+  no_reply: "no reply from the native host"
+
+audit:
+  desc: "Recent security decisions this extension made: confirmations, pairing approvals, revocations, kill-switch changes. Read-only; the durable trail lives on the host (`chromium-bridge audit`)."
+  empty: "No audit events recorded yet."
+  kind_confirm_shown: "Confirmation shown"
+  kind_confirm_allowed: "Confirmation approved"
+  kind_confirm_denied: "Confirmation denied"
+  kind_enroll_approved: "Pairing fingerprint approved"
+  kind_enroll_rejected: "Pairing fingerprint rejected"
+  kind_enroll_revoked: "Pairing revoked (unpaired)"
+  kind_client_revoked: "Trusted client revoked"
+  kind_kill_engaged: "Kill switch engage requested"
+  kind_kill_released: "Kill switch release requested"
+  kind_kill_status_changed: "Kill state changed"

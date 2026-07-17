@@ -977,6 +977,248 @@ def a19_deleting_the_allowlist_is_tampering_not_a_reset():
         _rm_clients()
 
 
+def a20_kill_reaches_every_enforcement_point():
+    """ADR-0030: with a PAIRED, admitted, actively-driving client, engaging the
+    kill switch must (1) turn the live broker's dispatch into typed
+    BRIDGE_KILLED refusals without dropping the harness (the refusal must be
+    deliverable), (2) sever the connected browser leg, (3) keep a fresh host
+    off the bridge entirely (control-plane only), and (4) refuse tool calls
+    from a freshly attached RELAY too (the second-instance path shares the
+    dispatcher). Note on the broker's browser-attach refusal: it is not
+    black-box reachable here, because the host itself refuses to dial while
+    killed (the layers are redundant by design); it is pinned by code review
+    and the broker unit tests."""
+    print("\n[A20] kill switch vs a LIVE broker (LIVE: typed refusal at every surface)")
+    if os.name == "nt":
+        note("A20 skipped: harness attestation is Unix-only")
+        return
+    _rm_lock()
+    _rm_clients()
+    srv = None
+    srv2 = None
+    nh = None
+    nh2 = None
+    try:
+        _pair_client("--name", "pytest", "--this-parent")
+        srv = start_server()
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A20 paired harness becomes the broker")
+        if lf is None:
+            return
+        c = e2e.McpClient(srv)
+        c.initialize()
+        c.initialized()
+        nh = e2e.start_bridge_host()
+        e2e.wait_host_ready(nh)
+        served = []
+        t = threading.Thread(
+            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
+        t.start()
+        c.call("tab_list", {}, _id=60)
+        t.join(timeout=3)
+        check(bool(served), "A20 the bridge works before the kill")
+
+        subprocess.run([e2e.BIN, "kill"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        rev = _read_revocation()
+        check(rev["killed"] is True and rev["kill_epoch"] == rev["epoch"],
+              "A20 the kill landed with its epoch bump in one record")
+
+        # (1) The live broker refuses with the stable code and KEEPS the
+        # harness connection up (a response arrives; no EOF).
+        r = c.call("tab_list", {}, _id=61)
+        text = r["result"]["content"][0]["text"]
+        check(r["result"].get("isError") is True and "BRIDGE_KILLED" in text,
+              "A20 dispatch refuses with the typed BRIDGE_KILLED error")
+        r = c.ping(_id=62)
+        check("result" in r, "A20 the harness connection survives to carry refusals")
+
+        # (2) The browser leg is severed within a watcher tick. Keep the
+        # handle either way: the finally block only kills a still-running
+        # host, so a failed severing is cleaned up, not leaked.
+        try:
+            nh.wait(timeout=8)
+        except Exception:
+            pass
+        check(nh.poll() is not None, "A20 the connected browser host is severed")
+
+        # (3) A fresh host never reaches the bridge while killed.
+        nh2 = e2e.start_bridge_host()
+        frame = e2e.nm_read(nh2)
+        check(frame is not None and frame.get("type") == "kill_status_result"
+              and frame.get("killed") is True,
+              "A20 a fresh host is control-plane only (announces killed)")
+        check(not nh2.ready.is_set(), "A20 the fresh host never handshakes the bridge")
+
+        # (4) A relay (second instance) attaches -- admission is a revocation
+        # decision, not a kill decision -- but its calls are refused the same
+        # typed way by the shared dispatcher.
+        srv2 = start_server()
+        c2 = e2e.McpClient(srv2)
+        c2.initialize()
+        c2.initialized()
+        r = c2.call("tab_list", {}, _id=63)
+        text = r["result"]["content"][0]["text"]
+        check(r["result"].get("isError") is True and "BRIDGE_KILLED" in text,
+              "A20 a relayed harness gets the same typed refusal")
+    finally:
+        for host in (nh, nh2):
+            if host is not None and host.poll() is None:
+                host.kill()
+                try:
+                    host.wait(timeout=3)
+                except Exception:
+                    pass
+        _reap(srv2)
+        _reap(srv)
+        e2e.unkill_interactive(check=False)
+        _rm_clients()
+
+
+def a21_corrupt_kill_marker_fails_closed():
+    """ADR-0030: with the revocation record corrupt, the kill/latch state is
+    unknowable, and EVERYTHING must fail closed: a live broker drops its
+    harness (the per-request guard reads the record first), a fresh instance
+    refuses to start, `unkill` refuses (releasing from an unknown state would
+    fail open) while the attempt still lands in the audit trail
+    (outcome=error, with the auth rung that passed), and `doctor` reports the
+    unreadable state non-zero."""
+    print("\n[A21] corrupt revocation record (LIVE: kill state unknown -> refuse everything)")
+    if os.name == "nt":
+        note("A21 skipped: harness attestation is Unix-only")
+        return
+    _rm_lock()
+    _rm_clients()
+    srv = None
+    try:
+        _pair_client("--name", "pytest", "--this-parent")
+        srv = start_server()
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A21 broker up before the corruption")
+        if lf is None:
+            return
+        c = e2e.McpClient(srv)
+        c.initialize()
+        c.initialized()
+
+        with open(_revocation_path(), "w") as f:
+            f.write("{ this is not json")
+
+        # The live broker: the per-request guard reads the record before any
+        # dispatch and fails the connection closed (EOF, no service).
+        c.send({"jsonrpc": "2.0", "id": 70, "method": "tools/call",
+                "params": {"name": "tab_list", "arguments": {}}})
+        finished, line = _call_with_timeout(lambda: srv.stdout.readline(), 10)
+        check(finished and line == "",
+              "A21 the live broker drops the harness on an unreadable record")
+
+        # A fresh instance refuses to serve at all.
+        srv2 = start_server()
+        try:
+            lf2 = e2e.wait_lock(srv2, timeout=3)
+            check(lf2 is None, "A21 a fresh instance refuses to start")
+            srv2.wait(timeout=5)
+            check(srv2.returncode == 1, "A21 the refusal is fail-closed (exit 1)")
+        finally:
+            _reap(srv2)
+
+        # unkill refuses: releasing from an unknown state would fail open.
+        # Driven interactively (pty + the exact phrase), so the refusal being
+        # tested is the unreadable RECORD, not the presence floor.
+        unkill = e2e.unkill_interactive(check=False)
+        check(unkill.returncode == 1 and "fail open" in unkill.stderr,
+              "A21 `unkill` refuses on an unreadable record")
+
+        # The presence-passing-but-write-refused attempt is DURABLY audited
+        # (ADR-0030: every release attempt leaves a trace), with the error
+        # outcome and the auth rung that vouched for it. The audit file is
+        # separate from the corrupt revocation record, so the trail survives.
+        audit_path = os.path.join(os.path.dirname(e2e.LOCK), "audit.log")
+        records = []
+        with open(audit_path) as f:
+            records = [json.loads(ln) for ln in f if ln.strip()]
+        errored = [r for r in records if r.get("kind") == "kill_release"
+                   and r.get("outcome") == "error"]
+        check(bool(errored),
+              "A21 the errored-after-presence release attempt is audited")
+        detail = errored[-1].get("detail", "")
+        check("auth=cli_confirm" in detail and "write refused" in detail,
+              "A21 the errored release names its auth rung and the write error")
+
+        # doctor reports it, non-zero.
+        doc = subprocess.run([e2e.BIN, "doctor"], capture_output=True, text=True)
+        check(doc.returncode == 1 and "UNREADABLE" in doc.stdout,
+              "A21 `doctor` surfaces the unreadable kill state")
+    finally:
+        _reap(srv)
+        _rm_clients()
+
+
+def a22_unkill_requires_interactive_user_presence():
+    """ADR-0030: releasing the kill switch requires the user-presence floor.
+    A piped stdin - a script, a harness, any other program - is refused even
+    with the exact phrase on it, so no same-user process can reopen the
+    bridge SILENTLY through the CLI; an interactive session that types the
+    wrong phrase is refused; the switch stays engaged through both refusals,
+    each of which lands in the audit trail with its presence reason; and the
+    typed phrase on a real terminal is what finally releases, audited with
+    auth=cli_confirm. (The remaining non-interactive path, editing
+    revocation.json directly, is the conceded same-user residual; Touch ID
+    hardware replaces this floor in Phase 8.)"""
+    print("\n[A22] unkill demands user presence (LIVE: piped/declined refused, typed releases)")
+    if os.name == "nt":
+        note("A22 skipped: the pty-driven confirmation is Unix-only")
+        return
+    _rm_lock()
+    audit_path = os.path.join(os.path.dirname(e2e.LOCK), "audit.log")
+    try:
+        os.remove(audit_path)
+    except FileNotFoundError:
+        pass
+    try:
+        subprocess.run([e2e.BIN, "kill"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        check(_read_revocation()["killed"] is True, "A22 the switch is engaged")
+
+        # (1) A piped stdin is refused outright, exact phrase and all.
+        piped = subprocess.run([e2e.BIN, "unkill"], input="release\n",
+                               capture_output=True, text=True)
+        check(piped.returncode == 1 and "not a terminal" in piped.stderr,
+              "A22 a piped `unkill` is refused (no silent script release)")
+        check(_read_revocation()["killed"] is True,
+              "A22 the switch stays engaged after the piped attempt")
+
+        # (2) An interactive session typing the wrong phrase is refused.
+        wrong = e2e.unkill_interactive(phrase="yes", check=False)
+        check(wrong.returncode == 1, "A22 the wrong phrase is refused")
+        check(_read_revocation()["killed"] is True,
+              "A22 the switch stays engaged after the declined prompt")
+
+        # (3) Both refusals are visible in the trail, with their reasons.
+        with open(audit_path) as f:
+            records = [json.loads(ln) for ln in f if ln.strip()]
+        refused = [r for r in records if r.get("kind") == "kill_release"
+                   and r.get("outcome") == "refused"]
+        check(len(refused) == 2, "A22 both refused releases are audited")
+        details = " | ".join(r.get("detail", "") for r in refused)
+        check("presence" in details,
+              "A22 the refusals name the presence gate that stopped them")
+
+        # (4) The typed phrase on a real terminal releases, and the audit
+        # record names the rung that authorized it.
+        ok = e2e.unkill_interactive()
+        check(ok.returncode == 0, "A22 the typed confirmation releases")
+        check(_read_revocation()["killed"] is False, "A22 the switch is off")
+        with open(audit_path) as f:
+            records = [json.loads(ln) for ln in f if ln.strip()]
+        released = [r for r in records if r.get("kind") == "kill_release"
+                    and r.get("outcome") == "ok"]
+        check(bool(released) and "auth=cli_confirm" in released[-1].get("detail", ""),
+              "A22 the release is audited with auth=cli_confirm")
+    finally:
+        e2e.unkill_interactive(check=False)
+
+
 def a13_manifest_substitution_xfail():
     print("\n[A13] native-messaging manifest substitution (XFAIL until enrollment #13)")
     # A malicious install could point the NM manifest at a different host binary,
@@ -1017,6 +1259,9 @@ def main():
         a17_revoke_reaches_the_live_broker()
         a18_extension_surface_revoke_via_host_control_frames()
         a19_deleting_the_allowlist_is_tampering_not_a_reset()
+        a20_kill_reaches_every_enforcement_point()
+        a21_corrupt_kill_marker_fails_closed()
+        a22_unkill_requires_interactive_user_presence()
         annotated_matrix()
         a13_manifest_substitution_xfail()
     finally:

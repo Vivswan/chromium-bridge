@@ -332,6 +332,14 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
                 Anchor::Hash(h) => format!("hash {h}"),
                 Anchor::TeamId(t) => format!("Team ID {t}"),
             };
+            // Log-after-decide (ADR-0030): the pairing is already persisted.
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::PairClient)
+                    .surface(crate::audit::Surface::Cli)
+                    .name(&parsed.name)
+                    .outcome("ok")
+                    .detail(&shown),
+            );
             println!("paired trusted client '{}' on {shown}", parsed.name);
             println!("harness admission is now ENFORCED (fail closed for anything else)");
             0
@@ -387,6 +395,13 @@ pub fn run_revoke_client(argv: &[String]) -> i32 {
     };
     match Allowlist::revoke(&name) {
         Ok(true) => {
+            // Log-after-decide (ADR-0030): the list rewrite + epoch bump are done.
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
+                    .surface(crate::audit::Surface::Cli)
+                    .name(&name)
+                    .outcome("ok"),
+            );
             println!("revoked trusted client '{name}'");
             println!(
                 "a live broker drops this client's connections and refuses its re-attach \
