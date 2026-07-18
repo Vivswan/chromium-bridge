@@ -14,16 +14,16 @@ export function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        "inline-flex h-9 items-center justify-between gap-2 rounded-lg border border-edge " +
-          "bg-surface px-3 text-sm text-body focus-visible:outline-2 focus-visible:outline-offset-1 " +
-          "focus-visible:outline-brand",
+        "inline-flex h-8 items-center justify-between gap-2 rounded-md border border-edge-strong " +
+          "bg-surface-1 px-2.5 text-xs font-medium text-text-1 focus-visible:outline-2 " +
+          "focus-visible:outline-offset-[-1px] focus-visible:outline-focus",
         className,
       )}
       {...props}
     >
       {children}
       <SelectPrimitive.Icon>
-        <ChevronDown className="size-4 opacity-60" />
+        <ChevronDown className="size-3.5 text-text-3" />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
@@ -40,8 +40,8 @@ export function SelectContent({
         position="popper"
         sideOffset={4}
         className={cn(
-          "z-50 min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border " +
-            "border-edge bg-surface shadow-lg",
+          "z-50 min-w-(--radix-select-trigger-width) overflow-hidden rounded-md border " +
+            "border-edge-strong bg-surface-3",
           className,
         )}
         {...props}
@@ -60,15 +60,15 @@ export function SelectItem({
   return (
     <SelectPrimitive.Item
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-md py-1.5 pl-7 pr-2 " +
-          "text-sm text-body outline-none data-[highlighted]:bg-edge-soft",
+        "relative flex cursor-pointer select-none items-center rounded-sm py-1.5 pl-7 pr-2 " +
+          "text-xs text-text-1 outline-none data-[highlighted]:bg-surface-4",
         className,
       )}
       {...props}
     >
       <span className="absolute left-2 flex size-3.5 items-center justify-center">
         <SelectPrimitive.ItemIndicator>
-          <Check className="size-3.5" />
+          <Check className="size-3.5 text-live" />
         </SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
