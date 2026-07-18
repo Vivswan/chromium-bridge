@@ -62,6 +62,35 @@ async function resolve(id: string, approved: boolean): Promise<void> {
   window.close();
 }
 
+// The panic exit: one SW-side message denies EVERYTHING pending (this
+// confirmation, the queue, new arrivals) and engages the kill switch (deny
+// settles first, synchronously, in the SW - see the router). The SW's
+// dismiss closes this window right after the deny; the engage continues in
+// the SW, so nothing is lost with the document.
+async function denyAndKill(): Promise<void> {
+  try {
+    await browser.runtime.sendMessage({ type: "confirm_deny_kill" });
+  } catch {
+    // SW gone; the request is already lost (denied) and nothing can act.
+  }
+  window.close();
+}
+
+// Same glyph as the popup/options kill rows: the one red vocabulary.
+function KillIcon({ size = 10 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 1.5v6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path
+        d="M4.5 3.6a6 6 0 1 0 7 0"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function fmtCountdown(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
@@ -120,6 +149,9 @@ export function ConfirmApp() {
   // When this window appeared: the footer anchor that ties the prompt to the
   // audit trail's timestamps.
   const [openedAt] = useState(() => Date.now());
+  // The footer's engage control fired: disabled from the first click (the SW
+  // closes this window moments later; no second click, no release here).
+  const [killBusy, setKillBusy] = useState(false);
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get("id") || "";
@@ -268,9 +300,33 @@ export function ConfirmApp() {
         {t(hardware ? "confirm.hardware_note" : "confirm.arm_note", [String(ARM_DELAY_MS)])}
       </p>
 
-      <div className="flex items-center justify-between gap-2 border-t border-edge pt-2 font-mono text-[10px] text-text-3">
-        <span className="truncate">{t("confirm.request_id", [payload.id])}</span>
+      {/* Footer, OUTSIDE the scroll region like the actions above it: the
+          request-id/timestamp line plus the compact panic exit (ADR-0030's
+          one-action brake, present on every surface). Engage only, never
+          release; last in DOM order so Deny keeps the default focus. It
+          denies this request first and then severs everything - both are
+          capability reduction, so it stays available in hardware mode too. */}
+      <div className="flex items-center gap-2 border-t border-edge pt-2 font-mono text-[10px] text-text-3">
+        <span className="min-w-0 flex-1 truncate">{t("confirm.request_id", [payload.id])}</span>
         <span className="tnum whitespace-nowrap">{new Date(openedAt).toLocaleString()}</span>
+        <Button
+          variant="danger"
+          className="flex-none gap-1 px-2 py-0.5 font-sans text-[10px]"
+          disabled={killBusy}
+          title={t("confirm.kill_note")}
+          aria-describedby="kill-note"
+          onClick={() => {
+            setKillBusy(true);
+            void denyAndKill();
+          }}
+        >
+          <KillIcon />
+          {t("kill.engage")}
+        </Button>
+        {/* the consequence, readable by assistive tech (title alone is not) */}
+        <span id="kill-note" className="sr-only">
+          {t("confirm.kill_note")}
+        </span>
       </div>
     </div>
   );
