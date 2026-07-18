@@ -474,21 +474,29 @@ against it. The canonical modules and their derived artifacts:
   built manifest, and the single-definition-site rule against the same
   values; the registration engine consumes the constants directly, so no
   installer copy exists to drift.
-- **Wire envelopes** (`BridgeReq` / `BridgeResp` in
-  `src/packages/core/src/protocol.rs`): the Rust types ARE the envelope
-  contract. The extension enforces hand-written Zod validators
-  (`src/packages/shared/src/envelope.ts`), and the double-derivation gate
+- **Wire envelopes and control frames** (`BridgeReq` / `BridgeResp`,
+  `EnclaveControl`, and `AdminControl` - the latter embedding
+  `allowlist::ClientEntry` - in `src/packages/core/src/protocol.rs`): the
+  Rust types ARE the contract. The extension enforces hand-written Zod
+  validators (`src/packages/shared/src/envelope.ts` for the envelopes,
+  `enclave.ts` for the control frames), and the double-derivation gate
   (`scripts/check-envelope-parity.ts`, `just check-envelope`) holds the
   two structurally equivalent in CI: schemars derives a schema from the
   Rust types (behind the gen-only `envelope-schema` feature, never in a
   shipped binary), `z.toJSONSchema` derives one from the Zod side, and
   both are normalized through the documented rules in
   `src/packages/shared/src/json-schema-normalize.ts` before an exact diff.
-  The parsers deliberately differ in a few places (Option null-arms,
-  JS-safe integer bounds, the id's forward-compat string arm); each such
-  asymmetry is erased only when it exactly matches the approved form
-  recorded there, so any drift beyond the recorded decisions fails CI. No
-  generated schema is checked in anywhere.
+  Control frames are diffed per `type` tag against a coverage plan in the
+  script: every host->extension frame is held to its Zod validator (or
+  pinned as a bare classification tag), extension->host frames are named
+  as enforced by the Rust serde parser itself, and an added or renamed
+  variant fails until the plan says how it is covered. The parsers
+  deliberately differ in a few places (Option null-arms, JS-safe integer
+  bounds, the id's forward-compat string arm, the control frames'
+  strict-host/loose-extension split); each such asymmetry is erased only
+  when it exactly matches the approved form recorded there, so any drift
+  beyond the recorded decisions fails CI. No generated schema is checked
+  in anywhere.
 
 ### 11.1 Error taxonomy (ERROR_SPECS)
 
