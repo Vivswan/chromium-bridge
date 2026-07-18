@@ -51,6 +51,41 @@ export const EnclaveErrorFrameSchema = z.looseObject({
 
 export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
 
+// ---- ADR-0031: per-action user-presence frames (host-handled) -----------------
+
+// The host's answers to a presence_challenge (the request is outbound only
+// and never classifies inbound). Distinct from the enrollment ceremony
+// frames on purpose: they are correlated by the confirmation provider, not
+// the enrollment state machine, and the signature they carry covers the
+// PRESENCE domain ("chromium-bridge-presence-v1"), never the enrollment one.
+export const PRESENCE_FRAME_TYPES = ["presence_proof", "presence_error"] as const;
+
+export const PresenceInboundFrameSchema = z.looseObject({
+  type: z.enum(PRESENCE_FRAME_TYPES),
+});
+
+export type PresenceInboundFrame = z.infer<typeof PresenceInboundFrameSchema>;
+
+// The signed per-action approval: same encoding as an enclave_proof, under
+// the presence domain. MUST be verified against the PINNED key.
+export const PresenceProofFrameSchema = z.looseObject({
+  type: z.literal("presence_proof"),
+  sig: z.string().min(1),
+  key_id: z.string().min(1),
+  pubkey: z.string().min(1),
+});
+
+export type PresenceProofFrame = z.infer<typeof PresenceProofFrameSchema>;
+
+// Stable reasons: the enclave reason codes plus "bridge_killed" and "busy".
+// Every reason is a denial; there is no fallback surface (no-downgrade rule).
+export const PresenceErrorFrameSchema = z.looseObject({
+  type: z.literal("presence_error"),
+  reason: z.string().optional(),
+});
+
+export type PresenceErrorFrame = z.infer<typeof PresenceErrorFrameSchema>;
+
 // ---- ADR-0025: trusted-client admin frames (host-handled) --------------------
 
 export const ADMIN_RESULT_FRAME_TYPES = ["client_list_result", "client_revoke_result"] as const;

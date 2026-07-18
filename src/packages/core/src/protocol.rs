@@ -524,6 +524,28 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
 ///   to its fail-closed compromised state without waiting for an opt-in
 ///   reverify. The extension treats it as capability reduction only: with a
 ///   pin it marks the bridge compromised; without one it is a no-op.
+///
+/// The PER-ACTION presence frames (ADR-0031) ride the same channel and are
+/// likewise host-handled, one round per confirmation of a crown-jewel tool
+/// (`page_eval`, `page_upload`):
+///
+/// - `presence_challenge { nonce, context? }` (extension -> host): same field
+///   bounds and freshness rules as `enclave_challenge` (fresh CSPRNG nonce,
+///   single-use, proof accepted only for the extension's own outstanding
+///   nonce). The signature covers `UTF8("chromium-bridge-presence-v1") ||
+///   0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")` - a DIFFERENT
+///   domain from the enrollment proof, so neither statement type can ever be
+///   replayed as the other. Signing raises the Secure Enclave user-presence
+///   prompt; the Touch ID tap is the approval. The host refuses (without
+///   prompting) while the kill switch is engaged (`bridge_killed`) and while
+///   another presence round is in flight (`busy`).
+/// - `presence_proof { sig, key_id, pubkey }` (host -> extension): same
+///   encoding as `enclave_proof`, under the presence domain. The extension
+///   MUST verify against its PINNED key.
+/// - `presence_error { reason }` (host -> extension): the enclave reason
+///   codes plus `bridge_killed` and `busy`. Every error is a denial; the
+///   extension must fail the confirmation closed, never fall back to a
+///   softer surface (the no-downgrade rule).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EnclaveControl {
@@ -546,6 +568,24 @@ pub enum EnclaveControl {
     EnclaveRevoke {},
     /// Host -> extension: the enrollment key is gone (ack or proactive push).
     EnclaveRevoked {},
+    /// Extension -> host: ask for one per-action user-presence approval
+    /// (ADR-0031).
+    PresenceChallenge {
+        nonce: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+    /// Host -> extension: the signed presence approval.
+    PresenceProof {
+        sig: String,
+        key_id: String,
+        pubkey: String,
+    },
+    /// Host -> extension: the presence round failed; the confirmation is
+    /// denied.
+    PresenceError {
+        reason: String,
+    },
 }
 
 /// Host-admin control frames (ADR-0025/0030), spoken over the native-messaging
@@ -653,6 +693,13 @@ pub enum FrameDisposition {
     /// A well-formed `enclave_revoke` (ADR-0025): delete the enrollment key
     /// locally, bump the revocation epoch, reply `enclave_revoked`.
     RevokeHostKey,
+    /// A well-formed `presence_challenge` (ADR-0031): sign the per-action
+    /// presence statement locally (raising the user-presence prompt), do not
+    /// forward.
+    PresenceChallenge {
+        nonce: String,
+        context: Option<String>,
+    },
     /// A well-formed `client_list` (ADR-0025): report the allowlist.
     ClientList,
     /// A well-formed `client_revoke` (ADR-0025): revoke the named client.
@@ -679,6 +726,10 @@ pub enum FrameDisposition {
     /// Carries the `enclave_challenge` type but does not parse as that frame:
     /// reply `enclave_error { reason: "invalid_challenge" }`, do not forward.
     Malformed,
+    /// Carries the `presence_challenge` type but does not parse as that
+    /// frame: reply `presence_error { reason: "invalid_challenge" }`, do not
+    /// forward.
+    MalformedPresence,
     /// Carries a `client_*` request type but does not parse as that frame:
     /// reply the matching `*_result { ok: false }`, do not forward.
     MalformedAdmin(&'static str),
@@ -705,6 +756,12 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
             // genuine extension sends the exact empty shape); dropping it
             // fails closed without inventing a misleading reason code.
             _ => FrameDisposition::Drop("malformed enclave_revoke"),
+        },
+        Some("presence_challenge") => match serde_json::from_value(frame.clone()) {
+            Ok(EnclaveControl::PresenceChallenge { nonce, context }) => {
+                FrameDisposition::PresenceChallenge { nonce, context }
+            }
+            _ => FrameDisposition::MalformedPresence,
         },
         Some("client_list") => match serde_json::from_value(frame.clone()) {
             Ok(AdminControl::ClientList {}) => FrameDisposition::ClientList,
@@ -747,6 +804,8 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
         Some("enclave_proof") => FrameDisposition::Drop("enclave_proof"),
         Some("enclave_error") => FrameDisposition::Drop("enclave_error"),
         Some("enclave_revoked") => FrameDisposition::Drop("enclave_revoked"),
+        Some("presence_proof") => FrameDisposition::Drop("presence_proof"),
+        Some("presence_error") => FrameDisposition::Drop("presence_error"),
         Some("client_list_result") => FrameDisposition::Drop("client_list_result"),
         Some("client_revoke_result") => FrameDisposition::Drop("client_revoke_result"),
         Some("kill_status_result") => FrameDisposition::Drop("kill_status_result"),
@@ -772,6 +831,9 @@ pub fn host_control_type(frame: &Value) -> Option<&str> {
             | "enclave_error"
             | "enclave_revoke"
             | "enclave_revoked"
+            | "presence_challenge"
+            | "presence_proof"
+            | "presence_error"
             | "client_list"
             | "client_list_result"
             | "client_revoke"
@@ -1223,6 +1285,29 @@ mod tests {
         assert!(
             serde_json::from_value::<EnclaveControl>(json!({ "type": "enclave_revoked" })).is_ok()
         );
+        // The presence frames (ADR-0031) reject unknown fields the same way,
+        // with positive controls.
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p",
+                    "extra": 1 })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "presence_error", "reason": "r", "extra": 1 })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "presence_challenge", "nonce": "n", "context": "c" })
+        )
+        .is_ok());
+        assert!(serde_json::from_value::<EnclaveControl>(
+            json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p" })
+        )
+        .is_ok());
         assert!(matches!(
             classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 })),
             FrameDisposition::Malformed
@@ -1404,6 +1489,58 @@ mod tests {
             classify_nm_frame(&json!({ "type": "enclave_error", "reason": "r" })),
             FrameDisposition::Drop("enclave_error")
         ));
+    }
+
+    #[test]
+    fn classify_handles_presence_frames_locally() {
+        // A well-formed presence_challenge is handled by the host (ADR-0031),
+        // never forwarded.
+        match classify_nm_frame(&json!({ "type": "presence_challenge", "nonce": "n",
+                                         "context": "c" }))
+        {
+            FrameDisposition::PresenceChallenge { nonce, context } => {
+                assert_eq!(nonce, "n");
+                assert_eq!(context.as_deref(), Some("c"));
+            }
+            other => panic!("expected PresenceChallenge, got {other:?}"),
+        }
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "presence_challenge", "nonce": "n" })),
+            FrameDisposition::PresenceChallenge { context: None, .. }
+        ));
+        // Malformed presence challenges are answered with a presence_error,
+        // never signed and never forwarded.
+        for bad in [
+            json!({ "type": "presence_challenge" }),
+            json!({ "type": "presence_challenge", "nonce": 5 }),
+            json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 }),
+        ] {
+            assert!(
+                matches!(classify_nm_frame(&bad), FrameDisposition::MalformedPresence),
+                "{bad}"
+            );
+        }
+        // Stray presence proof/error frames from the browser leg are dropped:
+        // they are host-originated frames only.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "presence_proof", "sig": "s" })),
+            FrameDisposition::Drop("presence_proof")
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "presence_error", "reason": "r" })),
+            FrameDisposition::Drop("presence_error")
+        ));
+        // And the socket->stdout pump recognizes all three as host control
+        // types, so a misbehaving server cannot inject a forged presence
+        // verdict (the signature check would catch it, but it must not even
+        // reach the extension).
+        for tag in ["presence_challenge", "presence_proof", "presence_error"] {
+            assert_eq!(
+                host_control_type(&json!({ "type": tag })),
+                Some(tag),
+                "{tag}"
+            );
+        }
     }
 
     #[test]

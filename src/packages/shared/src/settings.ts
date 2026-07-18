@@ -13,6 +13,14 @@ export const SettingsSchema = z.object({
   confirmHighRiskClick: z.boolean().default(true),
   // Confirm every page_eval (ADR-0008). Off = run unprompted.
   confirmPageEval: z.boolean().default(true),
+  // Per-action Touch ID confirmations (ADR-0031): route the page_eval /
+  // page_upload confirmations through the host's Secure-Enclave
+  // user-presence gate. Default ON; it takes effect only on a capable,
+  // enrolled device (macOS + a pinned host key). Off = those confirmations
+  // use the off-DOM extension window (still confirmed, not hardware-gated).
+  // The AUTH/enrollment Touch ID (the host-identity key) is mandatory and is
+  // NOT governed by this setting.
+  touchIdConfirm: z.boolean().default(true),
   // Confirm every tab_close. Off = close unprompted.
   confirmTabClose: z.boolean().default(true),
   warnPreciseSnapshot: z.boolean().default(true),

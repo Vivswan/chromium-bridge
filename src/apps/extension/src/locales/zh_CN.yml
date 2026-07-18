@@ -44,6 +44,7 @@ confirm:
   q_upload: "把这个本地文件上传到页面？"
   warn_eval: "这段代码将带着你的会话在页面中运行，可以读取令牌、Cookie 和页面数据，并能以你的身份发起请求。"
   warn_upload: "位于该路径的文件将离开你的磁盘并被发送到页面。"
+  touchid_wait: "请在系统提示上使用触控 ID 批准。批准只能在硬件提示上完成；此窗口只能拒绝。"
 
 options:
   title: "Chromium Bridge 设置"
@@ -74,6 +75,9 @@ settings:
   confirm_eval_title: "每次 page_eval 都需确认（运行任意 JS）"
   confirm_eval_desc: "每次 page_eval 都会显示完整代码并等待你批准（ADR-0008）。page_eval 运行任意 JavaScript，是风险最高的操作。"
   confirm_eval_warn: "关闭后，AI 可在没有任何提示的情况下运行任意 JS。只有在完全信任 AI 且需要无人值守自动化时才可关闭。"
+  touchid_confirm_title: "用触控 ID 批准 page_eval / page_upload"
+  touchid_confirm_desc: "在已配对的 Mac 上，这两个最高风险操作的批准需要安全隔区的触控 ID 轻触，任何页面或程序都无法伪造（ADR-0031）。确认窗口仍会显示正在批准的具体内容。"
+  touchid_confirm_warn: "关闭后，这些确认将改用扩展窗口的允许按钮，仍需确认，但没有硬件轻触作保。"
   confirm_tab_close_title: "确认 tab_close（关闭标签页）"
   confirm_tab_close_desc: "关闭标签页前会先请求批准。"
   confirm_tab_close_warn: "关闭后，AI 关闭标签页时不会有任何提示。"

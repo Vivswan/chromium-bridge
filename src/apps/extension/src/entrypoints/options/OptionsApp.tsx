@@ -133,6 +133,14 @@ export function OptionsApp() {
           onChange={(v) => void update("confirmPageEval", v)}
         />
         <SettingRow
+          title={t("settings.touchid_confirm_title")}
+          desc={t("settings.touchid_confirm_desc")}
+          warn={t("settings.touchid_confirm_warn")}
+          checked={settings.touchIdConfirm}
+          dangerOn="unchecked"
+          onChange={(v) => void update("touchIdConfirm", v)}
+        />
+        <SettingRow
           title={t("settings.confirm_tab_close_title")}
           desc={t("settings.confirm_tab_close_desc")}
           warn={t("settings.confirm_tab_close_warn")}

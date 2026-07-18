@@ -40,8 +40,9 @@
 //! (`chromium-bridge unkill`), the extension options page, or a future app
 //! through this same API -- and `release` demands a
 //! [`crate::presence::PresenceAttestation`], so no path can clear the latch
-//! without the user-presence ladder having run (Touch ID once Phase 8 lands;
-//! the per-surface interactive floors until then, see [`crate::presence`]).
+//! without the user-presence ladder having run (Touch ID via a Secure Enclave
+//! signing op on an enrolled Mac; the per-surface interactive floors where no
+//! Enclave key exists, see [`crate::presence`]).
 //! Failed or unavailable auth leaves the bridge killed, and every release --
 //! granted or refused -- is audited with the auth path that decided it. A
 //! corrupt record refuses BOTH directions (see
@@ -175,10 +176,11 @@ pub fn run_kill() -> i32 {
 }
 
 /// `chromium-bridge unkill`: release the switch, behind the user-presence
-/// gate (ADR-0030): Touch ID once Phase 8 lands; until then the CLI floor, an
-/// explicit typed confirmation on a real terminal. A piped stdin, a declined
-/// prompt, or a failed hardware check leaves the switch exactly as engaged
-/// as it was, audited as a refused release. Returns a process exit code.
+/// gate (ADR-0030/0031): a Secure Enclave Touch ID tap on an enrolled Mac,
+/// otherwise the CLI floor - an explicit typed confirmation on a real
+/// terminal. A piped stdin, a declined prompt, or a failed hardware check
+/// leaves the switch exactly as engaged as it was, audited as a refused
+/// release. Returns a process exit code.
 pub fn run_unkill() -> i32 {
     let auth = match presence::require_presence(
         "Releasing the kill switch lets MCP clients drive your browser again.",

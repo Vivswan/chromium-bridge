@@ -13,6 +13,10 @@
 // fingerprint the user compares against `chromium-bridge pair` output).
 
 export const CHALLENGE_DOMAIN = "chromium-bridge-enclave-v1";
+// ADR-0031: the per-action user-presence statements sign under their own
+// domain, so an enrollment proof and a presence approval can never be
+// replayed as one another even if nonce handling ever regressed.
+export const PRESENCE_DOMAIN = "chromium-bridge-presence-v1";
 // Host-enforced bounds on challenge fields (src/enclave.rs); we stay inside
 // them and reject anything outside before touching the crypto.
 export const MAX_NONCE_BYTES = 256;
@@ -57,10 +61,20 @@ export function base64Encode(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** Build the exact byte string a proof signs. Throws when nonce/context
- * violate the host's bounds (empty, NUL bytes, oversize): a challenge we
- * would not have issued must never verify. */
+/** Build the exact byte string an ENROLLMENT proof signs. Throws when
+ * nonce/context violate the host's bounds (empty, NUL bytes, oversize): a
+ * challenge we would not have issued must never verify. */
 export function buildChallengeMessage(nonce: string, context?: string): Uint8Array {
+  return buildDomainMessage(CHALLENGE_DOMAIN, nonce, context);
+}
+
+/** Build the exact byte string a PER-ACTION presence approval signs
+ * (ADR-0031): the same NUL-separated shape, under PRESENCE_DOMAIN. */
+export function buildPresenceMessage(nonce: string, context?: string): Uint8Array {
+  return buildDomainMessage(PRESENCE_DOMAIN, nonce, context);
+}
+
+function buildDomainMessage(domain: string, nonce: string, context?: string): Uint8Array {
   const nonceB = utf8.encode(nonce);
   if (nonceB.length === 0) throw new Error("nonce must be non-empty");
   if (nonceB.length > MAX_NONCE_BYTES) throw new Error("nonce too long");
@@ -68,7 +82,7 @@ export function buildChallengeMessage(nonce: string, context?: string): Uint8Arr
   const ctxB = utf8.encode(context ?? "");
   if (ctxB.length > MAX_CONTEXT_BYTES) throw new Error("context too long");
   if (ctxB.includes(0)) throw new Error("context must be NUL-free");
-  const domainB = utf8.encode(CHALLENGE_DOMAIN);
+  const domainB = utf8.encode(domain);
   const msg = new Uint8Array(domainB.length + 1 + nonceB.length + 1 + ctxB.length);
   // The two NUL separators are already 0 in the fresh Uint8Array.
   msg.set(domainB, 0);
@@ -181,13 +195,51 @@ export async function verifyProofAgainstPin(
   pinnedPubkeyB64: string,
   pinnedKeyId: string,
 ): Promise<PinVerifyResult> {
+  return verifyDomainProofAgainstPin(
+    buildChallengeMessage,
+    proof,
+    nonce,
+    context,
+    pinnedPubkeyB64,
+    pinnedKeyId,
+  );
+}
+
+/** Per-action presence verification (ADR-0031): identical pin-only rules,
+ * over the PRESENCE domain. A presence approval that fails this check is a
+ * denial AND host-substitution evidence (the caller marks compromised). */
+export async function verifyPresenceProofAgainstPin(
+  proof: ProofFields,
+  nonce: string,
+  context: string | undefined,
+  pinnedPubkeyB64: string,
+  pinnedKeyId: string,
+): Promise<PinVerifyResult> {
+  return verifyDomainProofAgainstPin(
+    buildPresenceMessage,
+    proof,
+    nonce,
+    context,
+    pinnedPubkeyB64,
+    pinnedKeyId,
+  );
+}
+
+async function verifyDomainProofAgainstPin(
+  buildMessage: (nonce: string, context?: string) => Uint8Array,
+  proof: ProofFields,
+  nonce: string,
+  context: string | undefined,
+  pinnedPubkeyB64: string,
+  pinnedKeyId: string,
+): Promise<PinVerifyResult> {
   let pinned: Uint8Array;
   let sig: Uint8Array;
   let message: Uint8Array;
   try {
     pinned = parsePubkey(pinnedPubkeyB64);
     sig = parseSig(proof.sig);
-    message = buildChallengeMessage(nonce, context);
+    message = buildMessage(nonce, context);
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }

@@ -45,6 +45,7 @@ confirm:
   q_upload: "Upload this local file to the page?"
   warn_eval: "This code runs in the page with your session. It can read tokens, cookies, and page data, and can make requests as you."
   warn_upload: "The file at this exact path will leave your disk and be sent to the page."
+  touchid_wait: "Approve with Touch ID on the system prompt. Approval happens only on the hardware prompt; this window can only deny."
 
 options:
   title: "Chromium Bridge settings"
@@ -75,6 +76,9 @@ settings:
   confirm_eval_title: "Confirm every page_eval (run arbitrary JS)"
   confirm_eval_desc: "Every page_eval shows the full code and waits for your approval (ADR-0008). page_eval runs arbitrary JavaScript - the highest-risk action."
   confirm_eval_warn: "With this off, the AI runs arbitrary JS with no prompt. Turn off only if you fully trust the AI and need hands-off automation."
+  touchid_confirm_title: "Approve page_eval / page_upload with Touch ID"
+  touchid_confirm_desc: "On a paired Mac, approving the two highest-risk actions takes a Secure Enclave Touch ID tap that no page or program can fake (ADR-0031). The confirmation window still shows exactly what is being approved."
+  touchid_confirm_warn: "With this off, those confirmations use the extension window's Allow button instead - still confirmed, but not backed by the hardware tap."
   confirm_tab_close_title: "Confirm tab_close (closing a tab)"
   confirm_tab_close_desc: "Closing a tab asks for approval first."
   confirm_tab_close_warn: "With this off, the AI closes tabs with no prompt."

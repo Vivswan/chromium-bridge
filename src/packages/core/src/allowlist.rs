@@ -52,6 +52,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::ipc::{self, ClientIdentity};
+use crate::presence::{self, PresenceAttestation};
 
 /// The current on-disk allowlist schema version. Bumped only on a
 /// breaking-shape change; unknown-field parsing is fail-closed
@@ -177,6 +178,14 @@ impl Allowlist {
     /// replaced (re-pair / renewal), so pairing the same client twice does not
     /// accumulate stale anchors. Persists atomically under the runtime lock.
     ///
+    /// Pairing GRANTS capability (the presence symmetry rule, ADR-0031), so
+    /// the write demands a [`PresenceAttestation`]: the only way to obtain
+    /// one is [`presence::require_presence`], which means no code path can
+    /// enroll a client without the user-presence ladder having run - Touch ID
+    /// where the machine has it, an explicit interactive confirmation where
+    /// it does not. Prefer [`pair_client_with_presence`], which runs the
+    /// ladder, audits both outcomes, and calls this.
+    ///
     /// The one-way enrollment latch (ADR-0025) is set BEFORE the allowlist is
     /// written, so a partial failure fails closed rather than open: if the
     /// latch write succeeds but the `clients.json` write then fails, the next
@@ -185,7 +194,11 @@ impl Allowlist {
     /// order would leave a usable allowlist with no deletion evidence, so a
     /// later `rm clients.json` would silently revert to open. The bump the
     /// latch carries also nudges running enforcement points to re-read.
-    pub fn pair(name: &str, anchor: Anchor) -> io::Result<()> {
+    pub fn pair(name: &str, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
+        // The attestation is structural evidence, consumed here; the audit
+        // record that names its path is written by the caller
+        // (pair_client_with_presence), log-after-decide.
+        let _ = auth;
         if !crate::ipc::validate_label(name) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -307,10 +320,117 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+// ---- The presence-gated pairing API (ADR-0031) ------------------------------
+
+/// Why a presence-gated pairing did not happen. Both variants leave the
+/// allowlist untouched.
+#[derive(Debug)]
+pub enum PairClientError {
+    /// The request was malformed (invalid client name); refused BEFORE the
+    /// presence prompt, so a bad request can never raise a hardware sheet.
+    InvalidName,
+    /// The user-presence gate refused: a hardware refusal, a non-interactive
+    /// stdin, or a declined prompt. Never downgraded, already audited.
+    Presence(presence::PresenceError),
+    /// Presence passed but the allowlist write failed.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for PairClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PairClientError::InvalidName => write!(
+                f,
+                "invalid client name (want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric)"
+            ),
+            PairClientError::Presence(e) => write!(f, "user presence not attested: {e}"),
+            PairClientError::Io(e) => write!(f, "could not write the allowlist: {e}"),
+        }
+    }
+}
+
+/// Pair a trusted client behind the user-presence gate (ADR-0031): the one
+/// entry point every surface uses to GRANT harness capability. Runs the
+/// presence ladder (Touch ID first; `floor` only when hardware is genuinely
+/// unavailable), audits the outcome either way with the rung that decided it,
+/// and only then writes the allowlist. Returns the attesting path so the
+/// surface can tell the user which proof authorized the pairing.
+///
+/// Surfaces: the CLI passes [`presence::Floor::CliConfirm`]; the desktop app
+/// passes [`presence::Floor::AppConfirm`] after showing its own modal
+/// confirmation (see the `Floor` docs for the obligation that carries).
+/// Revocation stays friction-free on purpose - removing capability never
+/// needs a human proof (the presence symmetry rule).
+pub fn pair_client_with_presence(
+    name: &str,
+    anchor: Anchor,
+    surface: crate::audit::Surface,
+    floor: presence::Floor,
+) -> Result<presence::PresencePath, PairClientError> {
+    use crate::audit::{self, AuditKind, AuditRecord};
+    // Validate before prompting: a malformed request must not be able to put
+    // a Touch ID sheet in front of the user.
+    if !crate::ipc::validate_label(name) {
+        return Err(PairClientError::InvalidName);
+    }
+    let reason = format!(
+        "Pair '{name}' as a trusted client of chromium-bridge? A trusted \
+         client can drive your browser through this bridge."
+    );
+    let auth = match presence::require_presence(&reason, floor) {
+        Ok(auth) => auth,
+        Err(e) => {
+            // Log-after-decide: the refusal has already happened; make the
+            // attempted silent enrollment visible in the trail.
+            audit::record(
+                AuditRecord::new(AuditKind::PairClient)
+                    .surface(surface)
+                    .name(name)
+                    .outcome("refused")
+                    .detail(&format!("presence: {e}")),
+            );
+            return Err(PairClientError::Presence(e));
+        }
+    };
+    let shown = match &anchor {
+        Anchor::Hash(h) => format!("hash {h}"),
+        Anchor::TeamId(t) => format!("Team ID {t}"),
+    };
+    match Allowlist::pair(name, anchor, auth) {
+        Ok(()) => {
+            // Log-after-decide (ADR-0030): the pairing is persisted; the
+            // record names the presence rung that authorized it.
+            audit::record(
+                AuditRecord::new(AuditKind::PairClient)
+                    .surface(surface)
+                    .name(name)
+                    .outcome("ok")
+                    .detail(&format!("{shown}; auth={}", auth.path().wire_name())),
+            );
+            Ok(auth.path())
+        }
+        Err(e) => {
+            audit::record(
+                AuditRecord::new(AuditKind::PairClient)
+                    .surface(surface)
+                    .name(name)
+                    .outcome("error")
+                    .detail(&format!(
+                        "{shown}; auth={}; write refused: {e}",
+                        auth.path().wire_name()
+                    )),
+            );
+            Err(PairClientError::Io(e))
+        }
+    }
+}
+
 // ---- CLI handlers ----------------------------------------------------------
 
-/// `pair-client`: add or replace a trusted client in the allowlist. Prints a
-/// confirmation and the resolved anchor. Returns a process exit code.
+/// `pair-client`: add or replace a trusted client in the allowlist, behind
+/// the user-presence gate (Touch ID where the machine has it; the typed
+/// terminal confirmation otherwise). Prints a confirmation and the resolved
+/// anchor. Returns a process exit code.
 pub fn run_pair_client(argv: &[String]) -> i32 {
     let parsed = match crate::cli::pair_client_args(argv) {
         Ok(p) => p,
@@ -326,26 +446,32 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
             return 1;
         }
     };
-    match Allowlist::pair(&parsed.name, anchor.clone()) {
-        Ok(()) => {
-            let shown = match &anchor {
-                Anchor::Hash(h) => format!("hash {h}"),
-                Anchor::TeamId(t) => format!("Team ID {t}"),
-            };
-            // Log-after-decide (ADR-0030): the pairing is already persisted.
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::PairClient)
-                    .surface(crate::audit::Surface::Cli)
-                    .name(&parsed.name)
-                    .outcome("ok")
-                    .detail(&shown),
+    let shown = match &anchor {
+        Anchor::Hash(h) => format!("hash {h}"),
+        Anchor::TeamId(t) => format!("Team ID {t}"),
+    };
+    match pair_client_with_presence(
+        &parsed.name,
+        anchor,
+        crate::audit::Surface::Cli,
+        presence::Floor::CliConfirm,
+    ) {
+        Ok(path) => {
+            println!(
+                "paired trusted client '{}' on {shown} (user presence: {})",
+                parsed.name,
+                path.wire_name()
             );
-            println!("paired trusted client '{}' on {shown}", parsed.name);
             println!("harness admission is now ENFORCED (fail closed for anything else)");
             0
         }
+        Err(e @ PairClientError::Presence(_)) => {
+            eprintln!("pair-client: refused — {e}");
+            eprintln!("nothing was paired");
+            1
+        }
         Err(e) => {
-            eprintln!("pair-client: could not write the allowlist: {e}");
+            eprintln!("pair-client: {e}");
             1
         }
     }
@@ -640,6 +766,23 @@ mod tests {
         let list = list_of(vec![]);
         assert!(apply_latch(Some(list.clone()), false).unwrap().is_some());
         assert!(apply_latch(Some(list), true).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_malformed_pair_request_is_refused_before_the_presence_prompt() {
+        // Order matters: the name check runs BEFORE require_presence, so a
+        // bad request can never raise a hardware sheet (and, under this test
+        // harness, never reaches the audit sink either - the early return is
+        // the whole point). See presence's module docs for why tests must
+        // not reach the hardware rung.
+        let err = pair_client_with_presence(
+            "bad name!",
+            Anchor::Hash("abc".into()),
+            crate::audit::Surface::Cli,
+            presence::Floor::CliConfirm,
+        )
+        .unwrap_err();
+        assert!(matches!(err, PairClientError::InvalidName));
     }
 
     #[test]

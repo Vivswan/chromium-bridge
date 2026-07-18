@@ -1,7 +1,11 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 import { installCdpLifecycleListeners } from "@/lib/background/cdp/registry";
-import { installConfirmationProvider } from "@/lib/background/confirm/service";
+import { EnclavePresenceProvider, presenceRoutingEnabled } from "@/lib/background/confirm/presence";
+import {
+  installConfirmationProvider,
+  installPresenceProvider,
+} from "@/lib/background/confirm/service";
 import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
@@ -49,8 +53,12 @@ export default defineBackground(() => {
 
   // The off-DOM confirmation surface (ADR-0027). Without a provider the
   // confirmation service denies everything, so install it before any bridge
-  // traffic can arrive.
-  installConfirmationProvider(new ExtensionWindowProvider());
+  // traffic can arrive. The Enclave user-presence provider (ADR-0031) rides
+  // on top of it for the "eval"/"upload" kinds: the window displays what is
+  // being approved, the Touch ID tap (a verified host signature) approves.
+  const windowProvider = new ExtensionWindowProvider();
+  installConfirmationProvider(windowProvider);
+  installPresenceProvider(new EnclavePresenceProvider(windowProvider), presenceRoutingEnabled);
 
   browser.runtime.onStartup.addListener(connectNative);
   browser.runtime.onInstalled.addListener(connectNative);

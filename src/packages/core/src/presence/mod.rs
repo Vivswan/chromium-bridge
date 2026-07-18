@@ -1,19 +1,33 @@
-//! Proof of user presence for capability-RESTORING acts (ADR-0030).
+//! Proof of user presence for capability-RESTORING acts (ADR-0030/0031).
 //!
-//! The kill switch's release is the one act in this codebase that restores
-//! capability instead of reducing it, and the user's directive for it is
-//! hardware-backed: releasing requires Touch ID. The hardware plumbing
-//! (LocalAuthentication) arrives with Phase 8; this module is the seam it
-//! plugs into, plus the interactive floor that holds the line until then.
+//! The presence symmetry rule: removing capability is always friction-free
+//! (kill, revoke, uninstall - fail-closed is the safe state), but RESTORING
+//! or GRANTING capability requires proof of a human. Two acts in this
+//! codebase do that - releasing the kill switch ([`crate::kill::release`])
+//! and pairing a trusted client ([`crate::allowlist`]) - and both demand a
+//! [`PresenceAttestation`] from this module. On macOS the proof is hardware:
+//! a Secure Enclave signing operation gated on the enrollment key's
+//! user-presence ACL, which forces Touch ID (or the login password through
+//! the same system sheet) and cannot succeed without a live user action.
+//! Elsewhere, and on a Mac with no enrollment key to gate on, the caller's
+//! interactive floor holds the line.
 //!
 //! ## The ladder, and why failure never falls down it
 //!
 //! [`require_presence`] tries the hardware provider first and falls back to
-//! the caller's floor ONLY when hardware is genuinely unavailable (no
-//! provider built yet, no sensor on this machine). A hardware check that ran
-//! and REFUSED never falls back: an attacker who can make Touch ID fail must
-//! not thereby downgrade the gate to a softer prompt. Failed or unavailable
-//! auth leaves the bridge exactly as killed as it was.
+//! the caller's floor ONLY when hardware is genuinely unavailable (non-macOS,
+//! or no usable Enclave key on this machine). A hardware check that RAN and
+//! REFUSED never falls back: an attacker who can make the Enclave prompt fail
+//! must not thereby downgrade the gate to a softer prompt. Failed or
+//! unavailable auth leaves capability exactly as reduced as it was.
+//!
+//! ## Preconditions run BEFORE the hardware prompt
+//!
+//! The CLI floor's surface requirement (stdin is a real terminal) is checked
+//! before any hardware prompt is raised, not merely inside the floor. A
+//! background script driving `chromium-bridge unkill` must not be able to
+//! put an unexplained Touch ID sheet in front of the user - a tap-phishing
+//! primitive - so a non-interactive invocation is refused outright, promptless.
 //!
 //! ## The floors
 //!
@@ -23,23 +37,39 @@
 //!   in some background script cannot silently reopen the bridge - and the
 //!   user must type the exact phrase.
 //! - [`Floor::ExtensionConfirm`]: the extension options page's explicit
-//!   confirmation dialog. The native host cannot raise a prompt of its own
-//!   (its stdin/stdout are the native-messaging protocol), so pre-Phase-8 it
-//!   accepts the surface's confirmation as the floor: the `kill_release`
-//!   frame only arrives from the extension Chrome pinned via
-//!   `allowed_origins`, and only the extension's own pages can make the
-//!   service worker send it (the #32 sender gate).
+//!   confirmation dialog. The native host cannot raise a text prompt of its
+//!   own (its stdin/stdout are the native-messaging protocol), so where
+//!   hardware is unavailable it accepts the surface's confirmation as the
+//!   floor: the `kill_release` frame only arrives from the extension Chrome
+//!   pinned via `allowed_origins`, and only the extension's own pages can
+//!   make the service worker send it (the #32 sender gate).
+//! - [`Floor::AppConfirm`]: the desktop app's explicit confirmation dialog,
+//!   same shape as the extension floor - the evidence lives in the calling
+//!   surface, which shows its own modal confirmation before asking. Only the
+//!   app's presence-gated actions may select it (see the variant docs).
 //!
 //! ## Residual, named
 //!
-//! Both floors attest intent on a trusted surface; neither is hardware. A
-//! same-user process can allocate a pty and type the phrase, or (more
+//! The floors attest intent on a trusted surface; none of them is hardware.
+//! A same-user process can allocate a pty and type the phrase, or (more
 //! directly) edit `revocation.json` itself - the conceded same-user boundary.
-//! The floors exist to make a silent, accidental, or script-driven unkill
-//! impossible, not to beat a hostile local process; Touch ID (Phase 8) is
-//! what upgrades this gate to hardware. The audit trail records which rung
-//! authorized every release, so a floor-authorized release is always
-//! distinguishable from a hardware-authorized one.
+//! The floors exist to make a silent, accidental, or script-driven
+//! capability restoration impossible, not to beat a hostile local process;
+//! Touch ID is what upgrades the gate to hardware where the machine has it.
+//! The audit trail records which rung authorized every act, so a
+//! floor-authorized one is always distinguishable from a hardware-authorized
+//! one.
+//!
+//! ## Testing rule (real prompts)
+//!
+//! On a Touch-ID Mac, [`require_presence`] with a non-CLI floor raises a REAL
+//! system prompt. Tests must never call it that way: unit coverage goes
+//! through the pure [`ladder`] with the hardware outcome injected. The one
+//! `require_presence` call tests may make is with [`Floor::CliConfirm`] under
+//! a non-terminal stdin, which the precondition refuses before any prompt.
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::fmt;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -48,13 +78,18 @@ use std::io::{self, BufRead, IsTerminal, Write};
 /// trail (`auth=<wire name>`) for every release, successful or refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresencePath {
-    /// Hardware user presence via LocalAuthentication (Phase 8).
+    /// Hardware user presence via a Secure Enclave signing operation gated on
+    /// the enrollment key's user-presence ACL (Touch ID or the login
+    /// password through the same system sheet).
     TouchId,
     /// The typed confirmation on the CLI's controlling terminal.
     CliConfirm,
     /// The extension options page's confirmation dialog, attested by the
     /// native-messaging channel (`allowed_origins` + the #32 sender gate).
     ExtensionConfirm,
+    /// The desktop app's confirmation dialog, attested by the app surface
+    /// that raised it.
+    AppConfirm,
 }
 
 impl PresencePath {
@@ -63,6 +98,7 @@ impl PresencePath {
             PresencePath::TouchId => "touch_id",
             PresencePath::CliConfirm => "cli_confirm",
             PresencePath::ExtensionConfirm => "extension_confirm",
+            PresencePath::AppConfirm => "app_confirm",
         }
     }
 }
@@ -106,14 +142,14 @@ impl fmt::Display for PresenceError {
             }
             PresenceError::NotInteractive => write!(
                 f,
-                "stdin is not a terminal; releasing the kill switch requires an \
-                 interactive confirmation (run it from a terminal, or use the \
-                 extension's options page)"
+                "stdin is not a terminal; this action restores or grants capability \
+                 and requires an interactive confirmation (run it from a terminal, \
+                 or use the app or the extension's options page)"
             ),
             PresenceError::Declined => {
                 write!(
                     f,
-                    "the confirmation phrase was not entered; nothing was released"
+                    "the confirmation phrase was not entered; nothing was changed"
                 )
             }
             PresenceError::Io(e) => write!(f, "could not read the confirmation: {e}"),
@@ -125,43 +161,69 @@ impl fmt::Display for PresenceError {
 /// unavailable. Chosen by the surface, because each surface has exactly one
 /// honest option (see the module docs).
 ///
-/// `ExtensionConfirm` succeeds without further checks here, because the
-/// evidence lives in the CHANNEL, not in this process: only the native
-/// host's control path (a `kill_release` frame from the pinned extension)
-/// may select it. Selecting it from any other call site would be claiming a
-/// confirmation that never happened; treat adding such a caller as a
-/// security change (SECURITY.md).
+/// `ExtensionConfirm` and `AppConfirm` succeed without further checks here,
+/// because the evidence lives in the CALLING SURFACE, not in this process:
+/// only the native host's control path (a `kill_release` frame from the
+/// pinned extension) may select the extension floor, and only the desktop
+/// app's own presence-gated actions - which show their own modal
+/// confirmation first - may select the app floor. Selecting either from any
+/// other call site would be claiming a confirmation that never happened;
+/// treat adding such a caller as a security change (SECURITY.md).
 #[derive(Debug, Clone, Copy)]
 pub enum Floor {
     CliConfirm,
     ExtensionConfirm,
+    AppConfirm,
 }
 
 /// What the hardware provider said. Public because it is the seam's
-/// contract: the Phase 8 LocalAuthentication provider returns exactly this.
-/// Distinct from [`PresenceError`] so the refused/unavailable distinction -
-/// the one that decides whether the floor is reachable - is explicit at the
-/// seam.
+/// contract: the Secure Enclave signing provider ([`macos`]) returns exactly
+/// this. Distinct from [`PresenceError`] so the refused/unavailable
+/// distinction - the one that decides whether the floor is reachable - is
+/// explicit at the seam.
 pub enum HardwareOutcome {
     Verified,
     Refused(String),
     Unavailable,
 }
 
-/// The Phase 8 seam: LocalAuthentication (Touch ID) plugs in here. Until
-/// that lands there is no hardware provider on any platform, so every call
-/// reports `Unavailable` and [`require_presence`] uses the floor.
-fn hardware_authenticate(_reason: &str) -> HardwareOutcome {
-    HardwareOutcome::Unavailable
+/// The hardware rung: a Secure Enclave signing operation gated on user
+/// presence (Touch ID / login password) on macOS; no provider exists on any
+/// other platform, so every call there reports `Unavailable` and
+/// [`require_presence`] uses the floor.
+///
+/// On a capable Mac this RAISES A REAL SYSTEM PROMPT - see the module docs'
+/// testing rule.
+fn hardware_authenticate(reason: &str) -> HardwareOutcome {
+    #[cfg(target_os = "macos")]
+    {
+        macos::authenticate(reason)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = reason;
+        HardwareOutcome::Unavailable
+    }
 }
 
 /// Attest user presence for `reason`, hardware first, `floor` only when
 /// hardware is unavailable. See the module docs for the no-downgrade rule.
+///
+/// The CLI floor's precondition (stdin is a terminal) runs BEFORE the
+/// hardware prompt: a script-driven invocation is refused promptless, so a
+/// background process cannot use this gate to put an unexplained Touch ID
+/// sheet in front of the user (tap phishing).
 pub fn require_presence(reason: &str, floor: Floor) -> Result<PresenceAttestation, PresenceError> {
+    if matches!(floor, Floor::CliConfirm) && !io::stdin().is_terminal() {
+        return Err(PresenceError::NotInteractive);
+    }
     ladder(hardware_authenticate(reason), floor, |floor| match floor {
         Floor::CliConfirm => cli_confirm(reason),
         Floor::ExtensionConfirm => Ok(PresenceAttestation {
             path: PresencePath::ExtensionConfirm,
+        }),
+        Floor::AppConfirm => Ok(PresenceAttestation {
+            path: PresencePath::AppConfirm,
         }),
     })
 }
@@ -185,7 +247,10 @@ fn ladder(
 }
 
 /// The exact phrase the CLI floor demands. A full word the user must mean,
-/// not a `y` a wrapper script might emit by habit.
+/// not a `y` a wrapper script might emit by habit. Shared by every
+/// capability-restoring CLI act (`unkill`, `pair-client`): each prints its
+/// own reason first, so the word is the deliberate keystroke, not the
+/// context.
 pub const CLI_CONFIRM_PHRASE: &str = "release";
 
 /// The CLI floor: refuse a non-terminal stdin, then require the phrase.
@@ -300,13 +365,39 @@ mod tests {
     }
 
     #[test]
-    fn the_extension_floor_attests_its_own_path() {
-        // Pre-Phase-8 (hardware unavailable) the extension floor succeeds and
-        // names itself, so the audit trail can never conflate it with
-        // hardware.
-        let att = require_presence("test", Floor::ExtensionConfirm).unwrap();
-        assert_eq!(att.path(), PresencePath::ExtensionConfirm);
-        assert_eq!(att.path().wire_name(), "extension_confirm");
+    fn the_extension_and_app_floors_attest_their_own_paths() {
+        // With hardware unavailable, the surface floors succeed and name
+        // themselves, so the audit trail can never conflate them with
+        // hardware. Injected through the pure ladder: on a Touch-ID Mac,
+        // require_presence with these floors raises a REAL system prompt
+        // (module docs, testing rule), so tests must never call it that way.
+        for (floor, path) in [
+            (Floor::ExtensionConfirm, PresencePath::ExtensionConfirm),
+            (Floor::AppConfirm, PresencePath::AppConfirm),
+        ] {
+            let att = ladder(HardwareOutcome::Unavailable, floor, |floor| match floor {
+                Floor::CliConfirm => panic!("wrong floor selected"),
+                Floor::ExtensionConfirm => Ok(PresenceAttestation {
+                    path: PresencePath::ExtensionConfirm,
+                }),
+                Floor::AppConfirm => Ok(PresenceAttestation {
+                    path: PresencePath::AppConfirm,
+                }),
+            })
+            .unwrap();
+            assert_eq!(att.path(), path);
+        }
+    }
+
+    #[test]
+    fn a_non_interactive_cli_invocation_is_refused_before_any_prompt() {
+        // The anti-tap-phishing precondition: under a test harness stdin is
+        // never a terminal, so the CLI floor refuses HERE, before
+        // hardware_authenticate could raise a system prompt. This is also
+        // what makes this the one require_presence call that is safe in a
+        // test on a Touch-ID Mac.
+        let err = require_presence("test", Floor::CliConfirm).unwrap_err();
+        assert!(matches!(err, PresenceError::NotInteractive));
     }
 
     #[test]
@@ -318,5 +409,6 @@ mod tests {
             PresencePath::ExtensionConfirm.wire_name(),
             "extension_confirm"
         );
+        assert_eq!(PresencePath::AppConfirm.wire_name(), "app_confirm");
     }
 }

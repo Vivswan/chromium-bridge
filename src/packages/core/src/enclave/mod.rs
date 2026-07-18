@@ -35,12 +35,15 @@ mod key;
 mod macos;
 mod pubkey;
 
-pub use challenge::{challenge_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN, MAX_NONCE_LEN};
-pub use cli::{run_pair, run_revoke, run_status};
+pub use challenge::{
+    challenge_message, presence_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN, MAX_NONCE_LEN,
+    PRESENCE_DOMAIN,
+};
+pub use cli::{run_pair, run_presence_selftest, run_revoke, run_status};
 pub use config::HostConfig;
 pub use der::der_to_raw_signature;
 pub use encoding::base64_encode;
-pub use key::{respond_to_challenge, EnrollmentKey};
+pub use key::{respond_to_challenge, respond_to_presence_challenge, EnrollmentKey};
 pub use pubkey::EnclavePublicKey;
 
 /// Keychain label of the enrollment signing key. Stable across processes: the
