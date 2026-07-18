@@ -7,7 +7,12 @@ import "@fontsource/jetbrains-mono/latin-700.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@/App";
+import { syncHtmlLang } from "@/lib/i18n";
 import "@/styles.css";
+
+// index.html hardcodes lang="en"; the runtime locale (zh_CN/zh_TW) must
+// override it or screen readers announce Chinese text with an English voice.
+syncHtmlLang();
 
 const rootElement = document.getElementById("root");
 if (rootElement === null) throw new Error("missing #root");

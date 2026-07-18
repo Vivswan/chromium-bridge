@@ -1,5 +1,5 @@
 import { Check, Copy } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { LanguagePicker } from "@/components/LanguagePicker";
 import { ChipMono, Consequence, Dot, ErrorNote, ViewShell } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
@@ -10,20 +10,34 @@ import { useAppStore } from "@/store";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  // the flash timer starts when the write settles and restarts on every
+  // copy, so back-to-back copies each get their full 1.5s of feedback
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const flash = (kind: "copied" | "failed") => {
+    setState(kind);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setState("idle"), 1500);
+  };
   return (
     <Button
       size="sm"
       aria-label={label}
+      aria-live="polite"
       onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
+        navigator.clipboard.writeText(text).then(
+          () => flash("copied"),
+          () => flash("failed"),
+        );
       }}
     >
-      {copied ? <Check size={11} aria-hidden /> : <Copy size={11} aria-hidden />}
-      {copied ? t("common.copied") : t("common.copy")}
+      {state === "copied" ? <Check size={11} aria-hidden /> : <Copy size={11} aria-hidden />}
+      {state === "copied"
+        ? t("common.copied")
+        : state === "failed"
+          ? t("common.copy_failed")
+          : t("common.copy")}
     </Button>
   );
 }
@@ -54,12 +68,21 @@ export function SetupView() {
 
   const browserDone = (browsers.data ?? []).some((b) => b.healthy);
   const cli = cliTool.data;
-  const mcpJson =
+  const mcpParts: { text: string; k?: boolean }[] | undefined =
     snippet.data === undefined
       ? undefined
-      : `{\n  "mcpServers": {\n    "chromium-bridge": {\n      "command": ${JSON.stringify(
-          snippet.data.hostPath,
-        )}\n    }\n  }\n}`;
+      : [
+          { text: "{\n  " },
+          { text: '"mcpServers"', k: true },
+          { text: ": {\n    " },
+          { text: '"chromium-bridge"', k: true },
+          { text: ": {\n      " },
+          { text: '"command"', k: true },
+          { text: ": " },
+          { text: JSON.stringify(snippet.data.hostPath) },
+          { text: "\n    }\n  }\n}" },
+        ];
+  const mcpJson = mcpParts?.map((part) => part.text).join("");
 
   return (
     <ViewShell
@@ -147,14 +170,21 @@ export function SetupView() {
                   {extension.data?.path != null ? (
                     <>
                       <ChipMono>{extension.data.path}</ChipMono>
-                      <Button size="sm" onClick={() => void api.extensionReveal()}>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          void api.extensionReveal().catch((err: unknown) => {
+                            setError(errorText(err));
+                          })
+                        }
+                      >
                         {t("setup.ext_reveal")}
                       </Button>
                     </>
                   ) : extension.error !== undefined ? (
                     <span className="mono text-[11px] text-danger">{extension.error}</span>
                   ) : extension.data !== undefined ? (
-                    <span className="text-danger">{t("setup.ext_missing")}</span>
+                    <span className="text-pending">{t("setup.ext_missing")}</span>
                   ) : (
                     <span className="text-text-3">{t("common.loading")}</span>
                   )}
@@ -188,23 +218,27 @@ export function SetupView() {
                     </div>
                     <pre>
                       <code>
-                        {"{\n  "}
-                        <span className="k">"mcpServers"</span>
-                        {": {\n    "}
-                        <span className="k">"chromium-bridge"</span>
-                        {": {\n      "}
-                        <span className="k">"command"</span>
-                        {": "}
-                        {JSON.stringify(snippet.data.hostPath)}
-                        {"\n    }\n  }\n}"}
+                        {mcpParts?.map((part, i) =>
+                          part.k === true ? (
+                            // biome-ignore lint/suspicious/noArrayIndexKey: static token list
+                            <span key={i} className="k">
+                              {part.text}
+                            </span>
+                          ) : (
+                            // biome-ignore lint/suspicious/noArrayIndexKey: static token list
+                            <Fragment key={i}>{part.text}</Fragment>
+                          ),
+                        )}
                       </code>
                     </pre>
                   </div>
                   <div className="mt-2 flex items-center gap-2">
-                    <Consequence className="quiet m-0 min-w-0">
-                      {t("setup.step3_claude")}{" "}
-                      <span className="mono break-all">{snippet.data.command}</span>
+                    <Consequence className="quiet m-0 flex-none">
+                      {t("setup.step3_claude")}
                     </Consequence>
+                    <span className="mono min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] text-text-3">
+                      {snippet.data.command}
+                    </span>
                     <CopyButton text={snippet.data.command} label={t("setup.copy_command")} />
                   </div>
                 </>
@@ -231,7 +265,7 @@ export function SetupView() {
                 ? "idle"
                 : cli.state === "installed"
                   ? cli.current
-                    ? "live"
+                    ? "idle"
                     : "pending"
                   : cli.state === "foreign"
                     ? "down"
@@ -267,12 +301,7 @@ export function SetupView() {
             </Button>
           )}
           {cli?.state === "installed" && (
-            <Button
-              size="sm"
-              variant="danger"
-              disabled={busy}
-              onClick={() => void cliAct(api.cliToolUninstall)}
-            >
+            <Button size="sm" disabled={busy} onClick={() => void cliAct(api.cliToolUninstall)}>
               {t("setup.cli_uninstall")}
             </Button>
           )}
