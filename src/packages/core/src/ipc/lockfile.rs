@@ -68,7 +68,7 @@ pub(crate) fn runtime_dir() -> PathBuf {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
             PathBuf::from(home).join("Library/Application Support/chromium-bridge")
         };
-        ensure_private_dir(&dir);
+        harden_runtime_dir(&dir);
         dir
     }
 
@@ -83,8 +83,29 @@ pub(crate) fn runtime_dir() -> PathBuf {
         } else {
             std::env::temp_dir().join(format!("chromium-bridge-{}", crate::sys::effective_uid()))
         };
-        ensure_private_dir(&dir);
+        harden_runtime_dir(&dir);
         dir
+    }
+}
+
+/// Directory hardening for [`runtime_dir`], which returns a path, not a
+/// `Result`: a directory that cannot be created or secured (a pre-planted
+/// symlink at the leaf, an unwritable parent) is LOGGED, loudly, and the path
+/// still returned - not silent, not fatal. What a refused directory loses is
+/// only the directory-level 0700 tightening: every security-bearing file
+/// inside guards its own creation (0600 + `O_NOFOLLOW` opens, exclusive
+/// creates - see [`crate::fsguard`]), and the operation that then touches it
+/// fails closed on its own error. Chmod-through-the-symlink is deliberately
+/// NOT attempted: chmodding a path an attacker chose is the primitive fsguard
+/// exists to remove.
+#[cfg(unix)]
+fn harden_runtime_dir(dir: &std::path::Path) {
+    if let Err(e) = crate::fsguard::ensure_private_dir(dir) {
+        log_warn!(
+            "ipc",
+            "could not secure the runtime directory {}: {e}",
+            dir.display()
+        );
     }
 }
 
@@ -155,14 +176,7 @@ struct RuntimeMutex(#[allow(dead_code)] fs::File);
 impl RuntimeMutex {
     fn acquire() -> io::Result<RuntimeMutex> {
         let path = runtime_dir().join("run.mutex");
-        let mut opts = fs::OpenOptions::new();
-        opts.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let f = opts.open(&path)?;
+        let f = crate::fsguard::open_private_rw(&path)?;
         f.lock()?; // blocks until exclusive; released on drop (close)
         Ok(RuntimeMutex(f))
     }
@@ -272,13 +286,8 @@ pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::
     tmp.set_extension("lock.tmp");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
         let _ = fs::remove_file(&tmp);
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut f = crate::fsguard::create_private_excl(&tmp)?;
         f.write_all(bytes)?;
         f.flush()?;
     }
@@ -303,15 +312,6 @@ pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::
     }
     fs::rename(&tmp, path)?;
     Ok(())
-}
-
-#[cfg(unix)]
-fn ensure_private_dir(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    if fs::create_dir_all(path).is_ok() {
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
-    }
 }
 
 pub(super) fn read_lock_or_err() -> io::Result<LockFile> {
