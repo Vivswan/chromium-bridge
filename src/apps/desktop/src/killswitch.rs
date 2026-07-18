@@ -22,10 +22,20 @@ pub fn engage() -> Result<u64, String> {
     })
 }
 
-/// Release, behind the presence gate (the Phase 8 seam). A refused gate is
-/// audited so an attempted silent unkill is visible in the trail, mirroring
-/// the CLI's `unkill` handler.
-pub fn release() -> Result<u64, String> {
+/// A granted release: the new epoch, and the presence path that authorized
+/// it (the UI shows which proof was used - Touch ID or the app floor).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseOutcome {
+    pub epoch: u64,
+    pub auth: &'static str,
+}
+
+/// Release, behind the presence gate (the Phase 8 seam; the caller must
+/// have shown the in-app confirm dialog first, see `crate::presence_seam`).
+/// A refused gate is audited so an attempted silent unkill is visible in the
+/// trail, mirroring the CLI's `unkill` handler.
+pub fn release() -> Result<ReleaseOutcome, String> {
     let att = match presence_seam::release_presence() {
         Ok(att) => att,
         Err(e) => {
@@ -39,12 +49,14 @@ pub fn release() -> Result<u64, String> {
             return Err(presence_seam::unavailable_guidance(&e));
         }
     };
-    kill::release(Surface::Core, att).map_err(|e| {
+    let auth = att.path().wire_name();
+    let epoch = kill::release(Surface::Core, att).map_err(|e| {
         format!(
             "refusing - the revocation record could not be read: {e}. Releasing \
              from an unknown state would fail open; see docs/operations.md."
         )
-    })
+    })?;
+    Ok(ReleaseOutcome { epoch, auth })
 }
 
 /// One line of the audit panel: a strictly parsed record, or an explicit

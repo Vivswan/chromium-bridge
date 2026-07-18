@@ -16,9 +16,15 @@ export const en = {
   "common.refresh": "Refresh",
   "common.copy": "Copy",
   "common.copied": "Copied",
+  "common.cancel": "Cancel",
   "common.error": "Error",
   "common.working": "Working...",
   "common.loading": "Loading...",
+
+  "auth.touch_id": "Touch ID",
+  "auth.app_confirm": "in-app confirmation",
+  "auth.cli_confirm": "terminal confirmation",
+  "auth.extension_confirm": "extension confirmation",
 
   "lang.label": "Display language",
   "lang.auto": "Match system",
@@ -31,6 +37,11 @@ export const en = {
   "overview.kill_unreadable": "State unreadable - every enforcement point is failing closed",
   "overview.kill_engage": "Engage kill switch",
   "overview.kill_release": "Release kill switch",
+  "overview.kill_release_dialog_title": "Release the kill switch?",
+  "overview.kill_release_dialog_body":
+    "Releasing lets MCP clients drive your browser again. On a Touch ID Mac you will be asked for your fingerprint.",
+  "overview.kill_release_confirm": "Release",
+  "overview.kill_released": "Kill switch released (authorized by $1).",
   "overview.kill_engage_hint":
     "One click, no confirmation: engaging only ever reduces what the bridge can do. Live browser connections drop within a second and the state survives restarts.",
   "overview.kill_release_hint":
@@ -104,7 +115,6 @@ export const en = {
   "clients.anchor": "Anchor",
   "clients.added": "Added",
   "clients.revoke": "Revoke",
-  "clients.revoke_confirm": "Really revoke?",
   "clients.empty": "No trusted clients.",
   "clients.add_title": "Add a client",
   "clients.add_hint":
@@ -115,6 +125,11 @@ export const en = {
   "clients.value_placeholder_hash": "lowercase hex hash",
   "clients.value_placeholder_team": "e.g. 3ZMH96L4V9",
   "clients.add": "Add client (user presence)",
+  "clients.add_dialog_title": "Trust this MCP client?",
+  "clients.add_dialog_body":
+    "Trusting '$1' lets it drive your browser - your tabs and logins. On a Touch ID Mac you will be asked for your fingerprint.",
+  "clients.add_confirm": "Trust client",
+  "clients.add_done": "Client added (authorized by $1).",
   "clients.hint_cli":
     "Tip: from the client's own terminal, `chromium-bridge pair-client --name <label> --this-parent` measures and pins it in one step.",
 
