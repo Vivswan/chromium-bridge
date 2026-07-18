@@ -30,9 +30,27 @@ const HEADLINE_KEY: Record<ConfirmKind, MessageKey> = {
   upload: "confirm.h_upload",
 };
 
-const WARNING_KEY: Partial<Record<ConfirmKind, MessageKey>> = {
+// One consequence line per control (design law): every kind states what
+// Allow does and that Deny changes nothing.
+const WARNING_KEY: Record<ConfirmKind, MessageKey> = {
+  click: "confirm.warn_click",
+  press: "confirm.warn_press",
+  select: "confirm.warn_select",
   eval: "confirm.warn_eval",
+  tab_close: "confirm.warn_tab_close",
   upload: "confirm.warn_upload",
+};
+
+// The meta chip speaks the catalogue's tool vocabulary (page_click, ...), the
+// same names the options grid and the audit trail use - never the internal
+// ConfirmKind spelling.
+const TOOL_NAME: Record<ConfirmKind, string> = {
+  click: "page_click",
+  press: "page_press",
+  select: "page_select",
+  eval: "page_eval",
+  tab_close: "tab_close",
+  upload: "page_upload",
 };
 
 async function resolve(id: string, approved: boolean): Promise<void> {
@@ -52,6 +70,9 @@ function fmtCountdown(seconds: number): string {
 
 // The which-gate-held strip: plain mono segments (dot + gate name) joined by
 // hairlines - the anti-spoof signature a page cannot fake outside this window.
+// The CLIENT segment stays idle/neutral: this window cannot see client
+// attestation (that check lives host-side), so it never overclaims - the
+// same semantics as the popup's micro pipeline.
 function FiringStrip({ hardware, t }: { hardware: boolean; t: (k: MessageKey) => string }) {
   const seg = (state: "passed" | "held" | "idle", label: string) => (
     <span
@@ -70,8 +91,8 @@ function FiringStrip({ hardware, t }: { hardware: boolean; t: (k: MessageKey) =>
   );
   return (
     <div className="flex items-center gap-2" role="img" aria-label={t("confirm.gate_strip_label")}>
-      {seg("passed", t("confirm.gate_client"))}
-      {link(true)}
+      {seg("idle", t("confirm.gate_client"))}
+      {link(false)}
       {hardware ? (
         <>
           {seg("held", t("confirm.gate_host_held"))}
@@ -96,6 +117,9 @@ export function ConfirmApp() {
   const [left, setLeft] = useState(0);
   // The countdown bar's full scale: seconds remaining when the payload landed.
   const initialLeft = useRef(0);
+  // When this window appeared: the footer anchor that ties the prompt to the
+  // audit trail's timestamps.
+  const [openedAt] = useState(() => Date.now());
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get("id") || "";
@@ -138,12 +162,14 @@ export function ConfirmApp() {
   // is the Touch ID tap on the host's system prompt (the service refuses a
   // window-side approval); Deny stays - removing capability is friction-free.
   const hardware = payload.hardware === true;
-  // The headline names the site plainly; the chip below keeps the exact origin.
+  // The headline names the TARGET site plainly (the requester is the paired
+  // MCP client, which this payload cannot attest - so the copy asks about
+  // the action's destination, never "X wants"); the chip keeps the exact origin.
   const subject = payload.origin.replace(/^https?:\/\//, "") || t("confirm.this_page");
-  const barPct = initialLeft.current > 0 ? Math.round((left / initialLeft.current) * 100) : 0;
+  const barFraction = initialLeft.current > 0 ? left / initialLeft.current : 0;
 
   return (
-    <div className="flex min-h-screen flex-col gap-3 bg-surface-0 p-4 text-text-1">
+    <div className="confirm-surface flex min-h-screen flex-col gap-3 bg-surface-0 p-4 text-text-1">
       <FiringStrip hardware={hardware} t={t} />
       <p className="text-[11px] leading-snug text-text-3">
         {t(hardware ? "confirm.spoof_note_host" : "confirm.spoof_note_browser")}{" "}
@@ -152,25 +178,30 @@ export function ConfirmApp() {
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-3">
         {t("confirm.via")}
-        <span className="chip-mono">{payload.kind}</span>
+        <span className="chip-mono">{TOOL_NAME[payload.kind]}</span>
+        {payload.kind === "click" && (
+          <span className="pill pill-pending">{t("confirm.high_risk")}</span>
+        )}
       </div>
 
       <h1 className="m-0 text-base font-semibold leading-snug tracking-tight">
         {t(HEADLINE_KEY[payload.kind], [subject])}
       </h1>
-      <div className="flex min-w-0 items-center gap-2 text-xs text-text-2">
-        <span className="chip-mono max-w-full">
-          <span className="truncate">{payload.origin}</span>
-        </span>
-        <span className="truncate">{payload.tabTitle}</span>
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-text-2">
+        <span className="chip-mono max-w-full whitespace-normal break-all">{payload.origin}</span>
+        <span className="min-w-0 text-text-3">&quot;{payload.tabTitle}&quot;</span>
       </div>
 
-      {/* the exact payload IS the decision: the only contained surface */}
-      <pre className="code-block m-0 max-h-80 min-h-[60px] flex-1 whitespace-pre-wrap break-words px-3 py-2.5">
+      {/* the exact payload IS the decision: the only contained surface.
+          Sized to content (mt-auto on the actions row absorbs slack) and
+          rendered whitespace-pre: source line breaks are preserved and long
+          lines scroll horizontally, so a display wrap can never be mistaken
+          for a source newline. */}
+      <pre className="code-block m-0 max-h-80 min-h-[60px] whitespace-pre px-3 py-2.5">
         {payload.detail}
       </pre>
 
-      {warnKey && <p className="consequence">{t(warnKey)}</p>}
+      <p className="consequence">{t(warnKey)}</p>
 
       <div>
         <div className="flex items-baseline justify-between text-[11px] text-text-3">
@@ -178,7 +209,12 @@ export function ConfirmApp() {
           <span className="tnum font-mono">{t("confirm.countdown", [fmtCountdown(left)])}</span>
         </div>
         <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-surface-4">
-          <div className="h-full bg-pending" style={{ width: `${barPct}%` }} />
+          {/* transform-only motion: scaleX drains smoothly between the 500ms
+              ticks (width would be a stepped layout animation) */}
+          <div
+            className="h-full origin-left bg-pending transition-transform duration-500 ease-linear"
+            style={{ transform: `scaleX(${barFraction})` }}
+          />
         </div>
       </div>
 
@@ -217,11 +253,12 @@ export function ConfirmApp() {
         )}
       </div>
       <p className="text-[11px] leading-snug text-text-3">
-        {t(hardware ? "confirm.hardware_note" : "confirm.arm_note")}
+        {t(hardware ? "confirm.hardware_note" : "confirm.arm_note", [String(ARM_DELAY_MS)])}
       </p>
 
-      <div className="flex items-center justify-between gap-2 border-t border-edge pt-2 font-mono text-[10px] text-text-4">
+      <div className="flex items-center justify-between gap-2 border-t border-edge pt-2 font-mono text-[10px] text-text-3">
         <span className="truncate">{t("confirm.request_id", [payload.id])}</span>
+        <span className="tnum whitespace-nowrap">{new Date(openedAt).toLocaleString()}</span>
       </div>
     </div>
   );

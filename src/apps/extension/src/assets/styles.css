@@ -292,7 +292,9 @@ body {
   background: var(--live-edge);
 }
 
-/* identity material (fingerprints, host ids, origins, tool names): always mono */
+/* identity material (fingerprints, host ids, origins, tool names): always mono.
+   Ligatures OFF: an origin or fingerprint must render character-for-character
+   (no glyph substitution on material the user compares by eye). */
 .chip-mono {
   display: inline-flex;
   align-items: center;
@@ -300,6 +302,7 @@ body {
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.05em;
+  font-variant-ligatures: none;
   color: var(--text-2);
   background: var(--surface-3);
   border: 1px solid var(--edge-strong);
@@ -333,16 +336,27 @@ body {
   font-weight: 600;
 }
 
-/* exact payloads and config, always mono; the confirm window's only box */
+/* exact payloads and config, always mono; the confirm window's only box.
+   Ligatures OFF is a security property here: the user approves the literal
+   characters that will execute, so '=>' must never render as an arrow glyph
+   (ADR-0027/0031). */
 .code-block {
   font-family: var(--mono);
   font-size: 11.5px;
   line-height: 1.55;
+  font-variant-ligatures: none;
   color: var(--text-1);
   background: var(--surface-1);
   border: 1px solid var(--edge);
   border-radius: var(--r-md);
   overflow: auto;
+}
+
+/* The confirm window is a decision surface: its focus/arming ring must never
+   speak the live/attested green (green on Deny reads as "go"). Neutral
+   high-contrast ink instead; unlayered, so it beats the Tailwind utility. */
+.confirm-surface :focus-visible {
+  outline-color: var(--text-1);
 }
 
 .kbd {
