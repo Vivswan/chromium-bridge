@@ -99,7 +99,7 @@ jobs:
           TAG="$RELEASE_TAG"
           NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
           mkdir -p "$NAME/extension"
-          cp -r src/apps/extension/dist/chrome-mv3 "$NAME/extension/dist"
+          cp -r build/extension/chrome-mv3 "$NAME/extension/dist"
           cp LICENSE README.md "$NAME/"
           # RELEASE.txt records which release this archive came from, so a
           # user can pick the matching published checksum / provenance
@@ -160,7 +160,7 @@ jobs:
           # Zip the built bundle with a top-level `dist/` folder so users can
           # point "Load unpacked" straight at the extracted directory.
           rm -rf dist-zip && mkdir dist-zip
-          cp -r src/apps/extension/dist/chrome-mv3 dist-zip/dist
+          cp -r build/extension/chrome-mv3 dist-zip/dist
           (cd dist-zip && zip -r "../$NAME.zip" dist)
           if command -v shasum >/dev/null 2>&1; then
             shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256"
@@ -318,7 +318,7 @@ jobs:
           # The asset name hardcodes arm64 (the supported macOS target), so
           # refuse to mislabel a build from a different runner arch.
           [ "$(uname -m)" = "arm64" ] || { echo "expected an arm64 runner, got $(uname -m)"; exit 1; }
-          BUILT="$(ls target/release/bundle/dmg/*.dmg)"
+          BUILT="$(ls build/dmg/*.dmg)"
           ASSET="chromium-bridge-app-${RELEASE_TAG}-macos-arm64.dmg"
           cp "$BUILT" "$ASSET"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"

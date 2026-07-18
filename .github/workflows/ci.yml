@@ -115,9 +115,9 @@ jobs:
         run: bun run --cwd src/packages/shared test
       - run: bun run --cwd src/apps/extension test
       - run: bun run --cwd src/apps/extension build
-      # With dist/ present, check-extension-id.ts also re-asserts the built
-      # manifest's security surface (key, permissions, host access); the
-      # version-consistency job runs it build-free and covers only the
+      # With build/extension/ present, check-extension-id.ts also re-asserts
+      # the built manifest's security surface (key, permissions, host access);
+      # the version-consistency job runs it build-free and covers only the
       # source-level identity parity.
       - name: Built-manifest security surface
         run: bun scripts/check-extension-id.ts

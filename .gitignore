@@ -19,8 +19,11 @@
 /src/apps/extension/src/public/icons/
 /src/apps/desktop/icons/
 
-# Extension build output
-/src/apps/extension/dist/
+# Unified build-output folder: all build deliverables (extension bundle,
+# desktop UI, signed app copy, dmg staging + image) land here
+/build/
+
+# Extension build staging (WXT codegen; the bundle itself goes to /build/)
 src/apps/extension/.wxt/
 
 # Docs site build output and Astro's generated types

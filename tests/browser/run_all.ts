@@ -61,7 +61,7 @@ if (!run([cargo, "build", "--release", "--manifest-path", join(repo, "Cargo.toml
 
 console.log("");
 console.log("(2/4) build extension bundle (esbuild)");
-// The DOM + smoke tests exercise the BUILT src/apps/extension/dist/, so build it first.
+// The DOM + smoke tests exercise the BUILT build/extension/, so build it first.
 if (!existsSync(join(repo, "node_modules"))) {
   run(["bun", "install"]);
 }
@@ -84,8 +84,8 @@ console.log("(4/4) DOM-layer + smoke tests");
 // --load-extension launch can capture and close your real session. We do NOT
 // default CHROME_BIN to the system Chrome; if it's unset, skip the browser suite.
 const chromeBin = process.env.CHROME_BIN;
-if (!existsSync(join(repo, "src/apps/extension/dist/chrome-mv3"))) {
-  console.log("  SKIP  src/apps/extension/dist/chrome-mv3 missing (build step above did not run)");
+if (!existsSync(join(repo, "build/extension/chrome-mv3"))) {
+  console.log("  SKIP  build/extension/chrome-mv3 missing (build step above did not run)");
 } else if (!chromeBin) {
   console.log("  SKIP  browser tests: set CHROME_BIN to an isolated Chrome for Testing /");
   console.log("        Chromium binary (NOT your daily Chrome). See tests/README.md -> Safety.");

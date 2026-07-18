@@ -201,7 +201,7 @@ pub fn extension_dir() -> Option<PathBuf> {
             }
         }
     }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../extension/dist/chrome-mv3");
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../build/extension/chrome-mv3");
     dev.canonicalize().ok().and_then(loadable)
 }
 

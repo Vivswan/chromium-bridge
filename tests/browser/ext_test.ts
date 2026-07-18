@@ -25,8 +25,7 @@ const REPO = path.resolve(import.meta.dir, "../..");
 // The load-unpacked target is the built bundle. Run
 // `bun run --cwd src/apps/extension build` first (run_all.ts / just handle this).
 // Override with BB_EXT_DIR to point at a different unpacked extension.
-const EXTENSION_DIR =
-  process.env.BB_EXT_DIR || path.join(REPO, "src", "apps", "extension", "dist", "chrome-mv3");
+const EXTENSION_DIR = process.env.BB_EXT_DIR || path.join(REPO, "build", "extension", "chrome-mv3");
 // The guard (assertIsolatedBrowserOrSkip) verifies CHROME_BIN by --version
 // before use; it is only ever an isolated Chrome for Testing here.
 const CHROME = process.env.CHROME_BIN ?? "";

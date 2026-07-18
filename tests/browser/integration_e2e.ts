@@ -35,7 +35,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
 const IS_WINDOWS = process.platform === "win32";
 const BIN = path.join(REPO, "target", "release", `chromium-bridge${IS_WINDOWS ? ".exe" : ""}`);
-const DIST = path.join(REPO, "src", "apps", "extension", "dist");
+const DIST = path.join(REPO, "build", "extension");
 // The guard (assertIsolatedBrowserOrSkip) verifies CHROME_BIN by --version
 // before use; it is only ever an isolated Chrome for Testing here.
 const CHROME = process.env.CHROME_BIN ?? "";

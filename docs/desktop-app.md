@@ -29,7 +29,7 @@ Info.plist with the workspace version, signs inside-out, and re-verifies with
 (free-tier profiles expire weekly; see ADR-0026 for the re-mint recipe).
 
 `app-dmg` runs the same pipeline and then packages the verified `.app` into
-`target/release/bundle/dmg/chromium-bridge-app-<version>-macos-arm64.dmg`,
+`build/dmg/chromium-bridge-app-<version>-macos-arm64.dmg`,
 with the usual drag-to-/Applications layout. The image is created after the
 inside-out re-sign (Tauri's own dmg target would capture the app before the
 helper bundle exists), the image itself is codesigned, and the copy inside

@@ -49,7 +49,7 @@ export function diagnoseExtensionId(
       `extension will be REJECTED and chromium-bridge cannot connect. Likely cause: ` +
       `you loaded a build whose manifest lacks the pinned \`key\` (Chrome then derives ` +
       `a path-based id), or a Chrome Web Store build with a store-assigned id. Fix: load ` +
-      `the built src/apps/extension/dist that contains the pinned key, or update the pinned ` +
+      `the built build/extension/chrome-mv3 that contains the pinned key, or update the pinned ` +
       `id in src/packages/core/src/identity.rs (and regenerate) to match your build.`,
   };
 }
