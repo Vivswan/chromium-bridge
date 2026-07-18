@@ -3,6 +3,7 @@ import { Card, ErrorNote, Mono, StatusDot, TextInput } from "@/components/ui/bit
 import { Button } from "@/components/ui/button";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
+import { browserAction } from "@/lib/browser-action";
 import { api, errorText } from "@/lib/tauri";
 
 export function BrowsersView() {
@@ -58,19 +59,24 @@ export function BrowsersView() {
                   {b.location}
                 </td>
                 <td className="py-2 text-right">
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      size="sm"
-                      disabled={busy !== undefined}
-                      onClick={() => void act(b.key, () => api.browserRegister(b.key))}
-                    >
-                      {busy === b.key
-                        ? t("common.working")
-                        : b.healthy
-                          ? t("browsers.repair")
-                          : t("browsers.register")}
-                    </Button>
-                    {b.state !== "missing" && (
+                  <div className="flex items-center justify-end gap-2">
+                    {b.detected && b.healthy && (
+                      <span className="text-xs text-muted">{t("browsers.connected")}</span>
+                    )}
+                    {browserAction(b) !== "none" && (
+                      <Button
+                        size="sm"
+                        disabled={busy !== undefined}
+                        onClick={() => void act(b.key, () => api.browserRegister(b.key))}
+                      >
+                        {busy === b.key
+                          ? t("common.working")
+                          : browserAction(b) === "connect"
+                            ? t("browsers.connect")
+                            : t("browsers.repair")}
+                      </Button>
+                    )}
+                    {b.code !== "missing" && (
                       <Button
                         size="sm"
                         variant="ghost"

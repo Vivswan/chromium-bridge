@@ -61,11 +61,12 @@ export const en = {
   "overview.extension_note":
     "These checks cover the app, host, and MCP server. They cannot confirm the extension is loaded and connected - verify that from the extension's toolbar icon.",
   "overview.first_run_title": "First launch",
-  "overview.first_run_registered":
-    "Registered the native-messaging manifests for your detected browsers.",
+  "overview.first_run_detected":
+    "Found $1. Pick browsers to connect on the Browsers page, or connect all of them now; the app registers nothing until you choose.",
+  "overview.first_run_connect_all": "Connect all detected browsers",
   "overview.first_run_none":
     "No Chromium-family browser was detected. Add one on the Browsers page.",
-  "overview.first_run_errors": "Some registrations were refused:",
+  "overview.first_run_errors": "Some browsers could not be connected:",
 
   "browsers.title": "Browsers",
   "browsers.intro":
@@ -74,7 +75,8 @@ export const en = {
   "browsers.not_detected": "Not detected",
   "browsers.state": "Registration",
   "browsers.location": "Location",
-  "browsers.register": "Register",
+  "browsers.connect": "Connect",
+  "browsers.connected": "Connected",
   "browsers.repair": "Repair",
   "browsers.unregister": "Remove",
   "browsers.restart_note":

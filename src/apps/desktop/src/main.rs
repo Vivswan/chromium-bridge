@@ -117,9 +117,13 @@ async fn manifest_dir_unregister(dir: String) -> Result<String, String> {
     blocking(move || registration_cmds::unregister_manifest_dir(&dir)).await
 }
 
+/// Detection only (ADR-0029 as amended): reports the browsers found on the
+/// first launch and writes nothing into any browser's configuration.
+/// Connecting a browser is always an explicit user action through
+/// `browser_register`.
 #[tauri::command]
-async fn first_launch_register() -> Result<Option<registration_cmds::FirstRunReport>, String> {
-    blocking(registration_cmds::first_launch_register).await
+async fn first_launch_detect() -> Result<Option<registration_cmds::FirstRunReport>, String> {
+    blocking(registration_cmds::first_launch_detect).await
 }
 
 // ---- kill switch + audit --------------------------------------------------------
@@ -230,7 +234,7 @@ fn main() {
             browser_unregister,
             manifest_dir_register,
             manifest_dir_unregister,
-            first_launch_register,
+            first_launch_detect,
             kill_engage,
             kill_release,
             audit_read,

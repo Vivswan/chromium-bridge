@@ -4,7 +4,8 @@
 //! pointed at the bundled host binary. App and CLI are co-equal surfaces
 //! writing the same bytes (ADR-0029); every fail-closed rule (foreign
 //! manifests refused, unreadable paths left alone) is the engine's, not
-//! reimplemented here.
+//! reimplemented here. Every manifest write is user-initiated: first launch
+//! only detects browsers and reports them (ADR-0029 as amended).
 
 use std::path::Path;
 
@@ -23,6 +24,9 @@ pub struct BrowserRow {
     pub detected: bool,
     /// `RegState::describe()` output: ok / missing / stale (why) / ...
     pub state: String,
+    /// `RegState::code()`: the machine form the UI branches on. The human
+    /// `state` string is display-only.
+    pub code: &'static str,
     pub healthy: bool,
     /// Where the registration lives (manifest path, or the HKCU key).
     pub location: String,
@@ -53,6 +57,7 @@ pub fn list() -> Result<Vec<BrowserRow>, String> {
                 key: entry.browser.key(),
                 detected: entry.detected(),
                 healthy: state == RegState::Ok,
+                code: state.code(),
                 state: state.describe(),
                 location: entry.registration.location(),
             }
@@ -100,49 +105,52 @@ pub fn unregister_manifest_dir(dir: &str) -> Result<String, String> {
     Registrar::uninstall(&Target::for_explicit_dir(Path::new(dir)))
 }
 
-/// What the first-launch self-registration did, for the onboarding banner.
+/// What first launch found, for the onboarding card. Detection only: no
+/// browser configuration is touched (ADR-0029 as amended); every manifest
+/// write goes through the user-initiated register commands above.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirstRunReport {
-    /// Report lines per registered browser (empty when none was detected).
-    pub lines: Vec<String>,
-    /// Per-target failures (foreign manifests refused, transient I/O, ...).
-    /// Any failure releases the first-run claim, so the next launch retries;
-    /// the engine keeps refusing foreign targets on every retry.
-    pub errors: Vec<String>,
+    /// Keys of the browsers detected for this user (may be empty).
     pub detected: Vec<String>,
 }
 
 /// The first-run marker: lives beside the wrapper scripts in the install
 /// dir, so `uninstall` semantics stay untouched (the marker is app state,
-/// not a registration artifact).
+/// not a registration artifact). It records that a launch claimed the
+/// first-run card; it has never meant "registered" since the opt-in
+/// amendment to ADR-0029.
 fn marker_path(os: Os, dirs: &BaseDirs) -> std::path::PathBuf {
     browsers::install_dir(os, dirs).join("desktop-first-run.json")
 }
 
-/// Self-register on first launch (ADR-0029): register every DETECTED browser
-/// through the shared engine, once, then leave the marker. Returns `None`
-/// when a previous (or concurrent) launch already did this.
-///
-/// The marker is CLAIMED first, with `create_new`: that refuses to follow a
-/// planted symlink (the write can never land outside the install dir) and
-/// makes the whole run single-flight - the loser of the create race does
-/// nothing and reports nothing. If any registration then fails (a refused
-/// foreign manifest, a transient I/O error), the claim is released so the
-/// next launch retries with the report still in front of the user; retrying
-/// is safe because the engine is idempotent and keeps refusing foreign
-/// targets without writing.
-pub fn first_launch_register() -> Result<Option<FirstRunReport>, String> {
-    let (os, dirs, registrar) = engine()?;
-    let marker = marker_path(os, &dirs);
+/// First launch (ADR-0029 as amended): detect the user's browsers and report
+/// them, writing nothing outside our own install dir. Returns `None` when a
+/// previous (or concurrent) launch already claimed the card. Connecting a
+/// browser is always a separate, user-initiated `register_browser` call.
+pub fn first_launch_detect() -> Result<Option<FirstRunReport>, String> {
+    let dirs = BaseDirs::from_env()?;
+    detect_once(Os::current(), &dirs)
+}
+
+/// The marker is CLAIMED first, with `create_new`, which refuses to follow
+/// a symlink planted at the marker path; the install dir is prepared by the
+/// engine's `ensure_private_dir` (owner-only, refuses a symlinked leaf), so
+/// a symlink planted there cannot redirect the write either. Both checks
+/// are hardening against redirection, not a privilege boundary: a same-user
+/// process that can plant symlinks can already write anywhere we can. The
+/// claim also makes the run single-flight - the loser of the create race
+/// does nothing and reports nothing.
+fn detect_once(os: Os, dirs: &BaseDirs) -> Result<Option<FirstRunReport>, String> {
+    let marker = marker_path(os, dirs);
     // symlink_metadata (not exists()): a dangling symlink at the marker path
     // must read as "present" so it is never followed by a write.
     if std::fs::symlink_metadata(&marker).is_ok() {
         return Ok(None);
     }
     if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+        registration::ensure_private_dir(parent)
+            .map_err(|e| format!("could not prepare {}: {e}", parent.display()))?;
     }
     let mut file = match std::fs::OpenOptions::new()
         .write(true)
@@ -150,13 +158,18 @@ pub fn first_launch_register() -> Result<Option<FirstRunReport>, String> {
         .open(&marker)
     {
         Ok(f) => f,
-        // Lost the single-flight race: another launch is doing all of this.
+        // Lost the single-flight race: another launch is showing the card.
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
         Err(e) => return Err(format!("could not write {}: {e}", marker.display())),
     };
     use std::io::Write as _;
+    // v2: the marker means "a launch claimed the first-run card". Claimed,
+    // not provably rendered: a crash between claim and paint forfeits the
+    // card, and the Browsers page carries the same information. v1 markers
+    // (from builds that still auto-registered) read the same way here - only
+    // existence is ever checked.
     if let Err(e) = file
-        .write_all(b"{\"v\":1}\n")
+        .write_all(b"{\"v\":2}\n")
         .and_then(|()| file.sync_all())
     {
         drop(file);
@@ -165,30 +178,99 @@ pub fn first_launch_register() -> Result<Option<FirstRunReport>, String> {
     }
     drop(file);
 
-    let mut report = FirstRunReport {
-        lines: Vec::new(),
-        errors: Vec::new(),
-        detected: Vec::new(),
-    };
-    for entry in browsers::resolve(os, &dirs) {
-        if !entry.detected() {
-            continue;
-        }
-        report.detected.push(entry.browser.key().to_string());
-        match registrar.register(&Target::for_browser(&entry)) {
-            Ok(lines) => report.lines.extend(lines),
-            Err(e) => report.errors.push(format!("{}: {e}", entry.browser.key())),
+    Ok(Some(FirstRunReport {
+        detected: browsers::resolve(os, dirs)
+            .iter()
+            .filter(|entry| entry.detected())
+            .map(|entry| entry.browser.key().to_string())
+            .collect(),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+
+    /// A fixture home in the temp dir; never a real user directory.
+    fn fixture(tag: &str) -> (PathBuf, BaseDirs) {
+        let root = std::env::temp_dir().join(format!("bb-first-run-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dirs = BaseDirs {
+            home: root.clone(),
+            xdg_config_home: None,
+            xdg_data_home: None,
+            local_app_data: None,
+            roaming_app_data: None,
+        };
+        (root, dirs)
+    }
+
+    fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files_under(&path, out);
+            } else {
+                out.push(path);
+            }
         }
     }
 
-    if !report.errors.is_empty() {
-        // Release the claim so the next launch retries the failed targets.
-        if let Err(e) = std::fs::remove_file(&marker) {
-            report.errors.push(format!(
-                "could not clear {} for a retry next launch: {e}",
-                marker.display()
-            ));
-        }
+    #[test]
+    fn first_launch_detects_and_writes_only_the_marker() {
+        let (root, dirs) = fixture("detect");
+        // One "detected" browser: Chrome's macOS config root exists.
+        std::fs::create_dir_all(root.join("Library/Application Support/Google/Chrome")).unwrap();
+
+        let report = detect_once(Os::MacOs, &dirs).unwrap().expect("first run");
+        assert_eq!(report.detected, vec!["chrome"]);
+
+        // The only file created anywhere under the fixture home is our own
+        // marker: no browser directory gained a manifest without the user
+        // asking for one.
+        let mut files = Vec::new();
+        files_under(&root, &mut files);
+        assert_eq!(
+            files,
+            vec![root.join(".chromium-bridge/desktop-first-run.json")]
+        );
+
+        // Later launches: the card was shown once, nothing more to report.
+        assert!(detect_once(Os::MacOs, &dirs).unwrap().is_none());
+        std::fs::remove_dir_all(&root).unwrap();
     }
-    Ok(Some(report))
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_at_the_marker_reads_as_present() {
+        let (root, dirs) = fixture("symlink");
+        let marker = marker_path(Os::MacOs, &dirs);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), &marker).unwrap();
+
+        // A planted symlink must never be followed by a write.
+        assert!(detect_once(Os::MacOs, &dirs).unwrap().is_none());
+        assert!(std::fs::symlink_metadata(&marker).unwrap().is_symlink());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_install_dir_is_refused() {
+        let (root, dirs) = fixture("linked-dir");
+        // The install dir itself is a symlink into a stand-in browser config
+        // dir: the marker write must be refused, not redirected.
+        let target = root.join("Library/Application Support/Google/Chrome/NativeMessagingHosts");
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, root.join(".chromium-bridge")).unwrap();
+
+        assert!(detect_once(Os::MacOs, &dirs).is_err());
+        let mut files = Vec::new();
+        files_under(&target, &mut files);
+        assert!(files.is_empty(), "nothing may land through the symlink");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
