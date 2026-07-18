@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { api, type BridgeStatus, errorText } from "@/lib/tauri";
 
-export type View = "overview" | "browsers" | "pairing" | "clients" | "audit" | "setup";
+export type View = "overview" | "browsers" | "clients" | "security" | "audit" | "setup";
 
 interface AppState {
   view: View;

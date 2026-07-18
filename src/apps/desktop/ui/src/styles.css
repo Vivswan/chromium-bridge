@@ -183,6 +183,8 @@ body {
   background: var(--bg);
   color: var(--text-1);
   font-family: var(--ui);
+  font-size: 14px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   /* The window is an app, not a document. */
   user-select: none;
@@ -195,6 +197,1272 @@ input,
 textarea {
   user-select: text;
 }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@layer components {
+/* =====================================================================
+   Control Tower component classes, ported from the mockups
+   (design-explorations/control-tower/*.html). Tailwind utilities handle
+   one-off layout; anything with a name below is shared design language.
+   ===================================================================== */
+
+.mono {
+  font-family: var(--mono);
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- app frame: sidebar + main pane ---------- */
+.sidebar {
+  width: 172px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 12px 8px;
+  background: var(--surface-1);
+  border-right: 1px solid var(--edge);
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.nav-item svg {
+  flex: none;
+  color: var(--text-3);
+}
+.nav-item:hover:not(.active) {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.nav-item.active {
+  background: var(--surface-3);
+  color: var(--text-1);
+  border-color: var(--edge);
+}
+.nav-item.active svg {
+  color: var(--live);
+}
+.nav-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+.nav-spacer {
+  flex: 1;
+}
+/* pinned panic entry: findable in one second on every screen */
+.nav-kill {
+  color: var(--danger);
+  border-color: var(--danger-edge);
+  background: var(--danger-dim);
+  font-weight: 600;
+}
+.nav-kill svg,
+.nav-kill:hover svg {
+  color: var(--danger);
+}
+.nav-kill:hover {
+  background: var(--danger-strong);
+  color: var(--danger);
+}
+/* kill switch currently engaged: the pinned entry inverts to solid red */
+.nav-kill.engaged {
+  background: var(--danger);
+  color: var(--surface-0);
+}
+.nav-kill.engaged svg,
+.nav-kill.engaged:hover svg {
+  color: var(--surface-0);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px;
+  overflow: hidden;
+}
+.main-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.main-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.main-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.main-foot {
+  margin-top: auto;
+  padding-top: 12px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.foot-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ---------- section labels ---------- */
+.spec-label,
+.pipeline-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.pipeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.pipeline-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- .card / .table-card / .hero ---------- */
+.card {
+  border: 1px solid var(--edge);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  padding: 12px 14px;
+}
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+/* a .card that holds a table or row list flush to its edges */
+.table-card {
+  padding: 0;
+  overflow: hidden;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--edge);
+}
+/* hero: one per screen - the raised edge and larger radius mark the
+   screen's centerpiece */
+.hero {
+  border-color: var(--edge-strong);
+  border-radius: var(--r-lg);
+}
+
+/* ---------- .btn ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--surface-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  padding: 6px 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform var(--t-fast) var(--ease),
+    opacity var(--t-fast) var(--ease);
+}
+.btn:hover {
+  background: var(--surface-4);
+}
+.btn:active {
+  transform: scale(0.97);
+}
+/* primary = the safe default */
+.btn-primary {
+  background: var(--text-1);
+  border-color: var(--text-1);
+  color: var(--surface-0);
+}
+.btn-primary:hover {
+  background: var(--text-1);
+  border-color: var(--text-1);
+  opacity: 0.9;
+}
+/* danger = kill and deny-with-consequence only */
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger-edge);
+  color: var(--danger);
+}
+.btn-danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--surface-0);
+}
+/* ghost = quiet inline action */
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+.btn-ghost:hover {
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+.btn[disabled],
+.btn.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.btn-sm {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+.btn-block {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
+/* Touch ID gated: acting on it asks for a fingerprint first. The resting
+   halo is neutral - amber appears only while a prompt is actually pending. */
+.btn-gated {
+  outline: 1px dashed var(--edge-strong);
+  outline-offset: 2px;
+}
+.btn-gated.pending {
+  outline-color: var(--pending-edge);
+}
+.btn-gated:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ---------- .status-dot / .pill / .chip-mono ---------- */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+  background: var(--text-4);
+}
+.status-dot.live {
+  background: var(--live);
+  box-shadow: 0 0 6px var(--live-halo);
+}
+.status-dot.pending {
+  background: var(--pending);
+  box-shadow: 0 0 6px var(--pending-halo);
+}
+.status-dot.down {
+  background: var(--danger);
+}
+
+/* status pill: uppercase mono capsule, status only */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid var(--edge-strong);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--text-2);
+}
+.pill-live {
+  color: var(--live);
+  border-color: var(--live-edge);
+  background: var(--live-dim);
+}
+.pill-pending {
+  color: var(--pending);
+  border-color: var(--pending-edge);
+  background: var(--pending-dim);
+}
+.pill-danger {
+  color: var(--danger);
+  border-color: var(--danger-edge);
+  background: var(--danger-dim);
+}
+
+/* identity material: fingerprints, host ids, origins, Touch ID marks */
+.chip-mono {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.chip-mono svg {
+  flex: none;
+}
+
+/* ---------- tables ---------- */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.table th {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--text-3);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--edge);
+}
+.table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--edge);
+  color: var(--text-2);
+  vertical-align: top;
+}
+.table tr:last-child td {
+  border-bottom: 0;
+}
+.table td.mono,
+.table td .mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* ---------- .consequence ---------- */
+/* The one-line plain-language consequence under a dangerous control.
+   Neutral ink on purpose: amber stays reserved for pending states. */
+.consequence {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+.consequence strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.consequence.quiet {
+  color: var(--text-3);
+}
+
+/* ---------- .banner ---------- */
+/* Full-width state strip at the top of a pane. Default is informational. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  padding: 8px 12px;
+}
+.banner .btn {
+  margin-left: auto;
+  flex: none;
+}
+.banner-pending {
+  border-color: var(--pending-edge);
+  background: var(--pending-dim);
+  color: var(--pending);
+}
+.banner-danger {
+  border-color: var(--danger-edge);
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+.banner-live {
+  border-color: var(--live-edge);
+  background: var(--live-dim);
+  color: var(--live);
+}
+.banner-pending .banner-text,
+.banner-danger .banner-text,
+.banner-live .banner-text {
+  color: var(--text-2);
+}
+
+/* ---------- form fields ---------- */
+.text-input {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-1);
+  background: var(--surface-1);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  padding: 6px 10px;
+  min-width: 0;
+}
+.text-input::placeholder {
+  color: var(--text-4);
+}
+.text-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+.text-input.mono {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.field-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.field .text-input,
+.field .select-trigger {
+  width: 100%;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 0.8fr 1.6fr;
+  gap: 10px;
+}
+.field-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.field-row .text-input {
+  flex: 1;
+}
+
+/* ---------- .code-block : exact payloads and config, always mono ---------- */
+.code-block {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.code-block .k {
+  color: var(--text-1);
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  border-bottom: 1px solid var(--edge);
+  font-family: var(--ui);
+}
+.code-file {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+/* ---------- identity blocks (gate id, fingerprint) ---------- */
+.gate-role {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.gate-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-sm);
+  padding: 4px 7px;
+  /* identity material must never truncate: wrap instead of clipping */
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.5;
+}
+
+/* ---------- .disclosure : collapsed optional flows, hairline only ---------- */
+.disclosure {
+  margin-top: 14px;
+  border-top: 1px solid var(--edge);
+}
+.disclosure summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.disclosure summary:hover {
+  color: var(--text-1);
+}
+.disclosure summary .twist {
+  color: var(--text-4);
+  transition: transform var(--t-fast) var(--ease);
+}
+.disclosure[open] summary .twist {
+  transform: rotate(90deg);
+}
+.disclosure-body {
+  padding: 0 2px 10px;
+}
+.twist {
+  flex: none;
+}
+
+/* =====================================================================
+   Overview: the fan-in/fan-out trust map + flat control rows
+   ===================================================================== */
+.hub {
+  display: grid;
+  grid-template-columns: 1fr 80px 1.6fr 80px 1fr;
+  align-items: center;
+}
+.hub-col-label {
+  grid-row: 1;
+  align-self: end;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+.hub-clients {
+  grid-column: 1;
+}
+.hub-browsers {
+  grid-column: 5;
+}
+.hub-stack {
+  grid-row: 2;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+}
+.hub-node {
+  height: 56px;
+  min-width: 0;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  background: var(--surface-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+}
+.hub-node.lit {
+  border-color: var(--live-edge);
+  box-shadow: inset 0 1px 0 var(--live-sheen);
+}
+.hub-node.dim {
+  opacity: 0.6;
+}
+.hub-node-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.hub-node-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* the host: the enclave-attested gate everything crosses - strongest node */
+.hub-host {
+  grid-column: 3;
+  grid-row: 2;
+  align-self: center;
+  height: 122px;
+  min-width: 0;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  background: var(--surface-3);
+  border: 1px solid var(--live-edge);
+  border-radius: var(--r-lg);
+  box-shadow:
+    inset 0 1px 0 var(--live-sheen),
+    inset 0 -1px 0 var(--live-dim);
+}
+.hub-host.dim {
+  border-color: var(--edge-strong);
+  box-shadow: none;
+}
+.hub-host .gate-id {
+  margin-top: 6px;
+}
+/* edge lanes: 80xH SVGs, endpoints match node centers */
+.hub-lane {
+  grid-row: 2;
+  position: relative;
+}
+.hub-lane-in {
+  grid-column: 2;
+}
+.hub-lane-out {
+  grid-column: 4;
+}
+.hub-lane svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.edge-on {
+  stroke: var(--live-edge);
+  fill: none;
+}
+.edge-chev {
+  stroke: var(--live);
+  fill: none;
+}
+.edge-off {
+  stroke: var(--edge-strong);
+  stroke-dasharray: 3 4;
+  fill: none;
+}
+/* attested but not currently serving: solid neutral, no chevron */
+.edge-idle {
+  stroke: var(--edge-strong);
+  fill: none;
+}
+.hub-lane-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.35;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+/* flat control rows: hairline rules and whitespace, no card chrome */
+.rows {
+  margin-top: 18px;
+}
+.row {
+  display: grid;
+  grid-template-columns: 112px 1fr auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid var(--edge);
+}
+.row-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.row-status {
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.row-side {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.row-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* =====================================================================
+   Browsers: registration table with expandable pairing detail
+   ===================================================================== */
+.table-card .table th {
+  padding: 9px 14px;
+  background: var(--surface-1);
+}
+.table-card .table td {
+  padding: 12px 14px;
+  vertical-align: middle;
+}
+.browser-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.browser-profile {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+.health-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.health-line + .health-line {
+  margin-top: 4px;
+}
+.health-line.off {
+  color: var(--text-3);
+}
+/* paths break only at <wbr> after each slash, so identity tokens
+   (the manifest filename) never fragment mid-string */
+.path {
+  max-width: 320px;
+  color: var(--text-2);
+}
+.path.unwritten {
+  color: var(--text-3);
+}
+.path-note {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 3px;
+  font-family: var(--ui);
+  letter-spacing: 0;
+}
+.actions-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+.actions-cell .btn + .btn {
+  margin-left: 6px;
+}
+
+/* expanded row: the pairing detail lives inside the one table surface -
+   the toggle row drops its bottom rule and the detail carries it, so the
+   pair reads as a single taller row, not a nested box */
+.name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+button.name-wrap {
+  width: 100%;
+  text-align: left;
+  border-radius: var(--r-sm);
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.name-wrap .twist {
+  color: var(--text-4);
+  flex: none;
+  transition: transform var(--t-fast) var(--ease);
+}
+tr.open .twist {
+  transform: rotate(90deg);
+}
+.table tr.open td {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+.row-detail td {
+  padding: 0 14px 16px 31px;
+}
+.fp-line {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+  /* full-length fingerprints wrap between groups; clipping any block would
+     defeat the block-for-block comparison */
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.detail-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.detail-actions .consequence {
+  margin: 0 0 0 6px;
+}
+
+/* =====================================================================
+   MCP Clients: anchor legend for the low-count void
+   ===================================================================== */
+.anchor-legend {
+  margin-top: auto;
+  padding-top: 24px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 12px;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.anchor-legend .chip-mono {
+  justify-self: start;
+}
+
+/* =====================================================================
+   Security: policy zones as open hairline rows
+   ===================================================================== */
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -8px;
+  padding: 0 8px 4px;
+  /* persistent (non-overlay) scrollbar: the cue that more policy exists below */
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge-strong) transparent;
+}
+.zone {
+  margin-bottom: 16px;
+}
+.zone-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.zone-head h2 {
+  margin: 0;
+}
+.zone-note {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.policy-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--edge);
+}
+.policy-flow .policy-row:last-child {
+  border-bottom: 0;
+}
+.policy-info {
+  flex: 1;
+  min-width: 0;
+}
+.policy-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy-side {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 2px;
+}
+.policy-state {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  min-width: 58px;
+  text-align: right;
+}
+.policy-state.granted {
+  color: var(--live);
+}
+/* un-granted powers read as dormant, not merely unchecked */
+.policy-row.off .policy-name {
+  color: var(--text-2);
+}
+.policy-row.off .policy-name .chip-mono {
+  color: var(--text-3);
+  border-color: var(--edge);
+}
+/* kill-switch pointer: one quiet hairline row pinned below the scroll */
+.kill-note {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--edge);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.kill-note .btn {
+  margin-left: auto;
+  flex: none;
+}
+
+/* =====================================================================
+   Audit: the ledger
+   ===================================================================== */
+.ledger {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ledger-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* border-collapse borders don't travel with sticky cells in Chromium;
+   the box-shadow keeps the header's bottom edge while it is stuck */
+.ledger thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  box-shadow: 0 1px 0 var(--edge);
+}
+.ledger td {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.col-time {
+  width: 88px;
+}
+.col-kind {
+  width: 110px;
+}
+.col-outcome {
+  width: 96px;
+}
+td.t {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+td.kind {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+td.detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+td.detail .obj {
+  color: var(--text-1);
+}
+td.outcome {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+td.outcome .status-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+td.outcome.ok {
+  color: var(--live);
+}
+td.outcome.denied {
+  color: var(--danger);
+}
+td.outcome.pending {
+  color: var(--pending);
+}
+/* the one entry waiting on the user is the loudest thing in the ledger */
+.row-pending td {
+  background: var(--pending-dim);
+}
+.row-pending td.detail {
+  color: var(--text-1);
+}
+.day-row td {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--surface-1);
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+/* =====================================================================
+   Setup: one vertical flow of numbered steps, no cards
+   ===================================================================== */
+.flow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: 640px;
+}
+.flow-step {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  column-gap: 14px;
+  padding: 14px 0;
+}
+.flow-step + .flow-step {
+  border-top: 1px solid var(--edge);
+}
+.flow-step:first-child {
+  padding-top: 2px;
+}
+.flow-mark {
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-2);
+  border: 1px solid var(--edge-strong);
+  border-radius: 50%;
+}
+.flow-step.done .flow-mark {
+  color: var(--live);
+  border-color: var(--live-edge);
+  background: var(--live-dim);
+}
+.flow-step.next .flow-mark {
+  border-color: var(--pending-edge);
+}
+.flow-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.flow-state {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.flow-step.next .flow-state {
+  color: var(--pending);
+}
+.flow-body {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.flow-body a,
+.flow-body button.linkish {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.flow-body strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.substeps {
+  list-style: none;
+  margin: 7px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.substeps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.substeps .idx {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+}
+.substeps .chip-mono {
+  display: block;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.substeps .btn {
+  flex: none;
+}
+/* CLI: optional tooling, one quiet row above the footer */
+.cli-row {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-top: 10px;
+  border-top: 1px solid var(--edge);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.cli-row .mono {
+  font-size: 11px;
+}
+.cli-row .spacer {
+  flex: 1;
+}
+/* language: small segmented control, lives in the footer */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.seg-btn {
+  padding: 3px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--text-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: none;
+  cursor: pointer;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.seg-btn:hover:not(.active) {
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+.seg-btn.active {
+  background: var(--surface-3);
+  border-color: var(--edge-strong);
+  color: var(--text-1);
+}
+.seg-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+} /* @layer components */
 
 @media (prefers-reduced-motion: reduce) {
   *,
