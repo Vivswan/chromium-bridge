@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card, ErrorNote, Field, StatusDot, TextInput } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Select,
   SelectContent,
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
+import { authLabel } from "@/lib/auth-label";
 import { api, errorText } from "@/lib/tauri";
 
 type AnchorKind = "hash" | "team_id";
@@ -19,11 +21,14 @@ export function ClientsView() {
   const clients = useAsync(api.clientsList);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [confirming, setConfirming] = useState<string>();
   const [name, setName] = useState("");
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("team_id");
   const [anchorValue, setAnchorValue] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [addedBy, setAddedBy] = useState<string>();
 
+  // Revocation is deliberately one click: it only reduces capability, and
+  // keeping it friction-free is the security posture (ADR-0025/0030).
   const revoke = async (clientName: string) => {
     setBusy(true);
     setError(undefined);
@@ -33,20 +38,25 @@ export function ClientsView() {
       setError(errorText(err));
     } finally {
       setBusy(false);
-      setConfirming(undefined);
       clients.reload();
     }
   };
 
-  const add = async () => {
+  // Presence-gated: invoked ONLY from the confirm dialog below. The dialog
+  // is what Floor::AppConfirm asserts once phase8 lands (see the Rust seam).
+  const confirmAdd = async () => {
     setBusy(true);
     setError(undefined);
+    setAddedBy(undefined);
     try {
-      await api.clientPair(name.trim(), anchorKind, anchorValue.trim());
+      const auth = await api.clientPair(name.trim(), anchorKind, anchorValue.trim());
+      setAddedBy(auth);
       setName("");
       setAnchorValue("");
+      setAddOpen(false);
     } catch (err) {
       setError(errorText(err));
+      setAddOpen(false);
     } finally {
       setBusy(false);
       clients.reload();
@@ -92,25 +102,14 @@ export function ClientsView() {
                     {new Date(c.addedUnix * 1000).toLocaleDateString()}
                   </td>
                   <td className="py-2 text-right">
-                    {confirming === c.name ? (
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        disabled={busy}
-                        onClick={() => void revoke(c.name)}
-                      >
-                        {t("clients.revoke_confirm")}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => setConfirming(c.name)}
-                      >
-                        {t("clients.revoke")}
-                      </Button>
-                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => void revoke(c.name)}
+                    >
+                      {t("clients.revoke")}
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -156,15 +155,27 @@ export function ClientsView() {
               />
             </Field>
           </div>
-          <div>
+          <div className="flex items-center gap-3">
             <Button
               variant="primary"
               disabled={busy || name.trim() === "" || anchorValue.trim() === ""}
-              onClick={() => void add()}
+              onClick={() => setAddOpen(true)}
             >
               {busy ? t("common.working") : t("clients.add")}
             </Button>
+            {addedBy !== undefined && (
+              <StatusDot tone="ok">{t("clients.add_done", [authLabel(addedBy)])}</StatusDot>
+            )}
           </div>
+          <ConfirmDialog
+            open={addOpen}
+            onOpenChange={setAddOpen}
+            title={t("clients.add_dialog_title")}
+            body={t("clients.add_dialog_body", [name.trim()])}
+            confirmLabel={t("clients.add_confirm")}
+            busy={busy}
+            onConfirm={() => void confirmAdd()}
+          />
           <p className="m-0 text-xs text-faint">{t("clients.hint_cli")}</p>
         </div>
       </Card>

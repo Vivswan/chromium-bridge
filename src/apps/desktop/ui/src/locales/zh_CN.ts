@@ -16,9 +16,15 @@ export const zh_CN: Record<MessageKey, string> = {
   "common.refresh": "刷新",
   "common.copy": "复制",
   "common.copied": "已复制",
+  "common.cancel": "取消",
   "common.error": "错误",
   "common.working": "处理中...",
   "common.loading": "加载中...",
+
+  "auth.touch_id": "Touch ID",
+  "auth.app_confirm": "应用内确认",
+  "auth.cli_confirm": "终端确认",
+  "auth.extension_confirm": "扩展确认",
 
   "lang.label": "显示语言",
   "lang.auto": "跟随系统",
@@ -31,6 +37,11 @@ export const zh_CN: Record<MessageKey, string> = {
   "overview.kill_unreadable": "状态不可读 - 所有执行点均按失败关闭处理",
   "overview.kill_engage": "启用紧急停止",
   "overview.kill_release": "解除紧急停止",
+  "overview.kill_release_dialog_title": "解除紧急停止开关？",
+  "overview.kill_release_dialog_body":
+    "解除后，MCP 客户端可以再次驱动你的浏览器。在支持 Touch ID 的 Mac 上会要求你验证指纹。",
+  "overview.kill_release_confirm": "解除",
+  "overview.kill_released": "紧急停止已解除（由$1授权）。",
   "overview.kill_engage_hint":
     "一键生效，无需确认：启用只会减少桥接的能力。活动的浏览器连接会在一秒内断开，且状态在重启后仍然保持。",
   "overview.kill_release_hint": "解除会恢复能力，因此需要用户在场证明。",
@@ -98,7 +109,6 @@ export const zh_CN: Record<MessageKey, string> = {
   "clients.anchor": "锚点",
   "clients.added": "添加时间",
   "clients.revoke": "撤销",
-  "clients.revoke_confirm": "确认撤销？",
   "clients.empty": "暂无受信任的客户端。",
   "clients.add_title": "添加客户端",
   "clients.add_hint":
@@ -109,6 +119,11 @@ export const zh_CN: Record<MessageKey, string> = {
   "clients.value_placeholder_hash": "小写十六进制哈希",
   "clients.value_placeholder_team": "例如 3ZMH96L4V9",
   "clients.add": "添加客户端（用户在场）",
+  "clients.add_dialog_title": "信任这个 MCP 客户端？",
+  "clients.add_dialog_body":
+    "信任“$1”意味着它可以驱动你的浏览器 - 你的标签页和登录状态。在支持 Touch ID 的 Mac 上会要求你验证指纹。",
+  "clients.add_confirm": "信任客户端",
+  "clients.add_done": "客户端已添加（由$1授权）。",
   "clients.hint_cli":
     "提示：在客户端自己的终端里运行 `chromium-bridge pair-client --name <label> --this-parent`，可一步完成测量并固定。",
 
