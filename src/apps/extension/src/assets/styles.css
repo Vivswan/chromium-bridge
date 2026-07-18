@@ -311,6 +311,15 @@ body {
   white-space: nowrap;
 }
 
+/* Consent chips (the exact origin / the exact grant) must show the FULL
+   value, wrapped, never clipped to one line. Opt-out lives here, unlayered,
+   because the nowrap above is unlayered too and a layered Tailwind
+   whitespace utility can never beat it. */
+.chip-mono.chip-wrap {
+  white-space: normal;
+  word-break: break-all;
+}
+
 /* mono uppercase section label */
 .section-title {
   font-family: var(--mono);
