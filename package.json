@@ -14,14 +14,14 @@
     "docs/site"
   ],
   "scripts": {
-    "gen": "bun scripts/gen-ops.ts && biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts",
-    "typecheck": "tsc -p src/apps/extension && tsc -p src/apps/desktop/ui && tsc -p tests/browser && tsc -p scripts && tsc -p src/packages/shared",
-    "build": "bun scripts/gen-icons.ts && bun run --cwd src/packages/shared typecheck && bun run --cwd src/apps/extension build && bun run --cwd src/apps/desktop/ui build && tsc -p scripts && cargo build --workspace",
-    "lint": "biome lint .",
-    "format": "biome format --write .",
-    "format:check": "biome format .",
-    "check": "biome check .",
-    "test": "bun run --cwd src/packages/shared test && bun run --cwd src/apps/extension test"
+    "gen": "just gen",
+    "typecheck": "just typecheck",
+    "build": "just build",
+    "lint": "just lint",
+    "format": "just fmt",
+    "format:check": "just fmt-check",
+    "check": "just check-ts",
+    "test": "just test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",

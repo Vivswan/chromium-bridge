@@ -102,8 +102,13 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - name: Typecheck (extension, tests, scripts, src/packages/shared)
-        run: bun run typecheck
+      - name: Typecheck (extension, desktop UI, tests, scripts, src/packages/shared)
+        run: |
+          bunx tsc -p src/apps/extension
+          bunx tsc -p src/apps/desktop/ui
+          bunx tsc -p tests/browser
+          bunx tsc -p scripts
+          bunx tsc -p src/packages/shared
       - name: Biome (lint + format)
         run: bunx biome ci .
       - name: src/packages/shared tests (generated catalogue, boundary validators)

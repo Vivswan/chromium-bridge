@@ -67,8 +67,12 @@ is authoritative; this file only summarizes.**
 just ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
 ```
 
+The justfile is the canonical command interface: `just --list` shows every
+task, the root `package.json` scripts are thin aliases delegating to just,
+and the per-workspace `package.json` scripts are implementation details the
+justfile and CI call.
 Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo nextest run`; `bun run typecheck`, `bunx biome ci .`,
+`cargo nextest run`; `just typecheck`, `bunx biome ci .`,
 `bun run --cwd src/packages/shared test`, `bun run --cwd src/apps/extension test`;
 `bun scripts/gen-ops.ts` (must leave no diff); `bun scripts/check-extension-id.ts`.
 A lefthook pre-commit hook runs `just ci` automatically (`bun install` wires
