@@ -39,7 +39,7 @@ pub use challenge::{
     challenge_message, presence_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN, MAX_NONCE_LEN,
     PRESENCE_DOMAIN,
 };
-pub use cli::{run_pair, run_presence_selftest, run_revoke, run_status};
+pub use cli::{run_pair, run_presence_selftest, run_revoke, run_status, run_status_json};
 pub use config::HostConfig;
 pub use der::der_to_raw_signature;
 pub use encoding::base64_encode;

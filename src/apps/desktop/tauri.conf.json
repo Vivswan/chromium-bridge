@@ -3,19 +3,24 @@
   "productName": "Chromium Bridge",
   "identifier": "com.vivswan.chromium-bridge",
   "build": {
-    "frontendDist": "./ui"
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "./ui/dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "Chromium Bridge",
-        "width": 520,
-        "height": 360
+        "width": 980,
+        "height": 700,
+        "minWidth": 760,
+        "minHeight": 560
       }
     ],
     "security": {
-      "csp": "default-src 'self'"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
   },
   "bundle": {

@@ -28,6 +28,7 @@ function setJsonVersion(relativePath: string) {
 }
 
 setJsonVersion("src/apps/extension/package.json");
+setJsonVersion("src/apps/desktop/ui/package.json");
 
 // Refresh bun.lock so the workspace lockfile records the new version.
 const install = spawnSync("bun", ["install"], { cwd: repoRoot, stdio: "inherit" });

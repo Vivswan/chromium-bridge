@@ -478,8 +478,11 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
 }
 
 /// Turn a CLI anchor spec into a concrete [`Anchor`], measuring this
-/// invocation's parent when asked (`--this-parent`).
-fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
+/// invocation's parent when asked (`--this-parent`). Public because it is the
+/// one validation path for user-supplied anchors, shared by the CLI and the
+/// desktop app's pairing form (ADR-0029): a malformed hash must be refused
+/// identically on every surface.
+pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
     use crate::cli::AnchorSpec;
     match spec {
         AnchorSpec::Hash(h) => {

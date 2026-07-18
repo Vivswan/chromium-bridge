@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+/* Semantic tokens -> CSS vars, the extension's palette, with dark mode
+   following the OS (a desktop app has no in-app theme toggle). */
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-edge: var(--edge);
+  --color-edge-soft: var(--edge-soft);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-danger: var(--danger);
+  --color-danger-strong: var(--danger-strong);
+  --color-danger-surface: var(--danger-surface);
+  --color-warn-edge: var(--warn-edge);
+  --color-warn-surface: var(--warn-surface);
+}
+
+:root {
+  --page: #f7f8f9;
+  --surface: #ffffff;
+  --body: #111827;
+  --muted: #6b7280;
+  --faint: #9ca3af;
+  --edge: #e5e7eb;
+  --edge-soft: #f3f4f6;
+  --brand: #2e8b57;
+  --brand-strong: #276b46;
+  --danger: #dc2626;
+  --danger-strong: #b91c1c;
+  --danger-surface: #fffbfb;
+  --warn-edge: #f0c674;
+  --warn-surface: #fff8e1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #15181c;
+    --surface: #1e2228;
+    --body: #e6e8eb;
+    --muted: #9aa3af;
+    --faint: #6b7280;
+    --edge: #333a44;
+    --edge-soft: #262b32;
+    --brand: #3fa76a;
+    --brand-strong: #348a58;
+    --danger: #f87171;
+    --danger-strong: #fca5a5;
+    --danger-surface: #2a1414;
+    --warn-edge: #6b5a1e;
+    --warn-surface: #2b2718;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--body);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Noto Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* The window is an app, not a document. */
+  user-select: none;
+  cursor: default;
+}
+
+pre,
+code,
+input,
+textarea {
+  user-select: text;
+}
