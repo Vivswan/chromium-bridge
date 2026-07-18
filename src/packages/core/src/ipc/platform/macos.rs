@@ -58,8 +58,8 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientId
     if num.is_null() {
         return Err(io::Error::other("CFNumberCreate for pid failed"));
     }
-    let _num = Cf(num);
-    guest_client_identity(GuestKey::Pid, num)
+    let num = Cf(num);
+    guest_client_identity(GuestKey::Pid, &num)
 }
 
 /// The PID of the peer of a connected Unix-domain socket. macOS has no
@@ -178,7 +178,10 @@ extern "C" {
 }
 
 /// Owns a +1 Core Foundation reference and releases it on drop, so every early
-/// return on the error paths below still balances its retain.
+/// return on the error paths below still balances its retain. Invariant: the
+/// wrapped pointer is a live CF object the caller owns (+1, null-checked at
+/// every construction site), which is what lets [`guest_cdhash`] and
+/// [`guest_client_identity`] accept `&Cf` from safe code.
 struct Cf(CFTypeRef);
 
 impl Drop for Cf {
@@ -269,8 +272,8 @@ fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
     if data.is_null() {
         return Err(io::Error::other("CFDataCreate for audit token failed"));
     }
-    let _data = Cf(data);
-    guest_cdhash(GuestKey::Audit, data)
+    let data = Cf(data);
+    guest_cdhash(GuestKey::Audit, &data)
 }
 
 /// The cdhash of the running image of the process named by `pid`,
@@ -291,13 +294,15 @@ fn pid_cdhash(pid: u32) -> io::Result<String> {
     if num.is_null() {
         return Err(io::Error::other("CFNumberCreate for pid failed"));
     }
-    let _num = Cf(num);
-    guest_cdhash(GuestKey::Pid, num)
+    let num = Cf(num);
+    guest_cdhash(GuestKey::Pid, &num)
 }
 
 /// Build the one-entry guest-attribute dictionary, copy the peer's SecCode,
-/// validate its running signature, and return its cdhash.
-fn guest_cdhash(key: GuestKey, value: CFTypeRef) -> io::Result<String> {
+/// validate its running signature, and return its cdhash. Taking `&Cf` (not a
+/// raw `CFTypeRef`) makes the caller's ownership guard carry the live-object
+/// invariant that `CFDictionaryCreate`'s retaining callbacks rely on.
+fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
     let key_ref = unsafe {
         match key {
             GuestKey::Audit => kSecGuestAttributeAudit,
@@ -305,7 +310,7 @@ fn guest_cdhash(key: GuestKey, value: CFTypeRef) -> io::Result<String> {
         }
     };
     let keys: [*const c_void; 1] = [key_ref];
-    let values: [*const c_void; 1] = [value];
+    let values: [*const c_void; 1] = [value.0];
     let attrs = unsafe {
         CFDictionaryCreate(
             kCFAllocatorDefault,
@@ -343,10 +348,7 @@ fn guest_cdhash(key: GuestKey, value: CFTypeRef) -> io::Result<String> {
 /// Like [`guest_cdhash`], but returns the guest's full client identity
 /// (cdhash + Team ID). Builds the same one-entry guest-attribute dictionary,
 /// copies and validates the peer's `SecCode`, and reads both signing fields.
-fn guest_client_identity(
-    key: GuestKey,
-    value: CFTypeRef,
-) -> io::Result<super::super::ClientIdentity> {
+fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::ClientIdentity> {
     let key_ref = unsafe {
         match key {
             GuestKey::Audit => kSecGuestAttributeAudit,
@@ -354,7 +356,7 @@ fn guest_client_identity(
         }
     };
     let keys: [*const c_void; 1] = [key_ref];
-    let values: [*const c_void; 1] = [value];
+    let values: [*const c_void; 1] = [value.0];
     let attrs = unsafe {
         CFDictionaryCreate(
             kCFAllocatorDefault,
@@ -445,6 +447,9 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
             "code-directory hash is empty",
         ));
     }
+    // SAFETY: ptr/len come from the CFData owned by the `_info` guard above,
+    // and were just checked non-null/positive; the borrow must not outlive
+    // `_info`, so the slice is hex-encoded before this function returns.
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
     Ok(super::super::rand::hex_encode(bytes))
 }
@@ -496,6 +501,9 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
             "code-directory hash is empty",
         ));
     }
+    // SAFETY: ptr/len come from the CFData owned by the `_info` guard above,
+    // and were just checked non-null/positive; the borrow must not outlive
+    // `_info`, so the slice is consumed by hex_encode within this expression.
     let hash =
         super::super::rand::hex_encode(unsafe { std::slice::from_raw_parts(ptr, len as usize) });
 

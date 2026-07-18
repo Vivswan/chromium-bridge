@@ -13,6 +13,13 @@ cargo-fuzz = true
 # under [workspace].exclude.
 [workspace]
 
+# Excluded from the root workspace means the workspace-wide unsafe_code deny
+# does not reach this crate; re-declare the quarantine here so fuzz targets
+# stay unsafe-free. (`fuzz_target!` expands to libFuzzer's unsafe extern
+# hooks, but the lint does not fire on external-macro expansions.)
+[lints.rust]
+unsafe_code = "deny"
+
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"

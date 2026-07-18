@@ -49,16 +49,14 @@ pub mod windows_process {
 }
 
 pub(crate) fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
+    // BCryptGenRandom takes a u32 length; a silent `as` cast would under-fill
+    // any buffer past 4 GiB while still returning Ok, so refuse instead.
+    let len = u32::try_from(buf.len())
+        .map_err(|_| io::Error::other("buffer too large for BCryptGenRandom"))?;
     // BCRYPT_USE_SYSTEM_PREFERRED_RNG lets BCryptGenRandom use the system
     // RNG without opening and managing an algorithm-provider handle.
-    let status = unsafe {
-        BCryptGenRandom(
-            std::ptr::null_mut(),
-            buf.as_mut_ptr(),
-            buf.len() as u32,
-            0x0000_0002,
-        )
-    };
+    let status =
+        unsafe { BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), len, 0x0000_0002) };
     if status >= 0 {
         Ok(())
     } else {
