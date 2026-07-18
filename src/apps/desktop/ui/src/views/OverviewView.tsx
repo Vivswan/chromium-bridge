@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Card, ErrorNote, Mono, StatusDot } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
+import { authLabel } from "@/lib/auth-label";
 import { api, errorText, type FirstRunReport } from "@/lib/tauri";
 import { useAppStore } from "@/store";
 
@@ -22,6 +24,8 @@ export function OverviewView() {
   const firstRunStarted = useRef(false);
   const [busy, setBusy] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const [releasedBy, setReleasedBy] = useState<string>();
 
   useEffect(() => {
     if (firstRunStarted.current) return;
@@ -36,13 +40,33 @@ export function OverviewView() {
     // browsers.reload is stable (useCallback with no deps).
   }, [browsers.reload]);
 
-  const killAction = async (action: () => Promise<number>, name: string) => {
-    setBusy(name);
+  const engage = async () => {
+    setBusy("engage");
     setActionError(undefined);
+    setReleasedBy(undefined);
     try {
-      await action();
+      await api.killEngage();
     } catch (err) {
       setActionError(errorText(err));
+    } finally {
+      setBusy(undefined);
+      void refreshStatus();
+    }
+  };
+
+  // Presence-gated: invoked ONLY from the confirm dialog below. The dialog
+  // is what Floor::AppConfirm asserts once phase8 lands (see the Rust seam).
+  const confirmRelease = async () => {
+    setBusy("release");
+    setActionError(undefined);
+    setReleasedBy(undefined);
+    try {
+      const outcome = await api.killRelease();
+      setReleasedBy(outcome.auth);
+      setReleaseOpen(false);
+    } catch (err) {
+      setActionError(errorText(err));
+      setReleaseOpen(false);
     } finally {
       setBusy(undefined);
       void refreshStatus();
@@ -92,11 +116,7 @@ export function OverviewView() {
             ))}
           <div className="flex items-center gap-3">
             {status?.kill.state !== "engaged" && (
-              <Button
-                variant="danger"
-                disabled={busy !== undefined}
-                onClick={() => void killAction(api.killEngage, "engage")}
-              >
+              <Button variant="danger" disabled={busy !== undefined} onClick={() => void engage()}>
                 {busy === "engage" ? t("common.working") : t("overview.kill_engage")}
               </Button>
             )}
@@ -104,12 +124,24 @@ export function OverviewView() {
               <Button
                 variant="primary"
                 disabled={busy !== undefined}
-                onClick={() => void killAction(api.killRelease, "release")}
+                onClick={() => setReleaseOpen(true)}
               >
                 {busy === "release" ? t("common.working") : t("overview.kill_release")}
               </Button>
             )}
           </div>
+          <ConfirmDialog
+            open={releaseOpen}
+            onOpenChange={setReleaseOpen}
+            title={t("overview.kill_release_dialog_title")}
+            body={t("overview.kill_release_dialog_body")}
+            confirmLabel={t("overview.kill_release_confirm")}
+            busy={busy === "release"}
+            onConfirm={() => void confirmRelease()}
+          />
+          {releasedBy !== undefined && (
+            <StatusDot tone="ok">{t("overview.kill_released", [authLabel(releasedBy)])}</StatusDot>
+          )}
           <p className="m-0 text-xs text-muted">
             {status?.kill.state === "engaged"
               ? t("overview.kill_release_hint")

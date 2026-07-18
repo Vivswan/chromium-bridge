@@ -55,14 +55,17 @@ The GUI itself cannot be clicked headlessly. After `just app-run`:
    against the extension's enrollment screen.
 3. Kill switch: engage from the Overview page (one click). `chromium-bridge
    doctor` should report it engaged, and the Audit page should show the
-   `kill_engage` record with `surface=core`. Release: until Phase 8 lands
-   this button refuses with guidance (by design; release it with
-   `chromium-bridge unkill`). After Phase 8, release should raise Touch ID.
+   `kill_engage` record with `surface=core`. Release: the button opens the
+   app's confirm dialog first; until Phase 8 lands, confirming then refuses
+   with guidance (by design; release it with `chromium-bridge unkill`).
+   After Phase 8, confirming should raise Touch ID and the page then names
+   which proof authorized the release.
 4. Audit: the Audit page lists the same records as `chromium-bridge audit`,
    and "Show file" reveals the runtime directory.
-5. Clients: the list matches `chromium-bridge list-clients`; revoking removes
-   the entry and writes a `revoke_client` record. "Add client" refuses until
-   Phase 8 (same presence gate as the kill release).
+5. Clients: the list matches `chromium-bridge list-clients`; revoking is one
+   click, removes the entry, and writes a `revoke_client` record. "Add
+   client" opens the confirm dialog and, until Phase 8, then refuses (same
+   presence gate as the kill release).
 6. CLI tool: on the Setup page, Install creates `~/.local/bin/chromium-bridge`
    and `chromium-bridge doctor` works from a terminal (with `~/.local/bin` on
    PATH). Remove deletes exactly that symlink.

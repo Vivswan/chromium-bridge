@@ -120,6 +120,12 @@ export interface ExtensionInfo {
   exists: boolean;
 }
 
+export interface ReleaseOutcome {
+  epoch: number;
+  /** Which presence proof authorized the release (touch_id, app_confirm, ...). */
+  auth: string;
+}
+
 export const api = {
   bridgeStatus: () => invoke<BridgeStatus>("bridge_status"),
   enclaveStatus: () => invoke<EnclaveStatusJson>("enclave_status"),
@@ -132,13 +138,17 @@ export const api = {
   manifestDirUnregister: (dir: string) => invoke<string>("manifest_dir_unregister", { dir }),
   firstLaunchRegister: () => invoke<FirstRunReport | null>("first_launch_register"),
   killEngage: () => invoke<number>("kill_engage"),
-  killRelease: () => invoke<number>("kill_release"),
+  /** Presence-gated: call ONLY from the confirm handler of the explicit
+   * modal dialog (Floor::AppConfirm asserts that dialog was shown). */
+  killRelease: () => invoke<ReleaseOutcome>("kill_release"),
   auditRead: (limit: number) => invoke<AuditPage>("audit_read", { limit }),
   auditReveal: () => invoke<void>("audit_reveal"),
   clientsList: () => invoke<ClientsPayload>("clients_list"),
   clientRevoke: (name: string) => invoke<boolean>("client_revoke", { name }),
+  /** Presence-gated: same dialog-first obligation as killRelease. Returns
+   * the presence path that authorized the pairing. */
   clientPair: (name: string, anchorKind: string, anchorValue: string) =>
-    invoke<void>("client_pair", { name, anchorKind, anchorValue }),
+    invoke<string>("client_pair", { name, anchorKind, anchorValue }),
   cliToolStatus: () => invoke<CliToolStatus>("cli_tool_status"),
   cliToolInstall: () => invoke<CliToolStatus>("cli_tool_install"),
   cliToolUninstall: () => invoke<CliToolStatus>("cli_tool_uninstall"),

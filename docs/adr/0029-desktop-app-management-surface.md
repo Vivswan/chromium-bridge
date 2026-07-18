@@ -80,22 +80,34 @@ than failing.
 ### Presence-gated actions fail closed until Phase 8 lands
 
 Two app actions grant capability: releasing the kill switch and adding a
-trusted client. Both route through `presence::require_presence`, hardware
-rung first. Phase 8 (in flight on `feat/phase8-touchid`) supplies the
-LocalAuthentication provider; until this branch rebases over it, the hardware
-rung reports unavailable and the only floor a GUI process can honestly claim,
-the CLI's typed terminal confirmation, refuses because a GUI's stdin is not a
-terminal.
+trusted client. The contract agreed with Phase 8 (in flight on
+`feat/phase8-touchid`): pairing goes through
+`allowlist::pair_client_with_presence(name, anchor, Surface::Core,
+Floor::AppConfirm)`, which validates the name before any prompt, raises
+Touch ID itself on capable hardware, and returns the `PresencePath` that
+authorized it; unkill goes through `presence::require_presence(reason,
+Floor::AppConfirm)` then `kill::release`. `Floor::AppConfirm` is only
+reached when hardware is genuinely unavailable (never on a hardware
+refusal), and it succeeds on the assertion that the app already showed its
+own explicit modal confirmation.
 
-So in this branch, those two buttons refuse, with an error that names the
-surfaces that do work today (`chromium-bridge unkill`, `pair-client`, the
-extension options page). That is the intended posture, not a gap to paper
-over: claiming `Floor::ExtensionConfirm` from the app would assert a
-confirmation that never happened, and inventing an app-owned click-to-confirm
-floor would add exactly the soft path the Touch ID gate exists to close. The
-seam is `src/apps/desktop/src/presence_seam.rs`; refused releases are audited
-(`kill_release` / outcome `refused`) so an attempted silent unkill is visible
-in the trail either way.
+That assertion is load-bearing, so the UI is built dialog-first: both
+buttons open an explicit confirm modal, and only the modal's confirm
+handler invokes the presence-gated command. The command's result carries
+the presence path, and the UI names which proof authorized the act (Touch
+ID or the in-app confirmation). Engaging the kill switch and revoking (a
+client, or the enrollment) stay one-click on purpose: they only reduce
+capability, and friction-free revocation is the security posture.
+
+Until this branch rebases over Phase 8, `Floor::AppConfirm` does not exist;
+the seam (`src/apps/desktop/src/presence_seam.rs`) claims the CLI floor,
+which a GUI cannot satisfy (its stdin is not a terminal), so both acts
+refuse with an error that names the surfaces that do work today
+(`chromium-bridge unkill`, `pair-client`, the extension options page).
+That is the intended posture, not a gap to paper over; refused releases
+are audited (`kill_release` / outcome `refused`) so an attempted silent
+unkill is visible in the trail either way. The rebase swaps one constant
+(the floor) and one call site (the pairing API).
 
 ### Self-registration on first launch
 
@@ -188,9 +200,9 @@ continues to assert the exact entitlement sets of both binaries.
 - The CLI loses nothing and remains complete; `doctor --fix` and the app's
   registration converge on identical bytes, so mixing surfaces cannot fork
   state.
-- Until Phase 8 lands, the app's kill-release and add-client buttons refuse
-  with guidance. After the rebase they acquire Touch ID with no change to
-  this crate beyond the seam file (or a swap to Phase 8's dedicated gated
-  pairing API, if its shape differs).
+- Until Phase 8 lands, the app's kill-release and add-client buttons show
+  their confirm dialog and then refuse with guidance. After the rebase they
+  acquire Touch ID by swapping the seam's floor constant and the pairing
+  call site to `pair_client_with_presence`, nothing else.
 - The host CLI's `enclave-status --json` is now a stable machine contract;
   changing its shape requires a version bump and a consumer update.
