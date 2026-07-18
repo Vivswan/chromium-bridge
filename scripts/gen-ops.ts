@@ -382,7 +382,7 @@ const identityOut = `// GENERATED from the Rust core (src/packages/core/src/iden
 // The bridge's identity constants. PINNED_EXTENSION_ID is DERIVED from
 // EXTENSION_MANIFEST_KEY (Chrome's own id derivation), so it cannot drift
 // from the generated manifest. scripts/check-extension-id.ts verifies the
-// installers and the built manifest against the same values.
+// built manifest against the same values.
 
 // The extension ID Chrome derives from the manifest \`key\`. The native-
 // messaging host manifest pins this in \`allowed_origins\`, so a build without

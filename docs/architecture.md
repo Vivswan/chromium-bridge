@@ -7,91 +7,100 @@
 ## 1. Architecture overview
 
 ```
-+----------------------------------------------------------------------------+
-|                    chromium-bridge (single Rust binary)                    |
-|                                                                            |
-|  +---------------------------+   localhost TCP     +---------------------+ |
-|  | MCP server (default mode) | <---NDJSON JSON---> | --native-host       | |
-|  | - holds session state     |  127.0.0.1:<random> | (thin bridge)       | |
-|  | - listens on TCP,         |                     | - stdin NM frames   | |
-|  |   writes the lock file    |                     |   -> TCP            | |
-|  | - tool dispatch           |                     | - TCP -> stdout     | |
-|  |                           |                     |   NM frames         | |
-|  +-------------+-------------+                     +----------+----------+ |
-+----------------|------------------------------------------------|----------+
-                 ^ stdio (NDJSON)                                  ^ stdin/stdout
-                 | JSON-RPC 2.0                                    | NM frames (4B LE length + JSON)
-                 |                                                 |
-+----------------+------------+                     +--------------+---------+
-| MCP client (Claude Code,    |                     | Chrome (spawns the     |
-| etc.); the client manages   |                     | host itself)           |
-| the connection              |                     +--------------+---------+
-+-----------------------------+                                    | chrome.runtime.connectNative
-                                                                   v
-                                                    +------------------------+
-                                                    | Chromium Bridge         |
-                                                    | extension (MV3)        |
-                                                    | background.js (SW):    |
-                                                    |  - native port +       |
-                                                    |    reconnect           |
-                                                    |  - dispatches requests |
-                                                    |    to content          |
-                                                    |  - allowlist           |
-                                                    |    management          |
-                                                    | content.js:            |
-                                                    |  - snapshot/click/fill |
-                                                    |  - Toast/masking       |
-                                                    +--------------+---------+
-                                                                   | chrome.tabs.sendMessage
-                                                                   v
-                                                    +------------------------+
-                                                    | the user's real page   |
-                                                    | (logged in)            |
-                                                    +------------------------+
+MCP client A --stdio--> +--------------------------------------------------+
+MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
+                        |                                                  |
+                        |  first instance = BROKER                         |
+                        |   - owns the bridge socket + lock file           |
+                        |   - admits each harness against the              |
+                        |     trusted-client allowlist (attested)          |
+                        |   - holds session state, dispatches tools        |
+                        |  later instances = relays, attach as clients     |
+                        +------------------------+-------------------------+
+                                                 | bridge socket: NDJSON over a
+                                                 | 0600 Unix-domain socket in a
+                                                 | 0700 runtime dir (loopback
+                                                 | TCP on Windows); peer-UID +
+                                                 | attestation + HMAC handshake
+                                                 v
+                        +--------------------------------------------------+
+                        | chromium-bridge --native-host  (one per browser, |
+                        | spawned by that browser, label e.g. "chrome")    |
+                        +------------------------+-------------------------+
+                                                 | stdin/stdout, Chrome native
+                                                 | messaging (4B LE len + JSON)
+                                                 v
+                        +--------------------------------------------------+
+                        | Chromium Bridge extension (MV3, WXT)             |
+                        |  service worker: dispatch, allowlist, masking,   |
+                        |    kill-switch mirror, enrollment pin            |
+                        |  content script + CDP backend: one shared DOM    |
+                        |    implementation (snapshot/click/fill/...)      |
+                        |  confirm.html: extension-owned confirmation      |
+                        |    window, off the page-reachable DOM            |
+                        +------------------------+-------------------------+
+                                                 |
+                                                 v
+                                       the user's real page (logged in)
+
+  Management surfaces (co-equal, over the same core, never a trust root):
+    - Chromium Bridge desktop app (Tauri, macOS): registration, pairing,
+      clients, kill switch, audit    [ADR-0029]
+    - the CLI: doctor --fix / uninstall / pair / pair-client / kill / audit
 ```
 
-## 2. The three processes
-
-The system spans three independent processes, and understanding their
-boundaries is the key to understanding the whole architecture.
+## 2. The processes
 
 | Process | Who starts it | Responsibility | Lifetime |
 |------|---------|------|---------|
-| **MCP server** | The MCP client (spawned via its server config) | Holds session state, listens on TCP, dispatches tool logic | Follows the client session |
-| **native host** | Chrome (via the host manifest) | Thin bridge between stdin/stdout NM frames and TCP NDJSON | Follows the Chrome extension's Port |
-| **Chrome extension (SW + content)** | Chrome | Actual page operations, allowlist, Toast | The SW restarts every 5 minutes; the extension follows the browser |
+| MCP server (broker) | The first MCP client to spawn one | Owns the socket and the lock, admits harnesses, holds session state, dispatches tools | Until the last attached harness detaches |
+| MCP server (relay) | Each further MCP client | Attests itself to the broker and forwards its harness's calls | Follows its client session |
+| native host | Each browser (via the host manifest) | Thin bridge between stdin/stdout NM frames and socket NDJSON; answers control frames (enrollment, kill, client admin) itself | Follows the browser extension's Port |
+| extension (SW + content) | The browser | Page operations, allowlist, confirmations, masking | The SW restarts about every 5 minutes; the extension follows the browser |
+| desktop app | The user | Management UI over the core's engines (registration, pairing, revocation, kill, audit) | User-run |
 
-**Why three processes instead of one**: Chrome spawns the native host itself
-(via the manifest) and the MCP client spawns the MCP server itself. The two
-are **not** in a parent-child relationship, cannot share stdin/stdout, and so
-need an IPC channel between them. See
-[ADR-0002](./adr/0002-three-process-architecture-localhost-tcp.md).
+Why separate server and host processes: the browser spawns the native host
+itself (via the manifest) and the MCP client spawns the MCP server itself.
+The two are not parent and child, cannot share stdin/stdout, and so need an
+IPC channel between them. See
+[ADR-0002](./adr/0002-three-process-architecture-localhost-tcp.md) (original
+design) and [ADR-0019](./adr/0019-authenticated-ipc.md) /
+[ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md) (the
+authenticated socket and the broker that own that channel today).
 
-**Why the native host is so thin**: all logic lives in the MCP server. That
-way neither an SW restart nor a host restart loses session state (the state
-is in the MCP server). The native host is just a protocol translator.
+Why the native host is so thin: all logic lives in the MCP server, so
+neither an SW restart nor a host restart loses session state. The host is a
+protocol translator with one addition: it terminates the control plane
+(enrollment ceremony frames, kill-switch frames, client-admin frames,
+audit-event forwarding) so those work even when the bridge is down or killed.
+
+Why a broker instead of one server per client: several MCP clients may be
+configured at once, and the old newest-wins takeover (SIGTERM the previous
+server) made them fight over the browsers. The first instance now owns the
+socket; later attested instances attach as relays and share one session,
+ref-counted so the broker exits when the last harness detaches. See
+[ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md).
 
 ## 3. Protocol layers
-
-The system involves three protocols, each with its own transport and framing.
 
 ### 3.1 Native Messaging (extension <-> native host)
 
 Chrome's official protocol, defined at
 [developer.chrome.com/native-messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging).
 
-- **Frame format**: `4-byte little-endian u32 length` + `UTF-8 JSON`
-- **Length**: counts only the JSON bytes, **excluding** the 4-byte prefix
-- **Outbound (host -> Chrome) hard limit**: **1 MB** (exceeding it makes Chrome drop the Port immediately)
-- **Inbound (Chrome -> host)**: 64 MB
-- **Shutdown signal**: **stdin EOF** (not SIGTERM); the host should exit gracefully on EOF
-- **stderr**: not shown to the user, but usable for logging (recorded in Chrome's internal logs)
-- **argv[1]**: Chrome passes the caller origin (e.g. `chrome-extension://<id>/`), usable to tell multiple extensions apart
+- Frame format: `4-byte little-endian u32 length` + `UTF-8 JSON`
+- Length counts only the JSON bytes, excluding the 4-byte prefix
+- Outbound (host -> Chrome) hard limit: 1 MB (exceeding it makes Chrome drop the Port immediately)
+- Inbound (Chrome -> host): 64 MB
+- Shutdown signal: stdin EOF (not SIGTERM); the host exits gracefully on EOF
+- stderr: not shown to the user, but usable for logging (recorded in Chrome's internal logs)
+- argv: Chrome appends the caller origin (e.g. `chrome-extension://<id>/`)
 
-**Key traps** (all handled in the implementation):
-- All stdout writes must be **single-threaded** with a **flush** per frame (concurrent writes interleave in the pipe buffer and corrupt frames)
-- A panic prints to stdout by default and pollutes the stream -> a **stderr panic hook** is mandatory
-- With `BufWriter`, an explicit flush after every frame is required
+Key traps (all handled in the implementation):
+- All stdout writes must be single-threaded with a flush per frame
+  (concurrent writes interleave in the pipe buffer and corrupt frames)
+- A panic prints to stdout by default and pollutes the stream, so a stderr
+  panic hook is mandatory
 - `panic = "abort"` (Cargo profile) + the stderr hook, as a double safety net
 
 ### 3.2 MCP JSON-RPC (MCP server <-> MCP client)
@@ -99,149 +108,155 @@ Chrome's official protocol, defined at
 Based on JSON-RPC 2.0 over NDJSON, defined at
 [modelcontextprotocol.io](https://modelcontextprotocol.io/specification/2025-06-18).
 
-- **Transport**: stdin/stdout, NDJSON (one message per line, LF-terminated)
-- **No embedded newlines** (serde serialization escapes `\n` automatically)
-- **Protocol version**: pinned to `2025-06-18`. See [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md)
-- **Three-step handshake**: `initialize` (request/response) -> `notifications/initialized` (notification, no response) -> running
-- **Tool errors**: use `isError: true` inside the result, **not** a JSON-RPC error (so the model sees the error text and can react)
-- **Must handle**: `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`
-- **Error codes**: unknown method `-32601`, parse error `-32700`
+- Transport: stdin/stdout, NDJSON (one message per line, LF-terminated)
+- Protocol version pinned to `2025-06-18`; see [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md)
+- Three-step handshake: `initialize` -> `notifications/initialized` -> running
+- Tool errors use `isError: true` inside the result, not a JSON-RPC error,
+  so the model sees the error text and can react
+- Handled methods: `initialize`, `notifications/initialized`, `ping`,
+  `tools/list`, `tools/call`; unknown methods return `-32601`
+- Before any tool call is served, the harness that spawned the server must
+  pass admission against the trusted-client allowlist (section 6 and
+  [trust-boundaries.md](./security/trust-boundaries.md))
 
-**Minimum viable message set** (implemented in v0.1): `initialize` /
-`notifications/initialized` / `ping` / `tools/list` / `tools/call`. Other
-methods return `-32601`.
+### 3.3 Internal bridge protocol (broker <-> native hosts and relays)
 
-### 3.3 Internal bridge protocol (MCP server <-> native host)
+Custom, NDJSON over the bridge socket: a 0600 Unix-domain socket inside the
+0700 per-user runtime directory on macOS/Linux, a loopback TCP socket on
+Windows (see [SECURITY.md](../SECURITY.md#platform-support)).
 
-Custom, over localhost TCP, NDJSON transport.
+Connection setup, in order, each step fail-closed:
+
+1. **Kernel checks** (Unix): the accepting end verifies the peer's UID equals
+   its own and takes a kernel-attested identity of the peer's running
+   executable, which must match its own image (mutual; see
+   [ADR-0020](./adr/0020-kernel-attested-peer-identity.md)).
+2. **HMAC handshake**: the server sends a fresh nonce; the peer answers with
+   `HMAC-SHA256(secret, nonce)` over the per-run secret from the lock file.
+   The secret never crosses the wire; the nonce defeats replay.
+3. **Attach frame**: one mandatory role-declaring frame. A browser's native
+   host attaches with its label (`chrome`, `brave`, ...); a relay attaches
+   with its attested harness identity, which the broker checks against the
+   trusted-client allowlist ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)).
+
+After attach, tool traffic is the `BridgeReq`/`BridgeResp` envelope pair
+(`src/packages/core/src/protocol.rs`; the Rust types are the wire contract,
+see section 11):
 
 ```typescript
-// Request: MCP server -> native host -> extension
 interface BridgeReq {
-  id: number;        // monotonically increasing, used to pair responses
+  id: number;        // monotonically increasing, pairs responses
   op: string;        // operation name, e.g. "tab_list", "page_click"
-  tabId?: number;    // target tab (optional; default = currently active tab)
-  args: any;         // operation arguments
+  tabId?: number;    // target tab (optional; default = active tab)
+  browser?: string;  // target browser label (required when several attached)
+  args: unknown;     // operation arguments
 }
 
-// Response: extension -> native host -> MCP server
 interface BridgeResp {
-  id: number;        // matches BridgeReq.id
+  id: number;
   ok: boolean;
-  data?: any;        // returned data on success
-  error?: string;    // error message on failure
+  data?: unknown;
+  error?: string;
 }
 ```
 
-**Authentication**: when the connection is established, the native host first
-sends one line, `{"hello": "<secret>"}`, and the MCP server validates it
-against the secret in the lock file. See [ipc.rs](../src/ipc.rs).
+Control frames (enrollment, revocation, kill switch, audit events) ride the
+native-messaging leg between the extension and its host and are terminated
+at the host; the same frame kinds arriving from the socket leg are dropped
+as injections (see [trust-boundaries.md](./security/trust-boundaries.md)).
 
 ## 4. Components in detail
 
-### 4.1 Rust backend (`src/`)
+### 4.1 The Rust core (`src/packages/core`) and the binary (`src/apps/host`)
 
-| File | Responsibility |
+The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the
+`chromium-bridge-core` library:
+
+| Module | Responsibility |
 |------|------|
-| `main.rs` | Mode dispatch: no arguments = MCP server, `--native-host` = native host, `doctor`/`status` = read-only self-check (see [cli.md](./cli.md)), `--help` = help |
-| `protocol.rs` | Message types plus read/write functions for the three protocols; stderr panic hook; SIGPIPE ignore |
-| `ipc.rs` | localhost TCP listener + lock file in the user directory + hello authentication + secret from the system randomness source |
-| `native_host.rs` | `--native-host` mode: two threads (stdin -> TCP, TCP -> stdout), graceful exit on EOF |
-| `mcp_server.rs` | Default mode: TCP accept thread + stdin JSON-RPC main loop + message dispatch |
-| `tools/` | Schema definitions for the 15 tools (`catalogue.rs`) + the `HANDLERS` registry (`{name, build_payload}` pure functions, `mod.rs`) + argument shaping (`handlers.rs`) -> dispatch to session.call |
-| `session.rs` | Connection management + request/response pairing by id (one mpsc channel per id) + a per-connection generation id (fixes the writer-clobber race; pending calls drain as `Disconnected` on disconnect) + 120s timeout |
-| `error.rs` | Typed error `CallError` at the tool-call boundary (thiserror); its Display is the text the model sees. See [ADR-0014](./adr/0014-leveled-logging.md) |
-| `log.rs` | Leveled stderr logger controlled by `BB_LOG` (error/warn/info/debug, default info) + the `log_*!` macros. See [ADR-0014](./adr/0014-leveled-logging.md) |
+| `protocol.rs` | Message types and read/write for the three protocols; the wire-envelope contract; stderr panic hook; SIGPIPE ignore |
+| `ipc/` | The bridge socket: platform socket + lockfile + peer credentials + attestation + HMAC handshake, split per concern with platform impls |
+| `broker.rs` | Broker ownership, relay attach/detach ref-counting, DoS caps, the kill-switch watcher |
+| `session.rs` | Connection registry keyed by browser label; request/response pairing by id; per-connection generation guard; 120s timeout |
+| `mcp_server.rs` | Default mode: harness admission, JSON-RPC loop, dispatch into the shared session |
+| `native_host.rs` | `--native-host` mode: NM frames <-> socket NDJSON, control-plane frame handling, graceful exit on EOF |
+| `tools/` | The tool catalogue (26 tools; the cross-process contract source), capabilities, and the `HANDLERS` registry |
+| `allowlist.rs` | The trusted-client allowlist: `pair-client` / `revoke-client` / `list-clients`, atomic 0600 writes, fail-closed parsing |
+| `revocation.rs` | The revocation epoch and the kill latch (`revocation.json`), one-way enrollment latch, tamper detection |
+| `kill.rs` | Kill-switch engage/release; release demands a `PresenceAttestation` |
+| `presence/` | User-presence proofs: Secure Enclave Touch ID on an enrolled Mac; interactive fail-closed floors elsewhere ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)) |
+| `enclave/` | The enrollment ceremony: Secure Enclave key, presence-gated signing, pin/verify/revoke ([ADR-0021](./adr/0021-enrollment-ceremony.md)) |
+| `audit.rs` | The durable audit trail: bounded 0600 `audit.log`, strict-parsed JSON records, `audit` subcommand reader |
+| `registration.rs` + `browsers.rs` | The registration engine and browser-path resolver behind `doctor --fix`, `uninstall`, and the app's self-registration |
+| `doctor.rs` | Read-only health report (`doctor` / `status` / `doctor --list`) |
+| `error.rs` | Typed `CallError` at the tool-call boundary and the stable `ERROR_SPECS` taxonomy |
+| `log.rs` | Leveled stderr logger (`BB_LOG`) and the `log_*!` macros |
+| `identity.rs` | The native-messaging host id and the pinned extension key: the single definition site |
 
-### 4.2 Chrome extension (`src/apps/extension/`)
+### 4.2 The extension (`src/apps/extension`)
 
-The extension source is written in **TypeScript** (strict) under
-`src/apps/extension/src/*.ts` and bundled by **esbuild** into IIFEs in
-`src/apps/extension/dist/`, with static assets (manifest/HTML/CSS/icons) copied in.
-**The load-unpacked target is `src/apps/extension/dist/`** (not `src/apps/extension/`). After
-changing code, run `bun run build` (or `just ext-build`) first. See
-[ADR-0012](./adr/0012-typescript-esbuild-extension-build.md).
+Built on WXT (which generates the manifest, including the pinned key) with
+React UI, TypeScript strict, Vitest + `fakeBrowser` tests
+([ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)).
+The load-unpacked target is the build output
+`src/apps/extension/dist/chrome-mv3`, not the source directory.
 
-| Source (`src/`) | Artifact (`dist/`) | Responsibility |
-|------|------|------|
-| `manifest.json` (static, copied into dist) | `manifest.json` | MV3; permissions=[tabs,scripting,storage,nativeMessaging]; **no static host_permissions** (everything goes through optional, on-demand requests) |
-| `background.ts` | `background.js` | SW **entry point** (about 20 lines): registers the onMessage router + connectNative on startup. The real logic lives in `src/background/*` (see below) |
-| `content.ts` | `content.js` | content script **entry point** (about 30 lines): re-injection guard + onMessage listener -> `handle`. The real logic lives in `src/content/*` (see below) |
-| `options.ts` + `options.html` | `options.js` + `options.html` | Standalone Options settings page (see [ADR-0011](./adr/0011-options-page-for-settings.md)) |
-| `popup.ts` + `popup.html` | `popup.js` + `popup.html` | Authorization UI: shows connection status, the allowlist (revocable), and Allow/Deny for pending authorization requests |
-| `toast.css` (static, copied into dist) | `toast.css` | Styles for the high-risk confirmation Toast |
+| Where | Responsibility |
+|------|------|
+| `src/entrypoints/background.ts` | Service-worker entry: native port + reconnect, message router |
+| `src/entrypoints/content.ts` | Content-script entry: injection guard, op dispatch into the shared DOM layer |
+| `src/entrypoints/confirm/` | The confirmation window: an extension-owned `chrome-extension://` document the page cannot read, overlay, or click |
+| `src/entrypoints/options/`, `popup/` | Settings (Zod-validated, versioned, migrated) and the authorization/status popup |
+| `src/lib/background/` | Dispatch, allowlist store, tabs/CDP backends, cookies, egress masking, kill mirror, enrollment |
+| `src/lib/dom/` | The one shared DOM implementation (snapshot/refs/actions); the CDP backend ships its stringified source so the two page backends cannot diverge |
+| `src/lib/shared/` | Settings schema, message protocol types, allowlist matching |
+| `src/locales/*.yml` | The i18n bundles (en, zh_CN, zh_TW); CI enforces key parity |
 
-**Modular structure**: the two giant files have been split into cohesive
-modules; esbuild bundles the imports back into single IIFEs, so runtime
-behavior is unchanged (verified by dom_test 77 / smoke / e2e).
+Trust-state isolation: the enrollment pin, kill mirror, allowlist, and audit
+ring live in storage confined to extension contexts
+(`setAccessLevel(TRUSTED_CONTEXTS)`), and the message router refuses
+security-relevant messages from anything but the extension's own pages.
 
-- `src/shared/` (shared by both sides, pure logic, unit-tested): `types` (bridge/message/settings types), `settings` (DEFAULTS + getSetting), `masking` (catalog of masking patterns), `allowlist` (glob matching / domain normalization), `ops` (tool catalog; unit tests check it matches `tools.rs`)
-- `src/background/`: `port` (native port lifecycle), `dispatch` (BridgeReq routing + tool-disable gate), `tabs` (target tab resolution/injection + the tab_* tools), `precise` (page_snapshot_precise / CDP), `cookies` (cookie_get), `allowlist-store` (stored allowlist + authorization flow), `messages` (runtime.onMessage routing)
-- `src/content/`: `refs` (encapsulated ref state), `snapshot` (a11y tree), `actions` (click/fill/text/screenshot/scroll), `wait`, `eval`, `storage`, `toast`, `handle` (op dispatch)
+### 4.3 On-disk artifacts
 
-The dependencies form an acyclic DAG: `shared/*` -> `background/allowlist-store`
--> `tabs` -> `precise`/`cookies` -> `dispatch` -> `port` -> `messages`; on the
-content side, `shared/*`/`util` -> `refs`/`snapshot` -> `toast` ->
-`actions`/`eval` -> `handle`. Unit tests (`src/shared/*.test.ts`, bun) cover
-the pure modules, including one cross-language guard (the op list must match
-`tools.rs`).
-
-### 4.3 Install artifacts
-
-macOS:
+Registration (written by the app's self-registration or `doctor --fix`, both
+through `registration.rs`):
 
 ```
-~/.chromium-bridge/
-|-- chromium-bridge          # release binary (608KB)
-|-- run-host-chrome.sh      # wrapper: exec chromium-bridge --native-host --label chrome
-|-- run-host-<browser>.sh   # one wrapper per installed browser (brave/edge/...)
-`-- run-host.sh             # label-less wrapper, only for manual --nm-dir registration
-                            # (wrappers work around the NM manifest's lack of an args field)
+macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
+        ~/Library/Application Support/<Vendor>/NativeMessagingHosts/
+          com.vivswan.chromium_bridge.host.json       # manifest -> that browser's wrapper
 
-~/Library/Application Support/Google/Chrome/NativeMessagingHosts/
-`-- com.vivswan.chromium_bridge.host.json   # host manifest; path points at that browser's own wrapper
+Linux   ${XDG_DATA_HOME:-~/.local/share}/chromium-bridge/run-host-<browser>.sh
+        ${XDG_CONFIG_HOME:-~/.config}/<vendor>/NativeMessagingHosts/
+          com.vivswan.chromium_bridge.host.json
+
+Windows %LOCALAPPDATA%\chromium-bridge\com.vivswan.chromium_bridge.host.json
+        HKCU\Software\<Vendor>\NativeMessagingHosts\com.vivswan.chromium_bridge.host
+          (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
-Windows:
+The manifest's `path` points at the registering binary in place (through the
+wrapper on Unix, because the manifest format has no `args` field); nothing is
+built, downloaded, or copied. On Windows, Chrome appends the extension origin
+to the command line, which selects native-host mode.
 
-```text
-%LOCALAPPDATA%\chromium-bridge\
-|-- chromium-bridge.exe
-`-- com.vivswan.chromium_bridge.host.json
+Runtime state, in the 0700 per-user runtime directory (macOS:
+`$XDG_RUNTIME_DIR/chromium-bridge` or
+`~/Library/Application Support/chromium-bridge`; Linux:
+`$XDG_RUNTIME_DIR/chromium-bridge` with XDG-cache fallback; Windows:
+`%LOCALAPPDATA%\chromium-bridge`):
 
-HKCU\Software\Google\Chrome\NativeMessagingHosts\com.vivswan.chromium_bridge.host
-`-- (Default) = absolute path of the manifest above
-```
+| File | Contents |
+|------|----------|
+| `run.lock` (0600) | The broker's pid and the per-run HMAC secret; the socket rendezvous |
+| the bridge socket (0600) | Unix only; no listening port exists |
+| `clients.json` (0600) | The trusted-client allowlist ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)) |
+| `revocation.json` (0600) | The revocation epoch, the enrollment latch, and the kill latch ([ADR-0025](./adr/0025-any-side-revocation-epoch.md), [ADR-0030](./adr/0030-global-kill-switch-and-audit.md)) |
+| `audit.log` (0600) | The durable audit trail, size-capped |
 
-Linux:
-
-```text
-${XDG_DATA_HOME:-~/.local/share}/chromium-bridge/
-|-- chromium-bridge
-|-- run-host-chrome.sh
-|-- run-host-<browser>.sh
-`-- run-host.sh
-
-${XDG_CONFIG_HOME:-~/.config}/google-chrome/NativeMessagingHosts/
-`-- com.vivswan.chromium_bridge.host.json
-
-${XDG_CONFIG_HOME:-~/.config}/chromium/NativeMessagingHosts/
-`-- com.vivswan.chromium_bridge.host.json   # when Chromium or --browser both is selected
-```
-
-On Windows the manifest points directly at the EXE. When Chrome starts the
-native host it appends the caller's extension origin, and the binary uses
-that to enter native-host mode; on macOS/Linux the wrapper passes
-`--native-host` explicitly. On Linux the lock file lives at
-`$XDG_RUNTIME_DIR/chromium-bridge/run.lock` when a runtime dir exists,
-falling back to the XDG cache otherwise; see
-[ADR-0016](./adr/0016-linux-wsl-support.md).
-
-The extension itself is loaded **load-unpacked** from **`src/apps/extension/dist/`**
-(the esbuild output: bundled from `src/*.ts` plus copied static assets);
-`install.sh`/`install.ps1` build it first. dist/ is not checked in, so after
-cloning run `bun run build` (or `just ext-build`) first. See
-[ADR-0012](./adr/0012-typescript-esbuild-extension-build.md).
+The Secure Enclave enrollment key lives in the keychain under
+`com.vivswan.chromium-bridge.enclave.signing.v1`, never on disk.
 
 ## 5. Key data flows
 
@@ -252,206 +267,171 @@ cloning run `bun run build` (or `just ext-build`) first. See
    {"jsonrpc":"2.0","id":2,"method":"tools/call",
     "params":{"name":"page_click","arguments":{"ref":"e3"}}}
 
-2. mcp_server.handle() -> tools.dispatch()
-   -> session.call("page_click", None, {"ref":"e3"})
-   -> assigns BridgeReq.id=1, writes to TCP
+2. dispatch checks: harness admitted, epoch fresh, kill switch clear
+   -> session.call assigns BridgeReq.id=1, writes to the socket
+   (a relay's call reaches the same dispatcher through the broker)
 
-3. native host reads TCP NDJSON -> converts to an NM frame -> writes stdout
+3. native host reads socket NDJSON -> NM frame -> stdout
 
-4. background.js Port.onMessage receives {op:"page_click",args:{ref:"e3"}}
-   -> resolveTargetTab(currently active tab)
-   -> ensureAllowed(tab.url)  // allowlist check; opens the popup if not authorized
-   -> injectIfNeeded(tab.id)  // dynamically injects content.js
-   -> chrome.tabs.sendMessage(tab.id, {op, args})
+4. extension SW receives {op:"page_click",args:{ref:"e3"}}
+   -> resolve target tab
+   -> ensureAllowed(tab.url)   // allowlist; prompts if not authorized
+   -> inject content script if needed
+   -> content: resolveTarget({ref:"e3"}) -> element
+   -> high-risk? (submit/link) -> confirmation window (confirm.html);
+      deny/timeout/close all reject
+   -> click
 
-5. content.js handle()
-   -> resolveTarget({ref:"e3"}) // refMap lookup -> element
-   -> isHighRiskClick(el)? // if submit/link -> confirmWithToast()
-     -> injects the Toast DOM; user clicks Allow -> continue; Deny/timeout -> throw
-   -> el.scrollIntoView() + el.click()
-
-6. The result returns along the same path:
-   content -> chrome.runtime.sendMessage response
-   -> background Port.postMessage({id:1,ok:true,data:{clicked:"e3"}})
-   -> native host reads the NM frame -> converts to NDJSON -> writes TCP
-
-7. session receives the BridgeResp -> finds the pending sender by id=1 -> wakes it
-   -> mcp_server returns the tools/call result -> MCP client
+5. The result returns along the same path, masked at the SW egress,
+   and session pairs it back to the pending call by id.
 ```
 
-### 5.2 Native host reconnect flow
+### 5.2 Native host reconnect
 
 ```
-Chrome closes the extension Port -> native host gets stdin EOF -> host exits
-The extension background.js onDisconnect fires -> scheduleReconnect(2s)
-After 2s, connectNative() -> Chrome re-spawns the host -> host reads the lock file -> connects to TCP -> sends hello
-MCP server accepts -> validate_hello -> session.attach_connection (replaces the old connection)
+Browser closes the Port -> host gets stdin EOF -> host exits
+Extension onDisconnect -> scheduleReconnect(2s)
+connectNative() -> browser re-spawns the host -> host reads the lock file
+  -> connects to the socket -> kernel checks + HMAC + attach(label)
+Broker accepts -> session re-attaches that label (generation-guarded:
+  pending calls of the old connection drain as Disconnected)
+```
+
+### 5.3 A second MCP client attaches
+
+```
+Client B spawns its own chromium-bridge process
+  -> it finds a live broker via the lock file
+  -> attests itself over the socket (kernel checks + HMAC + attach frame
+     carrying its harness's attested identity)
+  -> broker checks the identity against clients.json; unmatched fails closed
+  -> B's tool calls multiplex through the shared session
+Broker exits when the last attached harness detaches.
 ```
 
 ## 6. Security model
 
-See the individual ADRs for detail; this is the overview.
+The full treatment is in [docs/security/](./security/); this is the map.
 
 | Boundary | Mechanism | ADR |
 |------|------|-----|
-| Domain allowlist | chrome.storage.local + popup authorization + permissions.request | [0004](./adr/0004-allowlist-with-optional-host-permissions.md) |
-| High-risk action confirmation | content script injects a Toast; 30s timeout rejects; 60s grace window | [0006](./adr/0006-toast-confirmation-for-high-risk.md) |
-| page_eval | Enlarged Toast confirming each call + a short same-origin window + return values masked by default | [0008](./adr/0008-page-eval-confirmation-channel.md) |
-| host authentication | allowed_origins hardcodes the extension ID | [0002](./adr/0002-three-process-architecture-localhost-tcp.md) |
-| bridge socket | per-run secret + lock file in the user directory (Unix mode 0600) | [0002](./adr/0002-three-process-architecture-localhost-tcp.md) |
-| Masking | page_text masks passwords + long digit runs; page_fill masks password values when echoed | (none) |
-| Protocol safety | NM 1MB outbound limit; single-threaded writes + flush; stderr panic hook | (none) |
-| Settings management | Standalone Options page centralizes security switches/timeouts/tool enablement/allowlist/allowAllSites | [0011](./adr/0011-options-page-for-settings.md) |
+| Harness admission (stdio) | Kernel-attested parent identity checked against the trusted-client allowlist; fail-closed once enrolled | [0024](./adr/0024-multi-client-attested-pairing-and-broker.md) |
+| Bridge socket | 0600 Unix-domain socket in a 0700 dir; peer-UID check; mutual executable attestation; HMAC challenge-response; role-declaring attach | [0019](./adr/0019-authenticated-ipc.md), [0020](./adr/0020-kernel-attested-peer-identity.md), [0024](./adr/0024-multi-client-attested-pairing-and-broker.md) |
+| Any-side revocation | Monotonic epoch in `revocation.json`, re-read at every enforcement point; both credential halves deleted on unpair | [0025](./adr/0025-any-side-revocation-epoch.md) |
+| Enrollment (host <-> extension) | Secure Enclave key, presence-gated signing, extension-side pin, fingerprint comparison | [0021](./adr/0021-enrollment-ceremony.md) |
+| Site allowlist | Per-origin approval + `chrome.permissions.request`; page cannot self-approve | [0004](./adr/0004-allowlist-with-optional-host-permissions.md) |
+| High-risk confirmation | Extension-owned window off the page-reachable DOM; deny on timeout/close | [0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md) |
+| Crown-jewel confirmation | `page_eval` / `page_upload` approval is a Secure Enclave Touch ID signature on an enrolled Mac | [0031](./adr/0031-touch-id-confirmations-and-presence-grants.md) |
+| Kill switch + audit | Fail-closed latch enforced at four layers; presence-gated release; log-after-decide trail | [0030](./adr/0030-global-kill-switch-and-audit.md) |
+| Masking | Cookie/storage/eval/page-text egress masked in the SW, once for both page backends | [0010](./adr/0010-cookie-storage-readonly.md) |
+| Protocol safety | NM 1 MB outbound limit; single-writer + flush; stderr panic hook; fuzzed parsers | (section 3.1) |
 
-## 7. Key constraints (pitfalls hit and handled during implementation)
+## 7. Key constraints (pitfalls hit and handled)
 
 ### 7.1 MV3 Service Worker 5-minute restart (Chromium #40733525)
-**Constraint**: Chrome force-restarts the SW every 5 minutes, losing all
-in-memory state; the Port closes and the native host exits on stdin EOF.
-**Mitigation**:
-- The allowlist is stored in `chrome.storage.local` (not in memory)
-- The SW automatically calls `connectNative()` to reconnect on startup
-- Session state (current tab, ref map) lives in the MCP server process, not in the SW
-- ref markers are written to the DOM element's `data-zcb-ref` attribute, so after an SW restart the content script can rebuild the refMap from the DOM
+Chrome force-restarts the SW about every 5 minutes, losing in-memory state;
+the Port closes and the native host exits on stdin EOF. Mitigation: durable
+state lives in `chrome.storage` (confined to trusted contexts) or in the MCP
+server process; the SW reconnects on startup; ref markers are stamped onto
+DOM attributes so the content script rebuilds its map after a restart;
+pending calls are generation-guarded.
 
 ### 7.2 chrome.debugger forces an infobar
-**Constraint**: any `chrome.debugger.attach` forces a "Started debugging this
-browser" infobar at the top of every tab, and it cannot be dismissed (short of
-the `--silent-debugger-extension-api` launch flag, which brings back a special
-launch).
-**Mitigation**: the default snapshot uses a content script approximation and
-never touches the debugger; when the authoritative a11y tree is needed, call
-`page_snapshot_precise` explicitly, which attaches temporarily and detaches
-immediately. See
+Any `chrome.debugger.attach` shows a "Started debugging this browser" banner
+on every tab while attached. Mitigation: the default snapshot uses a content
+script and never touches the debugger; `page_snapshot_precise` attaches,
+reads the a11y tree, and detaches in one handler (detach on the finally
+path), so the banner flashes for about a second. See
 [ADR-0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) and
 [ADR-0009](./adr/0009-page-snapshot-precise-debugger.md).
 
 ### 7.3 The Native Messaging manifest has no args field
-**Constraint**: the manifest's `path` must be an executable and cannot carry
-arguments.
-**Mitigation**: use a wrapper (shebang script):
-`exec chromium-bridge --native-host --label <browser>`. One
-`run-host-<browser>.sh` per browser; the label identifies that browser, and
-the server keeps a multi-browser connection registry keyed by label (see
-[ADR-0022](./adr/0022-multi-browser-label-routing.md)).
+The manifest's `path` must be a bare executable. Mitigation: a wrapper script
+per browser (`run-host-<browser>.sh`) bakes in
+`--native-host --label <browser>`; the label keys the broker's connection
+registry (see [ADR-0022](./adr/0022-multi-browser-label-routing.md)).
 
 ### 7.4 chrome.permissions.request requires a user gesture
-**Constraint**: `permissions.request` (requesting host permissions) must be
-called in a user-gesture context such as a popup/action click; it cannot be
-called from the service worker in the background.
-**Mitigation**: the allowlist authorization flow goes through the popup. When
-the user clicks Allow in the popup, the host permission is requested and the
-allowlist entry is recorded at the same time.
+Host permissions can only be requested from a user-gesture context.
+Mitigation: the allowlist authorization flow goes through the popup; Allow
+requests the permission and records the entry together.
 
-### 7.5 Static content_scripts matches conflict with optional permissions
-**Constraint**: in MV3, the `matches` declaration of content_scripts also
-needs host permissions to inject. With an initial `host_permissions: []`, the
-content script never injects at all.
-**Mitigation**: **no manifest content_scripts**; everything uses
-`chrome.scripting.executeScript` dynamic injection. Permissions follow
-`optional_host_permissions`: whichever domain is granted is the domain that
-gets injected.
+### 7.5 Static content_scripts conflict with optional permissions
+With empty initial host permissions, manifest-declared content scripts never
+inject. Mitigation: no manifest `content_scripts`; everything injects at
+runtime via `chrome.scripting.executeScript`, following the granted optional
+permissions.
 
 ### 7.6 Rust panics pollute stdout
-**Constraint**: panic messages print to stdout by default, corrupting NM
-frames and MCP NDJSON and dropping the connection.
-**Mitigation**:
-- The Cargo release profile sets `panic = "abort"`
-- `install_stderr_panic_hook()` redirects panic messages to stderr
-- Both together, as a double safety net
+Panic messages default to stdout, which corrupts NM frames and MCP NDJSON.
+Mitigation: `panic = "abort"` in the release profile plus a stderr panic
+hook, as a double safety net.
 
 ### 7.7 page_eval uses the Function constructor, not eval()
-**Constraint**: `page_eval` must run arbitrary JS in the page's global scope,
-but content.js itself runs inside a strict-mode closure. A direct `eval(code)`
-cannot see the page's globals, and eval has its own scope under strict mode.
-**Mitigation**: use
-`new Function('"use strict"; return (async () => { <code> })()')()`. The
-Function constructor executes in the global scope and supports
-`return`/`await` (the code is wrapped in an async IIFE).
-**Known limitation**: a reliable execution timeout is hard to set (JS is
-single-threaded and cannot be interrupted externally); the session layer's
-120s timeout is the backstop, and an infinite loop will hang the page. Before
-leaving the page, the return value goes through `serializeResult` for safe
-handling (circular references/DOM/Error/BigInt/exotic types) and then through
-`maskSensitive` for masking. See
+`page_eval` must run code in the page's global scope, but the content script
+runs in a strict-mode closure where `eval` sees the wrong scope. Mitigation:
+`new Function('"use strict"; return (async () => { <code> })()')()`, which
+executes in the global scope and supports `return`/`await`. A reliable
+execution timeout is impossible in single-threaded JS; the session layer's
+120s timeout is the backstop. Results pass through safe serialization
+(cycles/DOM/exotic types) and masking before leaving the extension. See
 [ADR-0008](./adr/0008-page-eval-confirmation-channel.md).
 
-### 7.8 chrome.debugger: infobar / restrictions / SW-only
-**Constraints** (page_snapshot_precise):
-- `chrome.debugger.attach` forces a "Started debugging this browser" infobar at the top of **every tab**; it persists while attached and cannot be dismissed; it disappears after `detach`.
-- The `chrome.debugger` API can only be called from the **extension context (SW/popup)**; a content script runs in the page context and cannot reach it.
-- Cannot attach to `chrome://`, `chrome-extension://`, the Chrome Web Store, `view-source:`, or `about:` pages.
-- Only one debugger per tab at a time (if DevTools is open, attach fails with "Another debugger is already attached").
+### 7.8 chrome.debugger restrictions (page_snapshot_precise, CDP mode)
+The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web
+Store pages, and allows one debugger per tab (DevTools counts). Mitigation:
+CDP work happens in the SW; a URL-scheme check filters non-debuggable pages;
+precise-snapshot refs use a `p` prefix to stay clear of content-script refs;
+detach is on the finally path. See
+[ADR-0009](./adr/0009-page-snapshot-precise-debugger.md) and
+[ADR-0017](./adr/0017-cdp-mode-all-ops.md).
 
-**Mitigation**:
-- Execution happens entirely in background.js (the SW); only "show the notification Toast" is delegated to the content script (the Toast must render in the page)
-- Within one handler: attach -> `getFullAXTree` -> `resolveNode` + `callFunctionOn` to stamp refs -> `detach`; the infobar flashes for only about 1 second
-- Before attaching, the content script shows an **informational Toast** (blue, proceeds by default, cancellable) to inform the user
-- **`detach` must be on the finally path**: detach on any error, or the infobar stays forever
-- A URL-scheme check up front filters out non-debuggable pages
-- refs use a `p` prefix (precise) to stay clear of the content script's `e` prefix and avoid collisions; content.js's `resolveTarget` looks elements up by DOM attribute value, so the prefix does not matter
-
-**Key chain**: `Accessibility.getFullAXTree` (each AXNode carries a
-`backendDOMNodeId`) -> `DOM.resolveNode({backendNodeId})` -> `RemoteObjectId`
--> `Runtime.callFunctionOn` to stamp `data-zcb-ref`. See
-[ADR-0009](./adr/0009-page-snapshot-precise-debugger.md).
-
-### 7.9 chrome.cookies is host-bound / localStorage is same-origin / httpOnly is readable
-**Constraints** (cookie_get / storage_get):
-- The `chrome.cookies` API is **bound by host_permissions**: `getAll({})` returns only cookies for authorized domains, **not** all browser cookies. The blast radius matches the existing tools, reusing the allowlist.
-- `chrome.cookies` is only available in the **SW/extension context** -> cookie_get lives in background.js.
-- The page's `localStorage`/`sessionStorage` is readable only from a **content script (page context, same origin)**; `chrome.storage` belongs to the extension, not the page, and the two are different things. -> storage_get lives in content.js.
-- `chrome.cookies` **can read httpOnly cookies** (its core value over `document.cookie`; session tokens usually live there).
-- The `cookies` permission adds **no extra install warning** (debugger already triggers the maximal host warning).
-- Unauthorized domains: getAll returns an **empty array, not an error**, so "not authorized" and "genuinely no data" cannot be told apart; the only option is a friendly hint.
-
-**Mitigation**:
-- cookie_get in background, storage_get in content (each determined by its data source)
-- **Read-only**: no set/remove. cookie_set could forge httpOnly+Secure cookies (session fixation), which not even XSS can do
-- Masking: cookie values use the compact maskCookieValue; storage values use maskString. **storage_get always masks** (not governed by the evalMask switch, because silent reads leak tokens with risk equivalent to eval)
-- Values are masked but structural fields such as name/domain/httpOnly are kept (diagnostic value)
-
-See [ADR-0010](./adr/0010-cookie-storage-readonly.md).
+### 7.9 Cookies are host-bound; storage is same-origin; httpOnly is readable
+`chrome.cookies` is bound by host permissions and lives in the SW (it can
+read `httpOnly`, its core value); page `localStorage`/`sessionStorage` is
+readable only from a content script on the same origin. Hence `cookie_get`
+in the SW, `storage_get` in content, both read-only and always masked. See
+[ADR-0010](./adr/0010-cookie-storage-readonly.md).
 
 ## 8. Technology choices
 
 | Dimension | Choice | Rationale |
 |------|------|------|
-| Backend language | Rust | Single-binary distribution is reliable; the host manifest takes an absolute path with no PATH dependency; good performance and memory. See [ADR-0001](./adr/0001-use-rust-single-binary.md) |
-| Binary split | Single binary + subcommands | One codebase, one compile, upgrades replace one file. See [ADR-0001](./adr/0001-use-rust-single-binary.md) |
-| IPC | localhost TCP + lock file | Simple across processes; easy to debug; per-run secret authentication. See [ADR-0002](./adr/0002-three-process-architecture-localhost-tcp.md) |
-| Rust dependencies | serde/serde_json + libc + thiserror | The protocol is still handwritten and tokio is still unused; beyond serde, `libc` (signals/low-level interaction) and `thiserror` (typed errors on the tool path) were added. This revises ADR-0001's old "serde is the only dependency" wording; the minimal-dependency principle stands. See [ADR-0014](./adr/0014-leveled-logging.md) |
-| Extension toolchain | TypeScript + esbuild -> dist/ | strict types + a single dependency bundling to IIFE; load-unpacked target is `src/apps/extension/dist/`. See [ADR-0012](./adr/0012-typescript-esbuild-extension-build.md) |
-| Engineering gates | justfile + GitHub Actions | A single task entry point + CI (fmt/clippy -D warnings, Biome, typos/machete + tests); Cargo is the version's single source. See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by the 2026-07 bun/Biome/just migration |
-| Extension platform | MV3 | Mandated by Chrome; Service Worker model |
-| snapshot implementation | content script approximate a11y tree | No infobar; roughly 90% coverage, with the debugger fallback as backstop. See [ADR-0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) |
-| MCP version | 2025-06-18 | The current stable version; the one MCP clients commonly implement. See [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md) |
+| Backend language | Rust, single binary + subcommands | Single-file distribution; the host manifest takes an absolute path; one codebase for server, host, and CLI. See [ADR-0001](./adr/0001-use-rust-single-binary.md) |
+| IPC | Unix-domain socket + lock file (TCP fallback on Windows) | No listening port; kernel peer credentials enable attestation. See [ADR-0019](./adr/0019-authenticated-ipc.md) |
+| Crypto and parsing | RustCrypto `hmac`/`sha2`, `subtle`, `serde` | Many-eyes libraries over homegrown code, even in the security core; bespoke code only where no library exists (see SECURITY.md and AGENTS.md) |
+| Extension platform | MV3 on WXT, React UI, Vitest | Generated manifest with the pinned key; unified `browser.*`; testable SW. See [ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md) |
+| Desktop app | Tauri v2 (macOS) | Bundles the entitled host next to a webview UI; the UI carries no security weight. See [ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md), [ADR-0029](./adr/0029-desktop-app-management-surface.md) |
+| Contracts | The Rust core generates the TS side | One source of truth; CI fails on drift. See [ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md) and section 11 |
+| Engineering gates | justfile + GitHub Actions, bun workspace, Biome, cargo-nextest, typos/machete, cargo-vet | One `just ci` compiles and gates the whole graph. See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by ADR-0023 |
+| MCP version | 2025-06-18 | The current stable version MCP clients implement. See [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md) |
 
 ## 9. Known limitations
 
-1. **snapshot accuracy is roughly 90%**: the content script recomputes a11y names and misses shadow DOM and complex ARIA; phase two adds the debugger fallback
-2. **Cross-origin iframes**: the content script is bound by the same-origin policy and cannot read cross-origin iframe content
-3. **Single-user machine**: the bridge socket has secret authentication, but the design assumes a single-user machine
-4. **Chrome platform scope**: supports Google Chrome on macOS/Windows/Linux and Chromium on Linux; Edge should work in theory but is untested
-5. **Forced takeover on Windows**: Windows uses `TerminateProcess` to take over an old server, so the old process cannot clean up after itself; the new server explicitly deletes and replaces the stale lock file
+1. **Snapshot accuracy**: the content-script a11y tree is an approximation
+   (shadow DOM, complex ARIA); `page_snapshot_precise` is the authoritative
+   fallback.
+2. **Cross-origin iframes**: the content script cannot read them.
+3. **Windows bridge downgrade**: no Unix socket, no peer-UID check, no
+   attestation; the HMAC secret is the only gate, and harness admission is
+   unenforced. See [SECURITY.md](../SECURITY.md#platform-support).
+4. **Same-user attacker running our own binary**: kernel attestation
+   distinguishes binaries, not intentions; see the
+   [threat model](./security/threat-model.md) residuals.
+5. **Revocation latency to the extension**: the socket leg is immediate; the
+   extension's reflection of a host-key revoke is bounded to the next
+   service-worker wake ([ADR-0025](./adr/0025-any-side-revocation-epoch.md)).
 
-## 10. Roadmap
+## 10. Extension points
 
-See [requirements.md section 7, Phase plan](./requirements.md#7-phase-plan).
-Extension points reserved in the architecture:
-- **Adding a new tool**: add a schema definition in `tools/catalogue.rs` + one `HANDLERS` entry in `tools/mod.rs` (a `build_payload` pure function), and add the corresponding op handling in the extension's background/content
-- **page_eval**: needs a new high-risk confirmation channel (a stronger confirmation than the Toast)
-- **debugger fallback**: add a `page_snapshot_precise` tool; the SW attaches/detaches temporarily
-- **Skill layer**: no architecture change; purely additive skill files that teach the AI to combine existing tools
-
-### 10.1 Engineering standardization overhaul
-
-A round of engineering standardization reshaped the build, test, and
-observability baseline without changing the tools' runtime behavior. The
-decisions:
-- **[ADR-0012](./adr/0012-typescript-esbuild-extension-build.md)**: the extension moved to TypeScript, bundled by esbuild into `src/apps/extension/dist/` (the new load-unpacked target).
-- **[ADR-0013](./adr/0013-ci-and-toolchain.md)**: task-runner entry point + GitHub Actions CI + rustfmt/clippy and TS lint/format gates + Cargo-sourced version sync (tooling now just + Biome, 2026-07).
-- **[ADR-0014](./adr/0014-leveled-logging.md)**: `BB_LOG` leveled stderr logging + thiserror typed errors (new `libc` and `thiserror` dependencies).
+- **Adding a tool**: one catalogue entry + handler in the core, `just gen`,
+  an op home in the extension, a risk-matrix row, and tests; the drift
+  guards fail until every surface is covered. The step-by-step list is in
+  [CONTRIBUTING.md](../CONTRIBUTING.md#adding-a-tool).
+- **Adding a browser**: one row in the resolver (`browsers.rs`); doctor,
+  --fix, uninstall, and the app pick it up from there.
+- **Skill layer**: no architecture change; additive skill files that teach an
+  agent to combine existing tools.
 
 ## 11. Protocol boundary contracts: error taxonomy and handshake
 
@@ -490,8 +470,10 @@ against it. The canonical modules and their derived artifacts:
   `NATIVE_HOST_ID` for `connectNative`, `EXTENSION_MANIFEST_KEY` for the
   built manifest, and `PINNED_EXTENSION_ID`, derived from the key, for its
   startup self-check). `scripts/check-extension-id.ts` (`just
-  check-extension-id`, part of `just ci`) verifies the installers and the
-  built manifest against the same values.
+  check-extension-id`, part of `just ci`) verifies the generated TS, the
+  built manifest, and the single-definition-site rule against the same
+  values; the registration engine consumes the constants directly, so no
+  installer copy exists to drift.
 - **Wire envelopes** (`BridgeReq` / `BridgeResp` in
   `src/packages/core/src/protocol.rs`): the Rust types ARE the envelope
   contract. The extension enforces hand-written Zod validators
@@ -508,43 +490,33 @@ against it. The canonical modules and their derived artifacts:
   recorded there, so any drift beyond the recorded decisions fails CI. No
   generated schema is checked in anywhere.
 
-This section ties together the contracts related to the protocol boundary.
-
 ### 11.1 Error taxonomy (ERROR_SPECS)
 
-At the tool-call boundary, Rust's typed error `CallError` (see section 4.1,
-`error.rs`) maps to the stable `code`s in `ERROR_SPECS` (same file);
-`cargo test` validates the mapping, and the extension side normalizes its
-own failures to the same set of `code`s (generated into `errors.gen.ts`).
-The `code` is for programmatic decisions (it carries `category` and
-`retryable`); what the model/user sees is the `message`. This way the
-"three connection-layer failures"
-(`NOT_CONNECTED` / `EXTENSION_NOT_READY` / `CONNECTION_LOST`) have one shared
-meaning across the three processes instead of each telling its own story.
+At the tool-call boundary, Rust's typed error `CallError` maps to the stable
+`code`s in `ERROR_SPECS` (`src/packages/core/src/error.rs`); `cargo test`
+validates the mapping, and the extension normalizes its own failures to the
+same set (generated into `errors.gen.ts`). The `code` is for programmatic
+decisions (it carries `category` and `retryable`); what the model and the
+user see is the `message`. This way the connection-layer failures
+(`NOT_CONNECTED` / `EXTENSION_NOT_READY` / `CONNECTION_LOST`), the
+admission and revocation refusals, and `BRIDGE_KILLED` have one shared
+meaning across every process instead of each telling its own story.
 
-### 11.2 Capability / version handshake (capabilities.rs + BRIDGE_PROTOCOL_VERSION)
+### 11.2 Capability / version handshake
 
-On top of the internal bridge protocol of section 3.3, connection setup
-**intends** one more step beyond the `hello` secret authentication of section
-3.3: capability + version negotiation.
-
-- The native host / extension reports the internal protocol version it
-  supports (`BRIDGE_PROTOCOL_VERSION`, currently `1`) and its available
-  capability set (see `src/packages/core/src/tools/capabilities.rs`; capabilities
-  are conceptually derived from the catalogue's `permission`/`scope`
-  fields).
-- Incompatible version -> **fail fast** with `PROTOCOL_MISMATCH` (see
-  `ERROR_SPECS`) and a clear message, rather than accepting the connection
-  and blowing up late on some `tools/call` with "unknown op".
-- A tool whose required capability was not advertised -> reject that tool
-  call up front instead of dispatching an op the extension cannot handle.
+Beyond the authentication of section 3.3, connection setup carries a
+capability and version dimension: the extension side advertises its
+supported `BRIDGE_PROTOCOL_VERSION` and available capability set (see
+`src/packages/core/src/tools/capabilities.rs`). An incompatible version
+fails fast with `PROTOCOL_MISMATCH` rather than blowing up later on an
+unknown op, and a tool whose capability is not advertised is rejected up
+front. The wiring status of this negotiation is tracked honestly in
+[compatibility.md](./compatibility.md).
 
 Note the three distinct "versions": the MCP JSON-RPC version `2025-06-18`
-(section 3.2 / [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md)),
-the internal bridge protocol version (an integer,
-`BRIDGE_PROTOCOL_VERSION`), and the extension release version
-(Cargo-sourced). They are all different.
+(section 3.2), the internal bridge protocol version (an integer), and the
+release version (Cargo-sourced). They are all different.
 
-> To troubleshoot these two links at runtime (whether the connection is
-> reachable; whether the lock file/port/manifest are in place), use the
-> read-only `chromium-bridge doctor`; see [cli.md](./cli.md).
+> To troubleshoot these links at runtime (whether the connection is
+> reachable; whether the lock file, socket, and manifests are in place), use
+> the read-only `chromium-bridge doctor`; see [cli.md](./cli.md).

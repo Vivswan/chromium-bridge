@@ -58,7 +58,7 @@
 //! write with its epoch bump. Unlike the epoch, the latch IS the authority
 //! for the kill state; keeping it in the atomically-written record is what
 //! lets every existing fail-closed read of this file double as a kill-state
-//! read. See `crates/core/src/kill.rs` for the enforcement surface.
+//! read. See `kill.rs` for the enforcement surface.
 
 use std::io;
 

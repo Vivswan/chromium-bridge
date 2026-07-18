@@ -2,18 +2,26 @@
 #
 # The original rationale (staying byte-identical to upstream
 # whg517/browser-bridge for clean merges) ended with the rebrand to
-# chromium-bridge (ADR-0023). This list now only holds files that a later
-# rebuild phase converts to plain ASCII, and it must only ever shrink:
-# - src/apps/extension/: converted with the Phase 7 extension rehaul.
-# - src/apps/desktop/ui/src/locales/: the desktop app's zh bundles (and the
-#   native-language-names constants), legitimately CJK - the same category as
-#   the extension's locale files, policed by scripts/check-cjk.ts.
-# - docs/ and README.md: Chinese-language docs owned by the translation
-#   pass; historical ADRs keep their original text. Cleaned in Phase 11.
+# chromium-bridge (ADR-0023). This list only holds files that deliberately
+# carry non-ASCII text, and it must only ever shrink:
+# - src/apps/extension/: the zh locale bundles and the functional glyphs the
+#   code emits on purpose - the masking replacement bullets ("****[jwt]"
+#   spelled with U+2022, pinned by the masking/egress tests and visible to
+#   MCP clients) and their test fixtures. Legitimate CJK here is policed by
+#   scripts/check-cjk.ts.
+# - src/apps/desktop/ui locales + native-language-names: the desktop app's
+#   zh bundles and each language naming itself; same category as above.
+# - Translated docs (*.zh_CN.md / *.zh_TW.md): legitimate CJK text and CJK
+#   punctuation; each translated file is exempted by exact path so nothing
+#   else rides along. English docs are NOT exempt: they are plain ASCII.
 # - CHANGELOG.md: generated release history, never edited by hand.
 src/apps/extension/
 src/apps/desktop/ui/src/locales/
 src/apps/desktop/ui/src/lib/native-language-names.ts
-docs/
+README.zh_CN.md
+README.zh_TW.md
+docs/quickstart.zh_CN.md
+docs/quickstart.zh_TW.md
+docs/privacy-policy.zh_CN.md
+docs/privacy-policy.zh_TW.md
 CHANGELOG.md
-README.md
