@@ -159,16 +159,11 @@ fn admin_client_revoke(name: &str) -> AdminControl {
             error: Some("invalid client name".into()),
         };
     }
-    match crate::allowlist::Allowlist::revoke(name) {
+    // The RevokeClient audit record is written inside Allowlist::revoke
+    // (log-after-decide), so no revoke surface can forget the trail entry.
+    match crate::allowlist::Allowlist::revoke(name, crate::audit::Surface::Extension) {
         Ok(true) => {
             log_info!("native-host", "extension revoked trusted client '{name}'");
-            // Log-after-decide (ADR-0030): the rewrite + bump are complete.
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
-                    .surface(crate::audit::Surface::Extension)
-                    .name(name)
-                    .outcome("ok"),
-            );
             AdminControl::ClientRevokeResult {
                 ok: true,
                 error: None,

@@ -225,6 +225,14 @@ impl Allowlist {
     /// still means "enrolled" (admission enforced, nobody admitted), which is
     /// the fail-closed reading of "the user revoked every client".
     ///
+    /// A removal is audited HERE, not by the caller, so revocation cannot
+    /// rewrite trust state without a trail entry (audit completeness as a
+    /// property of the function, ADR-0030 - the same shape as
+    /// [`crate::kill::engage`]). `surface` names the trusted surface that
+    /// acted, for the record. Log-after-decide: the record is written after
+    /// the rewrite and epoch bump, outside the runtime lock (audit I/O never
+    /// runs inside a critical section, see [`crate::audit`]).
+    ///
     /// The allowlist rewrite is the authoritative act: it is what a re-attach
     /// reads (refused at once) and what the broker's watcher re-decides every
     /// tick against. The revocation-epoch bump that follows is a PROMPTNESS
@@ -239,8 +247,8 @@ impl Allowlist {
     /// WRITERS; it does not make them atomic to the broker's lock-free readers,
     /// which is why the list-first ordering and the unconditional watcher (not
     /// the lock) are what keep a concurrent reader safe.
-    pub fn revoke(name: &str) -> io::Result<bool> {
-        ipc::with_runtime_lock(|| {
+    pub fn revoke(name: &str, surface: crate::audit::Surface) -> io::Result<bool> {
+        let removed = ipc::with_runtime_lock(|| {
             let Some(mut list) = Self::load()? else {
                 return Ok(false);
             };
@@ -261,7 +269,18 @@ impl Allowlist {
                 }
             }
             Ok(removed)
-        })
+        })?;
+        if removed {
+            // Log-after-decide (ADR-0030): the list rewrite + epoch bump are
+            // done, and the lock above is released.
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
+                    .surface(surface)
+                    .name(name)
+                    .outcome("ok"),
+            );
+        }
+        Ok(removed)
     }
 
     /// Write atomically, 0600, under the caller-held runtime lock.
@@ -522,15 +541,8 @@ pub fn run_revoke_client(argv: &[String]) -> i32 {
             return 2;
         }
     };
-    match Allowlist::revoke(&name) {
+    match Allowlist::revoke(&name, crate::audit::Surface::Cli) {
         Ok(true) => {
-            // Log-after-decide (ADR-0030): the list rewrite + epoch bump are done.
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
-                    .surface(crate::audit::Surface::Cli)
-                    .name(&name)
-                    .outcome("ok"),
-            );
             println!("revoked trusted client '{name}'");
             println!(
                 "a live broker drops this client's connections and refuses its re-attach \
