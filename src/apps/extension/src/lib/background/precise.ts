@@ -6,6 +6,7 @@
 // warned via an informational toast before attach. See ADR-0009.
 
 import { browser } from "wxt/browser";
+import { initI18n, t } from "../i18n";
 import { getSetting } from "../shared/settings";
 import type { OpArgs, PageResponse } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
@@ -87,12 +88,15 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
   await injectIfNeeded(tab.id!);
   let proceed: boolean | PageResponse = true; // default: proceed (skip warning)
   if (warnPrecise) {
+    // The toast strings resolve here (the SW has the user's locale); the
+    // content script deliberately reads no extension storage (#32).
+    await initI18n();
     proceed = await browser.tabs
       .sendMessage(tab.id!, {
         op: "_info_toast",
         args: {
-          message:
-            "About to take a precise page snapshot - Chrome will briefly show a 'debugging' banner (about 1 second).",
+          message: t("content.precise_notice"),
+          cancelLabel: t("common.cancel"),
         },
       })
       .catch(() => true /* content script missing → proceed anyway */);
