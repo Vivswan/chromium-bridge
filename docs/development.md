@@ -88,9 +88,12 @@ prove the whole graph still compiles after a cross-cutting change.
 
 The justfile is the canonical command interface: every task is a `just`
 recipe, and the root `package.json` scripts are thin aliases that delegate to
-the corresponding recipe (e.g. `bun run format:check` runs `just fmt-check`),
-so both entry points share one implementation. Each recipe is a plain command
-you can also run by hand:
+the corresponding recipe, so both entry points share one implementation. The
+JS-flavored root verbs (`lint`, `format`, `format:check`, `check`, `test`)
+delegate to the `*-ts` recipes; `build`, `gen`, and `typecheck` delegate to
+the same-named recipes; the repo-wide verbs live in `just` directly
+(`just lint` = clippy, `just fmt` = cargo fmt, `just test` = Rust + protocol
+e2e). Each recipe is a plain command you can also run by hand:
 
 ```sh
 cargo build --release
