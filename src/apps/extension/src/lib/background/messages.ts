@@ -23,7 +23,12 @@ import { browser } from "wxt/browser";
 import { addAllow, getAllowlist, removeAllow, resolvePendingAllow } from "./allowlist-store";
 import { readRing } from "./audit-log";
 import { requestClientList, revokeTrustedClient } from "./clients";
-import { getPendingConfirm, resolveConfirm } from "./confirm/service";
+import {
+  denyAllConfirmations,
+  getPendingConfirm,
+  releasePanicDeny,
+  resolveConfirm,
+} from "./confirm/service";
 import {
   approvePending,
   getEnrollmentStatus,
@@ -32,7 +37,7 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
-import { requestKillStatus, setKillSwitch } from "./kill";
+import { engageKillSwitch, requestKillStatus, setKillSwitch, whenKillStateRefuses } from "./kill";
 import { isNativeConnected } from "./port";
 
 // True only for a sender that is one of the extension's OWN pages (popup /
@@ -155,6 +160,49 @@ export function route(
       }
       sendResponse(resolveConfirm(msg.id, msg.approved));
       return false;
+    case "confirm_deny_kill":
+      // The confirm window's panic exit (ADR-0030): deny everything pending,
+      // then engage the kill switch. One SW-side message, not two window-side
+      // sends, for two reasons that both matter:
+      // (a) ordering is airtight - denyAllConfirmations settles the in-flight
+      //     op false SYNCHRONOUSLY (and latches the queue and new arrivals to
+      //     auto-deny), before the kill frame is even posted, so no action
+      //     can race through while the brake is in flight (a hardware tap
+      //     landing after this line finds the confirmation already settled);
+      // (b) the deny tears the confirm window down (settle -> dismiss), and
+      //     a second message sent from that dying document could be lost -
+      //     here the engage lives in the SW and survives the teardown.
+      // engageKillSwitch (not setKillSwitch) so an in-flight status query or
+      // release cannot cause the brake to be refused. Deny is always accepted
+      // (capability reduction; hardware payloads refuse only window-side
+      // APPROVALS); a stale id changes nothing - whatever is pending is
+      // denied and the engage still goes out. The host decides and audits
+      // the actual transition; the latch lifts when the exchange settles.
+      if (!fromConfirmPage(sender)) {
+        sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
+        return false;
+      }
+      denyAllConfirmations();
+      // The latch lifts on the EARLIER of two proofs, because the engage's
+      // own answer cannot be singled out on an id-less pipe:
+      // - the stored mirror crossing into refusal (killed/unknown): from
+      //   that moment the request gate refuses every op upstream, so the
+      //   latch has nothing left to hold;
+      // - the exchange failing (port down, send failed, timed out): nothing
+      //   credible is in flight anymore, and a frame landing later still
+      //   flips the mirror, whose gate needs no latch. Residual, named: a
+      //   host that stays silent past the timeout and then answers "alive"
+      //   leaves a lifted window - reaching it takes a fresh op AND an
+      //   explicit user approval on a newly presented surface.
+      void whenKillStateRefuses().then(releasePanicDeny);
+      void engageKillSwitch().then((r) => {
+        if (!r.ok) {
+          releasePanicDeny();
+          console.error("[bb] confirm-window kill engage failed", r.error);
+        }
+        sendResponse(r);
+      });
+      return true;
     default: {
       if (!isEnrollmentAction(msg.type)) {
         // The schema admits nothing else; a new message type must be added

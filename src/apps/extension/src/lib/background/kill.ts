@@ -180,6 +180,42 @@ export function requestKillStatus(): Promise<KillView> {
   return request({ type: "kill_status" });
 }
 
+// ---- panic-latch support (ADR-0030 confirm-window engage) --------------------
+
+// One-shot waiters resolved the moment the stored mirror adopts a REFUSING
+// state ("killed"/"unknown"). The panic path (messages.ts) parks the consent
+// latch on this: the control frames carry no ids, so the engage's own answer
+// cannot be singled out - but the mirror crossing into refusal is exactly the
+// moment the request gate starts refusing everything upstream, which is what
+// the latch was holding the fort for.
+let refusalWaiters: Array<() => void> = [];
+
+function drainRefusalWaiters(): void {
+  const waiters = refusalWaiters;
+  refusalWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+/** Resolves once the kill state refuses (now, or on a future host frame).
+ * Subscribes BEFORE the current-state read so a frame landing in between
+ * cannot slip past (resolving twice is harmless). May never resolve in a
+ * session where the engage never lands - the caller must pair it with the
+ * exchange's own failure path. */
+export function whenKillStateRefuses(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    refusalWaiters.push(resolve);
+    // An unreadable current state resolves too: every enforcement read of
+    // this same storage fails closed alongside it, so nothing the latch
+    // guards can present anyway - retaining the waiter forever helps no one.
+    void killGate().then(
+      (gate) => {
+        if (!gate.allowed) resolve();
+      },
+      () => resolve(),
+    );
+  });
+}
+
 /** Engage or release the switch. The host performs the transition (and
  * audits it, surface=extension); the mirror adopts the host's answer. The
  * caller was already gated: the router accepts set_kill only from extension
@@ -190,6 +226,30 @@ export function setKillSwitch(on: boolean): Promise<KillView> {
   return on
     ? request({ type: "kill_engage" })
     : request({ type: "kill_release" }, KILL_RELEASE_TIMEOUT_MS);
+}
+
+/** The panic engage (the confirm window's deny-and-kill, ADR-0030): never
+ * refused because some OTHER kill exchange holds the single request slot
+ * (the startup status query, an options-page read, or - worst case - an
+ * in-flight release). With the slot free this is setKillSwitch(true); with
+ * it occupied the engage frame is posted anyway, uncorrelated: the control
+ * frames carry no ids, the host applies them in arrival order on one pipe,
+ * and the mirror adopts every kill_status_result in order, so the pending
+ * exchange settles with equally authoritative state and an engage racing a
+ * release still lands AFTER it (final state: killed). The returned view
+ * reports only the SEND outcome plus the last-known mirror, never the
+ * engage's result - the result is whatever the mirror adopts, which is what
+ * whenKillStateRefuses watches. Residual, named honestly: with the port down
+ * the engage cannot reach the host at all (ok: false); nothing can drive the
+ * browser through a dead port either, and the popup renders that state
+ * severed, never live. */
+export function engageKillSwitch(): Promise<KillView> {
+  if (!pending) return setKillSwitch(true);
+  auditEvent("kill_engaged", { outcome: "requested" }, { forward: false });
+  if (!postFrame) return mirrorView(false, "native host not connected");
+  return postFrame({ type: "kill_engage" })
+    ? mirrorView(true)
+    : mirrorView(false, "failed to send the request to the native host");
 }
 
 // Frames are processed strictly in arrival order: SW event handlers
@@ -228,13 +288,29 @@ async function handleOneKillFrame(msg: KillStatusResult): Promise<void> {
   pending = null;
   if (current) clearTimeout(current.timer);
 
-  if (msg.ok && typeof msg.killed === "boolean") {
-    await setMirror(msg.killed ? "killed" : "alive");
-  } else {
-    // The host cannot read its own state: unknown, which the gate refuses.
-    await setMirror("unknown");
+  // ok:false = the host cannot read its own state: unknown, which the gate
+  // refuses.
+  const state: KillMirror["state"] =
+    msg.ok && typeof msg.killed === "boolean" ? (msg.killed ? "killed" : "alive") : "unknown";
+  try {
+    await setMirror(state);
+    // Only after a successful write: the waiters' contract is "the STORED
+    // state now refuses" (what killGate enforces on), not "a refusing frame
+    // was seen".
+    if (state !== "alive") drainRefusalWaiters();
+  } finally {
+    // The pending exchange must always settle, even when the mirror write
+    // throws - stranding the caller would leave its consumer (the panic
+    // path, the options page) hanging instead of failing closed. mirrorView
+    // is itself a storage read, so its failure must not strand either.
+    if (current) {
+      try {
+        current.resolve(await mirrorView(msg.ok, msg.error));
+      } catch {
+        current.resolve({ ok: false, error: "kill state storage is unreadable" });
+      }
+    }
   }
-  if (current) current.resolve(await mirrorView(msg.ok, msg.error));
 }
 
 /** Tests only: forget port + pending so suites can drive both paths. */
@@ -243,4 +319,5 @@ export function resetKillForTests(): void {
   failPending("test reset");
   pending = null;
   frameChain = Promise.resolve();
+  drainRefusalWaiters();
 }

@@ -61,6 +61,9 @@ const GATED: RuntimeMsg[] = [
   { type: "get_kill" },
   { type: "set_kill", on: false },
   { type: "set_kill", on: true },
+  // The confirm window's deny-and-kill panic exit: gated twice (extension
+  // page, then confirm window specifically); this pins the first gate.
+  { type: "confirm_deny_kill" },
   { type: "get_audit" },
   { type: "enroll_pair" },
   { type: "enroll_verify" },
@@ -119,6 +122,13 @@ describe("router sender gating (#32)", () => {
       error: "confirmations are confirm-window-only",
     });
     expect(call({ type: "confirm_resolve", id: "x", approved: true }, optionsSender).resp).toEqual({
+      ok: false,
+      error: "confirmations are confirm-window-only",
+    });
+    // The deny-and-kill panic exit is confirm-window-only like the rest: any
+    // other extension page already has its own kill affordance (set_kill) and
+    // must not be able to answer a confirmation through this side door.
+    expect(call({ type: "confirm_deny_kill" }, optionsSender).resp).toEqual({
       ok: false,
       error: "confirmations are confirm-window-only",
     });
