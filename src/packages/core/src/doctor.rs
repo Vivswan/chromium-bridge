@@ -8,7 +8,7 @@
 //! `crate::browsers`. `doctor --list` is the short, resolver-only form of
 //! that report. `doctor --fix` hands the diagnosis to
 //! `crate::registration` for an idempotent repair; on a fresh machine that
-//! repair IS the registration. The app self-registers through the same
+//! repair IS the registration. The app registers through the same
 //! engine; app and CLI are co-equal surfaces (see docs/cli.md).
 
 use std::path::PathBuf;

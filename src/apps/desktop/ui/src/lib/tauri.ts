@@ -50,14 +50,17 @@ export interface EnclaveOutcome {
 export interface BrowserRow {
   key: string;
   detected: boolean;
+  /** RegState::describe(): human wording, display only. */
   state: string;
+  /** RegState::code(): ok | missing | stale | foreign | unreadable. The UI
+   * branches on this; an unknown code offers no action. */
+  code: string;
   healthy: boolean;
   location: string;
 }
 
 export interface FirstRunReport {
-  lines: string[];
-  errors: string[];
+  /** Browser keys detected on first launch; nothing is registered for them. */
   detected: string[];
 }
 
@@ -136,7 +139,9 @@ export const api = {
   browserUnregister: (key: string) => invoke<string>("browser_unregister", { key }),
   manifestDirRegister: (dir: string) => invoke<string[]>("manifest_dir_register", { dir }),
   manifestDirUnregister: (dir: string) => invoke<string>("manifest_dir_unregister", { dir }),
-  firstLaunchRegister: () => invoke<FirstRunReport | null>("first_launch_register"),
+  /** Detection only (ADR-0029 as amended): never writes into a browser's
+   * configuration. Null after the first launch. */
+  firstLaunchDetect: () => invoke<FirstRunReport | null>("first_launch_detect"),
   killEngage: () => invoke<number>("kill_engage"),
   /** Presence-gated: call ONLY from the confirm handler of the explicit
    * modal dialog (Floor::AppConfirm asserts that dialog was shown). */

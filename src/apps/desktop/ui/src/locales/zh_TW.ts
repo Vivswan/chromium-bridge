@@ -60,9 +60,11 @@ export const zh_TW: Record<MessageKey, string> = {
   "overview.extension_note":
     "以上檢查涵蓋應用程式、主機與 MCP 伺服器，但無法確認擴充功能已載入並連線 - 請透過擴充功能的工具列圖示確認。",
   "overview.first_run_title": "首次啟動",
-  "overview.first_run_registered": "已為偵測到的瀏覽器寫入原生訊息資訊清單。",
+  "overview.first_run_detected":
+    "偵測到 $1。可以在「瀏覽器」頁面選擇要連接的瀏覽器，或立即全部連接；在你選擇之前，應用程式不會寫入任何註冊資訊。",
+  "overview.first_run_connect_all": "連接所有偵測到的瀏覽器",
   "overview.first_run_none": "未偵測到 Chromium 系瀏覽器。請在「瀏覽器」頁面手動新增。",
-  "overview.first_run_errors": "部分註冊被拒絕：",
+  "overview.first_run_errors": "部分瀏覽器未能連接：",
 
   "browsers.title": "瀏覽器",
   "browsers.intro":
@@ -71,7 +73,8 @@ export const zh_TW: Record<MessageKey, string> = {
   "browsers.not_detected": "未偵測到",
   "browsers.state": "註冊狀態",
   "browsers.location": "位置",
-  "browsers.register": "註冊",
+  "browsers.connect": "連接",
+  "browsers.connected": "已連接",
   "browsers.repair": "修復",
   "browsers.unregister": "移除",
   "browsers.restart_note":

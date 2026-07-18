@@ -187,7 +187,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the
 | `presence/` | User-presence proofs: Secure Enclave Touch ID on an enrolled Mac; interactive fail-closed floors elsewhere ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)) |
 | `enclave/` | The enrollment ceremony: Secure Enclave key, presence-gated signing, pin/verify/revoke ([ADR-0021](./adr/0021-enrollment-ceremony.md)) |
 | `audit.rs` | The durable audit trail: bounded 0600 `audit.log`, strict-parsed JSON records, `audit` subcommand reader |
-| `registration.rs` + `browsers.rs` | The registration engine and browser-path resolver behind `doctor --fix`, `uninstall`, and the app's self-registration |
+| `registration.rs` + `browsers.rs` | The registration engine and browser-path resolver behind `doctor --fix`, `uninstall`, and the app's Connect/Repair buttons |
 | `doctor.rs` | Read-only health report (`doctor` / `status` / `doctor --list`) |
 | `error.rs` | Typed `CallError` at the tool-call boundary and the stable `ERROR_SPECS` taxonomy |
 | `log.rs` | Leveled stderr logger (`BB_LOG`) and the `log_*!` macros |
@@ -219,8 +219,8 @@ security-relevant messages from anything but the extension's own pages.
 
 ### 4.3 On-disk artifacts
 
-Registration (written by the app's self-registration or `doctor --fix`, both
-through `registration.rs`):
+Registration (written by the app's Connect/Repair buttons or `doctor --fix`,
+both through `registration.rs`):
 
 ```
 macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
