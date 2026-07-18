@@ -4,30 +4,38 @@
 // extension-owned window (ADR-0027); this notice stays in-page because a page
 // suppressing its own courtesy warning gains nothing (it cannot approve
 // anything here), while a focus-stealing window for a heads-up would be
-// hostile UX. Styles are inline so no stylesheet injection is needed.
+// hostile UX. Styles are inline so no stylesheet injection is needed; the
+// colors come from the Control Tower constants (theme-colors.ts) and follow
+// the OS scheme, since our stylesheet's tokens are not injected here.
+
+import { TOAST_DARK, TOAST_LIGHT, type ToastPalette } from "../shared/theme-colors";
+
+function toastPalette(): ToastPalette {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? TOAST_DARK : TOAST_LIGHT;
+}
 
 export function showInfoToast(message: string): Promise<boolean> {
   return new Promise((resolve) => {
     const host = ensureToastHost();
+    const p = toastPalette();
     const card = document.createElement("div");
     card.style.cssText =
-      "box-sizing:border-box;pointer-events:auto;background:#f0f7ff;color:#1f2937;" +
-      "border:1.5px solid #2563eb;border-left:4px solid #2563eb;border-radius:12px;" +
-      "box-shadow:0 10px 30px rgba(0,0,0,.16);padding:14px 16px;width:360px;" +
+      `box-sizing:border-box;pointer-events:auto;background:${p.surface};color:${p.text};` +
+      `border:1px solid ${p.edgeStrong};border-radius:10px;padding:14px 16px;width:360px;` +
       "font-family:-apple-system,system-ui,sans-serif;font-size:13px;line-height:1.5;";
     const title = document.createElement("div");
     title.textContent = "Chromium Bridge";
-    title.style.cssText = "font-weight:700;margin-bottom:6px;color:#1d4ed8;";
+    title.style.cssText = `font-weight:600;margin-bottom:6px;color:${p.text};`;
     const text = document.createElement("div");
     text.textContent = message;
-    text.style.cssText = "margin-bottom:12px;word-break:break-word;color:#374151;";
+    text.style.cssText = `margin-bottom:12px;word-break:break-word;color:${p.textSecondary};`;
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
     const cancel = document.createElement("button");
     cancel.textContent = "Cancel";
     cancel.style.cssText =
-      "padding:6px 14px;border-radius:8px;border:1px solid #d1d5db;color:#374151;" +
-      "background:#fff;cursor:pointer;font-size:12px;font-weight:600;";
+      `padding:6px 14px;border-radius:6px;border:1px solid ${p.edgeStrong};color:${p.text};` +
+      `background:${p.control};cursor:pointer;font-size:12px;font-weight:600;`;
     actions.appendChild(cancel);
     card.appendChild(title);
     card.appendChild(text);

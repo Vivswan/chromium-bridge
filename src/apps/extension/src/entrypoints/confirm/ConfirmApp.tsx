@@ -89,14 +89,14 @@ export function ConfirmApp() {
   const hardware = payload.hardware === true;
   return (
     <div className="flex min-h-screen flex-col p-5">
-      <h1 className="mb-0.5 text-base font-bold text-danger-strong">{t("confirm.title")}</h1>
+      <h1 className="mb-0.5 text-base font-bold text-danger">{t("confirm.title")}</h1>
       <div className="mb-0.5 break-all font-mono text-xs text-muted">{payload.origin}</div>
       <div className="mb-3 truncate text-xs text-muted">{payload.tabTitle}</div>
       <div className="mb-2.5 font-semibold">{t(QUESTION_KEY[payload.kind])}</div>
       <pre className="mb-3 min-h-[60px] max-h-80 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-edge bg-edge-soft px-3 py-2.5 font-mono text-xs">
         {payload.detail}
       </pre>
-      {warnKey && <div className="mb-3 text-xs text-danger-strong">{t(warnKey)}</div>}
+      {warnKey && <div className="mb-3 text-xs text-danger">{t(warnKey)}</div>}
       {hardware && <div className="mb-3 text-xs font-semibold">{t("confirm.touchid_wait")}</div>}
       <div className="mb-3 text-xs text-muted">{t("confirm.countdown", [String(left)])}</div>
       <div className="flex justify-end gap-2.5">

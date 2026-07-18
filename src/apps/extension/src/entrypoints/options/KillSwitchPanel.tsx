@@ -72,9 +72,9 @@ export function KillSwitchPanel() {
       case "alive":
         return <span className="font-semibold">{t("kill.state_alive")}</span>;
       case "killed":
-        return <span className="font-semibold text-danger-strong">{t("kill.state_killed")}</span>;
+        return <span className="font-semibold text-danger">{t("kill.state_killed")}</span>;
       case "unknown":
-        return <span className="font-semibold text-danger-strong">{t("kill.state_unknown")}</span>;
+        return <span className="font-semibold text-danger">{t("kill.state_unknown")}</span>;
       default:
         return <span className="text-muted">{t("kill.state_unmirrored")}</span>;
     }
@@ -101,13 +101,11 @@ export function KillSwitchPanel() {
         </Button>
       </div>
       {view && !view.ok && view.error && (
-        <div className="mt-2 text-xs font-semibold text-danger-strong">
+        <div className="mt-2 text-xs font-semibold text-danger">
           {t("kill.failed", [view.error])}
         </div>
       )}
-      {actionError && (
-        <div className="mt-2 text-xs font-semibold text-danger-strong">{actionError}</div>
-      )}
+      {actionError && <div className="mt-2 text-xs font-semibold text-danger">{actionError}</div>}
     </div>
   );
 }

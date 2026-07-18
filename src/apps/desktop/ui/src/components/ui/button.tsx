@@ -10,8 +10,8 @@ const button = cva(
     variants: {
       variant: {
         default: "border border-edge bg-surface text-body hover:bg-edge-soft",
-        primary: "border border-brand bg-brand text-white hover:bg-brand-strong",
-        danger: "border border-danger bg-danger text-white hover:bg-danger-strong",
+        primary: "border border-live bg-live text-surface-0 hover:opacity-90",
+        danger: "border border-danger bg-danger text-surface-0 hover:opacity-90",
         ghost: "border border-transparent bg-transparent text-danger hover:bg-danger-surface",
       },
       size: {
