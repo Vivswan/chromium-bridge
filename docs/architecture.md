@@ -199,7 +199,7 @@ Built on WXT (which generates the manifest, including the pinned key) with
 React UI, TypeScript strict, Vitest + `fakeBrowser` tests
 ([ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)).
 The load-unpacked target is the build output
-`src/apps/extension/dist/chrome-mv3`, not the source directory.
+`build/extension/chrome-mv3`, not the source directory.
 
 | Where | Responsibility |
 |------|------|

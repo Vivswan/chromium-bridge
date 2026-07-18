@@ -15,7 +15,10 @@ export default defineConfig({
   build: {
     // WKWebView on the supported macOS floor; fine for the other platforms.
     target: "safari15",
-    outDir: "dist",
+    // Repo-root build/ folder (must agree with tauri.conf.json frontendDist);
+    // outside the vite root, so emptyOutDir must be explicit.
+    outDir: "../../../../build/desktop-ui",
+    emptyOutDir: true,
   },
   resolve: {
     alias: {

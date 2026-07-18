@@ -33,7 +33,7 @@ folders (`src/` and `tests/`).
 
 ```
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
-src/apps/extension/      MV3 extension (WXT); dist/ is the load-unpacked target (gitignored)
+src/apps/extension/      MV3 extension (WXT); builds to build/extension/ (gitignored)
 src/apps/desktop/        Tauri v2 desktop app (ADR-0026/0029): workspace member but
                          NOT a default member; `just desktop-bundle` builds + signs
                          it with the bundled host (see docs/desktop-app.md)
@@ -75,7 +75,7 @@ just build-repro    # deterministic release build (scripts/build-repro.sh)
 just test           # rust tests (nextest) + protocol e2e
 just test-browser   # build the extension, then DOM + smoke tests (needs Chrome)
 just ci             # everything CI runs, minus the browser job
-just ext-build      # bundle the extension (src/ -> dist/)
+just ext-build      # bundle the extension (src/ -> build/extension/)
 just fmt            # cargo fmt
 just fix-ts         # biome lint+format auto-fix across the workspace
 just install        # build the release binary, then register it (doctor --fix)
@@ -119,7 +119,7 @@ bun run --cwd src/apps/extension dev       # WXT dev mode: rebuild on change
 bun run --cwd src/apps/extension build     # production bundle
 ```
 
-Load `src/apps/extension/dist/chrome-mv3` as an unpacked extension in
+Load `build/extension/chrome-mv3` as an unpacked extension in
 `chrome://extensions` (Developer mode). Unit tests
 (`bun run --cwd src/apps/extension test`) run on Vitest with `fakeBrowser`,
 no real browser needed.
@@ -130,10 +130,12 @@ Three suites, all wired into `tests/browser/run_all.ts` (and CI):
 
 - **Protocol** (`tests/protocol/e2e.py`) - drives the real release binary as
   subprocesses over the actual wire protocols. No browser needed.
-- **DOM** (`tests/browser/dom_test.ts`, bun) - injects the built `dist/content.js` into
+- **DOM** (`tests/browser/dom_test.ts`, bun) - injects the built content script
+  (`build/extension/chrome-mv3/content-scripts/content.js`) into
   a headless Chrome page via CDP and exercises every content-script op.
 - **Smoke** (`tests/browser/ext_test.ts`, bun + puppeteer-core) - launches Chrome with
-  `dist/` loaded and checks the service worker boots. Set `BB_EXT_DIR` to point
+  `build/extension/chrome-mv3` loaded and checks the service worker boots. Set
+  `BB_EXT_DIR` to point
   at a different unpacked extension.
 
 ```sh

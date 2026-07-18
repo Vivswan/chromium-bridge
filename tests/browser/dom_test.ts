@@ -25,10 +25,8 @@ const REPO = path.resolve(import.meta.dir, "../..");
 // `bun run --cwd src/apps/extension build` first; `run_all.ts` / `just` do this.
 const CONTENT_JS = path.join(
   REPO,
-  "src",
-  "apps",
+  "build",
   "extension",
-  "dist",
   "chrome-mv3",
   "content-scripts",
   "content.js",
