@@ -2,13 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Chromium Bridge</title>
   </head>
   <body>
-    <h1>Chromium Bridge</h1>
-    <p>Signing-spike shell (Phase 6). The control-panel UI lands in Phase 9.</p>
-    <p>Enclave key label (read from chromium-bridge-core):</p>
-    <pre id="label">loading...</pre>
-    <script src="main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
