@@ -20,13 +20,42 @@ build-release:
 build-repro:
     ./scripts/build-repro.sh
 
-# Build + sign the Tauri desktop shell with the bundled host (macOS, ADR-0026)
+# Build + sign the Tauri desktop app with the bundled host + extension (macOS, ADR-0026/0029)
 desktop-bundle:
     bun scripts/desktop-bundle.ts
 
 # Verify the signed desktop bundle's entitlement chain (app + nested host)
 desktop-check:
     bun scripts/check-desktop-signing.ts
+
+# Desktop app dev loop: Vite dev server + tauri dev (unsigned; Enclave ops
+# need the built host as a sibling: run `cargo build` first)
+app-dev:
+    #!/usr/bin/env sh
+    set -eu
+    cargo build
+    cd src/apps/desktop && bunx tauri dev
+
+# Build, sign, verify, then launch the desktop app (USER-RUN: the GUI)
+app-run: desktop-bundle
+    open "target/release/bundle/macos/Chromium Bridge.app"
+
+# Desktop UI: production build (also what `bunx tauri build` runs first)
+desktop-ui-build:
+    bun run --cwd src/apps/desktop/ui build
+
+# Desktop UI unit tests (locale coverage, i18n resolution; no browser)
+desktop-ui-test:
+    bun run --cwd src/apps/desktop/ui test
+
+# Desktop Rust crate: clippy + tests. Needs the UI dist (tauri's
+# generate_context! embeds it), hence the dependency. Not part of `just ci`:
+# the crate is deliberately not a default workspace member, and compiling
+# Tauri needs platform GUI toolchains (WebKitGTK on Linux); CI runs this on
+# macOS in the dedicated desktop job.
+desktop-check-rust: desktop-ui-build
+    cargo clippy -p chromium-bridge-desktop --all-targets -- -D warnings
+    cargo test -p chromium-bridge-desktop
 
 # Touch ID proof for the bundled host (USER-RUN: raises a real Touch ID
 # prompt). Builds + verifies the bundle, then enrolls the enclave key via the
@@ -167,8 +196,8 @@ test-integration: build-release ext-build
 # All tests that run without a browser
 test: test-rust test-e2e
 
-# Everything CI runs
-ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test ext-build test-e2e check-extension-id check-cjk check-gen check-envelope check-schemars-isolation
+# Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust)
+ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-gen check-envelope check-schemars-isolation
 
 # Install locally (build + copy binary + host manifest)
 install:

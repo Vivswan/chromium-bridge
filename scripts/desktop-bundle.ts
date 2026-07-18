@@ -1,29 +1,34 @@
 #!/usr/bin/env bun
 
-// Build and sign the desktop bundle end to end (Phase 6 signing spike,
-// ADR-0026). One command: `just desktop-bundle`.
+// Build and sign the desktop bundle end to end (ADR-0026, extended by the
+// Phase 9 app, ADR-0029). One command: `just desktop-bundle`.
 //
 //   1. build the release host binary (the Secure Enclave toucher)
-//   2. `tauri build` (builds the app, bundles, signs the .app)
-//   3. wrap the host in a HELPER BUNDLE inside the app
+//   2. build the extension (bundled into the app for "Load unpacked")
+//   3. `tauri build` (builds the UI + app, bundles, signs the .app)
+//   4. wrap the host in a HELPER BUNDLE inside the app
 //      (Contents/Helpers/chromium-bridge.app): macOS honors restricted
 //      entitlements only on a bundle's main executable with an embedded
-//      provisioning profile - a bare nested binary is SIGKILLed at exec
-//   4. embed the Mac Team provisioning profile (discovered from Xcode's
+//      provisioning profile - a bare nested binary is SIGKILLed at exec.
+//      The helper Info.plist is stamped with the workspace version here, so
+//      it cannot go stale against Cargo.toml.
+//   5. copy the extension dist into Contents/Resources/extension
+//   6. embed the Mac Team provisioning profile (discovered from Xcode's
 //      profile cache) in the helper and the outer app
-//   5. sign inside-out: the helper with the HOST's own entitlements
+//   7. sign inside-out: the helper with the HOST's own entitlements
 //      (entitlements/host.entitlements), then the outer app with its own
 //      (entitlements/app.entitlements)
-//   6. re-assert the final bundle with scripts/check-desktop-signing.ts,
+//   8. re-assert the final bundle with scripts/check-desktop-signing.ts,
 //      which fails on entitlement drift, a get-task-allow appearance, or an
 //      expired profile
 //
 // macOS-only by design: the entitlement chain is the thing under test.
 
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cargoVersion } from "./lib.ts";
 import { findUsableProfile, provisioningUdid, xcodeProfileDir } from "./provisioning.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -88,16 +93,39 @@ if (profile === undefined) {
 console.log(`provisioning profile: ${profile.path} (expires ${profile.expires.toISOString()})`);
 
 run(["cargo", "build", "--release", "-p", "chromium-bridge"]);
+run(["bun", "run", "--cwd", "src/apps/extension", "build"]);
 run(["bunx", "tauri", "build"], desktop);
 
 const app = resolve(root, "target/release/bundle/macos/Chromium Bridge.app");
 const helper = resolve(app, "Contents/Helpers/chromium-bridge.app");
 mkdirSync(resolve(helper, "Contents/MacOS"), { recursive: true });
-copyFileSync(resolve(desktop, "host-bundle/Info.plist"), resolve(helper, "Contents/Info.plist"));
+
+// Stamp the helper Info.plist with the workspace version (Cargo.toml is the
+// single source; the checked-in plist's placeholder values must not ship).
+const version = cargoVersion();
+const plistSource = readFileSync(resolve(desktop, "host-bundle/Info.plist"), "utf8");
+const plist = plistSource.replace(
+  /(<key>CFBundle(?:ShortVersionString|Version)<\/key>\s*<string>)[^<]+(<\/string>)/g,
+  `$1${version}$2`,
+);
+if (!plist.includes(`<string>${version}</string>`)) {
+  console.error("error: could not stamp the version into host-bundle/Info.plist");
+  process.exit(1);
+}
+writeFileSync(resolve(helper, "Contents/Info.plist"), plist);
 copyFileSync(
   resolve(root, "target/release/chromium-bridge"),
   resolve(helper, "Contents/MacOS/chromium-bridge"),
 );
+
+// Bundle the unpacked extension for the app's "Load unpacked" guidance
+// (Resources are sealed by the outer signature below). WXT emits the
+// loadable extension (the directory with manifest.json) at dist/chrome-mv3.
+const extensionDist = resolve(root, "src/apps/extension/dist/chrome-mv3");
+const extensionDest = resolve(app, "Contents/Resources/extension");
+rmSync(extensionDest, { recursive: true, force: true });
+cpSync(extensionDist, extensionDest, { recursive: true });
+
 copyFileSync(profile.path, resolve(helper, "Contents/embedded.provisionprofile"));
 copyFileSync(profile.path, resolve(app, "Contents/embedded.provisionprofile"));
 

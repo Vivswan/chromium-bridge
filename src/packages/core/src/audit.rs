@@ -45,8 +45,9 @@ use serde::{Deserialize, Serialize};
 use crate::ipc;
 
 /// Current record schema version; unknown versions are surfaced as
-/// unrecognized by the reader, never guessed at.
-const AUDIT_VERSION: u32 = 1;
+/// unrecognized by the reader, never guessed at. Public so co-equal reading
+/// surfaces (the desktop app's audit panel) apply the same strict check.
+pub const AUDIT_VERSION: u32 = 1;
 
 /// Size cap for the live audit file. When an append would exceed it, the live
 /// file rotates to `audit.log.1` (replacing any previous rotation), so the
