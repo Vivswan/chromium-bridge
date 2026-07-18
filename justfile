@@ -221,6 +221,9 @@ ext-test:
 shared-test:
     bun run --cwd src/packages/shared test
 
+# Unit-test shared + extension (the `bun run test` set; the desktop UI's suite is desktop-ui-test)
+test-ts: shared-test ext-test
+
 # DOM + smoke + security proofs (needs bun + isolated Chrome; builds first)
 test-browser: ext-build
     cd tests/browser && bun dom_test.ts
