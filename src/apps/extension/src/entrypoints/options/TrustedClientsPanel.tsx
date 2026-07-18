@@ -49,15 +49,13 @@ export function TrustedClientsPanel() {
       {view === null && <div className="mt-2 text-muted">{t("clients.loading")}</div>}
 
       {view && !view.ok && (
-        <div className="mt-2 text-xs font-semibold text-danger-strong">
+        <div className="mt-2 text-xs font-semibold text-danger">
           {t("clients.error", [view.error ?? t("clients.no_reply")])}
         </div>
       )}
 
       {view?.ok && view.enrolled === false && (
-        <div className="mt-2 text-xs font-semibold text-danger-strong">
-          {t("clients.unenrolled")}
-        </div>
+        <div className="mt-2 text-xs font-semibold text-danger">{t("clients.unenrolled")}</div>
       )}
 
       {view?.ok && view.enrolled && (view.clients?.length ?? 0) === 0 && (
@@ -82,9 +80,7 @@ export function TrustedClientsPanel() {
         </ul>
       )}
 
-      {actionError && (
-        <div className="mt-2 text-xs font-semibold text-danger-strong">{actionError}</div>
-      )}
+      {actionError && <div className="mt-2 text-xs font-semibold text-danger">{actionError}</div>}
     </div>
   );
 }

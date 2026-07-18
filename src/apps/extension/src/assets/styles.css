@@ -1,59 +1,175 @@
 @import "tailwindcss";
 
-/* Class-based dark mode (we toggle .dark on <html>). */
+/* Class-based dark mode (we toggle .dark on <html>, see src/lib/theme.ts). */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Semantic tokens -> CSS vars, so utilities like bg-page / text-body flip
-   with the .dark class instead of duplicating every color. */
+/* "Control Tower" token layer, extracted from
+   design-explorations/control-tower/theme.css. Color is a strict signal
+   vocabulary: green = live/attested, amber = pending/needs you,
+   red = kill/deny; everything else is neutral surfaces + ink.
+
+   This block is duplicated verbatim in src/apps/desktop/ui/src/styles.css
+   (only the dark-mode wrapper differs: .dark class here, prefers-color-scheme
+   there). Keep the two in sync by hand; deduplicating into
+   src/packages/shared is future work.
+
+   Contexts that cannot read CSS custom properties (action badges, the
+   inline-styled content-script toast) mirror these hexes in
+   src/lib/shared/theme-colors.ts - update both together. */
 @theme inline {
-  --color-page: var(--page);
-  --color-surface: var(--surface);
-  --color-body: var(--body);
-  --color-muted: var(--muted);
-  --color-faint: var(--faint);
+  /* Control Tower tokens */
+  --color-bg: var(--bg);
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
   --color-edge: var(--edge);
-  --color-edge-soft: var(--edge-soft);
-  --color-brand: var(--brand);
-  --color-brand-strong: var(--brand-strong);
+  --color-edge-strong: var(--edge-strong);
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-text-4: var(--text-4);
+  --color-live: var(--live);
+  --color-live-dim: var(--live-dim);
+  --color-live-edge: var(--live-edge);
+  --color-live-sheen: var(--live-sheen);
+  --color-live-halo: var(--live-halo);
+  --color-pending: var(--pending);
+  --color-pending-dim: var(--pending-dim);
+  --color-pending-edge: var(--pending-edge);
+  --color-pending-halo: var(--pending-halo);
   --color-danger: var(--danger);
-  --color-danger-strong: var(--danger-strong);
-  --color-danger-surface: var(--danger-surface);
-  --color-warn-edge: var(--warn-edge);
-  --color-warn-surface: var(--warn-surface);
+  --color-danger-dim: var(--danger-dim);
+  --color-danger-strong: var(--danger-strong); /* rgba hover FILL, not a solid */
+  --color-danger-edge: var(--danger-edge);
+  --color-focus: var(--focus);
+
+  /* Legacy aliases: pre-Control-Tower names the screens still use. The
+     per-screen restyle retires them lane by lane; new code uses the
+     Control Tower names above. */
+  --color-page: var(--bg);
+  --color-surface: var(--surface-2);
+  --color-body: var(--text-1);
+  --color-muted: var(--text-2);
+  --color-faint: var(--text-3);
+  --color-edge-soft: var(--surface-4);
+  --color-brand: var(--live);
+  --color-danger-surface: var(--danger-dim);
+  --color-warn-edge: var(--pending-edge);
+  --color-warn-surface: var(--pending-dim);
+
+  /* type, radius, motion */
+  --font-sans: var(--ui);
+  --font-mono: var(--mono);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --ease-console: var(--ease);
 }
 
+/* ---------- tokens: mode-independent ---------- */
 :root {
-  --page: #ffffff;
-  --surface: #ffffff;
-  --body: #111827;
-  --muted: #6b7280;
-  --faint: #9ca3af;
-  --edge: #e5e7eb;
-  --edge-soft: #f3f4f6;
-  --brand: #2e8b57;
-  --brand-strong: #276b46;
-  --danger: #dc2626;
-  --danger-strong: #b91c1c;
-  --danger-surface: #fffbfb;
-  --warn-edge: #f0c674;
-  --warn-surface: #fff8e1;
+  /* radii: pills are for status only */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
+  /* type: system sans, and a mono stack that picks up JetBrains Mono when
+     installed. No remote fonts (extension CSP + offline); bundling the font
+     files is future work. */
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* motion: transform and opacity only */
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --t-fast: 150ms;
+  --t-slow: 200ms;
 }
 
+/* ---------- tokens: LIGHT (paper-cool console) ---------- */
+:root {
+  color-scheme: light;
+
+  /* surfaces: cool gray page, surfaces step toward white as they rise */
+  --bg: #eef1f5;
+  --surface-0: #f6f8fa;
+  --surface-1: #f1f4f7;
+  --surface-2: #fafbfc;
+  --surface-3: #ffffff;
+  --surface-4: #e9edf2;
+
+  /* edges: ink hairlines */
+  --edge: rgba(22, 32, 44, 0.16);
+  --edge-strong: rgba(22, 32, 44, 0.27);
+
+  /* text: four ink levels */
+  --text-1: #16202c;
+  --text-2: #3f5165;
+  --text-3: #5b6b80;
+  --text-4: #8494a7;
+
+  /* signal green: deep, confident - not neon */
+  --live: #0f7a3e;
+  --live-dim: rgba(15, 122, 62, 0.10);
+  --live-edge: rgba(15, 122, 62, 0.40);
+  --live-sheen: rgba(15, 122, 62, 0.12);
+  --live-halo: rgba(15, 122, 62, 0.30);
+
+  /* amber: pending / waiting on the user only */
+  --pending: #8f5f00;
+  --pending-dim: rgba(143, 95, 0, 0.10);
+  --pending-edge: rgba(143, 95, 0, 0.42);
+  --pending-halo: rgba(143, 95, 0, 0.30);
+
+  /* red: kill and deny only */
+  --danger: #c22f35;
+  --danger-dim: rgba(194, 47, 53, 0.08);
+  --danger-strong: rgba(194, 47, 53, 0.16);
+  --danger-edge: rgba(194, 47, 53, 0.42);
+
+  /* focus ring: tracks the live green of the mode */
+  --focus: #0f7a3e;
+}
+
+/* ---------- tokens: DARK (phosphor ops console) ---------- */
 .dark {
-  --page: #15181c;
-  --surface: #1e2228;
-  --body: #e6e8eb;
-  --muted: #9aa3af;
-  --faint: #6b7280;
-  --edge: #333a44;
-  --edge-soft: #262b32;
-  --brand: #3fa76a;
-  --brand-strong: #348a58;
-  --danger: #f87171;
-  --danger-strong: #fca5a5;
-  --danger-surface: #2a1414;
-  --warn-edge: #6b5a1e;
-  --warn-surface: #2b2718;
+  color-scheme: dark;
+
+  /* surfaces: page -> canvas -> sidebar -> card -> raised -> control */
+  --bg: #090b0f;
+  --surface-0: #0e1116;
+  --surface-1: #10141a;
+  --surface-2: #12161d;
+  --surface-3: #161b24;
+  --surface-4: #1b212c;
+
+  /* edges: the only depth mechanism; brighter edge = closer */
+  --edge: #232a35;
+  --edge-strong: #2e3846;
+
+  --text-1: #e8edf4;
+  --text-2: #9aa7b8;
+  --text-3: #76869c;
+  --text-4: #55647a;
+
+  --live: #3fe081;
+  --live-dim: rgba(63, 224, 129, 0.12);
+  --live-edge: rgba(63, 224, 129, 0.35);
+  --live-sheen: rgba(63, 224, 129, 0.18);
+  --live-halo: rgba(63, 224, 129, 0.5);
+
+  --pending: #f5b942;
+  --pending-dim: rgba(245, 185, 66, 0.10);
+  --pending-edge: rgba(245, 185, 66, 0.38);
+  --pending-halo: rgba(245, 185, 66, 0.5);
+
+  --danger: #f2555a;
+  --danger-dim: rgba(242, 85, 90, 0.10);
+  --danger-strong: rgba(242, 85, 90, 0.18);
+  --danger-edge: rgba(242, 85, 90, 0.38);
+
+  --focus: #3fe081;
 }
 
 * {
@@ -62,9 +178,10 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  background: var(--page);
-  color: var(--body);
+  font-family: var(--ui);
+  background: var(--bg);
+  color: var(--text-1);
+  -webkit-font-smoothing: antialiased;
 }
 
 @media (prefers-reduced-motion: reduce) {
