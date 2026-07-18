@@ -7,8 +7,8 @@ and `browser/` (TypeScript, a bun workspace member), with shared pages in
 | Suite | File | Runtime | Why this language |
 |-------|------|---------|-------------------|
 | **Protocol** | `protocol/e2e.py` | `python3` (stdlib only) | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the TCP bridge) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
-| **DOM** | `browser/dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `src/apps/extension/dist/content.js` into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
-| **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `src/apps/extension/dist/` loaded and checks the MV3 service worker boots with its APIs. |
+| **DOM** | `browser/dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `src/apps/extension/dist/chrome-mv3` content script into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
+| **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `src/apps/extension/dist/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
 | **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
 
 The two browser suites are **TypeScript run under bun** (matching the

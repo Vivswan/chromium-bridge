@@ -2,8 +2,9 @@
 //! chromium-bridge recognizably itself across every process boundary. This
 //! module is the canonical source (ADR-0028); the TypeScript side receives
 //! them through the generated `src/packages/shared/src/identity.gen.ts` (`just
-//! gen`), and `scripts/check-extension-id.ts` verifies the installers and the
-//! built extension manifest against the same values.
+//! gen`), the registration engine consumes them directly, and
+//! `scripts/check-extension-id.ts` verifies the built extension manifest
+//! against the same values.
 
 /// The native-messaging host id: what the extension passes to
 /// `connectNative`, what the host manifest declares as `name`, and the host

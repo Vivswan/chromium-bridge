@@ -10,8 +10,9 @@ environment.
 This is the most common WSL setup: the MCP client (Codex, Claude Code, and so
 on) runs in WSL, while the daily browser is still Windows Chrome.
 
-1. Run `install/install.ps1` in the Windows checkout of the repo, and load
-   `src/apps/extension/dist` into Windows Chrome.
+1. On Windows, extract the Windows release archive (or build from source),
+   run `chromium-bridge.exe doctor --fix` there, and load the archive's
+   `extension/dist` into Windows Chrome.
 2. In the WSL MCP configuration, run the Windows-installed `.exe` directly.
    WSL interop launches it as a Windows process, so it shares the same
    registry, `%LOCALAPPDATA%` lock file, and Native Messaging host as Windows
@@ -26,40 +27,39 @@ args = []
 ```
 
 Replace `YOUR_WINDOWS_USER` with your Windows username and confirm the path
-exists. This mode requires neither running `install.sh` in WSL nor installing
-Chrome in WSL.
+exists (the example assumes the binary lives in
+`%LOCALAPPDATA%\chromium-bridge`; use wherever you extracted it). This mode
+requires neither a Linux install in WSL nor Chrome in WSL.
 
 ## Mode 2: WSLg + Linux Chrome/Chromium
 
-If the browser itself runs inside WSLg, use the native Linux install. First
-install Rust, Node.js, and Google Chrome or Chromium in WSL, then run in the
-WSL checkout of the repo:
+If the browser itself runs inside WSLg, use a native Linux install. Install
+Google Chrome or Chromium in WSL, put the Linux `chromium-bridge` binary at a
+stable path in the WSL filesystem, then register it:
 
 ```sh
-./install/install.sh                    # auto-detects Chrome or Chromium
-./install/install.sh --browser chrome   # Google Chrome only
-./install/install.sh --browser chromium # Chromium only
-./install/install.sh --browser both     # write both manifests
+./chromium-bridge doctor --fix                    # every detected browser
+./chromium-bridge doctor --fix --browser chrome   # Google Chrome only
+./chromium-bridge doctor --fix --browser chromium # Chromium only
 ```
 
-Default install locations:
+Default locations:
 
-- MCP server: `~/.local/share/chromium-bridge/chromium-bridge`
-- Google Chrome manifest:
+- Manifests:
   `~/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json`
-- Chromium manifest:
-  `~/.config/chromium/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json`
+  and `~/.config/chromium/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json`
 - Runtime lock file: `$XDG_RUNTIME_DIR/chromium-bridge/run.lock`; without
   `XDG_RUNTIME_DIR` it falls back to `$XDG_CACHE_HOME/chromium-bridge/run.lock`
   or `~/.cache/chromium-bridge/run.lock`
 
-Load the current WSL repo's `src/apps/extension/dist` in Linux Chrome/Chromium at
+Load the release archive's `extension/dist` (or a built
+`src/apps/extension/dist/chrome-mv3`) in Linux Chrome/Chromium at
 `chrome://extensions`, then configure the MCP client to run the
-Linux-installed binary:
+Linux binary:
 
 ```toml
 [mcp_servers.chromium-bridge]
-command = "/home/YOUR_WSL_USER/.local/share/chromium-bridge/chromium-bridge"
+command = "/home/YOUR_WSL_USER/.local/lib/chromium-bridge/chromium-bridge"
 args = []
 ```
 

@@ -26,7 +26,7 @@
 //! browsers. On Windows, Chrome appends the extension origin to the command
 //! line (which selects native-host mode), so the manifest points straight at
 //! the binary and registration is an HKCU registry key. The Windows path
-//! compiles and mirrors `install.ps1`, but still needs verification on a real
+//! compiles and mirrors what the retired `install.ps1` did, but still needs verification on a real
 //! Windows machine (see docs/cli.md).
 
 use std::fs;
@@ -57,7 +57,7 @@ pub struct Registrar {
     /// in the CLI; an explicit path in tests).
     pub host_exe: PathBuf,
     /// Where wrapper scripts live (Unix). Same directory the shell installer
-    /// used, so re-registering over an `install.sh` install converges.
+    /// used, so re-registering over a legacy `install.sh` install converges.
     pub install_dir: PathBuf,
     /// The extension ID trusted in `allowed_origins`.
     pub extension_id: String,
@@ -435,7 +435,7 @@ fn split_shell_literal(line: &str) -> Option<Vec<String>> {
 /// bash shebang, optionally comment/blank lines, and exactly ONE payload
 /// line whose literal tokens are exactly
 /// `exec <path> --native-host [--label <valid-label>]` -- the trampoline
-/// shape both this engine and `install.sh` generate, and nothing that does
+/// shape this engine (and the retired `install.sh`) generates, and nothing that does
 /// more than launch the host.
 fn wrapper_is_ours(contents: &str) -> bool {
     let mut lines = contents.lines();

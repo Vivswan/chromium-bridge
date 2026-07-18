@@ -73,7 +73,8 @@ Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
 `bun scripts/gen-ops.ts` (must leave no diff); `bun scripts/check-extension-id.ts`.
 A lefthook pre-commit hook runs `just ci` automatically (`bun install` wires
 it). Browser suites (`just test-browser`) need `CHROME_BIN` -> isolated Chrome
-and are **not** part of the required gate.
+and are **not** part of `just ci`; CI runs them in the required `browser` job
+against its own isolated Chrome.
 
 ### Project map
 
@@ -105,8 +106,10 @@ and are **not** part of the required gate.
 - Never develop on `main`; work in a git worktree under `.worktree/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge
   PR. Security-critical surfaces (`src/packages/core/src/ipc/`,
-  `src/packages/core/src/protocol.rs`, allowlist, eval/toast content scripts,
-  `src/apps/extension/manifest.json`, `install/`) deserve extra review care - see
+  `src/packages/core/src/protocol.rs`, `broker.rs`, `allowlist.rs`,
+  `revocation.rs`, `kill.rs`, `presence/`, `enclave/`, `registration.rs`,
+  the extension's allowlist/eval/confirmation code,
+  `src/apps/extension/wxt.config.ts`) deserve extra review care - see
   `SECURITY.md`.
 - `upstream` remote is `whg517/browser-bridge`. The rebrand (ADR-0023) ended
   the keep-mergeable-with-upstream policy: port upstream fixes manually and

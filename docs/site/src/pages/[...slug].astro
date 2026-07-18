@@ -1,0 +1,18 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { docPages } from "../lib/docs";
+
+export function getStaticPaths() {
+  return docPages.map((page) => ({
+    params: { slug: page.slug },
+    props: { page },
+  }));
+}
+
+const { page } = Astro.props;
+const { Content } = page;
+---
+
+<Layout title={page.title}>
+  <Content />
+</Layout>

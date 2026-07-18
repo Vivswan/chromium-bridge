@@ -6,11 +6,12 @@
 //   - extension id: DERIVED from the pinned manifest key (Chrome's id
 //     derivation; extension/wxt.config.ts injects the same key into the
 //     generated manifest). The generated src/packages/shared/src/identity.gen.ts
-//     and both installers must carry exactly that id.
-//   - native-messaging host id: the generated TS and both installers must
-//     agree with the Rust constant, and the id must satisfy Chrome's charset.
-//     Any disagreement makes native messaging fail silently, so it is
-//     asserted here as a CI gate.
+//     must carry exactly that id.
+//   - native-messaging host id: the generated TS must agree with the Rust
+//     constant, and the id must satisfy Chrome's charset. Any disagreement
+//     makes native messaging fail silently, so it is asserted here as a CI
+//     gate. The registration engine (registration.rs) consumes the constants
+//     directly from identity.rs, so it has no textual copy to verify.
 //
 // This script runs without cargo, so the Rust constants are read from the
 // source text; `just gen` idempotency (CI) separately proves the generated
@@ -73,40 +74,15 @@ if (rustPinnedId !== derivedId) {
   failed = true;
 }
 
-const sources: Array<[string, RegExp]> = [
-  ["install/install.sh", /PINNED_EXTENSION_ID="([a-p]{32})"/],
-  ["install/install.ps1", /\$ExtensionId\s*=\s*'([a-p]{32})'/],
-];
-for (const [relativePath, pattern] of sources) {
-  const source = readFileSync(resolve(root, relativePath), "utf8");
-  const configuredId = source.match(pattern)?.[1];
-  if (configuredId !== derivedId) {
-    console.error(`${relativePath}: configured=${configuredId || "missing"} derived=${derivedId}`);
-    failed = true;
-  }
-}
-
 // The native-messaging host id must be one value everywhere: the id the
 // extension passes to connectNative (via the generated identity.gen.ts), the
-// id the Rust host expects, and the id the installers write as both the
-// manifest "name" and the manifest filename stem (`$HOST_NAME.json`).
+// id the Rust host expects, and the id the registration engine writes as both
+// the manifest "name" and the manifest filename stem (`<host id>.json`).
 // Chrome's charset for host names: dot-separated segments of [a-z0-9_], so
 // no leading/trailing dots and no empty segments.
 if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(NATIVE_HOST_ID)) {
   console.error(`host id ${NATIVE_HOST_ID} violates Chrome's charset`);
   process.exit(1);
-}
-const hostSources: Array<[string, RegExp]> = [
-  ["install/install.sh", /HOST_NAME="([a-z0-9._]+)"/],
-  ["install/install.ps1", /\$HostName = '([a-z0-9._]+)'/],
-];
-for (const [relativePath, pattern] of hostSources) {
-  const source = readFileSync(resolve(root, relativePath), "utf8");
-  const configured = source.match(pattern)?.[1];
-  if (configured !== NATIVE_HOST_ID) {
-    console.error(`${relativePath}: host id=${configured || "missing"} expected=${NATIVE_HOST_ID}`);
-    failed = true;
-  }
 }
 
 // When the extension has been built, re-assert the SECURITY SURFACE on the
@@ -195,5 +171,5 @@ for (const entry of readdirSync(coreSrc, { recursive: true }) as string[]) {
 }
 
 if (failed) process.exit(1);
-console.log(`extension id: ${derivedId} (Rust key + generated TS + installers consistent)`);
-console.log(`host id: ${NATIVE_HOST_ID} (Rust + generated TS + installers consistent)`);
+console.log(`extension id: ${derivedId} (Rust key + generated TS consistent)`);
+console.log(`host id: ${NATIVE_HOST_ID} (Rust + generated TS consistent)`);

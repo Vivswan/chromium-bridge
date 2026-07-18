@@ -108,7 +108,7 @@ lint:
 
 # Lint the remaining standalone shell scripts (needs shellcheck)
 lint-scripts:
-    shellcheck install/install.sh scripts/build-repro.sh scripts/install_verify_test.sh scripts/fuzz_smoke.sh
+    shellcheck scripts/build-repro.sh scripts/fuzz_smoke.sh
 
 # Source-code spell check (CI gate; config in typos.toml)
 typos:
@@ -199,9 +199,17 @@ test: test-rust test-e2e
 # Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust)
 ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-gen check-envelope check-schemars-isolation
 
-# Install locally (build + copy binary + host manifest)
-install:
-    ./install/install.sh
+# Register this checkout's release binary with your browsers (build + doctor --fix)
+install: build-release
+    ./target/release/chromium-bridge doctor --fix
+
+# Build the docs site (docs/site: Astro over the repo's markdown docs)
+docs-site-build:
+    bun run --cwd docs/site build
+
+# Docs site dev server
+docs-site-dev:
+    bun run --cwd docs/site dev
 
 # Propagate the Cargo.toml version into the extension files
 sync-version:
@@ -211,7 +219,7 @@ sync-version:
 check-version:
     bun scripts/check-version.ts
 
-# Verify the manifest key and installer extension IDs agree
+# Verify the pinned key, extension ID, and built manifest agree
 check-extension-id:
     bun scripts/check-extension-id.ts
 

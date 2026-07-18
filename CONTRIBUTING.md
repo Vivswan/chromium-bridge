@@ -40,9 +40,10 @@ lands via a squash-merged PR whose gates are green.
    ```
    Browser tests (`just test-browser`) run **only** against an isolated Chrome
    for Testing via `CHROME_BIN`, never your daily Chrome (see Safety below and
-   [tests/README.md](./tests/README.md)). They are not in the required gate;
-   runtime-behavior changes (reconnect, handshake, service worker) must be
-   verified there manually.
+   [tests/README.md](./tests/README.md)). They are not part of `just ci`; CI
+   runs them in its required `browser` job against an isolated Chrome, and
+   runtime-behavior changes (reconnect, handshake, service worker) must still
+   be verified there manually.
 5. **Open a PR and squash-merge.** Push the branch, open a PR against `main`,
    wait for **all required checks green**, then **squash-merge** (one change =
    one commit on `main`):
@@ -62,8 +63,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org):
 
 - Allowed `type`: `feat` `fix` `docs` `refactor` `perf` `test` `ci` `build`
   `style` `revert`. **`chore` is not allowed** - every change maps to a more
-  precise type (dependency bumps → `build`/`ci`, misc scripts → `build`,
-  documentation → `docs`).
+  precise type (dependency bumps -> `build`/`ci`, misc scripts -> `build`,
+  documentation -> `docs`).
 - `scope` is optional (`session`, `tools`, `error`, `ci`, `ext`, ...).
 - `subject` is imperative, present tense, lower-case, no trailing period; explain
   the *why* in the body. One logical change per commit.
@@ -97,7 +98,7 @@ window you didn't start yourself: stop and ask first.
 
 ## Adding a tool
 
-A new tool touches both sides (see architecture.md §10):
+A new tool touches both sides (see architecture.md section 10):
 
 1. **Add it to the Rust catalogue**
    ([`src/packages/core/src/tools/catalogue.rs`](src/packages/core/src/tools/catalogue.rs)) -
