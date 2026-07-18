@@ -17,9 +17,9 @@
     "gen": "just gen",
     "typecheck": "just typecheck",
     "build": "just build",
-    "lint": "just lint",
-    "format": "just fmt",
-    "format:check": "just fmt-check",
+    "lint": "just lint-ts",
+    "format": "just fmt-ts",
+    "format:check": "just fmt-check-ts",
     "check": "just check-ts",
     "test": "just test-ts"
   },
