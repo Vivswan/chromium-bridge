@@ -13,7 +13,9 @@
 - Amends: [ADR-0011](0011-options-page-for-settings.md) (the options page
   stops owning security policy; it keeps the browser-owned settings),
   [ADR-0030](0030-global-kill-switch-and-audit.md) (the extension's
-  `kill_release` path is retired; release becomes app/CLI only)
+  `kill_release` path is retired, release becomes app/CLI only; and
+  decision 4's healthy-host-pushes-nothing connect asymmetry is reversed:
+  a policy-capable host pushes policy and language state at every connect)
 
 ## Context
 
@@ -71,6 +73,23 @@ only removes capability may travel free, because failing closed is the
 direction every forgery is allowed to point (the same symmetry rule as
 ADR-0031's grants and ADR-0025's revocations).
 
+### Open questions (user decision pending)
+
+Four points below are written as settled so the record reads as one
+coherent design, but each is pending the user's answer, and implementation
+of these four is gated on those answers:
+
+- Whether the first-run import screen really ends in a Touch ID tap on
+  both paths, "restore these" and "start fresh", or only on the restoring
+  one. Modifies decision 8.
+- Whether `requireEnrollment` survives as a policy field at all. Modifies
+  decisions 1 and 2 (and decision 1's nine-field count).
+- Whether the CLI's policy access stays read-only, or becomes a second
+  write surface. Modifies decision 5.
+- Which pole is conservative for the two toast timeouts
+  (`clickToastTimeoutMs`, `evalToastTimeoutMs`), currently declared
+  permissive as they grow. Modifies decision 2's direction table.
+
 ## Decision
 
 ### 1. The split: host-owned policy, browser-owned state
@@ -108,8 +127,12 @@ Every policy field carries a declared permissive pole, in the catalogue
 itself: the value direction that grants capability. `pageEvalEnabled`,
 `fileUploadEnabled`, `handleDialogEnabled`, `cdpMode` are permissive at
 `true`; every `confirm*`/`warn*`/`evalMask`/`requireEnrollment` flag is
-permissive at `false`; `confirmGraceMs` and the two toast timeouts are
-permissive as they grow; `disabledTools` is permissive as the set shrinks.
+permissive at `false`, and so is `touchIdConfirm`, which neither glob
+matches and is therefore declared here explicitly; `confirmGraceMs`
+matches `confirm*` lexically but is no flag, so it is deliberately
+excluded from that glob and classified with the grow-direction fields: it
+and the two toast timeouts are permissive as they grow; `disabledTools`
+is permissive as the set shrinks.
 `hostReverifyMs` gets a declared custom order, because its numeric order
 lies about its security order: 0 means never re-verify and is the MOST
 permissive value, and among positive values a longer interval means fewer
@@ -163,20 +186,34 @@ EFFECTIVE policy (the signed baseline with its restriction overlay
 applied, decision below; anchoring on the baseline alone would let
 "undo a restriction" masquerade as a non-grant, which the extension's
 ratchet would then rightly refuse) goes through
-`policy::set_signed(doc, surface, floor)`, which validates the document
-before any prompt can appear (a malformed document never raises a sheet,
-the ADR-0031 tap-phishing rule), then signs. The Enclave signing operation
-over the policy message is itself the presence act, exactly as ADR-0031
-clause 3 makes the signature over a confirmation digest the approval; there
-is no separate throwaway-challenge round and so no second prompt. The
+`policy::set_signed(doc, touched, surface, floor)`, which validates
+the document before any prompt can appear (a malformed document never
+raises a sheet, the ADR-0031 tap-phishing rule), then signs. The Enclave
+signing operation over the policy message is itself the presence act,
+exactly as ADR-0031 clause 3 makes the signature over a confirmation
+digest the approval; there is no separate throwaway-challenge round and
+so no second prompt. The
 presence module grows a sign-as-presence primitive for this (sign the
 caller's message on the hardware rung, report which rung authorized), so
 `set_signed` never takes a pre-made attestation and can never double
 prompt; `policy::restrict` takes no attestation at all. On success
 `set_signed` bumps `revision`, writes atomically under the runtime lock,
-and audits the outcome with the rung that authorized it. The ladder's
-no-downgrade rule applies unchanged: a refused or failed hardware prompt is
-a refusal, never a fallthrough to a floor. Where hardware is genuinely
+and audits the outcome with the rung that authorized it. An existing
+unsigned restriction overlay is retained across the write and re-applied
+on top of the new baseline, minus its entries on the fields the write
+explicitly touches. The touched set is an input to `set_signed`, named
+by the editing surface, not reconstructed from a document diff (an undo
+of an overlay restriction can leave the baseline value unchanged, so no
+diff can see it): the tapped edit supersedes the overlay entry on the
+field it touches, which is how an undo of a restriction (a relaxation
+like any other, above) actually lands, while entries on untouched fields
+survive as overlay, never silently folded into the signed baseline (the
+new document carries baseline values, not effective ones, on fields it
+does not touch). Folding the overlay into the baseline stays the
+separate, explicit act the reinstall paragraph below offers. The
+ladder's no-downgrade rule applies unchanged:
+a refused or failed hardware prompt is a refusal, never a fallthrough to
+a floor. Where hardware is genuinely
 unavailable, the write is gated by the surface's interactive floor and
 stored unsigned; what an unsigned baseline is worth at the enforcement
 boundary is defined by the unpinned lane below, not by the floor.
@@ -232,12 +269,16 @@ first document is by definition a relaxation candidate and always goes
 through the window; on unpinned machines the cutover therefore always rides
 a user gesture. A forged push on an unpinned machine costs the attacker a
 visible, unexpected prompt rather than a silent grant, and a denial changes
-nothing. The no-downgrade rule binds the lanes: an extension that has a pin
-never accepts an unsigned relaxation, from any frame, on any platform, for
-any reason; the window lane exists only where a pin cannot. And a
-reinstalled extension has an empty ratchet (and, until re-pairing, no pin),
-so after re-pairing it will accept the
-current signed baseline as-is, including grants the user had turned off
+nothing. The window is out of a web page's reach, not out of every
+program's: ADR-0031's concession that software driving the extension's
+own pages could answer its prompts applies to this lane unchanged, which
+is part of why the pinned lane never falls back to it. The no-downgrade
+rule binds the lanes: an extension that has a pin never accepts an
+unsigned relaxation, from any frame, on any platform, for any reason; the
+window lane applies only where no pin exists. And a reinstalled extension
+has an empty ratchet (and, until re-pairing, no pin), so after re-pairing
+it will accept the current signed baseline as-is, including grants the
+user had turned off
 through unsigned restrictions since that baseline was signed; folding
 long-lived restrictions into a fresh signed baseline (one tap in the app)
 is the way to make them survive a reinstall, and the app offers it.
@@ -298,6 +339,12 @@ effective policy (an emptied `disabledTools`, re-enabled clicks), so
 "garbage in, defaults out" would hand an attacker a relaxation lever made
 of garbage.
 
+Policy application is also ordered against decisions in flight: a
+confirmation or other decision already in progress completes under the
+policy it started with, and an accepted policy applies from the next
+decision on. A policy arriving mid-confirmation therefore cannot relax,
+or otherwise alter, an in-flight decision.
+
 When there is no stored effective policy at all, the fail-closed baseline
 applies: the generated defaults with every capability grant at its deny
 value, `pageEvalEnabled` included, every confirmation on, and
@@ -329,9 +376,11 @@ host holding the genuine `policy.json` can replay the genuine current
 state, so the barrier guarantees the extension runs on the newest policy
 it has ever accepted, not on the host store's ground truth. A tightening
 the extension never received can be withheld by a substituted host until
-the next genuine push: bounded staleness, named here, and never a
-relaxation, because nothing the extension ever applied gets laxer without
-a fresh signature.
+the next genuine push: bounded staleness, named here, and never laxer
+than a state the user personally signed (or, where no pin exists, a
+state accepted through the extension-window approval, with the residual
+that lane concedes above), because nothing the extension ever applied
+gets laxer without that signature or approval.
 
 The host enforces its own policy too: dispatch in `mcp_server` refuses a
 tool whose grant is off or that is in `disabledTools` with the existing
@@ -435,11 +484,28 @@ today's behavior or stricter:
   paired without ever seeing a policy push, as UI advice only, never
   enforcement.
 - An old extension against a new host drops the unfamiliar `policy_current`
-  push on the floor and keeps enforcing its local settings. The host-side
-  dispatch check (decision 4) still applies host policy on the honest path,
-  so the combined enforcement is never more permissive than the old
-  extension alone (the host policy itself may be laxer than the old
-  extension's local settings, but the old extension keeps enforcing those).
+  push on the floor and keeps enforcing its local settings. That drop is
+  an assumption about shipped code, so it is pinned as a test rather than
+  trusted: phases 1 and 3 each carry an explicit requirement that an
+  unrecognized push frame is ignored without tearing down the port. The
+  host-side dispatch check (decision 4) still applies host policy on the
+  honest path, so the combined enforcement is never more permissive than
+  the old extension alone (the host policy itself may be laxer than the
+  old extension's local settings, but the old extension keeps enforcing
+  those).
+
+Two platform postures ship in this record without a hardware grant
+surface, named here rather than implied. An unenrolled Mac has the app
+but no Enclave key: grants go through the app's interactive floor
+(decision 3), the baseline is stored and pushed unsigned, and the
+extension's window lane is the approval surface. The first-run import
+flow below reads on an enrolled Mac; on an unenrolled one the same
+screen ends in the app's floor confirmation instead of a tap and stores
+revision 1 unsigned, per decision 3. Non-macOS ships no grant
+surface at all: the desktop app does not ship there, the CLI's policy
+access is read-only (decision 5), so no baseline can ever be written and
+a non-macOS extension stays pre-cutover on its legacy settings
+indefinitely, the same posture as facing an old host.
 
 Because grants require presence, the existing settings cannot be silently
 grandfathered: importing `fileUploadEnabled: true` from chrome.storage into
@@ -563,7 +629,8 @@ The Touch ID paths cannot run in CI at all; they extend the
 versioned), the direction table, the comparison (`relaxes`, `restricts`)
 anchored on the effective policy, the store (atomic, runtime-locked,
 fail-closed reads), the `set_signed` / `restrict` seams (`set_signed`
-obtains presence through the sign-as-presence primitive, decision 3, and
+takes the touched-field set alongside the document, obtains presence
+through the sign-as-presence primitive, decision 3, and
 never accepts a pre-made attestation; `restrict` takes none), the
 `chromium-bridge-policy-v1` signing message. New control-frame variants
 (`policy_get`, `policy_current`, `legacy_settings`, `lang_get`, `lang_set`,
@@ -578,7 +645,10 @@ field-order independent) and revision monotonicity; the
 frame-classification and server-leg-drop units in protocol.rs and
 native_host.rs; the e2e frame-routing test proving the new frames are
 host-answered and never forwarded; a cargo test pinning that
-`check-envelope` inputs are unchanged.
+`check-envelope` inputs are unchanged; and, pinning the decision 8
+old-extension assumption before anything relies on it, a vitest unit that
+the pre-cutover extension frame router ignores an unrecognized push frame
+without tearing down the port.
 
 ### Phase 2: host store, dispatch check, and the app UI
 
@@ -618,23 +688,28 @@ verification retaining the stored effective rather than reverting to
 defaults, the unpinned window lane approving and denying), ratchet
 persistence across SW restarts, barrier ordering (an op racing the first
 push is refused), never-speak-first against a host that pushes nothing,
-and cutover one-wayness. Flagged for isolated-browser verification
+and cutover one-wayness, plus the decision 8 unknown-push pin re-asserted
+over the new router (an unrecognized push frame is still dropped, never
+fatal). Flagged for isolated-browser verification
 (`CHROME_BIN`): that the ratchet and snapshot actually survive real SW
-death, and that policy arriving mid-confirmation cannot relax an in-flight
-decision.
+death, and that the decision 4 in-flight rule holds under a real
+mid-confirmation push.
 
 ### Phase 4: migration and language sync
 
 `legacy_settings` send-once from the snapshot (only after a policy push
 has identified a capable host), pending-import store host-side, the app's
-first-run import screen signing revision 1, immediate overlay application
-of imported restrictions, `uiLanguage` adoption at first pairing, and the
+first-run import screen signing revision 1 (on an enrolled Mac; on an
+unenrolled one, floor-confirmed and stored unsigned, decision 8),
+immediate overlay application of imported restrictions, `uiLanguage`
+adoption at first pairing, and the
 sequence-suppressed propagation on both surfaces. Tests: vitest for
 send-once semantics, the capable-host gate, and echo suppression (a full
 set-push-apply cycle emits exactly one `lang_set`); cargo units for
 pending-import lifecycle and the never-applied rule; e2e for the language
 round trip through a live host; app tests for the import screen's
-tap-then-sign path over the mocked seam. Isolated-browser: the language
+tap-then-sign path over the mocked seam and for its floor-confirmed
+unsigned branch. Isolated-browser: the language
 change round trip extension-to-app and back, in all three locales.
 
 ### Phase 5: cleanup

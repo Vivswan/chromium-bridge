@@ -2,6 +2,9 @@
 
 - **Status**: Accepted
 - **Date**: 2026-07-09
+- **Amended by** (2026-07-18): [ADR-0032](./0032-host-owned-policy-settings.md)
+  moves the security-policy settings host-side; the options page keeps only
+  the browser-owned ones.
 
 ## Context
 
