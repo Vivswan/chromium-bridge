@@ -136,6 +136,16 @@ export function PopupApp() {
   // through to the green Live pill. Enforcement already refuses on a
   // malformed mirror; the display mirrors that severed posture.
   const killUnverified = kill === null || kill.ok !== true || kill.state === undefined;
+  // Grant-persisting controls take a stricter bar than display: a durable
+  // allowlist grant (plus its host permission) may only be OFFERED against a
+  // positively-read LIVE bridge. "unknown" is a positive read (ok: true) but
+  // means the host cannot read its own kill state and is failing closed - a
+  // grant approved now would lie dormant and activate the moment the state
+  // recovers. A pending origin only exists because the bridge was alive
+  // moments ago, so requiring a fresh "alive" here cannot brick anything.
+  // This is render-time gating of the offer; enforcement stays with the
+  // SW/host (killGate refuses ops regardless of what this popup shows).
+  const killSafeToGrant = kill?.ok === true && kill.state === "alive";
   const version = browser.runtime.getManifest().version;
 
   const openPairing = () => {
@@ -433,9 +443,7 @@ export function PopupApp() {
                 </div>
                 {/* the EXACT grant, scheme included: http:// and https://
                     globs must never look identical on a consent surface */}
-                <code className="chip-mono max-w-full whitespace-normal break-all">
-                  {pending.glob}
-                </code>
+                <code className="chip-mono chip-wrap max-w-full">{pending.glob}</code>
                 <p className="mt-1.5 text-xs leading-snug text-text-2">{t("popup.pending_ask")}</p>
                 <div className="mt-2.5 flex gap-2">
                   <Button
@@ -445,12 +453,13 @@ export function PopupApp() {
                   >
                     {t("common.deny")}
                   </Button>
-                  {/* Never offer the capability-granting half while the kill
-                      state is unreadable (the header says severed); Deny -
-                      removing capability - stays available. */}
+                  {/* Never offer the capability-granting half unless the
+                      kill state reads positively ALIVE: severed and
+                      "unknown" (host failing closed) both disarm Allow.
+                      Deny - removing capability - stays available. */}
                   <Button
                     className="flex-1 py-2 text-[13px]"
-                    disabled={killUnverified}
+                    disabled={!killSafeToGrant}
                     onClick={() => void resolvePending(true)}
                   >
                     {t("popup.pending_allow_on", [displayOrigin(pending.glob)])}
