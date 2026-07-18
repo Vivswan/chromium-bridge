@@ -1,6 +1,7 @@
 # ADR-0026: Signing the bundled host for Secure Enclave access (Tauri v2 spike)
 
-- Status: Accepted (Touch ID proof pending, see "What remains open")
+- Status: Accepted (Touch ID proof passed on 2026-07-17, see "The Touch ID
+  proof")
 - Date: 2026-07-17
 - Scope: the macOS signing and entitlement chain for the desktop app and the
   host binary it bundles. This is the Phase 6 record ADR-0023 promised; it
@@ -109,15 +110,23 @@ unknown flag (prints help, exits 2, touches nothing) and with
 - The iced/egui fallback is not needed. The gate that mattered (a bundled
   host that macOS lets run with Enclave-capable entitlements) is passed.
 
+## The Touch ID proof
+
+The live Enclave operation under Touch ID was observed on 2026-07-17, via
+`just desktop-touchid-proof` (which builds, signs, and verifies the bundle
+first). The bundled host, launched from
+`Chromium Bridge.app/Contents/Helpers/chromium-bridge.app`, ran the full
+`pair` ceremony: it minted the Enclave key, raised the Touch ID prompt,
+completed the presence-gated self-test signature, and printed the public key
+and fingerprint. The machine ended the run genuinely enrolled. No SIGKILL,
+no entitlement error, and the shipped signature carries no
+`com.apple.security.get-task-allow` (the check script asserts its absence on
+every build). The entitlement chain this ADR describes is confirmed working
+end to end, which is what gated Phase 8 (Touch ID confirmations) and Phase 9
+(the app UI, ADR-0029).
+
 ## What remains open
 
-- The live Enclave operation under Touch ID is the one step that needs a
-  finger. Runbook: `just desktop-touchid-proof` (it builds, signs, and
-  verifies the bundle first), which runs the bundled host's `pair` ceremony
-  (fresh mint plus a presence-gated self-test signature; declining rolls
-  back). On success the machine is genuinely enrolled; `revoke` on the same
-  binary undoes it. Phase 8 does not start until this has been observed
-  once.
 - Notarization and distribution stay out of scope (publishing is on hold).
   `spctl` assesses the bundle as rejected, which is expected for a
   non-notarized local build; locally built apps carry no quarantine flag, so
@@ -130,7 +139,7 @@ unknown flag (prints help, exits 2, touches nothing) and with
 - Free-cert renewals change the host's cdhash roughly weekly, which touches
   the Phase 4 attestation stability plan (anchor on Team ID / designated
   requirement where possible) but not this record's chain.
-- The helper Info.plist pins version 0.1.0; wiring the workspace version
-  through is Phase 9 housekeeping. Whether the outer app keeps its
-  application-identifier entitlement (it needs none today) is also a Phase 9
-  decision; dropping it would shrink the app's surface further.
+- The two Phase 9 housekeeping items this ADR named are done (ADR-0029):
+  `scripts/desktop-bundle.ts` stamps the helper Info.plist with the
+  workspace version at bundle time, and the outer app keeps its
+  application-identifier entitlement.

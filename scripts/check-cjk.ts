@@ -24,9 +24,12 @@ const ALLOWED_FILES = new Set([
   // The Chinese locale bundles: the canonical home of every zh string.
   "src/apps/extension/src/locales/zh_CN.yml",
   "src/apps/extension/src/locales/zh_TW.yml",
-  // The language picker's native names (each language naming itself),
+  "src/apps/desktop/ui/src/locales/zh_CN.ts",
+  "src/apps/desktop/ui/src/locales/zh_TW.ts",
+  // The language pickers' native names (each language naming itself),
   // rendered untranslated by design so a user can always find their language.
   "src/apps/extension/src/lib/native-language-names.ts",
+  "src/apps/desktop/ui/src/lib/native-language-names.ts",
   // i18n runtime tests: fixtures that prove zh bundles resolve and swap.
   "src/apps/extension/tests/lib/i18n.test.ts",
 ]);

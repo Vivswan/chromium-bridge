@@ -16,8 +16,10 @@ pub enum Command {
     Pair { reset: bool },
     /// `revoke`: delete the enrollment key, fail the pinned extension closed.
     Revoke,
-    /// `enclave-status`: read-only enrollment state report.
-    EnclaveStatus,
+    /// `enclave-status [--json]`: read-only enrollment state report. `--json`
+    /// emits one machine-readable object for co-equal surfaces (the desktop
+    /// app drives this binary as a subprocess and parses it).
+    EnclaveStatus { json: bool },
     /// `presence-selftest`: raise one per-action user-presence prompt
     /// (ADR-0031) and report the outcome. A diagnostic that exercises exactly
     /// the Enclave signing the `page_eval`/`page_upload` gate uses, so the
@@ -102,7 +104,10 @@ pub fn parse(args: &[String]) -> Command {
             Command::Pair { reset: true }
         }
         Some("revoke") if rest.len() == 1 => Command::Revoke,
-        Some("enclave-status") if rest.len() == 1 => Command::EnclaveStatus,
+        Some("enclave-status") if rest.len() == 1 => Command::EnclaveStatus { json: false },
+        Some("enclave-status") if rest.len() == 2 && rest.get(1).is_some_and(|a| a == "--json") => {
+            Command::EnclaveStatus { json: true }
+        }
         Some("presence-selftest") if rest.len() == 1 => Command::PresenceSelftest,
         // The client-allowlist subcommands take their own flags, parsed by the
         // handler (pair_client_args) so a bad combination reports a clear error
@@ -355,7 +360,7 @@ pub fn print_help() {
          chromium-bridge pair           Enroll: mint the Secure Enclave key (macOS)\n    \
          chromium-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
          chromium-bridge revoke         Delete the enrollment key (fails closed)\n    \
-         chromium-bridge enclave-status Print the enrollment state\n    \
+         chromium-bridge enclave-status [--json]\n                                Print the enrollment state (--json: machine-readable)\n    \
          chromium-bridge presence-selftest  Raise one Touch ID prompt and report (ADR-0031)\n    \
          chromium-bridge pair-client --name <label> (--this-parent | --hash <hex> | --team-id <id>)\n                                Trust an MCP-client harness (ADR-0024)\n    \
          chromium-bridge revoke-client --name <label>   Untrust a client\n    \
@@ -439,7 +444,14 @@ mod tests {
             Command::Pair { reset: true }
         );
         assert_eq!(parse(&args(&["revoke"])), Command::Revoke);
-        assert_eq!(parse(&args(&["enclave-status"])), Command::EnclaveStatus);
+        assert_eq!(
+            parse(&args(&["enclave-status"])),
+            Command::EnclaveStatus { json: false }
+        );
+        assert_eq!(
+            parse(&args(&["enclave-status", "--json"])),
+            Command::EnclaveStatus { json: true }
+        );
         assert_eq!(
             parse(&args(&["presence-selftest"])),
             Command::PresenceSelftest
@@ -457,6 +469,11 @@ mod tests {
         assert_eq!(parse(&args(&["pair", "--rest"])), Command::Unknown);
         assert_eq!(parse(&args(&["pair", "--reset", "x"])), Command::Unknown);
         assert_eq!(parse(&args(&["revoke", "--force"])), Command::Unknown);
+        assert_eq!(parse(&args(&["enclave-status", "--jso"])), Command::Unknown);
+        assert_eq!(
+            parse(&args(&["enclave-status", "--json", "x"])),
+            Command::Unknown
+        );
         // doctor now takes flags; stray arguments are rejected by doctor_args
         // (see doctor_args_fail_loud_on_conflicts_and_bad_values).
         assert!(super::doctor_args(&args(&["doctor", "extra"])).is_err());

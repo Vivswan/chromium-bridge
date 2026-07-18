@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Signing-spike shell: the main window may only call the app's own commands.",
+  "description": "Control panel: the main window may only call the app's own commands.",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

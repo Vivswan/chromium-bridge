@@ -68,8 +68,10 @@ impl Report {
 }
 
 /// Passive reachability probe: connect to our own bridge socket and drop the
-/// connection immediately. No command bytes are ever sent.
-fn probe(endpoint: &str) -> bool {
+/// connection immediately. No command bytes are ever sent. Public so the
+/// desktop app's status view (ADR-0029) shares the exact probe `doctor`
+/// reports with.
+pub fn probe(endpoint: &str) -> bool {
     #[cfg(unix)]
     {
         std::os::unix::net::UnixStream::connect(endpoint).is_ok()

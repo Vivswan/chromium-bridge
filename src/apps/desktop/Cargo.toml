@@ -2,7 +2,7 @@
 name = "chromium-bridge-desktop"
 version.workspace = true
 edition.workspace = true
-description = "Chromium Bridge control panel - Tauri v2 shell (Phase 6 signing spike)"
+description = "Chromium Bridge control panel - Tauri v2 desktop app (ADR-0029)"
 license.workspace = true
 
 [[bin]]
@@ -14,6 +14,8 @@ tauri-build.workspace = true
 
 [dependencies]
 chromium-bridge-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tauri.workspace = true
 
 [lints]

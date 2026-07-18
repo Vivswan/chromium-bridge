@@ -272,3 +272,155 @@ pub fn run_presence_selftest() -> i32 {
         }
     }
 }
+
+/// `chromium-bridge enclave-status --json`: the machine-readable form of
+/// [`run_status`], for co-equal surfaces that drive this binary as a
+/// subprocess (the desktop app, ADR-0029) instead of scraping the human
+/// report. One JSON object on stdout; the shape is versioned (`v`) so a
+/// consumer can refuse a report it does not understand instead of guessing.
+pub fn run_status_json() -> i32 {
+    let key = match EnrollmentKey::lookup() {
+        Ok(Some(key)) => match key.public_key() {
+            Ok(public) => KeyReport::Present(public),
+            Err(e) => KeyReport::Error(format!("public key unreadable: {e}")),
+        },
+        Ok(None) => KeyReport::None,
+        Err(EnclaveError::Unsupported) => KeyReport::Unsupported,
+        Err(e @ EnclaveError::KeyInvalid(_)) => KeyReport::Invalid(e.to_string()),
+        Err(e) => KeyReport::Error(e.to_string()),
+    };
+    let policy = HostConfig::read().map_err(|e| e.to_string());
+    println!("{}", render_status_json(&key, &policy));
+    0
+}
+
+/// What the keychain lookup found, reduced to the states the JSON report
+/// names. Factored from [`run_status_json`] so the rendering is pure and
+/// unit-testable without a keychain.
+enum KeyReport {
+    Present(EnclavePublicKey),
+    None,
+    Invalid(String),
+    Unsupported,
+    Error(String),
+}
+
+/// Render the JSON status object. `key: "present" | "none" | "invalid" |
+/// "unsupported" | "error"`; `invalid` means a key exists under our label but
+/// must be treated as untrusted (planted or malformed), which a consumer must
+/// surface as loudly as the human report does.
+fn render_status_json(
+    key: &KeyReport,
+    policy: &Result<Option<HostConfig>, String>,
+) -> serde_json::Value {
+    let mut out = serde_json::json!({
+        "v": 1,
+        "supported": cfg!(target_os = "macos"),
+        "key_label": KEY_LABEL,
+    });
+    // The json! literal above always builds an object; guard anyway so this
+    // renderer can never panic on the impossible.
+    let Some(obj) = out.as_object_mut() else {
+        return serde_json::json!({ "v": 1, "key": "error", "detail": "internal render error" });
+    };
+    match key {
+        KeyReport::Present(public) => {
+            obj.insert("key".into(), "present".into());
+            obj.insert("public_key_b64".into(), public.to_base64().into());
+            obj.insert("fingerprint".into(), public.fingerprint_display().into());
+        }
+        KeyReport::None => {
+            obj.insert("key".into(), "none".into());
+        }
+        KeyReport::Invalid(detail) => {
+            obj.insert("key".into(), "invalid".into());
+            obj.insert("detail".into(), detail.as_str().into());
+        }
+        KeyReport::Unsupported => {
+            obj.insert("key".into(), "unsupported".into());
+        }
+        KeyReport::Error(detail) => {
+            obj.insert("key".into(), "error".into());
+            obj.insert("detail".into(), detail.as_str().into());
+        }
+    }
+    match policy {
+        Ok(Some(cfg)) => {
+            obj.insert(
+                "policy".into(),
+                serde_json::json!({ "enrolled": cfg.enrolled, "granularity": cfg.granularity }),
+            );
+        }
+        Ok(None) => {
+            obj.insert("policy".into(), serde_json::Value::Null);
+        }
+        Err(e) => {
+            obj.insert("policy".into(), serde_json::Value::Null);
+            obj.insert("policy_error".into(), e.as_str().into());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn present_key() -> EnclavePublicKey {
+        // A syntactically valid uncompressed P-256 point (0x04 + 64 bytes).
+        let mut bytes = vec![0x04u8];
+        bytes.extend(std::iter::repeat_n(0xabu8, 64));
+        match EnclavePublicKey::from_x963(bytes) {
+            Ok(k) => k,
+            Err(e) => panic!("fixture key must parse: {e}"),
+        }
+    }
+
+    #[test]
+    fn json_report_carries_the_fingerprint_for_a_present_key() {
+        let public = present_key();
+        let (b64, fingerprint) = (public.to_base64(), public.fingerprint_display());
+        let v = render_status_json(
+            &KeyReport::Present(public),
+            &Ok(Some(HostConfig {
+                enrolled: true,
+                ..HostConfig::default()
+            })),
+        );
+        assert_eq!(v["v"], 1);
+        assert_eq!(v["key"], "present");
+        assert_eq!(v["key_label"], KEY_LABEL);
+        assert_eq!(v["public_key_b64"], b64);
+        assert_eq!(v["fingerprint"], fingerprint);
+        assert_eq!(v["policy"]["enrolled"], true);
+    }
+
+    #[test]
+    fn json_report_states_map_one_to_one() {
+        let none = render_status_json(&KeyReport::None, &Ok(None));
+        assert_eq!(none["key"], "none");
+        assert!(none["policy"].is_null());
+        assert!(none.get("fingerprint").is_none());
+
+        let invalid = render_status_json(
+            &KeyReport::Invalid("planted software key".into()),
+            &Ok(None),
+        );
+        assert_eq!(invalid["key"], "invalid");
+        assert_eq!(invalid["detail"], "planted software key");
+
+        let unsupported = render_status_json(&KeyReport::Unsupported, &Ok(None));
+        assert_eq!(unsupported["key"], "unsupported");
+
+        let err = render_status_json(&KeyReport::Error("keychain: -25300".into()), &Ok(None));
+        assert_eq!(err["key"], "error");
+        assert_eq!(err["detail"], "keychain: -25300");
+    }
+
+    #[test]
+    fn json_report_surfaces_an_unreadable_policy() {
+        let v = render_status_json(&KeyReport::None, &Err("config decode: bad".into()));
+        assert!(v["policy"].is_null());
+        assert_eq!(v["policy_error"], "config decode: bad");
+    }
+}

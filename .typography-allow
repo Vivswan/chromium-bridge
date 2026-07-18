@@ -5,10 +5,15 @@
 # chromium-bridge (ADR-0023). This list now only holds files that a later
 # rebuild phase converts to plain ASCII, and it must only ever shrink:
 # - src/apps/extension/: converted with the Phase 7 extension rehaul.
+# - src/apps/desktop/ui/src/locales/: the desktop app's zh bundles (and the
+#   native-language-names constants), legitimately CJK - the same category as
+#   the extension's locale files, policed by scripts/check-cjk.ts.
 # - docs/ and README.md: Chinese-language docs owned by the translation
 #   pass; historical ADRs keep their original text. Cleaned in Phase 11.
 # - CHANGELOG.md: generated release history, never edited by hand.
 src/apps/extension/
+src/apps/desktop/ui/src/locales/
+src/apps/desktop/ui/src/lib/native-language-names.ts
 docs/
 CHANGELOG.md
 README.md
