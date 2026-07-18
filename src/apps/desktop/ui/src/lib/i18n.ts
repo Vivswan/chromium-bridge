@@ -78,6 +78,19 @@ export function subscribeLocale(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** Keep the document's lang attribute in sync with the active locale, so
+ * assistive tech announces the UI in the right language (the desktop
+ * sibling of the extension's syncHtmlLang). No-op outside a document
+ * (tests). Call once at startup. */
+export function syncHtmlLang(): void {
+  if (typeof document === "undefined") return;
+  const apply = () => {
+    document.documentElement.lang = activeLocale().replace("_", "-");
+  };
+  apply();
+  subscribeLocale(apply);
+}
+
 export function getLocaleVersion(): number {
   return version;
 }
