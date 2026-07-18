@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* JetBrains Mono for identity material (fingerprints, origins, tool names,
+   code blocks) - bundled woff2 via @fontsource, weights the UI actually uses.
+   No remote loads: the files ship inside the extension package. */
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
 /* Class-based dark mode (we toggle .dark on <html>, see src/lib/theme.ts). */
 @custom-variant dark (&:where(.dark, .dark *));
 
