@@ -33,18 +33,28 @@ export function isolatedBrowserOrNull(): string | null {
   return ISOLATED_VERSION.test(version) ? bin : null;
 }
 
-/** Exit(0) with a SKIP message unless CHROME_BIN identifies as isolated. */
+/** Exit(0) with a SKIP message unless CHROME_BIN identifies as isolated.
+ *
+ * BB_REQUIRE_BROWSER=1 (set by CI) turns the skip into a hard failure: in CI
+ * the suite must actually run, so a CHROME_BIN that stops identifying as an
+ * isolated Chrome for Testing has to make the job red, never silently green.
+ * The variable only ever makes the guard stricter - no value lets a
+ * non-isolated browser through. */
 export function assertIsolatedBrowserOrSkip(): string {
   const bin = isolatedBrowserOrNull();
   if (!bin) {
-    console.log(
-      "SKIP: refusing to launch a browser that does not identify as an isolated\n" +
-        "Chrome for Testing (checked via `--version`). A non-headless\n" +
-        "--load-extension launch of a real browser can capture and close your\n" +
-        "session. Install one and point CHROME_BIN at it, e.g.:\n" +
-        "  bunx @puppeteer/browsers install chrome@stable --path tests/.chrome-for-testing\n" +
-        "(see tests/README.md -> Safety).",
-    );
+    const reason =
+      "refusing to launch a browser that does not identify as an isolated\n" +
+      "Chrome for Testing (checked via `--version`). A non-headless\n" +
+      "--load-extension launch of a real browser can capture and close your\n" +
+      "session. Install one and point CHROME_BIN at it, e.g.:\n" +
+      "  bunx @puppeteer/browsers install chrome@stable --path tests/.chrome-for-testing\n" +
+      "(see tests/README.md -> Safety).";
+    if (process.env.BB_REQUIRE_BROWSER === "1") {
+      console.error(`FAIL (BB_REQUIRE_BROWSER=1, the suite must run): ${reason}`);
+      process.exit(1);
+    }
+    console.log(`SKIP: ${reason}`);
     process.exit(0);
   }
   return bin;
