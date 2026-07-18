@@ -22,11 +22,15 @@ function toastPalette(): ToastPalette {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? TOAST_DARK : TOAST_LIGHT;
 }
 
-export function showInfoToast(message: string): Promise<boolean> {
+export function showInfoToast(message: string, cancelLabel?: string): Promise<boolean> {
   return new Promise((resolve) => {
     const host = ensureToastHost();
     const p = toastPalette();
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
     const card = document.createElement("div");
+    // Announced to screen readers when appended (the notice auto-proceeds,
+    // so a silent injection would skip the one chance to cancel).
+    card.setAttribute("role", "status");
     card.style.cssText =
       `box-sizing:border-box;pointer-events:auto;background:${p.surface};color:${p.text};` +
       `border:1px solid ${p.edgeStrong};border-radius:10px;padding:11px 12px 12px;width:316px;` +
@@ -48,7 +52,9 @@ export function showInfoToast(message: string): Promise<boolean> {
     fill.style.cssText = `width:100%;height:100%;background:${p.textSecondary};transform-origin:left;`;
     track.appendChild(fill);
     const cancel = document.createElement("button");
-    cancel.textContent = "Cancel";
+    // Localized by the SW caller (the content script reads no extension
+    // storage, so it cannot resolve the user's chosen locale itself).
+    cancel.textContent = cancelLabel || "Cancel";
     cancel.style.cssText =
       `padding:3px 9px;border-radius:6px;border:1px solid transparent;color:${p.textSecondary};` +
       "background:transparent;cursor:pointer;font-size:11px;font-weight:600;font-family:inherit;";
@@ -67,20 +73,41 @@ export function showInfoToast(message: string): Promise<boolean> {
     card.appendChild(foot);
     host.appendChild(card);
 
-    // Drain the countdown track (transform only; skipped under reduced motion).
-    if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-      fill.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], {
-        duration: TOAST_MS,
-        easing: "linear",
-        fill: "forwards",
-      });
+    // Entrance: transform/opacity only, ease-out; skipped under reduced motion.
+    if (!reduceMotion) {
+      card.animate(
+        [
+          { opacity: 0, transform: "translateY(8px)" },
+          { opacity: 1, transform: "translateY(0)" },
+        ],
+        { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+      );
     }
+
+    // Drain the countdown track (transform only). The drain is information,
+    // not decoration, so reduced motion STEPS it (one discrete move per
+    // second) instead of skipping it - a permanently full bar would claim
+    // "all time remaining" while the auto-proceed timer runs.
+    fill.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], {
+      duration: TOAST_MS,
+      easing: reduceMotion ? "steps(8, jump-none)" : "linear",
+      fill: "forwards",
+    });
 
     let done = false;
     const finish = (proceed: boolean) => {
       if (done) return;
       done = true;
-      card.remove();
+      if (reduceMotion) {
+        card.remove();
+      } else {
+        // Exit: quick fade, faster than the entrance.
+        const out = card.animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 120,
+          easing: "ease-out",
+        });
+        out.onfinish = () => card.remove();
+      }
       resolve(proceed);
     };
     cancel.onclick = () => finish(false);
