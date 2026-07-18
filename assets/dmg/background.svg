@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 400" width="660" height="400">
+  <title>Chromium Bridge - DMG install window background</title>
+  <!-- Source of truth for the DMG window art (window content area 660x400).
+       PNG/TIFF is generated at build time by scripts/gen-dmg-background.ts;
+       nothing rasterized is committed.
+
+       Layout contract with scripts/desktop-bundle.ts (keep in sync):
+         app icon centered at (165, 190), /Applications at (495, 190),
+         icon size 128, window content 660x400.
+
+       The caption is drawn from GLYPHS below - an original single-stroke
+       uppercase alphabet hand-defined for this file - so the image has no
+       font dependency and renders identically everywhere. Each glyph lives
+       on a 7x10 unit box (baseline y=10) and is placed with <use x=...> at
+       a fixed advance of 11 (8 for a word space). -->
+
+  <!-- Ink field with a barely-there vertical lift so the window does not
+       read as dead black next to Finder chrome. -->
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12161d"/>
+      <stop offset="1" stop-color="#0e1116"/>
+    </linearGradient>
+    <!-- Single-stroke glyphs, 7 wide x 10 tall, drawn once, placed by x. -->
+    <path id="gA" d="M0,10 L3.5,0 L7,10 M1.3,6.3 L5.7,6.3"/>
+    <path id="gB" d="M0,0 L0,10 M0,0 L4.1,0 Q6.5,0 6.5,2.5 Q6.5,5 4.1,5 L0,5 M4.1,5 Q7,5 7,7.5 Q7,10 4.1,10 L0,10"/>
+    <path id="gC" d="M6.6,1.6 Q5.4,0 3.6,0 Q0.4,0 0.4,5 Q0.4,10 3.6,10 Q5.4,10 6.6,8.4"/>
+    <path id="gD" d="M0,0 L0,10 M0,0 L3.2,0 Q7,0 7,5 Q7,10 3.2,10 L0,10"/>
+    <path id="gE" d="M6.4,0 L0,0 L0,10 L6.4,10 M0,5 L5,5"/>
+    <path id="gG" d="M6.6,1.6 Q5.4,0 3.6,0 Q0.4,0 0.4,5 Q0.4,10 3.6,10 Q6.6,10 6.6,6.2 L6.6,5.8 L4.4,5.8"/>
+    <path id="gH" d="M0,0 L0,10 M7,0 L7,10 M0,5 L7,5"/>
+    <path id="gI" d="M3.5,0 L3.5,10"/>
+    <path id="gL" d="M0,0 L0,10 L6.4,10"/>
+    <path id="gM" d="M0,10 L0,0 L3.5,5.6 L7,0 L7,10"/>
+    <path id="gN" d="M0,10 L0,0 L7,10 L7,0"/>
+    <path id="gO" d="M3.5,0 Q0.4,0 0.4,5 Q0.4,10 3.5,10 Q6.6,10 6.6,5 Q6.6,0 3.5,0 Z"/>
+    <path id="gP" d="M0,10 L0,0 L4.2,0 Q6.8,0 6.8,2.8 Q6.8,5.6 4.2,5.6 L0,5.6"/>
+    <path id="gR" d="M0,10 L0,0 L4.2,0 Q6.8,0 6.8,2.7 Q6.8,5.4 4.2,5.4 L0,5.4 M4.2,5.4 L7,10"/>
+    <path id="gS" d="M6.4,1.5 Q5.2,0 3.5,0 Q0.7,0 0.7,2.4 Q0.7,4.8 3.5,4.9 Q6.4,5.0 6.4,7.5 Q6.4,10 3.5,10 Q1.7,10 0.5,8.5"/>
+    <path id="gT" d="M0,0 L7,0 M3.5,0 L3.5,10"/>
+    <path id="gU" d="M0,0 L0,7 Q0,10 3.5,10 Q7,10 7,7 L7,0"/>
+  </defs>
+
+  <rect width="660" height="400" fill="url(#field)"/>
+
+  <!-- Gatedeck mark (closed state, same geometry as the app icon source),
+       watermarked large behind the icon row. The closed deck is drawn as a
+       single line here: at watermark opacity the icon's two overlapping
+       halves would double up into a visible dot at the joint. -->
+  <g transform="translate(174,44) scale(0.61)" fill="none"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M94 386 Q256 62 418 386" stroke="#6b7a92" stroke-width="72" opacity="0.06"/>
+    <path d="M58 134 L454 134" stroke="#3fe081" stroke-width="48" opacity="0.05"/>
+  </g>
+
+  <!-- Positional hint: a quiet arc from the app icon to /Applications,
+       curved to echo the Gatedeck arch. -->
+  <g fill="none" stroke="#6b7a92" stroke-width="2.5"
+     stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
+    <path d="M255,193 Q330,168 405,193"/>
+    <path d="M394.2,194.8 L405,193 L397.4,185.0"/>
+  </g>
+
+  <!-- DRAG CHROMIUM BRIDGE TO APPLICATIONS, centered (span 380, x 140..520),
+       baseline y=340. -->
+  <g transform="translate(140,330)" fill="none" stroke="#6b7a92"
+     stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+     opacity="0.8">
+    <use href="#gD" x="0"/>
+    <use href="#gR" x="11"/>
+    <use href="#gA" x="22"/>
+    <use href="#gG" x="33"/>
+    <use href="#gC" x="52"/>
+    <use href="#gH" x="63"/>
+    <use href="#gR" x="74"/>
+    <use href="#gO" x="85"/>
+    <use href="#gM" x="96"/>
+    <use href="#gI" x="107"/>
+    <use href="#gU" x="118"/>
+    <use href="#gM" x="129"/>
+    <use href="#gB" x="148"/>
+    <use href="#gR" x="159"/>
+    <use href="#gI" x="170"/>
+    <use href="#gD" x="181"/>
+    <use href="#gG" x="192"/>
+    <use href="#gE" x="203"/>
+    <use href="#gT" x="222"/>
+    <use href="#gO" x="233"/>
+    <use href="#gA" x="252"/>
+    <use href="#gP" x="263"/>
+    <use href="#gP" x="274"/>
+    <use href="#gL" x="285"/>
+    <use href="#gI" x="296"/>
+    <use href="#gC" x="307"/>
+    <use href="#gA" x="318"/>
+    <use href="#gT" x="329"/>
+    <use href="#gI" x="340"/>
+    <use href="#gO" x="351"/>
+    <use href="#gN" x="362"/>
+    <use href="#gS" x="373"/>
+  </g>
+</svg>
