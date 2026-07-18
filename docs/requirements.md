@@ -1,5 +1,12 @@
 # Requirements: chromium-bridge
 
+> **Historical document.** These are the original v0.1 requirements, kept for
+> context on what the project set out to do; sections describing the
+> implementation (tool count, in-page Toast confirmations, the TCP bridge,
+> the phase plan) predate the 2026-07 rebuild and no longer describe the
+> system. The current architecture, tool set, and security model are in
+> [architecture.md](./architecture.md) and [security/](./security/).
+
 > Let MCP clients (such as Claude Code and Codex) operate **the real Chrome
 > the user is already using** (real tabs, real login state, real cookies)
 > instead of launching a blank simulated browser.
@@ -158,7 +165,7 @@ as connected and the tools are callable.
 
 ## 8. Acceptance criteria (v0.1)
 
-1. `install.sh` (macOS/Linux) or `install.ps1` (Windows) runs through, the extension loads, and the host manifest is registered
+1. Registration runs through (the desktop app's first launch, or `chromium-bridge doctor --fix`), the extension loads, and the host manifest is registered
 2. The MCP client shows `chromium-bridge` as connected
 3. The AI says "list my tabs" in a conversation -> sees the real tab list
 4. The AI says "screenshot the current page" -> the AI can analyze the screenshot

@@ -8,12 +8,11 @@
   "files": {
     "includes": [
       "**",
-      "!contracts",
       "!supply-chain",
       "!tests/fixtures",
-      "!install",
       "!**/dist",
-      "!**/*.css"
+      "!**/*.css",
+      "!docs/site/**/*.astro"
     ]
   },
   "formatter": {

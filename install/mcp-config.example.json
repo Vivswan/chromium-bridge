@@ -1,9 +1,0 @@
-{
-  "_comment": "Generic MCP server config for chromium-bridge. Most clients (Claude Code's .mcp.json, Claude Desktop, and others) use this `mcpServers` shape - copy the `chromium-bridge` entry into your client's config. Point `command` at the installed binary: ~/.chromium-bridge/chromium-bridge on macOS, ~/.local/share/chromium-bridge/chromium-bridge on Linux, or /mnt/c/Users/YOU/AppData/Local/chromium-bridge/chromium-bridge.exe from WSL when using Windows Chrome. Use an ABSOLUTE path (most clients do not expand ~), and it does not depend on your shell PATH. The server speaks MCP over stdio with no arguments. Codex uses TOML instead of JSON - see the README for that snippet.",
-  "mcpServers": {
-    "chromium-bridge": {
-      "command": "/ABSOLUTE/PATH/TO/chromium-bridge",
-      "args": []
-    }
-  }
-}
