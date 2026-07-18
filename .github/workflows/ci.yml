@@ -324,7 +324,7 @@ jobs:
       - run: python3 tests/protocol/chaos.py
 
   browser:
-    name: DOM + smoke (Chrome)
+    name: DOM + smoke + security proofs (Chrome)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -342,13 +342,25 @@ jobs:
       - name: DOM-layer tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          # In CI the suites must actually run: the isolation guard's local
+          # default (SKIP, exit 0, when CHROME_BIN is not an isolated Chrome
+          # for Testing) would turn this required job silently green. Strict
+          # mode makes a skip a failure; it can only tighten the guard.
+          BB_REQUIRE_BROWSER: "1"
         run: bun tests/browser/dom_test.ts
       - name: Extension smoke test
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          BB_REQUIRE_BROWSER: "1"
         # The smoke test needs a non-headless browser (MV3 SW reliability), so
         # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
         run: xvfb-run -a bun tests/browser/ext_test.ts
+      - name: Browser security proofs (ADR-0027)
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          BB_REQUIRE_BROWSER: "1"
+        # Non-headless --load-extension like the smoke test, hence xvfb.
+        run: xvfb-run -a bun tests/browser/security_browser_test.ts
 
   typography:
     name: typography
@@ -435,6 +447,20 @@ jobs:
       ]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      # Branch protection requires only this job, so its hand-maintained needs
+      # list IS the merge gate: a job forgotten from it would be silently not
+      # required. The completeness check runs inside all-green itself so it
+      # cannot be un-required either (in any other job, dropping THAT job from
+      # needs would also un-gate the checker). Dependency-free (Bun builtins
+      # only), so no bun install.
+      - name: needs list covers every job in this workflow
+        run: |
+          bun scripts/check-all-green.ts
+          bun test scripts/check-all-green.test.ts
       - name: All jobs green
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
