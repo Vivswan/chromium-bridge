@@ -21,7 +21,7 @@
     "format": "just fmt",
     "format:check": "just fmt-check",
     "check": "just check-ts",
-    "test": "just test"
+    "test": "just test-ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
