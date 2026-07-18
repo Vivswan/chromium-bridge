@@ -40,6 +40,7 @@ export const en = {
   "overview.sub": "Every trust gate at a glance.",
   "overview.pill_ok": "Host checks passing",
   "overview.pill_kill": "Kill switch engaged",
+  "overview.pill_kill_unreadable": "Kill state unreadable",
   "overview.pill_partial": "Setup incomplete",
   "overview.map_title": "Trust map",
   "overview.map_clients": "MCP Clients - $1",
@@ -52,6 +53,7 @@ export const en = {
   "overview.map_no_browsers": "No browsers detected",
   "overview.map_no_browsers_meta": "see Browsers",
   "overview.map_more": "+$1 more",
+  "overview.map_state_unknown": "State unknown",
   "overview.map_note":
     "These checks cover the host, keys, and manifests; whether the extension is loaded shows only in the browser itself.",
   "overview.client_paired": "paired $1",
@@ -79,6 +81,7 @@ export const en = {
   "overview.server_lock_unreadable": "Lock file unreadable: $1",
   "overview.server_consequence": "Off-allowlist requests are refused.",
   "overview.server_pid": "PID $1",
+  "overview.server_endpoint_unknown": "endpoint unknown",
   "overview.enclave_label": "Enclave key",
   "overview.browsers_count": "$1 registered",
   "overview.clients_count": "$1 trusted",

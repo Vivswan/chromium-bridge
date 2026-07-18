@@ -42,7 +42,10 @@ interface HubNode {
 }
 
 /** The five Overview lifecycle states (first-run.html section 4). One
- * leading element each; if a state is not in this list, it is not a state. */
+ * leading element each; if a state is not in this list, it is not a state.
+ * "killed" covers both an engaged kill switch and an unreadable one: an
+ * unreadable switch cannot prove health, so the map renders severed (fail
+ * closed) while the copy stays distinct. */
 type Lifecycle = "loading" | "fresh" | "connected" | "attested" | "killed";
 
 const NODE_H = 56;
@@ -50,9 +53,10 @@ const NODE_GAP = 10;
 const LANE_W = 80;
 const HOST_H = 122;
 
-/** Collapse rule for >3 nodes per column: keep the 3 highest-priority
+/** Collapse rule for 5+ nodes per column: keep the 3 highest-priority
  * nodes (lit > held > plain > ghost/dim), then one dim "+N more" node
- * whose single dashed edge merges the rest. */
+ * whose single dashed edge merges the rest. Exactly 4 render as-is:
+ * collapsing 4 into 3 + "+1 more" would hide a node to save nothing. */
 function collapseColumn(nodes: HubNode[], moreLabel: (n: number) => string): HubNode[] {
   if (nodes.length <= 4) return nodes;
   const rank = (n: HubNode) =>
@@ -189,7 +193,11 @@ export function OverviewView() {
   const [actionError, setActionError] = useState<string>();
   const [connectReport, setConnectReport] = useState<string>();
   const [releaseOpen, setReleaseOpen] = useState(false);
-  const [releasedBy, setReleasedBy] = useState<string>();
+  // shared (store) so the sidebar's engage can clear it too
+  const releasedBy = useAppStore((s) => s.releasedBy);
+  const setReleasedBy = useAppStore((s) => s.setReleasedBy);
+  const beginRelease = useAppStore((s) => s.beginRelease);
+  const endRelease = useAppStore((s) => s.endRelease);
 
   // Registration is opt-in (ADR-0029): the guide only ever registers the
   // browser whose Connect the user clicked. Sequential for "Connect both";
@@ -233,6 +241,7 @@ export function OverviewView() {
     setBusy("release");
     setActionError(undefined);
     setReleasedBy(undefined);
+    beginRelease();
     try {
       const outcome = await api.killRelease();
       setReleasedBy(outcome.auth);
@@ -241,8 +250,11 @@ export function OverviewView() {
       setActionError(errorText(err));
       setReleaseOpen(false);
     } finally {
+      // hold busy (and the in-flight count) until the refresh settles so a
+      // second release cannot overlap the first while status is stale
+      await refreshStatus();
+      endRelease();
       setBusy(undefined);
-      void refreshStatus();
     }
   };
 
@@ -250,6 +262,10 @@ export function OverviewView() {
 
   const killState = status?.kill.state;
   const engaged = killState === "engaged";
+  // An unreadable kill switch is not "engaged", but it cannot prove health
+  // either: the host is refusing to claim anything, so the Overview renders
+  // it severed - same visuals as killed, distinct copy (fail closed).
+  const severed = engaged || killState === "unreadable";
   // "serving" is only claimed when the kill state is provably off AND the
   // server socket answered; loading or unreadable never counts as off.
   const serving = status?.server.reachable === true && killState === "off";
@@ -269,7 +285,7 @@ export function OverviewView() {
   const brokenRows = browserRows.filter((b) => !b.healthy && b.code !== "missing");
   const registered = registeredRows.length;
 
-  const lifecycle: Lifecycle = engaged
+  const lifecycle: Lifecycle = severed
     ? "killed"
     : status === undefined || browsers.data === undefined || clients.data === undefined
       ? "loading"
@@ -282,91 +298,108 @@ export function OverviewView() {
 
   /* ----- derive the map ----- */
 
+  // A severed (killed/unreadable) map can render before the browser/client
+  // queries resolve - or after they fail, in which case data stays undefined
+  // for good. Say loading or unknown; never claim "No browsers detected" /
+  // "No MCP client" from an empty default.
+  const pendingNode = (key: string, failed: boolean): HubNode => ({
+    key,
+    name: failed ? t("overview.map_state_unknown") : t("common.loading"),
+    meta: "",
+    variant: "dim",
+    dot: failed ? "down" : "idle",
+    edge: "off",
+  });
+
   const clientNodes: HubNode[] =
-    clientRows.length === 0
-      ? [
-          {
-            key: "__ghost",
-            name: t("overview.ghost_client"),
-            meta: t("overview.ghost_client_meta"),
-            variant: "ghost",
-            dot: "idle",
-            edge: "off",
-          },
-        ]
-      : clientRows.map((c) => ({
-          key: c.name,
-          name: c.name,
-          meta: t("overview.client_paired", [new Date(c.addedUnix * 1000).toLocaleDateString()]),
-          variant: serving ? ("lit" as const) : ("plain" as const),
-          dot: serving ? ("live" as const) : ("idle" as const),
-          edge: serving ? ("on" as const) : ("idle" as const),
-        }));
+    clients.data === undefined
+      ? [pendingNode("__pending_clients", clients.error !== undefined)]
+      : clientRows.length === 0
+        ? [
+            {
+              key: "__ghost",
+              name: t("overview.ghost_client"),
+              meta: t("overview.ghost_client_meta"),
+              variant: "ghost",
+              dot: "idle",
+              edge: "off",
+            },
+          ]
+        : clientRows.map((c) => ({
+            key: c.name,
+            name: c.name,
+            meta: t("overview.client_paired", [new Date(c.addedUnix * 1000).toLocaleDateString()]),
+            variant: serving ? ("lit" as const) : ("plain" as const),
+            dot: serving ? ("live" as const) : ("idle" as const),
+            edge: serving ? ("on" as const) : ("idle" as const),
+          }));
 
   const browserNodes: HubNode[] =
-    browserRows.length === 0
-      ? [
-          {
-            key: "__ghost",
-            name: t("overview.map_no_browsers"),
-            meta: t("overview.map_no_browsers_meta"),
-            variant: "ghost",
-            dot: "idle",
-            edge: "off",
-          },
-        ]
-      : browserRows.map((b) => {
-          if (!b.healthy) {
-            if (b.code !== "missing") {
-              // a manifest exists but is wrong: amber node, real state text
+    browsers.data === undefined
+      ? [pendingNode("__pending_browsers", browsers.error !== undefined)]
+      : browserRows.length === 0
+        ? [
+            {
+              key: "__ghost",
+              name: t("overview.map_no_browsers"),
+              meta: t("overview.map_no_browsers_meta"),
+              variant: "ghost",
+              dot: "idle",
+              edge: "off",
+            },
+          ]
+        : browserRows.map((b) => {
+            if (!b.healthy) {
+              if (b.code !== "missing") {
+                // a manifest exists but is wrong: amber node, real state text
+                return {
+                  key: b.key,
+                  name: browserDisplayName(b.key),
+                  meta: b.state,
+                  variant: "held" as const,
+                  dot: "pending" as const,
+                  edge: "off" as const,
+                };
+              }
               return {
                 key: b.key,
                 name: browserDisplayName(b.key),
-                meta: b.state,
-                variant: "held" as const,
-                dot: "pending" as const,
+                meta: t("overview.node_ghost_meta"),
+                variant: "ghost" as const,
+                dot: "idle" as const,
                 edge: "off" as const,
               };
             }
+            if (lifecycle === "attested" && keyPresent) {
+              return {
+                key: b.key,
+                name: browserDisplayName(b.key),
+                meta: t("overview.browser_registered"),
+                variant: "lit" as const,
+                dot: "live" as const,
+                edge: "on" as const,
+              };
+            }
+            if (lifecycle === "killed") {
+              return {
+                key: b.key,
+                name: browserDisplayName(b.key),
+                meta: t("overview.browser_registered"),
+                variant: "plain" as const,
+                dot: "idle" as const,
+                edge: "off" as const,
+              };
+            }
+            // registered but the pairing ceremony is still owed: amber
             return {
               key: b.key,
               name: browserDisplayName(b.key),
-              meta: t("overview.node_ghost_meta"),
-              variant: "ghost" as const,
-              dot: "idle" as const,
-              edge: "off" as const,
+              meta: t("overview.node_held_meta"),
+              variant: "held" as const,
+              dot: "pending" as const,
+              edge: "held" as const,
             };
-          }
-          if (lifecycle === "attested" && keyPresent) {
-            return {
-              key: b.key,
-              name: browserDisplayName(b.key),
-              meta: t("overview.browser_registered"),
-              variant: "lit" as const,
-              dot: "live" as const,
-              edge: "on" as const,
-            };
-          }
-          if (lifecycle === "killed") {
-            return {
-              key: b.key,
-              name: browserDisplayName(b.key),
-              meta: t("overview.browser_registered"),
-              variant: "plain" as const,
-              dot: "idle" as const,
-              edge: "off" as const,
-            };
-          }
-          // registered but the pairing ceremony is still owed: amber
-          return {
-            key: b.key,
-            name: browserDisplayName(b.key),
-            meta: t("overview.node_held_meta"),
-            variant: "held" as const,
-            dot: "pending" as const,
-            edge: "held" as const,
-          };
-        });
+          });
 
   const shownClients = collapseColumn(clientNodes, (n) => t("overview.map_more", [String(n)]));
   const shownBrowsers = collapseColumn(browserNodes, (n) => t("overview.map_more", [String(n)]));
@@ -392,15 +425,21 @@ export function OverviewView() {
         ? t("common.loading")
         : enclave.data.key === "unsupported"
           ? t("enclave.key_unsupported")
-          : guide
-            ? keyPresent
-              ? t("overview.map_host_running_key")
-              : t("overview.map_host_running_nokey")
-            : keyPresent
-              ? enclave.data.policy?.enrolled === true
-                ? t("overview.map_host_attested")
-                : t("overview.map_host_key_only")
-              : t("overview.map_host_unenrolled");
+          : // a key that exists and failed is a danger state in every
+            // lifecycle - never the benign "no key yet" wording
+            enclave.data.key === "invalid"
+            ? t("enclave.key_invalid")
+            : enclave.data.key === "error"
+              ? t("enclave.key_error")
+              : guide
+                ? keyPresent
+                  ? t("overview.map_host_running_key")
+                  : t("overview.map_host_running_nokey")
+                : keyPresent
+                  ? enclave.data.policy?.enrolled === true
+                    ? t("overview.map_host_attested")
+                    : t("overview.map_host_key_only")
+                  : t("overview.map_host_unenrolled");
 
   const laneInLabel =
     lifecycle === "killed"
@@ -422,7 +461,9 @@ export function OverviewView() {
       ? t("overview.map_browsers_detected", [String(browserRows.length)])
       : lifecycle === "connected"
         ? t("overview.map_browsers_partial", [String(registered), String(browserRows.length)])
-        : t("overview.map_browsers", [String(browserRows.length)]);
+        : t("overview.map_browsers", [
+            browsers.data === undefined ? "?" : String(browserRows.length),
+          ]);
 
   const headSub =
     lifecycle === "fresh"
@@ -436,7 +477,7 @@ export function OverviewView() {
   const headPill =
     lifecycle === "killed" ? (
       <Pill tone="danger" dot>
-        {t("overview.pill_kill")}
+        {engaged ? t("overview.pill_kill") : t("overview.pill_kill_unreadable")}
       </Pill>
     ) : lifecycle === "fresh" ? (
       <Pill dot>{t("overview.pill_fresh")}</Pill>
@@ -470,7 +511,9 @@ export function OverviewView() {
           )}
         </div>
         <Consequence>{t("overview.kill_consequence")}</Consequence>
-        {releasedBy !== undefined && (
+        {/* "released" is only true while the switch is actually off; any
+            re-engagement (sidebar, CLI) must not leave a stale green note */}
+        {releasedBy !== undefined && killState === "off" && (
           <StatusDot tone="live" className="text-xs">
             {t("overview.kill_released", [authLabel(releasedBy)])}
           </StatusDot>
@@ -510,7 +553,9 @@ export function OverviewView() {
       </div>
       <div className="hub">
         <span className="hub-col-label hub-clients tnum">
-          {t("overview.map_clients", [String(clientRows.length)])}
+          {t("overview.map_clients", [
+            clients.data === undefined ? "?" : String(clientRows.length),
+          ])}
         </span>
         <span className="hub-col-label hub-browsers tnum">{browsersColLabel}</span>
 
@@ -802,7 +847,11 @@ export function OverviewView() {
               {t("overview.server_pid", [String(status.server.pid)])}
             </span>
           )}
-          <ChipMono wrap>{status?.server.endpoint ?? "com.vivswan.chromium_bridge.host"}</ChipMono>
+          {/* endpoint null covers both "not running" and "lock unreadable";
+              claim neither - the row-status line above says which it is */}
+          <ChipMono wrap>
+            {status?.server.endpoint ?? t("overview.server_endpoint_unknown")}
+          </ChipMono>
         </div>
       </section>
 
@@ -850,6 +899,8 @@ export function OverviewView() {
         <div className="row-main">
           {browsers.error !== undefined ? (
             <p className="mono m-0 text-[11px] text-danger">{browsers.error}</p>
+          ) : browsers.data === undefined ? (
+            <span className="text-xs text-text-3">{t("common.loading")}</span>
           ) : (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
               {browserRows.length === 0 && (
@@ -870,7 +921,10 @@ export function OverviewView() {
           )}
         </div>
         <div className="row-side">
-          <span className="row-count">{t("overview.browsers_count", [String(registered)])}</span>
+          {/* a count is a claim; make none until the list is known */}
+          {browsers.data !== undefined && (
+            <span className="row-count">{t("overview.browsers_count", [String(registered)])}</span>
+          )}
         </div>
       </section>
 
@@ -879,6 +933,8 @@ export function OverviewView() {
         <div className="row-main">
           {clients.error !== undefined ? (
             <p className="mono m-0 text-[11px] text-danger">{clients.error}</p>
+          ) : clients.data === undefined ? (
+            <span className="text-xs text-text-3">{t("common.loading")}</span>
           ) : (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
               {clientRows.length === 0 && (
@@ -894,9 +950,11 @@ export function OverviewView() {
           )}
         </div>
         <div className="row-side">
-          <span className="row-count">
-            {t("overview.clients_count", [String(clientRows.length)])}
-          </span>
+          {clients.data !== undefined && (
+            <span className="row-count">
+              {t("overview.clients_count", [String(clientRows.length)])}
+            </span>
+          )}
         </div>
       </section>
     </div>
