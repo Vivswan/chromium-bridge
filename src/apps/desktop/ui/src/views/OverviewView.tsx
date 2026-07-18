@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChipMono,
   Consequence,
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
+import { isArmed } from "@/lib/armed";
 import { authLabel } from "@/lib/auth-label";
 import { browserDisplayName, formatBrowserList } from "@/lib/browser-names";
 import { formatFingerprint } from "@/lib/fingerprint";
@@ -45,8 +46,10 @@ interface HubNode {
  * leading element each; if a state is not in this list, it is not a state.
  * "killed" covers both an engaged kill switch and an unreadable one: an
  * unreadable switch cannot prove health, so the map renders severed (fail
- * closed) while the copy stays distinct. */
-type Lifecycle = "loading" | "fresh" | "connected" | "attested" | "killed";
+ * closed) while the copy stays distinct. "paired" means clients exist in
+ * the allowlist - configuration, not proof; every green claim is gated
+ * separately on the shared armed predicate (lib/armed.ts). */
+type Lifecycle = "loading" | "fresh" | "connected" | "paired" | "killed";
 
 const NODE_H = 56;
 const NODE_GAP = 10;
@@ -182,12 +185,25 @@ export function OverviewView() {
   const { t } = useI18n();
   const status = useAppStore((s) => s.status);
   const statusError = useAppStore((s) => s.statusError);
+  const statusFresh = useAppStore((s) => s.statusFresh);
   const refreshStatus = useAppStore((s) => s.refreshStatus);
   const setView = useAppStore((s) => s.setView);
   const browsers = useAsync(api.browsersList);
   const enclave = useAsync(api.enclaveStatus);
   const clients = useAsync(api.clientsList);
   const extension = useAsync(api.extensionInfo);
+
+  // status refreshes on focus (App.tsx); the queries the armed claim and
+  // the map derive from must not lag behind it on an old snapshot
+  useEffect(() => {
+    const onFocus = () => {
+      enclave.reload();
+      browsers.reload();
+      clients.reload();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [enclave.reload, browsers.reload, clients.reload]);
 
   const [busy, setBusy] = useState<string>();
   const [actionError, setActionError] = useState<string>();
@@ -266,10 +282,18 @@ export function OverviewView() {
   // either: the host is refusing to claim anything, so the Overview renders
   // it severed - same visuals as killed, distinct copy (fail closed).
   const severed = engaged || killState === "unreadable";
+  // The latest refresh FAILED: `status` is a stale snapshot or was never
+  // read at all. Unless the last snapshot already demands the severed
+  // rendering (kept, fail closed), every derivation below must take the
+  // unknown/idle path - a failed refresh never renders green.
+  const stale = statusError !== undefined && !statusFresh;
   // "serving" is only claimed when the kill state is provably off AND the
-  // server socket answered; loading or unreadable never counts as off.
-  const serving = status?.server.reachable === true && killState === "off";
+  // server socket answered on a refresh that succeeded; loading, stale, or
+  // unreadable never counts as off.
+  const serving = statusFresh && status?.server.reachable === true && killState === "off";
   const keyPresent = enclave.data?.key === "present";
+  // the ONE armed/attested predicate, shared with SecurityView
+  const armed = isArmed(enclave, statusFresh);
   const fingerprint = enclave.data?.fingerprint;
 
   const clientRows = clients.data?.clients ?? [];
@@ -285,12 +309,16 @@ export function OverviewView() {
   const brokenRows = browserRows.filter((b) => !b.healthy && b.code !== "missing");
   const registered = registeredRows.length;
 
+  // a settled error counts as loaded: the map then renders with the
+  // existing "State unknown" nodes instead of a perpetual loading line
   const lifecycle: Lifecycle = severed
     ? "killed"
-    : status === undefined || browsers.data === undefined || clients.data === undefined
+    : (status === undefined && statusError === undefined) ||
+        (browsers.data === undefined && browsers.error === undefined) ||
+        (clients.data === undefined && clients.error === undefined)
       ? "loading"
       : clientRows.length > 0
-        ? "attested"
+        ? "paired"
         : registered > 0 || brokenRows.length > 0
           ? "connected"
           : "fresh";
@@ -329,9 +357,12 @@ export function OverviewView() {
             key: c.name,
             name: c.name,
             meta: t("overview.client_paired", [new Date(c.addedUnix * 1000).toLocaleDateString()]),
-            variant: serving ? ("lit" as const) : ("plain" as const),
-            dot: serving ? ("live" as const) : ("idle" as const),
-            edge: serving ? ("on" as const) : ("idle" as const),
+            // an allowlist entry is configuration, not liveness: the app has
+            // no per-client connection or attestation evidence, so a paired
+            // client renders plain/idle and never green (fail-closed display)
+            variant: "plain" as const,
+            dot: "idle" as const,
+            edge: "idle" as const,
           }));
 
   const browserNodes: HubNode[] =
@@ -370,16 +401,6 @@ export function OverviewView() {
                 edge: "off" as const,
               };
             }
-            if (lifecycle === "attested" && keyPresent) {
-              return {
-                key: b.key,
-                name: browserDisplayName(b.key),
-                meta: t("overview.browser_registered"),
-                variant: "lit" as const,
-                dot: "live" as const,
-                edge: "on" as const,
-              };
-            }
             if (lifecycle === "killed") {
               return {
                 key: b.key,
@@ -388,6 +409,19 @@ export function OverviewView() {
                 variant: "plain" as const,
                 dot: "idle" as const,
                 edge: "off" as const,
+              };
+            }
+            if (lifecycle === "paired") {
+              // a verified manifest is configuration, not a live extension
+              // session (only the browser itself can show that): neutral
+              // node, solid neutral edge, never green
+              return {
+                key: b.key,
+                name: browserDisplayName(b.key),
+                meta: t("overview.browser_registered"),
+                variant: "plain" as const,
+                dot: "idle" as const,
+                edge: "idle" as const,
               };
             }
             // registered but the pairing ceremony is still owed: amber
@@ -412,12 +446,14 @@ export function OverviewView() {
   const clientYs = centers(shownClients.length, laneH);
   const browserYs = centers(shownBrowsers.length, laneH);
 
-  // the host earns its green border only once something is attested; on a
-  // fresh install the only green on screen is its own liveness dot. An
-  // unknown kill state claims nothing; unreadable renders down (fail closed).
-  const hostLit = lifecycle === "attested" && keyPresent;
+  // the host earns its green border and dot only from the shared armed
+  // predicate (key present + policy enrolled + fresh status) with the kill
+  // switch provably off; a fresh install, a stale status, or an unknown
+  // kill state renders neutral, and a non-off kill state renders down
+  // (fail closed).
+  const hostLit = armed && killState === "off";
   const hostDot: "live" | "down" | "idle" =
-    killState === undefined ? "idle" : killState !== "off" ? "down" : "live";
+    killState !== undefined && killState !== "off" ? "down" : hostLit ? "live" : "idle";
   const hostMeta =
     enclave.error !== undefined
       ? t("enclave.key_error")
@@ -436,7 +472,7 @@ export function OverviewView() {
                   ? t("overview.map_host_running_key")
                   : t("overview.map_host_running_nokey")
                 : keyPresent
-                  ? enclave.data.policy?.enrolled === true
+                  ? armed
                     ? t("overview.map_host_attested")
                     : t("overview.map_host_key_only")
                   : t("overview.map_host_unenrolled");
@@ -450,7 +486,7 @@ export function OverviewView() {
   const laneOutLabel =
     lifecycle === "killed"
       ? t("overview.lane_severed")
-      : lifecycle === "attested"
+      : lifecycle === "paired"
         ? t("overview.lane_native")
         : registered > 0
           ? t("overview.lane_native_held")
@@ -479,13 +515,16 @@ export function OverviewView() {
       <Pill tone="danger" dot>
         {engaged ? t("overview.pill_kill") : t("overview.pill_kill_unreadable")}
       </Pill>
+    ) : stale ? (
+      // the latest refresh failed: no claim survives it, green least of all
+      <Pill dot>{t("overview.map_state_unknown")}</Pill>
     ) : lifecycle === "fresh" ? (
       <Pill dot>{t("overview.pill_fresh")}</Pill>
     ) : lifecycle === "connected" ? (
       <Pill tone="pending" dot>
         {brokenRows.length > 0 ? t("overview.pill_repair") : t("overview.pill_steps", ["2"])}
       </Pill>
-    ) : keyPresent && registered > 0 && serving ? (
+    ) : armed && registered > 0 && serving ? (
       <Pill tone="live" dot>
         {t("overview.pill_ok")}
       </Pill>
@@ -501,38 +540,60 @@ export function OverviewView() {
       <div className="row-main">
         <div className="row-status">
           {status === undefined ? (
-            t("common.loading")
+            statusError !== undefined ? (
+              <StatusDot tone="down">{t("overview.kill_unreadable_state")}</StatusDot>
+            ) : (
+              t("common.loading")
+            )
           ) : engaged ? (
             <StatusDot tone="down">{t("overview.kill_engaged")}</StatusDot>
           ) : killState === "off" ? (
-            t("overview.kill_off")
+            stale ? (
+              // stale snapshot: "off" is the last known state, not a claim
+              <StatusDot tone="idle">{t("overview.map_state_unknown")}</StatusDot>
+            ) : (
+              t("overview.kill_off")
+            )
           ) : (
             <StatusDot tone="down">{t("overview.kill_unreadable_state")}</StatusDot>
           )}
         </div>
         <Consequence>{t("overview.kill_consequence")}</Consequence>
-        {/* "released" is only true while the switch is actually off; any
-            re-engagement (sidebar, CLI) must not leave a stale green note */}
-        {releasedBy !== undefined && killState === "off" && (
-          <StatusDot tone="live" className="text-xs">
-            {t("overview.kill_released", [authLabel(releasedBy)])}
-          </StatusDot>
+        {/* "released" is only true while the switch is provably off; any
+            re-engagement (sidebar, CLI) or a failed refresh must not leave
+            a stale note. Neutral ink: this is a historical event, not a
+            live claim. Announced: it lands after an async action. */}
+        {releasedBy !== undefined && killState === "off" && statusFresh && (
+          <span role="status">
+            <StatusDot tone="idle" className="text-xs">
+              {t("overview.kill_released", [authLabel(releasedBy)])}
+            </StatusDot>
+          </span>
         )}
       </div>
       <div className="row-side flex-col items-end gap-[5px]">
         {engaged ? (
-          <Button gated disabled={busy !== undefined} onClick={() => setReleaseOpen(true)}>
-            {busy === "release" ? t("common.working") : t("overview.kill_release")}
-          </Button>
+          <>
+            <Button
+              gated
+              pending={busy === "release"}
+              disabled={busy !== undefined}
+              onClick={() => setReleaseOpen(true)}
+            >
+              {busy === "release" ? t("common.working") : t("overview.kill_release")}
+            </Button>
+            {/* the release note belongs to the Release affordance: one
+                consequence line per visible control */}
+            <span className="inline-flex items-center gap-[5px] text-[11px] text-text-3">
+              {t("overview.kill_release_note")}
+              <TouchIdChip />
+            </span>
+          </>
         ) : (
           <Button variant="danger" disabled={busy !== undefined} onClick={() => void engage()}>
             {busy === "engage" ? t("common.working") : t("overview.kill_engage")}
           </Button>
         )}
-        <span className="inline-flex items-center gap-[5px] text-[11px] text-text-3">
-          {t("overview.kill_release_note")}
-          <TouchIdChip />
-        </span>
       </div>
     </section>
   );
@@ -540,7 +601,7 @@ export function OverviewView() {
   const trustMap = (
     <section aria-label={t("overview.map_title")}>
       <div className="pipeline-head">
-        <SpecLabel>{t("overview.map_title")}</SpecLabel>
+        <SpecLabel as="h2">{t("overview.map_title")}</SpecLabel>
         <span className="pipeline-meta">
           {lifecycle === "killed"
             ? t("overview.map_meta_killed")
@@ -680,7 +741,6 @@ export function OverviewView() {
                   </span>
                   {missingRows.length > 1 && (
                     <Button
-                      variant="ghost"
                       size="sm"
                       disabled={busy !== undefined}
                       onClick={() => void connect(missingRows.map((b) => b.key))}
@@ -769,7 +829,7 @@ export function OverviewView() {
                 ) : extension.error !== undefined ? (
                   <span className="mono text-[11px] text-danger">{extension.error}</span>
                 ) : extension.data !== undefined ? (
-                  <span className="text-xs text-danger">{t("setup.ext_missing")}</span>
+                  <span className="text-xs text-pending">{t("setup.ext_missing")}</span>
                 ) : (
                   <span className="text-xs text-text-3">{t("common.loading")}</span>
                 )}
@@ -816,7 +876,7 @@ export function OverviewView() {
     </ol>
   );
 
-  /* ----- control rows (attested + killed states) ----- */
+  /* ----- control rows (paired + killed states) ----- */
 
   const controlRows = (
     <div className="rows">
@@ -825,7 +885,13 @@ export function OverviewView() {
         <span className="row-label">{t("overview.server_label")}</span>
         <div className="row-main">
           <div className="row-status">
-            {status === undefined ? (
+            {severed ? (
+              // unreachability is the expected consequence of the kill, not
+              // something awaiting the user: neutral, attributed to the kill
+              <StatusDot tone="idle">{t("overview.server_severed")}</StatusDot>
+            ) : stale ? (
+              <StatusDot tone="idle">{t("overview.map_state_unknown")}</StatusDot>
+            ) : status === undefined ? (
               t("common.loading")
             ) : status.server.lockError !== null ? (
               <StatusDot tone="pending">
@@ -868,7 +934,12 @@ export function OverviewView() {
                 <StatusDot
                   tone={
                     enclave.data.key === "present"
-                      ? "live"
+                      ? // a key on disk is a fact, not attestation: green only
+                        // once the shared armed predicate holds AND the kill
+                        // switch is provably off (no green on a killed screen)
+                        hostLit
+                        ? "live"
+                        : "idle"
                       : enclave.data.key === "none"
                         ? "idle"
                         : "down"
@@ -913,8 +984,16 @@ export function OverviewView() {
                     b.healthy ? "text-text-2" : "text-text-3"
                   }`}
                 >
-                  <Dot tone={b.healthy ? "live" : "idle"} />
+                  {/* registration is configuration, never a live claim: the
+                      dot stays neutral and the state is said in words (the
+                      color-blind and the killed screen read the same) */}
+                  <Dot tone="idle" />
                   {browserDisplayName(b.key)}
+                  <span className="text-[11px] text-text-3">
+                    {b.healthy
+                      ? t("overview.browser_registered")
+                      : t("overview.browser_unregistered")}
+                  </span>
                 </span>
               ))}
             </div>
@@ -942,7 +1021,8 @@ export function OverviewView() {
               )}
               {clientRows.map((c) => (
                 <span key={c.name} className="inline-flex items-center gap-1.5 text-text-2">
-                  <Dot tone={serving ? "live" : "idle"} />
+                  {/* an allowlist entry proves nothing live: neutral dot */}
+                  <Dot tone="idle" />
                   {c.name}
                 </span>
               ))}
@@ -1000,10 +1080,14 @@ export function OverviewView() {
           trustMap
         )}
 
-        {connectReport !== undefined && <Mono>{connectReport}</Mono>}
+        {connectReport !== undefined && (
+          <div role="status">
+            <Mono>{connectReport}</Mono>
+          </div>
+        )}
 
         {guide && guideFlow}
-        {(lifecycle === "attested" || lifecycle === "killed") && controlRows}
+        {(lifecycle === "paired" || lifecycle === "killed") && controlRows}
 
         <ConfirmDialog
           open={releaseOpen}

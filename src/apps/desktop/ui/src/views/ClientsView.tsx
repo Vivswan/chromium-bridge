@@ -125,6 +125,7 @@ export function ClientsView() {
         <Button
           variant="primary"
           gated
+          pending={busy}
           className="flex-none"
           disabled={busy || name.trim() === "" || anchorValue.trim() === ""}
           onClick={() => setAddOpen(true)}
@@ -138,9 +139,11 @@ export function ClientsView() {
         </Consequence>
       </div>
       {addedBy !== undefined && (
-        <StatusDot tone="live" className="mt-2 text-xs">
-          {t("clients.add_done", [authLabel(addedBy)])}
-        </StatusDot>
+        <span role="status">
+          <StatusDot tone="idle" className="mt-2 text-xs">
+            {t("clients.add_done", [authLabel(addedBy)])}
+          </StatusDot>
+        </span>
       )}
     </>
   );
@@ -150,7 +153,7 @@ export function ClientsView() {
       title={t("nav.clients")}
       sub={t("clients.sub")}
       right={
-        <Pill tone={enforced && rows.length > 0 ? "live" : "idle"} dot className="tnum">
+        <Pill dot className="tnum">
           {t("clients.pill_count", [String(rows.length)])}
         </Pill>
       }
@@ -208,7 +211,7 @@ export function ClientsView() {
                   <tr key={c.name}>
                     <td>
                       <div className="flex items-center gap-[7px] text-[13px] font-semibold text-text-1">
-                        <Dot tone={enforced ? "live" : "idle"} />
+                        <Dot tone="idle" />
                         {c.name}
                       </div>
                     </td>
@@ -224,7 +227,7 @@ export function ClientsView() {
                     <td className="tnum whitespace-nowrap">
                       {new Date(c.addedUnix * 1000).toLocaleDateString()}
                     </td>
-                    <td style={{ textAlign: "right" }}>
+                    <td className="actions-cell">
                       <Button
                         variant="danger"
                         size="sm"
@@ -266,7 +269,9 @@ export function ClientsView() {
         )}
 
         <section className="anchor-legend" aria-label={t("clients.legend_title")}>
-          <SpecLabel className="col-span-full">{t("clients.legend_title")}</SpecLabel>
+          <SpecLabel as="h2" className="col-span-full">
+            {t("clients.legend_title")}
+          </SpecLabel>
           <ChipMono>team_id</ChipMono>
           <span>{t("clients.legend_team")}</span>
           <ChipMono>binary_hash</ChipMono>

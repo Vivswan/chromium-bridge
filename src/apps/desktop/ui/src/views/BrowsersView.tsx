@@ -87,7 +87,8 @@ export function BrowsersView() {
     if (!b.detected && b.code === "missing") return <Pill>{t("browsers.pill_not_detected")}</Pill>;
     switch (b.code) {
       case "ok":
-        return <Pill tone="live">{t("browsers.pill_registered")}</Pill>;
+        // registration is configuration on disk, not liveness: neutral
+        return <Pill>{t("browsers.pill_registered")}</Pill>;
       case "missing":
         return <Pill>{t("browsers.pill_unregistered")}</Pill>;
       case "foreign":
@@ -102,7 +103,7 @@ export function BrowsersView() {
       title={t("nav.browsers")}
       sub={t("browsers.sub")}
       right={
-        <Pill tone={registered > 0 ? "live" : "idle"} dot className="tnum">
+        <Pill dot className="tnum">
           {t("browsers.pill_count", [String(registered)])}
         </Pill>
       }
@@ -127,7 +128,7 @@ export function BrowsersView() {
                 <th scope="col">{t("browsers.col_state")}</th>
                 <th scope="col">{t("browsers.col_manifest")}</th>
                 <th scope="col">{t("browsers.col_pairing")}</th>
-                <th scope="col" style={{ textAlign: "right" }}>
+                <th scope="col" className="actions-cell">
                   {t("browsers.col_actions")}
                 </th>
               </tr>
@@ -161,9 +162,9 @@ export function BrowsersView() {
                           </button>
                         ) : (
                           <div className="name-wrap">
-                            <span style={{ width: 9, flex: "none" }} />
+                            <span className="w-[9px] flex-none" />
                             <span>
-                              <span className="browser-name" style={{ color: "var(--text-3)" }}>
+                              <span className="browser-name text-text-3">
                                 {browserDisplayName(b.key)}
                               </span>
                             </span>
@@ -187,7 +188,7 @@ export function BrowsersView() {
                         {expandable ? (
                           <>
                             <div className={`health-line${key === "present" ? "" : " off"}`}>
-                              <Dot tone={key === "present" ? "live" : "idle"} />
+                              <Dot tone="idle" />
                               {key === "present"
                                 ? t("browsers.pairing_key_present")
                                 : t("browsers.pairing_no_key")}
@@ -224,7 +225,6 @@ export function BrowsersView() {
                         )}
                         {action === "none" && b.healthy && (
                           <Button
-                            variant="ghost"
                             size="sm"
                             disabled={busy !== undefined}
                             onClick={() => {
@@ -280,6 +280,7 @@ export function BrowsersView() {
                                 variant="primary"
                                 size="sm"
                                 gated
+                                pending={busy === "pair"}
                                 disabled={busy !== undefined}
                                 onClick={() =>
                                   void enclaveAct("pair", () => api.enclavePair(false))
@@ -294,6 +295,7 @@ export function BrowsersView() {
                                   variant="ghost"
                                   size="sm"
                                   gated
+                                  pending={busy === "repair-key"}
                                   disabled={busy !== undefined}
                                   onClick={() =>
                                     void enclaveAct("repair-key", () => api.enclavePair(true))
@@ -360,7 +362,11 @@ export function BrowsersView() {
         </div>
 
         {error !== undefined && <ErrorNote>{error}</ErrorNote>}
-        {report !== undefined && <Mono>{report}</Mono>}
+        {report !== undefined && (
+          <div role="status">
+            <Mono>{report}</Mono>
+          </div>
+        )}
 
         <details className="disclosure">
           <summary>
