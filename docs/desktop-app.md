@@ -15,8 +15,10 @@ entitlement chain it rides on is
 ## Building and running
 
 ```sh
-just app-dev    # dev loop: builds the host, then Vite dev server + tauri dev
-just app-run    # build + sign + verify the real bundle, then launch it
+just app-dev      # dev loop: builds the host, then Vite dev server + tauri dev
+just app-run      # build + sign + verify the real bundle, then launch it
+just app-dmg      # build + sign the bundle, then wrap it in a verified .dmg
+just app-install  # copy the built app into /Applications
 ```
 
 `app-run` goes through `just desktop-bundle`, which builds the release host
@@ -25,6 +27,22 @@ the host, copies the extension into the app's Resources, stamps the helper
 Info.plist with the workspace version, signs inside-out, and re-verifies with
 `scripts/check-desktop-signing.ts`. It needs a live provisioning profile
 (free-tier profiles expire weekly; see ADR-0026 for the re-mint recipe).
+
+`app-dmg` runs the same pipeline and then packages the verified `.app` into
+`target/release/bundle/dmg/chromium-bridge-app-<version>-macos-arm64.dmg`,
+with the usual drag-to-/Applications layout. The image is created after the
+inside-out re-sign (Tauri's own dmg target would capture the app before the
+helper bundle exists), the image itself is codesigned, and the copy inside
+the mounted image is re-verified so the checks hold for the artifact that
+ships. `app-install` copies an already-built app into /Applications,
+replacing any previous install.
+
+Two limits of a free-certificate build, stated plainly: the app runs only on
+Macs the embedded provisioning profile lists (this machine, for a profile
+Xcode minted here), and it is not notarized, so Gatekeeper warns if the image
+is opened on another Mac. The release pipeline can build and publish the same
+`.dmg` once its signing secrets are configured; see
+[release.md](./release.md).
 
 In the dev loop the app is unsigned, so Secure Enclave operations depend on
 the sibling `target/debug/chromium-bridge` and your keychain's mood about

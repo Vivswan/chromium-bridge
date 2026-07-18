@@ -40,6 +40,25 @@ app-dev:
 app-run: desktop-bundle
     open "target/release/bundle/macos/Chromium Bridge.app"
 
+# Build + sign the app and wrap it in a signed, verified .dmg
+# (target/release/bundle/dmg/; the app inside the image is re-verified)
+app-dmg:
+    bun scripts/desktop-bundle.ts --dmg
+
+# Copy the built, signed app into /Applications (run desktop-bundle or
+# app-dmg first; replaces any existing install)
+app-install:
+    #!/usr/bin/env sh
+    set -eu
+    APP="target/release/bundle/macos/Chromium Bridge.app"
+    if [ ! -d "$APP" ]; then
+        echo "error: $APP not found; build it first: just desktop-bundle (or just app-dmg)" >&2
+        exit 1
+    fi
+    rm -rf "/Applications/Chromium Bridge.app"
+    ditto "$APP" "/Applications/Chromium Bridge.app"
+    echo "installed /Applications/Chromium Bridge.app"
+
 # Desktop UI: production build (also what `bunx tauri build` runs first)
 desktop-ui-build:
     bun run --cwd src/apps/desktop/ui build
