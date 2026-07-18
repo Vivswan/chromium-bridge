@@ -70,42 +70,57 @@ export function KillSwitchPanel() {
   const stateLine = () => {
     switch (view?.state) {
       case "alive":
-        return <span className="font-semibold">{t("kill.state_alive")}</span>;
+        return (
+          <span className="flex items-center gap-2 font-semibold">
+            <span className="status-dot live" />
+            {t("kill.state_alive")}
+          </span>
+        );
       case "killed":
-        return <span className="font-semibold text-danger">{t("kill.state_killed")}</span>;
+        return (
+          <span className="flex items-center gap-2 font-semibold text-danger">
+            <span className="status-dot down" />
+            {t("kill.state_killed")}
+          </span>
+        );
       case "unknown":
-        return <span className="font-semibold text-danger">{t("kill.state_unknown")}</span>;
+        return (
+          <span className="flex items-center gap-2 font-semibold text-danger">
+            <span className="status-dot down" />
+            {t("kill.state_unknown")}
+          </span>
+        );
       default:
-        return <span className="text-muted">{t("kill.state_unmirrored")}</span>;
+        return (
+          <span className="flex items-center gap-2 text-text-3">
+            <span className="status-dot" />
+            {t("kill.state_unmirrored")}
+          </span>
+        );
     }
   };
 
   return (
-    <div className="rounded-xl border border-edge p-3.5">
-      <div className="text-xs text-muted">{t("kill.desc")}</div>
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm">{stateLine()}</div>
-          {view?.at !== undefined && (
-            <div className="mt-0.5 text-[11px] text-faint">
-              {t("kill.updated", [new Date(view.at).toLocaleString()])}
-            </div>
-          )}
-        </div>
-        <Button
-          variant={killed ? "primary" : "danger"}
-          onClick={() => void toggle()}
-          disabled={busy}
-        >
-          {killed ? t("kill.release") : t("kill.engage")}
-        </Button>
+    <div className="flex items-start gap-3.5 py-1">
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px]">{stateLine()}</div>
+        <p className="consequence mt-1">{t("kill.desc")}</p>
+        <div className="mt-1 text-xs text-text-3">{t("kill.release_note")}</div>
+        {view?.at !== undefined && (
+          <div className="tnum mt-1.5 font-mono text-[11px] text-text-4">
+            {t("kill.updated", [new Date(view.at).toLocaleString()])}
+          </div>
+        )}
+        {view && !view.ok && view.error && (
+          <div className="mt-2 text-xs font-semibold text-danger">
+            {t("kill.failed", [view.error])}
+          </div>
+        )}
+        {actionError && <div className="mt-2 text-xs font-semibold text-danger">{actionError}</div>}
       </div>
-      {view && !view.ok && view.error && (
-        <div className="mt-2 text-xs font-semibold text-danger">
-          {t("kill.failed", [view.error])}
-        </div>
-      )}
-      {actionError && <div className="mt-2 text-xs font-semibold text-danger">{actionError}</div>}
+      <Button variant={killed ? "default" : "danger"} onClick={() => void toggle()} disabled={busy}>
+        {killed ? t("kill.release") : t("kill.engage")}
+      </Button>
     </div>
   );
 }
