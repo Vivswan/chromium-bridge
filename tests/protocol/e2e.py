@@ -163,7 +163,7 @@ def run_with_cli_presence(args, phrase="release", check=True, timeout=15, env=No
     Callers MUST guard with `enclave_key_present()` and skip when a key exists:
     the hardware rung raises a real Touch ID sheet the typed phrase cannot
     satisfy, and that path is exercised by the user runbook
-    (`just phase8-touchid-proof`), not headlessly. Returns a CompletedProcess;
+    (`just touchid-gates`), not headlessly. Returns a CompletedProcess;
     with check=True a non-zero exit raises."""
     import pty
 
@@ -803,7 +803,7 @@ def test_admin_control_frames():
         note("admin-frames test skipped: an Enclave key is enrolled, so "
              "pair-client would raise a real Touch ID prompt this automated "
              "run cannot answer. The hardware pairing path is covered by "
-             "`just phase8-touchid-proof`.")
+             "`just touchid-gates`.")
         return
     rundir = tempfile.mkdtemp(prefix="bb-admin-e2e-")
     env = dict(os.environ, XDG_RUNTIME_DIR=rundir,
@@ -895,7 +895,7 @@ def test_kill_switch_round_trip():
         note("kill-switch round-trip skipped: an Enclave key is enrolled, so "
              "the extension `kill_release` would raise a real Touch ID prompt "
              "this automated run cannot answer. The hardware unkill path is "
-             "covered by `just phase8-touchid-proof`.")
+             "covered by `just touchid-gates`.")
         return
     try:
         os.remove(LOCK)

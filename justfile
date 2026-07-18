@@ -73,8 +73,9 @@ desktop-touchid-proof: desktop-bundle
 # no key and fall to the interactive floor. Runs against your REAL runtime dir
 # - it engages and then releases the global kill switch, so run it when the
 # bridge is idle. The pair-client step trusts a throwaway client named
-# `phase8-proof`; it is removed again at the end.
-phase8-touchid-proof: desktop-bundle
+# `touchid-demo`; it is removed again at the end.
+# Demo the three Touch ID presence gates (per-action, client pairing, unkill).
+touchid-gates: desktop-bundle
     #!/usr/bin/env bash
     set -euo pipefail
     BIN="target/release/bundle/macos/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge"
@@ -83,9 +84,9 @@ phase8-touchid-proof: desktop-bundle
     "$BIN" presence-selftest
     echo
     echo "== 2/3 client pairing (granting harness capability) =="
-    echo "   expect a Touch ID prompt to trust 'phase8-proof':"
-    "$BIN" pair-client --name phase8-proof --hash "$(printf 'ab%.0s' {1..32})"
-    "$BIN" revoke-client --name phase8-proof
+    echo "   expect a Touch ID prompt to trust 'touchid-demo':"
+    "$BIN" pair-client --name touchid-demo --hash "$(printf 'ab%.0s' {1..32})"
+    "$BIN" revoke-client --name touchid-demo
     echo "   (revoked the throwaway client; revocation is friction-free by design)"
     echo
     echo "== 3/3 kill-switch release (restoring capability) =="
@@ -93,7 +94,7 @@ phase8-touchid-proof: desktop-bundle
     echo "   expect a Touch ID prompt to release the kill switch:"
     "$BIN" unkill
     echo
-    echo "phase8-touchid-proof: all three presence paths exercised."
+    echo "touchid-gates: all three presence paths exercised."
 
 # Format Rust sources
 fmt:
