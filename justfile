@@ -226,7 +226,7 @@ test-integration: build-release ext-build
 test: test-rust test-e2e
 
 # Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust)
-ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-gen check-envelope check-schemars-isolation
+ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-all-green check-gen check-envelope check-schemars-isolation
 
 # Register this checkout's release binary with your browsers (build + doctor --fix)
 install: build-release
@@ -255,6 +255,12 @@ check-extension-id:
 # Verify CJK text stays inside the zh locale files and translated docs
 check-cjk:
     bun scripts/check-cjk.ts
+
+# Every ci.yml job must be required by the all-green merge gate (or exempted
+# with a reason in the script)
+check-all-green:
+    bun scripts/check-all-green.ts
+    bun test scripts/check-all-green.test.ts
 
 # Pre-release gate: versions consistent + full CI green
 release: check-version check-extension-id ci
