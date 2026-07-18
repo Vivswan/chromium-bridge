@@ -88,7 +88,11 @@ export function SiteList() {
           />
           <Button onClick={() => void add()}>{t("common.add")}</Button>
         </div>
-        {note && <p className="m-0 mt-1.5 text-xs font-semibold text-danger">{note}</p>}
+        {note && (
+          <p role="alert" className="m-0 mt-1.5 text-xs font-semibold text-danger">
+            {note}
+          </p>
+        )}
       </div>
     </div>
   );
