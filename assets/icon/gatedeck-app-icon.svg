@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Gatedeck - macOS app icon (closed state)</title>
+  <!-- Apple 1024 icon canvas: 824x824 squircle tile centered with the
+       standard 100px transparent margin. Squircle is the common
+       superellipse approximation (corner control at 9% of tile).
+       Mark is drawn at 63% of tile width, nudged 10px above geometric
+       center for optical balance. The app icon always uses the closed
+       state. -->
+  <path d="M100 512 C100 174.2 174.2 100 512 100
+           C849.8 100 924 174.2 924 512
+           C924 849.8 849.8 924 512 924
+           C174.2 924 100 849.8 100 512 Z"
+        fill="#0e1116"/>
+  <path d="M323 642 Q512 264 701 642"
+        fill="none" stroke="#6b7a92" stroke-width="84"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M281 348 L512 348"
+        fill="none" stroke="#3fe081" stroke-width="56"
+        stroke-linecap="round"/>
+  <path d="M743 348 L512 348"
+        fill="none" stroke="#3fe081" stroke-width="56"
+        stroke-linecap="round"/>
+</svg>

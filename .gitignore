@@ -13,6 +13,12 @@
 /src/packages/core/fuzz/artifacts/
 /src/packages/core/fuzz/coverage/
 
+# Icon rasters rendered from the committed assets/icon/ SVGs by
+# scripts/gen-icons.ts (run by the extension and desktop builds) - build
+# artifacts, never committed
+/src/apps/extension/src/public/icons/
+/src/apps/desktop/icons/
+
 # Extension build output
 /src/apps/extension/dist/
 src/apps/extension/.wxt/

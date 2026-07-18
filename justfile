@@ -33,6 +33,7 @@ desktop-check:
 app-dev:
     #!/usr/bin/env sh
     set -eu
+    bun scripts/gen-icons.ts desktop
     cargo build
     cd src/apps/desktop && bunx tauri dev
 
@@ -68,11 +69,12 @@ desktop-ui-test:
     bun run --cwd src/apps/desktop/ui test
 
 # Desktop Rust crate: clippy + tests. Needs the UI dist (tauri's
-# generate_context! embeds it), hence the dependency. Not part of `just ci`:
-# the crate is deliberately not a default workspace member, and compiling
-# Tauri needs platform GUI toolchains (WebKitGTK on Linux); CI runs this on
-# macOS in the dedicated desktop job.
-desktop-check-rust: desktop-ui-build
+# generate_context! embeds it) and the generated app icon (tauri-build reads
+# icons/icon.png at compile time), hence the dependencies. Not part of
+# `just ci`: the crate is deliberately not a default workspace member, and
+# compiling Tauri needs platform GUI toolchains (WebKitGTK on Linux); CI runs
+# this on macOS in the dedicated desktop job.
+desktop-check-rust: desktop-ui-build gen-icons
     cargo clippy -p chromium-bridge-desktop --all-targets -- -D warnings
     cargo test -p chromium-bridge-desktop
 
@@ -180,7 +182,13 @@ test-e2e: build-release
 js-deps:
     bun install
 
-# Build the extension bundle (src/ -> dist/)
+# Render the extension + desktop icon rasters from the assets/icon/ SVGs
+# (build artifacts, gitignored; the extension and desktop builds run this
+# themselves via scripts/gen-icons.ts)
+gen-icons:
+    bun scripts/gen-icons.ts
+
+# Build the extension bundle (src/ -> dist/; generates icons first)
 ext-build:
     bun run --cwd src/apps/extension build
 

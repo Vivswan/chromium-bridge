@@ -402,6 +402,9 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
+      # tauri-build reads icons/icon.png at compile time; the rasters are
+      # generated from the committed SVGs, never checked in.
+      - run: bun scripts/gen-icons.ts desktop
       - run: bun run --cwd src/apps/desktop/ui build
       - run: bun run --cwd src/apps/desktop/ui test
       - run: cargo clippy -p chromium-bridge-desktop --all-targets -- -D warnings
