@@ -4,7 +4,7 @@
 // denied workspace-wide; this module is one of the audited exceptions.
 #![allow(unsafe_code)]
 
-use core_foundation::base::{TCFType, ToVoid};
+use core_foundation::base::{CFType, TCFType, ToVoid};
 use core_foundation::string::CFString;
 use security_framework::access_control::{ProtectionMode, SecAccessControl};
 use security_framework::item::{
@@ -77,7 +77,17 @@ pub(super) fn is_secure_enclave_key(key: &SecKey) -> bool {
     let Some(v) = attrs.find(unsafe { kSecAttrTokenID }.to_void()) else {
         return false;
     };
-    let token = unsafe { CFString::wrap_under_get_rule(v.cast()) };
+    // SAFETY: get-rule wrap (CFRetain only, released on drop) of the borrowed
+    // dictionary value, as the type-agnostic CFType - no assumption yet about
+    // the value's concrete type.
+    let token = unsafe { CFType::wrap_under_get_rule(*v) };
+    // The Keychain contract says kSecAttrTokenID's value is a CFString;
+    // verify with a checked downcast (CFGetTypeID) rather than trust it. A
+    // non-string value fails closed as "not an Enclave key".
+    let Some(token) = token.downcast::<CFString>() else {
+        return false;
+    };
+    // SAFETY: get-rule wrap of a non-null framework constant CFString.
     let expected = unsafe { CFString::wrap_under_get_rule(kSecAttrTokenIDSecureEnclave) };
     token == expected
 }
