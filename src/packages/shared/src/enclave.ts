@@ -46,7 +46,9 @@ export type EnclaveProofFrame = z.infer<typeof EnclaveProofFrameSchema>;
 
 export const EnclaveErrorFrameSchema = z.looseObject({
   type: z.literal("enclave_error"),
-  reason: z.string().optional(),
+  // Required: the host always names its denial (EnclaveControl::EnclaveError
+  // carries a non-optional reason; the parity gate holds this in sync).
+  reason: z.string(),
 });
 
 export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
@@ -79,9 +81,10 @@ export type PresenceProofFrame = z.infer<typeof PresenceProofFrameSchema>;
 
 // Stable reasons: the enclave reason codes plus "bridge_killed" and "busy".
 // Every reason is a denial; there is no fallback surface (no-downgrade rule).
+// Required, like enclave_error: the host always names its denial.
 export const PresenceErrorFrameSchema = z.looseObject({
   type: z.literal("presence_error"),
-  reason: z.string().optional(),
+  reason: z.string(),
 });
 
 export type PresenceErrorFrame = z.infer<typeof PresenceErrorFrameSchema>;
@@ -107,7 +110,9 @@ export const TrustedClientSchema = z.looseObject({
     kind: z.enum(["hash", "team_id"]),
     value: z.string().min(1),
   }),
-  added_unix: z.number().optional(),
+  // Unix seconds: u64 on the host side, hardened to a JS-safe non-negative
+  // integer here (same idiom as the envelope id). Absent reads as unset.
+  added_unix: z.int().nonnegative().optional(),
 });
 
 export type TrustedClient = z.infer<typeof TrustedClientSchema>;

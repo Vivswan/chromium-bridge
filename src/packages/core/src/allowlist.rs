@@ -68,6 +68,7 @@ const ALLOWLIST_MAX_BYTES: usize = 256 * 1024;
 /// The authorization key of an allowlist entry: the unforgeable thing a
 /// harness's attested identity must match. Never the name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     content = "value",
@@ -89,6 +90,7 @@ pub enum Anchor {
 /// One trusted client. The `name` is a validated, human-facing label for the
 /// user and the audit log; `anchor` is the authorization key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ClientEntry {
     /// Human-facing label (validated like a browser label). NOT the
