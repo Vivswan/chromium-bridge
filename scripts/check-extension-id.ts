@@ -90,9 +90,9 @@ if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(NATIVE_HOST_ID)) {
 // host access, and no manifest-declared content scripts. This catches drift
 // between wxt.config.ts and what the build actually emits (the config-level
 // assertions live in src/apps/extension/tests/shared/manifest.test.ts). `just ci`
-// builds before this check runs; a standalone run without dist/ skips it
-// loudly rather than failing a build-free environment.
-const builtManifestPath = resolve(root, "src/apps/extension/dist/chrome-mv3/manifest.json");
+// builds before this check runs; a standalone run without build/extension/
+// skips it loudly rather than failing a build-free environment.
+const builtManifestPath = resolve(root, "build/extension/chrome-mv3/manifest.json");
 if (existsSync(builtManifestPath)) {
   const built = JSON.parse(readFileSync(builtManifestPath, "utf8")) as {
     key?: unknown;
@@ -131,14 +131,12 @@ if (existsSync(builtManifestPath)) {
     problems.push("built manifest declares content_scripts; injection must stay runtime-only");
   }
   if (problems.length > 0) {
-    for (const p of problems) console.error(`extension/dist manifest: ${p}`);
+    for (const p of problems) console.error(`built extension manifest: ${p}`);
     process.exit(1);
   }
   console.log("built manifest security surface verified (key, permissions, host access)");
 } else {
-  console.log(
-    "note: src/apps/extension/dist/chrome-mv3 not built; skipped built-manifest verification",
-  );
+  console.log("note: build/extension/chrome-mv3 not built; skipped built-manifest verification");
 }
 
 // SINGLE SOURCE: identity.rs is the only Rust file allowed to DEFINE the

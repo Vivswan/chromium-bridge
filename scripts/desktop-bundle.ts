@@ -173,6 +173,8 @@ run(["cargo", "build", "--release", "-p", "chromium-bridge"]);
 run(["bun", "run", "--cwd", "src/apps/extension", "build"]);
 run(["bunx", "tauri", "build"], desktop);
 
+// tauri build writes its bundle under the cargo target dir; that tree is a
+// build intermediate here - the signed deliverable is copied to build/app below.
 const app = resolve(root, "target/release/bundle/macos/Chromium Bridge.app");
 const helper = resolve(app, "Contents/Helpers/chromium-bridge.app");
 mkdirSync(resolve(helper, "Contents/MacOS"), { recursive: true });
@@ -197,8 +199,9 @@ copyFileSync(
 
 // Bundle the unpacked extension for the app's "Load unpacked" guidance
 // (Resources are sealed by the outer signature below). WXT emits the
-// loadable extension (the directory with manifest.json) at dist/chrome-mv3.
-const extensionDist = resolve(root, "src/apps/extension/dist/chrome-mv3");
+// loadable extension (the directory with manifest.json) at
+// build/extension/chrome-mv3.
+const extensionDist = resolve(root, "build/extension/chrome-mv3");
 const extensionDest = resolve(app, "Contents/Resources/extension");
 rmSync(extensionDest, { recursive: true, force: true });
 cpSync(extensionDist, extensionDest, { recursive: true });
@@ -233,6 +236,14 @@ run([
   app,
 ]);
 
+// The deliverable lives in build/app/ (the unified build-output folder);
+// target/ stays a compiler cache. `ditto` preserves the signature, and the
+// verification below runs on the COPY - the artifact users actually launch.
+const appDeliverable = resolve(root, "build/app/Chromium Bridge.app");
+rmSync(appDeliverable, { recursive: true, force: true });
+mkdirSync(resolve(root, "build/app"), { recursive: true });
+run(["ditto", app, appDeliverable]);
+
 run(["bun", resolve(root, "scripts/check-desktop-signing.ts")]);
 
 // --dmg: wrap the verified .app in a distributable disk image. `ditto`
@@ -252,7 +263,7 @@ run(["bun", resolve(root, "scripts/check-desktop-signing.ts")]);
 // without an automation-capable UI session).
 if (wantDmg) {
   const arch = process.arch === "arm64" ? "arm64" : process.arch;
-  const dmgDir = resolve(root, "target/release/bundle/dmg");
+  const dmgDir = resolve(root, "build/dmg");
   const stage = resolve(dmgDir, "stage");
   const mount = resolve(dmgDir, "mnt");
   const dmg = resolve(dmgDir, `chromium-bridge-app-${version}-macos-${arch}.dmg`);
@@ -268,7 +279,7 @@ if (wantDmg) {
   }
   rmSync(dmgDir, { recursive: true, force: true });
   mkdirSync(stage, { recursive: true });
-  run(["ditto", app, resolve(stage, "Chromium Bridge.app")]);
+  run(["ditto", appDeliverable, resolve(stage, "Chromium Bridge.app")]);
   symlinkSync("/Applications", resolve(stage, "Applications"));
 
   if (plainDmg) {

@@ -15,7 +15,9 @@ import { MANIFEST_PERMISSIONS } from "./src/lib/shared/manifest-permissions";
 
 export default defineConfig({
   srcDir: "src",
-  outDir: "dist",
+  // All build deliverables land in the repo-root build/ folder; WXT appends
+  // the browser target, so the loadable extension is build/extension/chrome-mv3.
+  outDir: "../../../build/extension",
   publicDir: "src/public",
   // No magic: every import is written out, so grep and tsc see the truth.
   imports: false,

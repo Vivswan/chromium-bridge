@@ -3,10 +3,10 @@
   "productName": "Chromium Bridge",
   "identifier": "com.vivswan.chromium-bridge",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": { "script": "bun run dev", "cwd": "./ui" },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
-    "frontendDist": "./ui/dist"
+    "beforeBuildCommand": { "script": "bun run build", "cwd": "./ui" },
+    "frontendDist": "../../../build/desktop-ui"
   },
   "app": {
     "withGlobalTauri": false,
