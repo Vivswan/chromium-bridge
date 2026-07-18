@@ -179,9 +179,175 @@
 body {
   margin: 0;
   font-family: var(--ui);
+  font-size: 14px;
+  line-height: 1.45;
   background: var(--bg);
   color: var(--text-1);
   -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- shared Control Tower motifs ----------
+   Class components (no custom-property declarations here: the token parity
+   test pins those to the desktop stylesheet). */
+
+/* status pill: uppercase mono capsule, status only */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid var(--edge-strong);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--text-2);
+}
+.pill-live {
+  color: var(--live);
+  border-color: var(--live-edge);
+  background: var(--live-dim);
+}
+.pill-pending {
+  color: var(--pending);
+  border-color: var(--pending-edge);
+  background: var(--pending-dim);
+}
+.pill-danger {
+  color: var(--danger);
+  border-color: var(--danger-edge);
+  background: var(--danger-dim);
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+  background: var(--text-4);
+}
+.status-dot.live {
+  background: var(--live);
+  box-shadow: 0 0 6px var(--live-halo);
+}
+.status-dot.pending {
+  background: var(--pending);
+  box-shadow: 0 0 6px var(--pending-halo);
+}
+.status-dot.down {
+  background: var(--danger);
+}
+
+/* the trust pipeline at micro scale: three gates as dots */
+.pipeline-micro {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+}
+.pipeline-micro .p-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-4);
+  flex: none;
+}
+.pipeline-micro .p-line {
+  width: 9px;
+  height: 1px;
+  background: var(--edge-strong);
+  flex: none;
+}
+.pipeline-micro .p-dot.on {
+  background: var(--live);
+  box-shadow: 0 0 5px var(--live-halo);
+}
+.pipeline-micro .p-dot.pending {
+  background: var(--pending);
+  box-shadow: 0 0 5px var(--pending-halo);
+}
+.pipeline-micro .p-dot.down {
+  background: var(--danger);
+}
+.pipeline-micro .p-line.on {
+  background: var(--live-edge);
+}
+
+/* identity material (fingerprints, host ids, origins, tool names): always mono */
+.chip-mono {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+/* mono uppercase section label */
+.section-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* the one-line plain-language consequence under a control.
+   Neutral ink on purpose: amber stays reserved for pending states. */
+.consequence {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+.consequence strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+/* exact payloads and config, always mono; the confirm window's only box */
+.code-block {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-1);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-md);
+  overflow: auto;
+}
+
+.kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border: 1px solid var(--edge-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  padding: 1px 5px;
+  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: reduce) {
