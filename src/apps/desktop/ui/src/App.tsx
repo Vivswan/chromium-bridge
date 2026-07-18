@@ -35,6 +35,7 @@ export function App() {
   const setView = useAppStore((s) => s.setView);
   const status = useAppStore((s) => s.status);
   const refreshStatus = useAppStore((s) => s.refreshStatus);
+  const setReleasedBy = useAppStore((s) => s.setReleasedBy);
   const [killBusy, setKillBusy] = useState(false);
   const [killError, setKillError] = useState<string>();
 
@@ -42,10 +43,16 @@ export function App() {
   // event-driven alternative to polling for a control panel).
   useEffect(() => {
     void refreshStatus();
-    const onFocus = () => void refreshStatus();
+    const onFocus = () => {
+      // a refocus may follow CLI activity this app never observed, so a
+      // prior release note may not describe the latest release - drop it.
+      // Exception: focus churn from our own release flow's Touch ID sheet.
+      if (useAppStore.getState().releaseInFlight === 0) setReleasedBy(undefined);
+      void refreshStatus();
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [refreshStatus]);
+  }, [refreshStatus, setReleasedBy]);
 
   const engaged = status?.kill.state === "engaged";
 
@@ -59,6 +66,9 @@ export function App() {
     }
     setKillBusy(true);
     setKillError(undefined);
+    // engaging invalidates any prior "released via X" note, even if the
+    // status refresh below fails and leaves a stale kill state cached
+    setReleasedBy(undefined);
     try {
       await api.killEngage();
     } catch (err) {

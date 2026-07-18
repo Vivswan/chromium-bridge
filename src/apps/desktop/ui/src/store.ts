@@ -13,6 +13,19 @@ interface AppState {
   status: BridgeStatus | undefined;
   statusError: string | undefined;
   refreshStatus: () => Promise<void>;
+  /** Auth method from the last successful kill release. Shared so that any
+   * path that re-engages the switch (Overview or sidebar) can clear it - a
+   * stale "released" note under an engaged switch would be a false claim. */
+  releasedBy: string | undefined;
+  setReleasedBy: (releasedBy: string | undefined) => void;
+  /** Count of this app's own in-flight release flows (Touch ID sheet up
+   * through the follow-up refresh): their focus churn must not be mistaken
+   * for "user came back after possible CLI activity". A count, not a flag,
+   * so an overlapping flow or a view unmount cannot end suppression early;
+   * the host presence-gates every release regardless of what the UI shows. */
+  releaseInFlight: number;
+  beginRelease: () => void;
+  endRelease: () => void;
 }
 
 // Overlapping refreshes (startup, focus, post-action) must not let a slower,
@@ -24,11 +37,24 @@ export const useAppStore = create<AppState>((set) => ({
   setView: (view) => set({ view }),
   status: undefined,
   statusError: undefined,
+  releasedBy: undefined,
+  setReleasedBy: (releasedBy) => set({ releasedBy }),
+  releaseInFlight: 0,
+  beginRelease: () => set((state) => ({ releaseInFlight: state.releaseInFlight + 1 })),
+  endRelease: () => set((state) => ({ releaseInFlight: Math.max(0, state.releaseInFlight - 1) })),
   refreshStatus: async () => {
     const mySeq = ++statusSeq;
     try {
       const status = await api.bridgeStatus();
-      if (statusSeq === mySeq) set({ status, statusError: undefined });
+      if (statusSeq === mySeq) {
+        set((state) => ({
+          status,
+          statusError: undefined,
+          // an observed non-off switch invalidates any prior release note:
+          // it must not resurface after a later (e.g. CLI) release
+          releasedBy: status.kill.state === "off" ? state.releasedBy : undefined,
+        }));
+      }
     } catch (err) {
       if (statusSeq === mySeq) set({ statusError: errorText(err) });
     }
