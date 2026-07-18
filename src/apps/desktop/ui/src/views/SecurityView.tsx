@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import {
+  ChipMono,
   Consequence,
   Dot,
   ErrorNote,
@@ -11,28 +13,46 @@ import {
 import { Button } from "@/components/ui/button";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
+import { isArmed } from "@/lib/armed";
 import { api } from "@/lib/tauri";
 import { useAppStore } from "@/store";
 
 // The Security screen shows policy as it is enforced TODAY. Client
 // admission and the presence gates are host-side facts; capability grants
 // and per-tool confirmation policy still live in the extension (they move
-// host-side in a later protocol phase), so those sections carry a quiet
+// host-side in a later protocol phase), so that section carries a quiet
 // pointer instead of dead controls - a toggle that does nothing is a lie.
 export function SecurityView() {
   const { t } = useI18n();
   const status = useAppStore((s) => s.status);
+  const statusFresh = useAppStore((s) => s.statusFresh);
   const setView = useAppStore((s) => s.setView);
   const enclave = useAsync(api.enclaveStatus);
   const clients = useAsync(api.clientsList);
 
+  // status refreshes on focus (App.tsx); the enclave/clients reads behind
+  // the armed claim and the admission row must not lag it
+  useEffect(() => {
+    const onFocus = () => {
+      enclave.reload();
+      clients.reload();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [enclave.reload, clients.reload]);
+
   const keyPresent = enclave.data?.key === "present";
-  // "armed" means more than a key existing: the presence policy must be
-  // enrolled, or approvals fall back to the in-app confirm dialog.
-  const armed = keyPresent && enclave.data?.policy?.enrolled === true;
+  // the ONE armed/attested predicate, shared with OverviewView: key present,
+  // presence policy enrolled, and reads that actually succeeded
+  const armed = isArmed(enclave, statusFresh);
   const enforced = clients.data?.posture === "enforced";
   const killState = status?.kill.state;
   const engaged = killState === "engaged";
+
+  // Without enclave hardware enrolled, the presence proof degrades to the
+  // in-app confirm dialog (Floor::AppConfirm): the chip must say which
+  // mechanism actually answers, not overstate the hardware.
+  const presenceChip = armed ? <TouchIdChip /> : <ChipMono>{t("auth.app_confirm")}</ChipMono>;
 
   return (
     <ViewShell
@@ -43,7 +63,8 @@ export function SecurityView() {
         enclave.data === undefined ? (
           <Pill>{t("common.loading")}</Pill>
         ) : armed ? (
-          <Pill tone="live">
+          // a stored policy label, not a live signal: neutral ink
+          <Pill>
             <TouchIdIcon />
             {t("security.pill_armed")}
           </Pill>
@@ -54,7 +75,9 @@ export function SecurityView() {
         )
       }
     >
-      <div className="scroll">
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the scroll pane must be keyboard-reachable (WKWebView does not focus scrollers itself) */}
+      {/* biome-ignore lint/a11y/useSemanticElements: role=region names the focusable scroll pane */}
+      <div className="scroll" tabIndex={0} role="region" aria-label={t("nav.security")}>
         {enclave.error !== undefined && <ErrorNote>{enclave.error}</ErrorNote>}
         {clients.error !== undefined && <ErrorNote>{clients.error}</ErrorNote>}
 
@@ -104,7 +127,7 @@ export function SecurityView() {
               <div className="policy-info">
                 <div className="policy-name">
                   {t("security.presence_release_name")}
-                  <TouchIdChip />
+                  {presenceChip}
                 </div>
                 <Consequence>
                   {t("security.presence_release_body_1")}{" "}
@@ -119,7 +142,7 @@ export function SecurityView() {
               <div className="policy-info">
                 <div className="policy-name">
                   {t("security.presence_trust_name")}
-                  <TouchIdChip />
+                  {presenceChip}
                 </div>
                 <Consequence>
                   {t("security.presence_trust_body_1")}{" "}
@@ -134,7 +157,7 @@ export function SecurityView() {
               <div className="policy-info">
                 <div className="policy-name">
                   {t("security.presence_pair_name")}
-                  <TouchIdChip />
+                  {presenceChip}
                 </div>
                 <Consequence>{t("security.presence_pair_body")}</Consequence>
               </div>
@@ -145,31 +168,32 @@ export function SecurityView() {
           </div>
         </section>
 
-        <section className="zone" aria-label={t("security.grants_title")}>
+        {/* grants and per-tool confirmation policy are one honest pointer,
+            not two headed sections with the same body */}
+        <section className="zone" aria-label={t("security.managed_title")}>
           <div className="zone-head">
-            <SpecLabel as="h2">{t("security.grants_title")}</SpecLabel>
-          </div>
-          <Consequence className="quiet">{t("security.managed_in_extension")}</Consequence>
-        </section>
-
-        <section className="zone" aria-label={t("security.confirm_title")}>
-          <div className="zone-head">
-            <SpecLabel as="h2">{t("security.confirm_title")}</SpecLabel>
+            <SpecLabel as="h2">{t("security.managed_title")}</SpecLabel>
           </div>
           <Consequence className="quiet">{t("security.managed_in_extension")}</Consequence>
         </section>
       </div>
 
       <div className="kill-note" role="note">
-        <Dot tone={killState === undefined || killState === "off" ? "idle" : "down"} />
+        <Dot
+          tone={
+            killState === undefined ? "idle" : killState === "off" && statusFresh ? "idle" : "down"
+          }
+        />
         <span>
           {killState === undefined
             ? t("common.loading")
             : engaged
               ? t("security.kill_note_engaged")
-              : killState === "off"
+              : killState === "off" && statusFresh
                 ? t("security.kill_note_off")
-                : t("overview.kill_unreadable_state")}{" "}
+                : // unreadable, or a snapshot the latest refresh failed to
+                  // renew: claim nothing (fail closed)
+                  t("overview.kill_unreadable_state")}{" "}
           <strong className="font-semibold text-text-1">{t("security.kill_note_release")}</strong>
         </span>
         <Button variant="ghost" onClick={() => setView("overview")}>
