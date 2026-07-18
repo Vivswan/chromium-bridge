@@ -87,6 +87,7 @@ choices do not get an ADR.
 | [0029](./adr/0029-desktop-app-management-surface.md) | The desktop app as a management surface | Accepted |
 | [0030](./adr/0030-global-kill-switch-and-audit.md) | Global kill switch and the audit trail | Accepted |
 | [0031](./adr/0031-touch-id-confirmations-and-presence-grants.md) | Touch ID confirmations and presence-gated grants | Accepted |
+| [0032](./adr/0032-host-owned-policy-settings.md) | Host-owned policy settings and paired language sync | Accepted |
 
 ## ADR writing conventions
 
