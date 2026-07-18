@@ -8,6 +8,7 @@ import { browser } from "wxt/browser";
 import { maskErrorMessage } from "../shared/masking";
 import * as auditLog from "./audit-log";
 import * as clients from "./clients";
+import * as presence from "./confirm/presence";
 import { dispatch } from "./dispatch";
 import {
   attachPort,
@@ -40,13 +41,15 @@ export function connectNative() {
     port.onMessage.addListener(onNativeMessage);
     port.onDisconnect.addListener(onNativeDisconnect);
     // Hand the enrollment ceremony (ADR-0021), the trusted-client admin
-    // exchange (ADR-0025), and the kill-switch/audit surfaces (ADR-0030) the
-    // fresh port. Enrollment decides whether this connect needs a pairing
-    // challenge or a pending host-key deletion.
+    // exchange (ADR-0025), the kill-switch/audit surfaces (ADR-0030), and
+    // the per-action presence gate (ADR-0031) the fresh port. Enrollment
+    // decides whether this connect needs a pairing challenge or a pending
+    // host-key deletion.
     attachPort(postFrame);
     clients.attachPort(postFrame);
     kill.attachPort(postFrame);
     auditLog.attachPort(postFrame);
+    presence.attachPort(postFrame);
     // Pull the kill state on every connect (ADR-0030): this is what clears a
     // stale "killed" mirror after a CLI unkill that happened while the SW
     // slept (the host pushes transitions and bad startup states, but the
@@ -80,6 +83,7 @@ function onNativeDisconnect(_p: Browser.runtime.Port) {
   clients.detachPort();
   kill.detachPort();
   auditLog.detachPort();
+  presence.detachPort();
   const err = browser.runtime.lastError;
   console.warn("[bb] native host disconnected:", err?.message || "unknown");
   // Chrome kills the host process when the Port drops. Reconnect so a fresh
@@ -115,6 +119,12 @@ function onNativeMessage(msg: unknown) {
   // SW-only mirror the request gate reads.
   if (kill.isKillStatusFrame(msg)) {
     void kill.handleKillFrame(msg);
+    return;
+  }
+  // Per-action presence answers (ADR-0031): the signed approval (or refusal)
+  // for the confirmation round the presence provider has outstanding.
+  if (presence.isPresenceFrame(msg)) {
+    presence.handlePresenceFrame(msg);
     return;
   }
   // Everything else must be a well-formed BridgeReq: envelope shape, a known

@@ -8,10 +8,11 @@
 // from extension pages. A content script or page script can therefore
 // neither read a pending confirmation nor answer one.
 //
-// Phase 8 seam: ConfirmKind "eval" and "upload" are the two kinds whose
-// authorization will move to the host's Secure-Enclave user-presence gate
-// (Touch ID). The surface stays; only the approval mechanism behind it
-// changes (see lib/background/confirm/provider.ts in the extension).
+// Phase 8 (ADR-0031): ConfirmKind "eval" and "upload" are the two kinds whose
+// authorization moves to the host's Secure-Enclave user-presence gate
+// (Touch ID) on a capable, enrolled device. The surface stays as a
+// display-only window; `hardware: true` marks such a payload, and the
+// service refuses a window-side approval for it - the tap is the approval.
 
 import { z } from "zod";
 
@@ -39,6 +40,11 @@ export const ConfirmPayloadSchema = z.strictObject({
   /** Auto-deny deadline, ms since epoch. The window renders a countdown and
    * the service worker enforces it regardless. */
   deadline: z.int().positive(),
+  /** ADR-0031: approval comes from the host's Enclave user-presence tap, not
+   * the window. The window renders display-only (no Allow button) and the
+   * service refuses a window-side approval; denial stays window-reachable
+   * (removing capability is always friction-free). */
+  hardware: z.boolean().optional(),
 });
 
 export type ConfirmPayload = z.infer<typeof ConfirmPayloadSchema>;

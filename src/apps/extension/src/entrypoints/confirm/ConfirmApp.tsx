@@ -83,6 +83,10 @@ export function ConfirmApp() {
   }
 
   const warnKey = WARNING_KEY[payload.kind];
+  // ADR-0031: a hardware-gated confirmation renders display-only. Approval
+  // is the Touch ID tap on the host's system prompt (the service refuses a
+  // window-side approval); Deny stays - removing capability is friction-free.
+  const hardware = payload.hardware === true;
   return (
     <div className="flex min-h-screen flex-col p-5">
       <h1 className="mb-0.5 text-base font-bold text-danger-strong">{t("confirm.title")}</h1>
@@ -93,14 +97,17 @@ export function ConfirmApp() {
         {payload.detail}
       </pre>
       {warnKey && <div className="mb-3 text-xs text-danger-strong">{t(warnKey)}</div>}
+      {hardware && <div className="mb-3 text-xs font-semibold">{t("confirm.touchid_wait")}</div>}
       <div className="mb-3 text-xs text-muted">{t("confirm.countdown", [String(left)])}</div>
       <div className="flex justify-end gap-2.5">
         <Button autoFocus onClick={() => void resolve(payload.id, false)}>
           {t("confirm.deny")}
         </Button>
-        <Button variant="danger" disabled={!armed} onClick={() => void resolve(payload.id, true)}>
-          {t("confirm.allow")}
-        </Button>
+        {!hardware && (
+          <Button variant="danger" disabled={!armed} onClick={() => void resolve(payload.id, true)}>
+            {t("confirm.allow")}
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -22,6 +22,7 @@ describe("DEFAULTS", () => {
         "hostReverifyMs",
         "pageEvalEnabled",
         "requireEnrollment",
+        "touchIdConfirm",
         "uiLanguage",
         "warnPreciseSnapshot",
       ].sort(),
@@ -42,6 +43,10 @@ describe("DEFAULTS", () => {
     // Periodic host re-verification is opt-in; 0 keeps the session-granularity
     // default (verify at pairing and on demand only).
     expect(DEFAULTS.hostReverifyMs).toBe(0);
+    // Per-action Touch ID confirmations (ADR-0031) default ON; they take
+    // effect only on a capable, enrolled device, and opting out falls back to
+    // the off-DOM window confirmation.
+    expect(DEFAULTS.touchIdConfirm).toBe(true);
     // Display language defaults to English on every surface; browser-locale
     // matching ("auto") and Chinese are explicit choices.
     expect(DEFAULTS.uiLanguage).toBe("en");

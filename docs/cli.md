@@ -17,7 +17,8 @@
 | `chromium-bridge doctor --fix` | repair | Repairs (or first-registers) the native-messaging manifests for your Chromium browsers. The only mutating form of doctor. |
 | `chromium-bridge uninstall` | removal | Removes exactly the registrations this project wrote, nothing else. |
 | `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release ([ADR-0030](./adr/0030-global-kill-switch-and-audit.md)). |
-| `chromium-bridge unkill` | kill switch | Releases the kill switch, after an interactive confirmation on the terminal. Refuses a piped stdin, and refuses if the state cannot be read (see [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record)). |
+| `chromium-bridge unkill` | kill switch | Releases the kill switch, after proof of user presence: a Touch ID tap on an enrolled Mac ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)), otherwise an interactive confirmation on the terminal. Refuses a piped stdin, and refuses if the state cannot be read (see [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record)). |
+| `chromium-bridge presence-selftest` | diagnostic | Raises one per-action user-presence prompt and reports the result ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)). Read-only; the same Enclave signing the `page_eval`/`page_upload` gate uses, so you can see the Touch ID prompt without a browser. |
 | `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
 | `chromium-bridge --help` | help | Usage information. |
 
@@ -38,15 +39,16 @@ MCP client from driving every connected browser, at once.
 
 Nothing releases the switch on its own. `chromium-bridge unkill` (or the
 options-page toggle) is the only way back, and releasing demands proof of
-user presence ([ADR-0030](./adr/0030-global-kill-switch-and-audit.md)): once
-Phase 8 wires LocalAuthentication this is Touch ID; until then `unkill` asks
-you to type an explicit confirmation on a real terminal, and refuses outright
-when its stdin is a pipe, so no script or background program can quietly
-reopen the bridge through the CLI. The options-page release carries the same
-floor as its own confirmation dialog. Every release attempt is audited with
-the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`,
-`auth=extension_confirm`), whether it was granted, refused at the presence
-gate, or refused by an unwritable record after presence passed.
+user presence ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)):
+on an enrolled Mac this is a Secure Enclave Touch ID tap, and where no
+Enclave key exists `unkill` asks you to type an explicit confirmation on a
+real terminal, and refuses outright when its stdin is a pipe, so no script or
+background program can quietly reopen the bridge through the CLI. The
+options-page release carries the same floor as its own confirmation dialog.
+Every release attempt is audited with the auth path that decided it
+(`auth=touch_id`, `auth=cli_confirm`, `auth=extension_confirm`,
+`auth=app_confirm`), whether it was granted, refused at the presence gate, or
+refused by an unwritable record after presence passed.
 
 If either command reports that the revocation record is unreadable, see the
 recovery section in

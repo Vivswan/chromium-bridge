@@ -28,6 +28,7 @@
 //! frame in front of the extension.
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -211,13 +212,14 @@ fn kill_status_reply() -> AdminControl {
 /// state, which the extension's SW-only mirror adopts.
 ///
 /// Releasing runs the user-presence ladder first ([`crate::presence`]) with
-/// the extension floor: this process cannot raise a prompt of its own (stdin
-/// and stdout are the native-messaging protocol), so pre-Phase-8 the options
-/// page's explicit confirmation dialog IS the interactive floor, attested by
-/// the channel that delivered the frame (`allowed_origins` pins the
-/// extension; the #32 sender gate pins its pages). Once Phase 8 wires
-/// LocalAuthentication, the same call raises Touch ID host-side, and a
-/// hardware refusal keeps the bridge killed (`ok: false`, audited).
+/// the extension floor: this process cannot raise a text prompt of its own
+/// (stdin and stdout are the native-messaging protocol), so where no Enclave
+/// key exists the options page's explicit confirmation dialog IS the
+/// interactive floor, attested by the channel that delivered the frame
+/// (`allowed_origins` pins the extension; the #32 sender gate pins its
+/// pages). On an enrolled Mac the same call raises a Secure Enclave Touch ID
+/// prompt host-side, and a hardware refusal keeps the bridge killed
+/// (`ok: false`, audited).
 fn handle_kill_transition(engage: bool) -> AdminControl {
     let res = if engage {
         crate::kill::engage(crate::audit::Surface::Extension)
@@ -439,6 +441,115 @@ fn spawn_revocation_watch(out: Arc<Mutex<BufWriter<io::Stdout>>>, exit_on_unkill
     });
 }
 
+// ---- ADR-0031: per-action user-presence signing ------------------------------
+
+/// Whether a presence-signing round is already in flight. One at a time by
+/// design: the extension's confirmation service serializes its prompts, so a
+/// second concurrent `presence_challenge` is a misbehaving (or malicious)
+/// sender, and it is refused with `busy` rather than queued - stacking
+/// hardware prompts is a tap-phishing primitive, not a feature.
+static PRESENCE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// RAII reset for [`PRESENCE_IN_FLIGHT`]: clearing the flag in `Drop` makes the
+/// single-flight invariant structural. Even if the worker thread unwound
+/// (the no-panic-core lints forbid that in this crate, but a dependency could
+/// still abort/panic), the slot is released so the host never wedges into a
+/// permanent `busy`. The success path drops it after the reply is written; the
+/// spawn-failure path drops it explicitly.
+struct PresenceSlotGuard;
+
+impl Drop for PresenceSlotGuard {
+    fn drop(&mut self) {
+        PRESENCE_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+/// Handle a `presence_challenge` frame (ADR-0031): sign the per-action
+/// presence statement with the Enclave key, raising the Touch ID prompt.
+///
+/// Two promptless refusals come first, fail closed:
+/// - while the kill switch is engaged (or unreadable) nothing may prompt -
+///   no op can proceed anyway, and a killed bridge that still raises Touch ID
+///   sheets would train the user to tap unexplained prompts;
+/// - while another round is in flight (`busy`, above).
+///
+/// The signing itself runs on its OWN thread, unlike the enrollment
+/// challenge: enrollment blocks the pump only during the user-present
+/// ceremony, but presence rounds happen in steady state, and holding the
+/// stdin->socket pump for the duration of a tap would head-of-line block
+/// every other in-flight op's traffic behind the prompt. The reply is
+/// written through the shared stdout mutex, so frames stay whole. An `Err`
+/// from this function means the immediate (promptless) reply could not be
+/// written; worker-thread write failures are logged, and the pump notices
+/// stdout going away on its next frame.
+fn handle_presence_challenge(
+    nonce: String,
+    context: Option<String>,
+    out: &Arc<Mutex<BufWriter<io::Stdout>>>,
+) -> io::Result<()> {
+    let refuse = |out: &Mutex<BufWriter<io::Stdout>>, reason: &str| {
+        write_control_reply(
+            out,
+            &EnclaveControl::PresenceError {
+                reason: reason.into(),
+            },
+        )
+    };
+    if !matches!(crate::kill::is_killed(), Ok(false)) {
+        log_warn!(
+            "native-host",
+            "refusing presence_challenge while the kill switch is engaged or unreadable"
+        );
+        return refuse(out, "bridge_killed");
+    }
+    if PRESENCE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        log_warn!(
+            "native-host",
+            "refusing presence_challenge while another round is in flight"
+        );
+        return refuse(out, "busy");
+    }
+    let worker_out = Arc::clone(out);
+    let spawned = thread::Builder::new()
+        .name("presence-sign".into())
+        .spawn(move || {
+            // Held for the whole round; Drop clears PRESENCE_IN_FLIGHT even on
+            // an unexpected unwind, so a wedged `busy` is structurally
+            // impossible.
+            let _slot = PresenceSlotGuard;
+            let reply = crate::enclave::respond_to_presence_challenge(&nonce, context.as_deref());
+            // Log-after-decide (ADR-0030): the sign already happened (or
+            // refused); record which, host-side, so a hardware approval is
+            // never conflated with a window confirmation in the trail.
+            let outcome = match &reply {
+                EnclaveControl::PresenceProof { .. } => "ok",
+                _ => "refused",
+            };
+            let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::PresenceSign)
+                .surface(crate::audit::Surface::Host)
+                .outcome(outcome);
+            if let Some(ctx) = context.as_deref() {
+                rec = rec.detail(ctx);
+            }
+            crate::audit::record(rec);
+            if let Err(e) = write_control_reply(&worker_out, &reply) {
+                log_warn!("native-host", "could not write the presence reply: {e}");
+            }
+        });
+    if spawned.is_err() {
+        // No thread, no prompt: release the slot and refuse, fail closed. The
+        // guard lives only inside the worker, so on a spawn failure the flag
+        // is cleared here.
+        PRESENCE_IN_FLIGHT.store(false, Ordering::Release);
+        log_warn!("native-host", "could not spawn the presence-sign thread");
+        return refuse(out, "signing_failed");
+    }
+    Ok(())
+}
+
 /// What one inbound native-messaging frame turned into.
 enum Inbound {
     /// A host-handled control frame: the reply (if any) has been written.
@@ -449,11 +560,14 @@ enum Inbound {
 }
 
 /// Handle one frame from Chrome against the host-handled control surface
-/// (ADR-0021/0025/0030). Shared by the normal stdin->socket pump and the
+/// (ADR-0021/0025/0030/0031). Shared by the normal stdin->socket pump and the
 /// control-plane-only loop, so the two modes cannot drift in what they answer.
 /// An `Err` means a control REPLY could not be written (stdout gone), which
 /// ends the calling loop.
-fn handle_control_frame(frame: Value, out: &Mutex<BufWriter<io::Stdout>>) -> io::Result<Inbound> {
+fn handle_control_frame(
+    frame: Value,
+    out: &Arc<Mutex<BufWriter<io::Stdout>>>,
+) -> io::Result<Inbound> {
     match classify_nm_frame(&frame) {
         FrameDisposition::Forward => Ok(Inbound::Forward(frame)),
         FrameDisposition::Challenge { nonce, context } => {
@@ -462,9 +576,16 @@ fn handle_control_frame(frame: Value, out: &Mutex<BufWriter<io::Stdout>>) -> io:
             // presence prompt, so extension->server traffic is
             // head-of-line blocked for the duration (server->extension
             // still flows). Accepted: challenges only occur during the
-            // user-present enrollment ceremony, not in steady state.
+            // user-present enrollment ceremony, not in steady state (the
+            // steady-state presence rounds run on their own thread, see
+            // handle_presence_challenge).
             let reply = crate::enclave::respond_to_challenge(&nonce, context.as_deref());
             write_control_reply(out, &reply)?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::PresenceChallenge { nonce, context } => {
+            log_info!("native-host", "answering presence challenge locally");
+            handle_presence_challenge(nonce, context, out)?;
             Ok(Inbound::Handled)
         }
         FrameDisposition::RevokeHostKey => {
@@ -520,6 +641,17 @@ fn handle_control_frame(frame: Value, out: &Mutex<BufWriter<io::Stdout>>) -> io:
                 "malformed enclave control frame from browser"
             );
             let reply = EnclaveControl::EnclaveError {
+                reason: "invalid_challenge".into(),
+            };
+            write_control_reply(out, &reply)?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::MalformedPresence => {
+            log_warn!(
+                "native-host",
+                "malformed presence control frame from browser"
+            );
+            let reply = EnclaveControl::PresenceError {
                 reason: "invalid_challenge".into(),
             };
             write_control_reply(out, &reply)?;
@@ -929,6 +1061,9 @@ mod tests {
             "{\"type\":\"enclave_proof\",\"sig\":\"s\",\"key_id\":\"k\",\"pubkey\":\"p\"}\n",
             "{\"type\":\"enclave_revoke\"}\n",
             "{\"type\":\"enclave_revoked\"}\n",
+            "{\"type\":\"presence_challenge\",\"nonce\":\"n\"}\n",
+            "{\"type\":\"presence_proof\",\"sig\":\"s\",\"key_id\":\"k\",\"pubkey\":\"p\"}\n",
+            "{\"type\":\"presence_error\",\"reason\":\"busy\"}\n",
             "{\"type\":\"client_list\"}\n",
             "{\"type\":\"client_list_result\",\"ok\":true,\"enrolled\":true,\"clients\":[]}\n",
             "{\"type\":\"client_revoke\",\"name\":\"codex\"}\n",
