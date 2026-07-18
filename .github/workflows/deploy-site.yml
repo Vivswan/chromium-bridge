@@ -20,6 +20,8 @@ concurrency:
 
 jobs:
   deploy:
+    # workflow_dispatch is for redeploying main, not publishing a branch.
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

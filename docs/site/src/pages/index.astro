@@ -19,9 +19,15 @@ import overviewDark from "../assets/screens/overview-dark.png";
 import overviewLight from "../assets/screens/overview-light.png";
 import securityDark from "../assets/screens/security-dark.png";
 import securityLight from "../assets/screens/security-light.png";
+// The workspace version, read from the root Cargo.toml at build time so the
+// chip cannot drift from the release-please-managed number.
+import cargoToml from "../../../../Cargo.toml?raw";
 
 const base = import.meta.env.BASE_URL;
 const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${path}`;
+
+const version = /^version = "([^"]+)"/m.exec(cargoToml)?.[1];
+if (version === undefined) throw new Error("workspace version not found in Cargo.toml");
 ---
 
 <!doctype html>
@@ -32,7 +38,7 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
     <title>Chromium Bridge: your real browser, behind a gate you hold</title>
     <meta
       name="description"
-      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Every dangerous action stops at a gate a web page cannot see and a program cannot press."
+      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Dangerous actions stop at confirmation gates no web page can see or press - on by default, relaxed only by your explicit choice - and the riskiest demand a Secure Enclave proof that you are present."
     />
     <link rel="icon" type="image/svg+xml" href={withBase("gatedeck-app-icon.svg")} />
   </head>
@@ -50,7 +56,7 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
           <path d="M454 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
         </svg>
         <span class="wordmark">Chromium Bridge</span>
-        <span class="ver">v0.1.0-dev.1</span>
+        <span class="ver">v{version}</span>
         <nav aria-label="Site">
           <a href="#trust">How it works</a>
           <a href="#guarantees">Guarantees</a>
@@ -72,8 +78,10 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
         Chromium Bridge lets an MCP client such as Claude Code or Codex drive the
         Chromium browser you are already signed into: your tabs, your sessions,
         your cookies. No second browser, no debug port.
-        <strong>Every dangerous action stops at a gate a web page cannot see and
-        a program cannot press.</strong>
+        <strong>Dangerous actions stop at confirmation gates no web page can
+        see or press - on by default, relaxed only by your explicit choice -
+        and the riskiest demand a Secure Enclave proof that you are
+        present.</strong>
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="#install">Install on your Mac</a>
@@ -105,20 +113,21 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
             <div class="gate-role">MCP client</div>
             <div class="gate-name"><span class="status-dot live"></span>Claude Code, Codex, any MCP client</div>
             <div class="gate-meta">Connects over stdio. Admitted only if its
-              attested code identity is on your trusted list; you put it there
-              with Touch ID.</div>
-            <div class="gate-id">identity: kernel-attested binary</div>
+              attested code identity is on your trusted list; enrolling one
+              demands proof of your presence.</div>
+            <div class="gate-id">identity: attested parent image</div>
           </div>
           <div class="pipeline-link">
             <div class="link-line on"><svg class="link-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1.5 6.5 5 3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
-            <div class="link-label">peer-UID +<br />attestation +<br />HMAC</div>
+            <div class="link-label">stdio, parent<br />attestation +<br />allowlist</div>
           </div>
           <div class="gate lit">
             <div class="gate-role">Host</div>
             <div class="gate-name"><span class="status-dot live"></span>chromium-bridge</div>
-            <div class="gate-meta">Rust native-messaging host. Owns a private,
-              portless socket. Pairing signs with a Secure Enclave key that
-              requires your touch.</div>
+            <div class="gate-meta">One Rust binary plays MCP server and
+              native-messaging host. Its broker socket is private and portless:
+              kernel peer-UID check, mutual attestation, HMAC handshake. Pairing
+              signs with a Secure Enclave key gated on your presence.</div>
             <div class="gate-id">7F3A 9C04 D2E8 B166 5F0A A42C 9D13 E770</div>
           </div>
           <div class="pipeline-link">
@@ -138,12 +147,14 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
 
       <p class="trust-note"><span class="status-dot live"></span>Green means
         attested and live. <span class="status-dot pending"></span>Amber means
-        waiting on you. Neither is ever decoration.</p>
+        waiting on you. In the app these lights are drawn from the host's
+        checks; here they only illustrate.</p>
 
       <p class="trust-caveat">The portless socket, kernel peer check, and
         attestation hold on macOS and Linux. On Windows the bridge falls back to
         loopback TCP gated by the HMAC secret alone, and the server says so at
-        startup.</p>
+        startup. Until you enroll a first trusted client, admission runs open
+        and is logged loudly; enrolling is what arms the gate.</p>
     </section>
 
     <section class="shots wrap" id="shots">
@@ -170,8 +181,9 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
             alt="The extension's confirmation window in the light scheme, for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
           <figcaption>A client wants to run a script in your tab. The extension
             draws this in its own window, off the page. There is no Allow button:
-            on an enrolled Mac, approval is the Touch ID sensor itself, so nothing
-            on screen, and no remote client, can press it for you.</figcaption>
+            on an enrolled Mac with the default settings, approval is a Secure
+            Enclave presence check - your touch or your login password - so
+            nothing on screen, and no remote client, can press it for you.</figcaption>
         </figure>
         <figure class="shot">
           <Image class="shot-dark" src={securityDark} width={1280} height={860} densities={[1, 2]} loading="lazy"
@@ -193,29 +205,36 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
       <div class="g-grid">
         <div class="g-cell">
           <h3>A program you run can never enroll itself silently.</h3>
-          <p>Trusting an MCP client takes Touch ID on an enrolled Mac. The gate
-            is hard-wired; there is no flag, env var, or grace window that skips
-            it.</p>
+          <p>Trusting an MCP client takes proof of presence: a Secure Enclave
+            check - your touch or your login password - on an enrolled Mac, an
+            explicit interactive confirmation where no such hardware exists.
+            The gate is hard-wired; there is no flag, env var, or grace window
+            that skips it.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0024-multi-client-attested-pairing-and-broker.md">ADR-0024</a>
         </div>
         <div class="g-cell">
-          <h3>Approval is the sensor, not a button on screen.</h3>
-          <p>For script and upload requests the confirmation window offers Deny
-            and nothing else. The yes is a Secure Enclave user-presence check
-            that no page, script, or remote client can forge.</p>
+          <h3>On an enrolled Mac, approval is your presence.</h3>
+          <p>With Touch ID enrolled and the default settings, the script and
+            upload confirmation offers Deny and nothing else: the yes is a
+            Secure Enclave user-presence signature - your touch or your login
+            password - that no page, script, or remote client can forge.
+            Without that hardware, the verdict is a click in the extension's
+            own window.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0031-touch-id-confirmations-and-presence-grants.md">ADR-0031</a>
         </div>
         <div class="g-cell">
-          <h3>Credentials go one way, and masked.</h3>
+          <h3>Credentials go one way, masked on top.</h3>
           <p>Cookies and storage can be read, never written: there is no
-            cookie_set or storage_set by design. JWTs, long hex, and long digit
-            runs are masked before they leave the browser.</p>
+            cookie_set or storage_set by design. On top of that, a best-effort
+            heuristic masks common secret shapes - JWTs, long hex, long digit
+            runs - before they leave the browser.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/tool-risk-matrix.md">tool risk matrix</a>
         </div>
         <div class="g-cell">
           <h3>No site runs without your yes.</h3>
           <p>A new origin triggers a prompt in the extension. Until you approve
-            it there, no tool touches that site.</p>
+            it there, no tool touches that site; the one exception is an
+            explicit allow-all-sites opt-in you would have to set yourself.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
         </div>
         <div class="g-cell">
@@ -226,9 +245,12 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0030-global-kill-switch-and-audit.md">ADR-0030</a>
         </div>
         <div class="g-cell">
-          <h3>Every decision is written down.</h3>
-          <p>Admissions, confirmations, denials, kills: each lands in an on-disk
-            audit trail you can read after the fact.</p>
+          <h3>Decisions are written down, gaps are counted.</h3>
+          <p>Admissions, confirmations, denials, kills go to an on-disk audit
+            trail you can read after the fact. Recording is best-effort by
+            design: a failed write drops that record and the next one carries
+            a visible gap count, because bookkeeping must never block a
+            decision.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0030-global-kill-switch-and-audit.md">ADR-0030</a>
         </div>
       </div>
@@ -257,11 +279,12 @@ const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${pat
         <li class="step">
           <span class="step-num">01</span>
           <div class="step-body">
-            <h3>Build and install the app.</h3>
+            <h3>Build the app, then connect a browser.</h3>
             <p>Clone the repository and let <span class="mono-inline">just</span>
-              build, sign, and place the app in /Applications. First launch
-              registers the native-messaging host with every Chromium browser it
-              finds and shows you what it wrote.</p>
+              build, sign, and place the app in /Applications. First launch only
+              detects your Chromium browsers and writes nothing into any of
+              them; you connect each one yourself on the Browsers page, or all
+              at once from the first-run card.</p>
             <pre class="code-block"><code>git clone https://github.com/Vivswan/chromium-bridge
 cd chromium-bridge &amp;&amp; just app-install</code></pre>
           </div>
@@ -273,17 +296,19 @@ cd chromium-bridge &amp;&amp; just app-install</code></pre>
             <p>On the app's Setup page, click Reveal folder. In your browser,
               open <span class="mono-inline">chrome://extensions</span>, enable
               Developer mode, and Load unpacked from that folder. Then click Pair
-              in the app (Touch ID) and approve the key fingerprint on the
-              extension's options page. Until the fingerprints match, the
-              extension refuses to act.</p>
+              in the app (a Touch ID prompt on an enrolled Mac) and approve the
+              key fingerprint on the extension's options page. Until the
+              fingerprints match, the extension refuses to act.</p>
           </div>
         </li>
         <li class="step">
           <span class="step-num">03</span>
           <div class="step-body">
             <h3>Register with your MCP client.</h3>
-            <p>The app installs the <span class="mono-inline">chromium-bridge</span>
-              command at ~/.local/bin. Point your client at it; for Claude
+            <p>On the app's Setup page, click Install next to the command-line
+              tool: that places one symlink,
+              <span class="mono-inline">~/.local/bin/chromium-bridge</span>,
+              pointing at the bundled host. Point your client at it; for Claude
               Code:</p>
             <pre class="code-block"><code>claude mcp add chromium-bridge -- "$HOME/.local/bin/chromium-bridge"</code></pre>
             <p>Ask it to list your browser tabs. The first time it targets a new
