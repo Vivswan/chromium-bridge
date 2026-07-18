@@ -119,11 +119,17 @@ def enclave_key_present(env=None):
     real prompts). The keychain is system-global, so an isolated HOME/XDG does
     not hide it.
 
-    Fails SAFE: only a definitive `key: none` line lets the gated tests run.
-    A probe error, timeout, non-zero exit, or unrecognized output is treated
-    as possibly-enrolled and skips - risking an over-skip (lost coverage on a
-    broken probe) is acceptable; risking a real prompt is not. Read-only;
-    never prompts."""
+    Off macOS there is no Secure Enclave and no hardware rung (the ladder is
+    Unavailable by construction), so this is always False there - which is
+    what keeps the presence-gated suites running on Linux/Windows CI.
+
+    On macOS it fails SAFE: only a definitive `key: none` line lets the gated
+    tests run. A probe error, timeout, non-zero exit, or unrecognized output
+    is treated as possibly-enrolled and skips - risking an over-skip (lost
+    coverage on a broken probe) is acceptable; risking a real prompt is not.
+    Read-only; never prompts."""
+    if sys.platform != "darwin":
+        return False
     try:
         r = subprocess.run([BIN, "enclave-status"], capture_output=True,
                            text=True, env=env, timeout=10)
