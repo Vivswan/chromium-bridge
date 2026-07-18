@@ -1,7 +1,8 @@
 ---
 // The landing page, built exactly to the approved mockup
-// (design-explorations/site/mockup.html), since diverged: the page copy here
-// Gatedeck path data comes from assets/icon/gatedeck.svg and
+// (design-explorations/site/mockup.html), since diverged - the page copy
+// here is the source of truth. Gatedeck path data comes from
+// assets/icon/gatedeck.svg and
 // gatedeck-open.svg. Content needs zero JS: the theme flip is a checkbox,
 // the hover morph is CSS.
 import { Image } from "astro:assets";
@@ -204,10 +205,10 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
 
       <div class="g-grid">
         <div class="g-cell">
-          <h3>No program can enroll itself through the bridge.</h3>
+          <h3>The bridge has no silent enrollment path.</h3>
           <p>Trusting an MCP client takes proof of presence: a Secure Enclave
             check - your touch or your login password - on an enrolled Mac, an
-            explicit interactive confirmation where no such hardware exists.
+            explicit interactive confirmation where no enrollment key exists.
             The gate is hard-wired; there is no flag, env var, or grace window
             that skips it.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0031-touch-id-confirmations-and-presence-grants.md">ADR-0031</a>
