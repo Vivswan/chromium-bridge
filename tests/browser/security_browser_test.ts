@@ -50,8 +50,7 @@ import puppeteer, { type Browser, type Target } from "puppeteer-core";
 import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
-const EXTENSION_DIR =
-  process.env.BB_EXT_DIR || path.join(REPO, "src", "apps", "extension", "dist", "chrome-mv3");
+const EXTENSION_DIR = process.env.BB_EXT_DIR || path.join(REPO, "build", "extension", "chrome-mv3");
 const HELPER_DIR = path.join(REPO, "tests", "fixtures", "access-level-probe");
 // The guard (assertIsolatedBrowserOrSkip) verifies CHROME_BIN by --version
 // before this is used; it is only ever an isolated Chrome for Testing here.

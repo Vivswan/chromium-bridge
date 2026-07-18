@@ -88,7 +88,7 @@ Windows, on headless machines, and in CI.
 4. **Load the extension.** The release archive contains `extension/dist/`;
    load it via `chrome://extensions`, Developer mode, "Load unpacked" (in a
    source checkout, build it first and load
-   `src/apps/extension/dist/chrome-mv3`). Restart the browser.
+   `build/extension/chrome-mv3`). Restart the browser.
 
 5. **On macOS, pair.** Run `chromium-bridge pair` (Touch ID prompts and the
    key's fingerprint is printed), then approve that fingerprint on the

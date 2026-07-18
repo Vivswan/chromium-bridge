@@ -23,7 +23,7 @@
 // Exits non-zero on any mismatch. Run standalone or via `just desktop-check`.
 // An optional argument points at a different .app to verify (desktop-bundle
 // re-runs this against the copy inside the mounted .dmg); the default is the
-// build-tree bundle.
+// deliverable copy in build/app/.
 
 import { createHash } from "node:crypto";
 import {
@@ -54,7 +54,7 @@ const APP_IDENTIFIER = `${TEAM_ID}.${BUNDLE_ID}`;
 
 const appPath = process.argv[2]
   ? resolve(process.argv[2])
-  : resolve(root, "target/release/bundle/macos/Chromium Bridge.app");
+  : resolve(root, "build/app/Chromium Bridge.app");
 const appBinary = resolve(appPath, "Contents/MacOS/chromium-bridge-desktop");
 const helperBundle = resolve(appPath, "Contents/Helpers/chromium-bridge.app");
 const hostBinary = resolve(helperBundle, "Contents/MacOS/chromium-bridge");

@@ -53,7 +53,7 @@ Default locations:
   or `~/.cache/chromium-bridge/run.lock`
 
 Load the release archive's `extension/dist` (or a built
-`src/apps/extension/dist/chrome-mv3`) in Linux Chrome/Chromium at
+`build/extension/chrome-mv3`) in Linux Chrome/Chromium at
 `chrome://extensions`, then configure the MCP client to run the
 Linux binary:
 

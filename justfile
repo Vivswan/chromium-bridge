@@ -44,10 +44,10 @@ app-dev:
 
 # Build, sign, verify, then launch the desktop app (USER-RUN: the GUI)
 app-run: desktop-bundle
-    open "target/release/bundle/macos/Chromium Bridge.app"
+    open "build/app/Chromium Bridge.app"
 
 # Build + sign the app and wrap it in a signed, verified .dmg
-# (target/release/bundle/dmg/; the app inside the image is re-verified)
+# (build/dmg/; the app inside the image is re-verified)
 app-dmg:
     bun scripts/desktop-bundle.ts --dmg
 
@@ -56,7 +56,7 @@ app-dmg:
 app-install:
     #!/usr/bin/env sh
     set -eu
-    APP="target/release/bundle/macos/Chromium Bridge.app"
+    APP="build/app/Chromium Bridge.app"
     if [ ! -d "$APP" ]; then
         echo "error: $APP not found; build it first: just desktop-bundle (or just app-dmg)" >&2
         exit 1
@@ -88,7 +88,7 @@ desktop-check-rust: desktop-ui-build gen-icons
 # BUNDLED host binary; on success the machine is genuinely enrolled. Undo
 # with the same binary's `revoke` subcommand.
 desktop-touchid-proof: desktop-bundle
-    "target/release/bundle/macos/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair
+    "build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair
 
 # Touch ID gate demo (USER-RUN, macOS: raises a REAL Touch ID prompt). Runs
 # the per-action presence gate - the one page_eval / page_upload use - so you
@@ -103,7 +103,7 @@ desktop-touchid-proof: desktop-bundle
 touchid-gates: desktop-bundle
     #!/usr/bin/env bash
     set -euo pipefail
-    BIN="target/release/bundle/macos/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge"
+    BIN="build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge"
     echo "== 1/3 per-action presence (page_eval / page_upload gate) =="
     echo "   expect a Touch ID prompt now:"
     "$BIN" presence-selftest
@@ -193,7 +193,7 @@ js-deps:
 gen-icons:
     bun scripts/gen-icons.ts
 
-# Build the extension bundle (src/ -> dist/; generates icons first)
+# Build the extension bundle (src/ -> build/extension/; generates icons first)
 ext-build:
     bun run --cwd src/apps/extension build
 
