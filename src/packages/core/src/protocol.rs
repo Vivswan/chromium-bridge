@@ -547,6 +547,7 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
 ///   extension must fail the confirmation closed, never fall back to a
 ///   softer surface (the no-downgrade rule).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EnclaveControl {
     EnclaveChallenge {
@@ -626,6 +627,7 @@ pub enum EnclaveControl {
 /// with the CLI (ADR-0030 records the decision and the page-can-never-reach-it
 /// gating that keeps it true).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AdminControl {
     /// Extension -> host: report the trusted-client allowlist.

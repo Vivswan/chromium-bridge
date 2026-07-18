@@ -1,7 +1,7 @@
 // The normalizer is what stands between the envelope double-derivation gate
 // (scripts/check-envelope-parity.ts) and a false "equivalent" verdict, so
 // its behavior is pinned here: it may erase representation and exactly the
-// documented rules R1-R4 (see the module doc). At the reconciled paths each
+// documented rules R1-R5 (see the module doc). At the reconciled paths each
 // side must equal its own origin's approved form and is refused loudly
 // otherwise - a drifted parser can never be compared away, not even by
 // converging on the canonical form. Structure everywhere else must survive
@@ -9,7 +9,11 @@
 // derivation emits today; the mutation cases prove drift is CAUGHT.
 
 import { describe, expect, test } from "bun:test";
-import { diffSchemas, normalizeEnvelopeSchema } from "../src/json-schema-normalize";
+import {
+  diffSchemas,
+  normalizeEnvelopeSchema,
+  splitTaggedUnionSchema,
+} from "../src/json-schema-normalize";
 
 const JS_SAFE = Number.MAX_SAFE_INTEGER;
 
@@ -233,7 +237,7 @@ describe("normalizeEnvelopeSchema", () => {
     ).toThrow("unresolvable");
   });
 
-  test("refuses a $ref with sibling keys rather than silently merging", () => {
+  test("refuses a $ref with constraint siblings rather than silently merging", () => {
     expect(() =>
       normalizeEnvelopeSchema(
         {
@@ -244,5 +248,341 @@ describe("normalizeEnvelopeSchema", () => {
         "rust",
       ),
     ).toThrow("siblings");
+    // Annotation siblings constrain nothing: schemars puts a field's doc
+    // comment next to the $ref (ClientEntry.anchor), and it is dropped like
+    // R1 drops annotations everywhere else.
+    const annotated = normalizeEnvelopeSchema(
+      {
+        type: "object",
+        properties: { x: { $ref: "#/$defs/Extra", description: "noise" } },
+        $defs: { Extra: { type: "string" } },
+      },
+      "request",
+      "rust",
+    );
+    expect(diffSchemas(annotated, rustReq({ x: { type: "string" } }))).toEqual([]);
+    // $id and $schema are NOT harmless beside a $ref: they change how a
+    // conforming validator resolves it (base URI / dialect), so they are
+    // refused there even though R1 strips them elsewhere.
+    for (const sibling of [
+      { $id: "https://elsewhere.test/x.json" },
+      { $schema: "https://json-schema.org/draft-07/schema" },
+    ]) {
+      expect(() =>
+        normalizeEnvelopeSchema(
+          {
+            properties: { x: { $ref: "#/$defs/Extra", ...sibling } },
+            $defs: { Extra: { type: "string" } },
+          },
+          "request",
+          "rust",
+        ),
+      ).toThrow("siblings");
+    }
+  });
+});
+
+// ---- the control frames (EnclaveControl / AdminControl, R5 + new R4s) ---------
+
+// The real shapes each derivation emits today for a signed-statement frame
+// (enclave_proof / presence_proof share the field set)...
+const RUST_PROOF = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", const: "enclave_proof" },
+    sig: { type: "string" },
+    key_id: { type: "string" },
+    pubkey: { type: "string" },
+  },
+  required: ["type", "sig", "key_id", "pubkey"],
+};
+const ZOD_PROOF = {
+  type: "object",
+  additionalProperties: {},
+  properties: {
+    type: { type: "string", const: "enclave_proof" },
+    sig: { type: "string", minLength: 1 },
+    key_id: { type: "string", minLength: 1 },
+    pubkey: { type: "string", minLength: 1 },
+  },
+  required: ["type", "sig", "key_id", "pubkey"],
+};
+
+// ...and for the admin list result, ClientEntry (with the adjacently-tagged
+// Anchor) embedded.
+const RUST_ANCHOR = {
+  oneOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: { kind: { type: "string", const: "hash" }, value: { type: "string" } },
+      required: ["kind", "value"],
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: { kind: { type: "string", const: "team_id" }, value: { type: "string" } },
+      required: ["kind", "value"],
+    },
+  ],
+};
+const ZOD_ANCHOR = {
+  type: "object",
+  additionalProperties: {},
+  properties: {
+    kind: { type: "string", enum: ["hash", "team_id"] },
+    value: { type: "string", minLength: 1 },
+  },
+  required: ["kind", "value"],
+};
+const RUST_CLIENT_LIST = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", const: "client_list_result" },
+    ok: { type: "boolean" },
+    enrolled: { type: "boolean" },
+    error: { type: ["string", "null"] },
+    clients: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          anchor: RUST_ANCHOR,
+          added_unix: { type: "integer", format: "uint64", minimum: 0, default: 0 },
+        },
+        required: ["name", "anchor"],
+      },
+    },
+  },
+  required: ["type", "ok", "enrolled", "clients"],
+};
+const ZOD_CLIENT_LIST = {
+  type: "object",
+  additionalProperties: {},
+  properties: {
+    type: { type: "string", const: "client_list_result" },
+    ok: { type: "boolean" },
+    enrolled: { type: "boolean" },
+    error: { type: "string" },
+    clients: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: {},
+        properties: {
+          name: { type: "string", minLength: 1 },
+          anchor: ZOD_ANCHOR,
+          added_unix: { type: "integer", minimum: 0, maximum: JS_SAFE },
+        },
+        required: ["name", "anchor"],
+      },
+    },
+  },
+  required: ["type", "ok", "enrolled", "clients"],
+};
+
+describe("normalizeEnvelopeSchema on control frames", () => {
+  test("R5 + R4: today's real proof-frame derivations are equivalent", () => {
+    expect(
+      diffSchemas(
+        normalizeEnvelopeSchema(RUST_PROOF, "enclave_proof", "rust"),
+        normalizeEnvelopeSchema(ZOD_PROOF, "enclave_proof", "zod"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("R5 + R4: today's real client_list_result derivations are equivalent", () => {
+    expect(
+      diffSchemas(
+        normalizeEnvelopeSchema(RUST_CLIENT_LIST, "client_list_result", "rust"),
+        normalizeEnvelopeSchema(ZOD_CLIENT_LIST, "client_list_result", "zod"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("R5 refusal: a Rust frame losing deny_unknown_fields is fail-open drift", () => {
+    const loosened = { ...RUST_PROOF, additionalProperties: {} };
+    expect(() => normalizeEnvelopeSchema(loosened, "enclave_proof", "rust")).toThrow(
+      "deny_unknown_fields",
+    );
+    const dropped = { ...RUST_PROOF };
+    delete (dropped as Record<string, unknown>).additionalProperties;
+    expect(() => normalizeEnvelopeSchema(dropped, "enclave_proof", "rust")).toThrow(
+      "deny_unknown_fields",
+    );
+  });
+
+  test("R5 refusal: a Zod frame leaving the documented looseObject form", () => {
+    // Going strict is a deliberate contract change, not something to erase.
+    expect(() =>
+      normalizeEnvelopeSchema(
+        { ...ZOD_PROOF, additionalProperties: false },
+        "enclave_proof",
+        "zod",
+      ),
+    ).toThrow("looseObject");
+    const dropped = { ...ZOD_PROOF };
+    delete (dropped as Record<string, unknown>).additionalProperties;
+    expect(() => normalizeEnvelopeSchema(dropped, "enclave_proof", "zod")).toThrow("looseObject");
+  });
+
+  test("R5 is scoped to control frames: nested objects are checked, envelopes are not", () => {
+    // The nested ClientEntry object also carries the origin marker (checked
+    // by the equivalence test above); a nested Rust object losing it fails.
+    const nested = structuredClone(RUST_CLIENT_LIST) as typeof RUST_CLIENT_LIST;
+    delete (nested.properties.clients.items as Record<string, unknown>).additionalProperties;
+    expect(() => normalizeEnvelopeSchema(nested, "client_list_result", "rust")).toThrow(
+      "deny_unknown_fields",
+    );
+    // Request/response keep the verbatim additionalProperties comparison
+    // (see "additionalProperties is compared verbatim" above).
+  });
+
+  test("R5 also walks the extension->host frames, rust-side only", () => {
+    // audit_event has no Zod reader, but its rust-side normalization must
+    // still refuse a variant that stops rejecting unknown fields.
+    const auditEvent = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        type: { type: "string", const: "audit_event" },
+        kind: { type: "string" },
+        outcome: { type: ["string", "null"] },
+      },
+      required: ["type", "kind"],
+    };
+    expect(() => normalizeEnvelopeSchema(auditEvent, "audit_event", "rust")).not.toThrow();
+    const loosened = { ...auditEvent };
+    delete (loosened as Record<string, unknown>).additionalProperties;
+    expect(() => normalizeEnvelopeSchema(loosened, "audit_event", "rust")).toThrow(
+      "deny_unknown_fields",
+    );
+  });
+
+  test("R4 mutation: proof material losing the Zod non-empty guard is refused", () => {
+    const weakened = structuredClone(ZOD_PROOF) as typeof ZOD_PROOF;
+    weakened.properties.sig = { type: "string" } as (typeof ZOD_PROOF)["properties"]["sig"];
+    expect(() => normalizeEnvelopeSchema(weakened, "enclave_proof", "zod")).toThrow(
+      "approved zod form",
+    );
+  });
+
+  test("R4 mutation: kill_status_result.killed must keep each origin's form", () => {
+    const rustKill = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        type: { type: "string", const: "kill_status_result" },
+        ok: { type: "boolean" },
+        killed: { type: ["boolean", "null"] },
+        error: { type: ["string", "null"] },
+      },
+      required: ["type", "ok"],
+    };
+    const zodKill = {
+      type: "object",
+      additionalProperties: {},
+      properties: {
+        type: { type: "string", const: "kill_status_result" },
+        ok: { type: "boolean" },
+        killed: { type: "boolean" },
+        error: { type: "string" },
+      },
+      required: ["type", "ok"],
+    };
+    expect(
+      diffSchemas(
+        normalizeEnvelopeSchema(rustKill, "kill_status_result", "rust"),
+        normalizeEnvelopeSchema(zodKill, "kill_status_result", "zod"),
+      ),
+    ).toEqual([]);
+    // Rust dropping the Option null-arm (killed no longer optional in the
+    // wire type) is refused, not erased.
+    const changed = structuredClone(rustKill);
+    (changed.properties as Record<string, unknown>).killed = { type: "boolean" };
+    expect(() => normalizeEnvelopeSchema(changed, "kill_status_result", "rust")).toThrow(
+      "approved rust form",
+    );
+  });
+
+  test("R4 mutation: the anchor union and added_unix hardening are pinned", () => {
+    // The Zod anchor losing a kind from its enum.
+    const narrowed = structuredClone(ZOD_CLIENT_LIST) as typeof ZOD_CLIENT_LIST;
+    narrowed.properties.clients.items.properties.anchor.properties.kind.enum = ["hash"];
+    expect(() => normalizeEnvelopeSchema(narrowed, "client_list_result", "zod")).toThrow(
+      "approved zod form",
+    );
+    // The Zod added_unix widening back to a bare number.
+    const widened = structuredClone(ZOD_CLIENT_LIST) as typeof ZOD_CLIENT_LIST;
+    widened.properties.clients.items.properties.added_unix = {
+      type: "number",
+    } as (typeof ZOD_CLIENT_LIST)["properties"]["clients"]["items"]["properties"]["added_unix"];
+    expect(() => normalizeEnvelopeSchema(widened, "client_list_result", "zod")).toThrow(
+      "approved zod form",
+    );
+  });
+
+  test("frame kinds share no reconciliations with the envelopes", () => {
+    // enclave_error has no reconciled paths: reason is required on both
+    // sides, so an optional Zod reason surfaces as a required-list diff.
+    const rust = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        type: { type: "string", const: "enclave_error" },
+        reason: { type: "string" },
+      },
+      required: ["type", "reason"],
+    };
+    const zodOptionalReason = {
+      type: "object",
+      additionalProperties: {},
+      properties: {
+        type: { type: "string", const: "enclave_error" },
+        reason: { type: "string" },
+      },
+      required: ["type"],
+    };
+    expect(
+      diffSchemas(
+        normalizeEnvelopeSchema(rust, "enclave_error", "rust"),
+        normalizeEnvelopeSchema(zodOptionalReason, "enclave_error", "zod"),
+      ),
+    ).not.toEqual([]);
+  });
+});
+
+describe("splitTaggedUnionSchema", () => {
+  const union = {
+    oneOf: [
+      {
+        type: "object",
+        properties: { type: { type: "string", const: "a" }, x: { $ref: "#/$defs/X" } },
+        required: ["type"],
+      },
+      { type: "object", properties: { type: { type: "string", const: "b" } }, required: ["type"] },
+    ],
+    $defs: { X: { type: "string" } },
+  };
+
+  test("splits per tag and inlines $defs indirection", () => {
+    const parts = splitTaggedUnionSchema(union);
+    expect([...parts.keys()]).toEqual(["a", "b"]);
+    const a = parts.get("a") as { properties: { x: unknown } };
+    expect(diffSchemas(a.properties.x, { type: "string" })).toEqual([]);
+  });
+
+  test("refuses non-unions, tagless variants, and duplicate tags", () => {
+    expect(() => splitTaggedUnionSchema({ type: "object" })).toThrow("oneOf");
+    expect(() => splitTaggedUnionSchema({ oneOf: [{ type: "object", properties: {} }] })).toThrow(
+      "type",
+    );
+    expect(() => splitTaggedUnionSchema({ oneOf: [union.oneOf[1], union.oneOf[1]] })).toThrow(
+      "duplicate",
+    );
   });
 });
