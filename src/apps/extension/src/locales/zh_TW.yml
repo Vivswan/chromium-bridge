@@ -104,6 +104,7 @@ confirm:
   hardware_note: "沒有允許按鈕：核准就是觸控 ID 感應器本身，螢幕上的任何東西、任何遠端用戶端都無法替你按下。"
   touchid_wait: "等待這台 Mac 上的觸控 ID"
   request_id: "請求 $1"
+  kill_note: "拒絕此請求，並切斷所有用戶端與所有瀏覽器的連線。可在設定頁解除。"
 
 options:
   title: "Chromium Bridge 設定"

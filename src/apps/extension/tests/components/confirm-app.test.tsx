@@ -35,6 +35,8 @@ beforeEach(() => {
     confirm_countdown: { message: "Denies automatically in $1s" },
     confirm_q_eval: { message: "Run this JavaScript on the page?" },
     confirm_warn_eval: { message: "This code runs in the page with your session." },
+    confirm_kill_note: { message: "Denies this request and cuts every client off every browser." },
+    kill_engage: { message: "Engage kill switch" },
   };
   vi.stubGlobal(
     "fetch",
@@ -104,5 +106,42 @@ describe("ConfirmApp", () => {
     await mount();
     expect(await screen.findByText(/no longer pending/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /allow/i })).not.toBeInTheDocument();
+  });
+
+  test("the footer kill control sends confirm_deny_kill, never an approval", async () => {
+    const user = userEvent.setup();
+    await mount();
+    const kill = await screen.findByRole("button", { name: /kill/i });
+    await user.click(kill);
+    expect(sent).toContainEqual({ type: "confirm_deny_kill" });
+    // The panic exit must not be able to approve anything.
+    expect(sent).not.toContainEqual(expect.objectContaining({ approved: true }));
+    // Disabled from the first click: no double-fire while the SW acts.
+    expect(kill).toBeDisabled();
+  });
+
+  test("Deny keeps the default focus; the kill control is never autofocused", async () => {
+    await mount();
+    const deny = await screen.findByRole("button", { name: /deny/i });
+    const kill = screen.getByRole("button", { name: /kill/i });
+    expect(deny).toHaveFocus();
+    expect(kill).not.toHaveFocus();
+  });
+
+  test("the kill control stays available on a hardware-gated payload", async () => {
+    vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
+      const m = msg as { type: string };
+      sent.push(m);
+      if (m.type === "confirm_ready") return { payload: { ...PAYLOAD, hardware: true } };
+      return { ok: true };
+    });
+    const user = userEvent.setup();
+    await mount();
+    // Display-only mode: no Allow button, but deny-and-kill (both capability
+    // reduction) remains one click away.
+    expect(await screen.findByText("return document.cookie;")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /allow/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /kill/i }));
+    expect(sent).toContainEqual({ type: "confirm_deny_kill" });
   });
 });
