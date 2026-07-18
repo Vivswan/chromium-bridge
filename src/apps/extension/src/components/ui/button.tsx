@@ -3,11 +3,14 @@ import type * as React from "react";
 import { cn } from "@/lib/cn";
 
 // Control Tower buttons: primary is the SAFE default (Deny is always primary
-// in confirmations), danger is kill/deny-with-consequence only, ghost is a
-// quiet inline action.
+// in confirmations), danger is kill/deny-with-consequence only, pending is the
+// amber needs-you action (e.g. "Start pairing"), ghost is a quiet inline
+// action.
 const button = cva(
   "inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold " +
-    "transition-[transform,opacity] cursor-pointer active:scale-97 " +
+    // `scale` must be in the transition list: Tailwind v4 compiles scale-97 to
+    // the standalone `scale:` property, which `transform` does not cover.
+    "transition-[scale,transform,opacity] cursor-pointer active:scale-97 " +
     "disabled:opacity-40 disabled:cursor-default disabled:active:scale-100 " +
     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
   {
@@ -18,6 +21,7 @@ const button = cva(
         danger:
           "border border-danger-edge bg-transparent text-danger " +
           "hover:bg-danger hover:border-danger hover:text-surface-0",
+        pending: "border border-pending-edge bg-pending-dim text-pending hover:border-pending",
         ghost:
           "border border-transparent bg-transparent text-text-2 hover:bg-surface-3 hover:text-text-1",
       },

@@ -131,7 +131,17 @@ export function PopupApp() {
   // The host reports "unknown" when its kill state is unreadable and it is
   // FAILING CLOSED (all activity refused) - never render that as live.
   const killUnknown = kill?.state === "unknown";
+  // Fail-closed display: a kill view this popup could not positively read
+  // (send failed, host timed out, or the mirror is malformed) must never fall
+  // through to the green Live pill. Enforcement already refuses on a
+  // malformed mirror; the display mirrors that severed posture.
+  const killUnverified = kill === null || kill.ok !== true || kill.state === undefined;
   const version = browser.runtime.getManifest().version;
+
+  const openPairing = () => {
+    void browser.tabs.create({ url: `${browser.runtime.getURL("/options.html")}#pairing` });
+    window.close();
+  };
 
   const resolvePending = async (allow: boolean) => {
     if (!pending) return;
@@ -206,6 +216,19 @@ export function PopupApp() {
           ? "popup.status_blocked_pending"
           : "popup.status_blocked_unpaired";
     }
+  } else if (connected && killUnverified) {
+    // Connected but the kill state could not be read: severed until a fresh
+    // positive read - "unknown never renders as healthy". Outranks a pending
+    // origin approval: the pill must not claim "needs you" while the bridge's
+    // own state is unreadable (the approval card below keeps Deny available
+    // but disarms Allow).
+    pill = {
+      className: "pill pill-danger",
+      dot: "status-dot down",
+      label: "popup.pill_unverified",
+    };
+    gates = ["down", "down", "down"];
+    statusKey = "popup.status_kill_unverified";
   } else if (pending) {
     pill = {
       className: "pill pill-pending",
@@ -215,10 +238,14 @@ export function PopupApp() {
     gates = ["idle", "on", "pending"];
     statusKey = "popup.status_pending_origin";
   } else if (connected) {
-    pill = { className: "pill pill-live", dot: "status-dot live", label: "popup.pill_live" };
-    gates = ["idle", "on", "on"];
-    statusKey =
-      enroll?.state === "pinned" ? "popup.status_connected_verified" : "popup.status_connected";
+    // Green is live+attested only: the pill goes phosphor only once the
+    // host's key is pinned; a bare native connection renders neutral.
+    const verified = enroll?.state === "pinned";
+    pill = verified
+      ? { className: "pill pill-live", dot: "status-dot live", label: "popup.pill_live" }
+      : { className: "pill", dot: "status-dot", label: "popup.pill_connected" };
+    gates = verified ? ["idle", "on", "on"] : ["idle", "idle", "idle"];
+    statusKey = verified ? "popup.status_connected_verified" : "popup.status_connected";
   } else {
     pill = { className: "pill", dot: "status-dot", label: "popup.pill_offline" };
     gates = ["idle", "idle", "idle"];
@@ -244,6 +271,7 @@ export function PopupApp() {
   );
 
   // The panic row: engage-only. Always a plain row - never dimmed, never boxed.
+  // The error slot exists before text lands so screen readers announce it.
   const panicRow = (noteKey: MessageKey) => (
     <div className="border-t border-edge pt-3">
       <div className="flex items-center gap-2">
@@ -258,7 +286,12 @@ export function PopupApp() {
         </Button>
         <span className="text-[11px] text-text-3">{t(noteKey)}</span>
       </div>
-      {killError && <p className="mt-1.5 text-xs font-semibold text-danger">{killError}</p>}
+      <p
+        role="alert"
+        className={killError ? "mt-1.5 text-xs font-semibold text-danger" : "sr-only"}
+      >
+        {killError}
+      </p>
     </div>
   );
 
@@ -294,7 +327,7 @@ export function PopupApp() {
     <div className="flex min-h-[120px] flex-col bg-surface-0 text-text-1">
       <div className="flex items-center gap-2 border-b border-edge px-3.5 py-2.5">
         <BridgeIcon />
-        <span className="text-[13px] font-semibold">{t("app.name")}</span>
+        <h1 className="m-0 text-[13px] font-semibold">{t("app.name")}</h1>
         <span className={`${pill.className} ml-auto`}>
           <span className={pill.dot} />
           {t(pill.label)}
@@ -329,7 +362,7 @@ export function PopupApp() {
           <>
             {microStatus(false)}
             <div>
-              <div className="section-title mb-1.5">{t("popup.pair_compare")}</div>
+              <h2 className="section-title m-0 mb-1.5">{t("popup.pair_compare")}</h2>
               {/* reading order per first-run.html: explain, then the code,
                   then the choice - with the safe exit as the filled default */}
               <p className="text-xs leading-snug text-text-2">{t("popup.pair_explainer")}</p>
@@ -362,24 +395,48 @@ export function PopupApp() {
         ) : enroll?.blocked ? (
           <>
             {microStatus(false)}
-            <p className="text-xs leading-relaxed text-text-2">
-              {t(
-                enroll.state === "compromised"
-                  ? "popup.blocked_compromised_hint"
-                  : "popup.blocked_unpaired_hint",
-              )}
-            </p>
+            {enroll.state === "compromised" ? (
+              <p className="text-xs leading-relaxed text-text-2">
+                {t("popup.blocked_compromised_hint")}
+              </p>
+            ) : (
+              // Pairing is the pending action, so it gets the primary slot
+              // (amber: waiting on you); the kill switch stays the compact
+              // secondary row below.
+              <div>
+                <p className="text-xs leading-relaxed text-text-2">
+                  {t("popup.blocked_unpaired_hint")}
+                </p>
+                <Button
+                  variant="pending"
+                  className="mt-2 w-full py-2 text-[13px]"
+                  onClick={openPairing}
+                >
+                  {t("popup.start_pairing")}
+                </Button>
+                <p className="mt-1.5 text-[11px] text-text-3">
+                  {t("popup.pair_cli_hint")} <code className="chip-mono">chromium-bridge pair</code>
+                </p>
+              </div>
+            )}
             {panicRow("popup.kill_note_pair")}
           </>
         ) : (
           <>
             {pending && (
               <div className="rounded-lg border border-pending-edge bg-pending-dim px-3.5 py-3">
-                <div className="section-title mb-0.5 text-pending">{t("popup.pending_label")}</div>
+                <h2 className="section-title m-0 mb-0.5 text-pending">
+                  {t("popup.pending_label")}
+                </h2>
                 <div className="my-1 break-all font-mono text-lg font-bold text-text-1">
                   {displayOrigin(pending.glob)}
                 </div>
-                <p className="text-xs leading-snug text-text-2">{t("popup.pending_ask")}</p>
+                {/* the EXACT grant, scheme included: http:// and https://
+                    globs must never look identical on a consent surface */}
+                <code className="chip-mono max-w-full whitespace-normal break-all">
+                  {pending.glob}
+                </code>
+                <p className="mt-1.5 text-xs leading-snug text-text-2">{t("popup.pending_ask")}</p>
                 <div className="mt-2.5 flex gap-2">
                   <Button
                     variant="primary"
@@ -388,8 +445,12 @@ export function PopupApp() {
                   >
                     {t("common.deny")}
                   </Button>
+                  {/* Never offer the capability-granting half while the kill
+                      state is unreadable (the header says severed); Deny -
+                      removing capability - stays available. */}
                   <Button
                     className="flex-1 py-2 text-[13px]"
+                    disabled={killUnverified}
                     onClick={() => void resolvePending(true)}
                   >
                     {t("popup.pending_allow_on", [displayOrigin(pending.glob)])}
@@ -402,7 +463,7 @@ export function PopupApp() {
             {microStatus(Boolean(pending))}
 
             <div>
-              <div className="section-title mb-1">{t("popup.allowed_sites")}</div>
+              <h2 className="section-title m-0 mb-1">{t("popup.allowed_sites")}</h2>
               {list.length === 0 ? (
                 <p className="py-1 text-xs text-text-3">{t("popup.no_sites")}</p>
               ) : (
@@ -412,15 +473,16 @@ export function PopupApp() {
                       key={glob}
                       className="flex items-center gap-2 border-b border-edge py-1.5 last:border-b-0"
                     >
+                      {/* the exact glob, scheme included: what is actually granted */}
                       <code
-                        className={`min-w-0 truncate font-mono text-xs ${pending ? "text-text-2" : "text-text-1"}`}
+                        className={`min-w-0 break-all font-mono text-xs ${pending ? "text-text-2" : "text-text-1"}`}
                       >
-                        {displayOrigin(glob)}
+                        {glob}
                       </code>
                       <button
                         type="button"
                         className="-my-0.5 ml-auto cursor-pointer rounded-sm border-none bg-transparent px-2 py-1 text-[11px] font-medium text-text-2 hover:bg-danger-dim hover:text-danger"
-                        aria-label={`${t("common.remove")} ${displayOrigin(glob)}`}
+                        aria-label={`${t("common.remove")} ${glob}`}
                         onClick={() => void removeSite(glob)}
                       >
                         {t("common.remove")}
