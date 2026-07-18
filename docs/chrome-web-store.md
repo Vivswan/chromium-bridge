@@ -51,7 +51,8 @@ cannot connect.
 - [ ] A **privacy policy URL** (**required** for this project: the extension reads page
       content, cookies, and web storage). It can live under `docs/`.
 - [ ] Store listing assets: 1-5 screenshots (1280x800 or 640x400), a 128px icon
-      (`src/apps/extension/icons/icon128.png` already exists), short + detailed descriptions, a
+      (`just gen-icons` renders `src/apps/extension/src/public/icons/icon128.png` from the
+      committed SVG sources in `assets/icon/`), short + detailed descriptions, a
       category, and support/homepage URLs.
 
 ## Review risks specific to this extension

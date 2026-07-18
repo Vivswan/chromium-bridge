@@ -147,6 +147,7 @@ if (envProfilePath !== undefined && envProfilePath !== "") {
 }
 console.log(`provisioning profile: ${profile.path} (expires ${profile.expires.toISOString()})`);
 
+run(["bun", resolve(root, "scripts/gen-icons.ts"), "desktop"]);
 run(["cargo", "build", "--release", "-p", "chromium-bridge"]);
 run(["bun", "run", "--cwd", "src/apps/extension", "build"]);
 run(["bunx", "tauri", "build"], desktop);

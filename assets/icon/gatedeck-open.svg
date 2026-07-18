@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Gatedeck - open (awaiting consent)</title>
+  <!-- Path-compatible with gatedeck.svg: same three paths in the same
+       order; only the deck coordinates differ. The leaves pivot from
+       outer ends slightly below the closed line and lift to an apex gap. -->
+  <path id="arch" d="M94 386 Q256 62 418 386"
+        fill="none" stroke="#6b7a92" stroke-width="72"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path id="deck-left" d="M58 158 L205 113"
+        fill="none" stroke="#3fe081" stroke-width="48"
+        stroke-linecap="round"/>
+  <path id="deck-right" d="M454 158 L307 113"
+        fill="none" stroke="#3fe081" stroke-width="48"
+        stroke-linecap="round"/>
+</svg>
