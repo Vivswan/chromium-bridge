@@ -129,8 +129,8 @@ async fn kill_engage() -> Result<u64, String> {
     blocking(killswitch::engage).await
 }
 
-/// Presence-gated (Phase 8 seam). Same dialog-first obligation as
-/// `client_pair`: only the modal's confirm handler may invoke this.
+/// Presence-gated. Same dialog-first obligation as `client_pair`: only the
+/// modal's confirm handler may invoke this.
 #[tauri::command]
 async fn kill_release() -> Result<killswitch::ReleaseOutcome, String> {
     blocking(killswitch::release).await
@@ -156,10 +156,10 @@ async fn client_revoke(name: String) -> Result<bool, String> {
     blocking(move || clients::revoke(&name)).await
 }
 
-/// Presence-gated (Phase 8 seam). The webview may only invoke this from the
-/// confirm handler of its explicit modal dialog - the dialog is what
-/// `Floor::AppConfirm` will assert once phase8 lands. Returns the presence
-/// path that authorized the pairing.
+/// Presence-gated. The webview may only invoke this from the confirm
+/// handler of its explicit modal dialog - the dialog is what
+/// `Floor::AppConfirm` asserts. Returns the presence path that authorized
+/// the pairing.
 #[tauri::command]
 async fn client_pair(
     name: String,

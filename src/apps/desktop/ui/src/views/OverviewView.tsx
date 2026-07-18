@@ -55,7 +55,7 @@ export function OverviewView() {
   };
 
   // Presence-gated: invoked ONLY from the confirm dialog below. The dialog
-  // is what Floor::AppConfirm asserts once phase8 lands (see the Rust seam).
+  // is what Floor::AppConfirm asserts (see the Rust seam).
   const confirmRelease = async () => {
     setBusy("release");
     setActionError(undefined);
