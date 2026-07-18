@@ -17,6 +17,9 @@ export interface ProvisioningProfile {
   appIdentifier: string;
   keychainAccessGroups: string[];
   teamIds: string[];
+  // base64 DER of each certificate the profile authorizes to sign; AMFI
+  // rejects a binary signed by any other certificate, even same-team.
+  developerCertificates: string[];
   hasGetTaskAllow: boolean;
   provisionsAllDevices: boolean;
   provisionedDevices: string[];
@@ -27,7 +30,11 @@ export interface ProfileExpectation {
   appIdentifier: string;
   teamId: string;
   keychainGroup: string;
-  deviceUdid: string;
+  // undefined skips the this-device check: a CI runner signing for the
+  // user's Mac is never in the profile's device list. AMFI still enforces
+  // device coverage at exec on whatever machine runs the app, so skipping
+  // the build-time check cannot widen what the profile authorizes.
+  deviceUdid: string | undefined;
 }
 
 function capture(cmd: string[], stdin?: string): string | undefined {
@@ -54,6 +61,20 @@ function extractStringArray(plist: string, keypath: string): string[] {
   }
 }
 
+// An array of <data> values, as base64 strings. plutil cannot render data in
+// json mode, but raw mode prints an array's element count and a data
+// element's base64, so index through the array.
+function extractDataArray(plist: string, keypath: string): string[] {
+  const count = Number(extract(plist, keypath, "raw"));
+  if (!Number.isInteger(count) || count <= 0) return [];
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const b64 = extract(plist, `${keypath}.${i}`, "raw");
+    if (b64 !== undefined) out.push(b64);
+  }
+  return out;
+}
+
 /// Decode and parse one .provisionprofile. Returns undefined when the file
 /// cannot be decoded (not a CMS blob, unreadable).
 export function readProvisioningProfile(path: string): ProvisioningProfile | undefined {
@@ -69,6 +90,7 @@ export function readProvisioningProfile(path: string): ProvisioningProfile | und
     appIdentifier,
     keychainAccessGroups: extractStringArray(plist, "Entitlements.keychain-access-groups"),
     teamIds: extractStringArray(plist, "TeamIdentifier"),
+    developerCertificates: extractDataArray(plist, "DeveloperCertificates"),
     hasGetTaskAllow:
       extract(plist, "Entitlements.com\\.apple\\.security\\.get-task-allow", "raw") !== undefined,
     provisionsAllDevices: extract(plist, "ProvisionsAllDevices", "raw") === "true",
@@ -100,7 +122,11 @@ export function profileProblems(p: ProvisioningProfile, want: ProfileExpectation
   if (p.hasGetTaskAllow) {
     problems.push("authorizes com.apple.security.get-task-allow (debugger-attach regression)");
   }
-  if (!p.provisionsAllDevices && !p.provisionedDevices.includes(want.deviceUdid)) {
+  if (
+    want.deviceUdid !== undefined &&
+    !p.provisionsAllDevices &&
+    !p.provisionedDevices.includes(want.deviceUdid)
+  ) {
     problems.push(`does not provision this device (${want.deviceUdid})`);
   }
   if (p.expires.getTime() <= Date.now()) {
