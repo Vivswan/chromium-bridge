@@ -38,6 +38,12 @@ const KILL_MIRROR_KEY = "bridgeKillMirror";
  * fails closed (same posture as the client-admin exchange, #61). */
 const KILL_REQUEST_TIMEOUT_MS = 10_000;
 
+/** kill_release alone gets a longer window (ADR-0031): on macOS the host
+ * answers only after the user completes the Touch ID prompt, and a 10s
+ * budget would time the request out mid-tap. Timing out still fails closed
+ * (the switch stays engaged; a late release is pushed to the mirror). */
+const KILL_RELEASE_TIMEOUT_MS = 120_000;
+
 export type KillGate = { allowed: true } | { allowed: false; reason: string };
 
 /** The mirror's verdict for the request gate. Pure over the stored value so
@@ -147,7 +153,7 @@ async function mirrorView(ok: boolean, error?: string): Promise<KillView> {
 
 /** One kill request (status query or transition) over the port. One request
  * outstanding at a time; the host replies in order on a single pipe. */
-function request(frame: object): Promise<KillView> {
+function request(frame: object, timeoutMs: number = KILL_REQUEST_TIMEOUT_MS): Promise<KillView> {
   if (!postFrame) {
     return mirrorView(false, "native host not connected");
   }
@@ -158,7 +164,7 @@ function request(frame: object): Promise<KillView> {
     const timer = setTimeout(() => {
       pending = null;
       void mirrorView(false, "no reply from the native host (timed out)").then(resolve);
-    }, KILL_REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
     pending = { resolve, timer };
     if (!postFrame?.(frame)) {
       clearTimeout(timer);
@@ -181,7 +187,9 @@ export function requestKillStatus(): Promise<KillView> {
 export function setKillSwitch(on: boolean): Promise<KillView> {
   // Local ring only: the host records the authoritative kill_engage/release.
   auditEvent(on ? "kill_engaged" : "kill_released", { outcome: "requested" }, { forward: false });
-  return request({ type: on ? "kill_engage" : "kill_release" });
+  return on
+    ? request({ type: "kill_engage" })
+    : request({ type: "kill_release" }, KILL_RELEASE_TIMEOUT_MS);
 }
 
 // Frames are processed strictly in arrival order: SW event handlers

@@ -70,6 +70,11 @@ def check(cond, label):
         print(f"  FAIL  {label}")
 
 
+def note(msg):
+    """A non-counting informational line (e.g. a skip on an enrolled Mac)."""
+    print(f"  NOTE  {msg}")
+
+
 def ensure_binary():
     if os.path.exists(BIN):
         return
@@ -106,24 +111,67 @@ def nm_write(p, obj):
     p.stdin.flush()
 
 
-def unkill_interactive(phrase="release", check=True):
-    """Release the kill switch through the CLI's presence floor (ADR-0030):
-    `unkill` refuses a non-terminal stdin, so drive it on a pty and type the
-    confirmation phrase. Unix only (every caller is already Unix-gated).
-    Returns a CompletedProcess; with check=True a non-zero exit raises."""
+def enclave_key_present(env=None):
+    """Whether the presence ladder would reach the HARDWARE rung here - i.e.
+    whether a Secure Enclave enrollment key exists. When it does, presence-
+    gated commands raise a real Touch ID prompt an automated run cannot
+    answer, so callers skip rather than block (repo rule: tests must not raise
+    real prompts). The keychain is system-global, so an isolated HOME/XDG does
+    not hide it.
+
+    Fails SAFE: only a definitive `key: none` line lets the gated tests run.
+    A probe error, timeout, non-zero exit, or unrecognized output is treated
+    as possibly-enrolled and skips - risking an over-skip (lost coverage on a
+    broken probe) is acceptable; risking a real prompt is not. Read-only;
+    never prompts."""
+    try:
+        r = subprocess.run([BIN, "enclave-status"], capture_output=True,
+                           text=True, env=env, timeout=10)
+    except Exception:
+        return True  # indeterminate -> assume enrolled, skip
+    if r.returncode != 0:
+        return True
+    for line in r.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("key:"):
+            rest = stripped[len("key:"):].strip()
+            # The not-enrolled line is exactly `key:        none (run ...)`.
+            # Match on the first whitespace token so a hypothetical value like
+            # `nonetheless` is NOT mistaken for `none` (which would fail open).
+            first_token = rest.split()[0] if rest.split() else ""
+            if first_token == "none":
+                return False  # definitively not enrolled -> safe to run
+            return True  # present, rejected, or anything else -> skip
+    return True  # no key line at all -> indeterminate, skip
+
+
+def run_with_cli_presence(args, phrase="release", check=True, timeout=15, env=None):
+    """Run a capability-restoring CLI subcommand (`unkill`, `pair-client`)
+    through its presence floor (ADR-0030/0031). On macOS the presence ladder
+    tries the SECURE ENCLAVE signing rung first, but with no enrollment key on
+    this machine that rung is Unavailable, so it falls back to the CLI floor:
+    the command refuses a non-terminal stdin and then reads the confirmation
+    phrase from a terminal. Drive it on a pty and type the phrase. Unix only
+    (every caller is Unix-gated).
+
+    Callers MUST guard with `enclave_key_present()` and skip when a key exists:
+    the hardware rung raises a real Touch ID sheet the typed phrase cannot
+    satisfy, and that path is exercised by the user runbook
+    (`just phase8-touchid-proof`), not headlessly. Returns a CompletedProcess;
+    with check=True a non-zero exit raises."""
     import pty
 
     master, slave = pty.openpty()
     try:
-        p = subprocess.Popen([BIN, "unkill"], stdin=slave,
+        p = subprocess.Popen([BIN, *args], stdin=slave,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, encoding="utf-8")
+                             text=True, encoding="utf-8", env=env)
         os.close(slave)
         slave = -1
         # The pty buffers the phrase until the prompt reads it.
         os.write(master, (phrase + "\n").encode())
         try:
-            out, err = p.communicate(timeout=15)
+            out, err = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             # Reap the specific child we spawned; never leave it running.
             p.kill()
@@ -132,10 +180,25 @@ def unkill_interactive(phrase="release", check=True):
         if slave >= 0:
             os.close(slave)
         os.close(master)
-    result = subprocess.CompletedProcess([BIN, "unkill"], p.returncode, out, err)
+    result = subprocess.CompletedProcess([BIN, *args], p.returncode, out, err)
     if check and result.returncode != 0:
-        raise RuntimeError(f"unkill failed ({result.returncode}): {err}")
+        raise RuntimeError(f"{args[0]} failed ({result.returncode}): {err}")
     return result
+
+
+def unkill_interactive(phrase="release", check=True):
+    """Release the kill switch through the CLI's presence floor (ADR-0030).
+    See run_with_cli_presence for the headless-vs-hardware nuance."""
+    return run_with_cli_presence(["unkill"], phrase=phrase, check=check)
+
+
+def pair_client_interactive(*args, phrase="release", check=True, env=None):
+    """Run `chromium-bridge pair-client ...` through its presence floor
+    (ADR-0031): pairing GRANTS harness capability, so it is now gated exactly
+    like unkill. See run_with_cli_presence for the headless-vs-hardware
+    nuance."""
+    return run_with_cli_presence(["pair-client", *args], phrase=phrase,
+                                 check=check, env=env)
 
 
 def nm_read(p):
@@ -730,6 +793,12 @@ def test_admin_control_frames():
     (never the developer's real clients.json) via a private XDG_RUNTIME_DIR, so
     pairing and revoking here cannot touch real state."""
     print("\n[test] trusted-client admin frames are answered locally (ADR-0025)")
+    if enclave_key_present():
+        note("admin-frames test skipped: an Enclave key is enrolled, so "
+             "pair-client would raise a real Touch ID prompt this automated "
+             "run cannot answer. The hardware pairing path is covered by "
+             "`just phase8-touchid-proof`.")
+        return
     rundir = tempfile.mkdtemp(prefix="bb-admin-e2e-")
     env = dict(os.environ, XDG_RUNTIME_DIR=rundir,
                XDG_CONFIG_HOME=os.path.join(rundir, "config"))
@@ -744,13 +813,11 @@ def test_admin_control_frames():
     try:
         # Pair this test's own process so the server it spawns is admitted
         # (admission is enforced once any client is paired), plus a separate
-        # trusted client the admin frames will enumerate and revoke.
-        subprocess.run([BIN, "pair-client", "--name", "pytest", "--this-parent"],
-                       check=True, env=env, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL)
-        subprocess.run([BIN, "pair-client", "--name", "codex", "--hash", "aa" * 32],
-                       check=True, env=env, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL)
+        # trusted client the admin frames will enumerate and revoke. Pairing
+        # is presence-gated (ADR-0031); run_with_cli_presence drives the CLI
+        # floor on a pty.
+        pair_client_interactive("--name", "pytest", "--this-parent", env=env)
+        pair_client_interactive("--name", "codex", "--hash", "aa" * 32, env=env)
         mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
         wait_lock(mcp)
@@ -818,6 +885,12 @@ def test_kill_switch_round_trip():
     Also proves the audit trail: kill/unkill land in the 0600 audit file and
     `chromium-bridge audit` renders them."""
     print("\n[test] global kill switch: engage, refuse, release, recover (ADR-0030)")
+    if enclave_key_present():
+        note("kill-switch round-trip skipped: an Enclave key is enrolled, so "
+             "the extension `kill_release` would raise a real Touch ID prompt "
+             "this automated run cannot answer. The hardware unkill path is "
+             "covered by `just phase8-touchid-proof`.")
+        return
     try:
         os.remove(LOCK)
     except FileNotFoundError:
@@ -942,7 +1015,13 @@ def test_kill_switch_round_trip():
         release = next(rec for rec in records if rec.get("kind") == "kill_release")
         check(release.get("surface") == "extension",
               "the release records its surface (extension control frame)")
-        check("auth=extension_confirm" in release.get("detail", ""),
+        # The release names the presence rung that authorized it (ADR-0031).
+        # On a machine WITHOUT a Secure Enclave key the extension floor is used
+        # (auth=extension_confirm); on an enrolled Mac the hardware rung runs
+        # and the release requires a real Touch ID tap (auth=touch_id). Both
+        # are valid; only a missing/blank rung is a bug.
+        detail = release.get("detail", "")
+        check("auth=extension_confirm" in detail or "auth=touch_id" in detail,
               "the release names the presence rung that authorized it")
         killed_calls = [rec for rec in records
                         if rec.get("kind") == "tool_call"

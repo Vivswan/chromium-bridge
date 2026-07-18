@@ -221,3 +221,54 @@ fn print_public_key(public: &EnclavePublicKey) {
     println!("fingerprint (sha256):");
     println!("  {}", public.fingerprint_display());
 }
+
+/// `chromium-bridge presence-selftest`: raise ONE per-action user-presence
+/// prompt (ADR-0031) and report the outcome. It signs a throwaway challenge
+/// over the presence domain with the enrollment key - exactly the Enclave
+/// operation the `page_eval`/`page_upload` gate performs when the extension
+/// sends a `presence_challenge` - so the user can see that Touch ID prompt
+/// without a browser. Read-only: nothing is stored, and the signature is
+/// discarded. Returns a process exit code.
+pub fn run_presence_selftest() -> i32 {
+    println!("chromium-bridge presence-selftest");
+    let key = match EnrollmentKey::lookup() {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            eprintln!(
+                "no enrollment key on this machine; run `chromium-bridge pair` first. \
+                 Without a key the per-action Touch ID gate is unavailable and \
+                 page_eval/page_upload confirmations use the extension window instead."
+            );
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("could not look up the enrollment key: {e}");
+            return 1;
+        }
+    };
+    println!("raising a user-presence prompt (Touch ID or your login password)...");
+    // A fresh nonce + a self-test context; the signature is discarded. The
+    // point is that this Enclave op cannot complete without a live tap.
+    let nonce = format!(
+        "selftest-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    match key.sign_presence(&nonce, Some("presence-selftest")) {
+        Ok(_sig) => {
+            println!("OK: user presence verified (the Enclave signed under Touch ID).");
+            println!(
+                "this is the exact prompt page_eval / page_upload raise on an enrolled \
+                 Mac when touchIdConfirm is on."
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("presence NOT verified: {e}");
+            eprintln!("(a cancelled prompt or a failed scan reads as a refusal, fail closed)");
+            1
+        }
+    }
+}

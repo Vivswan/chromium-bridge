@@ -27,6 +27,7 @@ fn main() {
         Command::Pair { reset } => enclave::run_pair(reset),
         Command::Revoke => enclave::run_revoke(),
         Command::EnclaveStatus => enclave::run_status(),
+        Command::PresenceSelftest => enclave::run_presence_selftest(),
         Command::PairClient => allowlist::run_pair_client(&args),
         Command::RevokeClient => allowlist::run_revoke_client(&args),
         Command::ListClients => allowlist::run_list_clients(),

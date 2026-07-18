@@ -14,6 +14,7 @@ const verifyId = vi.fn();
 const registerRouter = vi.fn();
 const installCdp = vi.fn();
 const installConfirm = vi.fn();
+const installPresence = vi.fn();
 const connect = vi.fn();
 
 vi.mock("@/lib/background/trusted-storage", () => ({ hardenStorageAccess: harden }));
@@ -23,8 +24,13 @@ vi.mock("@/lib/background/messages", () => ({ registerRuntimeMessageRouter: regi
 vi.mock("@/lib/background/cdp/registry", () => ({ installCdpLifecycleListeners: installCdp }));
 vi.mock("@/lib/background/confirm/service", () => ({
   installConfirmationProvider: installConfirm,
+  installPresenceProvider: installPresence,
 }));
 vi.mock("@/lib/background/confirm/surface", () => ({ ExtensionWindowProvider: class {} }));
+vi.mock("@/lib/background/confirm/presence", () => ({
+  EnclavePresenceProvider: class {},
+  presenceRoutingEnabled: vi.fn(() => Promise.resolve(false)),
+}));
 vi.mock("@/lib/background/port", () => ({ connectNative: connect }));
 
 // defineBackground returns its callback as `.main`; capture it.
@@ -49,6 +55,9 @@ describe("background entrypoint", () => {
     expect(registerRouter).toHaveBeenCalledTimes(1);
     expect(installCdp).toHaveBeenCalledTimes(1);
     expect(installConfirm).toHaveBeenCalledTimes(1);
+    // The Enclave user-presence provider (ADR-0031) must be wired at startup
+    // too, or eval/upload confirmations silently stay window-only.
+    expect(installPresence).toHaveBeenCalledTimes(1);
     expect(verifyId).toHaveBeenCalledTimes(1);
     expect(connect).toHaveBeenCalled();
   });

@@ -664,10 +664,12 @@ def _rm_clients():
 
 
 def _pair_client(*args):
-    """Run `chromium-bridge pair-client ...` under the isolation env."""
+    """Run `chromium-bridge pair-client ...` under the isolation env. Pairing
+    GRANTS harness capability and is presence-gated (ADR-0031), so it is
+    driven through the CLI presence floor on a pty (see
+    e2e.run_with_cli_presence for the headless-vs-Touch-ID nuance)."""
     _require_isolated()
-    subprocess.run([e2e.BIN, "pair-client", *args], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    e2e.pair_client_interactive(*args)
 
 
 def a14_non_allowlisted_harness_refused():
