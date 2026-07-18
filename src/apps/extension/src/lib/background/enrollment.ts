@@ -38,6 +38,7 @@ import {
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
+import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
 import * as pinStore from "./enclave-pin";
 import {
@@ -691,7 +692,7 @@ async function updateBadge(): Promise<void> {
       badgeShown = true;
       await browser.action.setBadgeText({ text: st.state === "pending" ? "PAIR" : "!" });
       await browser.action.setBadgeBackgroundColor({
-        color: st.state === "pending" ? "#f59e0b" : "#d9534f",
+        color: st.state === "pending" ? BADGE_PENDING_COLOR : BADGE_DANGER_COLOR,
       });
     } else if (badgeShown) {
       badgeShown = false;

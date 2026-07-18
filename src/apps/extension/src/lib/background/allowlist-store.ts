@@ -13,6 +13,7 @@ import {
   originGlobOf,
 } from "../shared/allowlist";
 import { getSetting } from "../shared/settings";
+import { BADGE_PENDING_COLOR } from "../shared/theme-colors";
 
 const STORAGE_KEY = "allowlist";
 
@@ -73,7 +74,9 @@ function promptUserForAllow(glob: string): Promise<boolean> {
     const reqId = `allow_${Date.now()}`;
     pendingAllowRequests.set(reqId, { glob, resolve });
     browser.action.setBadgeText({ text: "!" });
-    browser.action.setBadgeBackgroundColor({ color: "#d9534f" });
+    // Amber, not red: a new-origin approval is a pending "needs you" state
+    // in the Control Tower vocabulary (red is kill/deny only).
+    browser.action.setBadgeBackgroundColor({ color: BADGE_PENDING_COLOR });
     browser.storage.local.set({ pendingAllow: { id: reqId, glob } });
     // Auto-reject after 60s.
     setTimeout(() => {
