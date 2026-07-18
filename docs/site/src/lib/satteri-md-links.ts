@@ -1,9 +1,9 @@
 // Repo markdown links point at sibling .md files (./architecture.md); served
 // under /docs/<slug>/ those hrefs would 404. This Satteri hast plugin
 // resolves each relative .md link against the source file, sends links this
-// site renders to their /docs/ route, and everything else (source trees,
-// agent instruction files) to the file on GitHub, so no rendered page keeps
-// a dead link.
+// site renders to their /docs/ route, and other .md targets (source-tree
+// READMEs, agent instruction files) to the file on GitHub. Only .md links
+// are rewritten; other relative links in docs are left as-is.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoPathToSlug } from "./doc-slug";

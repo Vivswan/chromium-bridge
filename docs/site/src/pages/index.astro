@@ -1,6 +1,6 @@
 ---
 // The landing page, built exactly to the approved mockup
-// (design-explorations/site/mockup.html). All copy is normative there; the
+// (design-explorations/site/mockup.html), since diverged: the page copy here
 // Gatedeck path data comes from assets/icon/gatedeck.svg and
 // gatedeck-open.svg. Content needs zero JS: the theme flip is a checkbox,
 // the hover morph is CSS.
@@ -38,7 +38,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
     <title>Chromium Bridge: your real browser, behind a gate you hold</title>
     <meta
       name="description"
-      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Dangerous actions stop at confirmation gates no web page can see or press - on by default, relaxed only by your explicit choice - and the riskiest demand a Secure Enclave proof that you are present."
+      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Dangerous actions stop at confirmation gates no web page can see or press - on by default, relaxed only by your explicit choice - and on an enrolled Mac the riskiest demand a Secure Enclave proof that you are present."
     />
     <link rel="icon" type="image/svg+xml" href={withBase("gatedeck-app-icon.svg")} />
   </head>
@@ -80,8 +80,8 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
         your cookies. No second browser, no debug port.
         <strong>Dangerous actions stop at confirmation gates no web page can
         see or press - on by default, relaxed only by your explicit choice -
-        and the riskiest demand a Secure Enclave proof that you are
-        present.</strong>
+        and on an enrolled Mac the riskiest demand a Secure Enclave proof that
+        you are present.</strong>
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="#install">Install on your Mac</a>
@@ -204,13 +204,13 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
 
       <div class="g-grid">
         <div class="g-cell">
-          <h3>A program you run can never enroll itself silently.</h3>
+          <h3>No program can enroll itself through the bridge.</h3>
           <p>Trusting an MCP client takes proof of presence: a Secure Enclave
             check - your touch or your login password - on an enrolled Mac, an
             explicit interactive confirmation where no such hardware exists.
             The gate is hard-wired; there is no flag, env var, or grace window
             that skips it.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0024-multi-client-attested-pairing-and-broker.md">ADR-0024</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0031-touch-id-confirmations-and-presence-grants.md">ADR-0031</a>
         </div>
         <div class="g-cell">
           <h3>On an enrolled Mac, approval is your presence.</h3>
@@ -233,7 +233,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
         <div class="g-cell">
           <h3>No site runs without your yes.</h3>
           <p>A new origin triggers a prompt in the extension. Until you approve
-            it there, no tool touches that site; the one exception is an
+            it there, no page-level tool touches that site; the one exception is an
             explicit allow-all-sites opt-in you would have to set yourself.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
         </div>
