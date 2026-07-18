@@ -43,11 +43,10 @@ export function ConfirmDialog({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/50" />
+        <DialogPrimitive.Overlay className="dialog-overlay fixed inset-0 z-40 bg-black/50" />
         <DialogPrimitive.Content
-          className="fixed left-1/2 top-1/2 z-50 w-96 max-w-[90vw] -translate-x-1/2
-            -translate-y-1/2 rounded-lg border border-edge-strong bg-surface-2 p-4
-            focus:outline-none"
+          className="dialog-content fixed left-1/2 top-1/2 z-50 w-96 max-w-[90vw]
+            rounded-lg border border-edge-strong bg-surface-2 p-4"
         >
           <DialogPrimitive.Title className="m-0 text-[13px] font-semibold text-text-1">
             {title}
@@ -63,6 +62,7 @@ export function ConfirmDialog({
             </DialogPrimitive.Close>
             <Button
               gated
+              pending={busy}
               disabled={busy}
               onClick={() => {
                 if (fired.current || busy) return;

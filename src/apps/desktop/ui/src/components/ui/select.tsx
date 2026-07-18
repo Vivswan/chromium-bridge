@@ -39,8 +39,8 @@ export function SelectContent({
         position="popper"
         sideOffset={4}
         className={cn(
-          "z-50 min-w-(--radix-select-trigger-width) overflow-hidden rounded-md border " +
-            "border-edge-strong bg-surface-3",
+          "select-content z-50 min-w-(--radix-select-trigger-width) overflow-hidden rounded-md " +
+            "border border-edge-strong bg-surface-3",
           className,
         )}
         {...props}

@@ -85,7 +85,7 @@ export function App() {
         <div className="mb-3 px-2.5 pt-1">
           <div className="text-[13px] font-semibold text-text-1">{t("app.title")}</div>
           {status !== undefined && (
-            <div className="mono tnum text-[10px] text-text-4">v{status.version}</div>
+            <div className="mono tnum text-[10px] text-text-3">v{status.version}</div>
           )}
         </div>
         {NAV.map((item) => {
@@ -105,12 +105,15 @@ export function App() {
         })}
         <div className="nav-spacer" />
         {killError !== undefined && (
-          <p className="mono m-0 mb-1 px-1 text-[10px] text-danger">{killError}</p>
+          <p role="alert" className="mono m-0 mb-1 px-1 text-[10px] text-danger">
+            {killError}
+          </p>
         )}
         <button
           type="button"
           className={cn("nav-item nav-kill", engaged && "engaged")}
           disabled={killBusy}
+          title={engaged ? undefined : t("overview.kill_consequence")}
           onClick={() => void onKill()}
         >
           <Power size={14} strokeWidth={1.8} aria-hidden />
