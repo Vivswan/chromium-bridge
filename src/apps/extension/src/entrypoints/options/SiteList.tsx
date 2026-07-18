@@ -71,7 +71,7 @@ export function SiteList() {
           {t("common.add")}
         </Button>
       </div>
-      {note && <div className="mb-2 text-xs text-danger-strong">{note}</div>}
+      {note && <div className="mb-2 text-xs text-danger">{note}</div>}
       {list.length === 0 ? (
         <div className="rounded-lg border border-dashed border-edge p-4 text-center text-xs text-faint">
           {t("popup.no_sites")}

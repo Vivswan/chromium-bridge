@@ -33,7 +33,7 @@ export function SettingRow({
       <div className="min-w-0 flex-1">
         <div className="font-semibold">{title}</div>
         <div className="mt-0.5 text-[12.5px] text-muted">{desc}</div>
-        {showWarn && <div className="mt-1.5 text-xs font-semibold text-danger-strong">{warn}</div>}
+        {showWarn && <div className="mt-1.5 text-xs font-semibold text-danger">{warn}</div>}
       </div>
       <Switch checked={checked} onCheckedChange={onChange} aria-label={title} />
     </div>

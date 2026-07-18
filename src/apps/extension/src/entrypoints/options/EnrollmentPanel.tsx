@@ -51,7 +51,7 @@ export function EnrollmentPanel() {
     );
   if (st === undefined) {
     return (
-      <div className="rounded-xl border border-danger p-3.5 text-danger-strong">
+      <div className="rounded-xl border border-danger p-3.5 text-danger">
         {t("enroll.no_status")}
       </div>
     );
@@ -120,9 +120,7 @@ export function EnrollmentPanel() {
         <>
           <div className="font-semibold text-danger">{t("enroll.state_compromised")}</div>
           {st.compromisedReason && (
-            <div className="mt-1 text-xs font-semibold text-danger-strong">
-              {st.compromisedReason}
-            </div>
+            <div className="mt-1 text-xs font-semibold text-danger">{st.compromisedReason}</div>
           )}
           <div className="mt-1 text-xs text-muted">{t("enroll.compromised_desc")}</div>
           <Actions>
@@ -156,9 +154,7 @@ export function EnrollmentPanel() {
         <div className="mt-2 text-xs text-muted">{t("enroll.host_revoke_pending")}</div>
       )}
 
-      {st.lastError && (
-        <div className="mt-2 text-xs font-semibold text-danger-strong">{st.lastError}</div>
-      )}
+      {st.lastError && <div className="mt-2 text-xs font-semibold text-danger">{st.lastError}</div>}
     </div>
   );
 }

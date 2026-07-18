@@ -29,7 +29,7 @@ export function StatusDot({
 }) {
   const toneClass = {
     ok: "bg-brand",
-    warn: "bg-warn-edge",
+    warn: "bg-pending",
     bad: "bg-danger",
     muted: "bg-faint",
   }[tone];
