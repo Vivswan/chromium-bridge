@@ -544,6 +544,12 @@ textarea {
 .chip-mono svg {
   flex: none;
 }
+/* identity material must never truncate: chips holding fingerprints,
+   origins, or paths wrap instead of clipping */
+.chip-mono.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 
 /* ---------- tables ---------- */
 .table {
@@ -832,6 +838,19 @@ textarea {
 .hub-node.dim {
   opacity: 0.6;
 }
+/* ghost = exists on this machine, no trust established: dashed, hollow */
+.hub-node.ghost {
+  background: transparent;
+  border-style: dashed;
+}
+.hub-node.ghost .hub-node-name {
+  color: var(--text-3);
+  font-weight: 500;
+}
+/* held = registered, waiting on the pairing ceremony */
+.hub-node.held {
+  border-color: var(--pending-edge);
+}
 .hub-node-name {
   font-size: 13px;
   font-weight: 600;
@@ -905,6 +924,12 @@ textarea {
 /* attested but not currently serving: solid neutral, no chevron */
 .edge-idle {
   stroke: var(--edge-strong);
+  fill: none;
+}
+/* registered, pairing ceremony pending: amber dashed */
+.edge-held {
+  stroke: var(--pending-edge);
+  stroke-dasharray: 3 4;
   fill: none;
 }
 .hub-lane-label {
@@ -1410,6 +1435,45 @@ td.outcome.pending {
 .substeps .btn {
   flex: none;
 }
+/* detected-browser rows inside Overview guide step 1: hairlines only */
+.detect {
+  margin-top: 8px;
+  max-width: 460px;
+}
+.detect-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 0;
+}
+.detect-row + .detect-row {
+  border-top: 1px solid var(--edge);
+}
+.detect-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.detect-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.detect-row .btn {
+  margin-left: auto;
+  flex: none;
+}
+.detect-meta a,
+.detect-meta button.linkish {
+  color: var(--text-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 /* CLI: optional tooling, one quiet row above the footer */
 .cli-row {
   margin-top: auto;
