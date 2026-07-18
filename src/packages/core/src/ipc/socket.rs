@@ -42,14 +42,13 @@ pub(super) fn socket_path() -> PathBuf {
 #[cfg(unix)]
 pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     let sock = socket_path();
     // A leftover socket from a crashed server makes bind fail with EADDRINUSE;
     // unlink it first. Binding recreates it fresh.
     let _ = fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
-    fs::set_permissions(&sock, fs::Permissions::from_mode(0o600))?;
+    crate::fsguard::set_private_mode(&sock)?;
     let lf = LockFile {
         endpoint: sock.to_string_lossy().into_owned(),
         secret: generate_secret()?,

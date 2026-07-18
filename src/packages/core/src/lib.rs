@@ -35,6 +35,7 @@ pub mod cli;
 pub mod doctor;
 pub mod enclave;
 pub mod error;
+pub(crate) mod fsguard;
 pub mod identity;
 pub mod ipc;
 pub mod kill;
