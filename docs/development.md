@@ -69,7 +69,7 @@ code enters the build without someone choosing to let it in.
 With `just` (`just` lists every recipe):
 
 ```sh
-just build          # build everything (mirror of `bun run build`, see below)
+just build          # build everything (see below)
 just build-release  # cargo build --release (the binary the e2e suites drive)
 just build-repro    # deterministic release build (scripts/build-repro.sh)
 just test           # rust tests (nextest) + protocol e2e
@@ -81,13 +81,16 @@ just fix-ts         # biome lint+format auto-fix across the workspace
 just install        # build the release binary, then register it (doctor --fix)
 ```
 
-`bun run build` (which `just build` wraps) builds the entire repo in one
-command: it typechecks `src/packages/shared`, bundles the extension, builds
-the desktop UI, typechecks `scripts/`, and finishes with
-`cargo build --workspace`. Use it to prove the whole graph still compiles
-after a cross-cutting change.
+`just build` builds the entire repo in one command: it typechecks
+`src/packages/shared`, bundles the extension, builds the desktop UI,
+typechecks `scripts/`, and finishes with `cargo build --workspace`. Use it to
+prove the whole graph still compiles after a cross-cutting change.
 
-Or run the underlying commands directly:
+The justfile is the canonical command interface: every task is a `just`
+recipe, and the root `package.json` scripts are thin aliases that delegate to
+the corresponding recipe (e.g. `bun run format:check` runs `just fmt-check`),
+so both entry points share one implementation. Each recipe is a plain command
+you can also run by hand:
 
 ```sh
 cargo build --release
@@ -95,7 +98,7 @@ cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 python3 tests/protocol/e2e.py
 bun install
-bun run typecheck               # tsc for the extension, tests/browser, scripts, src/packages/shared
+bunx tsc -p src/apps/extension  # one TS project; `just typecheck` covers all five
 bunx biome ci .                 # lint + format check (biome.json)
 bun run --cwd src/apps/extension build
 ```
