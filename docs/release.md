@@ -42,6 +42,68 @@ binary's own `chromium-bridge doctor --fix` (or the desktop app), see
 [quickstart.md](./quickstart.md). All third-party Actions are pinned to commit SHAs
 (supply-chain governance).
 
+## The desktop app job (macOS)
+
+release.yml has a second macOS job, `desktop-app`, that builds the signed
+desktop bundle (the helper-bundle host with its own entitlements,
+[ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md)), wraps it in a
+disk image, and attaches `chromium-bridge-app-<tag>-macos-arm64.dmg` plus its
+`.sha256` and a provenance attestation to the same release. It is the CI
+equivalent of `just app-dmg`, including the re-verification of the app inside
+the mounted image by `scripts/check-desktop-signing.ts`.
+
+The job needs signing material that forks and secretless checkouts do not
+have, so it is gated: a small `desktop-signing-secrets` job checks whether the
+secrets are configured and the `desktop-app` job skips cleanly (it does not
+fail) when they are absent. The binary and extension release is never blocked
+by the desktop job.
+
+Required repository secrets:
+
+| Secret | Content |
+|--------|---------|
+| `MACOS_CERT_P12_BASE64` | base64 of the signing certificate and its private key, exported from Keychain Access as a `.p12`. Must contain the identity named in `tauri.conf.json`'s `bundle.macOS.signingIdentity` |
+| `MACOS_CERT_PASSWORD` | the passphrase chosen for that `.p12` export |
+| `MACOS_PROVISION_PROFILE_BASE64` | base64 of a provisioning profile that authorizes the full entitlement chain (identifier, team, keychain group) |
+
+The certificate is imported into an ephemeral keychain that is deleted when
+the job ends, and the profile is passed to the build via
+`PROVISION_PROFILE_PATH` (locally, `scripts/desktop-bundle.ts` instead
+discovers the newest usable profile in Xcode's cache). The build validates the
+supplied profile fail-closed with one exception: the this-device check is
+skipped, because a CI runner is never in the profile's device list. That check
+is packaging validation, not enforcement; macOS itself refuses to run the app
+on any Mac the profile does not provision.
+
+**Free-tier churn:** a free Apple Development profile expires seven days after
+Xcode mints it, so `MACOS_PROVISION_PROFILE_BASE64` has to be refreshed
+shortly before tagging a release:
+
+```sh
+base64 -i ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/<uuid>.provisionprofile \
+  | gh secret set MACOS_PROVISION_PROFILE_BASE64
+```
+
+A free-tier profile also only provisions the enrolled Macs it lists, so a
+`.dmg` signed this way runs on those machines and nowhere else. The profile
+additionally has to authorize the exact certificate in the `.p12`:
+`check-desktop-signing.ts` compares the signer's leaf certificate against the
+profile's `DeveloperCertificates` and fails the build on a mismatch, so a
+renewed certificate means re-minting the profile and refreshing both secrets
+together. A paid Developer ID removes these limits.
+
+### Notarization (optional, needs a paid Developer ID)
+
+The job notarizes and staples the `.dmg` (`xcrun notarytool submit --wait`,
+then `xcrun stapler staple`) only when all three notarization secrets are
+configured: `APPLE_ID`, `APPLE_APP_PASSWORD` (an app-specific password), and
+`APPLE_TEAM_ID`. The free Apple Development certificate **cannot notarize**;
+these secrets can only exist once a paid Developer ID membership does. Without
+them the step is skipped and the job logs it plainly: the `.dmg` is
+dev-signed, not notarized, and Gatekeeper will warn on other Macs. Stapling
+runs before the checksum and attestation steps so the published digest matches
+the exact bytes users download.
+
 ## SBOM: a decoupled CycloneDX workflow
 
 `.github/workflows/sbom.yml` is independent of release.yml and triggers on
@@ -74,6 +136,11 @@ compatibility at will:
 
 - macOS **real integration tests in the release gate**: they need a real browser and are
   not part of the release gate yet.
+- **Desktop app signing secrets**: none are configured yet, so the `desktop-app` job
+  currently skips on every run. Wiring exists; the secrets (and a decision to publish)
+  do not.
+- **Notarization**: needs a paid Apple Developer ID membership. Until then any published
+  `.dmg` would be dev-signed only, and device-limited by the free-tier profile.
 
 ## Related
 

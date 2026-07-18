@@ -21,8 +21,23 @@
 //     SIGKILLs the entitled binaries at exec)
 //
 // Exits non-zero on any mismatch. Run standalone or via `just desktop-check`.
+// An optional argument points at a different .app to verify (desktop-bundle
+// re-runs this against the copy inside the mounted .dmg); the default is the
+// build-tree bundle.
 
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,7 +52,9 @@ const TEAM_ID = "3ZMH96L4V9";
 const BUNDLE_ID = "com.vivswan.chromium-bridge";
 const APP_IDENTIFIER = `${TEAM_ID}.${BUNDLE_ID}`;
 
-const appPath = resolve(root, "target/release/bundle/macos/Chromium Bridge.app");
+const appPath = process.argv[2]
+  ? resolve(process.argv[2])
+  : resolve(root, "target/release/bundle/macos/Chromium Bridge.app");
 const appBinary = resolve(appPath, "Contents/MacOS/chromium-bridge-desktop");
 const helperBundle = resolve(appPath, "Contents/Helpers/chromium-bridge.app");
 const hostBinary = resolve(helperBundle, "Contents/MacOS/chromium-bridge");
@@ -90,6 +107,50 @@ function teamIdOf(path: string): string | undefined {
   return run(["codesign", "-dv", path]).stderr.match(/^TeamIdentifier=(.+)$/m)?.[1];
 }
 
+// sha256 of the leaf certificate that signed a binary. codesign writes the
+// chain as codesign0 (leaf) .. codesignN into the working directory, so run
+// it in a throwaway temp dir.
+function leafCertSha256(path: string): string | undefined {
+  const dir = mkdtempSync(join(tmpdir(), "cb-signing-check-"));
+  try {
+    const proc = Bun.spawnSync(["codesign", "-d", "--extract-certificates", path], { cwd: dir });
+    if (proc.exitCode !== 0) return undefined;
+    return createHash("sha256")
+      .update(readFileSync(join(dir, "codesign0")))
+      .digest("hex");
+  } catch {
+    return undefined;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// AMFI only honors a profile for binaries signed by a certificate the
+// profile lists in DeveloperCertificates. Team, identifier, and entitlements
+// agreeing is not enough: a renewed free-tier certificate with the same name
+// fails at exec until a profile minted for it exists. Catch that here
+// instead of shipping it.
+function assertProfileCoversSigner(label: string, profilePath: string, binary: string): void {
+  const profile = readProvisioningProfile(profilePath);
+  if (profile === undefined) return; // assertProfile already reported it
+  const leaf = leafCertSha256(binary);
+  if (leaf === undefined) {
+    problem(`could not extract the signing certificate of ${binary}`);
+    return;
+  }
+  const authorized = profile.developerCertificates.map((b64) =>
+    createHash("sha256").update(Buffer.from(b64, "base64")).digest("hex"),
+  );
+  if (!authorized.includes(leaf)) {
+    problem(
+      `${label} does not authorize the certificate that signed ${binary}\n` +
+        `  signer leaf sha256 ${leaf}\n` +
+        `  profile authorizes ${authorized.join(", ") || "none"}\n` +
+        "  (re-mint the profile for the current certificate via Xcode, see ADR-0026)",
+    );
+  }
+}
+
 function assertEntitlements(label: string, path: string, expected: Record<string, unknown>): void {
   const actual = entitlementsOf(path);
   if ("com.apple.security.get-task-allow" in actual) {
@@ -104,9 +165,12 @@ function assertEntitlements(label: string, path: string, expected: Record<string
   }
 }
 
-// A provisioning profile must authorize the full entitlement chain on this
-// machine; anything less means AMFI kills the entitled process at exec.
-function assertProfile(label: string, path: string, deviceUdid: string): void {
+// A provisioning profile must authorize the full entitlement chain;
+// anything less means AMFI kills the entitled process at exec. deviceUdid
+// is undefined when PROVISION_PROFILE_PATH supplied the profile (a CI
+// runner is never in the device list; AMFI still enforces coverage on the
+// machine that runs the app).
+function assertProfile(label: string, path: string, deviceUdid: string | undefined): void {
   if (!existsSync(path)) {
     problem(`${label} is missing (${path})`);
     return;
@@ -206,21 +270,48 @@ for (const path of machOFilesUnder(appPath)) {
   }
 }
 
-const udid = provisioningUdid();
-if (udid === undefined) {
-  problem("could not determine this Mac's provisioning UDID (system_profiler)");
+const helperProfile = resolve(helperBundle, "Contents/embedded.provisionprofile");
+const appProfile = resolve(appPath, "Contents/embedded.provisionprofile");
+
+const suppliedProfilePath = process.env.PROVISION_PROFILE_PATH;
+if (suppliedProfilePath) {
+  // The env var is not a bare bypass: the embedded profiles must be byte-
+  // identical to the supplied file, and only then is the this-device check
+  // skipped (a CI runner is never in the device list; AMFI still enforces
+  // coverage on whatever Mac runs the app).
+  console.log(
+    "PROVISION_PROFILE_PATH set: this-device check skipped; the app runs only on Macs the embedded profile provisions",
+  );
+  let supplied: Buffer | undefined;
+  try {
+    supplied = readFileSync(suppliedProfilePath);
+  } catch {
+    problem(`PROVISION_PROFILE_PATH is not readable (${suppliedProfilePath})`);
+  }
+  if (supplied !== undefined) {
+    for (const [label, path] of [
+      ["helper embedded.provisionprofile", helperProfile],
+      ["app embedded.provisionprofile", appProfile],
+    ] as const) {
+      if (!existsSync(path) || !supplied.equals(readFileSync(path))) {
+        problem(`${label} is not the profile PROVISION_PROFILE_PATH supplied`);
+      }
+    }
+  }
+  assertProfile("helper embedded.provisionprofile", helperProfile, undefined);
+  assertProfile("app embedded.provisionprofile", appProfile, undefined);
 } else {
-  assertProfile(
-    "helper embedded.provisionprofile",
-    resolve(helperBundle, "Contents/embedded.provisionprofile"),
-    udid,
-  );
-  assertProfile(
-    "app embedded.provisionprofile",
-    resolve(appPath, "Contents/embedded.provisionprofile"),
-    udid,
-  );
+  const udid = provisioningUdid();
+  if (udid === undefined) {
+    problem("could not determine this Mac's provisioning UDID (system_profiler)");
+  } else {
+    assertProfile("helper embedded.provisionprofile", helperProfile, udid);
+    assertProfile("app embedded.provisionprofile", appProfile, udid);
+  }
 }
+
+assertProfileCoversSigner("helper embedded.provisionprofile", helperProfile, hostBinary);
+assertProfileCoversSigner("app embedded.provisionprofile", appProfile, appBinary);
 
 // Gatekeeper status is informational for a local dev build (no notarization;
 // publishing is on hold): record what spctl says without gating on it.

@@ -65,9 +65,16 @@ The Chromium Bridge desktop app is the primary install path. It bundles the
 signed host binary and the extension, and the only command in this path is
 the one that registers the server with your MCP client.
 
-> App downloads are not published yet (releases currently carry the CLI
-> archive only). Until they are, build and launch the app from a source
-> checkout with `just app-run`, or use the CLI path below.
+> App downloads are not published yet: releases carry the CLI archive and
+> extension zip, and the release pipeline's desktop job stays dormant until
+> its signing secrets are configured and the publish hold is lifted (see
+> [docs/release.md](./docs/release.md)). Until then, build the app from a
+> source checkout: `just app-dmg` produces a signed disk image,
+> `just app-install` puts the built app in /Applications, and `just app-run`
+> builds and launches it in place. A build signed with the free development
+> certificate runs only on Macs its provisioning profile lists, and public
+> distribution also needs a paid Developer ID for notarization; both remain
+> open. Or use the CLI path below.
 
 1. **Install the app.** Get `Chromium Bridge.app` (see the note above) and
    open it. On first launch it registers the native-messaging host with

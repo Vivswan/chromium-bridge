@@ -14,22 +14,42 @@
 //      it cannot go stale against Cargo.toml.
 //   5. copy the extension dist into Contents/Resources/extension
 //   6. embed the Mac Team provisioning profile (discovered from Xcode's
-//      profile cache) in the helper and the outer app
+//      profile cache, or supplied via PROVISION_PROFILE_PATH in CI) in the
+//      helper and the outer app
 //   7. sign inside-out: the helper with the HOST's own entitlements
 //      (entitlements/host.entitlements), then the outer app with its own
 //      (entitlements/app.entitlements)
 //   8. re-assert the final bundle with scripts/check-desktop-signing.ts,
 //      which fails on entitlement drift, a get-task-allow appearance, or an
 //      expired profile
+//   9. with --dmg, wrap the verified .app in a signed UDZO disk image and
+//      re-verify the copy inside the mounted image (the .dmg is what ships;
+//      hdiutil runs AFTER the re-sign because tauri's own dmg target would
+//      capture the .app before the helper bundle exists)
 //
 // macOS-only by design: the entitlement chain is the thing under test.
 
-import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { cargoVersion } from "./lib.ts";
-import { findUsableProfile, provisioningUdid, xcodeProfileDir } from "./provisioning.ts";
+import {
+  findUsableProfile,
+  type ProvisioningProfile,
+  profileProblems,
+  provisioningUdid,
+  readProvisioningProfile,
+  xcodeProfileDir,
+} from "./provisioning.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const desktop = resolve(root, "src/apps/desktop");
@@ -41,6 +61,8 @@ if (process.platform !== "darwin") {
   console.error("error: desktop-bundle is macOS-only (it exercises the signing chain)");
   process.exit(1);
 }
+
+const wantDmg = process.argv.includes("--dmg");
 
 function run(cmd: string[], cwd: string = root): void {
   console.log(`+ ${cmd.join(" ")}`);
@@ -65,30 +87,63 @@ if (typeof identity !== "string" || typeof bundleId !== "string") {
 }
 const appIdentifier = `${TEAM_ID}.${bundleId}`;
 
-// Find a live provisioning profile authorizing our full entitlement chain on
-// this machine (fail-closed: identifier, team, keychain group, device, and
-// expiry must all check out). Free-tier profiles expire after 7 days; when
-// none is usable, Xcode's automatic signing mints a fresh one (open any
-// Xcode project with this bundle id and the team selected).
-const udid = provisioningUdid();
-if (udid === undefined) {
-  console.error("error: could not determine this Mac's provisioning UDID (system_profiler)");
-  process.exit(1);
-}
-const profile = findUsableProfile({
-  appIdentifier,
-  teamId: TEAM_ID,
-  keychainGroup: appIdentifier,
-  deviceUdid: udid,
-});
-if (profile === undefined) {
-  console.error(
-    `error: no usable provisioning profile for ${appIdentifier} in\n  ${xcodeProfileDir()}\n` +
-      "free-tier profiles expire after 7 days; mint a fresh one by opening an\n" +
-      "Xcode project with this bundle id and automatic signing (Team " +
-      `${TEAM_ID}), then re-run.`,
+// Find a live provisioning profile authorizing our full entitlement chain
+// (fail-closed: identifier, team, keychain group, device, and expiry must
+// all check out). Two sources:
+//
+//   - PROVISION_PROFILE_PATH (CI): an explicit profile file, decoded from a
+//     repository secret. The this-device check is skipped - the runner is
+//     never in a free-tier profile's device list - so the built app runs
+//     only on Macs the supplied profile provisions (AMFI enforces that at
+//     exec regardless of what we check here).
+//   - default (local): the newest usable profile in Xcode's cache. Free-tier
+//     profiles expire after 7 days; when none is usable, Xcode's automatic
+//     signing mints a fresh one (open any Xcode project with this bundle id
+//     and the team selected).
+const envProfilePath = process.env.PROVISION_PROFILE_PATH;
+let profile: ProvisioningProfile;
+if (envProfilePath !== undefined && envProfilePath !== "") {
+  const parsed = readProvisioningProfile(envProfilePath);
+  if (parsed === undefined) {
+    console.error(`error: PROVISION_PROFILE_PATH could not be decoded (${envProfilePath})`);
+    process.exit(1);
+  }
+  const problems = profileProblems(parsed, {
+    appIdentifier,
+    teamId: TEAM_ID,
+    keychainGroup: appIdentifier,
+    deviceUdid: undefined,
+  });
+  if (problems.length > 0) {
+    console.error(`error: PROVISION_PROFILE_PATH is not usable: ${problems.join("; ")}`);
+    process.exit(1);
+  }
+  console.log(
+    "PROVISION_PROFILE_PATH set: this-device check skipped; the app will run only on Macs this profile provisions",
   );
-  process.exit(1);
+  profile = parsed;
+} else {
+  const udid = provisioningUdid();
+  if (udid === undefined) {
+    console.error("error: could not determine this Mac's provisioning UDID (system_profiler)");
+    process.exit(1);
+  }
+  const found = findUsableProfile({
+    appIdentifier,
+    teamId: TEAM_ID,
+    keychainGroup: appIdentifier,
+    deviceUdid: udid,
+  });
+  if (found === undefined) {
+    console.error(
+      `error: no usable provisioning profile for ${appIdentifier} in\n  ${xcodeProfileDir()}\n` +
+        "free-tier profiles expire after 7 days; mint a fresh one by opening an\n" +
+        "Xcode project with this bundle id and automatic signing (Team " +
+        `${TEAM_ID}), then re-run.`,
+    );
+    process.exit(1);
+  }
+  profile = found;
 }
 console.log(`provisioning profile: ${profile.path} (expires ${profile.expires.toISOString()})`);
 
@@ -157,3 +212,51 @@ run([
 ]);
 
 run(["bun", resolve(root, "scripts/check-desktop-signing.ts")]);
+
+// --dmg: wrap the verified .app in a distributable disk image. `ditto`
+// preserves the signature (cpSync would not keep every attribute), the
+// /Applications symlink gives the standard drag-to-install layout, and the
+// image itself is codesigned. The copy inside the mounted image is then
+// re-verified so "check-desktop-signing passed" holds for the artifact that
+// ships, not just the build-tree .app.
+if (wantDmg) {
+  const arch = process.arch === "arm64" ? "arm64" : process.arch;
+  const dmgDir = resolve(root, "target/release/bundle/dmg");
+  const stage = resolve(dmgDir, "stage");
+  const mount = resolve(dmgDir, "mnt");
+  const dmg = resolve(dmgDir, `chromium-bridge-app-${version}-macos-${arch}.dmg`);
+  rmSync(dmgDir, { recursive: true, force: true });
+  mkdirSync(stage, { recursive: true });
+  run(["ditto", app, resolve(stage, "Chromium Bridge.app")]);
+  symlinkSync("/Applications", resolve(stage, "Applications"));
+  run([
+    "hdiutil",
+    "create",
+    "-volname",
+    "Chromium Bridge",
+    "-srcfolder",
+    stage,
+    "-format",
+    "UDZO",
+    "-ov",
+    dmg,
+  ]);
+  rmSync(stage, { recursive: true, force: true });
+  run(["codesign", "--force", "--sign", identity, dmg]);
+  run(["hdiutil", "attach", dmg, "-readonly", "-nobrowse", "-mountpoint", mount]);
+  // Not run(): the image must be detached whether or not the check passes.
+  const check = Bun.spawnSync(
+    [
+      "bun",
+      resolve(root, "scripts/check-desktop-signing.ts"),
+      resolve(mount, "Chromium Bridge.app"),
+    ],
+    { cwd: root, stdout: "inherit", stderr: "inherit" },
+  );
+  run(["hdiutil", "detach", mount]);
+  if (check.exitCode !== 0) {
+    console.error("error: check-desktop-signing failed on the app inside the dmg");
+    process.exit(check.exitCode ?? 1);
+  }
+  console.log(`dmg: ${dmg}`);
+}
