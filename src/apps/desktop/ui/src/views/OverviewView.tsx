@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
 import { authLabel } from "@/lib/auth-label";
+import { formatBrowserList } from "@/lib/browser-names";
 import { api, errorText, type FirstRunReport } from "@/lib/tauri";
 import { useAppStore } from "@/store";
 
@@ -16,12 +17,16 @@ export function OverviewView() {
   const browsers = useAsync(api.browsersList);
   const enclave = useAsync(api.enclaveStatus);
 
-  // Self-registration on first launch (ADR-0029): the Rust side is
-  // single-flight (the marker is created with create_new), and the ref keeps
-  // StrictMode's double-invoked dev effect from firing the command twice.
+  // First-launch detection (ADR-0029 as amended): the command only reports
+  // which browsers exist and claims the shown-once marker; nothing touches a
+  // browser's configuration until the user clicks Connect here or on the
+  // Browsers page. The Rust side is single-flight (the marker is created
+  // with create_new), and the ref keeps StrictMode's double-invoked dev
+  // effect from firing the command twice.
   const [firstRun, setFirstRun] = useState<FirstRunReport | null>(null);
   const [firstRunError, setFirstRunError] = useState<string>();
   const firstRunStarted = useRef(false);
+  const [connectReport, setConnectReport] = useState<{ lines: string[]; errors: string[] }>();
   const [busy, setBusy] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [releaseOpen, setReleaseOpen] = useState(false);
@@ -31,14 +36,30 @@ export function OverviewView() {
     if (firstRunStarted.current) return;
     firstRunStarted.current = true;
     api
-      .firstLaunchRegister()
-      .then((report) => {
-        setFirstRun(report);
-        if (report !== null) browsers.reload();
-      })
+      .firstLaunchDetect()
+      .then(setFirstRun)
       .catch((err: unknown) => setFirstRunError(errorText(err)));
-    // browsers.reload is stable (useCallback with no deps).
-  }, [browsers.reload]);
+  }, []);
+
+  // The opt-in bulk path: one explicit click connects every detected
+  // browser through the same user-initiated command as the per-browser
+  // buttons. Sequential on purpose; the registrations share the install dir.
+  const connectAll = async (keys: string[]) => {
+    setBusy("connect-all");
+    setConnectReport(undefined);
+    const lines: string[] = [];
+    const errors: string[] = [];
+    for (const key of keys) {
+      try {
+        lines.push(...(await api.browserRegister(key)));
+      } catch (err) {
+        errors.push(`${key}: ${errorText(err)}`);
+      }
+    }
+    setConnectReport({ lines, errors });
+    setBusy(undefined);
+    browsers.reload();
+  };
 
   const engage = async () => {
     setBusy("engage");
@@ -81,22 +102,41 @@ export function OverviewView() {
       {(firstRun !== null || firstRunError !== undefined) && (
         <Card title={t("overview.first_run_title")}>
           {firstRunError !== undefined && <ErrorNote>{firstRunError}</ErrorNote>}
-          {firstRun !== null && (
-            <div className="flex flex-col gap-2 text-sm text-body">
-              <p className="m-0">
-                {firstRun.detected.length === 0
-                  ? t("overview.first_run_none")
-                  : t("overview.first_run_registered")}
-              </p>
-              {firstRun.lines.length > 0 && <Mono>{firstRun.lines.join("\n")}</Mono>}
-              {firstRun.errors.length > 0 && (
-                <>
-                  <p className="m-0">{t("overview.first_run_errors")}</p>
-                  <ErrorNote>{firstRun.errors.join("\n")}</ErrorNote>
-                </>
-              )}
-            </div>
-          )}
+          {firstRun !== null &&
+            (firstRun.detected.length === 0 ? (
+              <p className="m-0 text-sm text-body">{t("overview.first_run_none")}</p>
+            ) : (
+              <div className="flex flex-col gap-2 text-sm text-body">
+                <p className="m-0">
+                  {t("overview.first_run_detected", [formatBrowserList(firstRun.detected)])}
+                </p>
+                {(connectReport === undefined || connectReport.errors.length > 0) && (
+                  <div>
+                    <Button
+                      disabled={busy !== undefined}
+                      onClick={() => void connectAll(firstRun.detected)}
+                    >
+                      {busy === "connect-all"
+                        ? t("common.working")
+                        : t("overview.first_run_connect_all")}
+                    </Button>
+                  </div>
+                )}
+                {connectReport !== undefined && (
+                  <>
+                    {connectReport.lines.length > 0 && (
+                      <Mono>{connectReport.lines.join("\n")}</Mono>
+                    )}
+                    {connectReport.errors.length > 0 && (
+                      <>
+                        <p className="m-0">{t("overview.first_run_errors")}</p>
+                        <ErrorNote>{connectReport.errors.join("\n")}</ErrorNote>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
         </Card>
       )}
 

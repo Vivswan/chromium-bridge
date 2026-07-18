@@ -64,10 +64,15 @@ needs platform GUI toolchains.
 
 The GUI itself cannot be clicked headlessly. After `just app-run`:
 
-1. First launch: the Overview page shows a "First launch" banner listing the
-   native-messaging manifests it registered for your detected browsers.
-   `chromium-bridge doctor --list` from a terminal should agree with the
-   Browsers page afterwards.
+1. First launch: the Overview page shows a "First launch" card naming the
+   detected browsers, with a "Connect all detected browsers" button. The app
+   itself registers nothing at this point: on a machine with no prior CLI
+   registrations, `chromium-bridge doctor --list` reports every browser's
+   registration as missing until you click Connect (per browser, on the
+   Browsers page) or the card's connect-all button, and it should agree with
+   the Browsers page throughout. A healthy registration shows "Connected"
+   and no button; Repair appears only for a wrong (stale, foreign, or
+   unreadable) one.
 2. Pairing: on the Pairing page, run Pair (or "Replace key and re-pair" on an
    enrolled machine). Touch ID should prompt; after approval the page shows
    the key fingerprint. Check it against `chromium-bridge enclave-status` and
