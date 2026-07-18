@@ -169,56 +169,68 @@ export function ConfirmApp() {
   const barFraction = initialLeft.current > 0 ? left / initialLeft.current : 0;
 
   return (
-    <div className="confirm-surface flex min-h-screen flex-col gap-3 bg-surface-0 p-4 text-text-1">
-      <FiringStrip hardware={hardware} t={t} />
-      <p className="text-[11px] leading-snug text-text-3">
-        {t(hardware ? "confirm.spoof_note_host" : "confirm.spoof_note_browser")}{" "}
-        {t("confirm.spoof_note_drawn")}
-      </p>
+    <div className="confirm-surface flex h-screen flex-col gap-3 bg-surface-0 p-4 text-text-1">
+      {/* Everything page-influenced (origin, title, payload) lives in this
+          region; the decision controls and notes below sit OUTSIDE it, so no
+          hostile-length content can push them off the h-screen root. Under
+          pressure the payload box shrinks first (it is the only shrinkable
+          child); only if the REST still cannot fit does the region itself
+          scroll, as the final bound. flex-1 also absorbs the slack under
+          small payloads, keeping the actions pinned to the bottom. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+        <FiringStrip hardware={hardware} t={t} />
+        <p className="text-[11px] leading-snug text-text-3">
+          {t(hardware ? "confirm.spoof_note_host" : "confirm.spoof_note_browser")}{" "}
+          {t("confirm.spoof_note_drawn")}
+        </p>
 
-      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-3">
-        {t("confirm.via")}
-        <span className="chip-mono">{TOOL_NAME[payload.kind]}</span>
-        {payload.kind === "click" && (
-          <span className="pill pill-pending">{t("confirm.high_risk")}</span>
-        )}
-      </div>
-
-      <h1 className="m-0 text-base font-semibold leading-snug tracking-tight">
-        {t(HEADLINE_KEY[payload.kind], [subject])}
-      </h1>
-      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-text-2">
-        <span className="chip-mono max-w-full whitespace-normal break-all">{payload.origin}</span>
-        <span className="min-w-0 text-text-3">&quot;{payload.tabTitle}&quot;</span>
-      </div>
-
-      {/* the exact payload IS the decision: the only contained surface.
-          Sized to content (mt-auto on the actions row absorbs slack) and
-          rendered whitespace-pre: source line breaks are preserved and long
-          lines scroll horizontally, so a display wrap can never be mistaken
-          for a source newline. */}
-      <pre className="code-block m-0 max-h-80 min-h-[60px] whitespace-pre px-3 py-2.5">
-        {payload.detail}
-      </pre>
-
-      <p className="consequence">{t(warnKey)}</p>
-
-      <div>
-        <div className="flex items-baseline justify-between text-[11px] text-text-3">
-          <span>{t("confirm.idle_note")}</span>
-          <span className="tnum font-mono">{t("confirm.countdown", [fmtCountdown(left)])}</span>
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-3">
+          {t("confirm.via")}
+          <span className="chip-mono">{TOOL_NAME[payload.kind]}</span>
+          {payload.kind === "click" && (
+            <span className="pill pill-pending">{t("confirm.high_risk")}</span>
+          )}
         </div>
-        <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-surface-4">
-          {/* transform-only motion: scaleX drains smoothly between the 500ms
-              ticks (width would be a stepped layout animation) */}
-          <div
-            className="h-full origin-left bg-pending transition-transform duration-500 ease-linear"
-            style={{ transform: `scaleX(${barFraction})` }}
-          />
+
+        <h1 className="m-0 text-base font-semibold leading-snug tracking-tight">
+          {t(HEADLINE_KEY[payload.kind], [subject])}
+        </h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-text-2">
+          <span className="chip-mono chip-wrap max-w-full">{payload.origin}</span>
+          {/* the title is page-controlled context, not the grant: clamp it so
+              a hostile document.title cannot crowd out the payload */}
+          <span className="line-clamp-2 min-w-0 text-text-3">&quot;{payload.tabTitle}&quot;</span>
+        </div>
+
+        {/* the exact payload IS the decision: the only contained surface.
+            Sized to content for small payloads, but the only child allowed
+            to shrink: a long payload scrolls inside this box while the rest
+            of the region stays put. Rendered whitespace-pre: source line
+            breaks are preserved and long lines scroll horizontally, so a
+            display wrap can never be mistaken for a source newline. */}
+        <pre className="code-block m-0 min-h-[60px] shrink whitespace-pre px-3 py-2.5">
+          {payload.detail}
+        </pre>
+
+        <p className="consequence">{t(warnKey)}</p>
+
+        <div>
+          <div className="flex items-baseline justify-between text-[11px] text-text-3">
+            <span>{t("confirm.idle_note")}</span>
+            <span className="tnum font-mono">{t("confirm.countdown", [fmtCountdown(left)])}</span>
+          </div>
+          <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-surface-4">
+            {/* transform-only motion: scaleX drains smoothly between the 500ms
+                ticks (width would be a stepped layout animation) */}
+            <div
+              className="h-full origin-left bg-pending transition-transform duration-500 ease-linear"
+              style={{ transform: `scaleX(${barFraction})` }}
+            />
+          </div>
         </div>
       </div>
 
-      <div className="mt-auto flex gap-2.5">
+      <div className="flex gap-2.5">
         <Button
           variant="primary"
           className="flex-1 py-2 text-[13px]"
