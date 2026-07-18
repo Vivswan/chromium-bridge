@@ -31,10 +31,10 @@ pub struct ReleaseOutcome {
     pub auth: &'static str,
 }
 
-/// Release, behind the presence gate (the Phase 8 seam; the caller must
-/// have shown the in-app confirm dialog first, see `crate::presence_seam`).
-/// A refused gate is audited so an attempted silent unkill is visible in the
-/// trail, mirroring the CLI's `unkill` handler.
+/// Release, behind the presence gate (the caller must have shown the in-app
+/// confirm dialog first, see `crate::presence_seam`). A refused gate is
+/// audited so an attempted silent unkill is visible in the trail, mirroring
+/// the CLI's `unkill` handler; the switch stays exactly as engaged as it was.
 pub fn release() -> Result<ReleaseOutcome, String> {
     let att = match presence_seam::release_presence() {
         Ok(att) => att,
@@ -46,7 +46,7 @@ pub fn release() -> Result<ReleaseOutcome, String> {
                     .outcome("refused")
                     .detail(&format!("presence: {e}")),
             );
-            return Err(presence_seam::unavailable_guidance(&e));
+            return Err(format!("{e}. The kill switch stays engaged."));
         }
     };
     let auth = att.path().wire_name();

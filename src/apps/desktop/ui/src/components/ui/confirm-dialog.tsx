@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 
 // The app-owned explicit confirmation for capability-granting acts (unkill,
-// add-client). This modal is LOAD-BEARING, not cosmetic: with Phase 8's
+// add-client). This modal is LOAD-BEARING, not cosmetic: with
 // Floor::AppConfirm, the presence call succeeds by construction when
 // hardware is unavailable, on the assertion that the app already showed
 // exactly this dialog. The confirm handler is therefore the only place the
@@ -29,9 +29,9 @@ export function ConfirmDialog({
 }) {
   const { t } = useI18n();
   // Synchronous single-flight: `busy` only disables the button after a
-  // rerender, so two clicks in one frame could fire the command (and, post
-  // Phase 8, stack Touch ID prompts). The ref blocks the second call
-  // immediately; it re-arms each time the dialog opens.
+  // rerender, so two clicks in one frame could fire the command (and stack
+  // Touch ID prompts). The ref blocks the second call immediately; it
+  // re-arms each time the dialog opens.
   const fired = useRef(false);
   useEffect(() => {
     if (open) fired.current = false;
