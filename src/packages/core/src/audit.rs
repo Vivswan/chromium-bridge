@@ -293,25 +293,11 @@ fn append_at(path: &Path, line: &[u8], max: u64) -> io::Result<()> {
     if needs_rotation(path, line.len() as u64, max) {
         rotate_locked(path, line.len() as u64, max);
     }
-    let mut opts = fs::OpenOptions::new();
-    opts.append(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-        // Refuse a pre-planted symlink at the audit path: the trail must not
-        // be redirectable to (or chmod another user's) arbitrary file. The
-        // failed open is counted as a dropped record, never fatal.
-        opts.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut f = opts.open(path)?;
-    // The mode above only applies on create; re-assert it so a pre-planted
-    // looser file cannot keep group/other bits on the audit trail.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = f.set_permissions(fs::Permissions::from_mode(0o600));
-    }
+    // fsguard refuses a pre-planted symlink at the audit path (the trail must
+    // not be redirectable to, or chmod, another file) and re-asserts 0600 so
+    // a pre-planted looser file cannot keep group/other bits. A failed open
+    // is counted as a dropped record, never fatal.
+    let mut f = crate::fsguard::open_private_append(path)?;
     f.write_all(line)?;
     f.flush()
 }
@@ -328,15 +314,7 @@ fn needs_rotation(path: &Path, add: u64, max: u64) -> bool {
 fn rotate_locked(path: &Path, add: u64, max: u64) {
     let mut lock_name = path.as_os_str().to_owned();
     lock_name.push(".lock");
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-        opts.custom_flags(libc::O_NOFOLLOW);
-    }
-    let Ok(lock) = opts.open(PathBuf::from(lock_name)) else {
+    let Ok(lock) = crate::fsguard::open_private_rw(&PathBuf::from(lock_name)) else {
         return;
     };
     if lock.try_lock().is_err() {
