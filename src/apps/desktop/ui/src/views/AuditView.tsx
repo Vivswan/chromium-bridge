@@ -1,9 +1,9 @@
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import { Card, Dot, ErrorNote, ViewShell } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
-import { type AuditRecord, api, isUnrecognized } from "@/lib/tauri";
+import { type AuditLine, type AuditRecord, api, errorText, isUnrecognized } from "@/lib/tauri";
 
 const LIMIT = 500;
 
@@ -52,11 +52,49 @@ function outcomeClass(outcome: string | undefined): string {
   }
 }
 
+/** Indices of CONFIRM_SHOWN rows a later confirm_allowed/confirm_denied
+ * with the same subject (tool + name) resolves. Amber "pending" is reserved
+ * for a confirmation genuinely still waiting on the user; a resolved one
+ * claiming to wait is stale-state dishonesty in the ledger. A timeout
+ * settles as confirm_denied, so it correlates too.
+ *
+ * Best-effort, display-only: the wire records carry no request id, so the
+ * verdict closes the OLDEST still-open confirmation with the same subject
+ * (the extension shows confirmations one at a time, so collisions need two
+ * browsers raising the identical prompt concurrently). Unrecognized lines
+ * are skipped; when any exist, the page already flags the whole trail as
+ * suspect above the table. */
+function resolvedShownRows(lines: AuditLine[]): Set<number> {
+  const resolved = new Set<number>();
+  const open: { idx: number; key: string }[] = [];
+  lines.forEach((line, idx) => {
+    if (isUnrecognized(line)) return;
+    const key = `${line.tool ?? "-"}::${line.name ?? "-"}`;
+    if (line.kind === "confirm_shown") {
+      open.push({ idx, key });
+    } else if (line.kind === "confirm_allowed" || line.kind === "confirm_denied") {
+      const at = open.findIndex((o) => o.key === key);
+      if (at >= 0) {
+        const shown = open[at];
+        if (shown !== undefined) resolved.add(shown.idx);
+        open.splice(at, 1);
+      }
+    }
+  });
+  return resolved;
+}
+
 export function AuditView() {
   const { t } = useI18n();
   const page = useAsync(() => api.auditRead(LIMIT));
+  const [revealError, setRevealError] = useState<string>();
 
   const lines = page.data?.lines ?? [];
+  const resolved = resolvedShownRows(lines);
+  const ledgerLabel = t("audit.table_label");
+  // day headers group by the last SEEN day, skipping unrecognized lines, so
+  // a corrupt record in the middle of a day cannot duplicate its header
+  let lastDay: string | undefined;
 
   return (
     <ViewShell
@@ -68,7 +106,15 @@ export function AuditView() {
           <Button variant="ghost" onClick={page.reload}>
             {t("common.refresh")}
           </Button>
-          <Button onClick={() => void api.auditReveal()}>{t("audit.reveal")}</Button>
+          <Button
+            onClick={() =>
+              void api.auditReveal().catch((err: unknown) => {
+                setRevealError(errorText(err));
+              })
+            }
+          >
+            {t("audit.reveal")}
+          </Button>
         </div>
       }
       foot={
@@ -87,14 +133,21 @@ export function AuditView() {
           <ErrorNote>{page.error}</ErrorNote>
         </div>
       )}
+      {revealError !== undefined && (
+        <div className="mb-2.5">
+          <ErrorNote>{revealError}</ErrorNote>
+        </div>
+      )}
       {page.data !== undefined && page.data.unrecognized > 0 && (
         <div className="mb-2.5">
           <ErrorNote>{t("audit.unrecognized", [String(page.data.unrecognized)])}</ErrorNote>
         </div>
       )}
 
-      <Card flush hero className="ledger" aria-label={t("audit.table_label")}>
-        <div className="ledger-scroll">
+      <Card flush hero className="ledger" aria-label={ledgerLabel}>
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the scroll pane must be keyboard-reachable (WKWebView does not focus scrollers itself) */}
+        {/* biome-ignore lint/a11y/useSemanticElements: role=region names the focusable scroll pane; the Card already provides the section landmark */}
+        <div className="ledger-scroll" tabIndex={0} role="region" aria-label={ledgerLabel}>
           {page.data === undefined ? (
             <p className="m-0 p-3.5 text-xs text-text-3">{t("common.loading")}</p>
           ) : lines.length === 0 ? (
@@ -117,14 +170,6 @@ export function AuditView() {
               </thead>
               <tbody>
                 {lines.map((line, i) => {
-                  const prev = i > 0 ? lines[i - 1] : undefined;
-                  const day =
-                    !isUnrecognized(line) &&
-                    (prev === undefined ||
-                      isUnrecognized(prev) ||
-                      dayLabel(prev.ts_ms) !== dayLabel(line.ts_ms))
-                      ? dayLabel(line.ts_ms)
-                      : undefined;
                   if (isUnrecognized(line)) {
                     return (
                       // biome-ignore lint/suspicious/noArrayIndexKey: append-only log lines have no id
@@ -137,7 +182,16 @@ export function AuditView() {
                       </tr>
                     );
                   }
+                  const label = dayLabel(line.ts_ms);
+                  const day = label !== lastDay ? label : undefined;
+                  lastDay = label;
                   const { obj, rest } = recordParts(line);
+                  // an open confirmation is derived from the correlation, not
+                  // from a stored outcome: real confirm_shown records carry
+                  // no outcome field at all
+                  const resolvedShown = line.kind === "confirm_shown" && resolved.has(i);
+                  const openShown = line.kind === "confirm_shown" && !resolved.has(i);
+                  const pending = openShown || (line.outcome === "pending" && !resolvedShown);
                   return (
                     // biome-ignore lint/suspicious/noArrayIndexKey: append-only log lines have no id
                     <Fragment key={i}>
@@ -146,7 +200,7 @@ export function AuditView() {
                           <td colSpan={4}>{day}</td>
                         </tr>
                       )}
-                      <tr className={line.outcome === "pending" ? "row-pending" : undefined}>
+                      <tr className={pending ? "row-pending" : undefined}>
                         <td className="t tnum">{clock(line.ts_ms)}</td>
                         <td className="kind">{line.kind}</td>
                         <td className="detail">
@@ -154,9 +208,15 @@ export function AuditView() {
                           {obj !== undefined && rest !== "" && " - "}
                           {rest}
                         </td>
-                        <td className={`outcome${outcomeClass(line.outcome)}`}>
-                          {line.outcome === "pending" && <Dot tone="pending" />}
-                          {line.outcome ?? "-"}
+                        <td
+                          className={`outcome${outcomeClass(
+                            resolvedShown ? "shown" : pending ? "pending" : line.outcome,
+                          )}`}
+                        >
+                          {pending && <Dot tone="pending" />}
+                          {resolvedShown
+                            ? t("audit.outcome_shown")
+                            : (line.outcome ?? (pending ? t("audit.outcome_pending") : "-"))}
                         </td>
                       </tr>
                     </Fragment>
