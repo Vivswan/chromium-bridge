@@ -1,17 +1,20 @@
+import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 import { LanguagePicker } from "@/components/LanguagePicker";
-import { Card, ErrorNote, Mono, StatusDot } from "@/components/ui/bits";
+import { ChipMono, Consequence, Dot, ErrorNote, ViewShell } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
 import { api, errorText } from "@/lib/tauri";
+import { useAppStore } from "@/store";
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, label }: { text: string; label?: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   return (
     <Button
       size="sm"
+      aria-label={label}
       onClick={() => {
         void navigator.clipboard.writeText(text).then(() => {
           setCopied(true);
@@ -19,6 +22,7 @@ function CopyButton({ text }: { text: string }) {
         });
       }}
     >
+      {copied ? <Check size={11} aria-hidden /> : <Copy size={11} aria-hidden />}
       {copied ? t("common.copied") : t("common.copy")}
     </Button>
   );
@@ -26,9 +30,12 @@ function CopyButton({ text }: { text: string }) {
 
 export function SetupView() {
   const { t } = useI18n();
+  const setView = useAppStore((s) => s.setView);
+  const status = useAppStore((s) => s.status);
   const snippet = useAsync(api.mcpSnippet);
   const cliTool = useAsync(api.cliToolStatus);
   const extension = useAsync(api.extensionInfo);
+  const browsers = useAsync(api.browsersList);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -45,107 +52,237 @@ export function SetupView() {
     }
   };
 
-  const binDir = cliTool.data?.path.replace(/\/[^/]*$/, "") ?? "~/.local/bin";
+  const browserDone = (browsers.data ?? []).some((b) => b.healthy);
+  const cli = cliTool.data;
+  const mcpJson =
+    snippet.data === undefined
+      ? undefined
+      : `{\n  "mcpServers": {\n    "chromium-bridge": {\n      "command": ${JSON.stringify(
+          snippet.data.hostPath,
+        )}\n    }\n  }\n}`;
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card title={t("setup.mcp_title")}>
-        <div className="flex flex-col gap-2">
-          <p className="m-0 text-xs text-muted">{t("setup.mcp_hint")}</p>
-          {snippet.error !== undefined && <ErrorNote>{snippet.error}</ErrorNote>}
-          {snippet.data !== undefined && (
-            <div className="flex items-start gap-2">
-              <Mono className="flex-1">{snippet.data.command}</Mono>
-              <CopyButton text={snippet.data.command} />
-            </div>
+    <ViewShell
+      title={t("nav.setup")}
+      sub={t("setup.sub")}
+      foot={
+        <>
+          {status !== undefined && (
+            <span className="foot-note tnum">
+              chromium-bridge {status.version} - {status.os}/{status.arch}
+            </span>
           )}
-        </div>
-      </Card>
-
-      <Card title={t("setup.cli_title")}>
-        <div className="flex flex-col gap-3">
-          <p className="m-0 text-xs text-muted">{t("setup.cli_hint", [binDir])}</p>
-          {cliTool.error !== undefined && <ErrorNote>{cliTool.error}</ErrorNote>}
-          {cliTool.data !== undefined && (
-            <>
-              <StatusDot
-                tone={
-                  cliTool.data.state === "installed"
-                    ? cliTool.data.current
-                      ? "ok"
-                      : "warn"
-                    : cliTool.data.state === "foreign"
-                      ? "bad"
-                      : "muted"
-                }
-              >
-                {cliTool.data.state === "installed"
-                  ? cliTool.data.current
-                    ? t("setup.cli_installed")
-                    : t("setup.cli_installed_stale")
-                  : cliTool.data.state === "foreign"
-                    ? t("setup.cli_foreign")
-                    : t("setup.cli_missing")}
-              </StatusDot>
-              {cliTool.data.target !== null && <Mono>{cliTool.data.target}</Mono>}
-              <div className="flex gap-2">
-                {cliTool.data.state === "missing" && (
-                  <Button
-                    variant="primary"
-                    disabled={busy}
-                    onClick={() => void cliAct(api.cliToolInstall)}
-                  >
-                    {busy ? t("common.working") : t("setup.cli_install")}
-                  </Button>
-                )}
-                {cliTool.data.state === "installed" && !cliTool.data.current && (
-                  <Button disabled={busy} onClick={() => void cliAct(api.cliToolInstall)}>
-                    {t("setup.cli_update")}
-                  </Button>
-                )}
-                {cliTool.data.state === "installed" && (
-                  <Button
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => void cliAct(api.cliToolUninstall)}
-                  >
-                    {t("setup.cli_uninstall")}
-                  </Button>
-                )}
-              </div>
-              {cliTool.data.state === "installed" && (
-                <p className="m-0 text-xs text-faint">{t("setup.cli_path_note", [binDir])}</p>
+          <LanguagePicker />
+        </>
+      }
+    >
+      <div className="flex min-h-full flex-col">
+        <ol className="flow">
+          <li className={`flow-step ${browserDone ? "done" : "next"}`}>
+            <span className="flow-mark" aria-hidden="true">
+              {browserDone ? (
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path
+                    d="M2.5 6.5 5 9l4.5-6"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              ) : (
+                "1"
               )}
-            </>
-          )}
-          {error !== undefined && <ErrorNote>{error}</ErrorNote>}
-        </div>
-      </Card>
-
-      <Card title={t("setup.ext_title")}>
-        <div className="flex flex-col gap-2">
-          <p className="m-0 text-xs text-muted">{t("setup.ext_hint")}</p>
-          <ol className="m-0 flex list-decimal flex-col gap-1 pl-5 text-sm">
-            <li>{t("setup.ext_step1")}</li>
-            <li>{t("setup.ext_step2")}</li>
-            <li>{t("setup.ext_step3")}</li>
-          </ol>
-          {extension.data?.path != null ? (
-            <div className="flex items-start gap-2">
-              <Mono className="flex-1">{extension.data.path}</Mono>
-              <Button size="sm" onClick={() => void api.extensionReveal()}>
-                {t("setup.ext_reveal")}
-              </Button>
+            </span>
+            <div>
+              <div className="flow-title">
+                {t("setup.step1_title")}
+                <span className="flow-state">
+                  {browserDone ? t("setup.state_done") : t("setup.state_next")}
+                </span>
+              </div>
+              <p className="flow-body">
+                {browserDone ? t("setup.step1_done") : t("setup.step1_todo")}{" "}
+                <button type="button" className="linkish" onClick={() => setView("browsers")}>
+                  {t("nav.browsers")}
+                </button>
+                .
+              </p>
             </div>
-          ) : (
-            extension.data !== undefined && <ErrorNote>{t("setup.ext_missing")}</ErrorNote>
+          </li>
+
+          <li className={`flow-step${browserDone ? " next" : ""}`}>
+            <span className="flow-mark" aria-hidden="true">
+              2
+            </span>
+            <div>
+              <div className="flow-title">
+                {t("setup.step2_title")}
+                <span className="flow-state">
+                  {browserDone ? t("setup.state_next") : t("setup.state_todo")}
+                </span>
+              </div>
+              <ol className="substeps">
+                <li>
+                  <span className="idx" aria-hidden="true">
+                    a
+                  </span>
+                  <span>
+                    {t("setup.step2_a_1")} <span className="mono">chrome://extensions</span>
+                    {t("setup.step2_a_2")} <strong>{t("setup.step2_a_dev")}</strong>
+                  </span>
+                </li>
+                <li>
+                  <span className="idx" aria-hidden="true">
+                    b
+                  </span>
+                  <span>
+                    {t("setup.step2_b")} <strong>{t("setup.step2_b_btn")}</strong>
+                  </span>
+                </li>
+                <li>
+                  <span className="idx" aria-hidden="true">
+                    c
+                  </span>
+                  {extension.data?.path != null ? (
+                    <>
+                      <ChipMono>{extension.data.path}</ChipMono>
+                      <Button size="sm" onClick={() => void api.extensionReveal()}>
+                        {t("setup.ext_reveal")}
+                      </Button>
+                    </>
+                  ) : extension.error !== undefined ? (
+                    <span className="mono text-[11px] text-danger">{extension.error}</span>
+                  ) : extension.data !== undefined ? (
+                    <span className="text-danger">{t("setup.ext_missing")}</span>
+                  ) : (
+                    <span className="text-text-3">{t("common.loading")}</span>
+                  )}
+                </li>
+              </ol>
+              <p className="flow-body mt-[7px]">{t("setup.step2_note")}</p>
+            </div>
+          </li>
+
+          <li className="flow-step">
+            <span className="flow-mark" aria-hidden="true">
+              3
+            </span>
+            <div>
+              <div className="flow-title">
+                {t("setup.step3_title")}
+                <span className="flow-state">{t("setup.state_todo")}</span>
+              </div>
+              <p className="flow-body">{t("setup.step3_body")}</p>
+              {snippet.error !== undefined && (
+                <div className="mt-2">
+                  <ErrorNote>{snippet.error}</ErrorNote>
+                </div>
+              )}
+              {snippet.data !== undefined && mcpJson !== undefined && (
+                <>
+                  <div className="code-block mt-2">
+                    <div className="code-head">
+                      <span className="code-file">.mcp.json</span>
+                      <CopyButton text={mcpJson} label={t("setup.copy_json")} />
+                    </div>
+                    <pre>
+                      <code>
+                        {"{\n  "}
+                        <span className="k">"mcpServers"</span>
+                        {": {\n    "}
+                        <span className="k">"chromium-bridge"</span>
+                        {": {\n      "}
+                        <span className="k">"command"</span>
+                        {": "}
+                        {JSON.stringify(snippet.data.hostPath)}
+                        {"\n    }\n  }\n}"}
+                      </code>
+                    </pre>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Consequence className="quiet m-0 min-w-0">
+                      {t("setup.step3_claude")}{" "}
+                      <span className="mono break-all">{snippet.data.command}</span>
+                    </Consequence>
+                    <CopyButton text={snippet.data.command} label={t("setup.copy_command")} />
+                  </div>
+                </>
+              )}
+            </div>
+          </li>
+        </ol>
+
+        {error !== undefined && (
+          <div className="mt-2">
+            <ErrorNote>{error}</ErrorNote>
+          </div>
+        )}
+        {cliTool.error !== undefined && (
+          <div className="mt-2">
+            <ErrorNote>{cliTool.error}</ErrorNote>
+          </div>
+        )}
+
+        <div className="cli-row">
+          <Dot
+            tone={
+              cli === undefined
+                ? "idle"
+                : cli.state === "installed"
+                  ? cli.current
+                    ? "live"
+                    : "pending"
+                  : cli.state === "foreign"
+                    ? "down"
+                    : "idle"
+            }
+          />
+          <span>
+            {cli === undefined
+              ? t("common.loading")
+              : cli.state === "installed"
+                ? cli.current
+                  ? t("setup.cli_installed")
+                  : t("setup.cli_stale")
+                : cli.state === "foreign"
+                  ? t("setup.cli_foreign")
+                  : t("setup.cli_missing")}
+          </span>
+          {cli !== undefined && <span className="mono">{cli.path}</span>}
+          <span className="spacer" />
+          {cli?.state === "missing" && (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => void cliAct(api.cliToolInstall)}
+            >
+              {busy ? t("common.working") : t("setup.cli_install")}
+            </Button>
+          )}
+          {cli?.state === "installed" && !cli.current && (
+            <Button size="sm" disabled={busy} onClick={() => void cliAct(api.cliToolInstall)}>
+              {t("setup.cli_update")}
+            </Button>
+          )}
+          {cli?.state === "installed" && (
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={busy}
+              onClick={() => void cliAct(api.cliToolUninstall)}
+            >
+              {t("setup.cli_uninstall")}
+            </Button>
           )}
         </div>
-      </Card>
-
-      <Card title={t("setup.language_title")}>
-        <LanguagePicker />
-      </Card>
-    </div>
+        {cli?.state === "installed" && (
+          <Consequence className="quiet mt-1.5 text-right">
+            {t("setup.cli_uninstall_consequence", [cli.path])}
+          </Consequence>
+        )}
+      </div>
+    </ViewShell>
   );
 }
