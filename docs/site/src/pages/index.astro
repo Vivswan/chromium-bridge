@@ -1,47 +1,328 @@
 ---
-import Layout from "../layouts/Layout.astro";
-import { docPages } from "../lib/docs";
+// The landing page, built exactly to the approved mockup
+// (design-explorations/site/mockup.html). All copy is normative there; the
+// Gatedeck path data comes from assets/icon/gatedeck.svg and
+// gatedeck-open.svg. Content needs zero JS: the theme flip is a checkbox,
+// the hover morph is CSS.
+import { Image } from "astro:assets";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/inter/700.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/700.css";
+import "../styles/landing.css";
+import confirmDark from "../assets/screens/ext-confirm-eval-touchid-dark.png";
+import confirmLight from "../assets/screens/ext-confirm-eval-touchid-light.png";
+import overviewDark from "../assets/screens/overview-dark.png";
+import overviewLight from "../assets/screens/overview-light.png";
+import securityDark from "../assets/screens/security-dark.png";
+import securityLight from "../assets/screens/security-light.png";
 
 const base = import.meta.env.BASE_URL;
-const href = (slug: string) => `${base}${base.endsWith("/") ? "" : "/"}${slug}/`;
-
-const groups: Array<{ name: string; match: (slug: string) => boolean }> = [
-  { name: "Start here", match: (s) => s === "readme" || s === "quickstart" },
-  {
-    name: "Guides",
-    match: (s) => !s.includes("/") && !s.includes(".zh_") && s !== "readme" && s !== "quickstart",
-  },
-  { name: "Security", match: (s) => s.startsWith("security/") },
-  { name: "Translations (zh_CN / zh_TW)", match: (s) => s.includes(".zh_") },
-  { name: "Architecture Decision Records", match: (s) => s.startsWith("adr/") },
-];
-
-const grouped = groups.map((g) => ({
-  name: g.name,
-  pages: docPages.filter((p) => g.match(p.slug)),
-}));
+const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${path}`;
 ---
 
-<Layout title="Documentation">
-  <h1>chromium-bridge documentation</h1>
-  <p>
-    The documentation for
-    <a href="https://github.com/Vivswan/chromium-bridge">chromium-bridge</a>, an
-    authenticated MCP bridge to your real Chromium browsers, rendered straight
-    from the repository's markdown.
-  </p>
-  {
-    grouped.map((group) => (
-      <section>
-        <h2>{group.name}</h2>
-        <ul>
-          {group.pages.map((page) => (
-            <li>
-              <a href={href(page.slug)}>{page.title}</a>
-            </li>
-          ))}
-        </ul>
-      </section>
-    ))
-  }
-</Layout>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chromium Bridge: your real browser, behind a gate you hold</title>
+    <meta
+      name="description"
+      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Every dangerous action stops at a gate a web page cannot see and a program cannot press."
+    />
+    <link rel="icon" type="image/svg+xml" href={withBase("gatedeck-app-icon.svg")} />
+  </head>
+  <body>
+    <input type="checkbox" id="theme-flip" class="theme-flip" aria-label="Invert the color scheme" />
+    <label for="theme-flip" class="theme-flip-chip" title="Flip color scheme">
+      <span class="flip-light">Light</span><span class="flip-dark">Dark</span>
+    </label>
+
+    <header class="topbar">
+      <div class="wrap topbar-in">
+        <svg class="mark-sm" viewBox="0 0 512 512" aria-hidden="true">
+          <path d="M94 386 Q256 62 418 386" fill="none" stroke="#6b7a92" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"></path>
+          <path d="M58 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
+          <path d="M454 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
+        </svg>
+        <span class="wordmark">Chromium Bridge</span>
+        <span class="ver">v0.1.0-dev.1</span>
+        <nav aria-label="Site">
+          <a href="#trust">How it works</a>
+          <a href="#guarantees">Guarantees</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/Vivswan/chromium-bridge">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+    <section class="hero wrap">
+      <svg class="gatedeck" viewBox="0 0 512 512" role="img" aria-label="Gatedeck: the Chromium Bridge mark, a graphite arch with a phosphor deck that opens">
+        <path d="M94 386 Q256 62 418 386" fill="none" stroke="#6b7a92" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path class="deck-l" d="M58 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
+        <path class="deck-r" d="M454 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
+      </svg>
+      <h1>Your real browser, behind a gate you hold.</h1>
+      <p class="lede">
+        Chromium Bridge lets an MCP client such as Claude Code or Codex drive the
+        Chromium browser you are already signed into: your tabs, your sessions,
+        your cookies. No second browser, no debug port.
+        <strong>Every dangerous action stops at a gate a web page cannot see and
+        a program cannot press.</strong>
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">Install on your Mac</a>
+        <a class="btn" href="https://github.com/Vivswan/chromium-bridge">Read the code on GitHub</a>
+      </div>
+      <div class="fact-row" aria-label="Project status">
+        <span>Open source, Apache-2.0</span><i></i>
+        <span>macOS-first</span><i></i>
+        <span>Built from source today</span><i></i>
+        <span>Rust host + MV3 extension</span>
+      </div>
+    </section>
+
+    <div class="deck-divider" role="presentation">
+      <span class="d-line"></span>
+      <svg class="d-chev" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1.5 6.5 5 3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span class="d-dots"><i></i><i></i><i></i></span>
+    </div>
+    <section class="trust wrap" id="trust">
+      <p class="sec-label">Trust chain</p>
+      <h2 class="sec-title">Nothing moves without proof.</h2>
+      <p class="sec-sub">Three processes, two boundaries, a checkpoint at each.
+        A component is trusted for what a mechanism proves about it, never for
+        what it claims about itself.</p>
+
+      <div class="pipeline" aria-label="The trust chain from MCP client to browser">
+        <div class="pipeline-row">
+          <div class="gate lit">
+            <div class="gate-role">MCP client</div>
+            <div class="gate-name"><span class="status-dot live"></span>Claude Code, Codex, any MCP client</div>
+            <div class="gate-meta">Connects over stdio. Admitted only if its
+              attested code identity is on your trusted list; you put it there
+              with Touch ID.</div>
+            <div class="gate-id">identity: kernel-attested binary</div>
+          </div>
+          <div class="pipeline-link">
+            <div class="link-line on"><svg class="link-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1.5 6.5 5 3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+            <div class="link-label">peer-UID +<br />attestation +<br />HMAC</div>
+          </div>
+          <div class="gate lit">
+            <div class="gate-role">Host</div>
+            <div class="gate-name"><span class="status-dot live"></span>chromium-bridge</div>
+            <div class="gate-meta">Rust native-messaging host. Owns a private,
+              portless socket. Pairing signs with a Secure Enclave key that
+              requires your touch.</div>
+            <div class="gate-id">7F3A 9C04 D2E8 B166 5F0A A42C 9D13 E770</div>
+          </div>
+          <div class="pipeline-link">
+            <div class="link-line on"><svg class="link-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1.5 6.5 5 3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+            <div class="link-label">native messaging,<br />manifest-<br />registered</div>
+          </div>
+          <div class="gate lit">
+            <div class="gate-role">Browser</div>
+            <div class="gate-name"><span class="status-dot live"></span>Brave, Chrome</div>
+            <div class="gate-meta">The MV3 extension enforces the per-site
+              allowlist, masks credentials, and draws every confirmation in a
+              window no page can reach.</div>
+            <div class="gate-id">enrollment pinned to the key fingerprint</div>
+          </div>
+        </div>
+      </div>
+
+      <p class="trust-note"><span class="status-dot live"></span>Green means
+        attested and live. <span class="status-dot pending"></span>Amber means
+        waiting on you. Neither is ever decoration.</p>
+
+      <p class="trust-caveat">The portless socket, kernel peer check, and
+        attestation hold on macOS and Linux. On Windows the bridge falls back to
+        loopback TCP gated by the HMAC secret alone, and the server says so at
+        startup.</p>
+    </section>
+
+    <section class="shots wrap" id="shots">
+      <p class="sec-label">The console</p>
+      <h2 class="sec-title">Every gate, one window.</h2>
+      <p class="sec-sub">The desktop app is the control panel: pairing, trusted
+        clients, the kill switch, the audit trail. Dark and light are both
+        first-class; flip the chip in the corner to see.</p>
+
+      <figure class="shot shot-wide">
+        <Image class="shot-dark" src={overviewDark} width={1280} height={860} densities={[1, 2]} loading="lazy"
+          alt="The app's Overview screen: a trust map from Claude Code through the chromium-bridge host to Brave, with the kill switch, enclave key fingerprint, and connected browsers below" />
+        <Image class="shot-light" src={overviewLight} width={1280} height={860} densities={[1, 2]} loading="lazy"
+          alt="The app's Overview screen in the light scheme: a trust map from Claude Code through the chromium-bridge host to Brave, with the kill switch, enclave key fingerprint, and connected browsers below" />
+        <figcaption>The Overview screen. The trust map is the same pipeline you
+          just read, drawn live from the host's checks.</figcaption>
+      </figure>
+
+      <div class="shot-pair">
+        <figure class="shot">
+          <Image class="shot-dark" src={confirmDark} width={440} height={680} densities={[1, 2]} loading="lazy"
+            alt="The extension's confirmation window for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
+          <Image class="shot-light" src={confirmLight} width={440} height={680} densities={[1, 2]} loading="lazy"
+            alt="The extension's confirmation window in the light scheme, for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
+          <figcaption>A client wants to run a script in your tab. The extension
+            draws this in its own window, off the page. There is no Allow button:
+            on an enrolled Mac, approval is the Touch ID sensor itself, so nothing
+            on screen, and no remote client, can press it for you.</figcaption>
+        </figure>
+        <figure class="shot">
+          <Image class="shot-dark" src={securityDark} width={1280} height={860} densities={[1, 2]} loading="lazy"
+            alt="The app's Security screen: client admission enforced at the host, and three presence gates (releasing the kill switch, trusting an MCP client, minting the enclave key) each marked Touch ID, always" />
+          <Image class="shot-light" src={securityLight} width={1280} height={860} densities={[1, 2]} loading="lazy"
+            alt="The app's Security screen in the light scheme: client admission enforced at the host, and three presence gates (releasing the kill switch, trusting an MCP client, minting the enclave key) each marked Touch ID, always" />
+          <figcaption>Policy as the host enforces it. The presence gates are
+            hard-wired: no setting can turn them off.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="guarantees wrap" id="guarantees">
+      <p class="sec-label">Guarantees</p>
+      <h2 class="sec-title">Claims you can check.</h2>
+      <p class="sec-sub">Each one is enforced by a mechanism, not a policy
+        document, and each links to the decision record that binds it.</p>
+
+      <div class="g-grid">
+        <div class="g-cell">
+          <h3>A program you run can never enroll itself silently.</h3>
+          <p>Trusting an MCP client takes Touch ID on an enrolled Mac. The gate
+            is hard-wired; there is no flag, env var, or grace window that skips
+            it.</p>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0024-multi-client-attested-pairing-and-broker.md">ADR-0024</a>
+        </div>
+        <div class="g-cell">
+          <h3>Approval is the sensor, not a button on screen.</h3>
+          <p>For script and upload requests the confirmation window offers Deny
+            and nothing else. The yes is a Secure Enclave user-presence check
+            that no page, script, or remote client can forge.</p>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0031-touch-id-confirmations-and-presence-grants.md">ADR-0031</a>
+        </div>
+        <div class="g-cell">
+          <h3>Credentials go one way, and masked.</h3>
+          <p>Cookies and storage can be read, never written: there is no
+            cookie_set or storage_set by design. JWTs, long hex, and long digit
+            runs are masked before they leave the browser.</p>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/tool-risk-matrix.md">tool risk matrix</a>
+        </div>
+        <div class="g-cell">
+          <h3>No site runs without your yes.</h3>
+          <p>A new origin triggers a prompt in the extension. Until you approve
+            it there, no tool touches that site.</p>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
+        </div>
+        <div class="g-cell">
+          <h3>One switch halts everything.</h3>
+          <p>Engage it from the CLI, the extension, or the app; every client
+            loses every browser at once. Releasing it takes proof of presence,
+            never a silent API call.</p>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0030-global-kill-switch-and-audit.md">ADR-0030</a>
+        </div>
+        <div class="g-cell">
+          <h3>Every decision is written down.</h3>
+          <p>Admissions, confirmations, denials, kills: each lands in an on-disk
+            audit trail you can read after the fact.</p>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0030-global-kill-switch-and-audit.md">ADR-0030</a>
+        </div>
+      </div>
+
+      <p class="g-foot">Where a boundary cannot be fully enforced in user space,
+        the threat model says so instead of implying coverage. Start with
+        <a href="https://github.com/Vivswan/chromium-bridge/blob/main/SECURITY.md">SECURITY.md</a>
+        and the
+        <a href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/threat-model.md">threat model</a>.</p>
+    </section>
+
+    <div class="deck-divider" role="presentation">
+      <span class="d-line"></span>
+      <svg class="d-chev" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1.5 6.5 5 3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span class="d-dots"><i></i><i></i><i></i></span>
+    </div>
+    <section class="install wrap" id="install">
+      <p class="sec-label">Install</p>
+      <h2 class="sec-title">Three steps, same as the app's Setup screen.</h2>
+      <p class="sec-sub">App downloads are not published yet: today you build
+        from a source checkout, and the dev-signed app runs on Macs its
+        provisioning profile lists. The CLI path on Linux and Windows is in the
+        <a href="https://github.com/Vivswan/chromium-bridge#quickstart-with-the-cli-macos-linux-windows">README</a>.</p>
+
+      <ol class="steps">
+        <li class="step">
+          <span class="step-num">01</span>
+          <div class="step-body">
+            <h3>Build and install the app.</h3>
+            <p>Clone the repository and let <span class="mono-inline">just</span>
+              build, sign, and place the app in /Applications. First launch
+              registers the native-messaging host with every Chromium browser it
+              finds and shows you what it wrote.</p>
+            <pre class="code-block"><code>git clone https://github.com/Vivswan/chromium-bridge
+cd chromium-bridge &amp;&amp; just app-install</code></pre>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-num">02</span>
+          <div class="step-body">
+            <h3>Load the extension, then pair.</h3>
+            <p>On the app's Setup page, click Reveal folder. In your browser,
+              open <span class="mono-inline">chrome://extensions</span>, enable
+              Developer mode, and Load unpacked from that folder. Then click Pair
+              in the app (Touch ID) and approve the key fingerprint on the
+              extension's options page. Until the fingerprints match, the
+              extension refuses to act.</p>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-num">03</span>
+          <div class="step-body">
+            <h3>Register with your MCP client.</h3>
+            <p>The app installs the <span class="mono-inline">chromium-bridge</span>
+              command at ~/.local/bin. Point your client at it; for Claude
+              Code:</p>
+            <pre class="code-block"><code>claude mcp add chromium-bridge -- "$HOME/.local/bin/chromium-bridge"</code></pre>
+            <p>Ask it to list your browser tabs. The first time it targets a new
+              site, approve the site from the toolbar icon.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <div class="deck-divider" role="presentation">
+      <span class="d-line"></span>
+      <svg class="d-chev" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1.5 6.5 5 3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span class="d-dots"><i></i><i></i><i></i></span>
+    </div>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-in">
+        <div class="footer-id">
+          <svg class="mark-sm" viewBox="0 0 512 512" aria-hidden="true">
+            <path d="M94 386 Q256 62 418 386" fill="none" stroke="#6b7a92" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M58 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
+            <path d="M454 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
+          </svg>
+          <span>Chromium Bridge</span>
+          <span class="mono footer-lic">Apache-2.0</span>
+        </div>
+        <nav class="footer-nav" aria-label="Footer">
+          <a href="https://github.com/Vivswan/chromium-bridge">GitHub</a>
+          <a href={withBase("docs/")}>Documentation</a>
+          <a href="https://github.com/Vivswan/chromium-bridge/blob/main/SECURITY.md">Security policy</a>
+          <a href="https://github.com/Vivswan/chromium-bridge/releases/latest">Releases</a>
+        </nav>
+        <p class="footer-credit">Adopted from
+          <a href="https://github.com/whg517/browser-bridge">whg517/browser-bridge</a>
+          (Apache-2.0). The name and identifiers are our own, a deliberate
+          divergence recorded in
+          <a href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0023-workspace-monorepo-tauri-app.md">ADR-0023</a>.</p>
+      </div>
+    </footer>
+  </body>
+</html>

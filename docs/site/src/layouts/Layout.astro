@@ -1,8 +1,10 @@
 ---
-// One layout for every page: a small header, a content column, and enough
-// typographic defaults that raw markdown reads well without a CSS framework.
+// One layout for every docs page: a small header, a content column, and
+// enough typographic defaults that raw markdown reads well without a CSS
+// framework. (The landing page, src/pages/index.astro, has its own shell.)
 const { title } = Astro.props;
 const base = import.meta.env.BASE_URL;
+const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${path}`;
 ---
 
 <!doctype html>
@@ -11,6 +13,7 @@ const base = import.meta.env.BASE_URL;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title ? `${title} | chromium-bridge` : "chromium-bridge"}</title>
+    <link rel="icon" type="image/svg+xml" href={withBase("gatedeck-app-icon.svg")} />
     <style>
       :root {
         color-scheme: light dark;
@@ -61,7 +64,7 @@ const base = import.meta.env.BASE_URL;
   </head>
   <body>
     <header>
-      <a href={base}>chromium-bridge docs</a>
+      <a href={withBase("docs/")}>chromium-bridge docs</a>
     </header>
     <main>
       <slot />
