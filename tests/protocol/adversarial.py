@@ -672,8 +672,25 @@ def _pair_client(*args):
     e2e.pair_client_interactive(*args)
 
 
+def _skip_if_enrolled(case):
+    """Mirror e2e.py's enrolled-machine guard: the LIVE cases below drive
+    pair-client / unkill through the CLI presence floor on a pty, but on a Mac
+    with an enrolled Secure Enclave key the presence ladder reaches the
+    HARDWARE rung first and would raise a real Touch ID prompt the typed
+    phrase cannot satisfy (repo rule: automated tests never raise real
+    prompts). e2e.enclave_key_present is fail-safe (indeterminate -> skip)
+    and always False off macOS, so Linux/Windows coverage is unaffected. The
+    hardware path is covered by `just phase8-touchid-proof`."""
+    if e2e.enclave_key_present():
+        note(f"{case} skipped: real enclave key present, would raise a live prompt")
+        return True
+    return False
+
+
 def a14_non_allowlisted_harness_refused():
     print("\n[A14] enrolled + non-allowlisted harness (LIVE, must REFUSE / fail closed)")
+    if _skip_if_enrolled("A14"):
+        return
     if os.name == "nt":
         note("A14 skipped: harness attestation is Unix-only (Windows secret-only)")
         return
@@ -700,6 +717,8 @@ def a14_non_allowlisted_harness_refused():
 
 def a15_spoofed_client_name_is_not_authz():
     print("\n[A15] enrolled + spoofed client NAME (LIVE, name is not the authz key)")
+    if _skip_if_enrolled("A15"):
+        return
     if os.name == "nt":
         note("A15 skipped: harness attestation is Unix-only")
         return
@@ -730,6 +749,8 @@ def a15_spoofed_client_name_is_not_authz():
 
 def a16_paired_harness_is_admitted():
     print("\n[A16] enrolled + genuinely paired harness (LIVE, must be ADMITTED and serve)")
+    if _skip_if_enrolled("A16"):
+        return
     if os.name == "nt":
         note("A16 skipped: harness attestation is Unix-only")
         return
@@ -784,6 +805,8 @@ def _read_revocation():
 
 def a17_revoke_reaches_the_live_broker():
     print("\n[A17] revoke-client vs a LIVE broker (LIVE: dropped + no re-attach)")
+    if _skip_if_enrolled("A17"):
+        return
     if os.name == "nt":
         note("A17 skipped: harness attestation is Unix-only")
         return
@@ -856,6 +879,8 @@ def a17_revoke_reaches_the_live_broker():
 
 def a18_extension_surface_revoke_via_host_control_frames():
     print("\n[A18] extension-surface revoke (LIVE: client_revoke via the native host)")
+    if _skip_if_enrolled("A18"):
+        return
     if os.name == "nt":
         note("A18 skipped: harness attestation is Unix-only")
         return
@@ -935,6 +960,8 @@ def a18_extension_surface_revoke_via_host_control_frames():
 
 def a19_deleting_the_allowlist_is_tampering_not_a_reset():
     print("\n[A19] clients.json deletion (LIVE: detected via the enrollment latch)")
+    if _skip_if_enrolled("A19"):
+        return
     if os.name == "nt":
         note("A19 skipped: harness attestation is Unix-only")
         return
@@ -991,6 +1018,8 @@ def a20_kill_reaches_every_enforcement_point():
     killed (the layers are redundant by design); it is pinned by code review
     and the broker unit tests."""
     print("\n[A20] kill switch vs a LIVE broker (LIVE: typed refusal at every surface)")
+    if _skip_if_enrolled("A20"):
+        return
     if os.name == "nt":
         note("A20 skipped: harness attestation is Unix-only")
         return
@@ -1086,6 +1115,8 @@ def a21_corrupt_kill_marker_fails_closed():
     (outcome=error, with the auth rung that passed), and `doctor` reports the
     unreadable state non-zero."""
     print("\n[A21] corrupt revocation record (LIVE: kill state unknown -> refuse everything)")
+    if _skip_if_enrolled("A21"):
+        return
     if os.name == "nt":
         note("A21 skipped: harness attestation is Unix-only")
         return
@@ -1168,6 +1199,8 @@ def a22_unkill_requires_interactive_user_presence():
     revocation.json directly, is the conceded same-user residual; Touch ID
     hardware replaces this floor in Phase 8.)"""
     print("\n[A22] unkill demands user presence (LIVE: piped/declined refused, typed releases)")
+    if _skip_if_enrolled("A22"):
+        return
     if os.name == "nt":
         note("A22 skipped: the pty-driven confirmation is Unix-only")
         return
