@@ -2,6 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-07-17
+- Amended by (2026-07-18): [ADR-0032](0032-host-owned-policy-settings.md)
+  retires the extension's `kill_release` path (release becomes app/CLI
+  only) and reverses decision 4's pushes-nothing connect asymmetry: a
+  policy-capable host pushes `policy_current` and `lang_current` at every
+  connect.
 - Extends: [ADR-0025](0025-any-side-revocation-epoch.md) (the revocation
   record and its epoch; the kill latch lives in that record and rides its
   machinery), [ADR-0024](0024-multi-client-attested-pairing-and-broker.md)
