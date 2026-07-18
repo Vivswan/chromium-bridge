@@ -357,6 +357,20 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: Vivswan/repo-platform/actions/check-typography@main
 
+  # The docs site (docs/site: Astro over the repo's markdown docs) must
+  # keep building; nothing else gates it. Build-only: the site is not
+  # deployed from CI yet.
+  docs-site:
+    name: docs site builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd docs/site build
+
   cjk:
     name: CJK containment (zh text only in locale files)
     runs-on: ubuntu-latest
@@ -414,6 +428,7 @@ jobs:
         typography,
         cjk,
         desktop,
+        docs-site,
       ]
     runs-on: ubuntu-latest
     steps:
