@@ -60,15 +60,36 @@
 //! floor-authorized one is always distinguishable from a hardware-authorized
 //! one.
 //!
-//! ## Testing rule (real prompts)
+//! ## Testing rule (no real prompts, ever)
 //!
-//! On a Touch-ID Mac, [`require_presence`] with a non-CLI floor raises a REAL
-//! system prompt. Tests must never call it that way: unit coverage goes
-//! through the pure [`ladder`] with the hardware outcome injected. The one
-//! `require_presence` call tests may make is with [`Floor::CliConfirm`] under
-//! a non-terminal stdin, which the precondition refuses before any prompt.
+//! In a dev or prod build, [`require_presence`] with a non-CLI floor raises a
+//! REAL system prompt on a Touch-ID Mac. Automated UNIT tests must never do
+//! that, and cannot: under `cfg(test)`, [`hardware_authenticate`] returns the
+//! injected [`test_hook`] outcome (default `Unavailable`) instead of calling
+//! LocalAuthentication or signing with the enrolled Enclave key, and the real
+//! backend module is not even compiled into a `cfg(test)` build. Set the
+//! outcome with `test_hook::set` to exercise the verified/refused/unavailable
+//! branches. The mock is `cfg(test)`-only, compiled out of every shipped
+//! binary; there is NO runtime env var, flag, or config that disables the
+//! real hardware path (a bypass an attacker could set is forbidden by
+//! AGENTS.md).
+//!
+//! `cfg(test)` covers this crate's own unit tests. Integration tests (in
+//! `tests/`) and the release binary link the crate WITHOUT `cfg(test)`, so
+//! they use the real path - the suite keeps them promptless by construction,
+//! not by this mock: every enclave/presence e2e supplies only MALFORMED
+//! challenges (refused before the keychain), and the presence-gated CLI
+//! commands are skipped on an enrolled machine (see `tests/protocol/e2e.py`,
+//! `enclave_key_present`). The real hardware path is exercised only by the
+//! explicit user runbook (`just phase8-touchid-proof`), consciously run and
+//! tapped.
 
-#[cfg(target_os = "macos")]
+// The real hardware backend is compiled only into non-test macOS builds:
+// under cfg(test) `hardware_authenticate` returns the injected mock instead,
+// so the module (and its enrolled-key signing) would be dead code in a test
+// build. Gating it out is what makes "no test can reach the real key"
+// structural rather than merely conventional.
+#[cfg(all(target_os = "macos", not(test)))]
 mod macos;
 
 use std::fmt;
@@ -193,16 +214,86 @@ pub enum HardwareOutcome {
 /// [`require_presence`] uses the floor.
 ///
 /// On a capable Mac this RAISES A REAL SYSTEM PROMPT - see the module docs'
-/// testing rule.
+/// testing rule. That is precisely why, under `cfg(test)`, this function
+/// NEVER reaches the real LocalAuthentication / Secure Enclave key: it returns
+/// the injected [`test_hook`] outcome instead. So no automated test binary can
+/// raise a real prompt or sign with the user's enrolled key, even one that
+/// drives the full [`require_presence`] path. `cfg(test)` is compiled OUT of
+/// dev and prod builds; there is no runtime env var, flag, or config that
+/// disables the real hardware path in a shipped binary (that would be a
+/// bypass an attacker could set - forbidden by AGENTS.md).
 fn hardware_authenticate(reason: &str) -> HardwareOutcome {
-    #[cfg(target_os = "macos")]
+    #[cfg(test)]
+    {
+        let _ = reason;
+        test_hook::outcome()
+    }
+    #[cfg(all(not(test), target_os = "macos"))]
     {
         macos::authenticate(reason)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(test), not(target_os = "macos")))]
     {
         let _ = reason;
         HardwareOutcome::Unavailable
+    }
+}
+
+/// The `cfg(test)`-only presence mock: canned [`HardwareOutcome`]s injected in
+/// place of real hardware, so the full [`require_presence`] path is testable
+/// without ever raising a system prompt or touching the enrolled Enclave key.
+/// Compiled out of every non-test build. Per-thread state, so parallel tests
+/// do not interfere.
+#[cfg(test)]
+mod test_hook {
+    use std::cell::Cell;
+
+    use super::HardwareOutcome;
+
+    #[derive(Clone, Copy)]
+    pub(super) enum Mock {
+        Verified,
+        Refused,
+        Unavailable,
+    }
+
+    thread_local! {
+        // Default Unavailable: a test that does not opt in behaves as a
+        // machine with no hardware rung (falls to the floor), so no test can
+        // accidentally assert a hardware "grant" it did not set up.
+        static OUTCOME: Cell<Mock> = const { Cell::new(Mock::Unavailable) };
+    }
+
+    /// Set the outcome the next `hardware_authenticate` on THIS thread returns.
+    pub(super) fn set(mock: Mock) {
+        OUTCOME.with(|c| c.set(mock));
+    }
+
+    /// Reset to the default (no hardware rung). Call at the end of a test that
+    /// changed it, so a reused thread does not leak state to the next test.
+    pub(super) fn reset() {
+        OUTCOME.with(|c| c.set(Mock::Unavailable));
+    }
+
+    pub(super) fn outcome() -> HardwareOutcome {
+        match OUTCOME.with(Cell::get) {
+            Mock::Verified => HardwareOutcome::Verified,
+            Mock::Refused => HardwareOutcome::Refused("injected test refusal".into()),
+            Mock::Unavailable => HardwareOutcome::Unavailable,
+        }
+    }
+
+    /// RAII: restore the default outcome on scope exit, so a test that sets
+    /// the mock and then fails mid-way cannot leak state to the next test on a
+    /// reused thread. (State leakage could never reach hardware - the real
+    /// module is uncompiled under cfg(test) - but a stale `Verified` could
+    /// skew a later assertion.)
+    pub(super) struct ResetOnDrop;
+
+    impl Drop for ResetOnDrop {
+        fn drop(&mut self) {
+            reset();
+        }
     }
 }
 
@@ -368,9 +459,9 @@ mod tests {
     fn the_extension_and_app_floors_attest_their_own_paths() {
         // With hardware unavailable, the surface floors succeed and name
         // themselves, so the audit trail can never conflate them with
-        // hardware. Injected through the pure ladder: on a Touch-ID Mac,
-        // require_presence with these floors raises a REAL system prompt
-        // (module docs, testing rule), so tests must never call it that way.
+        // hardware. Injected through the pure ladder here; the full
+        // require_presence path is covered separately, driven through the
+        // cfg(test) mock (never real hardware).
         for (floor, path) in [
             (Floor::ExtensionConfirm, PresencePath::ExtensionConfirm),
             (Floor::AppConfirm, PresencePath::AppConfirm),
@@ -393,11 +484,43 @@ mod tests {
     fn a_non_interactive_cli_invocation_is_refused_before_any_prompt() {
         // The anti-tap-phishing precondition: under a test harness stdin is
         // never a terminal, so the CLI floor refuses HERE, before
-        // hardware_authenticate could raise a system prompt. This is also
-        // what makes this the one require_presence call that is safe in a
-        // test on a Touch-ID Mac.
+        // hardware_authenticate could run at all.
         let err = require_presence("test", Floor::CliConfirm).unwrap_err();
         assert!(matches!(err, PresenceError::NotInteractive));
+    }
+
+    #[test]
+    fn require_presence_uses_the_injected_mock_never_real_hardware() {
+        // The full require_presence path is driven end to end through the
+        // cfg(test) mock (test_hook), proving no test ever reaches real
+        // LocalAuthentication or the enrolled Enclave key: a verified mock
+        // attests touch_id, a refused mock never falls back to the floor, and
+        // an unavailable mock uses the floor. The RAII guard restores the
+        // default even if an assertion below panics, so no state leaks to a
+        // reused thread.
+        let _reset = test_hook::ResetOnDrop;
+
+        test_hook::set(test_hook::Mock::Verified);
+        let att = require_presence("test", Floor::ExtensionConfirm).unwrap();
+        assert_eq!(att.path(), PresencePath::TouchId);
+
+        test_hook::set(test_hook::Mock::Refused);
+        let err = require_presence("test", Floor::ExtensionConfirm).unwrap_err();
+        assert!(matches!(err, PresenceError::HardwareRefused(_)));
+
+        test_hook::set(test_hook::Mock::Unavailable);
+        let att = require_presence("test", Floor::ExtensionConfirm).unwrap();
+        assert_eq!(att.path(), PresencePath::ExtensionConfirm);
+    }
+
+    #[test]
+    fn the_default_test_hook_reaches_no_hardware() {
+        // Without opting in, the mock is Unavailable, so require_presence with
+        // a surface floor succeeds via that floor - never a hardware call.
+        // This is the default posture every other test in the crate runs
+        // under.
+        let att = require_presence("test", Floor::AppConfirm).unwrap();
+        assert_eq!(att.path(), PresencePath::AppConfirm);
     }
 
     #[test]
