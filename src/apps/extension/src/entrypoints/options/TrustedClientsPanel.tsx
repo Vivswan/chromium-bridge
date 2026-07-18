@@ -48,8 +48,10 @@ export function TrustedClientsPanel() {
 
       {view === null && <div className="mt-2 text-xs text-text-3">{t("clients.loading")}</div>}
 
+      {/* A read failure is unknown/degraded, not a denial: pending ink (red
+          stays reserved for kill/deny/compromised), fail-closed wording. */}
       {view && !view.ok && (
-        <div className="mt-2 text-xs font-semibold text-danger">
+        <div role="status" className="mt-2 text-xs font-semibold text-pending">
           {t("clients.error", [view.error ?? t("clients.no_reply")])}
         </div>
       )}
@@ -83,7 +85,12 @@ export function TrustedClientsPanel() {
         </ul>
       )}
 
-      {actionError && <div className="mt-2 text-xs font-semibold text-danger">{actionError}</div>}
+      <div
+        role="alert"
+        className={actionError ? "mt-2 text-xs font-semibold text-danger" : "sr-only"}
+      >
+        {actionError}
+      </div>
     </div>
   );
 }

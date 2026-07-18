@@ -68,12 +68,21 @@ export function KillSwitchPanel() {
   };
 
   const stateLine = () => {
+    // Fail-closed display: a green "alive" needs a FRESH positive answer
+    // (view.ok). A stale mirror behind an unreachable host downgrades to a
+    // neutral last-known line; no state at all renders severed, never a
+    // neutral controllable idle.
     switch (view?.state) {
       case "alive":
-        return (
+        return view.ok ? (
           <span className="flex items-center gap-2 font-semibold">
             <span className="status-dot live" />
             {t("kill.state_alive")}
+          </span>
+        ) : (
+          <span className="flex items-center gap-2 text-text-2">
+            <span className="status-dot" />
+            {t("kill.state_alive_stale")}
           </span>
         );
       case "killed":
@@ -91,10 +100,18 @@ export function KillSwitchPanel() {
           </span>
         );
       default:
-        return (
+        // Never heard a state AND could not read one: severed until a read
+        // succeeds. Only a fresh ok answer with no state (not reachable in
+        // practice: the host always reports a state) stays neutral.
+        return view?.ok ? (
           <span className="flex items-center gap-2 text-text-3">
             <span className="status-dot" />
             {t("kill.state_unmirrored")}
+          </span>
+        ) : (
+          <span className="flex items-center gap-2 font-semibold text-danger">
+            <span className="status-dot down" />
+            {t("kill.state_severed")}
           </span>
         );
     }
@@ -112,11 +129,16 @@ export function KillSwitchPanel() {
           </div>
         )}
         {view && !view.ok && view.error && (
-          <div className="mt-2 text-xs font-semibold text-danger">
+          <div role="alert" className="mt-2 text-xs font-semibold text-danger">
             {t("kill.failed", [view.error])}
           </div>
         )}
-        {actionError && <div className="mt-2 text-xs font-semibold text-danger">{actionError}</div>}
+        <div
+          role="alert"
+          className={actionError ? "mt-2 text-xs font-semibold text-danger" : "sr-only"}
+        >
+          {actionError}
+        </div>
       </div>
       <Button variant={killed ? "default" : "danger"} onClick={() => void toggle()} disabled={busy}>
         {killed ? t("kill.release") : t("kill.engage")}
