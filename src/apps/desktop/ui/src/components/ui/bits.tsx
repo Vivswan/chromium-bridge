@@ -82,15 +82,18 @@ export function Pill({
   );
 }
 
-/** Identity material chip: fingerprints, host ids, origins. Always mono. */
+/** Identity material chip: fingerprints, host ids, origins. Always mono.
+ * `wrap` lets long identity material wrap - it must never truncate. */
 export function ChipMono({
+  wrap,
   children,
   className,
 }: {
+  wrap?: boolean;
   children: React.ReactNode;
   className?: string;
 }) {
-  return <span className={cn("chip-mono", className)}>{children}</span>;
+  return <span className={cn("chip-mono", wrap === true && "wrap", className)}>{children}</span>;
 }
 
 /** The fingerprint glyph from the mockups (a Touch ID mark). */
