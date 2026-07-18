@@ -336,6 +336,28 @@ describe("ceremony state machine", () => {
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 
+  test("a malformed enclave_error (schema violation) degrades to unknown_error, still blocked", async () => {
+    // The frame classifies as enclave traffic by tag but fails
+    // EnclaveErrorFrameSchema (reason must be a string): the runtime must
+    // enforce the schema the parity gate declares, then fail exactly as an
+    // unrecognized reason would - blocked, never open.
+    await onPortConnected();
+    await handleEnclaveFrame({ type: "enclave_error", reason: 42 } as never);
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect(st.lastError).toContain("unknown_error");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("an enclave_error with no reason at all degrades to unknown_error, still blocked", async () => {
+    await onPortConnected();
+    await handleEnclaveFrame({ type: "enclave_error" });
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect(st.lastError).toContain("unknown_error");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
   test("a host claiming unsupported_platform on macOS stays blocked (no downgrade dodge)", async () => {
     await onPortConnected();
     await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });

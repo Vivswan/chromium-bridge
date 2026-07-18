@@ -32,6 +32,7 @@
 // The challenge-on-connect policy lives entirely in onPortConnected below.
 
 import {
+  EnclaveErrorFrameSchema,
   type EnclaveInboundFrame,
   EnclaveInboundFrameSchema,
   EnclaveProofFrameSchema,
@@ -438,10 +439,14 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
 async function handleError(frame: EnclaveInboundFrame): Promise<void> {
   const current = outstanding;
   clearOutstanding();
+  // Parse with the wire schema the envelope-parity gate declares for
+  // enclave_error (`reason` is required). A frame that fails it degrades to
+  // unknown_error - same as an unrecognized reason code - keeping the fail
+  // direction unchanged: an error frame only clears the outstanding
+  // challenge, it never grants anything.
+  const parsed = EnclaveErrorFrameSchema.safeParse(frame);
   const reason =
-    typeof frame.reason === "string" && KNOWN_REASONS.has(frame.reason)
-      ? frame.reason
-      : "unknown_error";
+    parsed.success && KNOWN_REASONS.has(parsed.data.reason) ? parsed.data.reason : "unknown_error";
   if (!current) {
     console.warn("[bb] dropping unsolicited enclave_error:", reason);
     return;
