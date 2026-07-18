@@ -26,7 +26,7 @@ export function LanguagePicker({
   const { t } = useI18n();
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span id="lang-label" className="text-muted">
+      <span id="lang-label" className="text-text-3">
         {t("lang.label")}
       </span>
       <Select value={value} onValueChange={(v) => onChange(v as UiLanguage)}>
