@@ -3,9 +3,9 @@
   "productName": "Chromium Bridge",
   "identifier": "com.vivswan.chromium-bridge",
   "build": {
-    "beforeDevCommand": "bun run --cwd ui dev",
+    "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run --cwd ui build",
+    "beforeBuildCommand": "bun run build",
     "frontendDist": "./ui/dist"
   },
   "app": {
