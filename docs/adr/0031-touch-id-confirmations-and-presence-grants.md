@@ -133,7 +133,7 @@ opt-out-able.
 - The gate cannot be fully verified without a finger on the sensor. The
   headless suites exercise every reachable path (the no-downgrade rule, the
   refused-window approval, forged and replayed proofs, the floors); the
-  hardware path itself is driven by `just phase8-touchid-proof`, a runbook
+  hardware path itself is driven by `just touchid-gates`, a runbook
   the user runs to see each prompt appear.
 
 ## Residual risk

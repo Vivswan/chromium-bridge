@@ -824,7 +824,7 @@ def c8_browser_gated_todo():
 def c10_revoke_mid_dispatch():
     print("\n[C10] revoke mid-session (LIVE: epoch guard drops the harness, broker recovers)")
     if e2e.enclave_key_present():
-        skip("C10: real enclave key present; pair-client/unkill would raise a live Touch ID prompt (hardware path covered by just phase8-touchid-proof)")
+        skip("C10: real enclave key present; pair-client/unkill would raise a live Touch ID prompt (hardware path covered by just touchid-gates)")
         return
     if os.name == "nt":
         skip("C10 uses the Unix harness-attestation path")
@@ -909,7 +909,7 @@ def c12_kill_mid_dispatch():
     bridge on the same broker."""
     print("\n[C12] kill mid-dispatch (LIVE: in-flight call fails fast; typed refusals; recovery)")
     if e2e.enclave_key_present():
-        skip("C12: real enclave key present; pair-client/unkill would raise a live Touch ID prompt (hardware path covered by just phase8-touchid-proof)")
+        skip("C12: real enclave key present; pair-client/unkill would raise a live Touch ID prompt (hardware path covered by just touchid-gates)")
         return
     if os.name == "nt":
         skip("C12 uses the Unix harness-attestation path")
@@ -977,7 +977,7 @@ def c13_audit_sink_failure_never_fails_the_decision():
     trail carries a `dropped` counter so the gap is visible."""
     print("\n[C13] audit sink failure during decisions (LIVE: log-after-decide, drop-on-full)")
     if e2e.enclave_key_present():
-        skip("C13: real enclave key present; pair-client/unkill would raise a live Touch ID prompt (hardware path covered by just phase8-touchid-proof)")
+        skip("C13: real enclave key present; pair-client/unkill would raise a live Touch ID prompt (hardware path covered by just touchid-gates)")
         return
     if os.name == "nt":
         skip("C13 exercises the Unix runtime-dir layout")
