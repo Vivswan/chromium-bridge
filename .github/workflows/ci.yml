@@ -374,9 +374,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: Vivswan/repo-platform/actions/check-typography@main
 
-  # The docs site (docs/site: Astro over the repo's markdown docs) must
-  # keep building; nothing else gates it. Build-only: the site is not
-  # deployed from CI yet.
+  # The public site (docs/site: the landing page plus Astro over the repo's
+  # markdown docs) must keep building. Build-only here: deployment to GitHub
+  # Pages happens in the separate deploy-site.yml workflow on push to main.
   docs-site:
     name: docs site builds
     runs-on: ubuntu-latest
