@@ -26,7 +26,7 @@ export type {
 // read fields generically; each validates what it needs.
 export interface ContentMsg {
   op: string;
-  args: OpArgs & { message?: string };
+  args: OpArgs & { message?: string; cancelLabel?: string };
   tabId?: number;
   /** What the SW preflight authorized (confirm/gate.ts): the approved
    * origin (enforced against location.origin before any act) and, for

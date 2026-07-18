@@ -34,7 +34,7 @@ export async function handle(msg: ContentMsg) {
   if (op === "_info_toast") {
     // Informational notice (e.g. "about to attach debugger, banner will
     // flash"). Returns true unless the user cancels; NOT a confirmation.
-    return await showInfoToast(args.message || "");
+    return await showInfoToast(args.message || "", args.cancelLabel);
   }
   if (op === "_probe_click") {
     // The SW's DOM read for click-risk classification (confirm/gate.ts).
