@@ -64,17 +64,16 @@ desktop-check-rust: desktop-ui-build
 desktop-touchid-proof: desktop-bundle
     "target/release/bundle/macos/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair
 
-# Phase 8 Touch ID proof (USER-RUN, macOS: raises REAL Touch ID prompts).
-# Drives each capability-restoring / crown-jewel presence path built in
-# ADR-0031 so you can watch the hardware prompt appear for each one. Requires
-# an enrolled Enclave key (run `just desktop-touchid-proof` first). Uses the
-# SIGNED BUNDLED host: the enclave key lives in the entitled keychain group
-# that only the signed bundle can reach, so the plain release binary would see
-# no key and fall to the interactive floor. Runs against your REAL runtime dir
-# - it engages and then releases the global kill switch, so run it when the
-# bridge is idle. The pair-client step trusts a throwaway client named
-# `touchid-demo`; it is removed again at the end.
-# Demo the three Touch ID presence gates (per-action, client pairing, unkill).
+# Touch ID gate demo (USER-RUN, macOS: raises a REAL Touch ID prompt). Runs
+# the per-action presence gate - the one page_eval / page_upload use - so you
+# can watch the Enclave sign under Touch ID, then prints the two
+# capability-grant commands (pair-client, unkill) for you to run in your own
+# terminal: those require a real interactive TTY by design (anti tap-phishing),
+# which a just recipe cannot provide. Needs an enrolled Enclave key (run
+# `just desktop-touchid-proof` first) and uses the SIGNED BUNDLED host, since
+# the enclave key lives in an entitled keychain group the plain release binary
+# cannot reach.
+# Demo the Touch ID presence gates (runs the per-action gate; prints the rest).
 touchid-gates: desktop-bundle
     #!/usr/bin/env bash
     set -euo pipefail
@@ -83,18 +82,19 @@ touchid-gates: desktop-bundle
     echo "   expect a Touch ID prompt now:"
     "$BIN" presence-selftest
     echo
-    echo "== 2/3 client pairing (granting harness capability) =="
-    echo "   expect a Touch ID prompt to trust 'touchid-demo':"
-    "$BIN" pair-client --name touchid-demo --hash "$(printf 'ab%.0s' {1..32})"
-    "$BIN" revoke-client --name touchid-demo
-    echo "   (revoked the throwaway client; revocation is friction-free by design)"
+    echo "== 2/3 client pairing  +  3/3 kill-switch release =="
+    echo "   These GRANT or RESTORE capability, so from the CLI they require a"
+    echo "   real interactive terminal (a background or piped process must not be"
+    echo "   able to raise that Touch ID sheet). A just recipe has no TTY, so run"
+    echo "   these yourself in this terminal - each raises a Touch ID prompt:"
     echo
-    echo "== 3/3 kill-switch release (restoring capability) =="
-    "$BIN" kill
-    echo "   expect a Touch ID prompt to release the kill switch:"
-    "$BIN" unkill
+    echo "     BIN=\"$BIN\""
+    echo "     \"\$BIN\" pair-client --name touchid-demo --hash \$(printf 'ab%.0s' {1..32})   # Touch ID"
+    echo "     \"\$BIN\" revoke-client --name touchid-demo                                    # instant, no prompt"
+    echo "     \"\$BIN\" kill && \"\$BIN\" unkill                                              # kill instant; unkill = Touch ID"
     echo
-    echo "touchid-gates: all three presence paths exercised."
+    echo "touchid-gates: the per-action gate above raised a live Touch ID prompt;"
+    echo "the two capability-grant gates need a real terminal - commands printed above."
 
 # Format Rust sources
 fmt:
