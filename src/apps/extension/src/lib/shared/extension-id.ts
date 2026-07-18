@@ -3,11 +3,10 @@
 // The constant itself is generated from the pinned key in
 // src/packages/core/src/identity.rs into @chromium-bridge/shared (identity.gen.ts) by
 // `just gen`, so it cannot drift from the wxt.config.ts-generated manifest;
-// `scripts/check-extension-id.ts` (a CI gate)
-// keeps `install/install.sh` and `install/install.ps1` in lockstep with the
-// same derivation. If you rotate the key (e.g. to adopt a Chrome Web
-// Store-assigned id), regenerate and update the installers together — the
-// gates fail otherwise.
+// `scripts/check-extension-id.ts` (a CI gate) re-derives the ID from the key
+// and asserts every copy (generated TS, built manifest) agrees. If you
+// rotate the key (e.g. to adopt a Chrome Web Store-assigned id), regenerate
+// everything together — the gates fail otherwise.
 import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared";
 
 export { PINNED_EXTENSION_ID };
@@ -50,7 +49,7 @@ export function diagnoseExtensionId(
       `extension will be REJECTED and chromium-bridge cannot connect. Likely cause: ` +
       `you loaded a build whose manifest lacks the pinned \`key\` (Chrome then derives ` +
       `a path-based id), or a Chrome Web Store build with a store-assigned id. Fix: load ` +
-      `the built src/apps/extension/dist that contains the pinned key, or update the pinned id ` +
-      `(manifest key + installers) to match your build.`,
+      `the built src/apps/extension/dist that contains the pinned key, or update the pinned ` +
+      `id in src/packages/core/src/identity.rs (and regenerate) to match your build.`,
   };
 }

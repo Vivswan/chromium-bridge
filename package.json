@@ -10,7 +10,8 @@
     "src/apps/desktop/ui",
     "src/packages/*",
     "tests/browser",
-    "scripts"
+    "scripts",
+    "docs/site"
   ],
   "scripts": {
     "gen": "bun scripts/gen-ops.ts && biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts",

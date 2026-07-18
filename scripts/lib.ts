@@ -3,8 +3,8 @@
 //
 //   import { repoRoot, cargoVersion } from "./lib.ts";
 //
-// (The two remaining standalone shell scripts - install/install.sh and
-// scripts/build-repro.sh - carry their own inlined copies of the old lib.sh
+// (The remaining standalone shell scripts - scripts/build-repro.sh and
+// scripts/fuzz_smoke.sh - carry their own inlined copies of the old lib.sh
 // helpers so they keep working without a bun runtime.)
 
 import { readFileSync } from "node:fs";

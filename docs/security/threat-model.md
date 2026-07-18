@@ -7,7 +7,7 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 ## Assets
 
 - The user's **authenticated browser sessions** (cookies incl. httpOnly, web
-  storage tokens) — i.e. the ability to act *as the user* on sites they're
+  storage tokens) - i.e. the ability to act *as the user* on sites they're
   logged into.
 - **Page content** the user can see.
 - The ability to **execute actions** (click/fill/navigate/eval) as the user.
@@ -19,12 +19,12 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 | Actor | Trusted? | Notes |
 |-------|----------|-------|
 | The user | yes | owns the machine and Chrome profile |
-| The MCP client (Claude Code, Codex, …) | **yes, by design** | the user configured it; it drives the tools |
+| The MCP client (Claude Code, Codex, ...) | **yes, by design** | the user configured it; it drives the tools |
 | The Rust binary (MCP server + native host) | yes | the thing we're securing |
 | The MV3 extension | yes | but runs alongside untrusted page code |
 | **The web page** | **NO** | may be attacker-controlled; may host prompt-injection |
 | Other local users / processes | **NO** | may try to connect to the bridge socket |
-| The network | out of scope | no remote surface — everything is localhost/stdio |
+| The network | out of scope | no remote surface - everything is localhost/stdio |
 
 ## Trust assumptions
 
@@ -37,7 +37,7 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   and [ADR-0020](../adr/0020-kernel-attested-peer-identity.md)). (See also
   [ADR-0019](../adr/0019-authenticated-ipc.md).)
 - **The MCP client is trusted.** A malicious client the user themselves
-  installed is out of scope — it already has whatever the user granted it. The
+  installed is out of scope - it already has whatever the user granted it. The
   tools exist to be driven by that client.
 - **Chrome's sandbox and extension model hold.** We rely on MV3 isolation
   between content scripts and page JS, and on Chrome enforcing host permissions.
@@ -45,32 +45,35 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
 ## Primary threats & mitigations
 
 1. **A web page influences the agent into acting on it without approval.**
-   → Page-level ops require an **allowlisted origin**; a new origin triggers an
+   -> Page-level ops require an **allowlisted origin**; a new origin triggers an
    explicit user prompt + `chrome.permissions.request`. The page can't add
    itself to the allowlist.
 
 2. **Prompt injection: page content tricks the model into a dangerous tool
    call** (e.g. "run this eval", "read cookies and post them").
-   → Observed page content is *data*, not commands, to the agent. Independently,
-   high-risk actions (submit/link click, `page_eval`, tab close) require an
-   **in-page user confirmation** the page cannot forge or auto-dismiss, and
+   -> Observed page content is *data*, not commands, to the agent. Independently,
+   high-risk actions (submit/link click, `page_eval`, tab close) require a
+   **user confirmation in an extension-owned window** the page cannot forge,
+   read, or auto-dismiss (ADR-0027), and
    `page_eval` confirms **every call** showing the full code. This per-action
    prompt covers the high-risk ops only. Low-risk ops (navigate, `page_text`,
    `tab_list`, and masked cookie or storage reads) run with no per-action
    prompt, so a driver that already reaches the extension can navigate, read
    masked page content, and enumerate tabs without the user seeing each step.
    The confirmation is a gate on the dangerous actions, not a promise that
-   nothing happens silently.
+   nothing happens silently. The gates are on by default; each is a
+   documented setting whose opt-out residuals are tabulated in
+   [SECURITY.md](../../SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 
 3. **Credential/token exfiltration.**
-   → Cookies/storage are **read-only** (no set), **allowlist-scoped**, and
+   -> Cookies/storage are **read-only** (no set), **allowlist-scoped**, and
    **masked** (JWT/hex/long-digit/token-like) before leaving the extension.
    `storage_get` masking is not user-toggleable. `page_text` masks passwords and
    card-like numbers.
 
 4. **Another local process hijacks the bridge** to issue tool calls or read
    responses.
-   → On Unix there is **no listening port**: the bridge is a 0600 Unix-domain
+   -> On Unix there is **no listening port**: the bridge is a 0600 Unix-domain
    socket in a 0700 directory. Every connection is gated by a **kernel peer-UID
    check** (rejecting other users), **kernel-attested executable identity**
    (Linux: the peer's `/proc/<pid>/exe` must SHA256-match ours; macOS: the peer's
@@ -102,15 +105,17 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    build) is a deferred follow-up (see ADR-0020).
 
 5. **A malformed/oversized message crashes or corrupts the bridge.**
-   → Native-messaging framing is length-checked (64 MB inbound clamp, 1 MB
+   -> Native-messaging framing is length-checked (64 MB inbound clamp, 1 MB
    outbound cap); a `panic = "abort"` profile + stderr panic hook keep panics
-   off the protocol stream; parse errors are surfaced, not fatal. (Protocol
-   fuzzing is a planned hardening — see the roadmap.)
+   off the protocol stream; parse errors are surfaced, not fatal; and the
+   wire parsers (native-messaging framing, MCP JSON-RPC, the bridge and
+   handshake decoders) carry cargo-fuzz targets
+   (`src/packages/core/fuzz/`).
 
 6. **Silent pairing: a malicious `claude mcp add` (or any process able to
    write an MCP client config) stands up the whole chain without the user
    noticing.**
-   → The **enrollment ceremony**
+   -> The **enrollment ceremony**
    ([ADR-0021](../adr/0021-enrollment-ceremony.md), on by default on macOS):
    `chromium-bridge pair` mints a P-256 key inside the Secure Enclave whose
    every use requires user presence (Touch ID / password), and performs a
@@ -123,9 +128,7 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    fingerprint printed by `pair` with the one the extension shows, which
    defeats a man-in-the-middle host between them. **Scope:** this closes
    silent *first* pairing and silent re-pinning; it does **not** close
-   post-enrollment same-user substitution (see the residual below), and the
-   host side ships first: until the extension-side pin lands, the host
-   answers challenges but nothing yet enforces them.
+   post-enrollment same-user substitution (see the residual below).
 
 7. **A revoked client or a revoked host keeps acting because revocation does
    not reach the enforcement point.**
@@ -178,8 +181,8 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   without ever touching the authenticated socket. `allowed_origins` pins which
   extension may open the host, but nothing pins which host the extension will
   accept. The enrollment ceremony
-  ([ADR-0021](../adr/0021-enrollment-ceremony.md)) narrows this: once the
-  extension-side pin lands, a substituted host cannot present a valid
+  ([ADR-0021](../adr/0021-enrollment-ceremony.md)) narrows this: with the
+  extension-side pin in place, a substituted host cannot present a valid
   `enclave_proof` without raising a Touch ID prompt the user did not expect,
   so substitution at *enrollment time* is no longer silent. What remains open
   is substitution *between* presence checks: MV3 respawns the host on every
@@ -237,42 +240,50 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   Allow itself. A navigation that races the pipeline while a confirmation is
   open is caught by an origin assertion run in the page atomically with the
   act, and a click is additionally bound to the target descriptor the user
-  approved. Residual: the surface displays the request but does not yet prove
-  user presence cryptographically; Phase 8 routes `page_eval`/`page_upload`
-  approval through the host Secure Enclave (Touch ID) so the verdict is an
-  unspoofable, host-signed tap rather than a click the extension trusts.
+  approved. Residual: the window proves a click on a page-unreachable
+  surface, not user presence in a cryptographic sense; ADR-0031 closes that
+  remainder for the two crown-jewel tools by routing `page_eval`/`page_upload`
+  approval through the host Secure Enclave on an enrolled Mac, where the
+  verdict is an unforgeable, host-signed user-presence check (Touch ID or
+  the login password). The window remains the confirmation surface for the
+  other high-risk kinds, on non-macOS platforms, on an un-enrolled Mac, and
+  when `touchIdConfirm` is opted out.
 - **`page_upload` can attach any local file the caller names.** When the tool
   is enabled (it is off by default), it attaches whatever absolute path the
   call supplies to a file input, so a model induced to call it on a page can
   hand that page a file the user never picked, such as an SSH key or a private
   document. Three gates stand in front of it: the opt-in, the origin
-  allowlist, and a per-call confirmation that shows the exact path. The
-  confirmation, though, is the page-defeatable one above, so on a hostile
-  allowlisted origin the last check can be auto-clicked, and the path itself
-  is not constrained to a picked file or a safe directory. Tracked for
-  hardening (a page-unreachable confirmation plus an OS file picker, so the
-  model names no path) before file upload is recommended for general use.
+  allowlist, and a per-call confirmation that shows the exact path (on an
+  enrolled Mac, a Secure Enclave user-presence check; elsewhere the
+  page-unreachable extension window). What remains open is that the path
+  itself is not constrained to a picked file or a safe directory: an approved
+  call attaches exactly what it names. Tracked for hardening (an OS file
+  picker, so the model names no path) before file upload is recommended for
+  general use.
 - `page_snapshot_precise` briefly attaches the debugger (infobar flash).
-- **CDP mode** (`cdpMode`, opt-in, off by default — see
+- **CDP mode** (`cdpMode`, opt-in, off by default - see
   [ADR-0017](../adr/0017-cdp-mode-all-ops.md)) routes all page ops through
   `chrome.debugger`. When enabled it **bypasses page CSP** (letting `page_eval`
   run on strict-CSP sites) and holds a **persistent debugger attach** for the
   tab (the "Started debugging this browser" banner stays up). The allowlist,
-  per-action confirmation toasts, and masking are unchanged; the residual risk
+  per-action confirmations, and masking are unchanged; the residual risk
   is the wider surface and the removed CSP defense-in-depth layer, accepted as
   the explicit price of the opt-in.
 
 ## Rebuild delta: new trust boundaries
 
 The workspace/Tauri rebuild
-([ADR-0023](../adr/0023-workspace-monorepo-tauri-app.md)) introduces six
-boundaries that do not exist in the model above. Boundaries 1-3 shipped with
-Phase 4 and are described here as delivered (mechanism, enforcement point,
-residual); see [ADR-0024](../adr/0024-multi-client-attested-pairing-and-broker.md)
-for the full treatment. Boundary 6 shipped with Phase 10
-([ADR-0030](../adr/0030-global-kill-switch-and-audit.md)). Boundaries 4 and 5
-remain stubs for later phases and must be treated as unenforced until their
-components ship.
+([ADR-0023](../adr/0023-workspace-monorepo-tauri-app.md)) introduced six
+boundaries that do not exist in the model above, all now delivered.
+Boundaries 1-3 shipped with the broker
+([ADR-0024](../adr/0024-multi-client-attested-pairing-and-broker.md) has the
+full treatment), boundary 4 with the desktop app
+([ADR-0029](../adr/0029-desktop-app-management-surface.md)), boundary 5 with
+the Touch ID presence gates
+([ADR-0031](../adr/0031-touch-id-confirmations-and-presence-grants.md)), and
+boundary 6 with the kill switch
+([ADR-0030](../adr/0030-global-kill-switch-and-audit.md)). Each is described
+as delivered: mechanism, enforcement point, residual.
 
 1. **Harness -> MCP server stdio admission (delivered, ADR-0024).** The
    server no longer trusts whatever spawned it. Before serving a single tool
@@ -351,16 +362,16 @@ components ship.
    tampering; only deleting both it and `revocation.json` reverts to the
    ERROR-logged bootstrap, the irreducible same-user residual.
 
-4. **The app as issuer.** The Tauri control panel can mint pairings and
-   revocations. It is a writer over the allowlist and a requester of
-   enclave operations, never a third trust root: nothing accepts "the app
-   said so" as authorization. Enforced by: the app going through the same
-   `core` write paths and the same presence-gated ceremonies as the CLI;
-   the UI carries no security weight. Residual: a compromised webview can
-   lie about state it displays, can ask for operations, and can decline to
-   request a confirmation at all (denying the operation, which fails
-   closed); what it cannot do is forge or answer the Enclave
-   user-presence prompt that dangerous operations terminate in.
+4. **The app as issuer (delivered, ADR-0029).** The Tauri control panel can
+   mint pairings and revocations. It is a writer over the allowlist and a
+   requester of enclave operations, never a third trust root: nothing
+   accepts "the app said so" as authorization. Enforced by: the app going
+   through the same `core` write paths and the same presence-gated
+   ceremonies as the CLI; the UI carries no security weight. Residual: a
+   compromised webview can lie about state it displays, can ask for
+   operations, and can decline to request a confirmation at all (denying
+   the operation, which fails closed); what it cannot do is forge or answer
+   the Enclave user-presence prompt that dangerous operations terminate in.
 
 5. **The Touch ID confirmation surface (delivered, ADR-0031).**
    Confirmations for the crown-jewel tools (`page_eval`, `page_upload`)
@@ -387,7 +398,7 @@ components ship.
    atomically with an epoch bump) halts all bridge activity from any
    trusted surface: the CLI (`kill`/`unkill`), the extension options page
    (host-mediated `kill_engage`/`kill_release` control frames), and the
-   future app through the same `core` calls. Enforced independently at
+   desktop app through the same `core` calls. Enforced independently at
    four layers so no single check is load-bearing: every `tools/call` from
    every harness is refused with the stable `BRIDGE_KILLED` code at the
    shared dispatcher; the broker's watcher severs every live browser
@@ -397,7 +408,7 @@ components ship.
    keeps the extension's release reachable; and the extension's own gate
    refuses on its SW-only mirror. Release is explicit, never automatic, and
    requires proof of user presence (`kill::release` demands a
-   `PresenceAttestation` only `crates/core/src/presence.rs` can construct):
+   `PresenceAttestation` only `src/packages/core/src/presence/` can construct):
    a Secure Enclave Touch ID tap on an enrolled Mac (ADR-0031); where no
    Enclave key exists, a typed confirmation on a real terminal for the CLI
    (a piped stdin is refused outright) and the options page's confirmation

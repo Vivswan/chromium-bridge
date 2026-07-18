@@ -8,7 +8,7 @@
 
 ## Three distinct kinds of "version"
 
-Before talking about compatibility, separate the three levels (see [architecture.md section 11.2](./architecture.md#112-capability--version-handshake-capabilitiesrs--bridge_protocol_version)):
+Before talking about compatibility, separate the three levels (see [architecture.md section 11.2](./architecture.md#112-capability--version-handshake)):
 
 | Version | Value | Single source | What a change means |
 |------|------|------|----------|
@@ -18,7 +18,7 @@ Before talking about compatibility, separate the three levels (see [architecture
 
 This doc focuses on the **internal bridge protocol version**: a small integer that is
 incremented only when the bridge wire contract (the `BridgeReq`/`BridgeResp` shapes, the
-`hello` handshake, op/capability semantics) changes **incompatibly**. Backward-compatible
+authentication handshake, op/capability semantics) changes **incompatibly**. Backward-compatible
 changes such as new optional fields, new tools, or new capabilities do not bump it (under
 SemVer they land in the minor of the release version, see
 [release.md](./release.md#semver-rules)).
@@ -38,10 +38,11 @@ capability is advertised.
 
 The doc comment on `BRIDGE_PROTOCOL_VERSION`
 ([`src/packages/core/src/protocol.rs`](../src/packages/core/src/protocol.rs)) describes the
-**intended** negotiation flow, layered on top of the existing `hello` secret authentication (see
-[ADR-0002](./adr/0002-three-process-architecture-localhost-tcp.md)):
+**intended** negotiation flow, layered on top of the existing connection authentication
+(peer attestation, the HMAC challenge-response, and the role-declaring attach frame; see
+[architecture.md section 3.3](./architecture.md#33-internal-bridge-protocol-broker---native-hosts-and-relays)):
 
-1. After the secret check passes, the extension reports its `protocolVersion` and its list
+1. After authentication passes, the extension reports its `protocolVersion` and its list
    of capability ids.
 2. The server compares protocol versions: on incompatibility it **fails fast**, returning
    `PROTOCOL_MISMATCH` from the error taxonomy (`ERROR_SPECS` in
@@ -59,7 +60,7 @@ can be upgraded independently (for example, a Web Store listing or separate rele
 cadences). What has landed today is the **first stage**: pending requests are bound to a
 connection generation, and generation-guarded reconnect keeps an old connection from
 affecting a new one (see
-[architecture.md section 5.2](./architecture.md#52-native-host-reconnect-flow)). The
+[architecture.md section 5.2](./architecture.md#52-native-host-reconnect)). The
 `PROTOCOL_MISMATCH` error code is already in place in the contract, ready to enable once
 the wiring lands.
 
@@ -67,6 +68,6 @@ the wiring lands.
 
 - Error taxonomy and `PROTOCOL_MISMATCH`: [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs),
   [`src/packages/core/src/error.rs`](../src/packages/core/src/error.rs).
-- Connection and reconnect semantics: [architecture.md section 5.2](./architecture.md#52-native-host-reconnect-flow),
+- Connection and reconnect semantics: [architecture.md section 5.2](./architecture.md#52-native-host-reconnect),
   [operations.md](./operations.md).
 - Release and SemVer discipline: [release.md](./release.md).

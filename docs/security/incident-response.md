@@ -70,7 +70,7 @@ ready:
   [operations.md](../operations.md)).
 - **Uninstall the host manifest**: after deleting the native messaging host manifest,
   Chrome can no longer spawn the host (paths in
-  [architecture.md section 4.3](../architecture.md#43-install-artifacts)).
+  [architecture.md section 4.3](../architecture.md#43-on-disk-artifacts)).
 
 > Mitigation order, from light to heavy: disable the high-risk tools first, then revoke
 > the allowlist, then disable the extension, then uninstall the manifest.

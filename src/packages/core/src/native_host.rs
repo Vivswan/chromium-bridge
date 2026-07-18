@@ -707,11 +707,11 @@ fn run_control_plane() -> i32 {
 }
 
 pub fn run() -> i32 {
-    // Which browser this host fronts (`--label <name>`, written into the
-    // per-browser wrapper by the installer). It rides in the signed handshake
-    // response so the MCP server can key its connection registry by browser.
-    // A malformed label refuses to start: better no bridge than one filed
-    // under a mangled identity.
+    // Which browser this host fronts (`--label <name>`, baked into the
+    // per-browser wrapper by the registration engine). It rides in the signed
+    // handshake response so the MCP server can key its connection registry by
+    // browser. A malformed label refuses to start: better no bridge than one
+    // filed under a mangled identity.
     let argv: Vec<String> = std::env::args().collect();
     let label = match crate::cli::native_host_label(&argv) {
         Ok(l) => l,

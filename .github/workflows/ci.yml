@@ -172,7 +172,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # shellcheck is preinstalled on GitHub's ubuntu runners. Only the
       # standalone shell scripts remain; the dev tooling is TypeScript now.
-      - run: shellcheck install/install.sh scripts/build-repro.sh scripts/install_verify_test.sh
+      - run: shellcheck scripts/build-repro.sh scripts/fuzz_smoke.sh
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
           # Pinned: these tools' verdicts gate the build. Bump deliberately.
@@ -181,40 +181,22 @@ jobs:
       - run: cargo machete
 
   linux-install:
-    name: Linux installer (isolated XDG directories)
+    name: Linux registration (doctor --fix / uninstall, isolated XDG directories)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           cache: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - run: bun run --cwd src/apps/extension build
-      - name: Install for chrome,chromium,brave,edge (explicit keys)
-        run: |
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          XDG_DATA_HOME="$tmp/data" \
-          XDG_CONFIG_HOME="$tmp/config" \
-            ./install/install.sh --browser chrome,chromium,brave,edge --skip-extension-build
-          test -x "$tmp/data/chromium-bridge/chromium-bridge"
-          test -x "$tmp/data/chromium-bridge/run-host.sh"
-          for d in google-chrome chromium BraveSoftware/Brave-Browser microsoft-edge; do
-            manifest="$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
-            test -f "$manifest"
-            grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$manifest"
-          done
-          "$tmp/data/chromium-bridge/chromium-bridge" --help
+      - run: cargo build --release
       - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
         run: |
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data"
-          bin="$PWD/target/release/chromium-bridge"   # built by the install.sh step above
+          bin="$PWD/target/release/chromium-bridge"
           mkdir -p "$tmp/home"
+          "$bin" --help
           # Fresh machine, no browsers: --fix refuses instead of guessing.
           if "$bin" doctor --fix; then
             echo "doctor --fix should have failed with no browser detected" >&2; exit 1
@@ -261,40 +243,40 @@ jobs:
           test ! -e "$manifest"
           test ! -e "$tmp/custom/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
           test ! -e "$wrapper"
-      - name: Install all, then uninstall removes every known registration
+          test ! -e "$tmp/config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          test ! -e "$tmp/data/chromium-bridge/run-host-brave.sh"
+      - name: Explicit multi-browser selection, --all, and full uninstall
         run: |
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
-          export XDG_DATA_HOME="$tmp/data" XDG_CONFIG_HOME="$tmp/config"
-          ./install/install.sh --browser all --skip-extension-build
+          export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data"
+          bin="$PWD/target/release/chromium-bridge"
+          mkdir -p "$tmp/home"
+          # A comma-separated selection registers exactly those browsers,
+          # detected or not; the unselected rows stay untouched.
+          "$bin" doctor --fix --browser chrome,chromium,brave,edge
+          for d in google-chrome chromium BraveSoftware/Brave-Browser microsoft-edge; do
+            manifest="$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+            test -f "$manifest"
+            grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$manifest"
+          done
+          for d in vivaldi opera; do
+            test ! -e "$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          done
+          # --all covers every known browser; uninstall reverses every row,
+          # wrappers included.
+          "$bin" doctor --fix --all
           dirs="google-chrome chromium BraveSoftware/Brave-Browser microsoft-edge vivaldi opera"
           for d in $dirs; do
             test -f "$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
           done
-          ./install/install.sh --uninstall
+          "$bin" uninstall
           for d in $dirs; do
             test ! -e "$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
           done
-          test ! -e "$tmp/data/chromium-bridge/chromium-bridge"
-      - name: Prebuilt-mode verification passes and fails closed (isolated fake archive)
-        run: ./scripts/install_verify_test.sh
-      - name: Escape hatch --nm-dir, and uninstall clears table + explicit dirs
-        run: |
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          export XDG_DATA_HOME="$tmp/data" XDG_CONFIG_HOME="$tmp/config"
-          custom="$tmp/custom/NativeMessagingHosts"
-          chrome="$tmp/config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
-          # A standard browser plus an out-of-table one via the escape hatch.
-          ./install/install.sh --browser chrome --skip-extension-build
-          ./install/install.sh --nm-dir "$custom" --skip-extension-build
-          test -f "$chrome"
-          test -f "$custom/com.vivswan.chromium_bridge.host.json"
-          grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$custom/com.vivswan.chromium_bridge.host.json"
-          # Uninstall with --nm-dir must clear BOTH the table dir and the explicit one.
-          ./install/install.sh --uninstall --nm-dir "$custom"
-          test ! -e "$chrome"
-          test ! -e "$custom/com.vivswan.chromium_bridge.host.json"
+          for b in chrome chromium brave edge vivaldi opera; do
+            test ! -e "$tmp/data/chromium-bridge/run-host-$b.sh"
+          done
 
   e2e:
     name: Protocol e2e (Python)

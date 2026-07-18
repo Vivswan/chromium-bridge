@@ -72,9 +72,10 @@ pub enum AnchorSpec {
 
 /// Chrome launches a Windows native-messaging host directly and appends the
 /// calling extension origin (plus a parent-window handle) to its command
-/// line. Native-host manifests have no `args` field, so the Windows installer
-/// points straight at chromium-bridge.exe and this origin selects host mode.
-/// Unix installs keep using the explicit `--native-host` wrapper argument.
+/// line. Native-host manifests have no `args` field, so on Windows the
+/// registration points straight at chromium-bridge.exe and this origin
+/// selects host mode. Unix registrations keep using the explicit
+/// `--native-host` wrapper argument.
 pub fn is_native_host_mode(args: &[String]) -> bool {
     if args.get(1).map(String::as_str) == Some("--native-host") {
         return true;

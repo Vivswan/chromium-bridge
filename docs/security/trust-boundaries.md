@@ -1,15 +1,15 @@
 # Trust boundaries
 
 The system spans three processes and four protocol hops. Each hop is a trust
-boundary — data crossing it is validated and/or authenticated. Pairs with the
+boundary - data crossing it is validated and/or authenticated. Pairs with the
 [threat model](threat-model.md).
 
 ```
-MCP client ──①──▶ Rust MCP server ──②──▶ native host ──③──▶ extension ──④──▶ web page
+MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)-> web page
    (trusted)         (trusted)           (trusted)         (trusted)        (UNTRUSTED)
 ```
 
-## ① MCP client ↔ Rust MCP server  (stdio, JSON-RPC 2.0)
+## Boundary 1: MCP client <-> Rust MCP server  (stdio, JSON-RPC 2.0)
 
 - **Direction of trust**: the client harness is trusted only once it is
   *admitted*. This boundary carries both protocol correctness and, since
@@ -54,14 +54,14 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   outright), and refuses on an unreadable record. Both
   transitions are audited; releases carry the auth path that authorized
   them.
-- **Enforcement (protocol)**: strict JSON-RPC parsing; unknown methods →
+- **Enforcement (protocol)**: strict JSON-RPC parsing; unknown methods ->
   `-32601`; parse errors surfaced, not fatal; **stdout carries only protocol**
   (diagnostics go to stderr, or a stray write corrupts the stream).
 
-## ② Rust MCP server ↔ native host  (bridge socket, NDJSON)
+## Boundary 2: Rust MCP server <-> native host  (bridge socket, NDJSON)
 
 - **Direction of trust**: this is the one boundary defended against *local*
-  peers — any process that could try to reach the bridge.
+  peers - any process that could try to reach the bridge.
 - **Ownership**: the server end of this boundary is the **broker**
   ([ADR-0024](../adr/0024-multi-client-attested-pairing-and-broker.md)): the
   first MCP-server instance to bind the socket and the lock. Later attested
@@ -112,7 +112,7 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     refused at admission. An unreadable revocation record gets the same
     treatment: with the kill state unknowable, no browser connection may
     stand. Relays stay attached; their calls are refused typed at
-    boundary ①.
+    boundary 1.
   - **Windows downgrade**: Windows has no std Unix-domain socket, so the bridge
     is a loopback TCP socket, and neither the peer-UID check nor the attestation
     is compiled in (both are Unix only). Any local process can open the loopback
@@ -132,10 +132,10 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
     designated-requirement pinning (to also accept a separate trusted build) is a
     deferred follow-up, not a gap in the same-binary bridge. See ADR-0020.
 
-## ③ Chrome ↔ native host  (Native Messaging framing)
+## Boundary 3: Chrome <-> native host  (Native Messaging framing)
 
 - **Direction of trust**: Chrome spawns the host per the host manifest, whose
-  `allowed_origins` **pins the extension ID** — only our extension can talk to
+  `allowed_origins` **pins the extension ID** - only our extension can talk to
   it.
 - **Enforcement**: 4-byte LE length prefix + JSON; 64 MB inbound clamp, 1 MB
   outbound cap; single-writer + flush-per-frame on stdout; `panic = "abort"` +
@@ -165,11 +165,11 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   will accept. The manifest lives in a user-writable directory, so a same-user
   attacker can repoint its `path` at a malicious host binary. The browser
   launches that binary and it speaks native messaging straight to the extension,
-  bypassing the authenticated socket at boundary ②. Closing this needs
+  bypassing the authenticated socket at boundary 2. Closing this needs
   trust-on-first-use host-identity pairing in the extension. See the
   [threat model](threat-model.md).
 
-## ④ Extension ↔ web page  (Chrome API / content script / DOM)
+## Boundary 4: Extension <-> web page  (Chrome API / content script / DOM)
 
 - **Direction of trust**: **the page is untrusted.** This is the security-
   critical boundary.
@@ -230,7 +230,7 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   ([ADR-0024](../adr/0024-multi-client-attested-pairing-and-broker.md)).
 - The host manifest's `allowed_origins` always pins exactly our extension ID.
   (This pins extension-to-host only; the host-to-extension hop is not yet
-  authenticated. See boundary ③.)
+  authenticated. See boundary 3.)
 - No page-level tool runs on a non-allowlisted origin (absent `allowAllSites`).
 - No tool writes cookies or web storage.
 - While the kill switch is engaged, or its record is unreadable, no tool call

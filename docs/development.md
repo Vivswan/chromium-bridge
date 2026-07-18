@@ -34,24 +34,27 @@ folders (`src/` and `tests/`).
 ```
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); dist/ is the load-unpacked target (gitignored)
-src/apps/desktop/        Tauri v2 desktop shell (signing spike, ADR-0026): workspace
-                         member but NOT a default member; `just desktop-bundle`
-                         builds + signs it with the bundled host
+src/apps/desktop/        Tauri v2 desktop app (ADR-0026/0029): workspace member but
+                         NOT a default member; `just desktop-bundle` builds + signs
+                         it with the bundled host (see docs/desktop-app.md)
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace for the wire parsers (nightly + libFuzzer)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)
-tests/protocol/          e2e.py, adversarial.py, chaos.py — drive the real release binary
+tests/protocol/          e2e.py, adversarial.py, chaos.py - drive the real release binary
 tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
                          integration_e2e.ts, run_all.ts (bun workspace member; isolated Chrome only)
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
 scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
                          check-extension-id.ts, lib.ts + the standalone shell scripts
+docs/site/               bun workspace member: minimal Astro site rendering the
+                         repo's markdown docs + translations (just docs-site-build;
+                         not part of `just ci`)
 ```
 
-The standalone shell scripts (`install/install.sh`, `scripts/build-repro.sh`,
-`scripts/install_verify_test.sh`, `scripts/fuzz_smoke.sh`) stay shell because
-they must run without a bun toolchain. They're `shellcheck`-clean (CI gates it;
-`just lint-scripts` locally).
+The standalone shell scripts (`scripts/build-repro.sh`,
+`scripts/fuzz_smoke.sh`) stay shell because they must run without a bun
+toolchain. They're `shellcheck`-clean (CI gates it; `just lint-scripts`
+locally).
 
 Rust dependencies are gated by supply-chain review (`cargo vet`, the
 `cargo-vet` CI job). Adding or bumping a crate fails CI until the new version
@@ -72,16 +75,17 @@ just build-repro    # deterministic release build (scripts/build-repro.sh)
 just test           # rust tests (nextest) + protocol e2e
 just test-browser   # build the extension, then DOM + smoke tests (needs Chrome)
 just ci             # everything CI runs, minus the browser job
-just ext-build      # bundle the extension (src/ → dist/)
+just ext-build      # bundle the extension (src/ -> dist/)
 just fmt            # cargo fmt
 just fix-ts         # biome lint+format auto-fix across the workspace
-just install        # build + install binary + host manifest
+just install        # build the release binary, then register it (doctor --fix)
 ```
 
 `bun run build` (which `just build` wraps) builds the entire repo in one
-command: it typechecks `src/packages/shared`, bundles the extension, typechecks
-`scripts/`, and finishes with `cargo build --workspace`. Use it to prove the
-whole graph still compiles after a cross-cutting change.
+command: it typechecks `src/packages/shared`, bundles the extension, builds
+the desktop UI, typechecks `scripts/`, and finishes with
+`cargo build --workspace`. Use it to prove the whole graph still compiles
+after a cross-cutting change.
 
 Or run the underlying commands directly:
 
@@ -98,29 +102,31 @@ bun run --cwd src/apps/extension build
 
 ## Working on the extension
 
-The extension is authored in TypeScript and bundled with esbuild (driven by
-`src/apps/extension/build.ts` under bun). Because esbuild only strips types, a correct
-typing change produces a byte-identical bundle — a handy way to prove a
-refactor is behavior-neutral (diff `dist/*.js` against a saved reference).
+The extension is built on WXT
+([ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)),
+which generates the manifest (including the pinned key) and bundles the
+entrypoints under `src/apps/extension/src/entrypoints/`.
 
 ```sh
 bun install
-bun run --cwd src/apps/extension watch     # rebuild dist/ on change
+bun run --cwd src/apps/extension dev       # WXT dev mode: rebuild on change
+bun run --cwd src/apps/extension build     # production bundle
 ```
 
-Load `src/apps/extension/dist/` as an unpacked extension in `chrome://extensions`
-(Developer mode). Rebuild after editing `src/`, then hit the reload button on
-the extension card.
+Load `src/apps/extension/dist/chrome-mv3` as an unpacked extension in
+`chrome://extensions` (Developer mode). Unit tests
+(`bun run --cwd src/apps/extension test`) run on Vitest with `fakeBrowser`,
+no real browser needed.
 
 ## Testing
 
 Three suites, all wired into `tests/browser/run_all.ts` (and CI):
 
-- **Protocol** (`tests/protocol/e2e.py`) — drives the real release binary as
+- **Protocol** (`tests/protocol/e2e.py`) - drives the real release binary as
   subprocesses over the actual wire protocols. No browser needed.
-- **DOM** (`tests/browser/dom_test.ts`, bun) — injects the built `dist/content.js` into
+- **DOM** (`tests/browser/dom_test.ts`, bun) - injects the built `dist/content.js` into
   a headless Chrome page via CDP and exercises every content-script op.
-- **Smoke** (`tests/browser/ext_test.ts`, bun + puppeteer-core) — launches Chrome with
+- **Smoke** (`tests/browser/ext_test.ts`, bun + puppeteer-core) - launches Chrome with
   `dist/` loaded and checks the service worker boots. Set `BB_EXT_DIR` to point
   at a different unpacked extension.
 
@@ -151,9 +157,9 @@ just sync-version        # bun scripts/sync-version.ts
 # 3. update CHANGELOG.md (move [Unreleased] items under the new version)
 # 4. gate on a clean tree
 just release             # check-version + full ci
-# 5. tag — pushing a v* tag triggers .github/workflows/release.yml, which
-#    builds macOS Apple Silicon and Linux x64 tarballs (binary + built
-#    extension + install.sh) and publishes them to GitHub Releases.
+# 5. tag - pushing a v* tag triggers .github/workflows/release.yml, which
+#    builds macOS Apple Silicon, Linux x64, and Windows x64 archives (binary
+#    + built extension) and publishes them to GitHub Releases.
 git tag vX.Y.Z && git push --tags
 ```
 

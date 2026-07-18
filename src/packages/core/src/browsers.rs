@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 pub use crate::identity::{NATIVE_HOST_ID as HOST_ID, PINNED_EXTENSION_ID};
 
 /// The Chromium-family browsers we know how to register with by name. Any
-/// other Chromium build is reachable through the installer's explicit
+/// other Chromium build is reachable through `doctor --fix`'s explicit
 /// `--manifest-dir` escape hatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Browser {
@@ -224,9 +224,9 @@ fn linux_vendor_dir(browser: Browser) -> &'static str {
     }
 }
 
-/// The HKCU registry root each browser owns on Windows (matches what
-/// `install.ps1` registered under). NOTE: derived from documentation and the
-/// existing PowerShell installer; the full Windows flow still needs
+/// The HKCU registry root each browser owns on Windows (matches what the
+/// retired `install.ps1` registered under). NOTE: derived from documentation
+/// and that PowerShell installer; the full Windows flow still needs
 /// verification on a real Windows machine (see docs/cli.md).
 fn windows_vendor_key(browser: Browser) -> &'static str {
     match browser {
@@ -268,7 +268,7 @@ fn windows_detect_dir(dirs: &BaseDirs, browser: Browser) -> PathBuf {
 /// Where the installer keeps files it owns (wrapper scripts on Unix, the
 /// manifest file on Windows -- Windows manifests live outside the browser's
 /// namespace, referenced by the registry value). Matches the directory the
-/// shell installers used, so re-registering over an `install.sh` install
+/// retired shell installers used, so re-registering over a legacy install
 /// converges on the same paths.
 pub fn install_dir(os: Os, dirs: &BaseDirs) -> PathBuf {
     match os {
@@ -325,8 +325,9 @@ pub fn resolve(os: Os, dirs: &BaseDirs) -> Vec<BrowserEntry> {
 
 /// A registration target for an explicit `--manifest-dir PATH`: a Chromium
 /// browser we do not know by name. Unix-style directory scanning only; on
-/// Windows an unknown browser needs its registry key, which stays with the
-/// legacy `install.ps1` until the Windows flow is verified.
+/// Windows an unknown browser needs its registry key, and no CLI escape
+/// hatch exists for that yet (a follow-up once the Windows flow is verified;
+/// see docs/cli.md).
 pub fn explicit_dir_registration(dir: &Path) -> Registration {
     Registration::ManifestDir(dir.to_path_buf())
 }

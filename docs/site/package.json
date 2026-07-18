@@ -1,0 +1,14 @@
+{
+  "name": "chromium-bridge-docs-site",
+  "private": true,
+  "type": "module",
+  "description": "Astro site serving the chromium-bridge docs and their translations.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "astro": "^5.12.0"
+  }
+}

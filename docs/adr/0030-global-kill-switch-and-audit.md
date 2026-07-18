@@ -38,7 +38,7 @@ other things) records every use of it.
 (the epoch of the last transition, either direction). A transition is one
 atomic write that flips the latch, stamps the marker, and bumps the global
 epoch, performed under the runtime lock by `kill::engage` / `kill::release`
-(`crates/core/src/kill.rs`, over `revocation::set_killed_locked`).
+(`src/packages/core/src/kill.rs`, over `revocation::set_killed_locked`).
 
 Placing the latch inside the record the epoch machinery already guards buys
 two properties for free. First, every enforcement point that already reads
@@ -96,7 +96,7 @@ Release is also the one act in the bridge that RESTORES capability, so it
 carries a gate engagement does not: proof of user presence. The user's
 directive is that releasing require Touch ID; the hardware plumbing
 (LocalAuthentication) arrives with Phase 8, and until it does, per-surface
-interactive floors hold the line. `crates/core/src/presence.rs` is the seam
+interactive floors hold the line. `src/packages/core/src/presence.rs` is the seam
 the hardware plugs into. `kill::release` demands a `PresenceAttestation`, a
 type only that module can construct, so no code path can clear the latch with
 presence unchecked. The ladder inside `require_presence` tries hardware
@@ -339,21 +339,21 @@ only; the durable trail is the host file.
 
 ## Implementation pointers
 
-- `crates/core/src/kill.rs`: `engage` / `release` / `is_killed` / `check`,
+- `src/packages/core/src/kill.rs`: `engage` / `release` / `is_killed` / `check`,
   the CLI handlers.
-- `crates/core/src/presence.rs`: the user-presence ladder (`require_presence`,
+- `src/packages/core/src/presence.rs`: the user-presence ladder (`require_presence`,
   `PresenceAttestation`), the Phase 8 hardware seam, the CLI and extension
   floors.
-- `crates/core/src/revocation.rs`: `killed`, `kill_epoch`,
+- `src/packages/core/src/revocation.rs`: `killed`, `kill_epoch`,
   `set_killed_locked`.
-- `crates/core/src/audit.rs`: `AuditRecord`, `record`, rotation,
+- `src/packages/core/src/audit.rs`: `AuditRecord`, `record`, rotation,
   `extension_kind`, `run_audit`.
-- `crates/core/src/broker.rs`: the kill-aware `watch_tick`, `admit_browser`
-  refusal; `crates/core/src/session.rs`: `shutdown_all_browsers`.
-- `crates/core/src/mcp_server.rs`: the dispatch gate in `handle`.
-- `crates/core/src/native_host.rs`: `run_control_plane`,
+- `src/packages/core/src/broker.rs`: the kill-aware `watch_tick`, `admit_browser`
+  refusal; `src/packages/core/src/session.rs`: `shutdown_all_browsers`.
+- `src/packages/core/src/mcp_server.rs`: the dispatch gate in `handle`.
+- `src/packages/core/src/native_host.rs`: `run_control_plane`,
   `handle_control_frame`, `spawn_revocation_watch`, the kill frame handlers.
-- `crates/core/src/protocol.rs`: `AdminControl::{KillStatus, KillEngage,
+- `src/packages/core/src/protocol.rs`: `AdminControl::{KillStatus, KillEngage,
   KillRelease, KillStatusResult, AuditEvent}`.
 - `extension/src/lib/background/kill.ts`, `audit-log.ts`; the gate hook in
   `enrollment.ts`; `extension/src/entrypoints/options/KillSwitchPanel.tsx`,

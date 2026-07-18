@@ -1,7 +1,7 @@
 name: Release
 
-# Tag a version to publish prebuilt tarballs (binary + built extension +
-# installer) so users don't need Rust/Node:  git tag v0.1.0 && git push --tags
+# Tag a version to publish prebuilt tarballs (binary + built extension) so
+# users don't need Rust/Node:  git tag v0.1.0 && git push --tags
 on:
   push:
     tags: ["v*"]
@@ -100,13 +100,12 @@ jobs:
           NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
           mkdir -p "$NAME/extension"
           cp -r src/apps/extension/dist/chrome-mv3 "$NAME/extension/dist"
-          cp install/mcp-config.example.json LICENSE README.md "$NAME/"
-          # RELEASE.txt tells the installer which release this archive came
-          # from, so it can fetch the published checksum for the binary and
-          # verify before installing (install.sh prebuilt mode). The values
-          # are untrusted input to the installer: tag/platform/arch select
-          # which published checksum to fetch, and repo is cross-checked
-          # against the repository pinned in install.sh - never trusted.
+          cp LICENSE README.md "$NAME/"
+          # RELEASE.txt records which release this archive came from, so a
+          # user can pick the matching published checksum / provenance
+          # attestation when verifying by hand (README "Verifying your
+          # binary"). Registration itself is `chromium-bridge doctor --fix`,
+          # run from the extracted binary.
           {
             echo "repo=${GITHUB_REPOSITORY}"
             echo "tag=${TAG}"
@@ -116,14 +115,12 @@ jobs:
           if [ "$PLATFORM" = "windows" ]; then
             cp target/release/chromium-bridge.exe "$NAME/"
             BIN_FILE="chromium-bridge.exe"
-            cp install/install.ps1 "$NAME/"
             7z a -tzip "$NAME.zip" "$NAME" > /dev/null
             sha256sum "$NAME.zip" > "$NAME.zip.sha256"
             ARCHIVE="$NAME.zip"
           else
             cp target/release/chromium-bridge "$NAME/"
             BIN_FILE="chromium-bridge"
-            cp install/install.sh "$NAME/"
             tar czf "$NAME.tar.gz" "$NAME"
             if command -v shasum >/dev/null 2>&1; then
               shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
@@ -132,9 +129,9 @@ jobs:
             fi
             ARCHIVE="$NAME.tar.gz"
           fi
-          # Per-binary checksum, published as its own release asset. This is
-          # what install.sh downloads to verify the shipped binary (the
-          # archive-level .sha256 can't be checked after extraction). Hash
+          # Per-binary checksum, published as its own release asset, so the
+          # shipped binary can be verified after extraction (the
+          # archive-level .sha256 can't be checked at that point). Hash
           # from inside $NAME so the recorded file name is the bare binary.
           if command -v shasum >/dev/null 2>&1; then
             (cd "$NAME" && shasum -a 256 "$BIN_FILE") > "$NAME.binary.sha256"
@@ -181,7 +178,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          # Attest the bare binary as well as the archive: the installer runs
+          # Attest the bare binary as well as the archive: users verify
           # after extraction, so `gh attestation verify` needs a subject whose
           # digest matches the shipped binary itself.
           subject-path: |

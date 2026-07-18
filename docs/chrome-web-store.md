@@ -12,10 +12,10 @@
 ## The number one trap: publishing changes the pinned extension ID
 
 The entire install flow depends on one **fixed** ID, `mkjjlmjbcljpcfkfadfmhblmmddkdihf`
-(derived from the `key` in
-[`src/apps/extension/manifest.json`](../src/apps/extension/manifest.json));
-[`install.sh`](../install/install.sh) / [`install.ps1`](../install/install.ps1)
-write it into the native host manifest's `allowed_origins`.
+(derived from the pinned manifest key in
+[`src/packages/core/src/identity.rs`](../src/packages/core/src/identity.rs), which WXT
+injects into the built manifest); the registration engine writes it into the native host
+manifest's `allowed_origins`.
 
 **But the Chrome Web Store assigns a store-controlled ID on first upload, and the store
 ignores the `key` in the manifest.** The published extension will therefore **almost
@@ -28,8 +28,8 @@ cannot connect.
 - After the first upload, take the store-assigned ID and add it to `allowed_origins`,
   ideally **trusting both IDs at once**: the store ID (store users) plus the current
   pinned ID (unpacked / developers).
-- Update [`install.sh`](../install/install.sh)'s `PINNED_EXTENSION_ID`,
-  [`install.ps1`](../install/install.ps1), and
+- Update [`identity.rs`](../src/packages/core/src/identity.rs) (the single definition
+  site the registration engine and the generated TS consume) and
   [`scripts/check-extension-id.ts`](../scripts/check-extension-id.ts) in step so they
   trust both IDs.
 - Optional: backfill the store listing's public key into the manifest `key` so unpacked
@@ -40,9 +40,9 @@ cannot connect.
 - Solves: **removes "wall 1"**. No more developer mode "Load unpacked"; one-click
   "Add to Chrome" that survives Chrome restarts, and far friendlier to managed/enterprise
   Chrome.
-- Does not solve: **the installer stays**. The store only distributes the **extension**.
-  Users still must run `install.sh` / `install.ps1` to install the **native host binary +
-  manifest**. So this tears down one wall, not all of them.
+- Does not solve: **the host install stays**. The store only distributes the
+  **extension**. Users still need the native host binary + manifest, via the desktop app
+  or `chromium-bridge doctor --fix`. So this tears down one wall, not all of them.
 
 ## Prerequisites
 
@@ -84,7 +84,7 @@ advance:
 
 ## After publishing
 
-- [ ] Wire the store ID into `allowed_origins` + both installers (see the number one trap).
+- [ ] Wire the store ID into `allowed_origins` via `identity.rs` (see the number one trap).
 - [ ] Rewrite the README's "Load the extension" section to "Add from the Chrome Web
       Store", keeping unpacked as the developer/advanced path.
 - [ ] Update `docs/`, and add an **ADR** recording the decision (per GOVERNANCE,
@@ -106,5 +106,5 @@ in discussion first, then act, rather than a quick PR.
 - Security boundaries and threat model: [SECURITY.md](../SECURITY.md),
   [security/threat-model.md](./security/threat-model.md),
   [security/trust-boundaries.md](./security/trust-boundaries.md).
-- Pinned ID and install artifacts: [architecture.md section 4.3](./architecture.md#43-install-artifacts).
+- Pinned ID and on-disk artifacts: [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
 - Release pipeline and the extension zip: [release.md](./release.md).
