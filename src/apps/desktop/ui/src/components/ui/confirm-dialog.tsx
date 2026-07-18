@@ -10,6 +10,10 @@ import { useI18n } from "@/hooks/useI18n";
 // hardware is unavailable, on the assertion that the app already showed
 // exactly this dialog. The confirm handler is therefore the only place the
 // presence-gated Tauri commands may be invoked from.
+//
+// Control Tower law: the safe default is the primary button, so CANCEL is
+// primary here; the capability-granting confirm is a plain gated button
+// (the dashed halo says a Touch ID prompt may follow).
 export function ConfirmDialog({
   open,
   onOpenChange,
@@ -39,23 +43,26 @@ export function ConfirmDialog({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/40" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/50" />
         <DialogPrimitive.Content
-          className="fixed left-1/2 top-1/2 z-50 w-96 max-w-[90vw] -translate-x-1/2 -translate-y-1/2
-            rounded-xl border border-edge bg-surface p-4 shadow-xl focus:outline-none"
+          className="fixed left-1/2 top-1/2 z-50 w-96 max-w-[90vw] -translate-x-1/2
+            -translate-y-1/2 rounded-lg border border-edge-strong bg-surface-2 p-4
+            focus:outline-none"
         >
-          <DialogPrimitive.Title className="m-0 text-sm font-semibold text-body">
+          <DialogPrimitive.Title className="m-0 text-[13px] font-semibold text-text-1">
             {title}
           </DialogPrimitive.Title>
           <DialogPrimitive.Description asChild>
-            <div className="mt-2 text-sm text-muted">{body}</div>
+            <div className="consequence mt-2">{body}</div>
           </DialogPrimitive.Description>
           <div className="mt-4 flex justify-end gap-2">
             <DialogPrimitive.Close asChild>
-              <Button disabled={busy}>{t("common.cancel")}</Button>
+              <Button variant="primary" disabled={busy}>
+                {t("common.cancel")}
+              </Button>
             </DialogPrimitive.Close>
             <Button
-              variant="primary"
+              gated
               disabled={busy}
               onClick={() => {
                 if (fired.current || busy) return;

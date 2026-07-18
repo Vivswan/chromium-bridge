@@ -47,11 +47,11 @@ describe("resolveUiLocale", () => {
 
 describe("t", () => {
   it("substitutes positional parameters", () => {
-    expect(t("overview.browsers_summary", ["1", "2"])).toContain("1");
-    expect(t("overview.browsers_summary", ["1", "2"])).toContain("2");
+    expect(t("audit.foot_count", ["247"])).toContain("247");
+    expect(t("audit.foot_count", ["247"])).not.toContain("$1");
   });
 
   it("leaves an unsupplied placeholder visible rather than dropping it", () => {
-    expect(t("overview.browsers_summary", ["1"])).toContain("$2");
+    expect(t("audit.foot_count", [])).toContain("$1");
   });
 });

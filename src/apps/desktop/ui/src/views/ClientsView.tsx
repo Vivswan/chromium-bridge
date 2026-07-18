@@ -1,5 +1,21 @@
+import { Cable } from "lucide-react";
 import { useState } from "react";
-import { Card, ErrorNote, Field, StatusDot, TextInput } from "@/components/ui/bits";
+import {
+  Card,
+  ChipMono,
+  Consequence,
+  Dot,
+  ErrorNote,
+  Field,
+  Pill,
+  SpecLabel,
+  StatusDot,
+  TextInput,
+  TouchIdChip,
+  TouchIdIcon,
+  Twist,
+  ViewShell,
+} from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -13,12 +29,14 @@ import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
 import { authLabel } from "@/lib/auth-label";
 import { api, errorText } from "@/lib/tauri";
+import { useAppStore } from "@/store";
 
 type AnchorKind = "hash" | "team_id";
 
 export function ClientsView() {
   const { t } = useI18n();
   const clients = useAsync(api.clientsList);
+  const status = useAppStore((s) => s.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [name, setName] = useState("");
@@ -63,124 +81,208 @@ export function ClientsView() {
     }
   };
 
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="m-0 text-sm text-muted">{t("clients.intro")}</p>
-      {clients.error !== undefined && <ErrorNote>{clients.error}</ErrorNote>}
+  const rows = clients.data?.clients ?? [];
+  const enforced = clients.data?.posture === "enforced";
 
-      {clients.data !== undefined && (
-        <StatusDot tone={clients.data.posture === "enforced" ? "ok" : "warn"}>
-          {clients.data.posture === "enforced"
-            ? t("clients.posture_enforced")
-            : t("clients.posture_unenrolled")}
+  const addForm = (
+    <>
+      <div className="form-grid">
+        <Field label={t("clients.name")} htmlFor="client-name">
+          <TextInput
+            id="client-name"
+            value={name}
+            placeholder={t("clients.name_placeholder")}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+        <Field label={t("clients.anchor_kind")}>
+          <Select value={anchorKind} onValueChange={(v) => setAnchorKind(v as AnchorKind)}>
+            <SelectTrigger aria-label={t("clients.anchor_kind")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="team_id">team_id</SelectItem>
+              <SelectItem value="hash">binary_hash</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label={t("clients.anchor_value")} htmlFor="anchor-value">
+          <TextInput
+            id="anchor-value"
+            className="mono"
+            value={anchorValue}
+            spellCheck={false}
+            placeholder={
+              anchorKind === "hash"
+                ? t("clients.value_placeholder_hash")
+                : t("clients.value_placeholder_team")
+            }
+            onChange={(e) => setAnchorValue(e.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="mt-3 flex items-start gap-3.5">
+        <Button
+          variant="primary"
+          gated
+          className="flex-none"
+          disabled={busy || name.trim() === "" || anchorValue.trim() === ""}
+          onClick={() => setAddOpen(true)}
+        >
+          <TouchIdIcon size={12} />
+          {busy ? t("common.working") : t("clients.add")}
+        </Button>
+        <Consequence>
+          {t("clients.add_consequence_1")} <strong>{t("clients.add_consequence_2")}</strong>{" "}
+          {t("clients.add_consequence_3")}
+        </Consequence>
+      </div>
+      {addedBy !== undefined && (
+        <StatusDot tone="live" className="mt-2 text-xs">
+          {t("clients.add_done", [authLabel(addedBy)])}
         </StatusDot>
       )}
+    </>
+  );
 
-      <Card>
-        {clients.data === undefined || clients.data.clients.length === 0 ? (
-          <p className="m-0 text-sm text-muted">{t("clients.empty")}</p>
-        ) : (
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="text-left text-xs text-muted">
-                <th className="pb-2 pr-3 font-medium">{t("clients.name")}</th>
-                <th className="pb-2 pr-3 font-medium">{t("clients.anchor")}</th>
-                <th className="pb-2 pr-3 font-medium">{t("clients.added")}</th>
-                <th className="pb-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {clients.data.clients.map((c) => (
-                <tr key={c.name} className="border-t border-edge-soft">
-                  <td className="py-2 pr-3 font-medium">{c.name}</td>
-                  <td className="max-w-72 break-all py-2 pr-3 font-mono text-xs text-muted">
-                    {c.anchorKind === "hash" ? t("clients.anchor_hash") : t("clients.anchor_team")}
-                    {": "}
-                    {c.anchorValue}
-                  </td>
-                  <td className="py-2 pr-3 text-xs text-muted">
-                    {new Date(c.addedUnix * 1000).toLocaleDateString()}
-                  </td>
-                  <td className="py-2 text-right">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => void revoke(c.name)}
-                    >
-                      {t("clients.revoke")}
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+  return (
+    <ViewShell
+      title={t("nav.clients")}
+      sub={t("clients.sub")}
+      right={
+        <Pill tone={enforced && rows.length > 0 ? "live" : "idle"} dot className="tnum">
+          {t("clients.pill_count", [String(rows.length)])}
+        </Pill>
+      }
+      foot={
+        status !== undefined && (
+          <span className="foot-note tnum">
+            chromium-bridge {status.version} - {status.os}/{status.arch}
+          </span>
+        )
+      }
+    >
+      <div className="flex min-h-full flex-col gap-2.5">
+        {clients.error !== undefined && <ErrorNote>{clients.error}</ErrorNote>}
+        {error !== undefined && <ErrorNote>{error}</ErrorNote>}
+
+        {clients.data !== undefined && !enforced && (
+          <div className="banner banner-pending">
+            <span className="banner-text">{t("clients.posture_unenrolled")}</span>
+          </div>
         )}
-      </Card>
 
-      <Card title={t("clients.add_title")}>
-        <div className="flex flex-col gap-3">
-          <p className="m-0 text-xs text-muted">{t("clients.add_hint")}</p>
-          <div className="grid grid-cols-3 gap-3">
-            <Field label={t("clients.name")}>
-              <TextInput
-                value={name}
-                placeholder={t("clients.name_placeholder")}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </Field>
-            <Field label={t("clients.anchor")}>
-              <Select value={anchorKind} onValueChange={(v) => setAnchorKind(v as AnchorKind)}>
-                <SelectTrigger aria-label={t("clients.anchor")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="team_id">{t("clients.anchor_team")}</SelectItem>
-                  <SelectItem value="hash">{t("clients.anchor_hash")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field
-              label={anchorKind === "hash" ? t("clients.anchor_hash") : t("clients.anchor_team")}
-            >
-              <TextInput
-                className="font-mono"
-                value={anchorValue}
-                placeholder={
-                  anchorKind === "hash"
-                    ? t("clients.value_placeholder_hash")
-                    : t("clients.value_placeholder_team")
-                }
-                onChange={(e) => setAnchorValue(e.target.value)}
-              />
-            </Field>
+        <Card flush hero aria-label={t("clients.table_label")}>
+          <div className="card-head">
+            <span className="card-title">{t("clients.table_label")}</span>
+            <span className="mono tnum text-[11px] text-text-3">
+              {t("clients.table_count", [String(rows.length)])}
+            </span>
           </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="primary"
-              disabled={busy || name.trim() === "" || anchorValue.trim() === ""}
-              onClick={() => setAddOpen(true)}
-            >
-              {busy ? t("common.working") : t("clients.add")}
-            </Button>
-            {addedBy !== undefined && (
-              <StatusDot tone="ok">{t("clients.add_done", [authLabel(addedBy)])}</StatusDot>
-            )}
-          </div>
-          <ConfirmDialog
-            open={addOpen}
-            onOpenChange={setAddOpen}
-            title={t("clients.add_dialog_title")}
-            body={t("clients.add_dialog_body", [name.trim()])}
-            confirmLabel={t("clients.add_confirm")}
-            busy={busy}
-            onConfirm={() => void confirmAdd()}
-          />
-          <p className="m-0 text-xs text-faint">{t("clients.hint_cli")}</p>
+          {clients.data === undefined ? (
+            <p className="m-0 p-3.5 text-xs text-text-3">{t("common.loading")}</p>
+          ) : rows.length === 0 ? (
+            <div className="px-5 py-6 text-center">
+              <div className="mb-2.5 inline-flex size-[34px] items-center justify-center rounded-full border border-edge-strong text-text-3">
+                <Cable size={15} strokeWidth={1.6} aria-hidden />
+              </div>
+              <div className="text-[13px] font-semibold">{t("clients.empty_title")}</div>
+              <p className="mx-auto mb-3 mt-1 max-w-[340px] text-xs text-text-2">
+                {t("clients.empty_body")}
+              </p>
+            </div>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">{t("clients.col_client")}</th>
+                  <th scope="col">{t("clients.col_anchor")}</th>
+                  <th scope="col">{t("clients.col_added")}</th>
+                  <th scope="col">
+                    <span className="sr-only">{t("browsers.col_actions")}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((c) => (
+                  <tr key={c.name}>
+                    <td>
+                      <div className="flex items-center gap-[7px] text-[13px] font-semibold text-text-1">
+                        <Dot tone={enforced ? "live" : "idle"} />
+                        {c.name}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="flex flex-wrap items-center gap-[7px]">
+                        <ChipMono>{c.anchorKind === "hash" ? "binary_hash" : "team_id"}</ChipMono>
+                        <span className="mono break-all text-text-1">{c.anchorValue}</span>
+                      </div>
+                      <div className="mt-[3px] text-[11px] text-text-3">
+                        {t("clients.anchor_checked")}
+                      </div>
+                    </td>
+                    <td className="tnum whitespace-nowrap">
+                      {new Date(c.addedUnix * 1000).toLocaleDateString()}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        disabled={busy}
+                        aria-label={`${t("clients.revoke")} ${c.name}`}
+                        onClick={() => void revoke(c.name)}
+                      >
+                        {t("clients.revoke")}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+
+        <div>
+          <Consequence>
+            {t("clients.revoke_consequence_1")} <strong>{t("clients.revoke_consequence_2")}</strong>{" "}
+            {t("clients.revoke_consequence_3")}
+          </Consequence>
+          {enforced && (
+            <Consequence className="quiet mt-1">{t("clients.unproven_note")}</Consequence>
+          )}
         </div>
-      </Card>
 
-      {error !== undefined && <ErrorNote>{error}</ErrorNote>}
-    </div>
+        {rows.length === 0 && clients.data !== undefined ? (
+          <div className="mt-1">{addForm}</div>
+        ) : (
+          <details className="disclosure" aria-label={t("clients.add_title")}>
+            <summary>
+              <Twist />
+              {t("clients.add_title")}
+              <TouchIdChip />
+            </summary>
+            <div className="disclosure-body">{addForm}</div>
+          </details>
+        )}
+
+        <section className="anchor-legend" aria-label={t("clients.legend_title")}>
+          <SpecLabel className="col-span-full">{t("clients.legend_title")}</SpecLabel>
+          <ChipMono>team_id</ChipMono>
+          <span>{t("clients.legend_team")}</span>
+          <ChipMono>binary_hash</ChipMono>
+          <span>{t("clients.legend_hash")}</span>
+        </section>
+
+        <ConfirmDialog
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          title={t("clients.add_dialog_title")}
+          body={t("clients.add_dialog_body", [name.trim()])}
+          confirmLabel={t("clients.add_confirm")}
+          busy={busy}
+          onConfirm={() => void confirmAdd()}
+        />
+      </div>
+    </ViewShell>
   );
 }
