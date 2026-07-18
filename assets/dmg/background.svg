@@ -43,29 +43,23 @@
 
   <rect width="660" height="400" fill="url(#field)"/>
 
-  <!-- Gatedeck mark (closed state, same geometry as the app icon source),
-       watermarked large behind the icon row. The closed deck is drawn as a
-       single line here: at watermark opacity the icon's two overlapping
-       halves would double up into a visible dot at the joint. -->
-  <g transform="translate(174,44) scale(0.61)" fill="none"
-     stroke-linecap="round" stroke-linejoin="round">
-    <path d="M94 386 Q256 62 418 386" stroke="#6b7a92" stroke-width="72" opacity="0.06"/>
-    <path d="M58 134 L454 134" stroke="#3fe081" stroke-width="48" opacity="0.05"/>
-  </g>
-
-  <!-- Positional hint: a quiet arc from the app icon to /Applications,
-       curved to echo the Gatedeck arch. -->
-  <g fill="none" stroke="#6b7a92" stroke-width="2.5"
-     stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
-    <path d="M255,193 Q330,168 405,193"/>
-    <path d="M394.2,194.8 L405,193 L397.4,185.0"/>
+  <!-- The drag path speaks the Gatedeck two-state language: the deck is
+       solid phosphor at the app side, breaks at a drawleaf chevron, and lies
+       dormant (dashed graphite) toward /Applications. Dragging right is what
+       closes the bridge. Runs on the icon centerline (y=190) through the
+       clear zone between the icon bounds (x 229..431). -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M247,190 L306,190" stroke="#3fe081" stroke-width="5" opacity="0.85"/>
+    <path d="M322,177 L341,190 L322,203" stroke="#3fe081" stroke-width="5" opacity="0.85"/>
+    <path d="M362,190 L362.2,190 M379,190 L379.2,190 M396,190 L396.2,190 M413,190 L413.2,190"
+          stroke="#55637a" stroke-width="5" opacity="0.75"/>
   </g>
 
   <!-- DRAG CHROMIUM BRIDGE TO APPLICATIONS, centered (span 380, x 140..520),
        baseline y=340. -->
-  <g transform="translate(140,330)" fill="none" stroke="#6b7a92"
+  <g transform="translate(140,330)" fill="none" stroke="#9aa7b8"
      stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
-     opacity="0.8">
+     opacity="0.9">
     <use href="#gD" x="0"/>
     <use href="#gR" x="11"/>
     <use href="#gA" x="22"/>
