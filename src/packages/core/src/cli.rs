@@ -18,6 +18,11 @@ pub enum Command {
     Revoke,
     /// `enclave-status`: read-only enrollment state report.
     EnclaveStatus,
+    /// `presence-selftest`: raise one per-action user-presence prompt
+    /// (ADR-0031) and report the outcome. A diagnostic that exercises exactly
+    /// the Enclave signing the `page_eval`/`page_upload` gate uses, so the
+    /// hardware prompt can be seen without a browser. Read-only.
+    PresenceSelftest,
     /// `pair-client ...`: add or replace a trusted MCP-client harness in the
     /// allowlist (ADR-0024). Flags are parsed by [`pair_client_args`] in the
     /// handler, so a rich error can be reported instead of a bare help dump.
@@ -98,6 +103,7 @@ pub fn parse(args: &[String]) -> Command {
         }
         Some("revoke") if rest.len() == 1 => Command::Revoke,
         Some("enclave-status") if rest.len() == 1 => Command::EnclaveStatus,
+        Some("presence-selftest") if rest.len() == 1 => Command::PresenceSelftest,
         // The client-allowlist subcommands take their own flags, parsed by the
         // handler (pair_client_args) so a bad combination reports a clear error
         // rather than a bare help dump.
@@ -350,6 +356,7 @@ pub fn print_help() {
          chromium-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
          chromium-bridge revoke         Delete the enrollment key (fails closed)\n    \
          chromium-bridge enclave-status Print the enrollment state\n    \
+         chromium-bridge presence-selftest  Raise one Touch ID prompt and report (ADR-0031)\n    \
          chromium-bridge pair-client --name <label> (--this-parent | --hash <hex> | --team-id <id>)\n                                Trust an MCP-client harness (ADR-0024)\n    \
          chromium-bridge revoke-client --name <label>   Untrust a client\n    \
          chromium-bridge list-clients   Print the trusted-client allowlist\n    \
@@ -433,6 +440,11 @@ mod tests {
         );
         assert_eq!(parse(&args(&["revoke"])), Command::Revoke);
         assert_eq!(parse(&args(&["enclave-status"])), Command::EnclaveStatus);
+        assert_eq!(
+            parse(&args(&["presence-selftest"])),
+            Command::PresenceSelftest
+        );
+        assert_eq!(parse(&args(&["presence-selftest", "x"])), Command::Unknown);
         assert_eq!(parse(&args(&["kill"])), Command::Kill);
         assert_eq!(parse(&args(&["unkill"])), Command::Unkill);
         assert_eq!(parse(&args(&["audit"])), Command::Audit);

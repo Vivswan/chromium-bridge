@@ -90,6 +90,13 @@ pub enum AuditKind {
     KillEngage,
     /// The global kill switch was released.
     KillRelease,
+    /// Host: one per-action user-presence signing round (ADR-0031) - the
+    /// Secure Enclave signature behind a `page_eval`/`page_upload`
+    /// confirmation. `ok` means the user tapped and the proof was returned;
+    /// `refused` covers everything else (cancelled prompt, keychain refusal,
+    /// kill switch, busy). Host-recorded only: the extension cannot forge it
+    /// through the `audit_event` frame.
+    PresenceSign,
     /// Extension: a confirmation surface was shown to the user.
     ConfirmShown,
     /// Extension: the user approved a confirmation.
@@ -753,6 +760,7 @@ mod tests {
             "kill_release",
             "revoke_client",
             "tool_call",
+            "presence_sign",
         ] {
             assert_eq!(extension_kind(host_only), None, "{host_only}");
         }

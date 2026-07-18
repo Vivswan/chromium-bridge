@@ -151,8 +151,9 @@ async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; e
  * base transport authentication and the ceremony is skipped entirely. That
  * is a platform fact, not a disabled security control. If the probe itself
  * fails, ambiguity fails closed: the platform is treated as capable and the
- * gate enforces. */
-async function platformCanEnroll(): Promise<boolean> {
+ * gate enforces. Exported for the presence provider (ADR-0031), which uses
+ * the same browser-decided capability probe. */
+export async function platformCanEnroll(): Promise<boolean> {
   try {
     const info = await browser.runtime.getPlatformInfo();
     return info.os === "mac";

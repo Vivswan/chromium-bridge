@@ -362,16 +362,25 @@ components ship.
    closed); what it cannot do is forge or answer the Enclave
    user-presence prompt that dangerous operations terminate in.
 
-5. **The Touch ID confirmation surface.** Confirmations for the
-   crown-jewel tools (`page_eval`, `page_upload`) move off the
-   page-reachable DOM to a host-side Secure Enclave user-presence gate.
-   This closes the "toast defeatable by the page it guards" residual above
-   for those tools. Enforced by: LocalAuthentication / `SecAccessControl`
-   user-presence on the enrolled Enclave key; the page and the extension
-   can request but cannot satisfy it. Residual: macOS-only; other platforms
-   degrade to an off-DOM, fail-closed extension surface that is better than
-   the in-page toast but not unspoofable in the same way. Prompt fatigue is
-   a real cost and is why only the highest-risk tools route here.
+5. **The Touch ID confirmation surface (delivered, ADR-0031).**
+   Confirmations for the crown-jewel tools (`page_eval`, `page_upload`)
+   move off the page-reachable DOM to a host-side Secure Enclave
+   user-presence gate. This closes the "toast defeatable by the page it
+   guards" residual above for those tools. Enforced by: a Secure Enclave
+   signing operation on the enrolled key, whose `kSecAccessControlUserPresence`
+   ACL forces Touch ID (or the login password) and cannot complete without a
+   live user action; the extension verifies the resulting signature against
+   its pinned key over a presence-specific domain. Deliberately NOT
+   LocalAuthentication's `LAContext.evaluatePolicy`, which was measured to
+   return success without fresh user interaction and is therefore no proof of
+   presence. The page and the extension can request the prompt but cannot
+   satisfy it, and the extension window renders display-only for these kinds
+   (no Allow button). Residual: macOS-and-enrolled-only; other platforms and
+   an un-enrolled Mac degrade to an off-DOM, fail-closed extension surface
+   that is better than the in-page toast but not unspoofable in the same way.
+   Per-action Touch ID is a user setting (`touchIdConfirm`, default on);
+   opting out returns those two kinds to the window confirmation. Prompt
+   fatigue is a real cost and is why only the highest-risk tools route here.
 
 6. **The global kill switch and the audit trail (delivered, ADR-0030).**
    One latch (`killed` in `runtime_dir()/revocation.json`, flipped
@@ -389,12 +398,12 @@ components ship.
    refuses on its SW-only mirror. Release is explicit, never automatic, and
    requires proof of user presence (`kill::release` demands a
    `PresenceAttestation` only `crates/core/src/presence.rs` can construct):
-   Touch ID once Phase 8 wires LocalAuthentication; until then a typed
-   confirmation on a real terminal for the CLI (a piped stdin is refused
-   outright) and the options page's confirmation dialog for the extension,
-   attested by the native-messaging channel. A hardware refusal never falls
-   back to a floor, and failed or unavailable auth leaves the switch
-   engaged. Both transitions refuse on an unreadable record (releasing from
+   a Secure Enclave Touch ID tap on an enrolled Mac (ADR-0031); where no
+   Enclave key exists, a typed confirmation on a real terminal for the CLI
+   (a piped stdin is refused outright) and the options page's confirmation
+   dialog for the extension, attested by the native-messaging channel. A
+   hardware refusal never falls back to a floor, and failed or unavailable
+   auth leaves the switch engaged. Both transitions refuse on an unreadable record (releasing from
    an unknown state would fail open). Alongside it, every security decision --
    admissions, refusals, confirmations shown/allowed/denied, revocations
    per surface, kill transitions, tool calls -- is recorded to stderr and
@@ -405,11 +414,12 @@ components ship.
    a decision (drop-on-failure with a visible counter). Residuals: the
    latch shares the revocation record's same-user-writer exposure (a
    same-user process can release the switch, exactly as it can delete the
-   trust files -- threat #4's class); the pre-Phase-8 presence floors attest
-   intent rather than hardware (a same-user process can drive a pty, and
-   the extension floor is a channel-attested claim), so they stop silent,
-   scripted, and accidental unkills, not that hostile process -- every
-   release is audited with the rung that authorized it; engagement has a
+   trust files -- threat #4's class); the presence floors (used where no
+   Enclave key exists) attest intent rather than hardware (a same-user
+   process can drive a pty, and the extension floor is a channel-attested
+   claim), so they stop silent, scripted, and accidental unkills, not that
+   hostile process -- every release is audited with the rung that authorized
+   it; engagement has a
    bounded sub-second
    window (one watcher tick) for in-flight work, which the severed sockets
    then drain; and the audit trail is best-effort by design, so a broken

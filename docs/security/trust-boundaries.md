@@ -48,9 +48,10 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   harness connection deliberately stays up so the refusal is delivered as a
   typed error rather than an opaque disconnect. Release is explicit
   (`unkill`, the options page, or the app through the same `core` call),
-  demands a user-presence attestation (Touch ID after Phase 8; a typed
-  terminal confirmation or the options page's dialog until then, with a
-  piped stdin refused outright), and refuses on an unreadable record. Both
+  demands a user-presence attestation (a Secure Enclave Touch ID tap on an
+  enrolled Mac, ADR-0031; a typed terminal confirmation or the options
+  page's dialog where no Enclave key exists, with a piped stdin refused
+  outright), and refuses on an unreadable record. Both
   transitions are audited; releases carry the auth path that authorized
   them.
 - **Enforcement (protocol)**: strict JSON-RPC parsing; unknown methods →
@@ -152,8 +153,9 @@ MCP client ──①──▶ Rust MCP server ──②──▶ native host ─
   that restores capability rather than reducing it; ADR-0030 records why the
   options page qualifies as a trusted surface for it, the gating that keeps a
   web page away from it, and the user-presence gate in front of the release
-  itself (the options page's confirmation dialog is the pre-Phase-8 floor;
-  Touch ID replaces it host-side when Phase 8 lands). While the kill latch is
+  itself (the options page's confirmation dialog is the floor where no
+  Enclave key exists; a Secure Enclave Touch ID tap gates it host-side on an
+  enrolled Mac, ADR-0031). While the kill latch is
   set the host runs a
   control-plane-only mode: it never dials the broker, drops bridge frames,
   and keeps exactly these control frames working so the release stays

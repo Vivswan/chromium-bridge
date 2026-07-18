@@ -44,6 +44,7 @@ confirm:
   q_upload: "將這個本機檔案上傳到頁面？"
   warn_eval: "這段程式碼將帶著你的工作階段在頁面中執行，可以讀取權杖、Cookie 和頁面資料，並能以你的身分發出請求。"
   warn_upload: "位於該路徑的檔案將離開你的磁碟並被傳送到頁面。"
+  touchid_wait: "請在系統提示上使用觸控 ID 核准。核准只能在硬體提示上完成；此視窗只能拒絕。"
 
 options:
   title: "Chromium Bridge 設定"
@@ -74,6 +75,9 @@ settings:
   confirm_eval_title: "每次 page_eval 都需確認（執行任意 JS）"
   confirm_eval_desc: "每次 page_eval 都會顯示完整程式碼並等待你核准（ADR-0008）。page_eval 會執行任意 JavaScript，是風險最高的操作。"
   confirm_eval_warn: "關閉後，AI 可在沒有任何提示的情況下執行任意 JS。只有在完全信任 AI 且需要無人值守的自動化時才可關閉。"
+  touchid_confirm_title: "以觸控 ID 核准 page_eval / page_upload"
+  touchid_confirm_desc: "在已配對的 Mac 上，這兩個最高風險操作的核准需要安全隔離區的觸控 ID 輕觸，任何頁面或程式都無法偽造（ADR-0031）。確認視窗仍會顯示正在核准的具體內容。"
+  touchid_confirm_warn: "關閉後，這些確認將改用擴充功能視窗的允許按鈕，仍需確認，但沒有硬體輕觸作保。"
   confirm_tab_close_title: "確認 tab_close（關閉分頁）"
   confirm_tab_close_desc: "關閉分頁前會先徵求核准。"
   confirm_tab_close_warn: "關閉後，AI 關閉分頁時不會有任何提示。"
