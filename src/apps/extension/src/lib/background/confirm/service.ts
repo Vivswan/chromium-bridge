@@ -110,10 +110,62 @@ async function providerFor(
   return { provider: defaultProvider, hardware: false };
 }
 
+// The panic latch (ADR-0030): set by the confirm window's deny-and-kill,
+// lifted by the router when the kill state refuses or the engage exchange
+// fails. While it is on, EVERY confirmation - the active one, the whole
+// queue, and anything newly requested - denies without presenting. This
+// closes the window the queue would otherwise open: a request that passed
+// the kill gate while the mirror still read alive would pop a fresh surface
+// (which the user could approve) while the brake is still in flight to the
+// host. Module state, deliberately: if the engage is lost with a dying host
+// (posted, never answered, host restarts alive) the latch stays on - denying
+// consent is the fail-closed reading of "kill everything" - until the SW's
+// own restart clears it.
+let panicDeny = false;
+// Edge marker beside the level latch: bumped on every panic. A request whose
+// provider selection was IN FLIGHT when the panic hit has no `active` entry
+// to settle and may finish selecting only after the latch has already lifted
+// (the kill confirmed quickly) - the level check alone would present it.
+// Every request captures the epoch at CREATION and denies on any mismatch:
+// "a panic crossed this request's lifetime" survives the lift.
+let panicEpoch = 0;
+
+/** The confirm window hit the brake: deny the active confirmation and latch
+ * everything behind it to auto-deny. Settling the active entry advances the
+ * queue, whose entries all see the latch and drain synchronously. */
+export function denyAllConfirmations(): void {
+  panicDeny = true;
+  panicEpoch += 1;
+  active?.settle(false);
+}
+
+/** Router-only: lift the panic latch. Called when the kill state refuses
+ * (the request gate refuses upstream from then on) or when the engage
+ * exchange failed outright - restoring normal confirmations there rather
+ * than silently bricking them: the kill mirror (popup, options) is what
+ * tells the user the truth either way, and a dead port carries no new
+ * requests anyway. */
+export function releasePanicDeny(): void {
+  panicDeny = false;
+}
+
 /** Ask the user. Resolves true only on an explicit, in-time approval from
  * the extension-owned surface; every other outcome is false. */
 export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
+    // Captured when the request is CREATED, not when it reaches the front of
+    // the queue: a panic bumps the epoch, so any request that predates the
+    // panic - active, queued behind a slow provider selection, or itself
+    // mid-selection - denies on the mismatch even after the latch lifts.
+    const epoch = panicEpoch;
+    if (panicDeny) {
+      // Created while the latch is on: denied at the door. Waiting in the
+      // queue instead would let it present if the latch lifts before it
+      // reaches the front (its own epoch is the post-panic one).
+      auditEvent("confirm_denied", { tool: req.kind, name: req.origin });
+      resolve(false);
+      return;
+    }
     // Hand the surface to the next queued request, or go idle.
     const advance = () => {
       const next = queue.shift();
@@ -122,9 +174,28 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
     };
     const run = () => {
       running = true;
+      if (panicDeny || panicEpoch !== epoch) {
+        // Denied unseen: the user already chose "kill everything" - showing
+        // more consent surfaces after that choice would invert it.
+        auditEvent("confirm_denied", { tool: req.kind, name: req.origin });
+        resolve(false);
+        advance();
+        return;
+      }
       void (async () => {
         counter += 1;
         const { provider, hardware } = await providerFor(req.kind);
+        if (panicDeny || panicEpoch !== epoch) {
+          // The panic landed DURING provider selection: `active` was not yet
+          // registered, so denyAllConfirmations could not settle this one -
+          // and the latch may even have lifted again already (kill confirmed
+          // fast), which is why the epoch is checked, not just the level.
+          // Same denial, before any surface exists.
+          auditEvent("confirm_denied", { tool: req.kind, name: req.origin });
+          resolve(false);
+          advance();
+          return;
+        }
         const payload: ConfirmPayload = {
           id: `confirm_${Date.now()}_${counter}`,
           kind: req.kind,

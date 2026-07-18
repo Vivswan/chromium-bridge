@@ -64,6 +64,13 @@ export const RuntimeMsgSchema = z.discriminatedUnion("type", [
     id: z.string().min(1),
     approved: z.boolean(),
   }),
+  // The confirm window's panic exit (ADR-0030): deny EVERYTHING pending
+  // (active, queued, and newly arriving confirmations) and engage the kill
+  // switch, as one service-worker-side step so the deny can never be
+  // reordered after (or torn from) the engage. Deliberately carries no id:
+  // after "kill everything" no pending confirmation may survive, whichever
+  // window asked. Confirm-window senders only, like the other confirm_*.
+  z.strictObject({ type: z.literal("confirm_deny_kill") }),
 ]);
 
 export type RuntimeMsg = z.infer<typeof RuntimeMsgSchema>;

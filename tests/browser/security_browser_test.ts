@@ -332,7 +332,9 @@ async function main(): Promise<void> {
     await sleep(1200);
 
     // Proof 4 (off-DOM confirm, sender gate): confirm_* from a non-confirm
-    // extension page is refused.
+    // extension page is refused - including the deny-and-kill panic exit,
+    // which must not hand any other page a side door that answers a pending
+    // confirmation.
     const gate = (await optPage.evaluate(async () => {
       const ready = await chrome.runtime.sendMessage({ type: "confirm_ready", id: "x" });
       const resolve = await chrome.runtime.sendMessage({
@@ -340,11 +342,16 @@ async function main(): Promise<void> {
         id: "x",
         approved: true,
       });
-      return { ready, resolve };
-    })) as { ready?: { ok?: boolean; error?: string }; resolve?: { ok?: boolean; error?: string } };
+      const denyKill = await chrome.runtime.sendMessage({ type: "confirm_deny_kill" });
+      return { ready, resolve, denyKill };
+    })) as {
+      ready?: { ok?: boolean; error?: string };
+      resolve?: { ok?: boolean; error?: string };
+      denyKill?: { ok?: boolean; error?: string };
+    };
     check(
-      gate.ready?.ok === false && gate.resolve?.ok === false,
-      "confirm_ready / confirm_resolve are refused from a non-confirm extension page",
+      gate.ready?.ok === false && gate.resolve?.ok === false && gate.denyKill?.ok === false,
+      "confirm_ready / confirm_resolve / confirm_deny_kill are refused from a non-confirm extension page",
       gate,
     );
 

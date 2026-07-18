@@ -106,6 +106,7 @@ confirm:
   hardware_note: "No Allow button: approval is the Touch ID sensor itself, so nothing on screen - and no remote client - can press it for you."
   touchid_wait: "Waiting for Touch ID on this Mac"
   request_id: "request $1"
+  kill_note: "Denies this request and cuts every client off every browser. Release lives in settings."
 
 options:
   title: "Chromium Bridge settings"
