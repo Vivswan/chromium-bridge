@@ -1,6 +1,6 @@
 //! Native-messaging registration: the write/repair/remove engine behind
-//! `doctor --fix` and `uninstall`, and the API the app's self-registration
-//! uses. Browser locations come from the shared resolver in
+//! `doctor --fix` and `uninstall`, and the API the app's registration
+//! buttons use. Browser locations come from the shared resolver in
 //! [`crate::browsers`], the same one `doctor` diagnoses with.
 //!
 //! A registration points at THIS binary (its resolved `current_exe`); nothing
@@ -42,7 +42,7 @@ use crate::cli::{DoctorArgs, UninstallArgs};
 const MANIFEST_DESCRIPTION_LEGACY: &str = "Chromium Bridge native messaging host";
 
 /// The `description` this engine writes: the ownership marker. Writer-neutral
-/// (`doctor --fix` and the app's self-registration write the same bytes).
+/// (`doctor --fix` and the app's registration write the same bytes).
 const MANIFEST_DESCRIPTION: &str =
     "Chromium Bridge native messaging host (managed by chromium-bridge)";
 
@@ -132,6 +132,20 @@ impl RegState {
             RegState::Stale(why) => format!("stale ({why})"),
             RegState::Foreign(why) => format!("NOT OURS ({why})"),
             RegState::Unreadable(why) => format!("unreadable ({why})"),
+        }
+    }
+
+    /// Stable machine code for the variant, for consumers (the desktop app's
+    /// webview) that must branch on the state without parsing `describe()`'s
+    /// human wording. Adding a variant means adding a code; consumers treat
+    /// an unknown code as "offer nothing".
+    pub fn code(&self) -> &'static str {
+        match self {
+            RegState::Missing => "missing",
+            RegState::Ok => "ok",
+            RegState::Stale(_) => "stale",
+            RegState::Foreign(_) => "foreign",
+            RegState::Unreadable(_) => "unreadable",
         }
     }
 }
@@ -733,8 +747,9 @@ fn shell_quote(s: &str) -> String {
 /// write would let another account swap them. Refuses a symlink at the leaf
 /// (our namespace must not be redirected elsewhere). Mirrors
 /// `ensure_private_dir` in the IPC layer and the 0700 the shell installer
-/// enforced.
-fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
+/// enforced. `pub` because the desktop app prepares the same install dir
+/// for its first-run marker and must apply the same rules.
+pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     if fs::symlink_metadata(dir)?.file_type().is_symlink() {
         return Err(std::io::Error::other(

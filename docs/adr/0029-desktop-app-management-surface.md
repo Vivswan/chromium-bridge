@@ -1,7 +1,8 @@
 # ADR-0029: The desktop app is a complete management surface, co-equal with the CLI
 
 - Status: Accepted
-- Date: 2026-07-17
+- Date: 2026-07-17 (amended 2026-07-18: first launch no longer
+  self-registers; see "First launch detects; the user connects")
 - Scope: the Phase 9 control-panel UI in `src/apps/desktop` (Tauri v2), its
   command surface over `chromium-bridge-core`, and how the app relates to the
   bundled host binary, the CLI, and the Phase 8 user-presence gates.
@@ -110,20 +111,44 @@ The seam is `src/apps/desktop/src/presence_seam.rs`; its `APP_FLOOR`
 constant and the dialog-first obligation are the only presence knowledge
 this crate holds.
 
-### Self-registration on first launch
+### First launch detects; the user connects (amended 2026-07-18)
 
-On its first launch the app registers the native-messaging manifests for
-every detected browser through the shared engine, reports what it wrote (and
-any refusals) in the window, and leaves a marker file
-(`desktop-first-run.json` in the install dir) so later launches do not write
-unasked. Registration points at the bundled host. After the first run,
-registration is explicit: per-browser register/repair/remove buttons, plus a
-manual absolute-path `NativeMessagingHosts` directory for Chromium builds the
-resolver does not know by name (the CLI's `--manifest-dir` escape hatch, same
-validation).
+As first shipped, the app registered the native-messaging manifests for
+every detected browser on its first launch. That was withdrawn the next
+day. A manifest write into a browser's configuration directory grants this
+software a path into that browser, and the project's consent rules (the
+zero-trust section of AGENTS.md; confirmations are a feature) require such
+a grant to be the user's explicit choice, not a side effect of opening the
+app. The rest of this ADR already insists every capability grant is
+user-initiated; startup-time registration was the one exception, and it is
+gone.
 
-A failed host resolution (a dev build without the host compiled) writes no
-marker, so the next launch retries.
+Now the first launch only detects. The app resolves the known browsers,
+names the detected ones on the Overview first-run card, and writes nothing
+into any browser's configuration. The user connects browsers one at a time
+on the Browsers page, or clicks the card's explicit "Connect all detected
+browsers" button. Both paths run the same shared engine command; only the
+trigger changed, from app startup to a user click. The Browsers page
+offers an action only where one exists: a healthy registration shows
+"Connected" with no button, a missing one shows Connect, and a wrong one
+(stale, foreign, unreadable) shows Repair.
+
+The marker file (`desktop-first-run.json` in the install dir) survives
+with a narrower meaning: it records that a launch claimed the first-run
+card, so later launches do not reopen it (claimed, not provably rendered;
+a crash between claim and paint forfeits the card, and the Browsers page
+carries the same information). It is still claimed single-flight with
+`create_new`, the install dir is verified to be a real directory before
+the write (a planted symlink cannot redirect it; hardening against
+redirection, not a privilege boundary), and it remains app state rather
+than a registration artifact, so `uninstall` semantics are untouched.
+Markers written by the withdrawn behavior read the same way, since only
+existence is checked.
+
+Registration after the first run is unchanged: per-browser buttons, plus a
+manual absolute-path `NativeMessagingHosts` directory for Chromium builds
+the resolver does not know by name (the CLI's `--manifest-dir` escape
+hatch, same validation).
 
 ### The rest of the management surface
 

@@ -60,9 +60,11 @@ export const zh_CN: Record<MessageKey, string> = {
   "overview.extension_note":
     "以上检查涵盖应用、主机和 MCP 服务器，但无法确认扩展已加载并连接 - 请通过扩展的工具栏图标确认。",
   "overview.first_run_title": "首次启动",
-  "overview.first_run_registered": "已为检测到的浏览器写入原生消息清单。",
+  "overview.first_run_detected":
+    "检测到 $1。可以在“浏览器”页面选择要连接的浏览器，或立即全部连接；在你选择之前，应用不会写入任何注册信息。",
+  "overview.first_run_connect_all": "连接所有检测到的浏览器",
   "overview.first_run_none": "未检测到 Chromium 系浏览器。请在“浏览器”页面手动添加。",
-  "overview.first_run_errors": "部分注册被拒绝：",
+  "overview.first_run_errors": "部分浏览器未能连接：",
 
   "browsers.title": "浏览器",
   "browsers.intro":
@@ -71,7 +73,8 @@ export const zh_CN: Record<MessageKey, string> = {
   "browsers.not_detected": "未检测到",
   "browsers.state": "注册状态",
   "browsers.location": "位置",
-  "browsers.register": "注册",
+  "browsers.connect": "连接",
+  "browsers.connected": "已连接",
   "browsers.repair": "修复",
   "browsers.unregister": "移除",
   "browsers.restart_note":
