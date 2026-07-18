@@ -5,8 +5,8 @@
   "description": "MV3 extension for chromium-bridge - built with WXT.",
   "type": "module",
   "scripts": {
-    "dev": "wxt",
-    "build": "wxt build",
+    "dev": "bun ../../../scripts/gen-icons.ts extension && wxt",
+    "build": "bun ../../../scripts/gen-icons.ts extension && wxt build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Gatedeck - monochrome template (closed state)</title>
+  <!-- Single-color variant for menu bar / tray. Uniform weight = the
+       sheet's mono weight (2.1 grid units = 63 at this scale). Tint via
+       currentColor, CSS mask, or macOS template-image rendering. -->
+  <path d="M94 386 Q256 62 418 386 M58 134 L256 134 M454 134 L256 134"
+        fill="none" stroke="currentColor" stroke-width="63"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

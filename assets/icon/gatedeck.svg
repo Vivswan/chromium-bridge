@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Gatedeck - closed (default / connected)</title>
+  <!-- Path-compatible with gatedeck-open.svg: same three paths in the same
+       order; only the deck coordinates differ. The closed deck is two
+       collinear halves meeting at x=256; the round caps overlap so the
+       line reads as one unbroken stroke. -->
+  <path id="arch" d="M94 386 Q256 62 418 386"
+        fill="none" stroke="#6b7a92" stroke-width="72"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path id="deck-left" d="M58 134 L256 134"
+        fill="none" stroke="#3fe081" stroke-width="48"
+        stroke-linecap="round"/>
+  <path id="deck-right" d="M454 134 L256 134"
+        fill="none" stroke="#3fe081" stroke-width="48"
+        stroke-linecap="round"/>
+</svg>
