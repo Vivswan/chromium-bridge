@@ -247,7 +247,12 @@ export function PopupApp() {
   const panicRow = (noteKey: MessageKey) => (
     <div className="border-t border-edge pt-3">
       <div className="flex items-center gap-2">
-        <Button variant="danger" onClick={() => void engageKill()} disabled={killBusy}>
+        <Button
+          variant="danger"
+          className="shrink-0 whitespace-nowrap"
+          onClick={() => void engageKill()}
+          disabled={killBusy}
+        >
           <KillIcon />
           {t("kill.engage")}
         </Button>
@@ -257,18 +262,30 @@ export function PopupApp() {
     </div>
   );
 
+  // The pairing state's footer carries the spec's promise instead of the
+  // settings link: until you pair, this extension does nothing.
+  const pairPending =
+    !killed &&
+    enroll?.blocked === true &&
+    enroll.state === "pending" &&
+    Boolean(enroll.fingerprint);
+
   const foot = (
     <div className="mt-auto flex items-center justify-between border-t border-edge px-3.5 py-2.5">
-      <button
-        type="button"
-        className="inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 text-xs font-medium text-text-2 hover:text-text-1"
-        onClick={() => browser.runtime.openOptionsPage()}
-      >
-        <span className="text-text-3">
-          <BridgeIcon size={12} />
-        </span>
-        {t("popup.open_settings")}
-      </button>
+      {pairPending ? (
+        <span className="text-[11px] text-text-3">{t("popup.pair_foot")}</span>
+      ) : (
+        <button
+          type="button"
+          className="inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 text-xs font-medium text-text-2 hover:text-text-1"
+          onClick={() => browser.runtime.openOptionsPage()}
+        >
+          <span className="text-text-3">
+            <BridgeIcon size={12} />
+          </span>
+          {t("popup.open_settings")}
+        </button>
+      )}
       <span className="font-mono text-[10px] text-text-4">{t("popup.ext_version", [version])}</span>
     </div>
   );
@@ -313,14 +330,16 @@ export function PopupApp() {
             {microStatus(false)}
             <div>
               <div className="section-title mb-1.5">{t("popup.pair_compare")}</div>
+              {/* reading order per first-run.html: explain, then the code,
+                  then the choice - with the safe exit as the filled default */}
+              <p className="text-xs leading-snug text-text-2">{t("popup.pair_explainer")}</p>
               {/* open and centered - size does the work, not a box */}
-              <div className="px-0 py-1.5 text-center">
+              <div className="px-0 py-2 text-center">
                 <div className="break-all font-mono text-[15px] font-bold leading-relaxed tracking-[0.12em] text-text-1">
                   {enroll.fingerprint}
                 </div>
               </div>
-              <p className="consequence mt-2">{t("popup.pair_consequence")}</p>
-              <div className="mt-2.5 flex gap-2">
+              <div className="mt-1 flex gap-2">
                 <Button
                   variant="primary"
                   className="flex-1 py-2 text-[13px]"
@@ -335,7 +354,8 @@ export function PopupApp() {
                   {t("popup.pair_approve")}
                 </Button>
               </div>
-              <p className="consequence mt-2">{t("popup.pair_outcome")}</p>
+              <p className="consequence mt-2">{t("popup.pair_consequence")}</p>
+              <p className="consequence mt-1">{t("popup.pair_outcome")}</p>
             </div>
             {panicRow("popup.kill_note_pair")}
           </>
