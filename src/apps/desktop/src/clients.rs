@@ -83,44 +83,24 @@ pub fn revoke(name: &str) -> Result<bool, String> {
 
 /// Add (or re-pair) a trusted client, behind the user-presence gate: pairing
 /// GRANTS capability, so it demands proof of the user, not just a click in a
-/// window (the Phase 8 seam; see `crate::presence_seam`, including the
-/// dialog-first obligation on the caller). Returns the presence path that
-/// authorized the pairing, for the UI to show. Shaped like phase8's
-/// `pair_client_with_presence` contract: the name and anchor are validated
-/// BEFORE any prompt, so a malformed request can never raise a presence
-/// sheet; the call sites swap to that API when the branch lands.
+/// window. Goes through `allowlist::pair_client_with_presence` (ADR-0031),
+/// the one entry point every surface uses - it validates the name before any
+/// prompt, runs the presence ladder (a real Touch ID sheet on an enrolled
+/// Mac; the app floor only when hardware is unavailable), audits both
+/// outcomes, and only then writes the allowlist. The caller must have shown
+/// the in-app confirm dialog first (see `crate::presence_seam`). Returns the
+/// presence path that authorized the pairing, for the UI to show. The anchor
+/// is validated by the same core path as the CLI's flags, also before any
+/// prompt.
 pub fn pair(name: &str, anchor_kind: &str, anchor_value: &str) -> Result<&'static str, String> {
-    if !chromium_bridge_core::ipc::validate_label(name) {
-        return Err(
-            "invalid client name (want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric)"
-                .to_string(),
-        );
-    }
     let spec = match anchor_kind {
         "hash" => AnchorSpec::Hash(anchor_value.to_string()),
         "team_id" => AnchorSpec::TeamId(anchor_value.to_string()),
         other => return Err(format!("unknown anchor kind {other:?}")),
     };
     let anchor = allowlist::resolve_anchor(&spec)?;
-
-    // PHASE 8 INTEGRATION POINT: fails closed until the Touch ID provider
-    // lands (see presence_seam.rs).
-    let att = presence_seam::pairing_presence(name)
-        .map_err(|e| presence_seam::unavailable_guidance(&e))?;
-
-    Allowlist::pair(name, anchor.clone()).map_err(|e| e.to_string())?;
-    let shown = match &anchor {
-        Anchor::Hash(h) => format!("hash {h}"),
-        Anchor::TeamId(t) => format!("Team ID {t}"),
-    };
-    let auth = att.path().wire_name();
-    // Log-after-decide, naming the presence rung that vouched for the user.
-    audit::record(
-        AuditRecord::new(AuditKind::PairClient)
-            .surface(Surface::Core)
-            .name(name)
-            .outcome("ok")
-            .detail(&format!("{shown}; auth={auth}")),
-    );
-    Ok(auth)
+    let path =
+        allowlist::pair_client_with_presence(name, anchor, Surface::Core, presence_seam::APP_FLOOR)
+            .map_err(|e| e.to_string())?;
+    Ok(path.wire_name())
 }
