@@ -2,9 +2,10 @@
 
 The Chromium Bridge control panel (`src/apps/desktop`, Tauri v2) is a
 complete management surface for the bridge: registration, pairing, trusted
-clients, the kill switch, and the audit trail. Two actions still need a
-terminal until Phase 8 lands (releasing the kill switch and adding a client
-require the Touch ID presence gate; the app refuses them with guidance).
+clients, the kill switch, and the audit trail, with no terminal required.
+The two capability-granting acts (releasing the kill switch, adding a
+client) go through the app's confirm dialog and the user-presence gate
+(Touch ID on an enrolled Mac, ADR-0031).
 It is co-equal with the CLI; both drive the same engines in
 `chromium-bridge-core`, so mixing surfaces cannot fork state. Design record:
 [ADR-0029](./adr/0029-desktop-app-management-surface.md); the signing and
@@ -56,16 +57,16 @@ The GUI itself cannot be clicked headlessly. After `just app-run`:
 3. Kill switch: engage from the Overview page (one click). `chromium-bridge
    doctor` should report it engaged, and the Audit page should show the
    `kill_engage` record with `surface=core`. Release: the button opens the
-   app's confirm dialog first; until Phase 8 lands, confirming then refuses
-   with guidance (by design; release it with `chromium-bridge unkill`).
-   After Phase 8, confirming should raise Touch ID and the page then names
-   which proof authorized the release.
+   app's confirm dialog first; confirming raises the Touch ID sheet on an
+   enrolled Mac, and on success the page names which proof authorized the
+   release. Declining the sheet leaves the switch engaged and writes a
+   refused `kill_release` record.
 4. Audit: the Audit page lists the same records as `chromium-bridge audit`,
    and "Show file" reveals the runtime directory.
 5. Clients: the list matches `chromium-bridge list-clients`; revoking is one
    click, removes the entry, and writes a `revoke_client` record. "Add
-   client" opens the confirm dialog and, until Phase 8, then refuses (same
-   presence gate as the kill release).
+   client" opens the confirm dialog, then raises Touch ID (enrolled Mac);
+   on success the page names the authorizing proof and the entry appears.
 6. CLI tool: on the Setup page, Install creates `~/.local/bin/chromium-bridge`
    and `chromium-bridge doctor` works from a terminal (with `~/.local/bin` on
    PATH). Remove deletes exactly that symlink.

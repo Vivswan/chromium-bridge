@@ -77,37 +77,38 @@ sitting next to it in `target/<profile>/`. There is no further fallback:
 registering a manifest that points at a binary we cannot name would be worse
 than failing.
 
-### Presence-gated actions fail closed until Phase 8 lands
+### Presence-gated actions: dialog-first, hardware-first
 
 Two app actions grant capability: releasing the kill switch and adding a
-trusted client. The contract agreed with Phase 8 (in flight on
-`feat/phase8-touchid`): pairing goes through
-`allowlist::pair_client_with_presence(name, anchor, Surface::Core,
-Floor::AppConfirm)`, which validates the name before any prompt, raises
-Touch ID itself on capable hardware, and returns the `PresencePath` that
-authorized it; unkill goes through `presence::require_presence(reason,
-Floor::AppConfirm)` then `kill::release`. `Floor::AppConfirm` is only
-reached when hardware is genuinely unavailable (never on a hardware
-refusal), and it succeeds on the assertion that the app already showed its
-own explicit modal confirmation.
+trusted client. Both are gated on user presence (ADR-0031). Pairing goes
+through `allowlist::pair_client_with_presence(name, anchor, Surface::Core,
+Floor::AppConfirm)`, the one entry point every surface uses: it validates
+the name before any prompt, runs the presence ladder, audits both outcomes
+with the rung that decided, and returns the `PresencePath` that authorized
+it. Unkill goes through `presence::require_presence(reason,
+Floor::AppConfirm)` then `kill::release`. On an enrolled Mac the ladder's
+hardware rung raises the real Touch ID sheet (per-action Secure Enclave
+signing); `Floor::AppConfirm` is reached only when hardware is genuinely
+unavailable, never on a hardware refusal, and it succeeds on the assertion
+that the app already showed its own explicit modal confirmation.
 
 That assertion is load-bearing, so the UI is built dialog-first: both
-buttons open an explicit confirm modal, and only the modal's confirm
-handler invokes the presence-gated command. The command's result carries
-the presence path, and the UI names which proof authorized the act (Touch
-ID or the in-app confirmation). Engaging the kill switch and revoking (a
-client, or the enrollment) stay one-click on purpose: they only reduce
-capability, and friction-free revocation is the security posture.
+buttons open an explicit confirm modal (with a synchronous single-flight
+guard), and only the modal's confirm handler invokes the presence-gated
+command. The command's result carries the presence path, and the UI names
+which proof authorized the act (Touch ID, or the in-app confirmation on a
+no-hardware machine). `AppConfirm` on such a machine is an intent floor,
+not an unspoofable hardware proof - the same residual class as the CLI's
+typed-terminal floor, named in the `Floor` docs rather than implied
+covered. Engaging the kill switch and revoking (a client, or the
+enrollment) stay one-click on purpose: they only reduce capability, and
+friction-free revocation is the security posture. Refused releases and
+refused pairings are audited (outcome `refused` with the presence error),
+so an attempted silent unkill or enrollment is visible in the trail.
 
-Until this branch rebases over Phase 8, `Floor::AppConfirm` does not exist;
-the seam (`src/apps/desktop/src/presence_seam.rs`) claims the CLI floor,
-which a GUI cannot satisfy (its stdin is not a terminal), so both acts
-refuse with an error that names the surfaces that do work today
-(`chromium-bridge unkill`, `pair-client`, the extension options page).
-That is the intended posture, not a gap to paper over; refused releases
-are audited (`kill_release` / outcome `refused`) so an attempted silent
-unkill is visible in the trail either way. The rebase swaps one constant
-(the floor) and one call site (the pairing API).
+The seam is `src/apps/desktop/src/presence_seam.rs`; its `APP_FLOOR`
+constant and the dialog-first obligation are the only presence knowledge
+this crate holds.
 
 ### Self-registration on first launch
 
@@ -170,8 +171,8 @@ platform GUI toolchains. Building the crate requires the UI dist first
 that locally.
 
 Platform status, honestly: on macOS the app covers the full management
-surface, with two actions (kill release, add client) refusing until Phase 8
-supplies the hardware presence rung; see the seam section above. The Rust
+surface, including the two presence-gated acts (kill release, add client)
+under Touch ID on an enrolled Mac; see the seam section above. The Rust
 command layer compiles for Linux and Windows (the registration and
 kill/audit paths are cross-platform in core), but the bundled-host layout,
 the Enclave ceremony, and the CLI symlink are macOS-shaped; Linux needs a
@@ -191,18 +192,13 @@ continues to assert the exact entitlement sets of both binaries.
 
 ## Consequences
 
-- A user on macOS can install, register, pair, revoke, audit, and engage the
-  kill switch from the window alone. The last two terminal dependencies
-  (releasing the kill switch, adding a client) are the presence-gated acts,
-  and they move in-window when Phase 8's Touch ID provider lands; until then
-  the app refuses them with guidance. Everything the app does lands in the
-  same audit trail and the same enforcement paths as the CLI.
+- A user on macOS manages the whole bridge from the window: install,
+  register, pair, revoke, audit, engage the kill switch, and - behind the
+  confirm dialog plus the presence gate - release it and add trusted
+  clients. Everything the app does lands in the same audit trail and the
+  same enforcement paths as the CLI.
 - The CLI loses nothing and remains complete; `doctor --fix` and the app's
   registration converge on identical bytes, so mixing surfaces cannot fork
   state.
-- Until Phase 8 lands, the app's kill-release and add-client buttons show
-  their confirm dialog and then refuse with guidance. After the rebase they
-  acquire Touch ID by swapping the seam's floor constant and the pairing
-  call site to `pair_client_with_presence`, nothing else.
 - The host CLI's `enclave-status --json` is now a stable machine contract;
   changing its shape requires a version bump and a consumer update.
