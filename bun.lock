@@ -15,6 +15,7 @@
     "docs/site": {
       "name": "chromium-bridge-docs-site",
       "dependencies": {
+        "@astrojs/markdown-satteri": "^0.3.4",
         "@fontsource/inter": "^5.2.8",
         "@fontsource/jetbrains-mono": "^5.2.8",
         "astro": "^7.0.7",

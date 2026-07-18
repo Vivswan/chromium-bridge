@@ -3,11 +3,15 @@
 // src/pages/docs/[...slug].astro). Served as a GitHub Pages project page
 // under /chromium-bridge/, so every internal link and asset must go through
 // import.meta.env.BASE_URL - never a root-absolute path.
+import { satteri } from "@astrojs/markdown-satteri";
 import { defineConfig } from "astro/config";
+import { mdLinksPlugin } from "./src/lib/satteri-md-links";
+
+const base = "/chromium-bridge";
 
 export default defineConfig({
   site: "https://vivswan.github.io",
-  base: "/chromium-bridge",
+  base,
   outDir: "dist",
   // Keep authored whitespace: the default HTML compression eats the space
   // between text and an adjacent inline link ("the<a>source code</a>").
@@ -15,6 +19,11 @@ export default defineConfig({
   // Each page builds to <route>/index.html so Pages serves clean URLs.
   build: {
     format: "directory",
+  },
+  markdown: {
+    // The default processor plus one plugin: repo-relative .md links become
+    // their rendered /docs/ routes (see satteri-md-links.ts).
+    processor: satteri({ hastPlugins: [mdLinksPlugin(base)] }),
   },
   vite: {
     // Let the dev server read the repo's markdown above the site root.

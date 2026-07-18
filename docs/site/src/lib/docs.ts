@@ -1,12 +1,11 @@
 // The site's content registry: every repository markdown doc, imported at
 // build time and mapped to a URL slug. The repo's markdown is the single
-// source; this site adds no content of its own.
-//
-// Known limitation (tracked as a follow-up, not load-bearing): relative
-// links BETWEEN markdown files (e.g. ./architecture.md) keep pointing at the
-// .md paths; use the index for navigation until a rehype link rewrite lands.
+// source; this site adds no content of its own. Relative links between
+// markdown files are rewritten to their rendered routes by the
+// satteri-md-links plugin (see astro.config.mjs).
 
 import type { MarkdownInstance } from "astro";
+import { EXCLUDED, repoPathToSlug } from "./doc-slug";
 
 type Doc = MarkdownInstance<Record<string, unknown>>;
 
@@ -29,18 +28,16 @@ const modules = {
 };
 
 // Glob keys come back normalized: repo-root files start with four `../`
-// segments, files under docs/ with three. Slugs keep lowercase familiar
-// names, and docs/README.md gets its own slug so it cannot collide with the
-// repo README.
+// segments, files under docs/ with three. Reconstruct the repo-relative path
+// from that depth and let the shared slug scheme (doc-slug.ts) name the
+// route; every globbed file is in the rendered set by construction.
 function toSlug(path: string): string {
   const isRepoRoot = path.startsWith("../../../../");
   const rel = path.replace(/^(\.\.\/)+/, "");
-  if (!isRepoRoot && rel === "README.md") return "overview";
-  return rel.replace(/\.md$/, "").replace(/^README/, "readme");
+  const slug = repoPathToSlug(isRepoRoot ? rel : `docs/${rel}`);
+  if (slug === undefined) throw new Error(`globbed doc without a slug: ${path}`);
+  return slug;
 }
-
-// Agent-facing instruction files are not user documentation.
-const EXCLUDED = new Set(["AGENTS.md", "CLAUDE.md"]);
 
 function toTitle(doc: Doc, slug: string): string {
   const heading = doc.getHeadings().find((h) => h.depth === 1);
@@ -48,7 +45,7 @@ function toTitle(doc: Doc, slug: string): string {
 }
 
 export const docPages: DocPage[] = Object.entries(modules)
-  .filter(([path]) => !EXCLUDED.has(path.replace(/^(\.\.\/)+/, "")))
+  .filter(([path]) => !EXCLUDED.has(path.slice(path.lastIndexOf("/") + 1)))
   .map(([path, doc]) => {
     const slug = toSlug(path);
     return { slug, title: toTitle(doc, slug), Content: doc.Content };
