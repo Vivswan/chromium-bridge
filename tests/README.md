@@ -58,7 +58,7 @@ The `.ts` suites are type-checked (`bun`, `chrome`, and DOM types):
 
 ```sh
 bun install            # workspace install (puppeteer-core + type packages)
-bun run typecheck      # tsc --noEmit (CI gates this)
+just typecheck         # tsc --noEmit (CI gates this)
 ```
 
 ## Fixtures

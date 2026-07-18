@@ -7,10 +7,14 @@
 default:
     @just --list --unsorted
 
-# Build everything (mirror of `bun run build`): shared typecheck -> extension
-# bundle -> scripts typecheck -> cargo build --workspace
+# Build everything: shared typecheck -> extension -> desktop UI -> scripts typecheck -> cargo workspace
 build:
-    bun run build
+    bun scripts/gen-icons.ts
+    bun run --cwd src/packages/shared typecheck
+    bun run --cwd src/apps/extension build
+    bun run --cwd src/apps/desktop/ui build
+    bunx tsc -p scripts
+    cargo build --workspace
 
 # Build the release binary
 build-release:
@@ -35,6 +39,7 @@ app-dev:
     set -eu
     bun scripts/gen-icons.ts desktop
     cargo build
+    bun run --cwd src/apps/extension build
     cd src/apps/desktop && bunx tauri dev
 
 # Build, sign, verify, then launch the desktop app (USER-RUN: the GUI)
@@ -192,9 +197,13 @@ gen-icons:
 ext-build:
     bun run --cwd src/apps/extension build
 
-# Type-check every TS project (extension, tests, scripts, src/packages/shared)
+# Type-check every TS project (extension, desktop UI, tests, scripts, src/packages/shared)
 typecheck:
-    bun run typecheck
+    bunx tsc -p src/apps/extension
+    bunx tsc -p src/apps/desktop/ui
+    bunx tsc -p tests/browser
+    bunx tsc -p scripts
+    bunx tsc -p src/packages/shared
 
 # Lint + format-check all TS/JS/JSON (Biome)
 check-ts:
