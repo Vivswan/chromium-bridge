@@ -680,7 +680,7 @@ def _skip_if_enrolled(case):
     phrase cannot satisfy (repo rule: automated tests never raise real
     prompts). e2e.enclave_key_present is fail-safe (indeterminate -> skip)
     and always False off macOS, so Linux/Windows coverage is unaffected. The
-    hardware path is covered by `just phase8-touchid-proof`."""
+    hardware path is covered by `just touchid-gates`."""
     if e2e.enclave_key_present():
         note(f"{case} skipped: real enclave key present, would raise a live prompt")
         return True
