@@ -745,23 +745,12 @@ fn shell_quote(s: &str) -> String {
 /// Create `dir` (and parents) and force owner-only permissions on it: it
 /// holds executable wrapper content the browser launches, so group/world
 /// write would let another account swap them. Refuses a symlink at the leaf
-/// (our namespace must not be redirected elsewhere). Mirrors
-/// `ensure_private_dir` in the IPC layer and the 0700 the shell installer
-/// enforced. `pub` because the desktop app prepares the same install dir
-/// for its first-run marker and must apply the same rules.
+/// (our namespace must not be redirected elsewhere). One vetted
+/// implementation for the whole crate ([`crate::fsguard`]), shared with the
+/// IPC layer's runtime directory. `pub` because the desktop app prepares the
+/// same install dir for its first-run marker and must apply the same rules.
 pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dir)?;
-    if fs::symlink_metadata(dir)?.file_type().is_symlink() {
-        return Err(std::io::Error::other(
-            "is a symlink; refusing to use it as the wrapper directory",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
+    crate::fsguard::ensure_private_dir(dir)
 }
 
 /// Write `bytes` to `path` atomically: exclusive-create a temp file beside it
