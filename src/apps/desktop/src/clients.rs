@@ -1,12 +1,12 @@
 //! Trusted-client management from the app: list, revoke, and the
 //! presence-gated add (ADR-0024/0029). Reads honor the tamper-evidence latch
-//! exactly like `list-clients`; writes mirror the CLI handlers' audit
-//! records with `Surface::Core` so the trail names which surface acted.
+//! exactly like `list-clients`; writes go through the core entry points,
+//! which audit with `Surface::Core` so the trail names which surface acted.
 
 use serde::Serialize;
 
 use chromium_bridge_core::allowlist::{self, Allowlist, Anchor};
-use chromium_bridge_core::audit::{self, AuditKind, AuditRecord, Surface};
+use chromium_bridge_core::audit::Surface;
 use chromium_bridge_core::cli::AnchorSpec;
 use chromium_bridge_core::revocation::Revocation;
 
@@ -66,19 +66,11 @@ pub fn list() -> Result<ClientsPayload, String> {
 }
 
 /// Revoke one client. Friction-free by design (revocation reduces
-/// capability). Returns whether an entry was removed.
+/// capability). The audit record is written inside `Allowlist::revoke`
+/// itself, with our surface, so this caller cannot forget the trail entry.
+/// Returns whether an entry was removed.
 pub fn revoke(name: &str) -> Result<bool, String> {
-    let removed = Allowlist::revoke(name).map_err(|e| e.to_string())?;
-    if removed {
-        // Log-after-decide (ADR-0030): the list rewrite + epoch bump are done.
-        audit::record(
-            AuditRecord::new(AuditKind::RevokeClient)
-                .surface(Surface::Core)
-                .name(name)
-                .outcome("ok"),
-        );
-    }
-    Ok(removed)
+    Allowlist::revoke(name, Surface::Core).map_err(|e| e.to_string())
 }
 
 /// Add (or re-pair) a trusted client, behind the user-presence gate: pairing
