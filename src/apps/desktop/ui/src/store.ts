@@ -12,6 +12,13 @@ interface AppState {
   setView: (view: View) => void;
   status: BridgeStatus | undefined;
   statusError: string | undefined;
+  /** False whenever the LATEST refresh failed: `status` is then a stale
+   * snapshot, and no view may derive a healthy (green) claim from it. The
+   * views fall back to their unknown/idle rendering until a refresh
+   * succeeds again (fail-closed display). Stays true while a refresh is
+   * merely in flight - the last settled answer keeps rendering rather than
+   * flashing unknown on every focus; only a settled failure drops it. */
+  statusFresh: boolean;
   refreshStatus: () => Promise<void>;
   /** Auth method from the last successful kill release. Shared so that any
    * path that re-engages the switch (Overview or sidebar) can clear it - a
@@ -37,6 +44,7 @@ export const useAppStore = create<AppState>((set) => ({
   setView: (view) => set({ view }),
   status: undefined,
   statusError: undefined,
+  statusFresh: false,
   releasedBy: undefined,
   setReleasedBy: (releasedBy) => set({ releasedBy }),
   releaseInFlight: 0,
@@ -50,13 +58,14 @@ export const useAppStore = create<AppState>((set) => ({
         set((state) => ({
           status,
           statusError: undefined,
+          statusFresh: true,
           // an observed non-off switch invalidates any prior release note:
           // it must not resurface after a later (e.g. CLI) release
           releasedBy: status.kill.state === "off" ? state.releasedBy : undefined,
         }));
       }
     } catch (err) {
-      if (statusSeq === mySeq) set({ statusError: errorText(err) });
+      if (statusSeq === mySeq) set({ statusError: errorText(err), statusFresh: false });
     }
   },
 }));
