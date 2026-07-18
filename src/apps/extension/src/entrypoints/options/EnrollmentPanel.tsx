@@ -10,6 +10,10 @@ import { type EnrollmentStatusView, send } from "@/lib/messages";
 // keys change when a proof/error frame lands in the background, so this
 // refreshes on storage.onChanged instead of the old 2s poll. Every action
 // (pair/verify/approve/reject/revoke) also refreshes on return.
+//
+// Control Tower: open rows, no card chrome. The pending fingerprint renders
+// as two open columns - what this extension sees vs. what the terminal
+// printed - with the extension's side marked in amber (waiting on you).
 export function EnrollmentPanel() {
   const { t } = useI18n();
   const [st, setSt] = useState<EnrollmentStatusView | undefined | null>(null);
@@ -45,51 +49,43 @@ export function EnrollmentPanel() {
 
   const fmtDate = (ms?: number) => (ms ? new Date(ms).toLocaleString() : "");
 
-  if (st === null)
-    return (
-      <div className="rounded-xl border border-edge p-3.5 text-muted">{t("enroll.loading")}</div>
-    );
+  if (st === null) return <div className="py-2 text-xs text-text-3">{t("enroll.loading")}</div>;
   if (st === undefined) {
-    return (
-      <div className="rounded-xl border border-danger p-3.5 text-danger">
-        {t("enroll.no_status")}
-      </div>
-    );
+    return <div className="py-2 text-xs font-semibold text-danger">{t("enroll.no_status")}</div>;
   }
 
-  // Platform without a Secure Enclave: show the N/A panel, but still surface a
+  // Platform without a Secure Enclave: show the N/A note, but still surface a
   // compromised state (which blocks regardless of platform) with its revoke.
   if (!st.platformSupported && st.state !== "compromised") {
     return (
-      <div className="rounded-xl border border-edge p-3.5">
-        <div className="font-semibold">{t("enroll.na_title")}</div>
-        <div className="mt-1 text-xs text-muted">{t("enroll.na_desc")}</div>
+      <div className="py-1">
+        <div className="text-[13px] font-medium">{t("enroll.na_title")}</div>
+        <p className="consequence mt-1">{t("enroll.na_desc")}</p>
       </div>
     );
   }
 
-  const Fingerprint = st.fingerprint ? (
-    <div className="my-2 break-all rounded-lg border border-edge bg-edge-soft px-3 py-2.5 font-mono text-[13px] tracking-wide">
-      {st.fingerprint}
-    </div>
-  ) : null;
-
   return (
-    <div className="rounded-xl border border-edge p-3.5">
+    <div className="py-1">
       {st.state === "pinned" && (
         <>
-          <div className="font-semibold text-brand">{t("enroll.state_pinned")}</div>
-          {Fingerprint}
-          <div className="text-xs text-muted">
+          <div className="flex items-center gap-2 text-[13px] font-medium">
+            <span className="status-dot live" />
+            {t("enroll.state_pinned")}
+          </div>
+          {st.fingerprint && (
+            <div className="mt-2 break-all font-mono text-[13px] font-medium tracking-[0.06em] text-text-1">
+              {st.fingerprint}
+            </div>
+          )}
+          <div className="tnum mt-1.5 font-mono text-[11px] text-text-3">
             {st.pinnedAt ? `${t("enroll.pinned_at", [fmtDate(st.pinnedAt)])} - ` : ""}
             {st.lastVerifiedAt
               ? t("enroll.last_verified", [fmtDate(st.lastVerifiedAt)])
               : t("enroll.never_verified")}
           </div>
           <Actions>
-            <Button variant="primary" onClick={() => void act("enroll_verify")}>
-              {t("enroll.btn_verify")}
-            </Button>
+            <Button onClick={() => void act("enroll_verify")}>{t("enroll.btn_verify")}</Button>
             <Button
               variant="ghost"
               onClick={() => void act("enroll_revoke", "enroll.confirm_revoke")}
@@ -102,27 +98,45 @@ export function EnrollmentPanel() {
 
       {st.state === "pending" && (
         <>
-          <div className="font-semibold text-danger">{t("enroll.state_pending")}</div>
-          {Fingerprint}
-          <div className="text-xs text-muted">{t("enroll.pending_desc")}</div>
+          <div className="flex items-center gap-2 text-[13px] font-medium">
+            {t("enroll.state_pending")}
+            <span className="pill pill-pending">
+              <span className="status-dot pending" />
+              {t("enroll.pill_pending")}
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <div>
+              <div className="section-title mb-1.5 text-pending">{t("enroll.col_extension")}</div>
+              <div className="break-all font-mono text-sm font-medium tracking-[0.06em] text-text-1">
+                {st.fingerprint}
+              </div>
+            </div>
+            <div>
+              <div className="section-title mb-1.5">{t("enroll.col_terminal")}</div>
+              <div className="text-xs text-text-3">{t("enroll.col_terminal_hint")}</div>
+            </div>
+          </div>
+          <p className="consequence mt-3">{t("enroll.pending_desc")}</p>
           <Actions>
-            <Button variant="primary" onClick={() => void act("enroll_approve")}>
-              {t("enroll.btn_approve")}
-            </Button>
-            <Button variant="ghost" onClick={() => void act("enroll_reject")}>
+            <Button variant="primary" onClick={() => void act("enroll_reject")}>
               {t("enroll.btn_reject")}
             </Button>
+            <Button onClick={() => void act("enroll_approve")}>{t("enroll.btn_approve")}</Button>
           </Actions>
         </>
       )}
 
       {st.state === "compromised" && (
         <>
-          <div className="font-semibold text-danger">{t("enroll.state_compromised")}</div>
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-danger">
+            <span className="status-dot down" />
+            {t("enroll.state_compromised")}
+          </div>
           {st.compromisedReason && (
-            <div className="mt-1 text-xs font-semibold text-danger">{st.compromisedReason}</div>
+            <div className="mt-1 font-mono text-xs text-danger">{st.compromisedReason}</div>
           )}
-          <div className="mt-1 text-xs text-muted">{t("enroll.compromised_desc")}</div>
+          <p className="consequence mt-1">{t("enroll.compromised_desc")}</p>
           <Actions>
             <Button
               variant="ghost"
@@ -136,22 +150,21 @@ export function EnrollmentPanel() {
 
       {st.state === "unpaired" && (
         <>
-          <div className={st.required ? "font-semibold text-danger" : "font-semibold"}>
+          <div className="flex items-center gap-2 text-[13px] font-medium">
+            <span className={`status-dot ${st.required ? "pending" : ""}`} />
             {t("enroll.state_unpaired")}
           </div>
-          <div className="mt-1 text-xs text-muted">
+          <p className="consequence mt-1">
             {st.required ? t("enroll.unpaired_blocked") : t("enroll.unpaired_unblocked")}
-          </div>
+          </p>
           <Actions>
-            <Button variant="primary" onClick={() => void act("enroll_pair")}>
-              {t("enroll.btn_pair")}
-            </Button>
+            <Button onClick={() => void act("enroll_pair")}>{t("enroll.btn_pair")}</Button>
           </Actions>
         </>
       )}
 
       {st.hostRevokePending && (
-        <div className="mt-2 text-xs text-muted">{t("enroll.host_revoke_pending")}</div>
+        <div className="mt-2 text-xs text-text-3">{t("enroll.host_revoke_pending")}</div>
       )}
 
       {st.lastError && <div className="mt-2 text-xs font-semibold text-danger">{st.lastError}</div>}
