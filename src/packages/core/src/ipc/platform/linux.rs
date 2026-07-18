@@ -95,6 +95,8 @@ pub(crate) fn peer_pid(fd: libc::c_int) -> io::Result<u32> {
 fn peer_ucred(fd: libc::c_int) -> io::Result<libc::ucred> {
     let mut cred = std::mem::MaybeUninit::<libc::ucred>::uninit();
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: cred/len are live stack locals sized and typed for SO_PEERCRED;
+    // an invalid fd yields an error return (EBADF), never a wild write.
     let rc = unsafe {
         libc::getsockopt(
             fd,
@@ -113,5 +115,8 @@ fn peer_ucred(fd: libc::c_int) -> io::Result<libc::ucred> {
             "unexpected peer-credential size from SO_PEERCRED",
         ));
     }
+    // SAFETY: rc == 0 with the returned len equal to size_of::<ucred>()
+    // (checked above) proves the kernel wrote the full struct, which is what
+    // licenses assume_init. Do not drop that length check as redundant.
     Ok(unsafe { cred.assume_init() })
 }

@@ -68,8 +68,8 @@ tauri-build = "2"
 # are all-or-nothing per crate, so the core's stricter set cannot live here).
 [workspace.lints.rust]
 # Zero-trust quarantine: unsafe is denied everywhere and re-allowed only in
-# the audited FFI modules (ipc/platform/*, ipc/peercred.rs, enclave/macos.rs),
-# each with a scoped `#![allow(unsafe_code)]` and justification.
+# the audited FFI modules (ipc/platform/*, ipc/peercred.rs, enclave/macos.rs,
+# sys.rs), each with a scoped `#![allow(unsafe_code)]` and justification.
 unsafe_code = "deny"
 # Typography policy (no look-alike characters) extended to identifiers.
 non_ascii_idents = "deny"
