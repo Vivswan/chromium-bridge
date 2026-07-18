@@ -209,6 +209,18 @@ typecheck:
 check-ts:
     bunx biome ci .
 
+# Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)
+lint-ts:
+    bunx biome lint .
+
+# Format TS/JS/JSON in place (Biome; what `bun run format` delegates to)
+fmt-ts:
+    bunx biome format --write .
+
+# Verify TS/JS/JSON formatting (Biome; what `bun run format:check` delegates to)
+fmt-check-ts:
+    bunx biome format .
+
 # Auto-fix lint + format across the workspace (Biome)
 fix-ts:
     bunx biome check --write .
