@@ -37,25 +37,22 @@ export function AuditPanel() {
     t(`audit.kind_${kind}` as Parameters<typeof t>[0]);
 
   return (
-    <div className="rounded-xl border border-edge p-3.5">
-      <div className="text-xs text-muted">{t("audit.desc")}</div>
+    <div className="py-1">
       {(entries?.length ?? 0) === 0 && (
-        <div className="mt-2 text-xs text-muted">{t("audit.empty")}</div>
+        <div className="text-xs text-text-3">{t("audit.empty")}</div>
       )}
       {entries && entries.length > 0 && (
-        <ul className="mt-2 max-h-80 divide-y divide-edge-soft overflow-y-auto">
+        <ul className="m-0 max-h-80 list-none overflow-y-auto p-0">
           {[...entries].reverse().map((e) => (
             <li
               key={`${e.at}-${e.kind}-${e.name ?? ""}`}
-              className="flex items-baseline gap-3 py-1.5"
+              className="flex items-baseline gap-3 py-1 font-mono text-[11px] leading-relaxed"
             >
-              <span className="shrink-0 font-mono text-[11px] text-faint">
-                {new Date(e.at).toLocaleString()}
-              </span>
+              <span className="tnum shrink-0 text-text-3">{new Date(e.at).toLocaleString()}</span>
               <span className="min-w-0">
-                <span className="text-[13px] font-medium">{kindLabel(e.kind)}</span>
+                <span className="text-xs font-medium text-text-1">{kindLabel(e.kind)}</span>
                 {(e.tool || e.name || e.outcome || e.detail) && (
-                  <span className="ml-2 break-all text-[11px] text-muted">
+                  <span className="ml-2 break-all text-text-3">
                     {[e.tool, e.name, e.outcome, e.detail].filter(Boolean).join(" - ")}
                   </span>
                 )}
@@ -64,6 +61,7 @@ export function AuditPanel() {
           ))}
         </ul>
       )}
+      <p className="consequence mt-2">{t("audit.desc")}</p>
     </div>
   );
 }

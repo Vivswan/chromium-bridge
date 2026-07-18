@@ -38,15 +38,15 @@ export function TrustedClientsPanel() {
     kind === "team_id" ? t("clients.anchor_team") : t("clients.anchor_hash");
 
   return (
-    <div className="rounded-xl border border-edge p-3.5">
+    <div className="py-1">
       <div className="flex items-start justify-between gap-3">
-        <div className="text-xs text-muted">{t("clients.desc")}</div>
+        <p className="consequence m-0">{t("clients.desc")}</p>
         <Button variant="ghost" onClick={() => void refresh()} disabled={busy}>
           {t("clients.refresh")}
         </Button>
       </div>
 
-      {view === null && <div className="mt-2 text-muted">{t("clients.loading")}</div>}
+      {view === null && <div className="mt-2 text-xs text-text-3">{t("clients.loading")}</div>}
 
       {view && !view.ok && (
         <div className="mt-2 text-xs font-semibold text-danger">
@@ -55,20 +55,23 @@ export function TrustedClientsPanel() {
       )}
 
       {view?.ok && view.enrolled === false && (
-        <div className="mt-2 text-xs font-semibold text-danger">{t("clients.unenrolled")}</div>
+        <p className="consequence mt-2">{t("clients.unenrolled")}</p>
       )}
 
       {view?.ok && view.enrolled && (view.clients?.length ?? 0) === 0 && (
-        <div className="mt-2 text-xs text-muted">{t("clients.empty")}</div>
+        <div className="mt-2 text-xs text-text-3">{t("clients.empty")}</div>
       )}
 
       {view?.ok && view.enrolled && (view.clients?.length ?? 0) > 0 && (
-        <ul className="mt-2 divide-y divide-edge-soft">
+        <ul className="m-0 mt-1 list-none p-0">
           {view.clients?.map((c) => (
-            <li key={c.name} className="flex items-center gap-3 py-2">
+            <li
+              key={c.name}
+              className="flex items-center gap-3 border-b border-edge py-2 last:border-b-0"
+            >
               <div className="min-w-0 flex-1">
-                <div className="font-mono text-[13px] font-semibold">{c.name}</div>
-                <div className="truncate text-[11px] text-faint">
+                <div className="font-mono text-xs font-semibold text-text-1">{c.name}</div>
+                <div className="truncate font-mono text-[11px] text-text-3">
                   {anchorLabel(c.anchor.kind)}: {c.anchor.value}
                 </div>
               </div>
