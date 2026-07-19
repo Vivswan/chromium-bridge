@@ -1,4 +1,4 @@
-# Publishes docs/site (the landing page + rendered repo docs) to GitHub Pages
+# Publishes src/apps/site (the landing page + rendered repo docs) to GitHub Pages
 # in ONE deployment with two environments:
 #   - the production root  <- built from the LATEST release tag
 #   - /staging/            <- built from main HEAD
@@ -104,8 +104,11 @@ jobs:
       # Production build. Base + origin depend on CUSTOM_DOMAIN (unset =>
       # project site under /chromium-bridge/; set => site at the domain
       # root). bun install runs at the checkout root (workspace lockfile);
-      # the site itself is the docs/site workspace. Skipped before the first
-      # release (no tag) so the root stays a 404.
+      # the site itself is the src/apps/site workspace. Skipped before the first
+      # release (no tag) so the root stays a 404. The release checkout is an
+      # OLD tag, so its site may still live at the pre-move docs/site path
+      # with a docs/site/dist output; detect the layout instead of assuming
+      # (drop the fallback once the first src/apps/site release ships).
       - name: Build production (root = latest release)
         if: steps.rel.outputs.tag != ''
         working-directory: release
@@ -113,10 +116,11 @@ jobs:
           CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
         run: |
           bun install --frozen-lockfile
+          if [ -d src/apps/site ]; then SITE_DIR=src/apps/site; else SITE_DIR=docs/site; fi
           if [ -n "$CUSTOM_DOMAIN" ]; then
-            ASTRO_SITE="https://$CUSTOM_DOMAIN" ASTRO_BASE=/ bun run --cwd docs/site build
+            ASTRO_SITE="https://$CUSTOM_DOMAIN" ASTRO_BASE=/ bun run --cwd "$SITE_DIR" build
           else
-            ASTRO_BASE=/chromium-bridge/ bun run --cwd docs/site build
+            ASTRO_BASE=/chromium-bridge/ bun run --cwd "$SITE_DIR" build
           fi
 
       # Staging runs under main's pin; this setup comes after the production
@@ -135,9 +139,9 @@ jobs:
         run: |
           bun install --frozen-lockfile
           if [ -n "$CUSTOM_DOMAIN" ]; then
-            ASTRO_SITE="https://$CUSTOM_DOMAIN" ASTRO_BASE=/staging/ bun run --cwd docs/site build
+            ASTRO_SITE="https://$CUSTOM_DOMAIN" ASTRO_BASE=/staging/ bun run --cwd src/apps/site build
           else
-            ASTRO_BASE=/chromium-bridge/staging/ bun run --cwd docs/site build
+            ASTRO_BASE=/chromium-bridge/staging/ bun run --cwd src/apps/site build
           fi
 
       # Compose the single artifact. When a release exists, its dist is the
@@ -154,11 +158,13 @@ jobs:
           rm -rf _site
           mkdir -p _site/staging
           if [ -n "$TAG" ]; then
-            cp -r release/docs/site/dist/. _site/
+            # Pre-move releases output to docs/site/dist (see the build step).
+            if [ -d release/build/site ]; then REL_OUT=release/build/site; else REL_OUT=release/docs/site/dist; fi
+            cp -r "$REL_OUT"/. _site/
           else
             echo "No release tag; publishing staging only (the root will 404)."
           fi
-          cp -r staging/docs/site/dist/. _site/staging/
+          cp -r staging/build/site/. _site/staging/
           if [ -n "$CUSTOM_DOMAIN" ]; then
             echo "$CUSTOM_DOMAIN" > _site/CNAME
             echo "Wrote _site/CNAME -> $CUSTOM_DOMAIN"

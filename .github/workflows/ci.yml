@@ -374,7 +374,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: Vivswan/repo-platform/actions/check-typography@main
 
-  # The public site (docs/site: the landing page plus Astro over the repo's
+  # The public site (src/apps/site: the landing page plus Astro over the repo's
   # markdown docs) must keep building. Build-only here: deployment to GitHub
   # Pages happens in deploy-site.yml, called by release-please.yml after
   # every push to main (production root = latest release, /staging/ = main).
@@ -387,7 +387,7 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - run: bun run --cwd docs/site build
+      - run: bun run --cwd src/apps/site build
 
   cjk:
     name: CJK containment (zh text only in locale files)

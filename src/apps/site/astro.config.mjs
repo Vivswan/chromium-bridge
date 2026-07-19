@@ -14,7 +14,7 @@ import { SITE_BASE, SITE_ORIGIN } from "./src/lib/site-identity";
 export default defineConfig({
   site: SITE_ORIGIN,
   base: SITE_BASE,
-  outDir: "dist",
+  outDir: "../../../build/site",
   // Keep authored whitespace: the default HTML compression eats the space
   // between text and an adjacent inline link ("the<a>source code</a>").
   compressHTML: false,
@@ -29,6 +29,6 @@ export default defineConfig({
   },
   vite: {
     // Let the dev server read the repo's markdown above the site root.
-    server: { fs: { allow: ["../.."] } },
+    server: { fs: { allow: ["../../.."] } },
   },
 });
