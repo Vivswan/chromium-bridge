@@ -45,15 +45,20 @@ tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
 scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
                          check-extension-id.ts, build-repro.ts, lib.ts, ...
+.github/scripts/         CI-only scripts (fuzz_smoke.ts, run by the nightly fuzz job;
+                         typechecked by `tsc -p scripts` alongside scripts/)
 src/apps/web/           bun workspace member: minimal Astro site rendering the
                          repo's markdown docs + translations (just web-build;
                          not part of `just ci`)
 ```
 
-All tooling scripts are TypeScript run via bun. Two of them
-(`scripts/build-repro.ts` and the nightly fuzz smoke driver) are deliberately
-self-contained on node builtins so they work before `bun install` - the
-release workflow builds the binary before installing the workspace.
+All tooling scripts are TypeScript run via bun. Scripts whose only consumer
+is a GitHub workflow live in `.github/scripts/`; everything with a local
+consumer (justfile, other scripts) stays in `scripts/`. Two of them
+(`scripts/build-repro.ts` and `.github/scripts/fuzz_smoke.ts`) are
+deliberately self-contained on node builtins so they work before
+`bun install` - the release workflow builds the binary before installing
+the workspace.
 
 Rust dependencies are gated by supply-chain review (`cargo vet`, the
 `cargo-vet` CI job). Adding or bumping a crate fails CI until the new version
