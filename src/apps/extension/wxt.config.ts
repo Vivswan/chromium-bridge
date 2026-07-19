@@ -81,6 +81,10 @@ export default defineConfig({
     // rejecting the arrays wholesale is simpler and stricter than
     // deny-listing flag spellings. Refuse to start instead of proceeding
     // degraded. Scoped to serve mode: only `wxt` (dev) launches a browser.
+    // Named residual: an rc `binaries.chrome` entry or the CHROME_PATH env
+    // var can still swap WHICH browser binary launches. That cannot reach a
+    // real session - web-ext-run always passes its fresh temp profile as an
+    // explicit --user-data-dir - so this hook guards profile reuse only.
     "config:resolved": (wxt) => {
       if (wxt.config.command !== "serve") return;
       const resolved = wxt.config.runnerConfig.config ?? {};
