@@ -306,7 +306,7 @@ test: test-rust test-e2e
 # so the lint meta-recipe would pay for the same Biome pass twice.
 # Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust)
 [group('main')]
-ci: fmt-check lint-rust typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-all-green check-gen check-envelope check-schemars-isolation
+ci: fmt-check lint-rust typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-typography check-all-green check-gen check-envelope check-schemars-isolation
 
 # Register this checkout's release binary with your browsers (build + doctor --fix)
 [group('main')]
@@ -349,6 +349,13 @@ check-cjk:
 check-all-green:
     bun scripts/check-all-green.ts
     bun test scripts/check-all-green.test.ts
+
+# No typographic look-alike characters (curly quotes, em-dashes, invisible
+# unicode) in any tracked file; exact-path exemptions in .typography-allow
+[private]
+check-typography:
+    bun scripts/check-typography.ts
+    bun test scripts/check-typography.test.ts
 
 # Pre-release gate: versions consistent + full CI green
 [group('main')]

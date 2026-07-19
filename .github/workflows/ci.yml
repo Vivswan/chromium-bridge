@@ -369,7 +369,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: Vivswan/repo-platform/actions/check-typography@main
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: No typographic look-alike characters in tracked files
+        run: |
+          bun scripts/check-typography.ts
+          bun test scripts/check-typography.test.ts
 
   # The public web app (src/apps/web: the landing page plus Astro over the repo's
   # markdown docs) must keep building. Build-only here: deployment to GitHub
