@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoPathToSlug } from "./doc-slug";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const GITHUB_BLOB = "https://github.com/Vivswan/chromium-bridge/blob/main";
 
 export function rewriteMdHref(href: string, fromDir: string, base: string): string | undefined {

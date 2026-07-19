@@ -16,25 +16,22 @@ export interface DocPage {
 }
 
 const modules = {
-  // Repo-root docs (the README and its translations). Vite normalizes each
-  // glob key to the shortest relative path, so these arrive with four `../`
-  // segments and the docs/ globs below with three; toSlug keys off that
-  // depth (verified by the built page list).
-  ...import.meta.glob<Doc>("../../../../*.md", { eager: true }),
+  // Repo-root docs (the README and its translations).
+  ...import.meta.glob<Doc>("../../../../../*.md", { eager: true }),
   // The docs tree: guides, security docs, ADRs, translations.
-  ...import.meta.glob<Doc>("../../../../docs/*.md", { eager: true }),
-  ...import.meta.glob<Doc>("../../../../docs/security/*.md", { eager: true }),
-  ...import.meta.glob<Doc>("../../../../docs/adr/*.md", { eager: true }),
+  ...import.meta.glob<Doc>("../../../../../docs/*.md", { eager: true }),
+  ...import.meta.glob<Doc>("../../../../../docs/security/*.md", { eager: true }),
+  ...import.meta.glob<Doc>("../../../../../docs/adr/*.md", { eager: true }),
 };
 
-// Glob keys come back normalized: repo-root files start with four `../`
-// segments, files under docs/ with three. Reconstruct the repo-relative path
-// from that depth and let the shared slug scheme (doc-slug.ts) name the
-// route; every globbed file is in the rendered set by construction.
+// The repo root sits five directories above this file, so every normalized
+// glob key starts with five `../` segments; stripping them leaves the
+// repo-relative path ("README.md", "docs/architecture.md") that the shared
+// slug scheme (doc-slug.ts) names. Every globbed file is in the rendered set
+// by construction (verified by the built page list).
 function toSlug(path: string): string {
-  const isRepoRoot = path.startsWith("../../../../");
   const rel = path.replace(/^(\.\.\/)+/, "");
-  const slug = repoPathToSlug(isRepoRoot ? rel : `docs/${rel}`);
+  const slug = repoPathToSlug(rel);
   if (slug === undefined) throw new Error(`globbed doc without a slug: ${path}`);
   return slug;
 }

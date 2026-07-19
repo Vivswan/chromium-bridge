@@ -17,7 +17,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { join } from "node:path";
 import { repoRoot } from "./lib.ts";
 
-const siteDir = join(repoRoot, "docs/site");
+const siteDir = join(repoRoot, "src/apps/site");
 const extensionDir = join(repoRoot, "src/apps/extension");
 const appDir = join(repoRoot, "src/apps/desktop");
 
