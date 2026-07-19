@@ -18,7 +18,7 @@ friction.
 
 > App downloads are not published yet (releases currently carry the CLI
 > archive only). Until they are, build and launch the app from a source
-> checkout with `just app-run`, or use path B.
+> checkout with `just run-app`, or use path B.
 
 1. **Install the app.** Get `Chromium Bridge.app` (see the note above) and
    open it. On first launch it registers its bundled native-messaging

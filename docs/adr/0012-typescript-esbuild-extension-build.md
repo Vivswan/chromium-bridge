@@ -70,7 +70,7 @@ The conversion ran in two steps, pipeline first, types second (see git history P
 - **A simple pipeline**: one `build.mjs` plus the single esbuild dependency, no config sprawl.
 
 ### Negative
-- **The install/load flow changed**: the load-unpacked target moved from `src/apps/extension/` to **`src/apps/extension/dist/`**, and dist/ is a build artifact (gitignored). **After changing code you must run `npm run build` (or `just ext-build`) before reloading the extension**; editing `.js` in place no longer takes effect. `install.sh` also now builds first and loads from dist/.
+- **The install/load flow changed**: the load-unpacked target moved from `src/apps/extension/` to **`src/apps/extension/dist/`**, and dist/ is a build artifact (gitignored). **After changing code you must run `npm run build` (or `just build-ext`) before reloading the extension**; editing `.js` in place no longer takes effect. `install.sh` also now builds first and loads from dist/.
 - **One more build-layer dependency**: extension development needs Node plus `npm ci`; esbuild/typescript/eslint and friends enter devDependencies.
 - **Artifacts are not committed**: dist/ is untracked; a fresh clone must build before it can load.
 

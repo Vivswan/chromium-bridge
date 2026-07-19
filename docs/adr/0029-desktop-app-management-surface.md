@@ -188,11 +188,11 @@ The desktop crate stays a workspace member but not a default member, per the
 existing policy: `cargo build/test/clippy` remain the core-and-host gate.
 The UI (Vite + React 19 + Radix + Tailwind v4 + Zustand, the cloud-speech
 house stack) is a bun workspace at `src/apps/desktop/ui`; its typecheck rides
-`bun run typecheck` and its unit tests ride `just ci` (`desktop-ui-test`),
+`bun run typecheck` and its unit tests ride `just ci` (`test-app-ui`),
 both platform-neutral. The Rust crate's clippy and tests run in a dedicated
 macOS CI job (`desktop`, wired into all-green), because compiling Tauri needs
 platform GUI toolchains. Building the crate requires the UI dist first
-(tauri's `generate_context!` embeds it); `just desktop-check-rust` sequences
+(tauri's `generate_context!` embeds it); `just check-app-rust` sequences
 that locally.
 
 Platform status, honestly: on macOS the app covers the full management

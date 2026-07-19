@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 // Build and sign the desktop bundle end to end (ADR-0026, extended by the
-// Phase 9 app, ADR-0029). One command: `just desktop-bundle`.
+// Phase 9 app, ADR-0029). One command: `just bundle-app`.
 //
 //   1. build the release host binary (the Secure Enclave toucher)
 //   2. build the extension (bundled into the app for "Load unpacked")
@@ -64,7 +64,7 @@ const desktop = resolve(root, "src/apps/desktop");
 const TEAM_ID = "3ZMH96L4V9";
 
 if (process.platform !== "darwin") {
-  console.error("error: desktop-bundle is macOS-only (it exercises the signing chain)");
+  console.error("error: scripts/desktop-bundle.ts is macOS-only (it exercises the signing chain)");
   process.exit(1);
 }
 

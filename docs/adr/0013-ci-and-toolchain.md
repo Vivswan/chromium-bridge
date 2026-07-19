@@ -28,7 +28,7 @@ The cleanup had to give the project a baseline of "one command runs the whole su
 **Adopt a justfile as the unified task entry point, GitHub Actions CI, rustfmt/clippy/eslint/prettier gates, and a version-sync mechanism with Cargo.toml as the single source of truth.**
 
 ### 1. justfile task entry point
-The `justfile` collects every developer action into named recipes: `build` / `fmt` / `lint` / `test-rust` / `test-e2e` / `ext-build` / `ext-typecheck` / `ext-lint` / `ext-format-check` / `test-browser` / `install` / `sync-version` / `check-version`, plus the aggregate recipe **`just ci`** (= fmt-check + clippy + Rust unit tests + extension typecheck/lint/format-check/build + e2e). Running `just ci` before submitting reproduces most of the CI gates locally (browser tests need Chrome and are split out as `test-browser`).
+The `justfile` collects every developer action into named recipes: `build` / `fmt` / `lint` / `test-rust` / `test-e2e` / `build-ext` / `ext-typecheck` / `ext-lint` / `ext-format-check` / `test-browser` / `install` / `sync-version` / `check-version`, plus the aggregate recipe **`just ci`** (= fmt-check-rust + clippy + Rust unit tests + extension typecheck/lint/format-check/build + e2e). Running `just ci` before submitting reproduces most of the CI gates locally (browser tests need Chrome and are split out as `test-browser`).
 
 ### 2. GitHub Actions CI (`.github/workflows/ci.yml`)
 Triggered on push to main / PR / manual dispatch, with concurrency cancellation, in five jobs:

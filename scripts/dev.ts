@@ -11,7 +11,7 @@
 // reopens the dev browser). Only one child can own the terminal, so the site
 // and the app run backgrounded with prefixed, non-interactive output.
 //
-// `just app-dev` remains the app-only convenience loop.
+// `just dev-app` remains the app-only convenience loop.
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { join } from "node:path";
@@ -86,7 +86,7 @@ const killWeb = () => {
   }
 };
 
-// Desktop app: background, detached; `just app-dev`'s steps MINUS its
+// Desktop app: background, detached; `just dev-app`'s steps MINUS its
 // extension production build - the WXT lane fills the same build/extension
 // outDir continuously, so building it here again would be wasted work. (Small
 // startup race: tauri can be up before WXT's first dev build lands; the app
