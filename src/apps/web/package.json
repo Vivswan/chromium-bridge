@@ -13,6 +13,6 @@
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "astro": "^7.0.7",
-    "sharp": "^0.34.4"
+    "sharp": "^0.35.3"
   }
 }
