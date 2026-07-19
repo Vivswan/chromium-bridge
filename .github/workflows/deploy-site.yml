@@ -8,8 +8,13 @@
 # PR merges. Before the FIRST release there is no tag: only staging is
 # published and the production root returns GitHub's default 404 (intended).
 #
-# CUSTOM DOMAIN (config-only cutover): set the repo variable CUSTOM_DOMAIN
-# (e.g. chromium-bridge.dev) and the deploy flips automatically:
+# CUSTOM DOMAIN (config-only cutover): CUSTOM_DOMAIN is a repository Actions
+# VARIABLE (Settings -> Secrets and variables -> Actions -> Variables), read
+# here as vars.CUSTOM_DOMAIN. To cut over: set the variable (e.g.
+# chromium-bridge.dev), then re-run this workflow (workflow_dispatch, or wait
+# for the next release-please run) - changing the variable does not trigger a
+# deploy by itself. The value picks the build's site/base and, when set, is
+# written to _site/CNAME (the Pages custom-domain marker):
 #   - unset -> project site: root at /chromium-bridge/, staging at
 #              /chromium-bridge/staging/, origin https://vivswan.github.io
 #              (no CNAME written).
@@ -36,6 +41,9 @@ concurrency:
 
 jobs:
   deploy:
+    # The github-pages environment's deployment-branch policy (repo Settings ->
+    # Environments -> github-pages) must allow `main` (or tags); that policy
+    # lives in repo settings and cannot be set from this workflow.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -67,6 +75,9 @@ jobs:
         with:
           ref: ${{ steps.rel.outputs.tag }}
           path: release
+          # This workflow only reads the repo; never leave a push-capable
+          # token in the checkout.
+          persist-credentials: false
 
       # Staging source = main HEAD. On the release-please call chain
       # github.sha is the exact main commit that triggered the run; on a
@@ -78,6 +89,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.sha }}
           path: staging
+          persist-credentials: false
 
       # Each build runs under the bun version ITS OWN checkout pins
       # (packageManager in package.json), so a bun upgrade on main cannot
