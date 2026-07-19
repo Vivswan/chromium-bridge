@@ -42,7 +42,7 @@ security-framework-sys = "2"
 # HKCU native-messaging registration on Windows
 # (src/packages/core/src/registration.rs). The vetted wrapper (rust-lang
 # community, windows-sys underneath) instead of hand-rolled Advapi32 FFI.
-winreg = "0.55"
+winreg = "0.56"
 # Schema derivation for the wire envelopes (ADR-0028): the emit_envelope_schema
 # example (behind the core's `envelope-schema` feature) feeds the CI
 # double-derivation diff against the extension's Zod validators. Excluded from
