@@ -5,7 +5,7 @@ members = ["src/packages/core", "src/apps/host", "src/apps/desktop"]
 # the host binary. Future members (e.g. a Tauri app) must be added here only
 # by an explicit decision, so `cargo test` stays the gate for the core.
 # The Tauri desktop shell (src/apps/desktop) is a member but deliberately NOT
-# a default member: build it explicitly via `just desktop-bundle` or
+# a default member: build it explicitly via `just bundle-app` or
 # `cargo build -p chromium-bridge-desktop` (tauri-build reads the generated
 # app icon at compile time: run `just gen-icons` first on a clean checkout).
 default-members = ["src/packages/core", "src/apps/host"]
