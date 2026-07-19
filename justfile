@@ -11,7 +11,7 @@
 default:
     @just --list
 
-# Build everything: shared typecheck -> extension -> desktop UI -> scripts typecheck -> cargo workspace -> docs site
+# Build everything: shared typecheck -> extension -> desktop UI -> scripts typecheck -> cargo workspace -> web app
 [group('main')]
 build:
     bun scripts/gen-icons.ts
@@ -42,10 +42,10 @@ desktop-bundle:
 desktop-check:
     bun scripts/check-desktop-signing.ts
 
-# Dev everything at once: extension (WXT dev browser) + docs site (Astro) +
+# Dev everything at once: extension (WXT dev browser) + web app (Astro) +
 # desktop app (tauri dev). Ctrl-C stops all three; see scripts/dev.ts.
 [group('main')]
-[doc('Dev everything: extension (WXT) + docs site (Astro) + desktop app (tauri) together')]
+[doc('Dev everything: extension (WXT) + web app (Astro) + desktop app (tauri) together')]
 dev:
     bun scripts/dev.ts
 
@@ -318,7 +318,7 @@ ci: fmt-check lint-rust lint-scripts typos machete test-rust typecheck check-ts 
 install: build-release
     ./target/release/chromium-bridge doctor --fix
 
-# Build the docs site (src/apps/web: Astro over the repo's markdown docs)
+# Build the web app (src/apps/web: Astro over the repo's markdown docs)
 [private]
 web-build:
     bun run --cwd src/apps/web build

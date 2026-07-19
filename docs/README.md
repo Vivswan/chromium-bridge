@@ -36,7 +36,7 @@ project. Code comments answer "what does this code do"; this directory answers
 > entry point for agents is [`AGENTS.md`](../AGENTS.md). The build/test
 > toolchain is in [development.md](./development.md).
 
-> `site/` holds a minimal Astro site (`just docs-site-build`) that renders
+> `src/apps/web/` holds a minimal Astro site (`just web-build`) that renders
 > these markdown docs and their translations; the markdown stays the single
 > source. Cross-doc links on the rendered site still point at `.md` paths
 > (a link rewrite is a tracked follow-up); navigate from its index page.
