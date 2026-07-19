@@ -45,6 +45,9 @@ src/apps/extension/.wxt/
 # Test scratch
 /tmp/
 
+# Agent working notes (audits, handoffs, consolidation scratch) - local only
+/.notes/
+
 # Python bytecode cache from the tests/protocol/ harness (adversarial.py imports e2e.py)
 tests/protocol/__pycache__/
 
