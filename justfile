@@ -2,12 +2,17 @@
 # Requires: cargo (+ cargo-nextest), bun, python3. Optional: Chrome for the
 # browser suites, typos + cargo-machete for the hygiene checks, shellcheck.
 # Every recipe is a plain command you can also run by hand (see docs/development.md).
+#
+# `just --list` shows the human-facing surface, grouped. Recipes marked
+# [private] are internal sub-steps (CI sub-checks, `bun run <verb>` delegates)
+# - hidden from the list but still runnable by name.
 
 # List available recipes
 default:
-    @just --list --unsorted
+    @just --list
 
 # Build everything: shared typecheck -> extension -> desktop UI -> scripts typecheck -> cargo workspace -> docs site
+[group('build')]
 build:
     bun scripts/gen-icons.ts
     bun run --cwd src/packages/shared typecheck
@@ -18,28 +23,36 @@ build:
     bun run --cwd docs/site build
 
 # Build the release binary
+[group('build')]
 build-release:
     cargo build --release
 
 # Deterministic release build (path-remapped, --locked)
+[private]
 build-repro:
     ./scripts/build-repro.sh
 
 # Build + sign the Tauri desktop app with the bundled host + extension (macOS, ADR-0026/0029)
+[group('desktop')]
 desktop-bundle:
     bun scripts/desktop-bundle.ts
 
 # Verify the signed desktop bundle's entitlement chain (app + nested host)
+[group('desktop')]
 desktop-check:
     bun scripts/check-desktop-signing.ts
 
-# Dev everything web: extension (WXT dev browser) + docs site (Astro) together;
-# Ctrl-C stops both. The desktop app's loop stays separate: app-dev.
+# Everything-dev loop: extension (WXT dev browser) + docs site (Astro), one
+# terminal, Ctrl-C stops both. The desktop app's loop stays separate: app-dev.
+[group('dev')]
+[doc('Dev everything web: extension (WXT) + docs site (Astro) together; Ctrl-C stops both')]
 dev:
     bun scripts/dev.ts
 
 # Desktop app dev loop: Vite dev server + tauri dev (unsigned; Enclave ops
 # need the built host as a sibling: run `cargo build` first)
+[group('dev')]
+[doc('Desktop app dev loop: Vite dev server + tauri dev (unsigned)')]
 app-dev:
     #!/usr/bin/env sh
     set -eu
@@ -49,16 +62,21 @@ app-dev:
     cd src/apps/desktop && bunx tauri dev
 
 # Build, sign, verify, then launch the desktop app (USER-RUN: the GUI)
+[group('desktop')]
 app-run: desktop-bundle
     open "build/app/Chromium Bridge.app"
 
 # Build + sign the app and wrap it in a signed, verified .dmg
 # (build/dmg/; the app inside the image is re-verified)
+[group('desktop')]
+[doc('Build + sign the app and wrap it in a signed, verified .dmg (build/dmg/)')]
 app-dmg:
     bun scripts/desktop-bundle.ts --dmg
 
 # Copy the built, signed app into /Applications (run desktop-bundle or
 # app-dmg first; replaces any existing install)
+[group('desktop')]
+[doc('Copy the built, signed app into /Applications (run desktop-bundle or app-dmg first)')]
 app-install:
     #!/usr/bin/env sh
     set -eu
@@ -72,10 +90,12 @@ app-install:
     echo "installed /Applications/Chromium Bridge.app"
 
 # Desktop UI: production build (also what `bunx tauri build` runs first)
+[group('build')]
 desktop-ui-build:
     bun run --cwd src/apps/desktop/ui build
 
 # Desktop UI unit tests (locale coverage, i18n resolution; no browser)
+[group('test')]
 desktop-ui-test:
     bun run --cwd src/apps/desktop/ui test
 
@@ -85,6 +105,8 @@ desktop-ui-test:
 # `just ci`: the crate is deliberately not a default workspace member, and
 # compiling Tauri needs platform GUI toolchains (WebKitGTK on Linux); CI runs
 # this on macOS in the dedicated desktop job.
+[group('desktop')]
+[doc('Desktop Rust crate: clippy + tests (CI runs this in the macOS desktop job, not `just ci`)')]
 desktop-check-rust: desktop-ui-build gen-icons
     cargo clippy -p chromium-bridge-desktop --all-targets -- -D warnings
     cargo test -p chromium-bridge-desktop
@@ -93,6 +115,8 @@ desktop-check-rust: desktop-ui-build gen-icons
 # prompt). Builds + verifies the bundle, then enrolls the enclave key via the
 # BUNDLED host binary; on success the machine is genuinely enrolled. Undo
 # with the same binary's `revoke` subcommand.
+[group('desktop')]
+[doc('Enroll the enclave key via the BUNDLED host (USER-RUN: raises a real Touch ID prompt)')]
 desktop-touchid-proof: desktop-bundle
     "build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair
 
@@ -106,6 +130,7 @@ desktop-touchid-proof: desktop-bundle
 # the enclave key lives in an entitled keychain group the plain release binary
 # cannot reach.
 # Demo the Touch ID presence gates (runs the per-action gate; prints the rest).
+[group('desktop')]
 touchid-gates: desktop-bundle
     #!/usr/bin/env bash
     set -euo pipefail
@@ -129,48 +154,59 @@ touchid-gates: desktop-bundle
     echo "the two capability-grant gates need a real terminal - commands printed above."
 
 # Format Rust sources
+[group('lint')]
 fmt:
     cargo fmt
 
 # Verify Rust formatting (CI gate)
+[private]
 fmt-check:
     cargo fmt --check
 
 # Lint Rust, denying all warnings (CI gate)
+[group('lint')]
 lint:
     cargo clippy --all-targets -- -D warnings
 
 # Lint the remaining standalone shell scripts (needs shellcheck)
+[private]
 lint-scripts:
     shellcheck scripts/build-repro.sh scripts/fuzz_smoke.sh
 
 # Source-code spell check (CI gate; config in typos.toml)
+[private]
 typos:
     typos
 
 # Detect unused Cargo dependencies (CI gate)
+[private]
 machete:
     cargo machete
 
 # Supply-chain checks (needs cargo-deny, cargo-audit)
+[group('release')]
 audit:
     cargo deny check
     cargo audit
 
 # Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)
+[group('build')]
 gen:
     bun scripts/gen-ops.ts
     bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
 
 # The checked-in generated TS must match what the Rust core emits today
+[private]
 check-gen: gen
     git diff --exit-code -- src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
 
 # Envelope double-derivation gate: Rust schemars vs Zod z.toJSONSchema
+[private]
 check-envelope:
     bun scripts/check-envelope-parity.ts
 
 # schemars is gen-only tooling: it must never enter a shipped binary's graph
+[private]
 check-schemars-isolation:
     #!/usr/bin/env sh
     set -eu
@@ -181,29 +217,30 @@ check-schemars-isolation:
     fi
 
 # Rust unit + integration tests (cargo-nextest, plus doctests)
+[group('test')]
 test-rust:
     cargo nextest run
     cargo test --doc
 
 # Protocol-layer e2e tests (drives the real release binary)
+[group('test')]
 test-e2e: build-release
     python3 tests/protocol/e2e.py
-
-# Install JS workspace dev dependencies (bun)
-js-deps:
-    bun install
 
 # Render the extension + desktop icon rasters from the assets/icon/ SVGs
 # (build artifacts, gitignored; the extension and desktop builds run this
 # themselves via scripts/gen-icons.ts)
+[private]
 gen-icons:
     bun scripts/gen-icons.ts
 
 # Build the extension bundle (src/ -> build/extension/; generates icons first)
+[group('build')]
 ext-build:
     bun run --cwd src/apps/extension build
 
 # Type-check every TS project (extension, desktop UI, tests, scripts, src/packages/shared)
+[group('lint')]
 typecheck:
     bunx tsc -p src/apps/extension
     bunx tsc -p src/apps/desktop/ui
@@ -212,86 +249,107 @@ typecheck:
     bunx tsc -p src/packages/shared
 
 # Lint + format-check all TS/JS/JSON (Biome)
+[group('lint')]
 check-ts:
     bunx biome ci .
 
 # Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)
+[private]
 lint-ts:
     bunx biome lint .
 
 # Format TS/JS/JSON in place (Biome; what `bun run format` delegates to)
+[private]
 fmt-ts:
     bunx biome format --write .
 
 # Verify TS/JS/JSON formatting (Biome; what `bun run format:check` delegates to)
+[private]
 fmt-check-ts:
     bunx biome format .
 
 # Auto-fix lint + format across the workspace (Biome)
+[group('lint')]
 fix-ts:
     bunx biome check --write .
 
 # Unit-test the extension's shared modules (bun; no browser)
+[group('test')]
 ext-test:
     bun run --cwd src/apps/extension test
 
 # Unit-test src/packages/shared: generated catalogue, boundary validators
+[group('test')]
 shared-test:
     bun run --cwd src/packages/shared test
 
 # Unit-test shared + extension (the `bun run test` set; the desktop UI's suite is desktop-ui-test)
+[private]
 test-ts: shared-test ext-test
 
 # DOM + smoke + security proofs (needs bun + isolated Chrome; builds first)
+[group('test')]
 test-browser: ext-build
     cd tests/browser && bun dom_test.ts
     bun tests/browser/ext_test.ts
     bun tests/browser/security_browser_test.ts
 
 # Real E2E integration (opt-in; real binary + Chrome + extension)
+[group('test')]
 test-integration: build-release ext-build
     BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts
 
 # All tests that run without a browser
+[group('test')]
 test: test-rust test-e2e
 
 # Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust)
+[group('release')]
 ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-all-green check-gen check-envelope check-schemars-isolation
 
 # Register this checkout's release binary with your browsers (build + doctor --fix)
+[group('release')]
 install: build-release
     ./target/release/chromium-bridge doctor --fix
 
 # Build the docs site (docs/site: Astro over the repo's markdown docs)
+[group('build')]
 docs-site-build:
     bun run --cwd docs/site build
 
 # Docs site dev server
+[group('dev')]
 docs-site-dev:
     bun run --cwd docs/site dev
 
 # Propagate the Cargo.toml version into the extension files
+[private]
 sync-version:
     bun scripts/sync-version.ts
 
 # Verify the crate and extension versions agree
+[private]
 check-version:
     bun scripts/check-version.ts
 
 # Verify the pinned key, extension ID, and built manifest agree
+[private]
 check-extension-id:
     bun scripts/check-extension-id.ts
 
 # Verify CJK text stays inside the zh locale files and translated docs
+[private]
 check-cjk:
     bun scripts/check-cjk.ts
 
 # Every ci.yml job must be required by the all-green merge gate (or exempted
 # with a reason in the script)
+[private]
 check-all-green:
     bun scripts/check-all-green.ts
     bun test scripts/check-all-green.test.ts
 
 # Pre-release gate: versions consistent + full CI green
+[group('release')]
 release: check-version check-extension-id ci
     @echo "Release checks passed. Now tag the release, e.g.: git tag v$(bun scripts/check-version.ts | awk '/Cargo.toml/{print $2}')"
