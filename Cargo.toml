@@ -93,7 +93,7 @@ fn_to_numeric_cast_any = "warn"
 # codegen-units=1 and strip=symbols also serve reproducibility: one codegen
 # unit removes parallel-codegen variance, and stripping drops the symbol/debug
 # sections most likely to leak build-machine paths. Path remapping and
-# SOURCE_DATE_EPOCH live in scripts/build-repro.sh (used by the release
+# SOURCE_DATE_EPOCH live in scripts/build-repro.ts (used by the release
 # workflow), since they need the concrete checkout path at build time.
 [profile.release]
 opt-level = "z"
