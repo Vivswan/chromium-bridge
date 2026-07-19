@@ -66,21 +66,21 @@ code enters the build without someone choosing to let it in.
 
 ## Common tasks
 
-With `just` (`just` lists the recipes, grouped; a few internal sub-steps are
-hidden from the list but still runnable by name):
+With `just` (`just` lists the top-level verbs; every sub-step - `ext-build`,
+`test-browser`, `gen`, `typecheck`, `build-repro`, the CI sub-checks, ... -
+is `[private]`: hidden from the list but runnable by name):
 
 ```sh
-just build          # build everything (see below)
-just build-release  # cargo build --release (the binary the e2e suites drive)
-just build-repro    # deterministic release build (scripts/build-repro.sh)
-just dev            # extension (WXT dev browser) + docs site dev, together
-just test           # rust tests (nextest) + protocol e2e
-just test-browser   # build the extension, then DOM + smoke tests (needs Chrome)
-just ci             # everything CI runs, minus the browser job
-just ext-build      # bundle the extension (src/ -> build/extension/)
-just fmt            # cargo fmt
-just fix-ts         # biome lint+format auto-fix across the workspace
-just install        # build the release binary, then register it (doctor --fix)
+just build     # build everything (see below)
+just dev       # dev everything: extension (WXT) + docs site (Astro) + desktop app (tauri)
+just test      # rust tests (nextest) + protocol e2e
+just ci        # everything CI runs, minus the browser job
+just release   # pre-release gate: version checks + full ci
+just install   # build the release binary, then register it (doctor --fix)
+just lint      # lint everything: clippy -D warnings + biome lint
+just fmt       # format everything: cargo fmt + biome format
+just fix       # auto-fix everything: biome check --write + cargo fmt
+just app-run   # build, sign, verify, then launch the desktop app
 ```
 
 `just build` builds the entire repo in one command: it typechecks
@@ -94,9 +94,10 @@ recipe, and the root `package.json` scripts are thin aliases that delegate to
 the corresponding recipe, so both entry points share one implementation. The
 JS-flavored root verbs (`lint`, `format`, `format:check`, `check`, `test`)
 delegate to the `*-ts` recipes; `build`, `gen`, and `typecheck` delegate to
-the same-named recipes; the repo-wide verbs live in `just` directly
-(`just lint` = clippy, `just fmt` = cargo fmt, `just test` = Rust + protocol
-e2e). Each recipe is a plain command you can also run by hand:
+the same-named recipes; the repo-wide verbs in `just` cover every language at
+once (`just lint` = clippy + biome lint, `just fmt` = cargo fmt + biome
+format, `just test` = Rust + protocol e2e). Each recipe is a plain command
+you can also run by hand:
 
 ```sh
 cargo build --release

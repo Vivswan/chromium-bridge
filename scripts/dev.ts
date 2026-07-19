@@ -1,24 +1,39 @@
 #!/usr/bin/env bun
-// Dev orchestrator for `just dev`: runs the docs site (Astro) in the
-// background and the extension (WXT) in the foreground with the real
-// terminal attached.
+// Dev orchestrator for `just dev`: every dev surface at once, one terminal.
+//
+//   - extension (WXT):        FOREGROUND - real terminal output + live stdin
+//   - docs site (Astro):      background, output prefixed [site]
+//   - desktop app (tauri):    background, output prefixed [app]
 //
 // Why not `bun run --filter '*' dev`? The filter runner closes each child's
 // stdin; WXT's readline-based key listener hits EOF and shuts the dev server
 // down seconds after launch. WXT needs a live stdin (its `o` + enter shortcut
-// reopens the dev browser).
+// reopens the dev browser). Only one child can own the terminal, so the site
+// and the app run backgrounded with prefixed, non-interactive output.
 //
-// The desktop app's dev loop (tauri) stays separate: `just app-dev`.
+// `just app-dev` remains the app-only convenience loop.
 
-import { execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { join } from "node:path";
 import { repoRoot } from "./lib.ts";
 
 const siteDir = join(repoRoot, "docs/site");
 const extensionDir = join(repoRoot, "src/apps/extension");
+const appDir = join(repoRoot, "src/apps/desktop");
 
-// Site: background, output prefixed. Detached puts it in its own process
-// group so shutdown can signal the WHOLE tree: `bun run dev` wraps the real
+const prefixLines = (label: string, chunk: unknown) =>
+  String(chunk)
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => `[${label}] ${line}`)
+    .join("\n");
+const pipePrefixed = (child: ChildProcess, label: string) => {
+  child.stdout?.on("data", (chunk) => console.log(prefixLines(label, chunk)));
+  child.stderr?.on("data", (chunk) => console.error(prefixLines(label, chunk)));
+};
+
+// Site: background, detached. Detached puts it in its own process group so
+// shutdown can signal the WHOLE tree: `bun run dev` wraps the real
 // `astro dev` process, and killing just the wrapper's pid orphans astro,
 // which then squats on its port across sessions.
 const site = spawn("bun", ["run", "dev"], {
@@ -26,6 +41,7 @@ const site = spawn("bun", ["run", "dev"], {
   stdio: ["ignore", "pipe", "pipe"],
   detached: true,
 });
+pipePrefixed(site, "site");
 
 let siteKilled = false;
 const killSite = () => {
@@ -58,14 +74,70 @@ const killSite = () => {
   }
 };
 
-const prefixed = (chunk: unknown) =>
-  String(chunk)
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => `[site] ${line}`)
-    .join("\n");
-site.stdout?.on("data", (chunk) => console.log(prefixed(chunk)));
-site.stderr?.on("data", (chunk) => console.error(prefixed(chunk)));
+// Desktop app: background, detached; `just app-dev`'s steps. The prereqs run
+// first (icon rasters, then the host binary Enclave ops need as a sibling of
+// the dev app), then `tauri dev`, whose beforeDevCommand starts the
+// desktop-UI vite on 1420 (strictPort; no clash with astro). tauri dev fans
+// out into cargo, vite, and the native app binary - none of them setsid, so
+// they stay in the detached child's process group and one negative-pid
+// SIGTERM reaps the whole tree. appChild always points at the lane's CURRENT
+// process (a prereq or tauri), so shutdown mid-prereq kills the right group.
+let appChild: ChildProcess | null = null;
+let appKilled = false;
+const killApp = () => {
+  if (appKilled) return;
+  appKilled = true;
+  const child = appChild;
+  if (child?.pid !== undefined && child.exitCode === null) {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      child.kill("SIGTERM");
+    }
+  }
+};
+const runAppStep = (cmd: string, args: string[], cwd: string) =>
+  new Promise<number>((resolve) => {
+    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    appChild = child;
+    pipePrefixed(child, "app");
+    child.on("error", (error) => {
+      console.error(`[app] failed to start ${cmd}: ${error.message}`);
+      resolve(1);
+    });
+    child.on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  });
+const startApp = async () => {
+  const prereqs: [string, string[], string][] = [
+    ["bun", ["scripts/gen-icons.ts", "desktop"], repoRoot],
+    ["cargo", ["build"], repoRoot],
+  ];
+  for (const [cmd, args, cwd] of prereqs) {
+    const code = await runAppStep(cmd, args, cwd);
+    if (appKilled) return;
+    if (code !== 0) {
+      console.error(
+        `[app] prereq failed: ${cmd} ${args.join(" ")} (exit ${code}); ` +
+          "desktop app lane stopped - extension and site keep running",
+      );
+      return;
+    }
+  }
+  const app = spawn("bunx", ["tauri", "dev"], {
+    cwd: appDir,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  appChild = app;
+  pipePrefixed(app, "app");
+  app.on("error", (error) => console.error(`[app] failed to start tauri dev: ${error.message}`));
+  app.on("exit", (code) => {
+    if (!appKilled && code !== 0 && code !== null) {
+      console.error(`[app] exited with code ${code}; extension and site keep running`);
+    }
+  });
+};
+void startApp();
 
 // Extension: foreground with the real terminal for output; stdin is piped so
 // the browser watchdog below can inject WXT's `o` (reopen) keypress. Your own
@@ -170,7 +242,10 @@ const killWxt = () => {
 const shutdown = () => {
   shuttingDown = true;
   clearInterval(watchdog);
+  // All the fast group signals first; killSite ends with the potentially
+  // slow, synchronous `astro dev stop`.
   killWxt();
+  killApp();
   killSite();
 };
 process.on("SIGINT", shutdown);
@@ -191,6 +266,7 @@ wxt.on("error", (error: Error) => {
 
 wxt.on("exit", (code, signal) => {
   clearInterval(watchdog);
+  killApp();
   killSite();
   if (startFailed) process.exit(1);
   // Signal-terminated during our own shutdown is a clean stop; a signal from
@@ -199,5 +275,7 @@ wxt.on("exit", (code, signal) => {
   process.exit(code ?? (signal ? 1 : 0));
 });
 site.on("exit", (code) => {
-  if (code !== 0 && code !== null) console.error(`[site] exited with code ${code}`);
+  if (!siteKilled && code !== 0 && code !== null) {
+    console.error(`[site] exited with code ${code}`);
+  }
 });
