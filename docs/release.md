@@ -27,7 +27,7 @@ release.yml builds on a matrix (currently `macos-14/arm64`, `ubuntu-22.04/x64`, 
 `windows-2022/x64`; Intel macOS is **deliberately omitted** because hosted runners are
 scarce, and Linux uses an older glibc baseline to widen compatibility). For each target:
 
-1. `scripts/build-repro.sh` produces the deterministic release binary.
+1. `bun scripts/build-repro.ts` produces the deterministic release binary.
 2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` produces the extension bundle.
 3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (`.zip` on
    Windows), containing the binary, `extension/dist`, `RELEASE.txt`, `LICENSE`, and
