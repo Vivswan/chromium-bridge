@@ -5,6 +5,11 @@ name: release-please
 # (semver derived from feat:/fix:/feat!: prefixes) and regenerates CHANGELOG.md.
 # Merging that PR is what tags vX.Y.Z + publishes the GitHub Release -- a plain
 # push to main releases nothing.
+#
+# On every successful run this workflow also (re)deploys the site:
+#   - the production root (vivswan.github.io/chromium-bridge/) is built from
+#     the LATEST release tag, so it changes only when a release PR is merged
+#   - the /staging/ path is built from main HEAD, so it refreshes every push
 on:
   push:
     branches: [main]
@@ -33,3 +38,16 @@ jobs:
       - uses: googleapis/release-please-action@v4
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+  # Deploy the site on EVERY successful release-please run, NOT only when a
+  # release is created (no `if: release_created`): staging (main HEAD) must
+  # refresh on each push to main. deploy-site.yml rebuilds the production
+  # root from the latest release tag, so the root only actually changes when
+  # a release was just tagged.
+  deploy:
+    needs: release-please
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy-site.yml
