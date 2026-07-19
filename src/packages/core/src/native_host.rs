@@ -846,8 +846,13 @@ fn run_control_plane() -> i32 {
     // handled), and an unbounded queue would let a faulty or hostile
     // extension stack multi-megabyte frames in memory while the loop is
     // blocked on a presence prompt. A full channel simply parks the reader
-    // thread, which parks Chrome's pipe - exactly the old behavior.
-    let (frame_tx, frame_rx) = mpsc::sync_channel(8);
+    // thread, which parks Chrome's pipe - exactly the old behavior. Bound 1,
+    // not more: native-messaging frames can reach tens of MB each, so the
+    // peak held is about three frames (one being handled by the loop, one
+    // queued, one parsed in the reader blocked on send) - enough for the
+    // reader to stay a frame ahead during the unkill drain, and nothing
+    // like a buffer.
+    let (frame_tx, frame_rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let mut stdin = io::stdin();
         loop {
