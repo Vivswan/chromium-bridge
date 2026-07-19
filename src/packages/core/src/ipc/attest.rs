@@ -219,14 +219,35 @@ mod tests {
         // Foreign: a child WE spawned (a specific, verified pid - never a
         // pattern match) running a different binary must be rejected with
         // PermissionDenied, the caller's do-not-signal signal.
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
+        //
+        // Synchronize on the child having exec'd before measuring it: spawn()
+        // can return while the child is still a pre-exec clone of US (its
+        // /proc/<pid>/exe naming our own binary), and measuring in that
+        // window attests the child as self - a CI-speed flake, seen on
+        // GitHub's ubuntu runners. Reading the byte the shell echoes proves
+        // the child's image is the (foreign) shell. Production callers do not
+        // race this: they measure long-running processes named by lock files,
+        // not pids they just spawned.
+        use std::io::Read;
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "echo r; exec sleep 30"])
+            .stdout(std::process::Stdio::piped())
             .spawn()
-            .expect("spawn sleep");
-        let err = attest_pid(child.id()).expect_err("a foreign binary must not attest");
-        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+            .expect("spawn sh");
+        let mut byte = [0u8; 1];
+        let handshake = child
+            .stdout
+            .as_mut()
+            .expect("child stdout is piped")
+            .read_exact(&mut byte);
+        let attested = attest_pid(child.id());
+        // Reap the child BEFORE asserting: a failed assertion must not leave
+        // the 30-second sleeper running.
         let _ = child.kill();
         let _ = child.wait();
+        handshake.expect("child signals it has exec'd");
+        let err = attested.expect_err("a foreign binary must not attest");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
