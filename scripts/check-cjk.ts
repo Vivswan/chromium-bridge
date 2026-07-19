@@ -8,7 +8,7 @@
 // class of bug where an upstream-inherited Chinese tool label reached the
 // options page - so this fails CI.
 //
-// Companion to the check-typography action (which handles look-alike
+// Companion to scripts/check-typography.ts (which handles look-alike
 // punctuation); this one is about whole scripts, not characters that resemble
 // ASCII.
 
