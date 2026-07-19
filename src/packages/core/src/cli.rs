@@ -322,7 +322,7 @@ fn take_value<'a, I: Iterator<Item = &'a String>>(
 /// tell several browsers apart. Returns `Ok(None)` when no label was given
 /// (the server files the connection under its default slot). A missing or
 /// flag-shaped value, a repeated `--label`, or a label that fails
-/// [`crate::ipc::validate_label`] is an error — the caller must refuse to
+/// [`crate::ipc::validate_label`] is an error - the caller must refuse to
 /// start rather than run under a mangled identity.
 pub fn native_host_label(args: &[String]) -> Result<Option<String>, String> {
     let mut found: Option<String> = None;
@@ -371,7 +371,7 @@ pub fn print_help() {
          chromium-bridge unkill         Explicitly release the kill switch\n                                (interactive confirmation on the terminal)\n    \
          chromium-bridge audit [--limit <n>]\n                                Print the audit trail (default: last 200 records)\n    \
          chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
-         Configure your MCP client (Claude Code, Codex, …) to launch this \
+         Configure your MCP client (Claude Code, Codex, ...) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
          --native-host via the host manifest. You normally never invoke either \
          mode by hand.",

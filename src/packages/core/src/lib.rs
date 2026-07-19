@@ -1,4 +1,4 @@
-//! chromium-bridge-core — bridge an MCP client (Claude Code, Codex, …) to your
+//! chromium-bridge-core - bridge an MCP client (Claude Code, Codex, ...) to your
 //! real Chromium browser.
 //!
 //! One binary (`src/apps/host`), two modes selected by argv:
