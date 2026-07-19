@@ -554,6 +554,50 @@ describe("confirm_deny_kill", () => {
     await expect(later).resolves.toBe(false);
   });
 
+  test("an unknown answer to the engage is not refusal proof: a plain alive read cannot lift", async () => {
+    // The host answering the engage ok:false means the kill write FAILED -
+    // nothing applied. The unknown mirror refuses upstream (fail closed),
+    // but it must not satisfy phase 1: otherwise a later plain alive read
+    // (the host recovering, no release ever having happened) would lift the
+    // latch without any presence-gated act.
+    const presented = fakeProvider(installConfirmationProvider);
+    attachPort(() => true);
+    route({ type: "confirm_deny_kill" }, confirmSender, () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    await handleKillFrame({ type: "kill_status_result", ok: false }); // engage failed host-side
+    await handleKillFrame({ type: "kill_status_result", ok: true, killed: false }); // recovered: alive
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    expect(presented).toHaveLength(0);
+
+    // Only a kill that provably TOOK, then the explicit release, lifts.
+    await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
+    await vi.advanceTimersByTimeAsync(0);
+    const later = confirmWithUser(WINDOW_REQ);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(presented).toHaveLength(1);
+    resolveConfirm(presented[0]!.payload.id, false);
+    await expect(later).resolves.toBe(false);
+  });
+
+  test("an unknown frame does not disarm the engage re-post", async () => {
+    // ok:false is not proof the kill took, so the at-least-once re-post
+    // must stay armed: a host that failed the kill write and then died
+    // would otherwise swallow the brake.
+    attachPort(() => true);
+    route({ type: "confirm_deny_kill" }, confirmSender, () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    await handleKillFrame({ type: "kill_status_result", ok: false });
+    detachPort();
+    const frames: Array<Record<string, unknown>> = [];
+    attachPort((frame) => {
+      frames.push(frame as Record<string, unknown>);
+      return true;
+    });
+    expect(frames).toEqual([{ type: "kill_engage" }]);
+  });
+
   test("with nothing pending it still engages (capability reduction)", async () => {
     const frames: Array<Record<string, unknown>> = [];
     attachPort((frame) => {
