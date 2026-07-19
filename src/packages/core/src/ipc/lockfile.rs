@@ -16,7 +16,7 @@ use super::socket::{listen, BridgeListener};
 ///
 /// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records
 /// (decided in ADR-0025): the lock file is the one file read across BINARY
-/// VERSIONS at the same instant — during an upgrade, a still-installed older
+/// VERSIONS at the same instant - during an upgrade, a still-installed older
 /// build (Chrome keeps spawning the manifest's host; a harness keeps spawning
 /// its configured server) reads the lock a newer broker wrote, and a strict
 /// parser would take the whole bridge down for the upgrade window if a field
@@ -318,7 +318,7 @@ pub(super) fn read_lock_or_err() -> io::Result<LockFile> {
     LockFile::read()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "chromium-bridge lock file not found — is the MCP server running?",
+            "chromium-bridge lock file not found - is the MCP server running?",
         )
     })
 }

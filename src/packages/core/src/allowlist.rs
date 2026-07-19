@@ -487,7 +487,7 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
             0
         }
         Err(e @ PairClientError::Presence(_)) => {
-            eprintln!("pair-client: refused — {e}");
+            eprintln!("pair-client: refused - {e}");
             eprintln!("nothing was paired");
             1
         }

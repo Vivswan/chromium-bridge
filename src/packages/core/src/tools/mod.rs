@@ -7,13 +7,13 @@
 //!     and calls the session.
 //!
 //! The extension side (background.js / content.js) recognizes the same `op`
-//! strings — keep them in sync when editing.
+//! strings - keep them in sync when editing.
 //!
 //! This module is split across:
-//!   - [`catalogue`] — the [`Tool`] struct, [`all`] catalogue, and `schema` helper,
-//!   - [`capabilities`] — the negotiable capability groupings over the catalogue,
-//!   - [`handlers`] — the per-op `build_*` payload fns and arg helpers,
-//!   - this root — [`dispatch`], [`Outcome`], and the `Handler`/`HANDLERS` registry.
+//!   - [`catalogue`] - the [`Tool`] struct, [`all`] catalogue, and `schema` helper,
+//!   - [`capabilities`] - the negotiable capability groupings over the catalogue,
+//!   - [`handlers`] - the per-op `build_*` payload fns and arg helpers,
+//!   - this root - [`dispatch`], [`Outcome`], and the `Handler`/`HANDLERS` registry.
 
 pub mod capabilities;
 mod catalogue;
@@ -37,7 +37,7 @@ use handlers::{
 /// A registered tool handler. The bridge `op` name equals the tool `name`;
 /// `build_payload` maps the (schema-shaped) MCP args into the op's argument
 /// object. Responses are formatted centrally in [`dispatch`]. `HANDLERS` is the
-/// single dispatch registry — `registry_covers_catalogue` (tests) asserts it
+/// single dispatch registry - `registry_covers_catalogue` (tests) asserts it
 /// stays in lockstep with [`all`], so a new tool can't be added to the
 /// catalogue without a handler (or vice versa).
 struct Handler {
@@ -156,7 +156,7 @@ const HANDLERS: &[Handler] = &[
 ];
 
 /// The result of dispatching one tool call: the MCP content blocks, whether it
-/// is an error, and — on error — the stable taxonomy code (`error::ERROR_SPECS`)
+/// is an error, and - on error - the stable taxonomy code (`error::ERROR_SPECS`)
 /// so the caller can record it in the audit trail without re-parsing the text.
 pub struct Outcome {
     pub content: Value,
@@ -170,7 +170,7 @@ pub struct Outcome {
 /// Every tool accepts an optional `browser` argument naming which connected
 /// browser to run on; it is consumed here (routing) and never forwarded in the
 /// op's own args. `list_browsers` is answered by the server itself from its
-/// connection registry — it is the one tool that does not translate into a
+/// connection registry - it is the one tool that does not translate into a
 /// single bridge request.
 pub fn dispatch(session: &Session, name: &str, args: &Value) -> Outcome {
     let result = extract_browser(args).and_then(|browser| {
@@ -241,7 +241,7 @@ fn extract_browser(args: &Value) -> Result<Option<&str>, CallError> {
 /// Answer `list_browsers` from the server's connection registry: one entry per
 /// live, authenticated connection, enriched with that browser's open-tab count
 /// (a routed `tab_list` round-trip per browser). A browser that fails to
-/// answer stays in the list with `tabCount: null` and its error text — being
+/// answer stays in the list with `tabCount: null` and its error text - being
 /// slow or broken should not hide it from enumeration. The per-browser
 /// round-trip uses a short enumeration timeout (and no connect-wait), so one
 /// wedged browser costs seconds, not the interactive 120s, and can never
@@ -344,7 +344,7 @@ mod tests {
     fn dispatch_rejects_a_malformed_browser_arg_without_routing() {
         // A fresh session has no connections; a call would normally block in
         // the 12s startup wait. The malformed `browser` must be rejected
-        // before that — this test finishing quickly is itself the assertion
+        // before that - this test finishing quickly is itself the assertion
         // that no routing was attempted.
         let session = Session::new();
         let out = dispatch(&session, "tab_list", &json!({ "browser": 123 }));

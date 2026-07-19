@@ -7,7 +7,7 @@ use super::encoding::base64_encode;
 use super::EnclaveError;
 
 /// The enrollment key's public half, validated to be a 65-byte uncompressed
-/// X9.63 P-256 point (`0x04 || X || Y`) — exactly what WebCrypto's
+/// X9.63 P-256 point (`0x04 || X || Y`) - exactly what WebCrypto's
 /// `importKey("raw", ...)` accepts for ECDSA P-256.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnclavePublicKey {

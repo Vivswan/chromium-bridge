@@ -95,7 +95,7 @@ pub(super) fn is_secure_enclave_key(key: &SecKey) -> bool {
 /// Find the enrollment key by its stable label, failing closed unless it
 /// is unambiguous and Enclave-resident. Cross-process: the `pair` CLI
 /// mints it, the Chrome-spawned native host finds it here. Obtaining the
-/// reference does not trigger a presence prompt — only using the private
+/// reference does not trigger a presence prompt - only using the private
 /// key does.
 ///
 /// Two fail-closed rules beyond the label match:
@@ -234,7 +234,7 @@ mod tests {
     }
 
     /// The signature must not verify under a different message or a tampered
-    /// signature — guards against the converter accidentally producing
+    /// signature - guards against the converter accidentally producing
     /// something "verifiable" by construction.
     #[test]
     fn software_key_rejects_wrong_message_and_tampered_sig() {

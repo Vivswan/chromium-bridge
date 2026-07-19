@@ -123,7 +123,7 @@ pub fn run_pair(reset: bool) -> i32 {
 /// epoch's host-key marker (ADR-0025) so a live native host notices and
 /// pushes the `enclave_revoked` frame to the extension -- the pinned
 /// extension flips to its fail-closed state without waiting for an opt-in
-/// reverify. Fail-closed by construction — after this, proofs can no longer
+/// reverify. Fail-closed by construction - after this, proofs can no longer
 /// be produced, so a pinned extension refuses the bridge until the user
 /// re-pairs.
 pub fn run_revoke() -> i32 {
@@ -197,7 +197,7 @@ pub fn run_status() -> i32 {
         Ok(None) => println!("key:        none (run `chromium-bridge pair`)"),
         Err(EnclaveError::Unsupported) => println!("key:        n/a"),
         Err(e @ EnclaveError::KeyInvalid(_)) => println!(
-            "key:        REJECTED — {e}\n            treat it as untrusted; \
+            "key:        REJECTED - {e}\n            treat it as untrusted; \
              run `chromium-bridge pair --reset` to replace it"
         ),
         Err(e) => println!("key:        lookup failed: {e}"),

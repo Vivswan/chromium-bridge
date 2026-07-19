@@ -13,7 +13,7 @@ use std::time::Duration;
 pub enum CallError {
     /// No native host is currently connected (extension not loaded, Chrome not
     /// running, or the bridge hasn't reconnected yet).
-    #[error("browser extension not connected — is the extension loaded and Chrome running?")]
+    #[error("browser extension not connected - is the extension loaded and Chrome running?")]
     NotConnected,
 
     /// Failed to write the request onto the bridge socket.
@@ -43,12 +43,12 @@ pub enum CallError {
     /// use. Field 0 is the comma-joined list of live labels. Refusing (rather
     /// than guessing) is deliberate: acting in the wrong logged-in browser is
     /// worse than asking the caller to name one.
-    #[error("multiple browsers are connected ({0}) — pass the `browser` argument to pick one (see list_browsers)")]
+    #[error("multiple browsers are connected ({0}) - pass the `browser` argument to pick one (see list_browsers)")]
     AmbiguousBrowser(String),
 
     /// The call named a browser label that is not currently connected.
     /// Field 0 is the requested label, field 1 the comma-joined live labels.
-    #[error("no connected browser is labeled '{0}' (connected: {1}) — see list_browsers")]
+    #[error("no connected browser is labeled '{0}' (connected: {1}) - see list_browsers")]
     BrowserNotFound(String, String),
 
     /// The extension executed the op and reported a failure of its own.
@@ -60,7 +60,7 @@ pub enum CallError {
     /// retry-until-cleared territory for a client: the state changes only by
     /// an explicit human act.
     #[error(
-        "the bridge kill switch is engaged — all bridge activity is refused until it is \
+        "the bridge kill switch is engaged - all bridge activity is refused until it is \
          explicitly released (`chromium-bridge unkill`, or the extension's options page)"
     )]
     Killed,
@@ -70,7 +70,7 @@ pub enum CallError {
     /// refused exactly as if the switch were engaged. Field 0 is the read
     /// error.
     #[error(
-        "the bridge kill state could not be read ({0}); failing closed — \
+        "the bridge kill state could not be read ({0}); failing closed - \
          see `chromium-bridge doctor` and docs/operations.md for recovery"
     )]
     KillStateUnknown(String),

@@ -2,10 +2,10 @@
 //!
 //! Three protocols live here:
 //! 1. Chrome Native Messaging framing (4-byte LE length prefix + UTF-8 JSON)
-//!    — used between the native-host subprocess and the Chrome extension.
-//! 2. MCP JSON-RPC 2.0 messages (NDJSON over stdio) — used between the MCP
+//!    - used between the native-host subprocess and the Chrome extension.
+//! 2. MCP JSON-RPC 2.0 messages (NDJSON over stdio) - used between the MCP
 //!    server and the MCP client.
-//! 3. The internal "bridge" envelope — request/response exchanged between the
+//! 3. The internal "bridge" envelope - request/response exchanged between the
 //!    MCP server and the native-host subprocess over the bridge socket
 //!    (newline-delimited JSON).
 
@@ -487,7 +487,7 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
 /// `enclave_challenge` locally (signing with the Secure Enclave key, which
 /// raises the user-presence prompt) and never forwards these frames to the
 /// MCP server. Everything without one of these `type` tags forwards
-/// byte-for-byte as before, so the protocol is fully backward compatible —
+/// byte-for-byte as before, so the protocol is fully backward compatible -
 /// an extension that never sends a challenge sees no change.
 ///
 /// Contract (the extension side consumes this):
@@ -723,7 +723,7 @@ pub enum FrameDisposition {
     },
     /// A control-frame `type` that is not addressed to the host (a stray
     /// proof/error/revoked/result, or a malformed host-directed frame with no
-    /// defined error reply) — drop it, never forward it.
+    /// defined error reply) - drop it, never forward it.
     Drop(&'static str),
     /// Carries the `enclave_challenge` type but does not parse as that frame:
     /// reply `enclave_error { reason: "invalid_challenge" }`, do not forward.
@@ -815,12 +815,12 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
     }
 }
 
-/// The host-control `type` tag carried by `frame` — any [`EnclaveControl`] or
-/// [`AdminControl`] tag — or `None` for everything else. The native host's
+/// The host-control `type` tag carried by `frame` - any [`EnclaveControl`] or
+/// [`AdminControl`] tag - or `None` for everything else. The native host's
 /// socket->stdout pump uses this to drop control frames arriving FROM the MCP
 /// server: the ceremony and the admin exchange run strictly between the
 /// extension and the host itself, so the server leg has no legitimate reason
-/// to ever carry one. Zero trust applies to our own server too — an
+/// to ever carry one. Zero trust applies to our own server too - an
 /// attested-but-misbehaving server must not be able to inject an
 /// `enclave_error` that burns the extension's outstanding nonce, an
 /// `enclave_revoked` that provokes a false fail-closed "compromised" mark, or
@@ -1472,7 +1472,7 @@ mod tests {
             classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n" })),
             FrameDisposition::Challenge { context: None, .. }
         ));
-        // A challenge missing its nonce is malformed — answered with an
+        // A challenge missing its nonce is malformed - answered with an
         // error, never forwarded.
         assert!(matches!(
             classify_nm_frame(&json!({ "type": "enclave_challenge" })),
@@ -1720,10 +1720,10 @@ mod tests {
 
 /// Property-based (`proptest`) coverage of the parsing boundary. Three
 /// families, matching the fuzzing item on the roadmap:
-///   1. Roundtrip — `write` then `read` recovers the original payload.
-///   2. Never-panics — arbitrary bytes fed to a reader return `Ok`/`Err` but
+///   1. Roundtrip - `write` then `read` recovers the original payload.
+///   2. Never-panics - arbitrary bytes fed to a reader return `Ok`/`Err` but
 ///      never panic (the key robustness guarantee for a security boundary).
-///   3. Size guard — any length prefix above the cap is always rejected,
+///   3. Size guard - any length prefix above the cap is always rejected,
 ///      before any unbounded allocation or read.
 #[cfg(test)]
 mod proptests {
@@ -1733,7 +1733,7 @@ mod proptests {
     use std::io::Cursor;
 
     /// A bounded, arbitrary JSON string built from arbitrary Unicode scalar
-    /// values (control chars included — serde escapes them). Avoids the
+    /// values (control chars included - serde escapes them). Avoids the
     /// `regex-syntax` proptest feature so the dependency tree stays lean.
     fn arb_string() -> impl Strategy<Value = String> {
         prop::collection::vec(any::<char>(), 0..12).prop_map(|cs| cs.into_iter().collect())
@@ -1761,7 +1761,7 @@ mod proptests {
 
     /// Like [`arb_json`] but never `null` at the top level. For `Option<Value>`
     /// fields, `Some(Value::Null)` serializes as `null` and deserializes back
-    /// as `None` — an intentional serde asymmetry that would make an exact
+    /// as `None` - an intentional serde asymmetry that would make an exact
     /// roundtrip comparison spuriously fail. Nested nulls are still allowed.
     fn arb_json_non_null() -> impl Strategy<Value = Value> {
         arb_json().prop_filter("non-null at top level", |v| !v.is_null())
