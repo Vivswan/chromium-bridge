@@ -111,16 +111,17 @@ async function providerFor(
 }
 
 // The panic latch (ADR-0030): set by the confirm window's deny-and-kill,
-// lifted by the router when the kill state refuses or the engage exchange
-// fails. While it is on, EVERY confirmation - the active one, the whole
-// queue, and anything newly requested - denies without presenting. This
-// closes the window the queue would otherwise open: a request that passed
-// the kill gate while the mirror still read alive would pop a fresh surface
-// (which the user could approve) while the brake is still in flight to the
-// host. Module state, deliberately: if the engage is lost with a dying host
-// (posted, never answered, host restarts alive) the latch stays on - denying
-// consent is the fail-closed reading of "kill everything" - until the SW's
-// own restart clears it.
+// lifted by the router only when the kill state authoritatively reads alive
+// again after the engage applied, or when the engage frame never reached
+// the pipe (send failure). While it is on, EVERY confirmation - the active
+// one, the whole queue, and anything newly requested - denies without
+// presenting. This closes the window the queue would otherwise open: a
+// request that passed the kill gate while the mirror still read alive would
+// pop a fresh surface (which the user could approve) while the brake is
+// still in flight to the host. Module state, deliberately: if the engage is
+// lost with a dying host (posted, never answered, host restarts alive) the
+// latch stays on - denying consent is the fail-closed reading of "kill
+// everything" - until the SW's own restart clears it.
 let panicDeny = false;
 // Edge marker beside the level latch: bumped on every panic. A request whose
 // provider selection was IN FLIGHT when the panic hit has no `active` entry
@@ -132,20 +133,35 @@ let panicEpoch = 0;
 
 /** The confirm window hit the brake: deny the active confirmation and latch
  * everything behind it to auto-deny. Settling the active entry advances the
- * queue, whose entries all see the latch and drain synchronously. */
-export function denyAllConfirmations(): void {
+ * queue, whose entries all see the latch and drain synchronously. Returns
+ * the panic's epoch, which is the ONLY token that can later lift this
+ * latch (releasePanicDeny). */
+export function denyAllConfirmations(): number {
   panicDeny = true;
   panicEpoch += 1;
   active?.settle(false);
+  return panicEpoch;
 }
 
-/** Router-only: lift the panic latch. Called when the kill state refuses
- * (the request gate refuses upstream from then on) or when the engage
- * exchange failed outright - restoring normal confirmations there rather
- * than silently bricking them: the kill mirror (popup, options) is what
- * tells the user the truth either way, and a dead port carries no new
- * requests anyway. */
-export function releasePanicDeny(): void {
+/** Router-only: lift the panic latch, scoped to the panic that armed it.
+ * Fail closed on every ambiguity:
+ * - `epoch` must be the value denyAllConfirmations returned; a stale
+ *   release (an earlier panic's kill settling late) is a no-op, so it can
+ *   never lift a NEWER panic's latch;
+ * - the router calls this only on the two proofs that the brake either
+ *   fully settled or never left the station: the kill state authoritatively
+ *   reading alive again AFTER the engage applied (an explicit, presence-
+ *   gated release), or the engage frame never reaching the pipe at all
+ *   (send failure - nothing is in flight, and the mirror tells the user the
+ *   truth). A timeout is neither: the posted frame may still apply, so the
+ *   latch stays down and confirmations keep denying. */
+export function releasePanicDeny(epoch: number): void {
+  if (epoch === panicEpoch) panicDeny = false;
+}
+
+/** Tests only: clear the latch level. The epoch stays monotonic, exactly
+ * like the real thing across panics. */
+export function resetPanicForTests(): void {
   panicDeny = false;
 }
 

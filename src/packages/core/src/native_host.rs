@@ -29,7 +29,7 @@
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -365,15 +365,22 @@ fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
 ///   CLI-driven kills without polling (the alive direction is pulled by the
 ///   extension's own on-connect query).
 ///
-/// With `exit_on_unkill` (the control-plane mode of a killed bridge), an
-/// observed release additionally ends this process: Chrome tears the port
-/// down, the extension reconnects, and the fresh host comes up in normal
-/// bridge mode. The exit happens only AFTER the released state was pushed,
-/// so the mirror is not left engaged across the respawn gap.
+/// With `unkill_observed` (the control-plane mode of a killed bridge), an
+/// observed release is pushed and then HANDED to the control-plane loop via
+/// the flag instead of exiting the process from this thread: exiting here
+/// would drop whatever control frames are still buffered on stdin with the
+/// process - including a `kill_engage` the extension was already told was
+/// sent - so the loop drains those and re-checks the state before deciding
+/// to leave killed mode (see [`drain_then_decide`]). The released state is
+/// pushed BEFORE the flag is raised, so the mirror is not left engaged
+/// across the respawn gap.
 ///
 /// An unreadable record is pushed once (as `ok: false`, which the extension
 /// treats as unknown and fails closed on) and logged once, not every tick.
-fn spawn_revocation_watch(out: Arc<Mutex<BufWriter<io::Stdout>>>, exit_on_unkill: bool) {
+fn spawn_revocation_watch(
+    out: Arc<Mutex<BufWriter<io::Stdout>>>,
+    unkill_observed: Option<Arc<AtomicBool>>,
+) {
     thread::spawn(move || {
         // Startup posture: bad news is announced now (a key revoked or a kill
         // engaged while no host was running); a healthy state stays quiet.
@@ -407,13 +414,15 @@ fn spawn_revocation_watch(out: Arc<Mutex<BufWriter<io::Stdout>>>, exit_on_unkill
                         }
                         if last_kill != rev.kill_epoch {
                             push_kill_status(&out);
-                            if exit_on_unkill && !rev.killed {
-                                log_info!(
-                                    "native-host",
-                                    "kill switch released; exiting so the extension \
-                                     reconnects into a bridge-mode host"
-                                );
-                                std::process::exit(0);
+                            if !rev.killed {
+                                if let Some(flag) = &unkill_observed {
+                                    log_info!(
+                                        "native-host",
+                                        "kill switch released; handing the transition \
+                                         to the control-plane loop"
+                                    );
+                                    flag.store(true, Ordering::Release);
+                                }
                             }
                         }
                     } else {
@@ -655,6 +664,158 @@ fn handle_control_frame(
     }
 }
 
+// ---- control-plane-only mode (ADR-0030) --------------------------------------
+
+/// One event on the control-plane loop's inbound channel.
+enum PlaneEvent {
+    /// A native-messaging frame from Chrome.
+    Frame(Value),
+    /// stdin EOF: Chrome tore the port down.
+    Eof,
+    /// stdin read error (framing violation, pipe error).
+    ReadError(String),
+}
+
+/// Why the control-plane loop ended.
+#[derive(Debug, PartialEq, Eq)]
+enum PlaneExit {
+    /// stdin is gone (EOF or read error), a control reply could not be
+    /// written, or the reader thread died: Chrome is done with this host.
+    StdinClosed,
+    /// The kill switch authoritatively read released after a drained-quiet
+    /// pipe: exit so the extension reconnects into a bridge-mode host.
+    Unkilled,
+}
+
+/// The control-plane loop's verdict on an observed unkill.
+enum UnkillDecision {
+    Exit(PlaneExit),
+    /// The state does not authoritatively read alive after the drain (a
+    /// drained frame re-engaged the switch, or the record is unreadable):
+    /// keep serving the control plane, fail closed.
+    Stay,
+}
+
+/// How long the pipe must stay quiet, after an observed unkill, before the
+/// state re-check and exit. Bytes Chrome accepted before the release reply
+/// reached the extension are long since readable; this window only covers
+/// their last hop into our stdin.
+const UNKILL_DRAIN_SETTLE: Duration = Duration::from_millis(200);
+
+/// How often the loop wakes from an idle channel to check the unkill flag.
+const PLANE_TICK: Duration = Duration::from_millis(100);
+
+/// The unkill transition, taken only by the control-plane loop: before
+/// leaving killed mode, DRAIN the control frames already buffered on stdin,
+/// then re-read the kill state and exit only on an authoritative alive.
+///
+/// This is what keeps an acknowledged engage from being lost across the
+/// transition: the extension's panic path is told ok:true the moment the
+/// `kill_engage` frame is accepted for the pipe, so a frame that raced an
+/// in-flight release may still be sitting in our stdin when the watch
+/// observes the released state. Draining hands it to the normal control
+/// handler (re-engaging the switch and answering the extension), and the
+/// re-check then keeps this host in control-plane mode. An unreadable state
+/// after the drain also stays: leaving killed mode on ambiguity would fail
+/// open. The settle window is a best-effort fast path, not the guarantee: a
+/// frame Chrome accepts but which reaches our stdin only after the window
+/// elapses dies with the process, and what makes that loss non-silent is
+/// the EXTENSION side - its panic latch stays engaged (no refusing frame
+/// ever arrived) and it re-posts the unconfirmed engage on the reconnect
+/// into the fresh host (at-least-once; the engage is idempotent here).
+fn drain_then_decide<H, K>(
+    frames: &mpsc::Receiver<PlaneEvent>,
+    handle: &mut H,
+    killed_now: &K,
+) -> UnkillDecision
+where
+    H: FnMut(Value) -> io::Result<()>,
+    K: Fn() -> io::Result<bool>,
+{
+    loop {
+        match frames.recv_timeout(UNKILL_DRAIN_SETTLE) {
+            Ok(PlaneEvent::Frame(frame)) => {
+                if let Err(e) = handle(frame) {
+                    log_warn!("native-host", "control reply write error: {e}");
+                    return UnkillDecision::Exit(PlaneExit::StdinClosed);
+                }
+            }
+            Ok(PlaneEvent::Eof) => {
+                log_info!("native-host", "stdin EOF, shutting down");
+                return UnkillDecision::Exit(PlaneExit::StdinClosed);
+            }
+            Ok(PlaneEvent::ReadError(e)) => {
+                log_warn!("native-host", "stdin read error: {e}");
+                return UnkillDecision::Exit(PlaneExit::StdinClosed);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return UnkillDecision::Exit(PlaneExit::StdinClosed)
+            }
+        }
+    }
+    match killed_now() {
+        Ok(false) => UnkillDecision::Exit(PlaneExit::Unkilled),
+        Ok(true) => {
+            log_info!(
+                "native-host",
+                "kill switch re-engaged during the release drain; staying in control-plane mode"
+            );
+            UnkillDecision::Stay
+        }
+        Err(e) => {
+            log_warn!(
+                "native-host",
+                "kill state unreadable after the release ({e}); staying in \
+                 control-plane mode (fail closed)"
+            );
+            UnkillDecision::Stay
+        }
+    }
+}
+
+/// The control-plane pump: handle channel events, and take the unkill
+/// transition through [`drain_then_decide`] whenever the watch raises the
+/// flag. Extracted from [`run_control_plane`] so the frame/flag interleaving
+/// is unit-testable without a real stdin.
+fn control_plane_loop<H, K>(
+    frames: &mpsc::Receiver<PlaneEvent>,
+    unkill_observed: &AtomicBool,
+    handle: &mut H,
+    killed_now: &K,
+) -> PlaneExit
+where
+    H: FnMut(Value) -> io::Result<()>,
+    K: Fn() -> io::Result<bool>,
+{
+    loop {
+        if unkill_observed.swap(false, Ordering::AcqRel) {
+            match drain_then_decide(frames, handle, killed_now) {
+                UnkillDecision::Exit(exit) => return exit,
+                UnkillDecision::Stay => {}
+            }
+        }
+        match frames.recv_timeout(PLANE_TICK) {
+            Ok(PlaneEvent::Frame(frame)) => {
+                if let Err(e) = handle(frame) {
+                    log_warn!("native-host", "control reply write error: {e}");
+                    return PlaneExit::StdinClosed;
+                }
+            }
+            Ok(PlaneEvent::Eof) => {
+                log_info!("native-host", "stdin EOF, shutting down");
+                return PlaneExit::StdinClosed;
+            }
+            Ok(PlaneEvent::ReadError(e)) => {
+                log_warn!("native-host", "stdin read error: {e}");
+                return PlaneExit::StdinClosed;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return PlaneExit::StdinClosed,
+        }
+    }
+}
+
 /// Control-plane-only mode (ADR-0030): the bridge is killed (or its state is
 /// unreadable), so NOTHING may flow between the browser and a broker -- but
 /// this host must stay up, because the extension's unkill rides a control
@@ -662,28 +823,49 @@ fn handle_control_frame(
 /// this host's pushes. So: no socket, no forwarding; host-handled control
 /// frames (kill status/engage/release, enclave ceremony, client admin, audit
 /// events) keep working; a bridge frame that arrives anyway is dropped and
-/// logged. When the watch observes the switch released, the process exits so
-/// the extension's reconnect spawns a normal bridge-mode host.
+/// logged. When the watch observes the switch released, the LOOP (never the
+/// watch thread) drains any control frames already buffered on stdin and
+/// re-checks the state before exiting so the extension's reconnect spawns a
+/// normal bridge-mode host -- an exit that raced a buffered, extension-
+/// acknowledged `kill_engage` would silently drop the brake.
+///
+/// stdin is read on a dedicated thread feeding a channel, so the loop can
+/// interleave frame handling with the unkill flag without blocking forever
+/// in a read.
 fn run_control_plane() -> i32 {
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
-    // exit_on_unkill: leaving this mode goes through a clean respawn.
-    spawn_revocation_watch(Arc::clone(&stdout_writer), true);
-    let mut stdin = io::stdin();
-    loop {
-        let frame: Option<Value> = match nm_read_frame(&mut stdin) {
-            Ok(v) => v,
-            Err(e) => {
-                log_warn!("native-host", "stdin read error: {e}");
-                break;
+    // The watch raises this flag on an observed release; leaving this mode
+    // is the LOOP's decision, after the drain (see drain_then_decide).
+    let unkill_observed = Arc::new(AtomicBool::new(false));
+    spawn_revocation_watch(
+        Arc::clone(&stdout_writer),
+        Some(Arc::clone(&unkill_observed)),
+    );
+    // Bounded on purpose: the old synchronous loop applied backpressure by
+    // construction (a frame was read only when the previous one was fully
+    // handled), and an unbounded queue would let a faulty or hostile
+    // extension stack multi-megabyte frames in memory while the loop is
+    // blocked on a presence prompt. A full channel simply parks the reader
+    // thread, which parks Chrome's pipe - exactly the old behavior.
+    let (frame_tx, frame_rx) = mpsc::sync_channel(8);
+    thread::spawn(move || {
+        let mut stdin = io::stdin();
+        loop {
+            let event = match nm_read_frame(&mut stdin) {
+                Ok(Some(frame)) => PlaneEvent::Frame(frame),
+                Ok(None) => PlaneEvent::Eof,
+                Err(e) => PlaneEvent::ReadError(e.to_string()),
+            };
+            let ends = !matches!(event, PlaneEvent::Frame(_));
+            if frame_tx.send(event).is_err() || ends {
+                return;
             }
-        };
-        let Some(frame) = frame else {
-            log_info!("native-host", "stdin EOF, shutting down");
-            break;
-        };
-        match handle_control_frame(frame, &stdout_writer) {
-            Ok(Inbound::Handled) => {}
-            Ok(Inbound::Forward(_)) => {
+        }
+    });
+    let mut handle = |frame: Value| -> io::Result<()> {
+        match handle_control_frame(frame, &stdout_writer)? {
+            Inbound::Handled => {}
+            Inbound::Forward(_) => {
                 // Fail closed: no bridge traffic while killed. The extension's
                 // own gate refuses ops too; this covers a raced or tampered
                 // sender.
@@ -692,11 +874,18 @@ fn run_control_plane() -> i32 {
                     "dropping bridge frame while the kill switch is engaged"
                 );
             }
-            Err(e) => {
-                log_warn!("native-host", "control reply write error: {e}");
-                break;
-            }
         }
+        Ok(())
+    };
+    let exit = control_plane_loop(&frame_rx, &unkill_observed, &mut handle, &|| {
+        crate::kill::is_killed()
+    });
+    if exit == PlaneExit::Unkilled {
+        log_info!(
+            "native-host",
+            "kill switch released; exiting so the extension reconnects into a \
+             bridge-mode host"
+        );
     }
     0
 }
@@ -860,9 +1049,9 @@ pub fn run() -> i32 {
 
     // ADR-0025/0030: notify the extension when the enrollment key has been
     // revoked out-of-band, and keep its kill mirror fed (at startup and on
-    // every observed transition). exit_on_unkill=false: in bridge mode an
-    // engaged kill ends this process via the broker severing the socket.
-    spawn_revocation_watch(Arc::clone(&stdout_writer), false);
+    // every observed transition). No unkill flag: in bridge mode an engaged
+    // kill ends this process via the broker severing the socket.
+    spawn_revocation_watch(Arc::clone(&stdout_writer), None);
 
     // Thread A: stdin -> socket
     let ctrl_out = Arc::clone(&stdout_writer);
@@ -1155,5 +1344,94 @@ mod tests {
             }
             other => panic!("expected enclave_error, got {other:?}"),
         }
+    }
+
+    // ---- ADR-0030: the control-plane unkill drain -----------------------------
+
+    #[test]
+    fn a_buffered_engage_across_unkill_is_drained_and_keeps_the_host_killed() {
+        // The gap this pins: the extension is told ok:true for a kill_engage
+        // the moment the frame is accepted for the pipe, so one can still be
+        // buffered on stdin when the watch observes an in-flight release
+        // landing. Exiting at that point (the old watch-thread process::exit)
+        // dropped the acknowledged brake on the floor. The drain must hand
+        // the frame to the control handler FIRST, and the re-engaged state it
+        // produces must keep the host in control-plane mode.
+        let (tx, rx) = mpsc::channel();
+        tx.send(PlaneEvent::Frame(
+            serde_json::json!({"type": "kill_engage"}),
+        ))
+        .unwrap();
+        let _keep_stdin_open = tx;
+        let killed = std::cell::Cell::new(false);
+        let mut handled = Vec::new();
+        let mut handle = |frame: Value| {
+            killed.set(true); // the engage applies to the record
+            handled.push(frame);
+            Ok(())
+        };
+        let decision = drain_then_decide(&rx, &mut handle, &|| Ok(killed.get()));
+        assert!(matches!(decision, UnkillDecision::Stay));
+        assert_eq!(handled, vec![serde_json::json!({"type": "kill_engage"})]);
+    }
+
+    #[test]
+    fn a_quiet_pipe_with_an_alive_state_exits_for_the_bridge_mode_respawn() {
+        let (tx, rx) = mpsc::channel::<PlaneEvent>();
+        let _keep_stdin_open = tx;
+        let decision = drain_then_decide(&rx, &mut |_| Ok(()), &|| Ok(false));
+        assert!(matches!(
+            decision,
+            UnkillDecision::Exit(PlaneExit::Unkilled)
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_state_after_the_drain_stays_in_control_plane_mode() {
+        // Leaving killed mode on an unreadable record would fail open: the
+        // fresh host would dial the broker before anyone re-proved "alive".
+        let (tx, rx) = mpsc::channel::<PlaneEvent>();
+        let _keep_stdin_open = tx;
+        let decision = drain_then_decide(&rx, &mut |_| Ok(()), &|| {
+            Err(io::Error::other("corrupt record"))
+        });
+        assert!(matches!(decision, UnkillDecision::Stay));
+    }
+
+    #[test]
+    fn eof_during_the_drain_ends_the_host() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(PlaneEvent::Eof).unwrap();
+        let decision = drain_then_decide(&rx, &mut |_| Ok(()), &|| Ok(false));
+        assert!(matches!(
+            decision,
+            UnkillDecision::Exit(PlaneExit::StdinClosed)
+        ));
+    }
+
+    #[test]
+    fn the_loop_handles_buffered_frames_before_exiting_on_unkill() {
+        // Loop-level wiring: with the watch's flag already raised and a frame
+        // buffered, the loop must run the drain (handling the frame) before
+        // its exit decision - never exit with the frame unread.
+        let (tx, rx) = mpsc::channel();
+        tx.send(PlaneEvent::Frame(
+            serde_json::json!({"type": "kill_status"}),
+        ))
+        .unwrap();
+        let _keep_stdin_open = tx;
+        let flag = AtomicBool::new(true);
+        let mut handled = Vec::new();
+        let exit = control_plane_loop(
+            &rx,
+            &flag,
+            &mut |frame| {
+                handled.push(frame);
+                Ok(())
+            },
+            &|| Ok(false),
+        );
+        assert_eq!(exit, PlaneExit::Unkilled);
+        assert_eq!(handled, vec![serde_json::json!({"type": "kill_status"})]);
     }
 }
