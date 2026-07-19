@@ -1343,8 +1343,11 @@ def test_foreign_peer_is_rejected():
         s.close()
         # Prove the drop was attestation specifically (not a uid check, a bind
         # error, or some other cause): the server logs the executable-identity
-        # mismatch to stderr. Draining stdin ends the server so we can read it.
-        mcp.stdin.close()
+        # mismatch to stderr. communicate() drains and closes stdin itself,
+        # which ends the server so we can read that log. Do NOT close stdin
+        # first: on Python 3.12 communicate() flushes the stdin object
+        # unconditionally and a manually pre-closed one raises ValueError
+        # (3.13+ tolerates it).
         try:
             _out, err = mcp.communicate(timeout=3)
         except subprocess.TimeoutExpired:
