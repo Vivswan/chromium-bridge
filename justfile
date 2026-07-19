@@ -164,9 +164,12 @@ fmt-check:
 
 # Lint everything, denying warnings: Rust (clippy) + TS/JS/JSON (Biome)
 [group('quality')]
-lint:
+lint: lint-rust lint-ts
+
+# Lint Rust, denying all warnings (the CI gate; `lint` adds Biome on top)
+[private]
+lint-rust:
     cargo clippy --all-targets -- -D warnings
-    bunx biome lint .
 
 # Lint the remaining standalone shell scripts (needs shellcheck)
 [private]
@@ -304,9 +307,11 @@ test-integration: build-release ext-build
 [group('main')]
 test: test-rust test-e2e
 
-# Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust)
+# Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust).
+# Depends on lint-rust, not lint: check-ts (biome ci) already covers biome lint,
+# so the lint meta-recipe would pay for the same Biome pass twice.
 [group('main')]
-ci: fmt-check lint lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-all-green check-gen check-envelope check-schemars-isolation
+ci: fmt-check lint-rust lint-scripts typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-all-green check-gen check-envelope check-schemars-isolation
 
 # Register this checkout's release binary with your browsers (build + doctor --fix)
 [group('main')]

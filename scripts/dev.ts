@@ -74,7 +74,11 @@ const killSite = () => {
   }
 };
 
-// Desktop app: background, detached; `just app-dev`'s steps. The prereqs run
+// Desktop app: background, detached; `just app-dev`'s steps MINUS its
+// extension production build - the WXT lane fills the same build/extension
+// outDir continuously, so building it here again would be wasted work. (Small
+// startup race: tauri can be up before WXT's first dev build lands; the app
+// just sees the extension artifacts a moment later.) The prereqs run
 // first (icon rasters, then the host binary Enclave ops need as a sibling of
 // the dev app), then `tauri dev`, whose beforeDevCommand starts the
 // desktop-UI vite on 1420 (strictPort; no clash with astro). tauri dev fans
