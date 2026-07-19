@@ -318,7 +318,7 @@ install: build-release
 web-build:
     bun run --cwd src/apps/web build
 
-# Docs site dev server only (`just dev` supersets this)
+# Docs site dev server only; replaces any already-running astro dev (`just dev` supersets this)
 [private]
 web-dev:
     bun run --cwd src/apps/web dev

@@ -2,7 +2,7 @@
 // Dev orchestrator for `just dev`: every dev surface at once, one terminal.
 //
 //   - extension (WXT):        FOREGROUND - real terminal output + live stdin
-//   - docs site (Astro):      background, output prefixed [site]
+//   - docs site (Astro):      background, output prefixed [web]
 //   - desktop app (tauri):    background, output prefixed [app]
 //
 // Why not `bun run --filter '*' dev`? The filter runner closes each child's
@@ -17,7 +17,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { join } from "node:path";
 import { repoRoot } from "./lib.ts";
 
-const siteDir = join(repoRoot, "src/apps/web");
+const webDir = join(repoRoot, "src/apps/web");
 const extensionDir = join(repoRoot, "src/apps/extension");
 const appDir = join(repoRoot, "src/apps/desktop");
 
@@ -32,40 +32,52 @@ const pipePrefixed = (child: ChildProcess, label: string) => {
   child.stderr?.on("data", (chunk) => console.error(prefixLines(label, chunk)));
 };
 
-// Site: background, detached. Detached puts it in its own process group so
-// shutdown can signal the WHOLE tree: `bun run dev` wraps the real
+// Docs site: background, detached. Detached puts it in its own process group
+// so shutdown can signal the WHOLE tree: `bun run dev` wraps the real
 // `astro dev` process, and killing just the wrapper's pid orphans astro,
 // which then squats on its port across sessions.
-const site = spawn("bun", ["run", "dev"], {
-  cwd: siteDir,
+//
+// The dev script (src/apps/web/package.json) is stop-then-start:
+// `astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev`. The stop clears any
+// already-running tracked server (astro exits 0 when none is running);
+// ASTRO_DEV_BACKGROUND=1 then pins Astro 7's lifecycle - the variable marks
+// the process as ALREADY backgrounded, so astro skips its AI-agent
+// auto-daemonization and runs the server inside this child. That keeps the
+// logs on our pipe (prefixed [web]) and the server inside this child's
+// process group, while astro still writes the lockfile that
+// `astro dev stop` / `astro dev status` read. (`astro dev logs` reads the
+// daemon log file, which this mode does not create - the logs are HERE.)
+const web = spawn("bun", ["run", "dev"], {
+  cwd: webDir,
   stdio: ["ignore", "pipe", "pipe"],
   detached: true,
 });
-pipePrefixed(site, "site");
+pipePrefixed(web, "web");
 
-let siteKilled = false;
-const killSite = () => {
+let webKilled = false;
+const killWeb = () => {
   // One-shot: the signal handler and WXT's exit handler both call this, and
   // a second `astro dev stop` would stall shutdown for up to 10 more seconds.
-  if (siteKilled) return;
-  siteKilled = true;
-  // Signal the group first (negative pid = wrapper AND a foreground astro):
-  // the daemon stop below can block for up to 10s, and if this process is
-  // force-killed while it runs, the group must already be down.
-  if (site.pid !== undefined) {
+  if (webKilled) return;
+  webKilled = true;
+  // Signal the group first (negative pid = wrapper AND the astro server,
+  // which ASTRO_DEV_BACKGROUND pins into this group): the stop below can
+  // block for up to 10s, and if this process is force-killed while it runs,
+  // the group must already be down.
+  if (web.pid !== undefined) {
     try {
-      process.kill(-site.pid, "SIGTERM");
+      process.kill(-web.pid, "SIGTERM");
     } catch {
       // Group already gone; nothing to clean up.
     }
   }
-  // Astro 7 daemonizes `astro dev` whenever it detects an AI coding agent
-  // (CLAUDECODE, Copilot terminals, Cursor, ...), so the real server may not
-  // be in the child's process group at all. `astro dev stop` reads Astro's
-  // lockfile and stops either flavor (SIGTERM, then SIGKILL after 5s).
+  // Belt and braces: `astro dev stop` reads Astro's lockfile and stops
+  // whatever it names (SIGTERM, then SIGKILL after 5s), covering a server
+  // that somehow escaped the group, and clears the lockfile so the next
+  // start is clean.
   try {
     execFileSync("bunx", ["astro", "dev", "stop"], {
-      cwd: siteDir,
+      cwd: webDir,
       stdio: "ignore",
       timeout: 10_000,
     });
@@ -258,11 +270,11 @@ const killWxt = () => {
 const shutdown = () => {
   shuttingDown = true;
   clearInterval(watchdog);
-  // All the fast group signals first; killSite ends with the potentially
+  // All the fast group signals first; killWeb ends with the potentially
   // slow, synchronous `astro dev stop`.
   killWxt();
   killApp();
-  killSite();
+  killWeb();
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
@@ -272,7 +284,7 @@ const spawnFailed = (name: string) => (error: Error) => {
   console.error(`[dev] failed to start ${name}: ${error.message}`);
   shutdown();
 };
-site.on("error", spawnFailed("the docs site"));
+web.on("error", spawnFailed("the docs site"));
 wxt.on("error", (error: Error) => {
   // A wxt spawn failure never emits "exit", so the exit handler below cannot
   // finish the job - clean up and leave directly.
@@ -283,15 +295,15 @@ wxt.on("error", (error: Error) => {
 wxt.on("exit", (code, signal) => {
   clearInterval(watchdog);
   killApp();
-  killSite();
+  killWeb();
   if (startFailed) process.exit(1);
   // Signal-terminated during our own shutdown is a clean stop; a signal from
   // anywhere else means dev died under us and the caller should see failure.
   if (shuttingDown) process.exit(code ?? 0);
   process.exit(code ?? (signal ? 1 : 0));
 });
-site.on("exit", (code) => {
-  if (!siteKilled && code !== 0 && code !== null) {
-    console.error(`[site] exited with code ${code}`);
+web.on("exit", (code) => {
+  if (!webKilled && code !== 0 && code !== null) {
+    console.error(`[web] exited with code ${code}`);
   }
 });
