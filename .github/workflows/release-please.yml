@@ -35,7 +35,7 @@ jobs:
       # required `all-green` check used to sit unmet on the release PR. Falls back to
       # GITHUB_TOKEN when the secret is absent: the release PR still opens, but CI
       # won't run on it (admin-merge) until you add the token. See AGENTS.md > Releases.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
