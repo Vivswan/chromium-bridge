@@ -193,7 +193,9 @@ mod tests {
 
     use super::*;
 
-    /// A fixture home in the temp dir; never a real user directory.
+    /// A fixture home in the temp dir; never a real user directory. The
+    /// system applications folder is a fixture subdir too, so detection
+    /// never scans the machine's real `/Applications`.
     fn fixture(tag: &str) -> (PathBuf, BaseDirs) {
         let root = std::env::temp_dir().join(format!("bb-first-run-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -204,6 +206,7 @@ mod tests {
             xdg_data_home: None,
             local_app_data: None,
             roaming_app_data: None,
+            system_applications: root.join("SystemApplications"),
         };
         (root, dirs)
     }
@@ -222,8 +225,13 @@ mod tests {
     #[test]
     fn first_launch_detects_and_writes_only_the_marker() {
         let (root, dirs) = fixture("detect");
-        // One "detected" browser: Chrome's macOS config root exists.
+        // One detected browser: Chrome's app bundle AND its macOS config
+        // root exist.
+        std::fs::create_dir_all(root.join("SystemApplications/Google Chrome.app")).unwrap();
         std::fs::create_dir_all(root.join("Library/Application Support/Google/Chrome")).unwrap();
+        // A leftover config root with no app bundle (the ghost-browser bug)
+        // must NOT be reported as detected.
+        std::fs::create_dir_all(root.join("Library/Application Support/Vivaldi")).unwrap();
 
         let report = detect_once(Os::MacOs, &dirs).unwrap().expect("first run");
         assert_eq!(report.detected, vec!["chrome"]);

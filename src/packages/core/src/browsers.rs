@@ -104,6 +104,10 @@ pub struct BaseDirs {
     pub local_app_data: Option<PathBuf>,
     /// `%APPDATA%` (Windows roaming; Opera keeps its profile there).
     pub roaming_app_data: Option<PathBuf>,
+    /// The system-wide applications folder (`/Applications` on macOS).
+    /// Injected like every other root so detection tests scan fixture trees,
+    /// never the machine's real one.
+    pub system_applications: PathBuf,
 }
 
 impl BaseDirs {
@@ -132,6 +136,7 @@ impl BaseDirs {
             xdg_data_home: std::env::var_os("XDG_DATA_HOME").and_then(absolute),
             local_app_data: std::env::var_os("LOCALAPPDATA").and_then(absolute),
             roaming_app_data: std::env::var_os("APPDATA").and_then(absolute),
+            system_applications: PathBuf::from("/Applications"),
         })
     }
 
@@ -183,19 +188,45 @@ impl Registration {
 #[derive(Debug, Clone)]
 pub struct BrowserEntry {
     pub browser: Browser,
-    /// A directory whose existence means "this browser is present for this
-    /// user" (its per-user config/profile root). Purely a path; the caller
-    /// checks existence.
-    pub detect_dir: PathBuf,
+    /// The browser's per-user config/profile root. On Linux/Windows its
+    /// existence is the detection signal; on macOS it is a weak signal on
+    /// its own -- an uninstalled browser leaves its config root behind
+    /// forever, and dev tooling creates some (a bare `Chromium` folder) --
+    /// so detection there requires an application bundle from `app_paths`
+    /// instead. Purely a path; the caller checks existence.
+    pub config_dir: PathBuf,
+    /// Candidate install locations for the application itself (macOS: the
+    /// `.app` bundle under `/Applications` or `~/Applications`). Empty on
+    /// platforms where we have no equally cheap app-presence signal
+    /// (Linux/Windows), which keeps the config-dir heuristic there. Purely
+    /// paths; the caller checks existence.
+    pub app_paths: Vec<PathBuf>,
     pub registration: Registration,
 }
 
 impl BrowserEntry {
-    /// Whether the browser looks present for this user (its config root
-    /// exists). The only I/O in this module's surface, kept on the entry so
-    /// `resolve` itself stays pure for tests.
+    /// Whether the browser looks present for this user. The only I/O in this
+    /// module's surface, kept on the entry so `resolve` itself stays pure for
+    /// tests.
+    ///
+    /// When `app_paths` is populated (macOS), the application bundle itself
+    /// must exist -- a leftover config root alone must never light the row,
+    /// and a freshly installed app that has not created its config root yet
+    /// still counts. When `app_paths` is empty (Linux/Windows), the config
+    /// root is the best cheap signal we have.
+    ///
+    /// This is a display/guidance heuristic, not a security gate. Default
+    /// `doctor --fix` does use it to pick which browsers to register (fewer
+    /// detected browsers means fewer manifests written, never more), and
+    /// registration into an undetected browser stays possible through the
+    /// explicit register paths. Residual: a macOS app installed outside both
+    /// application folders reads as "not detected"; the user can still
+    /// register it explicitly.
     pub fn detected(&self) -> bool {
-        self.detect_dir.is_dir()
+        if self.app_paths.is_empty() {
+            return self.config_dir.is_dir();
+        }
+        self.app_paths.iter().any(|p| p.is_dir())
     }
 }
 
@@ -209,6 +240,24 @@ fn macos_vendor_dir(browser: Browser) -> &'static str {
         Browser::Edge => "Microsoft Edge",
         Browser::Vivaldi => "Vivaldi",
         Browser::Opera => "com.operasoftware.Opera",
+    }
+}
+
+/// Each browser's application bundle name on macOS, looked for under
+/// `/Applications` and `~/Applications` (the two standard install roots,
+/// including Homebrew casks). A Launch Services lookup by bundle id would
+/// also catch non-standard locations, but needs shelling out or an
+/// Objective-C bridge; two path checks are the cheap, dependency-free
+/// mechanism, and the non-standard-location gap is a named residual on
+/// [`BrowserEntry::detected`].
+fn macos_app_bundle(browser: Browser) -> &'static str {
+    match browser {
+        Browser::Chrome => "Google Chrome.app",
+        Browser::Chromium => "Chromium.app",
+        Browser::Brave => "Brave Browser.app",
+        Browser::Edge => "Microsoft Edge.app",
+        Browser::Vivaldi => "Vivaldi.app",
+        Browser::Opera => "Opera.app",
     }
 }
 
@@ -245,7 +294,7 @@ fn windows_vendor_key(browser: Browser) -> &'static str {
 /// NOTE: derived from vendor documentation, not yet verified on a real
 /// Windows machine; Opera's vendor dir is broad (other Opera-family products
 /// like Opera GX share `Opera Software`), so detection there can over-match.
-fn windows_detect_dir(dirs: &BaseDirs, browser: Browser) -> PathBuf {
+fn windows_profile_dir(dirs: &BaseDirs, browser: Browser) -> PathBuf {
     let local = |sub: &str| {
         dirs.local_app_data
             .clone()
@@ -291,10 +340,15 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
                 .home
                 .join("Library/Application Support")
                 .join(macos_vendor_dir(browser));
+            let bundle = macos_app_bundle(browser);
             BrowserEntry {
                 browser,
                 registration: Registration::ManifestDir(root.join("NativeMessagingHosts")),
-                detect_dir: root,
+                config_dir: root,
+                app_paths: vec![
+                    dirs.system_applications.join(bundle),
+                    dirs.home.join("Applications").join(bundle),
+                ],
             }
         }
         Os::Linux => {
@@ -302,12 +356,14 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
             BrowserEntry {
                 browser,
                 registration: Registration::ManifestDir(root.join("NativeMessagingHosts")),
-                detect_dir: root,
+                config_dir: root,
+                app_paths: Vec::new(),
             }
         }
         Os::Windows => BrowserEntry {
             browser,
-            detect_dir: windows_detect_dir(dirs, browser),
+            config_dir: windows_profile_dir(dirs, browser),
+            app_paths: Vec::new(),
             registration: Registration::Registry {
                 key: format!(
                     r"{}\NativeMessagingHosts\{HOST_ID}",
@@ -344,6 +400,7 @@ mod tests {
             xdg_data_home: None,
             local_app_data: None,
             roaming_app_data: None,
+            system_applications: PathBuf::from("/fix/Applications"),
         }
     }
 
@@ -360,7 +417,7 @@ mod tests {
     fn macos_layout_matches_the_shell_installer() {
         let e = entry(Os::MacOs, &dirs(), Browser::Brave);
         assert_eq!(
-            e.detect_dir,
+            e.config_dir,
             PathBuf::from("/fix/home/Library/Application Support/BraveSoftware/Brave-Browser")
         );
         assert_eq!(
@@ -369,11 +426,22 @@ mod tests {
                 "/fix/home/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
             )
         );
+        // App-presence candidates: the two standard install roots.
+        assert_eq!(
+            e.app_paths,
+            vec![
+                PathBuf::from("/fix/Applications/Brave Browser.app"),
+                PathBuf::from("/fix/home/Applications/Brave Browser.app"),
+            ]
+        );
         // Opera's macOS dir is the bundle-id one, not "Opera".
         let opera = entry(Os::MacOs, &dirs(), Browser::Opera);
         assert!(opera
-            .detect_dir
+            .config_dir
             .ends_with("Library/Application Support/com.operasoftware.Opera"));
+        assert!(opera
+            .app_paths
+            .contains(&PathBuf::from("/fix/Applications/Opera.app")));
     }
 
     #[test]
@@ -390,7 +458,7 @@ mod tests {
         with_xdg.xdg_config_home = Some(PathBuf::from("/fix/xdg-config"));
         let e = entry(Os::Linux, &with_xdg, Browser::Edge);
         assert_eq!(
-            e.detect_dir,
+            e.config_dir,
             PathBuf::from("/fix/xdg-config/microsoft-edge")
         );
     }
@@ -417,13 +485,13 @@ mod tests {
             other => panic!("expected a registry registration, got {other:?}"),
         }
         assert_eq!(
-            e.detect_dir,
+            e.config_dir,
             PathBuf::from("/fix/local/Google/Chrome/User Data")
         );
         // Opera detects under the roaming profile dir.
         let opera = entry(Os::Windows, &d, Browser::Opera);
         assert_eq!(
-            opera.detect_dir,
+            opera.config_dir,
             PathBuf::from("/fix/roaming/Opera Software")
         );
     }
@@ -452,25 +520,58 @@ mod tests {
     }
 
     #[test]
-    fn detection_checks_the_config_root_on_fixture_dirs() {
+    fn detection_requires_the_app_on_macos_and_the_config_root_elsewhere() {
         // Fixture tree in a temp dir; never a real user dir.
         let root = std::env::temp_dir().join(format!("bb-browsers-detect-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("Library/Application Support/Google/Chrome")).unwrap();
         let d = BaseDirs {
-            home: root.clone(),
+            home: root.join("home"),
             xdg_config_home: None,
             xdg_data_home: None,
             local_app_data: None,
             roaming_app_data: None,
+            system_applications: root.join("Applications"),
         };
+
+        // macOS: the app bundle is required; the config root alone is not
+        // enough (uninstalled browsers and dev tooling leave those behind).
+        let app_support = d.home.join("Library/Application Support");
+        // chrome: app in the system folder + config root -> detected.
+        std::fs::create_dir_all(root.join("Applications/Google Chrome.app")).unwrap();
+        std::fs::create_dir_all(app_support.join("Google/Chrome")).unwrap();
+        // brave: app in ~/Applications, config root ABSENT (fresh install
+        // before first run) -> still detected.
+        std::fs::create_dir_all(d.home.join("Applications/Brave Browser.app")).unwrap();
+        // chromium + vivaldi: leftover config roots with no app -> NOT
+        // detected (the reported ghost-browser bug).
+        std::fs::create_dir_all(app_support.join("Chromium")).unwrap();
+        std::fs::create_dir_all(app_support.join("Vivaldi")).unwrap();
+
         let entries = resolve(Os::MacOs, &d);
         let detected: Vec<&str> = entries
             .iter()
             .filter(|e| e.detected())
             .map(|e| e.browser.key())
             .collect();
-        assert_eq!(detected, vec!["chrome"]);
+        assert_eq!(detected, vec!["chrome", "brave"]);
+
+        // Linux keeps the config-dir heuristic: no app-presence signal is
+        // resolved there, so the same fixture home detects via ~/.config.
+        std::fs::create_dir_all(d.home.join(".config/chromium")).unwrap();
+        let entries = resolve(Os::Linux, &d);
+        let detected: Vec<&str> = entries
+            .iter()
+            .filter(|e| e.detected())
+            .map(|e| e.browser.key())
+            .collect();
+        assert_eq!(detected, vec!["chromium"]);
+        for e in resolve(Os::Linux, &d) {
+            assert!(e.app_paths.is_empty(), "{:?}", e.browser);
+        }
+        for e in resolve(Os::Windows, &d) {
+            assert!(e.app_paths.is_empty(), "{:?}", e.browser);
+        }
+
         std::fs::remove_dir_all(&root).unwrap();
     }
 
