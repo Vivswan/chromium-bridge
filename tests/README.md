@@ -1,6 +1,6 @@
 # Tests
 
-Three suites across **two languages**, in two directories: `protocol/` (python)
+Three suites across two languages, in two directories: `protocol/` (python)
 and `browser/` (TypeScript, a bun workspace member), with shared pages in
 `fixtures/`. The language split is deliberate, not historical accident:
 
@@ -11,8 +11,8 @@ and `browser/` (TypeScript, a bun workspace member), with shared pages in
 | **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `build/extension/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
 | **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
 
-The two browser suites are **TypeScript run under bun** (matching the
-extension). The protocol suite stays **Python on purpose** - rewriting it in
+The two browser suites are TypeScript run under bun (matching the
+extension). The protocol suite stays Python on purpose - rewriting it in
 TS/JS would remove the independent-implementation value and add nothing.
 
 ## ⚠ Safety - never point browser tests at your daily Chrome
