@@ -7,6 +7,7 @@
 # additions survive template updates via three-way merge.
 
 repository:
+  private: true
   description: "Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port"
   topics: "mcp,browser-automation,native-messaging,chrome-extension,brave,rust"
   has_issues: true
