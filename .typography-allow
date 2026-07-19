@@ -1,12 +1,20 @@
 # Exact repo-relative paths exempt from scripts/check-typography.ts
 # (one per line; exact match, never a prefix).
 #
-# EMPTY, and it should stay that way: every file in the repo - including the
-# zh locale bundles and translated docs - uses ASCII punctuation for
-# everything the checker bans (the CJK marks it always allows in CJK-context
-# files remain in use). Add a path only with an explicit, reviewed decision.
+# Every HUMAN-AUTHORED file in the repo - including the zh locale bundles and
+# translated docs - uses ASCII punctuation for everything the checker bans
+# (the CJK marks it always allows in CJK-context files remain in use). Add a
+# path only with an explicit, reviewed decision.
 #
 # Whole-script CJK containment (an untranslated Chinese label leaking into an
 # English surface) is policed separately by scripts/check-cjk.ts, not here.
 # Non-banned functional glyphs (U+2022 masking bullet, U+2192, U+26A0, U+2260)
 # are not look-alikes and need no exemption.
+
+# Reviewed 2026-07-19: release-please generates CHANGELOG.md from commit
+# subjects, and two pre-policy subjects in immutable history contain U+2014.
+# Exempting the generated file beats hand-editing a bot-refreshed branch.
+# Once the bootstrap release merges, the offending lines freeze in the file:
+# ASCII-ify them on main and REMOVE this entry (future sections come from
+# post-policy, ASCII-enforced subjects).
+CHANGELOG.md
