@@ -53,7 +53,7 @@ tests/protocol/__pycache__/
 /tests/chrome/
 /tests/chromium/
 
-# Development worktrees (see CONTRIBUTING.md — one per branch, never committed)
+# Development worktrees (see CONTRIBUTING.md - one per branch, never committed)
 /.worktree/
 
 # Chrome Web Store upload package (built from dist/, never committed)
@@ -62,7 +62,7 @@ tests/protocol/__pycache__/
 # Playwright MCP scratch
 /.playwright-mcp/
 
-# Extension signing keys — never commit
+# Extension signing keys - never commit
 *.pem
 
 # Editor / IDE
