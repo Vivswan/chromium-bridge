@@ -81,11 +81,12 @@ jobs:
           [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
 
       - name: Build binary (deterministic)
-        # build-repro.sh pins SOURCE_DATE_EPOCH and remaps build paths so the
+        # build-repro.ts pins SOURCE_DATE_EPOCH and remaps build paths so the
         # binary is bit-for-bit reproducible from the tag with the pinned
-        # toolchain; see README.md "Verifying your binary".
+        # toolchain; see SECURITY.md "Release artifact integrity". It is
+        # self-contained (no bun install needed; setup-bun above suffices).
         shell: bash
-        run: ./scripts/build-repro.sh
+        run: bun scripts/build-repro.ts
 
       - name: Build extension bundle
         run: |

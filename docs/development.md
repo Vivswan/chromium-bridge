@@ -16,7 +16,6 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
 | [`just`](https://just.systems/) | task runner | the `justfile` collects every dev task; `just` lists the human-facing ones, grouped (internal sub-checks are `[private]`: hidden from the list, still runnable by name). Each recipe is a plain command you can also run by hand |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `just typos` / `just machete`; CI gates both |
-| [`shellcheck`](https://www.shellcheck.net/) | linting the remaining shell scripts (optional) | `just lint-scripts`; CI gates it |
 
 Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`):
 `bun install` wires a pre-commit hook that runs `just ci`, so a commit that
@@ -45,16 +44,16 @@ tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
                          integration_e2e.ts, run_all.ts (bun workspace member; isolated Chrome only)
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
 scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
-                         check-extension-id.ts, lib.ts + the standalone shell scripts
+                         check-extension-id.ts, build-repro.ts, lib.ts, ...
 src/apps/web/           bun workspace member: minimal Astro site rendering the
                          repo's markdown docs + translations (just web-build;
                          not part of `just ci`)
 ```
 
-The standalone shell scripts (`scripts/build-repro.sh`,
-`scripts/fuzz_smoke.sh`) stay shell because they must run without a bun
-toolchain. They're `shellcheck`-clean (CI gates it; `just lint-scripts`
-locally).
+All tooling scripts are TypeScript run via bun. Two of them
+(`scripts/build-repro.ts` and the nightly fuzz smoke driver) are deliberately
+self-contained on node builtins so they work before `bun install` - the
+release workflow builds the binary before installing the workspace.
 
 Rust dependencies are gated by supply-chain review (`cargo vet`, the
 `cargo-vet` CI job). Adding or bumping a crate fails CI until the new version

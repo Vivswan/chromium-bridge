@@ -3,9 +3,9 @@
 //
 //   import { repoRoot, cargoVersion } from "./lib.ts";
 //
-// (The remaining standalone shell scripts - scripts/build-repro.sh and
-// scripts/fuzz_smoke.sh - carry their own inlined copies of the old lib.sh
-// helpers so they keep working without a bun runtime.)
+// (scripts/build-repro.ts and scripts/fuzz_smoke.ts deliberately do NOT
+// import this file: they stay self-contained on node builtins so they run
+// before `bun install` - the release workflow builds the binary first.)
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

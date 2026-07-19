@@ -89,7 +89,7 @@ know why it is there:
   `rustfmt.toml` and `clippy.toml` (`cargo fmt` / clippy discover them from the
   crate root; no CLI override is set), `deny.toml` (`cargo deny check` is invoked
   bare, so it uses the default root path), `.editorconfig` / `.gitignore` /
-  `.gitattributes` / `.shellcheckrc` (walked up from the working tree).
+  `.gitattributes` (walked up from the working tree).
 - **Convention / GitHub-surfaced (keep at root):** `README.md`, `LICENSE`,
   `SECURITY.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `CHANGELOG.md`, `AGENTS.md`.
 - **Referenced by path (moving requires editing every reference):**

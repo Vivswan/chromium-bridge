@@ -178,7 +178,7 @@ be disabled per surface (`evalMask`), which removes this filter entirely;
 
 Release binaries are built by GitHub Actions from the tagged commit
 (`.github/workflows/release.yml`) with a deterministic build
-(`scripts/build-repro.sh`: pinned toolchain, path remapping,
+(`scripts/build-repro.ts`: pinned toolchain, path remapping,
 `SOURCE_DATE_EPOCH`, `--locked`), so the binary's hash can be re-derived
 from the tag. Byte-identical rebuilds are verified across clean builds and
 checkout paths on the same machine; matching a published hash from another
@@ -203,12 +203,13 @@ it sits on disk; it downloads nothing and adds no verification step of its
 own, so verify first, then register. You can also skip the release pipeline
 entirely: the binary builds reproducibly, so install the exact toolchain
 pinned in `rust-toolchain.toml` via [rustup](https://rustup.rs) (a Homebrew
-or distro rustc embeds different standard-library paths and will not match),
+or distro rustc embeds different standard-library paths and will not match)
+plus [bun](https://bun.sh) to run the build script,
 on the same platform the release targets, then:
 
 ```sh
 git checkout <tag>
-./scripts/build-repro.sh
+bun scripts/build-repro.ts
 shasum -a 256 target/release/chromium-bridge   # compare with the release's .binary.sha256
 ```
 

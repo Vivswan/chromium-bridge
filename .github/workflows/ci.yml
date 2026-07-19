@@ -171,13 +171,10 @@ jobs:
       - run: bun scripts/check-extension-id.ts
 
   tooling:
-    name: Tooling hygiene (shellcheck, typos, cargo-machete)
+    name: Tooling hygiene (typos, cargo-machete)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # shellcheck is preinstalled on GitHub's ubuntu runners. Only the
-      # standalone shell scripts remain; the dev tooling is TypeScript now.
-      - run: shellcheck scripts/build-repro.sh scripts/fuzz_smoke.sh
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
           # Pinned: these tools' verdicts gate the build. Bump deliberately.
