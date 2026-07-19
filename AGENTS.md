@@ -67,8 +67,9 @@ is authoritative; this file only summarizes.**
 just ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
 ```
 
-The justfile is the canonical command interface: `just --list` shows every
-task, the root `package.json` scripts are thin aliases delegating to just,
+The justfile is the canonical command interface: `just --list` shows the
+top-level verbs (sub-steps are `[private]`: hidden, still runnable by name),
+the root `package.json` scripts are thin aliases delegating to just,
 and the per-workspace `package.json` scripts are implementation details the
 justfile and CI call.
 Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,

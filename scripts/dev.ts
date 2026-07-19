@@ -88,12 +88,14 @@ const killApp = () => {
   if (appKilled) return;
   appKilled = true;
   const child = appChild;
-  if (child?.pid !== undefined && child.exitCode === null) {
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {
-      child.kill("SIGTERM");
-    }
+  if (child?.pid === undefined) return;
+  // Signal the group even when the direct child already exited: its
+  // descendants (vite, cargo, the app window) share the pgid and can
+  // outlive it.
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    // Whole group already gone; nothing to clean up.
   }
 };
 const runAppStep = (cmd: string, args: string[], cwd: string) =>
@@ -132,9 +134,19 @@ const startApp = async () => {
   pipePrefixed(app, "app");
   app.on("error", (error) => console.error(`[app] failed to start tauri dev: ${error.message}`));
   app.on("exit", (code) => {
-    if (!appKilled && code !== 0 && code !== null) {
-      console.error(`[app] exited with code ${code}; extension and site keep running`);
+    if (appKilled) return;
+    // The leader can die while its group (vite, cargo, the app window)
+    // lives - e.g. a tauri CLI crash - and that would squat port 1420.
+    // Sweep the group on any exit we did not initiate.
+    if (app.pid !== undefined) {
+      try {
+        process.kill(-app.pid, "SIGTERM");
+      } catch {
+        // Whole group already gone.
+      }
     }
+    const how = code === null ? "on a signal" : `with code ${code}`;
+    console.error(`[app] tauri dev exited ${how}; extension and site keep running`);
   });
 };
 void startApp();
