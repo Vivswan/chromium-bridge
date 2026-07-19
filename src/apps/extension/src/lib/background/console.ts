@@ -1,10 +1,10 @@
-// console_get — read recent console output from the active tab via Chrome's
+// console_get - read recent console output from the active tab via Chrome's
 // debugger (CDP). We attach, enable Runtime + Log, collect the events the
 // browser delivers during a short window (Log.enable replays buffered
 // browser-side entries; Runtime.consoleAPICalled and Runtime.exceptionThrown
 // arrive for anything happening while we listen), then detach. Console.* output
-// produced before the call is generally NOT available — the DevTools protocol
-// does not replay historical console.* calls — so this is honest about only
+// produced before the call is generally NOT available - the DevTools protocol
+// does not replay historical console.* calls - so this is honest about only
 // surfacing what the debugger reports at call time. Values are masked before
 // they leave the extension (console lines can carry tokens). Mirrors the
 // transient-attach shape of precise.ts (ADR-0009 / ADR-0017).

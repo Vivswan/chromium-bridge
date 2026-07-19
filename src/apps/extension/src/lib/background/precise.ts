@@ -1,4 +1,4 @@
-// page_snapshot_precise — Chrome's authoritative accessibility tree via the
+// page_snapshot_precise - Chrome's authoritative accessibility tree via the
 // debugger API (CDP). More accurate than the content-script snapshot (shadow
 // DOM, complex ARIA) but briefly shows the "Started debugging this browser"
 // infobar on EVERY tab while attached. We attach → fetch tree → tag elements →
@@ -211,5 +211,5 @@ function truncateUrl(u: string | undefined) {
 }
 function truncateAx(s: unknown): unknown {
   if (typeof s !== "string") return s;
-  return s.length > 120 ? `${s.slice(0, 120)}…` : s;
+  return s.length > 120 ? `${s.slice(0, 120)}...` : s;
 }

@@ -1,7 +1,7 @@
-// page_upload — attach a LOCAL file to a page's file input (<input type=file>)
+// page_upload - attach a LOCAL file to a page's file input (<input type=file>)
 // via Chrome's debugger (CDP DOM.setFileInputFiles), so the page can upload it.
 //
-// SECURITY (CRITICAL): this is a local-file EGRESS vector — a hijacked model
+// SECURITY (CRITICAL): this is a local-file EGRESS vector - a hijacked model
 // could attach the user's private files to a web page and have it uploaded.
 // Two gates, both mandatory:
 //   1. OFF by default (fileUploadEnabled). The user must opt in.
@@ -41,7 +41,7 @@ export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): 
   if (!path) throw new Error("page_upload needs `path` (absolute local file path)");
   // Require an absolute path: a POSIX "/..." or a Windows "C:\..." / UNC "\\...".
   // A relative path would resolve against the host process's cwd, which is not
-  // what the user sees in the confirmation — reject it rather than guess.
+  // what the user sees in the confirmation - reject it rather than guess.
   if (!(path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\"))) {
     throw new Error(`page_upload needs an ABSOLUTE path, got: ${path}`);
   }

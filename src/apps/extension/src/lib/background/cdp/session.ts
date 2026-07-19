@@ -1,10 +1,10 @@
-// CdpSession — a thin Facade over browser.debugger (CDP) for ONE tab.
+// CdpSession - a thin Facade over browser.debugger (CDP) for ONE tab.
 //
 // The promisified attach/detach/send primitives (and the NON_DEBUGGABLE /
 // isDebuggable URL filter) were previously private to background/precise.ts.
 // They live here now so both precise.ts and the CDP page backend share one
 // implementation (see ADR-0017). `evaluate` runs code in the page's MAIN world
-// via Runtime.evaluate — this is what lets CDP mode bypass page CSP.
+// via Runtime.evaluate - this is what lets CDP mode bypass page CSP.
 
 // The subset of the CDP payloads we read (not the full protocol).
 import { browser } from "wxt/browser";
@@ -49,7 +49,7 @@ export function dbgAttach(tabId: number): Promise<void> {
 }
 
 export async function dbgDetach(tabId: number): Promise<void> {
-  // detach must never throw — used in finally / teardown. Swallow errors.
+  // detach must never throw - used in finally / teardown. Swallow errors.
   try {
     await browser.debugger.detach({ tabId });
   } catch {
@@ -67,7 +67,7 @@ export async function dbgSend<T = unknown>(
 
 // Build a Runtime.evaluate expression that invokes a page function with args.
 // The function is stringified and applied to the JSON-serialized args, so it
-// runs self-contained in the page — it must NOT close over module scope.
+// runs self-contained in the page - it must NOT close over module scope.
 export function buildEvaluateExpression(
   fn: (...args: never[]) => unknown,
   args: readonly unknown[] = [],
@@ -96,14 +96,14 @@ export class CdpSession {
   }
 
   // Attach the debugger to this tab. Idempotent: a no-op if already attached.
-  // The banner ("Started debugging this browser") stays up until detach — by
+  // The banner ("Started debugging this browser") stays up until detach - by
   // design in CDP mode (ADR-0017), the registry keeps sessions attached.
   async attach(): Promise<void> {
     if (this.attached) return;
     // Dedupe concurrent attaches. Without this, two page ops racing on a fresh
     // tab each issue browser.debugger.attach; the second fails ("another debugger
     // is already attached"), and the caller's cleanup deletes the session the
-    // first successfully attached — orphaning the debugger (stuck banner, CDP
+    // first successfully attached - orphaning the debugger (stuck banner, CDP
     // broken for that tab). Share one in-flight attach instead.
     if (!this.attaching) {
       this.attaching = this.doAttach().finally(() => {
@@ -137,7 +137,7 @@ export class CdpSession {
     await dbgDetach(this.tabId);
   }
 
-  // Mark the session as detached WITHOUT calling browser.debugger.detach — for
+  // Mark the session as detached WITHOUT calling browser.debugger.detach - for
   // the case where Chrome already detached us (onDetach event).
   markDetached(): void {
     this.attached = false;

@@ -87,7 +87,7 @@ function onNativeDisconnect(_p: Browser.runtime.Port) {
   const err = browser.runtime.lastError;
   console.warn("[bb] native host disconnected:", err?.message || "unknown");
   // Chrome kills the host process when the Port drops. Reconnect so a fresh
-  // host is spawned — but back off to avoid a tight loop if the host is
+  // host is spawned - but back off to avoid a tight loop if the host is
   // genuinely unavailable (e.g. install not finished).
   scheduleReconnect();
 }

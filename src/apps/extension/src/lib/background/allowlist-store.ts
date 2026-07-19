@@ -119,7 +119,7 @@ export async function resolvePendingAllow(
   return { ok: true };
 }
 
-// Manual add from the options page. We only persist the glob — MV3 forbids
+// Manual add from the options page. We only persist the glob - MV3 forbids
 // browser.permissions.request outside a user-gesture context, so the actual
 // host permission is requested on first visit via ensureAllowed().
 export async function addAllow(

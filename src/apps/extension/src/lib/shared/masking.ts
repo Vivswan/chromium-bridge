@@ -54,7 +54,7 @@ export function maskString(s: string): string {
 }
 
 // Cookie value masking: non-strings and short values pass through unchanged;
-// otherwise apply only the pattern catalogue (no full-mask — see note above).
+// otherwise apply only the pattern catalogue (no full-mask - see note above).
 export function maskCookieValue(v: unknown): unknown {
   if (typeof v !== "string") return v;
   if (v.length < 8) return v;
