@@ -19,8 +19,9 @@ updates:
       default-days: 7
 
   # bun workspace (root bun.lock covers src/apps/extension, src/packages/*,
-  # tests/browser, scripts). Dependabot's npm ecosystem reads bun.lock since 2025.
-  - package-ecosystem: "npm"
+  # tests/browser, scripts). Dependabot's bun ecosystem keeps both the
+  # manifests and bun.lock current.
+  - package-ecosystem: "bun"
     directory: "/"
     schedule:
       interval: "monthly"
