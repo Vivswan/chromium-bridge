@@ -7,7 +7,7 @@
 default:
     @just --list --unsorted
 
-# Build everything: shared typecheck -> extension -> desktop UI -> scripts typecheck -> cargo workspace
+# Build everything: shared typecheck -> extension -> desktop UI -> scripts typecheck -> cargo workspace -> docs site
 build:
     bun scripts/gen-icons.ts
     bun run --cwd src/packages/shared typecheck
@@ -15,6 +15,7 @@ build:
     bun run --cwd src/apps/desktop/ui build
     bunx tsc -p scripts
     cargo build --workspace
+    bun run --cwd docs/site build
 
 # Build the release binary
 build-release:
@@ -31,6 +32,11 @@ desktop-bundle:
 # Verify the signed desktop bundle's entitlement chain (app + nested host)
 desktop-check:
     bun scripts/check-desktop-signing.ts
+
+# Dev everything web: extension (WXT dev browser) + docs site (Astro) together;
+# Ctrl-C stops both. The desktop app's loop stays separate: app-dev.
+dev:
+    bun scripts/dev.ts
 
 # Desktop app dev loop: Vite dev server + tauri dev (unsigned; Enclave ops
 # need the built host as a sibling: run `cargo build` first)

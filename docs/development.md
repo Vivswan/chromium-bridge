@@ -72,6 +72,7 @@ With `just` (`just` lists every recipe):
 just build          # build everything (see below)
 just build-release  # cargo build --release (the binary the e2e suites drive)
 just build-repro    # deterministic release build (scripts/build-repro.sh)
+just dev            # extension (WXT dev browser) + docs site dev, together
 just test           # rust tests (nextest) + protocol e2e
 just test-browser   # build the extension, then DOM + smoke tests (needs Chrome)
 just ci             # everything CI runs, minus the browser job
@@ -83,7 +84,8 @@ just install        # build the release binary, then register it (doctor --fix)
 
 `just build` builds the entire repo in one command: it typechecks
 `src/packages/shared`, bundles the extension, builds the desktop UI,
-typechecks `scripts/`, and finishes with `cargo build --workspace`. Use it to
+typechecks `scripts/`, runs `cargo build --workspace`, and finishes by
+building the docs site. Use it to
 prove the whole graph still compiles after a cross-cutting change.
 
 The justfile is the canonical command interface: every task is a `just`
