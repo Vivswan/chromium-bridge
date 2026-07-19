@@ -88,7 +88,7 @@ window you didn't start yourself: stop and ask first.
   (`src/packages/core/src/log.rs`), never bare `eprintln!` for diagnostics.
   Remember: **stdout is protocol** - all logging goes to stderr.
 - **TypeScript** - Biome lints and formats every TS/JS/JSON file in the bun
-  workspace (`bunx biome ci .` to check, `just fix-ts` to auto-fix; config in
+  workspace (`bunx biome ci .` to check, `just fix` to auto-fix; config in
   `biome.json`). `noExplicitAny` is enforced in extension source; test files
   and the tests/ harness are exempt until their CDP plumbing gets real types.
 - The cross-boundary TS shapes (settings, envelopes, runtime messages) live as
