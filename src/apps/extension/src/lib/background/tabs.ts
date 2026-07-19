@@ -22,7 +22,7 @@ export async function injectIfNeeded(tabId: number) {
   try {
     await browser.tabs.sendMessage(tabId, { op: "ping" });
   } catch {
-    // Not injected yet — inject now (requires scripting permission + host).
+    // Not injected yet - inject now (requires scripting permission + host).
     // Fetch the tab purely for its side effect: rejects if the tab is gone.
     await browser.tabs.get(tabId);
     await browser.scripting.executeScript({

@@ -1,18 +1,18 @@
-// page_handle_dialog — accept or dismiss a JavaScript dialog (alert / confirm /
+// page_handle_dialog - accept or dismiss a JavaScript dialog (alert / confirm /
 // prompt) on the active tab via Chrome's debugger (CDP
 // Page.handleJavaScriptDialog).
 //
 // SECURITY: this tool is OFF by default (handleDialogEnabled). Accepting a
 // dialog can confirm a destructive action, and a dialog blocks the page, so we
 // cannot render an in-page confirmation Toast the way page_click / page_eval do
-// — there is no surface to draw on while the dialog is up. The explicit
+// - there is no surface to draw on while the dialog is up. The explicit
 // settings opt-in is therefore the gate (fail-closed: no opt-in, no dialog
 // handling). See the tool description in src/packages/core/src/tools/catalogue.rs.
 //
 // A dialog is only handleable if the debugger was attached (Page domain
 // enabled) when it opened; that is the case under CDP mode, whose registry
 // keeps a persistent attach. Without that, the native dialog is already showing
-// and may not be capturable — Page.handleJavaScriptDialog then errors, which we
+// and may not be capturable - Page.handleJavaScriptDialog then errors, which we
 // surface honestly.
 
 import { getSetting } from "../shared/settings";

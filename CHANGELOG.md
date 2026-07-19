@@ -26,22 +26,22 @@ extension-ID self-check, restyled confirmations, and dark mode.
   and extension versions in lockstep (Cargo.toml is the source of truth).
 - `LICENSE` (Apache-2.0), `CONTRIBUTING.md`, `docs/development.md`,
   `.editorconfig`.
-- **Prebuilt release tarballs** — tagging `v*` triggers a GitHub Actions release
+- **Prebuilt release tarballs** - tagging `v*` triggers a GitHub Actions release
   build (macOS Apple Silicon) that publishes a binary + built extension +
   installer. `install.sh` auto-detects a prebuilt tarball and installs with no
   Rust/Node toolchain. The matrix also builds Linux x64 and Windows x64, each
   with a `.sha256` checksum and SLSA build-provenance attestation, plus a
   standalone extension zip; a decoupled workflow attaches a CycloneDX SBOM.
-- **Opt-in CDP execution mode** (`cdpMode`, off by default) — routes every page
+- **Opt-in CDP execution mode** (`cdpMode`, off by default) - routes every page
   op through `chrome.debugger` (CDP) in the page's main world instead of the
   content script, which **bypasses page CSP** so `page_eval` works on strict-CSP
   sites (e.g. Bing). Keeps every confirmation/allowlist/masking gate. A
   persistent debugger attach shows Chrome's "Started debugging this browser"
   banner while enabled. (ADR-0017)
-- **`confirmPageEval` / `confirmTabClose` settings** — opt out of the per-call
+- **`confirmPageEval` / `confirmTabClose` settings** - opt out of the per-call
   confirmation for `page_eval` / `tab_close` for hands-off automation. Both
   default on, so behavior is unchanged unless you turn them off.
-- **Extension-ID self-check** — the service worker logs a loud `[bb]` error at
+- **Extension-ID self-check** - the service worker logs a loud `[bb]` error at
   startup when the running extension ID ≠ the pinned ID, the most common
   "won't connect" cause (native-messaging `allowed_origins` mismatch).
 - **Dark mode** for the options and popup pages (`prefers-color-scheme`).
@@ -54,16 +54,16 @@ extension-ID self-check, restyled confirmations, and dark mode.
 ### Changed
 - **Installers moved to `install/`** (`install/install.sh`, `install/install.ps1`,
   `install/mcp-config.example.json`) to slim the repository root. Release archives
-  are unchanged — they still ship the installer flat at the archive root, so the
+  are unchanged - they still ship the installer flat at the archive root, so the
   extract-and-run flow (`./install.sh`) is the same. From a source checkout, run
   `./install/install.sh`. Each installer auto-detects whether it sits beside
   `extension/` (release archive) or one level up (source tree).
 - **Extension ID is now pinned** via a public `key` in the manifest
   (`mkjjlmjbcljpcfkfadfmhblmmddkdihf`), so it's the same for everyone
   regardless of load path. `install.sh` writes the host manifest with that ID
-  directly — **no more "copy the extension ID and re-run with --extension-id"**.
+  directly - **no more "copy the extension ID and re-run with --extension-id"**.
   (`--extension-id` remains as an override.)
-- **Decoupled from ZCode — now generic across MCP clients** (Claude Code, Codex,
+- **Decoupled from ZCode - now generic across MCP clients** (Claude Code, Codex,
   any MCP client). The server already spoke standard MCP; this is a naming/docs
   change plus two identifier renames:
   - **Native host id `com.zcode.browser_bridge` → `com.browser_bridge.host`**
@@ -79,13 +79,13 @@ extension-ID self-check, restyled confirmations, and dark mode.
 - Signal handling: `SIGTERM`/`SIGINT` now trigger a graceful shutdown that
   removes the lock file (via a `libc` `sigwait` thread); scattered hand-rolled
   `extern "C"` shims collapsed onto `libc`.
-- **README redesigned** — security-first intro, a prebuilt-first 60-second
+- **README redesigned** - security-first intro, a prebuilt-first 60-second
   quickstart, the accurate 15-tool catalogue grouped by risk, plus
   configuration and troubleshooting sections.
-- **Confirmation toasts restyled** — one consistent size (360px) across all of
+- **Confirmation toasts restyled** - one consistent size (360px) across all of
   them; high-risk confirmations (submit/navigate click, `tab_close`, `page_eval`)
   now use a red danger theme, while the informational toast stays blue.
-- **Installer UX** — prints the fully-resolved `claude mcp add …` command and
+- **Installer UX** - prints the fully-resolved `claude mcp add ...` command and
   can auto-register with Claude Code when its CLI is present.
 - Repository tidy: `deny.toml` moved to `ci/deny.toml`; the remaining root files
   are documented in `GOVERNANCE.md` as reference-locked (required at root by a

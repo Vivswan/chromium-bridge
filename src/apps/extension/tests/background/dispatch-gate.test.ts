@@ -16,7 +16,7 @@ describe("dispatch disable-gate (assertNotDisabled)", () => {
 
   test("an unknown op is not blocked by the gate (passthrough)", () => {
     // Even if the unknown name appears in disabledTools, the gate must not
-    // fail-close it — Rust validates tool names upstream and the switch handles
+    // fail-close it - Rust validates tool names upstream and the switch handles
     // routing. This preserves the original inline behavior.
     expect(() => assertNotDisabled("does_not_exist", ["does_not_exist"])).not.toThrow();
     expect(() => assertNotDisabled(undefined, ["tab_list"])).not.toThrow();
