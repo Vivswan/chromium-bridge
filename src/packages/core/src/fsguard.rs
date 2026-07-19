@@ -51,13 +51,15 @@ pub(crate) fn open_private_rw(path: &Path) -> io::Result<fs::File> {
     open_private(opts, path)
 }
 
-fn open_private(mut opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> {
+fn open_private(opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> {
     #[cfg(unix)]
-    {
+    let opts = {
         use std::os::unix::fs::OpenOptionsExt;
+        let mut opts = opts;
         opts.mode(0o600);
         opts.custom_flags(libc::O_NOFOLLOW);
-    }
+        opts
+    };
     let f = opts.open(path)?;
     // The mode above applies only on create; re-assert it on the open handle
     // so a pre-planted looser file cannot keep group/other bits. Propagated:
@@ -75,14 +77,14 @@ fn open_private(mut opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> 
 /// `create_new` (O_EXCL) fails on ANY pre-existing entry - a planted file or
 /// symlink is refused, never adopted or followed - so no re-assert is needed:
 /// the file cannot exist with a mode we did not give it.
+///
+/// Unix-only: its sole caller (`ipc::write_private_atomic`) takes a plain
+/// create+truncate open on Windows, where there are no Unix modes to pin.
+#[cfg(unix)]
 pub(crate) fn create_private_excl(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
     let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
+    opts.write(true).create_new(true).mode(0o600);
     opts.open(path)
 }
 
