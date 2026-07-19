@@ -95,7 +95,7 @@ fn der_read_integer(input: &[u8]) -> Result<(&[u8], &[u8]), EnclaveError> {
         // Length 1..=33 was enforced above, so the value has a first byte.
         None => return Err(bad("empty INTEGER value".into())),
         Some((&0x00, tail)) => match tail.first() {
-            // INTEGER 0 — impossible for a valid ECDSA r or s, but it is
+            // INTEGER 0 - impossible for a valid ECDSA r or s, but it is
             // well-formed DER; map it to 32 zero bytes and let the verifier
             // reject the signature.
             None => tail,
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn der_roundtrip_high_bit_needs_sign_padding() {
-        // Top bit set: DER carries a 33-byte INTEGER with a 0x00 sign pad —
+        // Top bit set: DER carries a 33-byte INTEGER with a 0x00 sign pad -
         // the most likely first bug in a naive converter.
         let r = filled(0x80);
         let s = filled(0xff);

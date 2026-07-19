@@ -5,7 +5,7 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-/// Enrollment policy recorded on disk. This is policy only — the key material
+/// Enrollment policy recorded on disk. This is policy only - the key material
 /// lives exclusively in the Secure Enclave / keychain, never here. The file is
 /// informational for `doctor`/`enclave-status` and for the extension-side
 /// enrollment flow; the security decisions are enforced by the keychain ACL
@@ -31,7 +31,7 @@ pub struct HostConfig {
     pub enrolled: bool,
     /// Verification granularity the user selected. Only "session" exists
     /// today (one presence proof per enrollment; reconnects are not
-    /// presence-gated — see ADR-0021 for why and what that leaves open).
+    /// presence-gated - see ADR-0021 for why and what that leaves open).
     pub granularity: String,
 }
 

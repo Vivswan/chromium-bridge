@@ -28,7 +28,7 @@ fn compute_mac(key: &[u8], msg: &[u8]) -> io::Result<String> {
 /// The exact bytes the handshake MAC covers: the server's nonce and, when the
 /// client claims a browser label, a NUL separator plus that label. Covering
 /// the label makes the claim authenticated rather than merely adjacent to the
-/// MAC — a response whose label was altered in any way fails verification.
+/// MAC - a response whose label was altered in any way fails verification.
 /// The two forms cannot collide: the nonce is fixed-width hex (never contains
 /// NUL), so a message either ends at the nonce (no label) or continues past
 /// exactly one NUL with the label bytes.

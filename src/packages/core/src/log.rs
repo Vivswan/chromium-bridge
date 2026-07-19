@@ -73,7 +73,7 @@ pub fn format() -> Format {
     })
 }
 
-/// Minimal JSON string escaping — enough for the small, controlled values we
+/// Minimal JSON string escaping - enough for the small, controlled values we
 /// put in audit fields (tool names, codes, numbers). Avoids pulling serde into
 /// the hot path for one line.
 fn json_escape(s: &str) -> String {

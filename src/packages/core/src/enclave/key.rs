@@ -102,7 +102,7 @@ impl EnrollmentKey {
 }
 
 /// Answer an `enclave_challenge` control frame: look the key up, sign the
-/// challenge (presence prompt), and build the proof — or a typed error frame.
+/// challenge (presence prompt), and build the proof - or a typed error frame.
 /// Never panics and never leaks key material; detailed failure context goes to
 /// stderr, the extension only sees the stable reason code.
 pub fn respond_to_challenge(nonce: &str, context: Option<&str>) -> EnclaveControl {
