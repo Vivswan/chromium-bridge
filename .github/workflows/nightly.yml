@@ -90,7 +90,7 @@ jobs:
   # SMOKE pass (bounded runs per target) that proves the harnesses build and
   # survive a blast of random input; the "no findings" path is a normal pass,
   # and a crash (a parser panic/abort on hostile input) is fatal -- exactly the
-  # exit semantics of scripts/fuzz_smoke.ts.
+  # exit semantics of .github/scripts/fuzz_smoke.ts.
   fuzz:
     name: Parser fuzz smoke (cargo-fuzz, scheduled)
     runs-on: ubuntu-latest
@@ -111,5 +111,5 @@ jobs:
         with:
           tool: cargo-fuzz
       - name: Fuzz the wire parsers (bounded smoke; a crash is fatal)
-        run: bun scripts/fuzz_smoke.ts 200000
+        run: bun .github/scripts/fuzz_smoke.ts 200000
 
