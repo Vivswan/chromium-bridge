@@ -225,7 +225,8 @@ mod tests {
         // /proc/<pid>/exe naming our own binary), and measuring in that
         // window attests the child as self - a CI-speed flake, seen on
         // GitHub's ubuntu runners. Reading the byte the shell echoes proves
-        // the child's image is the (foreign) shell. Production callers do not
+        // the child has exec'd a foreign image (the shell, or already its
+        // sleep successor - foreign either way). Production callers do not
         // race this: they measure long-running processes named by lock files,
         // not pids they just spawned.
         use std::io::Read;
