@@ -116,13 +116,16 @@ let postFrame: ((frame: object) => boolean) | null = null;
 export function attachPort(post: (frame: object) => boolean): void {
   postFrame = post;
   // At-least-once for the panic brake (ADR-0030): an engage that was handed
-  // to a port that then died UNCONFIRMED (no refusing frame ever arrived) is
-  // re-asserted on the fresh host - a dying host must not be able to drop
-  // the brake silently. Idempotent host-side (engaging a killed bridge just
-  // re-bumps the epoch) and audited there; if the user explicitly released
-  // in the gap, the re-assert re-kills, which is the honest at-least-once
-  // reading of an unconfirmed "kill everything" - releasing again is
-  // friction the user can see, unlike a lost kill.
+  // to a port that then died UNCONFIRMED (no authoritative killed frame ever
+  // arrived) is re-asserted on the fresh host - a dying host must not be
+  // able to drop the brake silently. Idempotent host-side (engaging a killed
+  // bridge just re-bumps the epoch) and audited there; if the user
+  // explicitly released in the gap, the re-assert re-kills, which is the
+  // honest at-least-once reading of an unconfirmed "kill everything" -
+  // releasing again is friction the user can see, unlike a lost kill.
+  // Bounded honestly: the flag is SW module state, so the guarantee is per
+  // SW lifetime - engage posted, host dead, THEN the SW dying too drops the
+  // brake silently after the restart (nothing durable re-arms it).
   if (unconfirmedEngageSeq !== null) {
     auditEvent("kill_engaged", { outcome: "requested" }, { forward: false });
     if (post({ type: "kill_engage" })) {
@@ -241,8 +244,11 @@ let frameArrivals = 0;
 // subscribe (afterSeq) count; the subscribe and the engage post share one
 // synchronous turn, so counting from the subscribe is counting from the
 // post:
-//   phase 1: an authoritative refusing frame (killed/unknown) lands - the
-//            engage (or an equivalent cross-surface kill) has applied;
+//   phase 1: an authoritative "killed" frame lands - the engage (or an
+//            equivalent cross-surface kill) provably applied. "unknown" is
+//            NOT phase 1: it also covers the engage failing host-side
+//            (ok:false, kill write refused), and accepting it would let a
+//            later plain alive read lift with no release having happened;
 //   phase 2: a LATER authoritative alive frame lands. After the engage has
 //            applied, only an explicit user-presence-gated release produces
 //            an alive state, so that is exactly the moment confirmations may
@@ -262,13 +268,14 @@ let frameArrivals = 0;
 let panicWaiter: { afterSeq: number; sawRefusal: boolean; resolve: () => void } | null = null;
 
 // The watermark of a panic engage that was handed to a port but has not yet
-// been CONFIRMED by a refusing frame that arrived after it. attachPort
-// re-posts while this is armed (at-least-once, see there); a refusing
-// arrival after the watermark disarms it.
+// been CONFIRMED by an authoritative "killed" frame that arrived after it.
+// attachPort re-posts while this is armed (at-least-once, see there); only
+// a killed arrival after the watermark disarms it ("unknown" may mean the
+// engage failed host-side and applied nothing).
 let unconfirmedEngageSeq: number | null = null;
 
 /** Resolves once the kill state - via host frames alone - has authoritatively
- * refused (the engage applied) and then read alive again (an explicit,
+ * read killed (the engage applied) and then alive again (an explicit,
  * presence-gated release). May never resolve in a session where the engage
  * never lands or the switch is never released - the caller pairs it with the
  * exchange's send-failure path, and an unresolved waiter just leaves the
@@ -293,21 +300,30 @@ export function whenKillRevivesAfterRefusal(): Promise<void> {
  * `seq` is the frame's ARRIVAL stamp; frames that predate the waiter's
  * subscription are ignored (they prove nothing about the panic's engage). */
 function advancePanicWaiter(state: KillMirror["state"], seq: number): void {
-  if (state !== "alive" && unconfirmedEngageSeq !== null && seq > unconfirmedEngageSeq) {
+  if (state === "killed" && unconfirmedEngageSeq !== null && seq > unconfirmedEngageSeq) {
     // The brake (or an equivalent kill) demonstrably applied after the
-    // engage was posted: nothing left to re-assert on reconnect.
+    // engage was posted: nothing left to re-assert on reconnect. Only an
+    // authoritative "killed" disarms - "unknown" covers the host answering
+    // the engage ok:false (the kill write FAILED, nothing applied), so
+    // disarming on it would let a dying-then-recovering host swallow the
+    // brake; the re-post stays armed until a kill provably took.
     unconfirmedEngageSeq = null;
   }
   if (!panicWaiter || seq <= panicWaiter.afterSeq) return;
-  if (state !== "alive") {
+  if (state === "killed") {
     panicWaiter.sawRefusal = true;
     return;
   }
-  if (panicWaiter.sawRefusal) {
+  if (state === "alive" && panicWaiter.sawRefusal) {
     const waiter = panicWaiter;
     panicWaiter = null;
     waiter.resolve();
   }
+  // "unknown" advances nothing: it is not proof the engage applied (the
+  // host may have just failed to WRITE the kill), so treating it as the
+  // phase-1 refusal would let a later plain alive read lift the latch with
+  // no presence-gated release ever having happened. The gate upstream
+  // refuses on the unknown mirror regardless, so waiting stays fail closed.
 }
 
 /** Engage or release the switch. The host performs the transition (and
@@ -334,9 +350,9 @@ export function setKillSwitch(on: boolean): Promise<KillView> {
  * reports only the SEND outcome plus the last-known mirror, never the
  * engage's result - the result is whatever the mirror adopts, which is what
  * whenKillRevivesAfterRefusal watches. A successfully posted engage also
- * arms the at-least-once re-post (see attachPort): only a refusing frame
- * that arrives after the post disarms it, so a host dying mid-exchange
- * cannot swallow the brake. Residual, named honestly: with the port down
+ * arms the at-least-once re-post (see attachPort): only an authoritative
+ * killed frame that arrives after the post disarms it, so a host dying
+ * mid-exchange cannot swallow the brake. Residual, named honestly: with the port down
  * the engage cannot reach the host at all (ok: false); nothing can drive the
  * browser through a dead port either, and the popup renders that state
  * severed, never live. */
@@ -354,11 +370,11 @@ export function engageKillSwitch(): Promise<KillView> {
   return mirrorView(true, true);
 }
 
-/** Whether a successfully posted engage is still unconfirmed - no refusing
- * frame has arrived since it went out (on this port or a reconnect's
- * re-post). While true, one exchange's "my send failed" proves nothing
- * globally: some engage may still apply, so the panic latch must not lift
- * on that failure alone. */
+/** Whether a successfully posted engage is still unconfirmed - no
+ * authoritative killed frame has arrived since it went out (on this port or
+ * a reconnect's re-post). While true, one exchange's "my send failed"
+ * proves nothing globally: some engage may still apply, so the panic latch
+ * must not lift on that failure alone. */
 export function engageOutstanding(): boolean {
   return unconfirmedEngageSeq !== null;
 }
