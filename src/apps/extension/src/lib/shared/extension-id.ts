@@ -1,4 +1,4 @@
-// The pinned extension ID — the ID Chrome derives from the manifest `key`.
+// The pinned extension ID - the ID Chrome derives from the manifest `key`.
 //
 // The constant itself is generated from the pinned key in
 // src/packages/core/src/identity.rs into @chromium-bridge/shared (identity.gen.ts) by
@@ -6,7 +6,7 @@
 // `scripts/check-extension-id.ts` (a CI gate) re-derives the ID from the key
 // and asserts every copy (generated TS, built manifest) agrees. If you
 // rotate the key (e.g. to adopt a Chrome Web Store-assigned id), regenerate
-// everything together — the gates fail otherwise.
+// everything together - the gates fail otherwise.
 import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared";
 
 export { PINNED_EXTENSION_ID };
@@ -25,7 +25,7 @@ export interface IdDiagnosis {
  * rejects the native connection and chromium-bridge cannot work. This surfaces
  * that failure loudly at startup instead of leaving the user to guess.
  *
- * We compare ids only — `browser.runtime.getManifest()` strips the `key` field
+ * We compare ids only - `browser.runtime.getManifest()` strips the `key` field
  * at runtime, so we cannot reliably tell "no key" from "different key" here;
  * the message lists the likely causes instead of asserting one.
  */
@@ -37,7 +37,7 @@ export function diagnoseExtensionId(
     return {
       ok: true,
       level: "ok",
-      message: `extension id ${runtimeId} matches the pinned id — native messaging will be accepted`,
+      message: `extension id ${runtimeId} matches the pinned id - native messaging will be accepted`,
     };
   }
   return {

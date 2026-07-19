@@ -3,8 +3,8 @@
 // A PURE decision function that, given an op name and the current settings
 // context, says whether the op is allowed and how it should be confirmed. It is
 // derived entirely from TOOL_META (generated from the Rust catalogue) plus the
-// user's disabledTools list — no chrome.* calls, no I/O, no import-time side
-// effects — so it is trivially unit-testable and can be reused from anywhere.
+// user's disabledTools list - no chrome.* calls, no I/O, no import-time side
+// effects - so it is trivially unit-testable and can be reused from anywhere.
 //
 // NOTE: this module is not yet wired into background/dispatch.ts. Wiring is a
 // separate, supervised step; for now this is scaffolding.

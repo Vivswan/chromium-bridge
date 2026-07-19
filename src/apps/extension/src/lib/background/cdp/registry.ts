@@ -1,7 +1,7 @@
-// CdpSessionRegistry — a module-level singleton mapping tabId → CdpSession.
+// CdpSessionRegistry - a module-level singleton mapping tabId → CdpSession.
 //
 // In CDP mode the debugger stays attached across ops (the "Started debugging
-// this browser" banner persists — by design, ADR-0017), so we cache one
+// this browser" banner persists - by design, ADR-0017), so we cache one
 // attached session per tab and reuse it. Sessions are torn down when the tab
 // closes, when Chrome detaches us, or when the user turns CDP mode off.
 
@@ -23,7 +23,7 @@ class CdpSessionRegistry {
       await session.attach();
     } catch (e) {
       // Attach failed → don't leave a half-dead session cached. But if a
-      // concurrent op already attached this same session, keep it — deleting it
+      // concurrent op already attached this same session, keep it - deleting it
       // would orphan a live debugger attach (stuck banner, teardown misses it).
       if (!session.isAttached) this.sessions.delete(tabId);
       throw e;
@@ -45,7 +45,7 @@ class CdpSessionRegistry {
     await Promise.all(sessions.map((s) => s.detach()));
   }
 
-  // Chrome already detached us (onDetach) — drop the session WITHOUT issuing a
+  // Chrome already detached us (onDetach) - drop the session WITHOUT issuing a
   // redundant detach command.
   handleExternalDetach(tabId: number): void {
     const session = this.sessions.get(tabId);
@@ -83,7 +83,7 @@ export function installCdpLifecycleListeners(): void {
   });
 
   // Chrome detached us (tab navigated to a non-debuggable page, user hit the
-  // banner's "Cancel", DevTools opened, …). Drop the session without re-detach.
+  // banner's "Cancel", DevTools opened, ...). Drop the session without re-detach.
   browser.debugger.onDetach.addListener((source) => {
     if (typeof source.tabId === "number") cdpRegistry.handleExternalDetach(source.tabId);
   });
