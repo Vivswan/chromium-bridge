@@ -732,7 +732,9 @@ textarea,
 .code-block pre {
   margin: 0;
   padding: 10px 12px;
-  overflow-x: auto;
+  /* payloads wrap instead of clipping; the copy button carries the exact bytes */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .code-block .k {
   color: var(--text-1);
@@ -1383,6 +1385,11 @@ td.outcome.pending {
   column-gap: 14px;
   padding: 14px 0;
 }
+/* grid items default to min-width auto: a long unbroken path inside a step
+   would widen the column past the pane instead of wrapping */
+.flow-step > div {
+  min-width: 0;
+}
 .flow-step + .flow-step {
   border-top: 1px solid var(--edge);
 }
@@ -1530,6 +1537,8 @@ td.outcome.pending {
 }
 .cli-row .mono {
   font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .cli-row .spacer {
   flex: 1;

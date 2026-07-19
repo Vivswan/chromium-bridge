@@ -236,7 +236,7 @@ export function SetupView() {
                     <Consequence className="quiet m-0 flex-none">
                       {t("setup.step3_claude")}
                     </Consequence>
-                    <span className="mono min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] text-text-3">
+                    <span className="mono min-w-0 flex-1 [overflow-wrap:anywhere] text-[11px] text-text-3">
                       {snippet.data.command}
                     </span>
                     <CopyButton text={snippet.data.command} label={t("setup.copy_command")} />
