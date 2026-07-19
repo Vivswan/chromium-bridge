@@ -6,12 +6,14 @@
 import { satteri } from "@astrojs/markdown-satteri";
 import { defineConfig } from "astro/config";
 import { mdLinksPlugin } from "./src/lib/satteri-md-links";
-
-const base = "/chromium-bridge";
+// Origin + base come from ASTRO_SITE / ASTRO_BASE (defaults: the GitHub Pages
+// project page) so deploy-site.yml can build the staging path and the
+// custom-domain cutover without touching source. See site-identity.ts.
+import { SITE_BASE, SITE_ORIGIN } from "./src/lib/site-identity";
 
 export default defineConfig({
-  site: "https://vivswan.github.io",
-  base,
+  site: SITE_ORIGIN,
+  base: SITE_BASE,
   outDir: "dist",
   // Keep authored whitespace: the default HTML compression eats the space
   // between text and an adjacent inline link ("the<a>source code</a>").
@@ -23,7 +25,7 @@ export default defineConfig({
   markdown: {
     // The default processor plus one plugin: repo-relative .md links become
     // their rendered /docs/ routes (see satteri-md-links.ts).
-    processor: satteri({ hastPlugins: [mdLinksPlugin(base)] }),
+    processor: satteri({ hastPlugins: [mdLinksPlugin(SITE_BASE)] }),
   },
   vite: {
     // Let the dev server read the repo's markdown above the site root.
