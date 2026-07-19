@@ -1,12 +1,28 @@
-# Publishes docs/site (the landing page + rendered repo docs) to GitHub
-# Pages. Triggers on every push to main - the site renders the repository's
-# own docs, which track main - plus workflow_dispatch for manual deploys.
+# Publishes docs/site (the landing page + rendered repo docs) to GitHub Pages
+# in ONE deployment with two environments:
+#   - the production root  <- built from the LATEST release tag
+#   - /staging/            <- built from main HEAD
+# Called by release-please.yml on every successful run (so staging tracks
+# main), plus workflow_dispatch for manual/urgent redeploys. The root is
+# rebuilt from the release tag each time, so it only changes when a release
+# PR merges. Before the FIRST release there is no tag: only staging is
+# published and the production root returns GitHub's default 404 (intended).
+#
+# CUSTOM DOMAIN (config-only cutover): set the repo variable CUSTOM_DOMAIN
+# (e.g. chromium-bridge.dev) and the deploy flips automatically:
+#   - unset -> project site: root at /chromium-bridge/, staging at
+#              /chromium-bridge/staging/, origin https://vivswan.github.io
+#              (no CNAME written).
+#   - set   -> custom domain: root at /, staging at /staging/, origin
+#              https://<domain>, and _site/CNAME is written (the Pages
+#              custom-domain marker). ASTRO_SITE/ASTRO_BASE are passed to the
+#              builds; site-identity.ts reads them, so no source edit needed.
+#
 # One-time repo setting: Pages source must be set to "GitHub Actions".
 name: deploy-site
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -20,22 +36,127 @@ concurrency:
 
 jobs:
   deploy:
-    # workflow_dispatch is for redeploying main, not publishing a branch.
-    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      # Resolve the latest release tag without a checkout. No releases yet
+      # means an empty tag (staging-only publish, the root 404s); any gh
+      # failure exits nonzero.
+      - name: Resolve latest release tag
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release list -R "$GITHUB_REPOSITORY" --limit 1 \
+            --exclude-drafts --exclude-pre-releases \
+            --json tagName -q '.[0].tagName // empty')"
+          if [ -n "$tag" ]; then
+            echo "Latest release tag: $tag"
+          else
+            echo "No release yet; publishing staging only, the production root will 404."
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Production source = the latest release tag. Skipped entirely before
+      # the first release (no tag); only staging is published then.
+      - name: Checkout release (production root)
+        if: steps.rel.outputs.tag != ''
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - run: bun run --cwd docs/site build
+          ref: ${{ steps.rel.outputs.tag }}
+          path: release
+
+      # Staging source = main HEAD. On the release-please call chain
+      # github.sha is the exact main commit that triggered the run; on a
+      # manual workflow_dispatch it would be the selected ref, so pin to
+      # `main` explicitly there to stop a dispatch from a tag/branch
+      # publishing that ref as staging.
+      - name: Checkout main HEAD (staging)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.sha }}
+          path: staging
+
+      # Each build runs under the bun version ITS OWN checkout pins
+      # (packageManager in package.json), so a bun upgrade on main cannot
+      # change how an already-released site builds. The production setup is
+      # skipped with the rest of the release steps before the first release.
+      - name: Set up bun (release pin)
+        if: steps.rel.outputs.tag != ''
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: release/package.json
+
+      # Production build. Base + origin depend on CUSTOM_DOMAIN (unset =>
+      # project site under /chromium-bridge/; set => site at the domain
+      # root). bun install runs at the checkout root (workspace lockfile);
+      # the site itself is the docs/site workspace. Skipped before the first
+      # release (no tag) so the root stays a 404.
+      - name: Build production (root = latest release)
+        if: steps.rel.outputs.tag != ''
+        working-directory: release
+        env:
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+        run: |
+          bun install --frozen-lockfile
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            ASTRO_SITE="https://$CUSTOM_DOMAIN" ASTRO_BASE=/ bun run --cwd docs/site build
+          else
+            ASTRO_BASE=/chromium-bridge/ bun run --cwd docs/site build
+          fi
+
+      # Staging runs under main's pin; this setup comes after the production
+      # build so its bun wins for the steps below.
+      - name: Set up bun (main pin)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: staging/package.json
+
+      # Staging build: nested base path. /staging/ hangs off whichever root
+      # the domain resolves to.
+      - name: Build staging (main HEAD)
+        working-directory: staging
+        env:
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+        run: |
+          bun install --frozen-lockfile
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            ASTRO_SITE="https://$CUSTOM_DOMAIN" ASTRO_BASE=/staging/ bun run --cwd docs/site build
+          else
+            ASTRO_BASE=/chromium-bridge/staging/ bun run --cwd docs/site build
+          fi
+
+      # Compose the single artifact. When a release exists, its dist is the
+      # root and the staging dist goes under /staging/. Before the first
+      # release there is no release dist, so _site holds ONLY staging and the
+      # root 404s. A trailing `/.` copies directory CONTENTS (not the dir
+      # itself). When a custom domain is set, write the CNAME marker GitHub
+      # Pages needs.
+      - name: Compose _site (root = release, /staging/ = main HEAD)
+        env:
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          rm -rf _site
+          mkdir -p _site/staging
+          if [ -n "$TAG" ]; then
+            cp -r release/docs/site/dist/. _site/
+          else
+            echo "No release tag; publishing staging only (the root will 404)."
+          fi
+          cp -r staging/docs/site/dist/. _site/staging/
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            echo "$CUSTOM_DOMAIN" > _site/CNAME
+            echo "Wrote _site/CNAME -> $CUSTOM_DOMAIN"
+          fi
+
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: docs/site/dist
+          path: _site
+
       - id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

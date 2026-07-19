@@ -376,7 +376,8 @@ jobs:
 
   # The public site (docs/site: the landing page plus Astro over the repo's
   # markdown docs) must keep building. Build-only here: deployment to GitHub
-  # Pages happens in the separate deploy-site.yml workflow on push to main.
+  # Pages happens in deploy-site.yml, called by release-please.yml after
+  # every push to main (production root = latest release, /staging/ = main).
   docs-site:
     name: docs site builds
     runs-on: ubuntu-latest
