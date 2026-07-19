@@ -25,9 +25,10 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 - No typographic look-alike characters (curly quotes, em-dashes, invisible
   unicode). CI enforces this with `scripts/check-typography.ts` (also run by
   `just ci`); use plain ASCII punctuation.
-- Files marked "managed by Vivswan/repo-platform" are updated by
-  template sync PRs. Put repository-specific content in `.gitignore`'s marked
-  LOCAL section or below this line in this file.
+- Files marked "managed by Vivswan/repo-platform" keep their markers for a
+  planned re-adoption of the template, but are NOT currently synced (the
+  template-sync workflow was removed). Put repository-specific content in
+  `.gitignore`'s marked LOCAL section or below this line in this file.
 
 ## Repository-specific guidance
 
