@@ -11,7 +11,7 @@
     "src/packages/*",
     "tests/browser",
     "scripts",
-    "docs/site"
+    "src/apps/site"
   ],
   "scripts": {
     "gen": "just gen",

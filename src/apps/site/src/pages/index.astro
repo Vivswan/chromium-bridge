@@ -22,7 +22,7 @@ import securityDark from "../assets/screens/security-dark.png";
 import securityLight from "../assets/screens/security-light.png";
 // The workspace version, read from the root Cargo.toml at build time so the
 // chip cannot drift from the release-please-managed number.
-import cargoToml from "../../../../Cargo.toml?raw";
+import cargoToml from "../../../../../Cargo.toml?raw";
 
 const base = import.meta.env.BASE_URL;
 const withBase = (path: string) => `${base}${base.endsWith("/") ? "" : "/"}${path}`;

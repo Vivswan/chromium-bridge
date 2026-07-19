@@ -26,9 +26,8 @@
 # Extension build staging (WXT codegen; the bundle itself goes to /build/)
 src/apps/extension/.wxt/
 
-# Docs site build output and Astro's generated types
-/docs/site/dist/
-/docs/site/.astro/
+# Astro's generated types (the site builds into /build/site/)
+/src/apps/site/.astro/
 
 # Downloaded isolated Chrome for Testing (browser suites; never committed)
 /tests/.chrome-for-testing/
