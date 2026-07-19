@@ -3,6 +3,16 @@
 # browser suites, typos + cargo-machete for the hygiene checks.
 # Every recipe is a plain command you can also run by hand (see docs/development.md).
 #
+# Naming convention: verb first, project second - `<verb>-<project>`, as in
+# dev-web, build-ext, or dmg-app. Verbs can be compound (fmt-check-rust) and
+# a recipe may add a trailing qualifier (check-app-signing). Project
+# shorthands: web (the Astro site in src/apps/web), app (the Tauri desktop
+# app), app-ui (the desktop app's web UI), ext (the MV3 extension), shared
+# (src/packages/shared), rust (the cargo workspace), ts (all TS/JS/JSON).
+# Recipes that span the whole repo (ci, gen, typecheck, ...) and the
+# machine-level Touch ID runbooks (touchid-proof, touchid-gates) take no
+# project suffix.
+#
 # `just --list` shows only the top-level verbs. Recipes marked [private] are
 # internal sub-steps (CI sub-checks, build/test sub-targets, `bun run <verb>`
 # delegates) - hidden from the list but still runnable by name.
@@ -34,12 +44,12 @@ build-repro:
 
 # Build + sign the Tauri desktop app with the bundled host + extension (macOS, ADR-0026/0029)
 [private]
-desktop-bundle:
+bundle-app:
     bun scripts/desktop-bundle.ts
 
 # Verify the signed desktop bundle's entitlement chain (app + nested host)
 [private]
-desktop-check:
+check-app-signing:
     bun scripts/check-desktop-signing.ts
 
 # Dev everything at once: extension (WXT dev browser) + web app (Astro) +
@@ -53,7 +63,7 @@ dev:
 # ops need the built host as a sibling, hence the cargo build). `just dev`
 # supersets this.
 [private]
-app-dev:
+dev-app:
     #!/usr/bin/env sh
     set -eu
     bun scripts/gen-icons.ts desktop
@@ -63,26 +73,26 @@ app-dev:
 
 # Build, sign, verify, then launch the desktop app (USER-RUN: the GUI)
 [group('app')]
-app-run: desktop-bundle
+run-app: bundle-app
     open "build/app/Chromium Bridge.app"
 
 # Build + sign the app and wrap it in a signed, verified .dmg
 # (build/dmg/; the app inside the image is re-verified)
 [group('app')]
 [doc('Build + sign the app and wrap it in a signed, verified .dmg (build/dmg/)')]
-app-dmg:
+dmg-app:
     bun scripts/desktop-bundle.ts --dmg
 
-# Copy the built, signed app into /Applications (run desktop-bundle or
-# app-dmg first; replaces any existing install)
+# Copy the built, signed app into /Applications (run bundle-app or
+# dmg-app first; replaces any existing install)
 [group('app')]
-[doc('Copy the built, signed app into /Applications (run app-dmg or desktop-bundle first)')]
-app-install:
+[doc('Copy the built, signed app into /Applications (run dmg-app or bundle-app first)')]
+install-app:
     #!/usr/bin/env sh
     set -eu
     APP="build/app/Chromium Bridge.app"
     if [ ! -d "$APP" ]; then
-        echo "error: $APP not found; build it first: just desktop-bundle (or just app-dmg)" >&2
+        echo "error: $APP not found; build it first: just bundle-app (or just dmg-app)" >&2
         exit 1
     fi
     rm -rf "/Applications/Chromium Bridge.app"
@@ -91,12 +101,12 @@ app-install:
 
 # Desktop UI: production build (also what `bunx tauri build` runs first)
 [private]
-desktop-ui-build:
+build-app-ui:
     bun run --cwd src/apps/desktop/ui build
 
 # Desktop UI unit tests (locale coverage, i18n resolution; no browser)
 [private]
-desktop-ui-test:
+test-app-ui:
     bun run --cwd src/apps/desktop/ui test
 
 # Desktop Rust crate: clippy + tests. Needs the UI dist (tauri's
@@ -106,7 +116,7 @@ desktop-ui-test:
 # compiling Tauri needs platform GUI toolchains (WebKitGTK on Linux); CI runs
 # this on macOS in the dedicated desktop job.
 [private]
-desktop-check-rust: desktop-ui-build gen-icons
+check-app-rust: build-app-ui gen-icons
     cargo clippy -p chromium-bridge-desktop --all-targets -- -D warnings
     cargo test -p chromium-bridge-desktop
 
@@ -115,7 +125,7 @@ desktop-check-rust: desktop-ui-build gen-icons
 # BUNDLED host binary; on success the machine is genuinely enrolled. Undo
 # with the same binary's `revoke` subcommand.
 [private]
-desktop-touchid-proof: desktop-bundle
+touchid-proof: bundle-app
     "build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair
 
 # Touch ID gate demo (USER-RUN, macOS: raises a REAL Touch ID prompt). Runs
@@ -124,12 +134,12 @@ desktop-touchid-proof: desktop-bundle
 # capability-grant commands (pair-client, unkill) for you to run in your own
 # terminal: those require a real interactive TTY by design (anti tap-phishing),
 # which a just recipe cannot provide. Needs an enrolled Enclave key (run
-# `just desktop-touchid-proof` first) and uses the SIGNED BUNDLED host, since
+# `just touchid-proof` first) and uses the SIGNED BUNDLED host, since
 # the enclave key lives in an entitled keychain group the plain release binary
 # cannot reach.
 # Demo the Touch ID presence gates (runs the per-action gate; prints the rest).
 [private]
-touchid-gates: desktop-bundle
+touchid-gates: bundle-app
     #!/usr/bin/env bash
     set -euo pipefail
     BIN="build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge"
@@ -159,7 +169,7 @@ fmt:
 
 # Verify Rust formatting (CI gate)
 [private]
-fmt-check:
+fmt-check-rust:
     cargo fmt --check
 
 # Lint everything, denying warnings: Rust (clippy) + TS/JS/JSON (Biome)
@@ -234,7 +244,7 @@ gen-icons:
 
 # Build the extension bundle (src/ -> build/extension/; generates icons first)
 [private]
-ext-build:
+build-ext:
     bun run --cwd src/apps/extension build
 
 # Type-check every TS project (extension, desktop UI, tests, scripts, src/packages/shared)
@@ -274,28 +284,28 @@ fix:
 
 # Unit-test the extension's shared modules (bun; no browser)
 [private]
-ext-test:
+test-ext:
     bun run --cwd src/apps/extension test
 
 # Unit-test src/packages/shared: generated catalogue, boundary validators
 [private]
-shared-test:
+test-shared:
     bun run --cwd src/packages/shared test
 
-# Unit-test shared + extension (the `bun run test` set; the desktop UI's suite is desktop-ui-test)
+# Unit-test shared + extension (the `bun run test` set; the desktop UI's suite is test-app-ui)
 [private]
-test-ts: shared-test ext-test
+test-ts: test-shared test-ext
 
 # DOM + smoke + security proofs (needs bun + isolated Chrome; builds first)
 [private]
-test-browser: ext-build
+test-browser: build-ext
     cd tests/browser && bun dom_test.ts
     bun tests/browser/ext_test.ts
     bun tests/browser/security_browser_test.ts
 
 # Real E2E integration (opt-in; real binary + Chrome + extension)
 [private]
-test-integration: build-release ext-build
+test-integration: build-release build-ext
     BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts
 
 # All tests that run without a browser
@@ -304,9 +314,9 @@ test: test-rust test-e2e
 
 # Depends on lint-rust, not lint: check-ts (biome ci) already covers biome lint,
 # so the lint meta-recipe would pay for the same Biome pass twice.
-# Everything CI runs (except the macOS-only desktop Rust job: desktop-check-rust)
+# Everything CI runs (except the macOS-only desktop Rust job: check-app-rust)
 [group('main')]
-ci: fmt-check lint-rust typos machete test-rust typecheck check-ts shared-test ext-test desktop-ui-test ext-build test-e2e check-extension-id check-cjk check-typography check-all-green check-gen check-envelope check-schemars-isolation
+ci: fmt-check-rust lint-rust typos machete test-rust typecheck check-ts test-shared test-ext test-app-ui build-ext test-e2e check-extension-id check-cjk check-typography check-all-green check-gen check-envelope check-schemars-isolation
 
 # Register this checkout's release binary with your browsers (build + doctor --fix)
 [group('main')]
@@ -315,12 +325,12 @@ install: build-release
 
 # Build the web app (src/apps/web: Astro over the repo's markdown docs)
 [private]
-web-build:
+build-web:
     bun run --cwd src/apps/web build
 
 # Docs site dev server only; replaces any already-running astro dev (`just dev` supersets this)
 [private]
-web-dev:
+dev-web:
     bun run --cwd src/apps/web dev
 
 # Propagate the Cargo.toml version into the extension files

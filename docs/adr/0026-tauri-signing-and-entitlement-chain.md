@@ -97,9 +97,9 @@ unknown flag (prints help, exits 2, touches nothing) and with
   project exists to keep. `scripts/check-desktop-signing.ts` fails the build
   if it ever appears, alongside its other assertions (exact entitlements on
   both binaries, Team ID, deep/strict verification, live profile).
-- `just desktop-bundle` (`scripts/desktop-bundle.ts`) is the one command
+- `just bundle-app` (`scripts/desktop-bundle.ts`) is the one command
   that builds, assembles, signs inside-out, and verifies. `just
-  desktop-check` re-runs the verification alone.
+  check-app-signing` re-runs the verification alone.
 - Supply chain: the Tauri tree was reviewed at policy level per ADR-0023
   (the GUI carries no security weight). `deny.toml` documents the accepted
   licenses it brought in and the unmaintained-crate advisories for the GTK3
@@ -113,7 +113,7 @@ unknown flag (prints help, exits 2, touches nothing) and with
 ## The Touch ID proof
 
 The live Enclave operation under Touch ID was observed on 2026-07-17, via
-`just desktop-touchid-proof` (which builds, signs, and verifies the bundle
+`just touchid-proof` (which builds, signs, and verifies the bundle
 first). The bundled host, launched from
 `Chromium Bridge.app/Contents/Helpers/chromium-bridge.app`, ran the full
 `pair` ceremony: it minted the Enclave key, raised the Touch ID prompt,

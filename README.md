@@ -69,8 +69,8 @@ the one that registers the server with your MCP client.
 > extension zip, and the release pipeline's desktop job stays dormant until
 > its signing secrets are configured and the publish hold is lifted (see
 > [docs/release.md](./docs/release.md)). Until then, build the app from a
-> source checkout: `just app-dmg` produces a signed disk image,
-> `just app-install` puts the built app in /Applications, and `just app-run`
+> source checkout: `just dmg-app` produces a signed disk image,
+> `just install-app` puts the built app in /Applications, and `just run-app`
 > builds and launches it in place. A build signed with the free development
 > certificate runs only on Macs its provisioning profile lists, and public
 > distribution also needs a paid Developer ID for notarization; both remain

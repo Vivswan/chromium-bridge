@@ -41,7 +41,7 @@ macOS gives two candidate primitives. We measured both:
 - A Secure Enclave signing operation on a key whose ACL carries
   `kSecAccessControlUserPresence` cannot complete without a live Touch ID (or
   login-password) response. This is the primitive ADR-0021 already relies on,
-  and the one the hardware proof (`just desktop-touchid-proof`) confirmed
+  and the one the hardware proof (`just touchid-proof`) confirmed
   prompts on real hardware.
 
 ## Decision

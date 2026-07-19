@@ -34,7 +34,7 @@ folders (`src/` and `tests/`).
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension/ (gitignored)
 src/apps/desktop/        Tauri v2 desktop app (ADR-0026/0029): workspace member but
-                         NOT a default member; `just desktop-bundle` builds + signs
+                         NOT a default member; `just bundle-app` builds + signs
                          it with the bundled host (see docs/desktop-app.md)
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace for the wire parsers (nightly + libFuzzer)
@@ -48,7 +48,7 @@ scripts/                 bun workspace member: gen-ops.ts, check-version.ts, syn
 .github/scripts/         CI-only scripts (fuzz_smoke.ts, run by the nightly fuzz job;
                          typechecked by `tsc -p scripts` alongside scripts/)
 src/apps/web/           bun workspace member: minimal Astro site rendering the
-                         repo's markdown docs + translations (just web-build;
+                         repo's markdown docs + translations (just build-web;
                          not part of `just ci`)
 ```
 
@@ -70,7 +70,7 @@ code enters the build without someone choosing to let it in.
 
 ## Common tasks
 
-With `just` (`just` lists the top-level verbs; every sub-step - `ext-build`,
+With `just` (`just` lists the top-level verbs; every sub-step - `build-ext`,
 `test-browser`, `gen`, `typecheck`, `build-repro`, the CI sub-checks, ... -
 is `[private]`: hidden from the list but runnable by name):
 
@@ -84,7 +84,7 @@ just install   # build the release binary, then register it (doctor --fix)
 just lint      # lint everything: clippy -D warnings + biome lint
 just fmt       # format everything: cargo fmt + biome format
 just fix       # auto-fix everything: biome check --write + cargo fmt
-just app-run   # build, sign, verify, then launch the desktop app
+just run-app   # build, sign, verify, then launch the desktop app
 ```
 
 `just build` builds the entire repo in one command: it typechecks
