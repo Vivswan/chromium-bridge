@@ -38,7 +38,7 @@ export const zh_CN: Record<MessageKey, string> = {
   "enclave.key_unsupported": "此平台不支持 Secure Enclave",
   "enclave.key_error": "注册状态不可读",
 
-  "overview.sub": "所有信任关卡，一目了然。",
+  "overview.sub": "所有信任关卡, 一目了然。",
   "overview.pill_ok": "主机检查全部通过",
   "overview.pill_kill": "紧急停止已启动",
   "overview.pill_kill_unreadable": "停止状态不可读",
@@ -204,7 +204,7 @@ export const zh_CN: Record<MessageKey, string> = {
   "clients.add_done": "客户端已添加 (由$1授权)。",
   "clients.add_dialog_title": "信任此 MCP 客户端?",
   "clients.add_dialog_body":
-    "信任“$1”将允许它驱动你的浏览器 - 你的标签页与登录态。支持 Touch ID 的 Mac 会要求指纹。",
+    '信任"$1"将允许它驱动你的浏览器 - 你的标签页与登录态。支持 Touch ID 的 Mac 会要求指纹。',
   "clients.add_confirm": "信任客户端",
   "clients.legend_title": "锚点类型",
   "clients.legend_team": "Apple 开发者团队 ID",
