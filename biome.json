@@ -12,7 +12,7 @@
       "!tests/fixtures",
       "!**/dist",
       "!**/*.css",
-      "!src/apps/site/**/*.astro"
+      "!src/apps/web/**/*.astro"
     ]
   },
   "formatter": {

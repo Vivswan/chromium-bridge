@@ -1,5 +1,5 @@
 {
-  "name": "chromium-bridge-docs-site",
+  "name": "chromium-bridge-web",
   "private": true,
   "type": "module",
   "description": "Astro site: the Chromium Bridge landing page plus the repository docs, rendered straight from markdown.",

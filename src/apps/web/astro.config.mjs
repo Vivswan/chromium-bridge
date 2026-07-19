@@ -14,7 +14,7 @@ import { SITE_BASE, SITE_ORIGIN } from "./src/lib/site-identity";
 export default defineConfig({
   site: SITE_ORIGIN,
   base: SITE_BASE,
-  outDir: "../../../build/site",
+  outDir: "../../../build/web",
   // Keep authored whitespace: the default HTML compression eats the space
   // between text and an adjacent inline link ("the<a>source code</a>").
   compressHTML: false,
