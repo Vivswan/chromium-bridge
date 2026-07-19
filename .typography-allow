@@ -1,4 +1,5 @@
-# Path prefixes exempt from the check-typography action.
+# Exact repo-relative paths exempt from scripts/check-typography.ts
+# (one per line; exact match, never a prefix).
 #
 # EMPTY, and it should stay that way: every file in the repo - including the
 # zh locale bundles and translated docs - uses ASCII punctuation for

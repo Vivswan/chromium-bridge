@@ -1,5 +1,8 @@
-# This file is managed by Vivswan/repo-platform.
-# Local edits may be replaced during template updates.
+# First-party CodeQL analysis via github/codeql-action, replacing the
+# Vivswan/repo-platform reusable workflow (repo-platform is removed for now;
+# it has no release yet). The language matrix matches the old configuration:
+# javascript-typescript. The Rust crates can be added deliberately later
+# (compiled-language analysis is a heavier, separate decision).
 
 name: CodeQL
 
@@ -16,10 +19,22 @@ permissions:
 
 jobs:
   codeql:
-    uses: Vivswan/repo-platform/.github/workflows/reusable-codeql.yml@4f694d4ef5ce170be630bd7e5674174b44407886
-    with:
-      language: javascript-typescript
+    name: codeql
+    # Code scanning needs Advanced Security on a private repository, so run
+    # only where it can succeed: skip while the repo is private (the retired
+    # reusable workflow skipped the same way). The event_name guard matters:
+    # schedule payloads carry no repository object, and the expression
+    # engine's loose equality would coerce that null equal to false and RUN
+    # the job - push/PR coverage is what gates, so schedule is skipped.
+    if: github.event_name != 'schedule' && github.event.repository.private == false
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
       actions: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: github/codeql-action/init@eec0bff2f6c15bf3f1e8a0152f94d17664a06a06 # v4
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@eec0bff2f6c15bf3f1e8a0152f94d17664a06a06 # v4
