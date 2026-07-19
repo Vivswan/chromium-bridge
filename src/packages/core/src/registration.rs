@@ -952,7 +952,10 @@ mod tests {
         }
 
         fn path(&self, rel: &str) -> PathBuf {
-            self.0.join(rel)
+            // Join per component: pushing a literal "a/b" keeps the "/" on
+            // Windows, which breaks string comparison against paths the
+            // production code builds with native separators.
+            rel.split('/').fold(self.0.clone(), |p, seg| p.join(seg))
         }
     }
 
