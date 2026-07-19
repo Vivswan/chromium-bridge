@@ -14,7 +14,7 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 | bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned via the root `package.json` `packageManager` field |
 | Python 3 | protocol e2e tests | stdlib only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
-| [`just`](https://just.systems/) | task runner | the `justfile` collects every dev task; `just` lists them. Each recipe is a plain command you can also run by hand |
+| [`just`](https://just.systems/) | task runner | the `justfile` collects every dev task; `just` lists the human-facing ones, grouped (internal sub-checks are `[private]`: hidden from the list, still runnable by name). Each recipe is a plain command you can also run by hand |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `just typos` / `just machete`; CI gates both |
 | [`shellcheck`](https://www.shellcheck.net/) | linting the remaining shell scripts (optional) | `just lint-scripts`; CI gates it |
 
@@ -66,7 +66,8 @@ code enters the build without someone choosing to let it in.
 
 ## Common tasks
 
-With `just` (`just` lists every recipe):
+With `just` (`just` lists the recipes, grouped; a few internal sub-steps are
+hidden from the list but still runnable by name):
 
 ```sh
 just build          # build everything (see below)
