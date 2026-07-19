@@ -115,8 +115,8 @@ the exact bytes users download.
   tree (a fresh checkout has no `node_modules`/`target`).
 - It attaches the SBOM as an asset to the Release for the corresponding tag.
 
-**Why decoupled**: the SBOM workflow is separated from the binary release, so an SBOM
-tooling failure can **never block** a binary release.
+The decoupling is deliberate: an SBOM tooling failure can **never block** a binary
+release.
 
 ## SemVer rules
 
