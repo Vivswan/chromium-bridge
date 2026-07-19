@@ -2,9 +2,9 @@
 
 chromium-bridge drives a **real, logged-in browser** on the user's machine.
 It can read page content, cookies (including httpOnly), and web storage, and
-can execute JavaScript in pages. Security is a first-class concern, not an
-afterthought. This document covers how to report issues, the security model
-in summary, and the review bar for security-relevant changes.
+can execute JavaScript in pages. This document covers how to report issues,
+the security model in summary, and the review bar for security-relevant
+changes.
 
 ## Reporting a vulnerability
 
@@ -302,7 +302,7 @@ if it:
 - adds outbound network/IPC, or widens `page_eval`.
 
 Such PRs should add a **negative** security test (proving the boundary
-holds), not just a positive one. Extra review care applies to the
+holds), in addition to the positive one. Extra review care applies to the
 security-critical surfaces listed in [AGENTS.md](AGENTS.md):
 `src/packages/core/src/ipc/`, `protocol.rs`, `broker.rs`, `allowlist.rs`,
 `revocation.rs`, `kill.rs`, `presence/`, `enclave/`, the extension's

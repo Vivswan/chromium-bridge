@@ -34,7 +34,7 @@ reasonable fix window.
 
 ## Triage
 
-After receiving a report, grade it with these questions (aligned with the blast radius in
+After receiving a report, grade it with these questions (they track the blast radius in
 [tool-risk-matrix.md](tool-risk-matrix.md)):
 
 1. **Which trust boundary is crossed?** (See boundaries 1 through 4 in
