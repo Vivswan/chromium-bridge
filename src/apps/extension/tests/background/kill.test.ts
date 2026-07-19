@@ -10,15 +10,17 @@
 // - the audit ring is bounded, strict on read, and appends survive
 //   interleaving.
 
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
 import { auditEvent, readRing, resetAuditForTests } from "@/lib/background/audit-log";
 import {
+  attachPort,
   getKillMirror,
   handleKillFrame,
   killGate,
   killGateFromStored,
+  requestKillStatus,
   resetKillForTests,
   setKillSwitch,
 } from "@/lib/background/kill";
@@ -135,6 +137,25 @@ describe("kill mirror updates from host frames only", () => {
       error: "this action is only accepted from extension pages",
     });
     expect((await getKillMirror())?.state).toBe("killed");
+  });
+
+  test("a failed mirror write settles the pending exchange ok:false, never ok:true over a stale mirror", async () => {
+    // The host answered, but the STORED state - the only thing killGate
+    // enforces on - could not adopt it. Reporting ok:true with the stale
+    // mirror would tell the caller (options page, panic path) that the
+    // transition took when the gate is still enforcing the old state.
+    attachPort(() => true);
+    const view = requestKillStatus();
+    const spy = vi
+      .spyOn(fakeBrowser.storage.local, "set")
+      .mockRejectedValueOnce(new Error("storage write refused"));
+    await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    spy.mockRestore();
+    const r = await view;
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("mirror");
+    // And the mirror itself was never half-updated.
+    expect(await getKillMirror()).toBeNull();
   });
 });
 

@@ -37,7 +37,13 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
-import { engageKillSwitch, requestKillStatus, setKillSwitch, whenKillStateRefuses } from "./kill";
+import {
+  engageKillSwitch,
+  engageOutstanding,
+  requestKillStatus,
+  setKillSwitch,
+  whenKillRevivesAfterRefusal,
+} from "./kill";
 import { isNativeConnected } from "./port";
 
 // True only for a sender that is one of the extension's OWN pages (popup /
@@ -160,7 +166,7 @@ export function route(
       }
       sendResponse(resolveConfirm(msg.id, msg.approved));
       return false;
-    case "confirm_deny_kill":
+    case "confirm_deny_kill": {
       // The confirm window's panic exit (ADR-0030): deny everything pending,
       // then engage the kill switch. One SW-side message, not two window-side
       // sends, for two reasons that both matter:
@@ -177,32 +183,43 @@ export function route(
       // (capability reduction; hardware payloads refuse only window-side
       // APPROVALS); a stale id changes nothing - whatever is pending is
       // denied and the engage still goes out. The host decides and audits
-      // the actual transition; the latch lifts when the exchange settles.
+      // the actual transition; the latch lifts per the rules below.
       if (!fromConfirmPage(sender)) {
         sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
         return false;
       }
-      denyAllConfirmations();
-      // The latch lifts on the EARLIER of two proofs, because the engage's
-      // own answer cannot be singled out on an id-less pipe:
-      // - the stored mirror crossing into refusal (killed/unknown): from
-      //   that moment the request gate refuses every op upstream, so the
-      //   latch has nothing left to hold;
-      // - the exchange failing (port down, send failed, timed out): nothing
-      //   credible is in flight anymore, and a frame landing later still
-      //   flips the mirror, whose gate needs no latch. Residual, named: a
-      //   host that stays silent past the timeout and then answers "alive"
-      //   leaves a lifted window - reaching it takes a fresh op AND an
-      //   explicit user approval on a newly presented surface.
-      void whenKillStateRefuses().then(releasePanicDeny);
+      const panicEpoch = denyAllConfirmations();
+      // The latch lifts on exactly two proofs, epoch-scoped so a stale
+      // release from an EARLIER panic can never lift this one's latch:
+      // - the kill state authoritatively reading alive again AFTER a
+      //   refusing state applied (host frames only, in pipe order): the
+      //   engage - or an equivalent cross-surface kill - landed, and the
+      //   alive that followed can only come from an explicit, presence-
+      //   gated release, which is precisely when confirmations may resume.
+      //   The stored mirror is never consulted directly: at panic time it
+      //   can read a stale "killed" while a pending release is about to
+      //   write "alive" with this engage still queued behind it;
+      // - the engage frame never reaching the pipe at all (port down or the
+      //   post itself failing) AND no other engage still outstanding (an
+      //   earlier panic's, or a reconnect re-post): only then is nothing in
+      //   flight, and the kill mirror (popup, options) tells the user the
+      //   truth. A TIMEOUT is neither proof - the posted frame may still
+      //   apply later - so it leaves the latch down, fail closed. Residual,
+      //   named: a host that stays silent forever leaves confirmations
+      //   denying until the SW restarts; that is the fail-closed reading of
+      //   "kill everything".
+      void whenKillRevivesAfterRefusal().then(() => releasePanicDeny(panicEpoch));
       void engageKillSwitch().then((r) => {
-        if (!r.ok) {
-          releasePanicDeny();
+        if (!r.ok && r.sent === false && !engageOutstanding()) {
+          releasePanicDeny(panicEpoch);
           console.error("[bb] confirm-window kill engage failed", r.error);
+        } else if (!r.ok) {
+          console.error("[bb] confirm-window kill engage unconfirmed", r.error);
         }
         sendResponse(r);
       });
       return true;
+    }
     default: {
       if (!isEnrollmentAction(msg.type)) {
         // The schema admits nothing else; a new message type must be added
