@@ -1,4 +1,4 @@
-//! chromium-bridge — thin binary entry point.
+//! chromium-bridge - thin binary entry point.
 //!
 //! All logic lives in the `chromium_bridge_core` library crate
 //! (`src/packages/core`); this binary only selects a mode from argv and forwards to

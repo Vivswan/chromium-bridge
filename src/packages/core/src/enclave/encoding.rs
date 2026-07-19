@@ -1,4 +1,4 @@
-//! base64 (encode only — the proof frame carries sig + pubkey as base64).
+//! base64 (encode only - the proof frame carries sig + pubkey as base64).
 
 /// Standard-alphabet base64 with padding (RFC 4648). Encode-only, so no
 /// dependency is pulled in for one direction of one codec.

@@ -110,7 +110,7 @@ fn should_clear_conn(current: Option<u64>, my_gen: u64) -> bool {
 /// Remove and return every pending entry whose generation matches `my_gen`.
 /// Dropping the returned senders wakes those callers immediately with a closed
 /// channel (surfaced as [`CallError::Disconnected`]). Entries tagged with any
-/// other generation — including other still-live connections — are left in the
+/// other generation - including other still-live connections - are left in the
 /// map. Factored out so the drain policy is unit-testable without sockets.
 fn drain_pending_for_generation(
     pending: &mut HashMap<u64, (u64, mpsc::Sender<BridgeResp>)>,
@@ -132,9 +132,9 @@ fn drain_pending_for_generation(
 /// - `want = Some(label)`: that label must be live, otherwise the caller gets
 ///   [`CallError::BrowserNotFound`] naming what IS connected.
 /// - `want = None` with exactly one connection: route to it (single-browser
-///   back-compat — no argument needed when there is nothing to choose).
+///   back-compat - no argument needed when there is nothing to choose).
 /// - `want = None` with several connections: refuse with
-///   [`CallError::AmbiguousBrowser`] rather than guess — acting in the wrong
+///   [`CallError::AmbiguousBrowser`] rather than guess - acting in the wrong
 ///   logged-in browser is worse than asking the caller to name one.
 /// - No connections at all: [`CallError::NotConnected`].
 fn resolve_target(available: &[&str], want: Option<&str>) -> Result<String, CallError> {
@@ -161,7 +161,7 @@ fn resolve_target(available: &[&str], want: Option<&str>) -> Result<String, Call
     }
 }
 
-/// Shared session. Cheap to clone — everything is behind Arc.
+/// Shared session. Cheap to clone - everything is behind Arc.
 #[derive(Clone)]
 pub struct Session {
     /// The currently-connected native hosts, keyed by browser label. Each
@@ -311,7 +311,7 @@ impl Session {
                 // pending entry was sent over THIS connection (generation
                 // match); anything else is a protocol violation and drops the
                 // offending connection (fail closed). An UNSENT entry cannot
-                // legally be answered either — its request has not been
+                // legally be answered either - its request has not been
                 // written to any connection yet. This path locks only the
                 // pending mutex, which is compatible with the conns→pending
                 // ordering used elsewhere.
@@ -361,7 +361,7 @@ impl Session {
             // Reader ended (disconnect / error). Under a consistent lock order
             // (conns mutex THEN pending mutex):
             //   1. Clear this label's slot, but ONLY if it still holds our
-            //      generation — a newer host may have already replaced us in
+            //      generation - a newer host may have already replaced us in
             //      the race window, and clobbering it would leave `call`
             //      wrongly failing against a healthy connection.
             //   2. Drop every pending sender tagged with our generation so
@@ -456,7 +456,7 @@ impl Session {
     /// request is unroutable at this moment (nothing connected, unknown label,
     /// or ambiguous). Used by the MCP server to tag audit lines so operators
     /// can correlate a tool call with the specific browser and connection it
-    /// ran over, across reconnects. Just a lock and a map — non-blocking.
+    /// ran over, across reconnects. Just a lock and a map - non-blocking.
     pub fn route_info(&self, browser: Option<&str>) -> Option<(String, u64)> {
         // A poisoned registry is unroutable (None), same as nothing connected.
         let conns = self.conns.lock().ok()?;
@@ -874,7 +874,7 @@ mod tests {
             // Its generation no longer matches the slot, so it must leave the
             // new entry alone: chrome stays connected at the new generation.
             drop(old);
-            // No removal event to wait for — poll briefly and require the
+            // No removal event to wait for - poll briefly and require the
             // entry to still be the new one afterwards.
             thread::sleep(Duration::from_millis(200));
             assert_eq!(
@@ -929,7 +929,7 @@ mod tests {
             );
 
             // The genuine browser can still answer, and the caller gets ITS
-            // data — not the spoofed payload.
+            // data - not the spoofed payload.
             let mut chrome_w = chrome.try_clone().unwrap();
             chrome_w
                 .write_all(

@@ -189,7 +189,7 @@ pub fn run_unkill() -> i32 {
         Ok(auth) => auth,
         Err(e) => {
             audit_refused_release(Surface::Cli, &e);
-            eprintln!("unkill: refused — {e}");
+            eprintln!("unkill: refused - {e}");
             eprintln!("the kill switch stays engaged");
             return 1;
         }
@@ -201,7 +201,7 @@ pub fn run_unkill() -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("unkill: refusing — the revocation record could not be read: {e}");
+            eprintln!("unkill: refusing - the revocation record could not be read: {e}");
             eprintln!(
                 "releasing the kill switch from an unknown state would fail open; \
                  see docs/operations.md for the recovery path"

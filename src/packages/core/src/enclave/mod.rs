@@ -6,7 +6,7 @@
 //! is gated on user presence (Touch ID / password). The extension pins the
 //! PUBLIC key and later verifies `enclave_proof` frames (see
 //! [`crate::protocol::EnclaveControl`]) against it, so only a host that can
-//! drive THIS machine's Enclave — with the user physically approving — can
+//! drive THIS machine's Enclave - with the user physically approving - can
 //! complete an enrollment.
 //!
 //! Layout (one concern per submodule; the public API is re-exported here):
@@ -20,7 +20,7 @@
 //! - [`key`]: the cross-platform [`EnrollmentKey`] handle and the native-host
 //!   challenge responder.
 //! - [`macos`]: the keychain/Secure Enclave backend, built on the vetted
-//!   `security-framework` crate — no hand-rolled Security.framework FFI.
+//!   `security-framework` crate - no hand-rolled Security.framework FFI.
 //!   Other platforms get stubs that fail closed with
 //!   [`EnclaveError::Unsupported`].
 //! - [`cli`]: the `pair` / `revoke` / `enclave-status` subcommand runners.
@@ -58,7 +58,7 @@ pub const KEY_LABEL: &str = "com.vivswan.chromium-bridge.enclave.signing.v1";
 pub enum EnclaveError {
     #[error("Secure Enclave enrollment is only supported on macOS")]
     Unsupported,
-    #[error("no enrollment key found — run `chromium-bridge pair` first")]
+    #[error("no enrollment key found - run `chromium-bridge pair` first")]
     NotEnrolled,
     #[error("invalid challenge: {0}")]
     InvalidChallenge(&'static str),

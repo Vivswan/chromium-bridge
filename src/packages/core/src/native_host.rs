@@ -9,10 +9,10 @@
 //! The exceptions to "forward everything" are the host-handled control frames:
 //! the enrollment ceremony (ADR-0021) and the revocation/admin exchange
 //! (ADR-0025). Frames whose `type` is one of those control tags are handled
-//! HERE — an `enclave_challenge` is answered locally by signing with the
+//! HERE - an `enclave_challenge` is answered locally by signing with the
 //! Secure Enclave key (raising the user-presence prompt), an `enclave_revoke`
 //! deletes the enrollment key, and `client_list`/`client_revoke` manage the
-//! trusted-client allowlist — and are never forwarded to the MCP server;
+//! trusted-client allowlist - and are never forwarded to the MCP server;
 //! symmetrically, a control frame arriving FROM the server is an injection
 //! and is dropped, never forwarded to the extension. Everything else forwards
 //! byte-for-byte, so all real tool logic stays in the MCP server on the other
@@ -21,7 +21,7 @@
 //!
 //! One host-originated push exists (ADR-0025): when the enrollment key has
 //! been revoked out-of-band (`chromium-bridge revoke`, `pair --reset`), the
-//! host tells the extension with an `enclave_revoked` frame — at startup when
+//! host tells the extension with an `enclave_revoked` frame - at startup when
 //! the key is already gone, and live when the revocation epoch's host-key
 //! marker moves. It is host-originated on purpose: the socket->stdout pump
 //! drops any server-injected control frame, so only this process can put that
@@ -355,13 +355,13 @@ fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
 /// of out-of-band transitions:
 ///
 /// - **host-key revocations** (`chromium-bridge revoke`, `pair --reset`),
-///   pushed as `enclave_revoked` — both triggers require a RECORDED revocation
+///   pushed as `enclave_revoked` - both triggers require a RECORDED revocation
 ///   (`host_key_epoch > 0`) AND a keychain-confirmed absent key before any
 ///   frame is sent (see ADR-0025; the keychain check keeps a scribbled-on
 ///   revocation file from faking one);
 /// - **kill-switch transitions** (ADR-0030), pushed as `kill_status_result`
-///   whenever `kill_epoch` moves — plus once at startup when the state is
-///   already killed or unreadable — so the extension's SW-only mirror tracks
+///   whenever `kill_epoch` moves - plus once at startup when the state is
+///   already killed or unreadable - so the extension's SW-only mirror tracks
 ///   CLI-driven kills without polling (the alive direction is pulled by the
 ///   extension's own on-connect query).
 ///
@@ -845,7 +845,7 @@ pub fn run() -> i32 {
     // thread is blocked inside nm_read_frame waiting for a frame that Chrome
     // (still alive) will never send, so the join never returns. The process
     // lingers as a zombie holding an open stdin/stdout pair, which means the
-    // extension's onDisconnect never fires and it never reconnects — the
+    // extension's onDisconnect never fires and it never reconnects - the
     // MCP server's tool calls then report "extension not connected".
     //
     // Fix: let whichever thread finishes first terminate the whole process.
@@ -918,7 +918,7 @@ pub fn run() -> i32 {
     let out_handle = thread::spawn(move || {
         // Forwarded frames share stdout with Thread A's enclave control replies,
         // so the pump locks the buffered writer per frame (never across the
-        // blocking socket read) — otherwise a challenge reply could not be
+        // blocking socket read) - otherwise a challenge reply could not be
         // written while this thread waits on the socket, hanging the ceremony.
         pump_socket_to_stdout(&mut reader, &stdout_writer);
         log_debug!("native-host", "socket->stdout thread ending");
@@ -936,13 +936,13 @@ pub fn run() -> i32 {
 /// frames. Reads through [`bridge_read`], so every line is bounded by
 /// `BRIDGE_MAX_LINE`: the server passed attestation, but zero trust means even
 /// an attested peer must not be able to exhaust memory with one newline-less
-/// line. Any read error — an over-cap line included — fails closed: the pump
+/// line. Any read error - an over-cap line included - fails closed: the pump
 /// ends, the process exits, and Chrome tears the port down.
 ///
 /// Enclave and admin control frames (ADR-0021/0025) are filtered out here:
 /// they legitimately originate only in the extension and in this host itself,
 /// never in the server, so one arriving on the socket leg is an injection
-/// attempt — e.g. a spurious `enclave_error` to burn the extension's
+/// attempt - e.g. a spurious `enclave_error` to burn the extension's
 /// outstanding nonce, an `enclave_revoked` to provoke a false "compromised"
 /// mark, or a forged `client_list_result`. Dropped and logged, and the pump
 /// keeps going: unlike a malformed line this is a recognized, bounded frame,
@@ -995,7 +995,7 @@ mod tests {
         // pump must fail closed at the over-cap line (stop, emit nothing, not
         // even the later valid frame). The old `reader.lines()` pump buffered
         // the giant line unbounded (the OOM path), skipped it as malformed,
-        // and would have emitted the trailing frame — so this pins both the
+        // and would have emitted the trailing frame - so this pins both the
         // cap and the fail-closed stop.
         let mut input = Vec::with_capacity(BRIDGE_MAX_LINE + 32);
         input.resize(BRIDGE_MAX_LINE + 1, b'x');
@@ -1009,7 +1009,7 @@ mod tests {
     fn valid_lines_are_framed_until_the_over_cap_line() {
         // A legal frame, then an over-cap line, then another legal frame: the
         // first goes out as native messaging, and the pump stops at the
-        // poisoned line — the frame after it must never be emitted.
+        // poisoned line - the frame after it must never be emitted.
         let mut input = b"{\"ok\":true}\n".to_vec();
         input.resize(input.len() + BRIDGE_MAX_LINE + 1, b'x');
         input.extend_from_slice(b"\n{\"after\":true}\n");
@@ -1047,8 +1047,8 @@ mod tests {
     fn server_injected_control_frames_are_dropped_not_forwarded() {
         // The server leg never legitimately carries host-handled control
         // frames (the ceremony and the admin exchange run extension <-> host
-        // only), so injected frames — the nonce-burning enclave_error, the
-        // false-compromise enclave_revoked, a forged client_list_result — must
+        // only), so injected frames - the nonce-burning enclave_error, the
+        // false-compromise enclave_revoked, a forged client_list_result - must
         // be dropped while the pump keeps forwarding real traffic around them.
         let input = concat!(
             "{\"type\":\"enclave_error\",\"reason\":\"key_invalid\"}\n",

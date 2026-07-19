@@ -153,7 +153,7 @@ fn gather() -> Report {
 /// Pure rendering of a gathered report into the printed health text.
 fn render(r: &Report) -> String {
     let mut out = String::new();
-    out.push_str(&format!("chromium-bridge doctor — v{}\n", r.version));
+    out.push_str(&format!("chromium-bridge doctor - v{}\n", r.version));
     out.push_str(&format!("platform:        {}/{}\n", r.os, r.arch));
 
     out.push_str(&format!("lock file:       {}\n", r.lock_path.display()));
@@ -185,9 +185,9 @@ fn render(r: &Report) -> String {
     match &r.kill {
         Ok(false) => out.push_str("off (bridge activity permitted)\n"),
         Ok(true) => out
-            .push_str("ENGAGED — all bridge activity is refused until `chromium-bridge unkill`\n"),
+            .push_str("ENGAGED - all bridge activity is refused until `chromium-bridge unkill`\n"),
         Err(e) => out.push_str(&format!(
-            "state UNREADABLE ({e}) — every enforcement point is failing closed;\n  \
+            "state UNREADABLE ({e}) - every enforcement point is failing closed;\n  \
              see docs/operations.md for recovery\n"
         )),
     }
@@ -213,7 +213,7 @@ fn render(r: &Report) -> String {
     // These probes only cover the MCP-server/bridge side. doctor cannot observe
     // whether the Chrome extension is loaded and connected without speaking the
     // native-host hello protocol on the bridge port, which would clobber the
-    // live connection via the generation guard — so we tell the user how to
+    // live connection via the generation guard - so we tell the user how to
     // check it themselves instead of probing.
     out.push_str(
         "\nnote: the checks above cover the MCP server + native-host bridge only.\n\
@@ -229,23 +229,23 @@ fn render(r: &Report) -> String {
 /// One-line status summary and the derived exit code hint.
 fn summary(r: &Report) -> &'static str {
     if r.kill == Ok(true) {
-        return "kill switch ENGAGED — release it with `chromium-bridge unkill`";
+        return "kill switch ENGAGED - release it with `chromium-bridge unkill`";
     }
     if r.kill.is_err() {
-        return "kill state unreadable — failing closed; see docs/operations.md";
+        return "kill state unreadable - failing closed; see docs/operations.md";
     }
     if r.lock_error.is_some() {
-        return "lock file present but unreadable — try restarting your MCP client";
+        return "lock file present but unreadable - try restarting your MCP client";
     }
     if !r.lock_present {
-        return "server not running — is your MCP client started?";
+        return "server not running - is your MCP client started?";
     }
     match r.reachable {
         Some(true) if r.manifest_ok() => "OK",
         Some(true) => {
-            "server reachable, but no detected browser has a healthy native-host registration — run `chromium-bridge doctor --fix`"
+            "server reachable, but no detected browser has a healthy native-host registration - run `chromium-bridge doctor --fix`"
         }
-        _ => "server not reachable — is your MCP client running?",
+        _ => "server not reachable - is your MCP client running?",
     }
 }
 
