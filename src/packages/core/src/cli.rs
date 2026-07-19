@@ -390,6 +390,16 @@ mod tests {
             .collect()
     }
 
+    // --manifest-dir demands an absolute path, and "/a" is not absolute on
+    // Windows; build one per platform.
+    fn abs(tail: &str) -> String {
+        if cfg!(windows) {
+            format!("C:\\{tail}")
+        } else {
+            format!("/{tail}")
+        }
+    }
+
     #[test]
     fn explicit_native_host_flag_is_recognized() {
         assert!(is_native_host_mode(&args(&["--native-host"])));
@@ -507,12 +517,12 @@ mod tests {
                 "doctor",
                 "--fix",
                 "--manifest-dir",
-                "/a",
+                &abs("a"),
                 "--manifest-dir",
-                "/b"
+                &abs("b")
             ])
             .manifest_dirs,
-            vec!["/a".to_string(), "/b".to_string()]
+            vec![abs("a"), abs("b")]
         );
     }
 
@@ -540,10 +550,10 @@ mod tests {
     fn uninstall_args_take_only_manifest_dirs() {
         use super::uninstall_args;
         assert_eq!(
-            uninstall_args(&args(&["uninstall", "--manifest-dir", "/a"]))
+            uninstall_args(&args(&["uninstall", "--manifest-dir", &abs("a")]))
                 .unwrap()
                 .manifest_dirs,
-            vec!["/a".to_string()]
+            vec![abs("a")]
         );
         assert!(uninstall_args(&args(&["uninstall", "--browser", "chrome"])).is_err());
     }
