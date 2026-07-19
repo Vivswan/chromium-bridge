@@ -3,25 +3,25 @@
 # The original rationale (staying byte-identical to upstream
 # whg517/browser-bridge for clean merges) ended with the rebrand to
 # chromium-bridge (ADR-0023). This list only holds files that deliberately
-# carry non-ASCII text, and it must only ever shrink:
-# - src/apps/extension/: the zh locale bundles and the functional glyphs the
-#   code emits on purpose - the masking replacement bullets ("****[jwt]"
-#   spelled with U+2022, pinned by the masking/egress tests and visible to
-#   MCP clients) and their test fixtures. Legitimate CJK here is policed by
-#   scripts/check-cjk.ts.
-# - src/apps/desktop/ui locales + native-language-names: the desktop app's
-#   zh bundles and each language naming itself; same category as above.
-# - Translated docs (*.zh_CN.md / *.zh_TW.md): legitimate CJK text and CJK
-#   punctuation; each translated file is exempted by exact path so nothing
-#   else rides along. English docs are NOT exempt: they are plain ASCII.
-# - CHANGELOG.md: generated release history, never edited by hand.
-src/apps/extension/
-src/apps/desktop/ui/src/locales/
-src/apps/desktop/ui/src/lib/native-language-names.ts
+# carry banned look-alike/fullwidth punctuation, by EXACT path so nothing else
+# rides along, and it must only ever shrink:
+# - zh locale bundles (extension .yml, desktop .ts): fullwidth CJK punctuation
+#   and curly quotes are correct Chinese typography. Only zh_CN.ts is listed
+#   for the desktop app; zh_TW.ts uses only CJK marks the checker already
+#   allows, and en.* files are pure ASCII.
+# - Translated docs (*.zh_CN.md / *.zh_TW.md): legitimate CJK punctuation,
+#   exempted per exact path. English docs are NOT exempt - they are plain ASCII.
+#
+# Whole-script CJK containment (an untranslated Chinese label leaking into an
+# English surface) is policed separately by scripts/check-cjk.ts, not here.
+# Non-banned functional glyphs (U+2022 masking bullet, U+2192, U+26A0, U+2260)
+# are not look-alikes and need no exemption.
+src/apps/extension/src/locales/zh_CN.yml
+src/apps/extension/src/locales/zh_TW.yml
+src/apps/desktop/ui/src/locales/zh_CN.ts
 README.zh_CN.md
 README.zh_TW.md
 docs/quickstart.zh_CN.md
 docs/quickstart.zh_TW.md
 docs/privacy-policy.zh_CN.md
 docs/privacy-policy.zh_TW.md
-CHANGELOG.md

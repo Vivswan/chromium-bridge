@@ -67,9 +67,9 @@ function isSwReq(req: BridgeReq): req is SwReq {
  *
  * - Only *known* tools (in the generated catalogue) are consulted, because
  *   `decide()` fail-closes unknown ops. Unknown/empty ops pass through
- *   untouched — parseBridgeReq refuses them at the port boundary before
+ *   untouched - parseBridgeReq refuses them at the port boundary before
  *   dispatch is ever reached.
- * - A known, disabled tool throws `tool disabled in settings: <op>` — the same
+ * - A known, disabled tool throws `tool disabled in settings: <op>` - the same
  *   message the old inline check produced (`decision.reason` is
  *   "tool disabled in settings").
  */
@@ -144,7 +144,7 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
 
 // Switching on `req.op` narrows `req.args` to that tool's schema
 // (BridgeCommand), so the required args (e.g. tabId, url) are typed
-// non-optional — no `!` needed. The `default` arm is the exhaustiveness
+// non-optional - no `!` needed. The `default` arm is the exhaustiveness
 // backstop: adding an op to SW_OPS without a case here fails to compile.
 async function dispatchSw(req: SwReq): Promise<unknown> {
   switch (req.op) {

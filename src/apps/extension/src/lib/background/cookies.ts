@@ -1,5 +1,5 @@
-// cookie_get — read-only cookie access for allowlisted hosts (browser.cookies
-// is SW-only). httpOnly cookies are readable here (that's the point — session
+// cookie_get - read-only cookie access for allowlisted hosts (browser.cookies
+// is SW-only). httpOnly cookies are readable here (that's the point - session
 // tokens live there). Values are masked before leaving the extension. No
 // set/remove: writing would allow forging httpOnly cookies (session fixation),
 // which even page XSS cannot do. See ADR-0010.
