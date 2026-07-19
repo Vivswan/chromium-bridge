@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Astro site: the Chromium Bridge landing page plus the repository docs, rendered straight from markdown.",
   "scripts": {
-    "dev": "astro dev",
+    "dev": "astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev",
     "build": "astro build",
     "preview": "astro preview"
   },
