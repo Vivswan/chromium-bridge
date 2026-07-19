@@ -104,8 +104,8 @@ jobs:
           cp LICENSE README.md "$NAME/"
           # RELEASE.txt records which release this archive came from, so a
           # user can pick the matching published checksum / provenance
-          # attestation when verifying by hand (README "Verifying your
-          # binary"). Registration itself is `chromium-bridge doctor --fix`,
+          # attestation when verifying by hand (SECURITY.md "Release artifact
+          # integrity"). Registration itself is `chromium-bridge doctor --fix`,
           # run from the extracted binary.
           {
             echo "repo=${GITHUB_REPOSITORY}"
