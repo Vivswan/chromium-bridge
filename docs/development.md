@@ -46,8 +46,8 @@ tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
 scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
                          check-extension-id.ts, lib.ts + the standalone shell scripts
-src/apps/site/           bun workspace member: minimal Astro site rendering the
-                         repo's markdown docs + translations (just docs-site-build;
+src/apps/web/           bun workspace member: minimal Astro site rendering the
+                         repo's markdown docs + translations (just web-build;
                          not part of `just ci`)
 ```
 

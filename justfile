@@ -20,7 +20,7 @@ build:
     bun run --cwd src/apps/desktop/ui build
     bunx tsc -p scripts
     cargo build --workspace
-    bun run --cwd src/apps/site build
+    bun run --cwd src/apps/web build
 
 # Build the release binary
 [private]
@@ -318,15 +318,15 @@ ci: fmt-check lint-rust lint-scripts typos machete test-rust typecheck check-ts 
 install: build-release
     ./target/release/chromium-bridge doctor --fix
 
-# Build the docs site (src/apps/site: Astro over the repo's markdown docs)
+# Build the docs site (src/apps/web: Astro over the repo's markdown docs)
 [private]
-docs-site-build:
-    bun run --cwd src/apps/site build
+web-build:
+    bun run --cwd src/apps/web build
 
 # Docs site dev server only (`just dev` supersets this)
 [private]
-docs-site-dev:
-    bun run --cwd src/apps/site dev
+web-dev:
+    bun run --cwd src/apps/web dev
 
 # Propagate the Cargo.toml version into the extension files
 [private]
