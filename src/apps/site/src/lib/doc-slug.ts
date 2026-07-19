@@ -3,8 +3,9 @@
 // never disagree about which route a markdown file gets.
 
 // Agent-facing instruction files are not user documentation, wherever they
-// sit in the tree.
-export const EXCLUDED = new Set(["AGENTS.md", "CLAUDE.md"]);
+// sit in the tree. HANDOFF/CONSOLIDATION-AUDIT are uncommitted working notes
+// that would otherwise render from a local checkout's repo-root glob.
+export const EXCLUDED = new Set(["AGENTS.md", "CLAUDE.md", "HANDOFF.md", "CONSOLIDATION-AUDIT.md"]);
 
 // Maps a repo-relative markdown path ("docs/architecture.md") to its /docs/
 // route slug, or undefined when the site does not render that file. The
