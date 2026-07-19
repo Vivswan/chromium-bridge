@@ -115,8 +115,19 @@ chromium-bridge doctor --list                     # read-only: detection + regis
 ```
 
 Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`,
-`opera`. "Detected" means the browser's per-user config directory exists.
-When nothing is detected, `--fix` refuses and asks for an explicit selection
+`opera`. "Detected" means the browser is actually installed, as far as a
+cheap local check can tell. On macOS that check is the application bundle
+under `/Applications` or `~/Applications` - a leftover per-user config
+directory alone (uninstalled browsers keep those forever, and some dev
+tools create them) does not count, and a freshly installed browser counts
+before its first run. On Linux and Windows the check is the per-user config
+(profile) directory, the best cheap signal there. A browser installed
+somewhere non-standard on macOS reads as "not detected"; it can still be
+registered explicitly with `--browser <key>` or `--manifest-dir`. Plain
+`doctor`'s summary counts only detected browsers, so a healthy explicit
+registration for a non-standard install keeps the summary below "OK" even
+though the bridge works - the per-browser lines tell the real story. When
+nothing is detected, `--fix` refuses and asks for an explicit selection
 instead of guessing.
 
 `chromium-bridge uninstall` reverses exactly what this project registers

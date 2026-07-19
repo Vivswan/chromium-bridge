@@ -987,6 +987,15 @@ mod tests {
         let tree = TempTree::new("register");
         let reg = registrar(&tree);
         let target = browser_target(&tree);
+        // The manifest dir does not exist yet -- a freshly installed browser
+        // may not have created its config tree either. Registration creates
+        // it; an undetected-but-real browser stays registrable.
+        assert!(!target
+            .registration
+            .manifest_path()
+            .parent()
+            .unwrap()
+            .exists());
         reg.register(&target).unwrap();
 
         let manifest_path = target.registration.manifest_path();
@@ -1227,6 +1236,63 @@ mod tests {
     fn shell_quote_defuses_single_quotes() {
         assert_eq!(shell_quote("plain"), "'plain'");
         assert_eq!(shell_quote("a'b"), r"'a'\''b'");
+    }
+
+    #[test]
+    fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
+        // Fixture tree: Chrome is really installed (app bundle + config
+        // root); Vivaldi is a ghost (leftover config root, no app).
+        let tree = TempTree::new("select");
+        fs::create_dir_all(tree.path("Applications/Google Chrome.app")).unwrap();
+        fs::create_dir_all(tree.path("home/Library/Application Support/Google/Chrome")).unwrap();
+        fs::create_dir_all(tree.path("home/Library/Application Support/Vivaldi")).unwrap();
+        let dirs = BaseDirs {
+            home: tree.path("home"),
+            xdg_config_home: None,
+            xdg_data_home: None,
+            local_app_data: None,
+            roaming_app_data: None,
+            system_applications: tree.path("Applications"),
+        };
+        let entries = browsers::resolve(Os::MacOs, &dirs);
+
+        // Default --fix: only the detected browser; the ghost gets no
+        // manifest written into its leftover directory.
+        let args = crate::cli::DoctorArgs {
+            fix: true,
+            ..Default::default()
+        };
+        let targets = select_targets(&args, &entries).unwrap();
+        assert_eq!(
+            targets.iter().map(Target::describe).collect::<Vec<_>>(),
+            vec!["chrome"]
+        );
+
+        // Explicit --browser: the user's word overrides detection, so a
+        // browser we cannot see (non-standard install) stays registrable.
+        let args = crate::cli::DoctorArgs {
+            fix: true,
+            browsers: Some(vec!["vivaldi".into(), "opera".into()]),
+            ..Default::default()
+        };
+        let targets = select_targets(&args, &entries).unwrap();
+        assert_eq!(
+            targets.iter().map(Target::describe).collect::<Vec<_>>(),
+            vec!["vivaldi", "opera"]
+        );
+
+        // Nothing detected at all: refuse with guidance, never guess.
+        let empty_dirs = BaseDirs {
+            home: tree.path("empty-home"),
+            system_applications: tree.path("empty-apps"),
+            ..dirs
+        };
+        let entries = browsers::resolve(Os::MacOs, &empty_dirs);
+        let args = crate::cli::DoctorArgs {
+            fix: true,
+            ..Default::default()
+        };
+        assert_eq!(select_targets(&args, &entries).err(), Some(1));
     }
 
     #[cfg(unix)]
