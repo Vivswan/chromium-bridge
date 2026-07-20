@@ -126,6 +126,29 @@ fn drain_pending_for_generation(
         .collect()
 }
 
+/// Remove and return every pending entry that has been bound to ANY real
+/// connection generation, leaving only [`UNSENT_GENERATION`] entries behind.
+/// The kill sweep uses this because a kill is global: an entry whose
+/// generation is no longer in the registry (its connection was replaced by a
+/// same-label reconnect, or its reader already cleaned up) must not survive
+/// either -- the replaced connection's reader may still be alive on a cloned
+/// fd and could otherwise deliver a late response after the sweep. UNSENT
+/// entries are kept: their request was never written to any connection, so
+/// nothing can answer them, and their caller is about to resolve against the
+/// now-empty registry and fail with [`CallError::NotConnected`] on its own.
+fn drain_pending_all_sent(
+    pending: &mut HashMap<u64, (u64, mpsc::Sender<BridgeResp>)>,
+) -> Vec<mpsc::Sender<BridgeResp>> {
+    let ids: Vec<u64> = pending
+        .iter()
+        .filter(|(_, (gen, _))| *gen != UNSENT_GENERATION)
+        .map(|(id, _)| *id)
+        .collect();
+    ids.into_iter()
+        .filter_map(|id| pending.remove(&id).map(|(_, tx)| tx))
+        .collect()
+}
+
 /// Pick the connection a request should run over. `available` are the live
 /// labels (any order); `want` is the request's optional `browser` argument.
 ///
@@ -429,26 +452,67 @@ impl Session {
     }
 
     /// Sever every live browser connection (the kill switch's teeth on the
-    /// browser leg, ADR-0030). Shuts each connection's socket down and lets
-    /// the owning reader thread do the actual cleanup -- clear its slot and
-    /// drain its pending callers into [`CallError::Disconnected`] -- exactly
-    /// as it would on any other disconnect, so slot bookkeeping stays in one
-    /// place (mirroring the broker registry's sweep-never-removes rule).
-    /// Idempotent: shutting down an already-shut socket is harmless, so the
-    /// broker's watcher may call this every tick while killed. Returns how
-    /// many connections were signaled.
+    /// browser leg, ADR-0030) and do the registry bookkeeping synchronously:
+    /// clear every slot and drain every sent pending caller into
+    /// [`CallError::Disconnected`]. The sweep must NOT delegate this to the
+    /// reader threads: a reader already blocked in `recv(2)` is not reliably
+    /// woken by `shutdown(2)` on macOS (observed live under load: a reader
+    /// still parked in `__recvfrom` 90 seconds after the sweep), so
+    /// reader-side cleanup may only happen once the peer's end closes. The
+    /// generation guard keeps such a late-waking reader honest: its slot is
+    /// already gone (or re-occupied by a newer generation), so its own
+    /// cleanup degrades to a no-op, and its pending drain finds nothing left.
+    ///
+    /// The drain covers every SENT generation, not just the connections
+    /// severed by this call: a kill is global, and an entry left behind by an
+    /// already-replaced connection could otherwise still be answered by that
+    /// connection's lingering reader after the sweep (see
+    /// [`drain_pending_all_sent`]). A response a reader claimed before the
+    /// sweep (its entry already removed for delivery) is a call that
+    /// completed before the kill, not one that survived it.
+    ///
+    /// Idempotent: sweeping an already-empty registry signals nobody, and
+    /// shutting down a socket twice is harmless, so the broker's watcher may
+    /// call this every tick while killed. Returns how many connections were
+    /// severed by THIS call.
     pub(crate) fn shutdown_all_browsers(&self) -> usize {
-        // The kill switch must bite even after a panic poisoned the registry:
-        // severing sockets is safe on inconsistent bookkeeping, whereas
-        // refusing to sever would leave the bridge alive. Recover the guard.
-        let guard = self
+        // The kill switch must bite even after a panic poisoned a lock:
+        // severing sockets, dropping slots, and waking callers with a typed
+        // disconnect are all safe on inconsistent bookkeeping (they can only
+        // make callers fail faster), whereas refusing to sever would leave
+        // the bridge alive. Recover both guards.
+        let mut conns_guard = self
             .conns
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for conn in guard.values() {
-            let _ = conn.writer.get_ref().shutdown(std::net::Shutdown::Both);
+        // Sever first: the kernel-level cut in both directions (the peer sees
+        // EOF, inbound data is discarded) must not depend on the bookkeeping
+        // below. A failure here is unexpected on a registered socket; the
+        // removal and drain below still neutralize the connection (no caller
+        // is left for a late response to reach), so log rather than abort.
+        for (label, conn) in conns_guard.iter() {
+            if let Err(e) = conn.writer.get_ref().shutdown(std::net::Shutdown::Both) {
+                log_warn!("session", "kill sweep: shutdown of '{label}' failed: {e}");
+            }
         }
-        guard.len()
+        // Bookkeeping under the same conns -> pending lock order the readers
+        // and `try_call` use, so the three paths serialize instead of racing.
+        let severed: Vec<Conn> = conns_guard.drain().map(|(_, conn)| conn).collect();
+        let drained: Vec<mpsc::Sender<BridgeResp>> = {
+            let mut pending_guard = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            drain_pending_all_sent(&mut pending_guard)
+        };
+        drop(conns_guard);
+        let count = severed.len();
+        // Locks released: dropping the writers closes our socket handles;
+        // dropping the senders wakes the in-flight callers immediately with
+        // `Disconnected` (ADR-0030: drained, not left to ride out timeouts).
+        drop(severed);
+        drop(drained);
+        count
     }
 
     /// Resolve where a call with the given `browser` argument would be routed
@@ -755,6 +819,36 @@ mod tests {
     }
 
     #[test]
+    fn drain_all_sent_drops_every_real_generation_but_keeps_unsent() {
+        // The kill sweep's drain: every entry bound to ANY real generation is
+        // dropped -- including one whose connection already left the registry
+        // (replaced by a same-label reconnect) -- while UNSENT sentinel
+        // entries survive (nothing can ever answer them).
+        let mut pending: HashMap<u64, (u64, mpsc::Sender<BridgeResp>)> = HashMap::new();
+        let (tx1, rx1) = mpsc::channel::<BridgeResp>();
+        let (tx2, rx2) = mpsc::channel::<BridgeResp>();
+        let (unsent_tx, unsent_rx) = mpsc::channel::<BridgeResp>();
+        pending.insert(10, (1, tx1)); // a replaced (no longer registered) gen
+        pending.insert(20, (2, tx2)); // a live gen
+        pending.insert(30, (UNSENT_GENERATION, unsent_tx));
+
+        let drained = drain_pending_all_sent(&mut pending);
+        assert_eq!(drained.len(), 2);
+        assert!(!pending.contains_key(&10));
+        assert!(!pending.contains_key(&20));
+        assert!(pending.contains_key(&30));
+
+        drop(drained);
+        assert!(matches!(rx1.recv(), Err(mpsc::RecvError)));
+        assert!(matches!(rx2.recv(), Err(mpsc::RecvError)));
+        // The unsent caller is still connected (its sender is in the map).
+        assert!(matches!(
+            unsent_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
     fn drain_never_touches_unsent_sentinel_entries() {
         // A pending entry that was registered but not yet sent carries the
         // UNSENT sentinel generation and must survive any real-generation drain.
@@ -813,29 +907,118 @@ mod tests {
         }
 
         #[test]
-        fn shutdown_all_browsers_severs_every_connection_and_readers_clean_up() {
+        fn shutdown_all_browsers_severs_every_connection_and_clears_the_registry() {
             use std::io::Read;
             let session = Session::new();
             let mut chrome = attach(&session, "chrome");
             let mut brave = attach(&session, "brave");
             assert_eq!(session.labels(), vec!["brave", "chrome"]);
 
-            // The kill sweep signals both connections...
-            assert_eq!(session.shutdown_all_browsers(), 2);
-
-            // ...each far end sees EOF (the native host exits on it)...
-            for far in [&mut chrome, &mut brave] {
+            // Bound the EOF reads below while the pairs are still connected:
+            // macOS fails setsockopt(SO_RCVTIMEO) with EINVAL on a unix
+            // socket whose peer end is fully closed, which it may be the
+            // instant the sweep returns. Reads still return EOF; only the
+            // option set is order-sensitive.
+            for far in [&chrome, &brave] {
                 far.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            }
+
+            // The kill sweep severs both connections and clears the registry
+            // synchronously; there is nothing asynchronous to wait for.
+            assert_eq!(session.shutdown_all_browsers(), 2);
+            assert!(session.labels().is_empty());
+
+            // Each far end sees EOF (the native host exits on it). The read
+            // timeout is a fail-fast bound, not a synchronization point: the
+            // EOF is kernel-guaranteed by the shutdown above.
+            for far in [&mut chrome, &mut brave] {
                 let mut buf = [0u8; 1];
                 assert_eq!(far.read(&mut buf).unwrap(), 0, "far end must see EOF");
             }
 
-            // ...and the reader threads clear their own slots, exactly as on
-            // any other disconnect.
-            assert!(wait_until(|| session.labels().is_empty()));
-
             // Idempotent: sweeping an empty registry signals nobody.
             assert_eq!(session.shutdown_all_browsers(), 0);
+        }
+
+        #[test]
+        fn kill_sweep_fails_in_flight_callers_fast_with_disconnected() {
+            use std::io::BufRead;
+            let session = Session::new();
+            let far = attach(&session, "chrome");
+            far.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+
+            // Put a call in flight: once its request is readable on the far
+            // end, the caller is parked waiting and its pending entry is
+            // bound to the live generation (both happen before the write,
+            // under the registry lock). The caller timeout only bounds how
+            // long a REGRESSION takes to fail; the drain must beat it.
+            let s2 = session.clone();
+            let caller = thread::spawn(move || {
+                s2.try_call(
+                    "tab_list",
+                    None,
+                    serde_json::json!({}),
+                    Some("chrome"),
+                    Duration::from_secs(15),
+                )
+            });
+            let mut far_reader = std::io::BufReader::new(far.try_clone().unwrap());
+            let mut line = String::new();
+            far_reader.read_line(&mut line).unwrap();
+            let req: BridgeReq = serde_json::from_str(&line).unwrap();
+            assert_eq!(req.browser.as_deref(), Some("chrome"));
+
+            // The sweep itself drains the caller (its reader thread may
+            // never observe the shutdown on macOS): the caller must see
+            // Disconnected now, not its timeout (ADR-0030).
+            assert_eq!(session.shutdown_all_browsers(), 1);
+            assert!(matches!(
+                caller.join().unwrap(),
+                Err(CallError::Disconnected)
+            ));
+        }
+
+        #[test]
+        fn kill_sweep_drains_callers_of_an_already_replaced_connection() {
+            use std::io::BufRead;
+
+            // A call is in flight on generation G when a same-label reconnect
+            // replaces G's slot. G's socket and reader may both still be
+            // alive (the reader holds a cloned fd), so a later kill sweep
+            // must drain G's caller too: an entry left waiting could
+            // otherwise still be answered by the replaced connection AFTER
+            // the kill. The sweep drains every sent generation, not just the
+            // ones still in the registry.
+            let session = Session::new();
+            let old = attach(&session, "chrome");
+            old.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+
+            let s2 = session.clone();
+            let caller = thread::spawn(move || {
+                s2.try_call(
+                    "tab_list",
+                    None,
+                    serde_json::json!({}),
+                    Some("chrome"),
+                    Duration::from_secs(15),
+                )
+            });
+            // The request is on the wire of the OLD connection.
+            let mut old_reader = std::io::BufReader::new(old.try_clone().unwrap());
+            let mut line = String::new();
+            old_reader.read_line(&mut line).unwrap();
+
+            // Same-label reconnect: the registry slot now belongs to a newer
+            // generation; the old connection is no longer in the map.
+            let _new = attach(&session, "chrome");
+
+            // The sweep severs the new connection (count 1) AND drains the
+            // old generation's caller into Disconnected.
+            assert_eq!(session.shutdown_all_browsers(), 1);
+            assert!(matches!(
+                caller.join().unwrap(),
+                Err(CallError::Disconnected)
+            ));
         }
 
         #[test]
