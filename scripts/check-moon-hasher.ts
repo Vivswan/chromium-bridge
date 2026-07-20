@@ -18,32 +18,24 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { die, repoRoot } from "./lib.ts";
 
-// Extract the quoted pattern entries of the hasher.ignorePatterns block. The
-// file is our own hand-maintained YAML with single-quoted scalars, so a
-// line-oriented scan is enough - and failing loudly on an unparsable block
-// beats silently checking nothing.
+// Read hasher.ignorePatterns as real YAML (Bun.YAML, like the sibling
+// check-all-green.ts / check-toolchain.ts), and fail loudly on a missing,
+// empty, or malformed list - silently checking nothing is the failure mode
+// this script exists to prevent.
 const workspaceYml = readFileSync(join(repoRoot, ".moon/workspace.yml"), "utf8");
-const lines = workspaceYml.split("\n");
-const start = lines.findIndex((line) => /^\s*ignorePatterns:\s*$/.test(line));
-if (start === -1) die(".moon/workspace.yml has no hasher.ignorePatterns block");
-
-const patterns: string[] = [];
-for (const line of lines.slice(start + 1)) {
-  if (/^\s*#/.test(line) || /^\s*$/.test(line)) continue;
-  const entry = line.match(/^\s+-\s+'([^']+)'\s*$/);
-  if (entry) {
-    patterns.push(entry[1] as string);
-    continue;
-  }
-  // A list entry we cannot parse (double-quoted, unquoted, flow style)
-  // must fail loudly - silently stopping here would leave the rest of the
-  // list unchecked. Anything else (a dedented key) ends the block.
-  if (/^\s+-\s/.test(line)) {
-    die(`unparsable hasher.ignorePatterns entry (use single quotes): ${line.trim()}`);
-  }
-  break; // end of the block
+const workspace = Bun.YAML.parse(workspaceYml) as {
+  hasher?: { ignorePatterns?: unknown };
+} | null;
+const ignorePatterns = workspace?.hasher?.ignorePatterns;
+if (!Array.isArray(ignorePatterns) || ignorePatterns.length === 0) {
+  die(".moon/workspace.yml has no non-empty hasher.ignorePatterns list");
 }
-if (patterns.length === 0) die("hasher.ignorePatterns block parsed to zero patterns");
+const patterns = ignorePatterns.map((entry, i) => {
+  if (typeof entry !== "string" || entry === "") {
+    die(`hasher.ignorePatterns[${i}] is not a non-empty string: ${JSON.stringify(entry)}`);
+  }
+  return entry;
+});
 
 const ls = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: repoRoot });
 if (ls.exitCode !== 0) die(`git ls-files failed: ${ls.stderr.toString()}`);
