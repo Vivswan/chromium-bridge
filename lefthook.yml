@@ -3,10 +3,13 @@
 # `bun install` wires the hooks automatically (lefthook is a devDependency and
 # its postinstall runs `lefthook install`); run `lefthook install` to re-wire
 # by hand. CONTRIBUTING.md requires the full gate green before every commit -
-# this hook automates that rule. For a WIP commit on a private branch,
+# this hook automates that rule. The gate task is uncached by design (every
+# step sets cache: false), so this always runs the full suite. moon comes
+# from proto (`proto install`; see .prototools) - make sure ~/.proto/shims
+# and ~/.proto/bin are on your PATH. For a WIP commit on a private branch,
 # LEFTHOOK=0 git commit skips it; CI still runs the same gate on the PR.
 
 pre-commit:
   jobs:
     - name: gate
-      run: just ci
+      run: moon run ci

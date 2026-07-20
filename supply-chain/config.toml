@@ -1424,7 +1424,7 @@ criteria = "safe-to-deploy"
 [[exemptions.ts-rs]]
 version = "12.0.1"
 criteria = "safe-to-deploy"
-notes = "TypeScript type generation for the desktop app's Tauri command DTOs (just gen -> commands.gen.ts). Gen-only: behind the non-default ts-export feature, compiled and run only by the export cargo test, never in a shipped binary's graph (asserted by the justfile's isolation check). Widely used derive-macro crate; no imported audit covers it yet."
+notes = "TypeScript type generation for the desktop app's Tauri command DTOs (moon run gen -> commands.gen.ts). Gen-only: behind the non-default ts-export feature, compiled and run only by the export cargo test, never in a shipped binary's graph (asserted by the check-gen-isolation task). Widely used derive-macro crate; no imported audit covers it yet."
 
 [[exemptions.ts-rs-macros]]
 version = "12.0.1"

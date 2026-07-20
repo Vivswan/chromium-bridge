@@ -1,27 +1,708 @@
-# moon tasks for the workspace root: the repo-wide Biome passes, which have no
-# single-project home. The justfile recipes lint-ts / check-ts / fmt-check-ts
-# delegate here. fmt-ts (`biome format --write`) mutates the tree and stays a
-# plain justfile recipe.
+# moon tasks for the workspace root: the ci gate, the repo-wide aggregates,
+# the contract codegen tasks, the python protocol suites, and the desktop
+# bundle / signing / Touch ID runbooks. moon is the canonical command
+# interface (phase two of the moon adoption; the justfile is gone):
 #
-# Inputs are the whole repo ('**/*' of the root project): `biome ci .` scans
-# every file Biome supports, so anything narrower would risk a stale pass.
+#   moon run <task>       run one task; unscoped names resolve to this
+#                         project via workspace.yml's defaultProject
+#   moon query tasks      the menu: every task with its description
+#
+# WHY ALMOST EVERY TASK HERE SETS cache: false - GATES MUST NEVER BE
+# SKIPPABLE BY A CACHE. `moon run ci` is the merge gate (the lefthook
+# pre-commit hook runs it; CONTRIBUTING.md requires it green). A gate that a
+# cache hit can satisfy is not a gate: a wrong hash (moon's hasher cannot see
+# gitignored inputs like the generated .wxt/tsconfig.json, and a mistaken
+# hasher.ignorePattern silently drops tracked files from every hash) would
+# let unverified code land. So the ci aggregate, every task reachable from
+# it, every check-* task, the python suites, and the runbook/ceremony tasks
+# all set `options.cache: false` and execute fully every run. The underlying
+# tools (cargo, tsc, vite, bun) keep their own incremental caches, so warm
+# reruns stay fast. Affected-only runs (`moon ci`) are a LOCAL CONVENIENCE
+# ONLY - the gate is always the full `moon run ci`.
+#
+# Determinism: the ci / test / release / gen aggregates set
+# `runDepsInParallel: false`, so their steps run in the listed order - the
+# order the old justfile ran them - and a tree-mutating step (gen-shared
+# rewrites the checked-in *.gen.ts modules) can never race a reader (biome,
+# tsc) in a parallel lane.
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'typescript'
 layer: 'tool'
 
 tasks:
+  # ----- front door ---------------------------------------------------------
+
+  help:
+    description: 'List every task with its description (the front door; raw JSON: `moon query tasks`)'
+    command: 'bun scripts/help.ts'
+    toolchains: ['system']
+    options:
+      cache: false
+      runInCI: false
+
+  # ----- main aggregates ----------------------------------------------------
+
+  build:
+    # gen-icons first, sequentially: `cargo build --workspace` compiles the
+    # desktop crate (tauri-build reads icons/icon.png at compile time), and
+    # the extension build regenerates its own icons - running the steps in
+    # the listed order keeps the two icon writers from racing.
+    description: 'Build everything: icons, shared typecheck, extension, desktop UI, web app, scripts typecheck, cargo workspace'
+    deps:
+      - '~:gen-icons'
+      - 'shared:typecheck'
+      - 'extension:build'
+      - 'desktop-ui:build'
+      - 'web:build'
+    script: 'bunx tsc -p scripts && cargo build --workspace'
+    toolchains: ['system']
+    options:
+      cache: false
+      runDepsInParallel: false
+
+  ci:
+    # THE GATE - the cross-platform steps every change must pass locally,
+    # the same list the old `just ci` ran: rust fmt/clippy/nextest+doctests,
+    # typos/machete, TS typecheck/biome/tests/extension build, protocol e2e,
+    # and the contract + hygiene checks. CI runs MORE on top: the
+    # macOS/Windows rust matrices, cargo-vet, linux-install, the
+    # adversarial/chaos suites, the browser suites (isolated Chrome), the
+    # web build, and the macOS-only desktop gate (check-app-rust needs the
+    # Tauri GUI toolchain). Every dep here is uncached (see the header) and
+    # runs in this exact order, sequentially - the gate always executes
+    # fully; there is nothing a cache or a scheduler can skip or reorder.
+    description: 'THE GATE: the local cross-platform gate steps (CI layers more jobs on top - see the comment); uncached, sequential, always full'
+    deps:
+      - 'core:fmt-check'
+      - 'core:lint'
+      - '~:typos'
+      - '~:machete'
+      - 'core:test'
+      - 'core:test-doc'
+      - '~:typecheck'
+      - '~:check-ts'
+      - 'shared:test'
+      - 'extension:test'
+      - 'desktop-ui:test'
+      - 'extension:build'
+      - '~:test-e2e'
+      - '~:check-extension-id'
+      - '~:check-cjk'
+      - '~:check-typography'
+      - '~:check-all-green'
+      - '~:check-gen'
+      - '~:check-envelope'
+      - '~:check-gen-isolation'
+      - '~:check-toolchain'
+      - '~:check-hasher'
+    toolchains: ['system']
+    options:
+      cache: false
+      runDepsInParallel: false
+
+  test:
+    description: 'All tests that run without a browser: Rust (nextest + doctests), then protocol e2e'
+    deps:
+      - 'core:test'
+      - 'core:test-doc'
+      - '~:test-e2e'
+    toolchains: ['system']
+    options:
+      cache: false
+      runDepsInParallel: false
+
+  test-rust:
+    description: 'Rust unit + integration tests (cargo-nextest), plus doctests'
+    deps:
+      - 'core:test'
+      - 'core:test-doc'
+    toolchains: ['system']
+    options:
+      cache: false
+      runDepsInParallel: false
+
+  release:
+    description: 'Pre-release gate: versions consistent + full ci; prints the tag command on success'
+    deps:
+      - '~:check-version'
+      - '~:check-extension-id'
+      - '~:ci'
+    script: |
+      echo "Release checks passed. Now tag the release, e.g.: git tag v$(bun scripts/check-version.ts | awk '/Cargo.toml/{print $2}')"
+    toolchains: ['system']
+    options:
+      cache: false
+      runDepsInParallel: false
+
+  install:
+    description: 'USER-RUN: build the release binary, then register it with your browsers (doctor --fix)'
+    deps: ['~:build-release']
+    command: './target/release/chromium-bridge doctor --fix'
+    toolchains: ['system']
+    options:
+      cache: false # user-run: must really run
+      runInCI: false
+
+  # ----- dev loops (local only; never in CI) --------------------------------
+
+  dev:
+    description: 'Dev everything: extension (WXT) + web app (Astro) + desktop app (tauri) in one terminal; Ctrl-C stops all'
+    command: 'bun scripts/dev.ts'
+    toolchains: ['system']
+    preset: 'server'
+
+  dev-app:
+    # Desktop app dev loop ONLY: Vite dev server + tauri dev (unsigned;
+    # Enclave ops need the built host as a sibling, hence the cargo build).
+    # `moon run dev` supersets this.
+    description: 'Desktop app dev loop only: cargo build + extension build, then Vite + tauri dev'
+    script: |
+      set -eu
+      bun scripts/gen-icons.ts desktop
+      cargo build
+      bun run --cwd src/apps/extension build
+      cd src/apps/desktop && bunx tauri dev
+    toolchains: ['system']
+    preset: 'server'
+
+  dev-web:
+    # Deliberately NOT persistent: the web project's dev script manages the
+    # astro dev daemon itself (`astro dev stop; ASTRO_DEV_BACKGROUND=1 astro
+    # dev`) - it backgrounds the server and exits, so as a moon task it is a
+    # plain one-shot command, not a `persistent` server task.
+    description: 'Docs site dev server only; replaces any already-running astro dev (`dev` supersets this)'
+    command: 'bun run --cwd src/apps/web dev'
+    toolchains: ['system']
+    options:
+      cache: false # dev loop
+      runInCI: false
+
+  # ----- quality ------------------------------------------------------------
+
+  fmt:
+    description: 'Format everything in place: Rust (cargo fmt) + TS/JS/JSON (Biome)'
+    script: 'set -e; cargo fmt; bunx biome format --write .'
+    toolchains: ['system']
+    options:
+      cache: false # mutates the tree
+
+  fmt-ts:
+    description: 'Format TS/JS/JSON in place (Biome; what `bun run format` delegates to)'
+    command: 'bunx biome format --write .'
+    toolchains: ['system']
+    options:
+      cache: false # mutates the tree
+
+  fix:
+    description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt'
+    script: 'set -e; bunx biome check --write .; cargo fmt'
+    toolchains: ['system']
+    options:
+      cache: false # mutates the tree
+
   lint:
+    # Depends on core:lint + lint-ts, not check-ts: check-ts (biome ci)
+    # already covers Biome lint inside the ci gate, so this aggregate exists
+    # for humans who want "lint everything" in one verb.
+    description: 'Lint everything, denying warnings: Rust (clippy) + TS/JS/JSON (Biome)'
+    deps:
+      - 'core:lint'
+      - '~:lint-ts'
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached
+
+  lint-ts:
+    description: 'Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)'
     command: 'bunx biome lint .'
     toolchains: ['system']
     inputs: ['**/*', '!**/node_modules/**']
+    options:
+      cache: false # a check task: gates are never cached
 
-  check:
+  check-ts:
+    description: 'Lint + format-check all TS/JS/JSON (biome ci; what `bun run check` delegates to)'
     command: 'bunx biome ci .'
     toolchains: ['system']
     inputs: ['**/*', '!**/node_modules/**']
+    options:
+      cache: false # in the ci gate: gates are never cached
 
-  fmt-check:
+  fmt-check-ts:
+    description: 'Verify TS/JS/JSON formatting (Biome; what `bun run format:check` delegates to)'
     command: 'bunx biome format .'
     toolchains: ['system']
     inputs: ['**/*', '!**/node_modules/**']
+    options:
+      cache: false # a check task: gates are never cached
+
+  typos:
+    description: 'Source-code spell check (CI gate; config in typos.toml)'
+    command: 'typos'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  machete:
+    description: 'Detect unused Cargo dependencies (CI gate)'
+    command: 'cargo machete'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  audit:
+    description: 'Supply-chain checks (needs cargo-deny, cargo-audit)'
+    script: 'set -e; cargo deny check; cargo audit'
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached
+
+  # ----- rust builds --------------------------------------------------------
+
+  build-release:
+    description: 'Build the release binary'
+    command: 'cargo build --release'
+    toolchains: ['system']
+    options:
+      # cargo owns target/ and its own incremental cache; a moon cache hit
+      # must never stand in for a missing build artifact.
+      cache: false
+
+  build-repro:
+    description: 'Deterministic release build (path-remapped, --locked)'
+    command: 'bun scripts/build-repro.ts'
+    toolchains: ['system']
+    options:
+      cache: false # release ceremony: must really run
+
+  # ----- typescript aggregates ----------------------------------------------
+
+  typecheck:
+    description: 'Type-check every TS project (extension, desktop UI, tests, scripts, src/packages/shared)'
+    script: |
+      set -e
+      bunx tsc -p src/apps/extension
+      bunx tsc -p src/apps/desktop/ui
+      bunx tsc -p tests/browser
+      bunx tsc -p scripts
+      bunx tsc -p src/packages/shared
+    toolchains: ['system']
+    options:
+      # In the ci gate, and the extension tsconfig extends the generated
+      # (gitignored, unhashable) .wxt/tsconfig.json: never cache this.
+      cache: false
+
+  test-ts:
+    description: 'Unit-test shared + extension (the `bun run test` set; the desktop UI suite is desktop-ui:test)'
+    deps:
+      - 'shared:test'
+      - 'extension:test'
+    toolchains: ['system']
+    options:
+      cache: false
+      runDepsInParallel: false
+
+  test-browser:
+    # SAFETY: only ever run against an isolated Chrome for Testing via
+    # CHROME_BIN - never a browser holding a real session (tests/README.md).
+    description: 'DOM + smoke + security proofs (needs bun + isolated Chrome via CHROME_BIN; builds the extension first)'
+    deps: ['extension:build']
+    script: |
+      set -e
+      (cd tests/browser && bun dom_test.ts)
+      bun tests/browser/ext_test.ts
+      bun tests/browser/security_browser_test.ts
+    toolchains: ['system']
+    options:
+      cache: false # a gating suite (CI's browser job): gates are never cached
+      runInCI: false # needs an isolated Chrome; CI's browser job provides its own
+
+  test-integration:
+    description: 'Real E2E integration (opt-in; real binary + isolated Chrome + extension)'
+    deps:
+      - '~:build-release'
+      - 'extension:build'
+    command: 'bun tests/browser/integration_e2e.ts'
+    env:
+      BB_REAL_E2E: '1'
+    toolchains: ['system']
+    options:
+      cache: false # a gating suite: gates are never cached
+      runInCI: false # opt-in; needs an isolated Chrome
+
+  # ----- python protocol suites (uv-provisioned interpreter) -----------------
+
+  check-uv:
+    # The protocol suites run under the exact interpreter pinned in
+    # .python-version, provisioned by uv, so local runs and CI cannot diverge
+    # (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
+    # semantics). No fallback by design - fail loudly with an install hint.
+    description: 'Fail loudly if uv (which provisions the pinned Python) is missing'
+    script: |
+      if ! command -v uv >/dev/null 2>&1; then
+        echo "error: uv not found - it provisions the Python pinned in .python-version for the protocol suites" >&2
+        echo "install it via proto (proto install uv), or: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: brew install uv)" >&2
+        exit 1
+      fi
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached
+
+  test-e2e:
+    # --no-project: the harness is stdlib-only by design (its independence
+    # from our code and from any package is the point) - never add
+    # dependencies to it.
+    description: 'Protocol-layer e2e tests (drives the real release binary)'
+    deps:
+      - '~:check-uv'
+      - '~:build-release'
+    command: 'uv run --no-project --isolated tests/protocol/e2e.py'
+    toolchains: ['system']
+    options:
+      cache: false # a gating suite: gates are never cached
+
+  test-adversarial:
+    description: "Adversarial break-in suite (CI's adversarial job; drives the real release binary)"
+    deps:
+      - '~:check-uv'
+      - '~:build-release'
+    command: 'uv run --no-project --isolated tests/protocol/adversarial.py'
+    toolchains: ['system']
+    options:
+      cache: false # a gating suite: gates are never cached
+
+  test-chaos:
+    description: "Fault-injection chaos suite (CI's chaos job; drives the real release binary)"
+    deps:
+      - '~:check-uv'
+      - '~:build-release'
+    command: 'uv run --no-project --isolated tests/protocol/chaos.py'
+    toolchains: ['system']
+    options:
+      cache: false # a gating suite: gates are never cached
+
+  # ----- contract codegen (the Rust core is the single source, ADR-0028) ----
+
+  gen:
+    description: 'Regenerate ALL generated TS from Rust: the shared contract modules and the desktop Tauri command types'
+    deps:
+      - '~:gen-shared'
+      - '~:gen-app-types'
+    toolchains: ['system']
+    options:
+      cache: false # mutates the tree
+      runDepsInParallel: false
+
+  gen-shared:
+    description: 'Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)'
+    script: |
+      set -e
+      bun scripts/gen-ops.ts
+      bun scripts/gen-envelope.ts
+      bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/envelope-wire.gen.ts
+    toolchains: ['system']
+    options:
+      cache: false # mutates the tree; check-gen diffs its output
+
+  gen-app-types:
+    # Regenerates the desktop UI's Tauri command types from the desktop
+    # crate's command DTOs (src/apps/desktop/ui/src/lib/commands.gen.ts).
+    # ts-rs writes bindings by executing generated code, so the export runs
+    # as a cargo test (src/apps/desktop/src/ts_export.rs) behind the
+    # gen-only ts-export feature; the file is deleted first and must be
+    # recreated, so a renamed or missing export test fails here instead of
+    # silently leaving a stale file. Compiling the desktop crate needs the
+    # UI dist and the generated icon (hence the deps) - and the platform GUI
+    # toolchain, hence the precondition check below.
+    description: 'Regenerate the desktop UI Tauri command types (compiles the desktop crate; needs the Tauri GUI toolchain)'
+    deps:
+      - 'desktop-ui:build'
+      - '~:gen-icons'
+    script: |
+      set -e
+      if [ "$(uname -s)" != "Darwin" ] && ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+        echo "error: gen-app-types compiles the Tauri desktop crate, which needs the platform GUI toolchain" >&2
+        echo "(WebKitGTK on Linux: install libwebkit2gtk-4.1-dev). Without it, run 'moon run gen-shared' for the" >&2
+        echo "shared contract modules; CI's macOS desktop job keeps commands.gen.ts honest (check-gen-app)." >&2
+        exit 1
+      fi
+      rm -f src/apps/desktop/ui/src/lib/commands.gen.ts
+      cargo test -p chromium-bridge-desktop --features ts-export export_commands_gen_ts
+      test -f src/apps/desktop/ui/src/lib/commands.gen.ts
+      bunx biome format --write src/apps/desktop/ui/src/lib/commands.gen.ts
+    toolchains: ['system']
+    options:
+      cache: false # mutates the tree; check-gen-app diffs its output
+
+  gen-icons:
+    description: 'Render the extension + desktop icon rasters from the assets/icon/ SVGs (build artifacts, gitignored)'
+    command: 'bun scripts/gen-icons.ts'
+    toolchains: ['system']
+    options:
+      cache: false # cheap, and a dep of gate tasks: never cached
+
+  check-gen:
+    # The checked-in generated TS must match what the Rust core emits today,
+    # and the envelope generator's fail-closed rules (G1-G5) must hold. The
+    # diff pathspec covers every generated module (*.gen.ts, tracked or
+    # newly written - the porcelain check catches untracked output); the
+    # hand-written files sharing the directory are deliberately out of
+    # scope, so local WIP there cannot false-fail the staleness gate.
+    # commands.gen.ts has its own macOS-side gate, check-gen-app.
+    description: 'Staleness gate for the generated shared contract modules + envelope generator fail-closed rules'
+    deps: ['~:gen-shared']
+    script: |
+      set -e
+      git diff --exit-code -- 'src/packages/shared/src/*.gen.ts' || {
+        echo "error: generated contract code is stale - run 'moon run gen' after editing the Rust catalogue/taxonomy or wire types" >&2
+        exit 1
+      }
+      untracked="$(git status --porcelain -- 'src/packages/shared/src/*.gen.ts' | grep '^??' || true)"
+      if [ -n "$untracked" ]; then
+        echo "error: the generators wrote generated modules that are not tracked - commit them:" >&2
+        printf '%s\n' "$untracked" >&2
+        exit 1
+      fi
+      bun test scripts/gen-envelope.test.ts
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-gen-app:
+    # Staleness gate for the desktop command types. Not part of `moon run
+    # ci` for the same reason as check-app-rust (compiling Tauri needs the
+    # platform GUI toolchain); CI's macOS desktop job runs it.
+    description: 'Staleness gate for the desktop Tauri command types (macOS / Tauri toolchain only)'
+    deps: ['~:gen-app-types']
+    script: |
+      git diff --exit-code -- src/apps/desktop/ui/src/lib/commands.gen.ts || {
+        echo "error: commands.gen.ts is stale - run 'moon run gen' after editing the desktop command DTOs" >&2
+        exit 1
+      }
+    toolchains: ['system']
+    options:
+      cache: false # a gate: gates are never cached
+
+  check-envelope:
+    # Envelope asymmetry gate: the hand-written layer over the generated
+    # wire schemas (Rust schemars vs Zod z.toJSONSchema) must stay within
+    # the pinned parser asymmetries; base freshness is check-gen's job.
+    description: 'Envelope asymmetry gate: hand-written Zod layer stays within the pinned parser asymmetries'
+    command: 'bun scripts/check-envelope-parity.ts'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-gen-isolation:
+    # Gen-only tooling (schemars, ts-rs) must never enter a shipped binary's
+    # graph. The desktop crate is checked for ts-rs only: Tauri's macro
+    # stack carries its own schemars 0.8 - Tauri's dependency, not our gen
+    # feature (schemars 1, off by default, asserted out of the host binary
+    # below).
+    description: 'Gen-only tooling (schemars, ts-rs) stays out of every shipped binary dependency graph'
+    script: |
+      set -eu
+      tree="$(cargo tree -e normal -p chromium-bridge --locked)"
+      for crate in schemars ts-rs; do
+          if printf '%s\n' "$tree" | grep -q "$crate"; then
+              echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
+              exit 1
+          fi
+      done
+      tree="$(cargo tree -e normal -p chromium-bridge-desktop --locked)"
+      if printf '%s\n' "$tree" | grep -q ts-rs; then
+          echo "ts-rs leaked into the chromium-bridge-desktop binary dependency graph" >&2
+          exit 1
+      fi
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  # ----- desktop app (macOS bundle / signing / runbooks) ---------------------
+
+  bundle-app:
+    description: 'Build + sign the Tauri desktop app with the bundled host + extension (macOS, ADR-0026/0029)'
+    command: 'bun scripts/desktop-bundle.ts'
+    toolchains: ['system']
+    options:
+      cache: false # signing ceremony: must really run
+
+  check-app-signing:
+    description: "Verify the signed desktop bundle's entitlement chain (app + nested host)"
+    command: 'bun scripts/check-desktop-signing.ts'
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached
+
+  check-app-rust:
+    # Desktop Rust crate: clippy + tests, plus the commands.gen.ts staleness
+    # gate (check-gen-app). Needs the UI dist (tauri's generate_context!
+    # embeds it) and the generated app icon (tauri-build reads
+    # icons/icon.png at compile time), hence the dependencies. Clippy runs
+    # with --features ts-export so the gen-only derive code is linted too.
+    # Not part of `moon run ci`: the crate is deliberately not a default
+    # workspace member, and compiling Tauri needs platform GUI toolchains
+    # (WebKitGTK on Linux); CI runs this on macOS in the dedicated desktop
+    # job.
+    description: 'Desktop crate gate: clippy + tests + the commands.gen.ts staleness gate (macOS / Tauri toolchain only)'
+    deps:
+      - 'desktop-ui:build'
+      - '~:gen-icons'
+      - '~:check-gen-app'
+    script: |
+      set -e
+      cargo clippy -p chromium-bridge-desktop --all-targets --features ts-export -- -D warnings
+      cargo test -p chromium-bridge-desktop
+    toolchains: ['system']
+    options:
+      cache: false # a gate: gates are never cached
+
+  run-app:
+    description: 'USER-RUN: build, sign, verify, then launch the desktop app (the GUI)'
+    deps: ['~:bundle-app']
+    script: 'open "build/app/Chromium Bridge.app"'
+    toolchains: ['system']
+    options:
+      cache: false # user-run: must really run
+      runInCI: false
+
+  dmg-app:
+    description: 'Build + sign the app and wrap it in a signed, verified .dmg (build/dmg/)'
+    command: 'bun scripts/desktop-bundle.ts --dmg'
+    toolchains: ['system']
+    options:
+      cache: false # signing ceremony: must really run
+
+  install-app:
+    description: 'Copy the built, signed app into /Applications (run dmg-app or bundle-app first)'
+    script: |
+      set -eu
+      APP="build/app/Chromium Bridge.app"
+      if [ ! -d "$APP" ]; then
+          echo "error: $APP not found; build it first: moon run bundle-app (or moon run dmg-app)" >&2
+          exit 1
+      fi
+      rm -rf "/Applications/Chromium Bridge.app"
+      ditto "$APP" "/Applications/Chromium Bridge.app"
+      echo "installed /Applications/Chromium Bridge.app"
+    toolchains: ['system']
+    options:
+      cache: false # user-run: must really run
+      runInCI: false
+
+  touchid-proof:
+    # Touch ID proof for the bundled host (USER-RUN: raises a real Touch ID
+    # prompt). Builds + verifies the bundle, then enrolls the enclave key
+    # via the BUNDLED host binary; on success the machine is genuinely
+    # enrolled. Undo with the same binary's `revoke` subcommand.
+    description: 'USER-RUN runbook: enroll the enclave key via the bundled host (raises a real Touch ID prompt)'
+    deps: ['~:bundle-app']
+    script: '"build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair'
+    toolchains: ['system']
+    options:
+      cache: false # Touch ID ceremony: must really run
+      runInCI: false
+      interactive: true
+
+  touchid-gates:
+    # Touch ID gate demo (USER-RUN, macOS: raises a REAL Touch ID prompt).
+    # Runs the per-action presence gate - the one page_eval / page_upload
+    # use - so you can watch the Enclave sign under Touch ID, then prints
+    # the two capability-grant commands (pair-client, unkill) for you to run
+    # in your own terminal: those require a real interactive TTY by design
+    # (anti tap-phishing), which a task runner cannot provide. Needs an
+    # enrolled Enclave key (run `moon run touchid-proof` first) and uses the
+    # SIGNED BUNDLED host, since the enclave key lives in an entitled
+    # keychain group the plain release binary cannot reach.
+    description: 'USER-RUN runbook: demo the Touch ID presence gates (runs the per-action gate; prints the rest)'
+    deps: ['~:bundle-app']
+    script: |
+      set -eu
+      BIN="build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge"
+      echo "== 1/3 per-action presence (page_eval / page_upload gate) =="
+      echo "   expect a Touch ID prompt now:"
+      "$BIN" presence-selftest
+      echo
+      echo "== 2/3 client pairing  +  3/3 kill-switch release =="
+      echo "   These GRANT or RESTORE capability, so from the CLI they require a"
+      echo "   real interactive terminal (a background or piped process must not be"
+      echo "   able to raise that Touch ID sheet). A task runner has no TTY, so run"
+      echo "   these yourself in this terminal - each raises a Touch ID prompt:"
+      echo
+      echo "     BIN=\"$BIN\""
+      echo "     \"\$BIN\" pair-client --name touchid-demo --hash abababababababababababababababababababababababababababababababab   # Touch ID"
+      echo "     \"\$BIN\" revoke-client --name touchid-demo                                    # instant, no prompt"
+      echo "     \"\$BIN\" kill && \"\$BIN\" unkill                                              # kill instant; unkill = Touch ID"
+      echo
+      echo "touchid-gates: the per-action gate above raised a live Touch ID prompt;"
+      echo "the two capability-grant gates need a real terminal - commands printed above."
+    toolchains: ['system']
+    options:
+      cache: false # Touch ID ceremony: must really run
+      runInCI: false
+      interactive: true
+
+  # ----- version + repo hygiene checks ---------------------------------------
+
+  sync-version:
+    description: 'Propagate the Cargo.toml version into the extension files'
+    command: 'bun scripts/sync-version.ts'
+    toolchains: ['system']
+    options:
+      cache: false # mutates the tree
+
+  check-version:
+    description: 'Verify the crate and extension versions agree'
+    command: 'bun scripts/check-version.ts'
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached
+
+  check-extension-id:
+    description: 'Verify the pinned key, extension ID, and built manifest agree'
+    command: 'bun scripts/check-extension-id.ts'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-cjk:
+    description: 'Verify CJK text stays inside the zh locale files and translated docs'
+    command: 'bun scripts/check-cjk.ts'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-all-green:
+    description: 'Every ci.yml job must be required by the all-green merge gate (or exempted with a reason)'
+    script: |
+      set -e
+      bun scripts/check-all-green.ts
+      bun test scripts/check-all-green.test.ts
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-typography:
+    description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
+    script: |
+      set -e
+      bun scripts/check-typography.ts
+      bun test scripts/check-typography.test.ts
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-toolchain:
+    description: 'The duplicated toolchain pins (.prototools vs rust-toolchain.toml, package.json, ci.yml) must agree'
+    command: 'bun scripts/check-toolchain.ts'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-hasher:
+    description: 'No tracked file may match a .moon/workspace.yml hasher.ignorePattern (a stale-cache hole)'
+    command: 'bun scripts/check-moon-hasher.ts'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached

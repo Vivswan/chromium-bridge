@@ -1,5 +1,5 @@
 // GENERATED from the Rust core (src/packages/core/src/error.rs ERROR_SPECS) by
-// scripts/gen-ops.ts - DO NOT EDIT. Edit the taxonomy, then run `just gen`.
+// scripts/gen-ops.ts - DO NOT EDIT. Edit the taxonomy, then run `moon run gen`.
 //
 // The stable cross-process error codes. The Rust server assigns them via
 // CallError::code(); the extension reports its own failures with the same

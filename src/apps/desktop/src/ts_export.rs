@@ -2,7 +2,7 @@
 //! ui/src/lib/commands.gen.ts, one file, deterministic order. Compiled only
 //! under `--features ts-export`. The export runs as a cargo test because
 //! ts-rs writes bindings by executing generated code, not during macro
-//! expansion - `just gen-app-types` deletes the file, runs exactly this
+//! expansion - `moon run gen-app-types` deletes the file, runs exactly this
 //! test (which must recreate it), and formats the result with Biome. CI's
 //! desktop job then regenerates and fails on a stale diff, like the shared
 //! *.gen.ts modules.
@@ -10,7 +10,7 @@
 //! Every exported type must be listed here explicitly; a new command's DTO
 //! is added here alongside its `#[derive(TS)]`. Forgetting a type that
 //! another declaration references leaves an undefined name in the generated
-//! file, which `just typecheck` then rejects - a loud failure, not drift.
+//! file, which `moon run typecheck` then rejects - a loud failure, not drift.
 
 use std::fmt::Write as _;
 
@@ -19,7 +19,7 @@ use ts_rs::{Config, TS};
 const HEADER: &str = "\
 // GENERATED from the desktop crate's Tauri command DTOs (src/apps/desktop/src/)
 // by the ts-export cargo test (src/apps/desktop/src/ts_export.rs) - DO NOT
-// EDIT. Edit the Rust structs, then run `just gen`.
+// EDIT. Edit the Rust structs, then run `moon run gen`.
 //
 // Display contracts for the app's own webview (trusted same-author IPC over
 // Tauri invoke): static types only, no runtime validators - every decision

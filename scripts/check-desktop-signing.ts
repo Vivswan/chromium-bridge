@@ -20,7 +20,7 @@
 //     expired (free-tier profiles die after 7 days; without a live one macOS
 //     SIGKILLs the entitled binaries at exec)
 //
-// Exits non-zero on any mismatch. Run standalone or via `just check-app-signing`.
+// Exits non-zero on any mismatch. Run standalone or via `moon run check-app-signing`.
 // An optional argument points at a different .app to verify (scripts/
 // desktop-bundle.ts re-runs this against the copy inside the mounted .dmg); the default is the
 // deliverable copy in build/app/.
@@ -237,7 +237,7 @@ if (tauriConf.identifier !== BUNDLE_ID) {
 }
 
 if (!existsSync(appPath)) {
-  console.error(`error: ${appPath} not found; build it first with \`just bundle-app\``);
+  console.error(`error: ${appPath} not found; build it first with \`moon run bundle-app\``);
   process.exit(1);
 }
 if (!existsSync(hostBinary)) {

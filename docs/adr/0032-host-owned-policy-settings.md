@@ -132,8 +132,8 @@ changing the display language never raises a Touch ID sheet.
 
 The policy schema, its defaults, and its wire shape move into the core as a
 `PolicyDoc` (`src/packages/core/src/policy.rs`), following ADR-0028: the
-enforcement core is the single source, and the TS side is generated. `just
-gen` emits `src/packages/shared/src/policy.gen.ts` with the Zod validator
+enforcement core is the single source, and the TS side is generated. `moon
+run gen` emits `src/packages/shared/src/policy.gen.ts` with the Zod validator
 (strict objects, the same salvage posture as today's settings), the
 defaults, and the per-field direction metadata below. CI's stale-diff gate
 covers it like every other generated artifact. `settings.ts` shrinks to the
@@ -165,7 +165,7 @@ about which way a change points.
 The wire envelope does not change. `BridgeReq`/`BridgeResp` are untouched (a
 new envelope field is a breaking protocol change by construction, per the
 `deny_unknown_fields` posture documented on `BridgeReq`), so the
-double-derivation gate (`just check-envelope`) needs no new erasure rules;
+double-derivation gate (`moon run check-envelope`) needs no new erasure rules;
 what it needs is nothing, and a cargo test pins that the new frame types are
 host-control tags (`host_control_type`), never envelope traffic. Policy
 rides host-handled control frames exactly like ADR-0025/0030's admin frames:
@@ -715,12 +715,12 @@ wire.
 
 ## Implementation plan
 
-Five phases, each landing green through `just ci` and each honoring the
+Five phases, each landing green through `moon run ci` and each honoring the
 browser-safety rules: browser suites only against an isolated Chrome for
 Testing via `CHROME_BIN`, and every runtime-behavior claim (service worker,
 reconnect, storage semantics) verified there rather than from static checks.
 The Touch ID paths cannot run in CI at all; they extend the
-`just touchid-gates` runbook and are verified by a human with a finger.
+`moon run touchid-gates` runbook and are verified by a human with a finger.
 
 ### Phase 1: core policy module and protocol (docs/core, no behavior shift)
 
@@ -737,7 +737,7 @@ never accepts a pre-made attestation; `restrict` takes none), the
 `chromium-bridge-policy-v1` signing message. New control-frame variants
 (`policy_get`, `policy_current`, `legacy_settings`, `lang_get`, `lang_set`,
 `lang_current`), classification in `classify_nm_frame`, membership in
-`host_control_type`. `just gen` emits `policy.gen.ts` (validator, defaults,
+`host_control_type`. `moon run gen` emits `policy.gen.ts` (validator, defaults,
 directions). Tests: cargo units for the direction totality rule and the
 `hostReverifyMs` custom order specifically (the one a numeric comparator
 gets backwards), the JS-safe revision bound, the touched-set embedding
@@ -775,7 +775,7 @@ the CLI grant refusal on a keyless machine; e2e
 for push-on-connect and push-on-change against a live host; app unit tests
 over the presence seam with the cfg(test) mock (never a real prompt, per
 the presence test isolation rule); runbook additions to
-`just touchid-gates` for the grant tap and the audit rung it must record.
+`moon run touchid-gates` for the grant tap and the audit rung it must record.
 
 ### Phase 3: extension consumption
 
@@ -837,7 +837,7 @@ from chrome.storage; dead locale keys go, with the key-parity and
 check-cjk gates keeping the three locales honest; architecture.md section
 11, compatibility.md, operations.md, cli.md, SECURITY.md's threat model
 (the new residuals of decisions 3 and 8), and the tool risk matrix
-references are updated. Tests: the full `just ci`, the extension vitest
+references are updated. Tests: the full `moon run ci`, the extension vitest
 suite over the slimmed settings, and a final isolated-browser pass over
 the options page.
 

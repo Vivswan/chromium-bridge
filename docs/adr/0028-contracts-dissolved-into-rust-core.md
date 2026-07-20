@@ -52,7 +52,7 @@ The Rust core is the canonical contract; `contracts/` is deleted.
 4. **Protocol version and identity**: `BRIDGE_PROTOCOL_VERSION` in
    `protocol.rs`; `NATIVE_HOST_ID` and `EXTENSION_MANIFEST_KEY` in
    `src/packages/core/src/identity.rs`.
-5. **Generation**: `just gen` runs the core's `emit_contract` example
+5. **Generation**: `moon run gen` runs the core's `emit_contract` example
    (plain serde_json, no extra dependencies) and feeds `scripts/gen-ops.ts`,
    which writes `src/packages/shared/src/{ops,errors,protocol,identity}.gen.ts`.
    CI regenerates and fails on any diff, so the checked-in TS cannot drift
@@ -78,7 +78,7 @@ The Rust core is the canonical contract; `contracts/` is deleted.
 
 - One source of truth with the trust gradient pointing the right way:
   enforcement (Rust) is canonical, UI/tooling is derived.
-- Adding a tool now touches the Rust catalogue plus `just gen`, instead of
+- Adding a tool now touches the Rust catalogue plus `moon run gen`, instead of
   JSON + Rust + gen.
 - The parity tests that existed to guard the duplicate copies are gone;
   their replacements are generation idempotency (CI diff) and the envelope
