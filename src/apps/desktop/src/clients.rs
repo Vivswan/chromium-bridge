@@ -12,21 +12,42 @@ use chromium_bridge_core::revocation::Revocation;
 
 use crate::presence_seam;
 
+/// The anchor kind on the wire: the same `hash` / `team_id` names
+/// `AnchorSpec` parses back in [`pair`]. An enum rather than a string so the
+/// generated TS carries the literal union straight from the serde attribute.
+#[derive(Serialize, Clone, Copy)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum AnchorKind {
+    Hash,
+    TeamId,
+}
+
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ClientRow {
     pub name: String,
-    /// `hash` or `team_id`, mirroring the Anchor wire names.
-    pub anchor_kind: &'static str,
+    pub anchor_kind: AnchorKind,
     pub anchor_value: String,
     pub added_unix: u64,
 }
 
+/// Whether client admission is enforced: `unenrolled` (no allowlist yet) or
+/// `enforced`.
+#[derive(Serialize, Clone, Copy)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Posture {
+    Unenrolled,
+    Enforced,
+}
+
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ClientsPayload {
-    /// `unenrolled` (no allowlist yet, admission not enforced) or `enforced`.
-    pub posture: &'static str,
+    pub posture: Posture,
     pub clients: Vec<ClientRow>,
 }
 
@@ -40,18 +61,18 @@ pub fn list() -> Result<ClientsPayload, String> {
     let list = allowlist::load_enforced(latched).map_err(|e| e.to_string())?;
     Ok(match list {
         None => ClientsPayload {
-            posture: "unenrolled",
+            posture: Posture::Unenrolled,
             clients: Vec::new(),
         },
         Some(list) => ClientsPayload {
-            posture: "enforced",
+            posture: Posture::Enforced,
             clients: list
                 .clients
                 .into_iter()
                 .map(|c| {
                     let (anchor_kind, anchor_value) = match c.anchor {
-                        Anchor::Hash(h) => ("hash", h),
-                        Anchor::TeamId(t) => ("team_id", t),
+                        Anchor::Hash(h) => (AnchorKind::Hash, h),
+                        Anchor::TeamId(t) => (AnchorKind::TeamId, t),
                     };
                     ClientRow {
                         name: c.name,

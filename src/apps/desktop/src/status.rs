@@ -11,6 +11,7 @@ use chromium_bridge_core::{doctor, kill};
 use crate::host;
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeStatus {
     pub version: &'static str,
@@ -27,6 +28,7 @@ pub struct BridgeStatus {
 /// own state, not "off": while it is unreadable every enforcement point is
 /// refusing, and the UI must say so.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum KillState {
     Off,
@@ -35,6 +37,7 @@ pub enum KillState {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ServerStatus {
     pub lock_present: bool,
