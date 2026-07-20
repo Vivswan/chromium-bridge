@@ -1,0 +1,56 @@
+# moon tasks for the desktop app's web UI. The justfile recipes build-app-ui /
+# test-app-ui delegate here; the justfile stays the front door (AGENTS.md).
+# The Tauri shell itself (src/apps/desktop) is NOT a moon project: bundling,
+# signing, and the desktop Rust checks stay with their justfile recipes.
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'typescript'
+layer: 'application'
+
+tasks:
+  build:
+    command: 'bun run build'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/package.json'
+      - '/bun.lock'
+    outputs:
+      - '/build/desktop-ui'
+
+  dev:
+    command: 'bun run dev'
+    toolchains: ['system']
+    preset: 'server'
+
+  test:
+    command: 'bun run test'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/package.json'
+      - '/bun.lock'
+
+  typecheck:
+    command: 'bun run typecheck'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/package.json'
+      - '/bun.lock'
+
+  lint:
+    command: 'bunx biome lint $projectSource'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/biome.json'
+      - '/.gitignore'
+      - '/package.json'
+      - '/bun.lock'
+    options:
+      runFromWorkspaceRoot: true

@@ -1,0 +1,44 @@
+# moon tasks for the Astro site. The justfile recipe build-web delegates here.
+#
+# There is deliberately NO dev task: `bun run dev` in this project manages the
+# astro dev daemon (`astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev`), a
+# backgrounding lifecycle moon's persistent-task model would fight. The
+# justfile's dev-web recipe keeps calling it directly.
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'typescript'
+layer: 'application'
+
+tasks:
+  build:
+    command: 'bun run build'
+    toolchains: ['system']
+    inputs:
+      # The site renders the repo's own markdown (src/lib/docs.ts globs the
+      # root and docs/ trees), imports the workspace version from the root
+      # Cargo.toml (src/pages/index.astro), and takes site identity from
+      # these env vars (src/lib/site-identity.ts).
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/*.md'
+      - '/docs/**/*'
+      - '/Cargo.toml'
+      - '/package.json'
+      - '/bun.lock'
+      - '$ASTRO_SITE'
+      - '$ASTRO_BASE'
+    outputs:
+      - '/build/web'
+
+  lint:
+    command: 'bunx biome lint $projectSource'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/biome.json'
+      - '/.gitignore'
+      - '/package.json'
+      - '/bun.lock'
+    options:
+      runFromWorkspaceRoot: true

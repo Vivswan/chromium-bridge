@@ -1,0 +1,50 @@
+# moon tasks for src/packages/shared (contract-derived types + validators).
+# The justfile recipes test-shared (and friends) delegate here; the justfile
+# stays the front door (AGENTS.md).
+#
+# Inputs include the inherited rust-contract file group (.moon/tasks/all.yml):
+# the *.gen.ts modules in src/ are generated FROM the Rust core, so a core
+# change must invalidate these caches even before `just gen` refreshes the
+# checked-in output. Never narrow that edge.
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'typescript'
+layer: 'library'
+
+tasks:
+  typecheck:
+    command: 'bun run typecheck'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/tsconfig.base.json'
+      - '/package.json'
+      - '/bun.lock'
+      - '@group(rust-contract)'
+
+  test:
+    command: 'bun run test'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/tsconfig.base.json'
+      - '/package.json'
+      - '/bun.lock'
+      - '@group(rust-contract)'
+
+  lint:
+    # Same invocation shape as the repo-wide gate (`bunx biome lint .` from
+    # the root), scoped to this project so config resolution is identical.
+    command: 'bunx biome lint $projectSource'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/biome.json'
+      - '/.gitignore'
+      - '/package.json'
+      - '/bun.lock'
+    options:
+      runFromWorkspaceRoot: true
