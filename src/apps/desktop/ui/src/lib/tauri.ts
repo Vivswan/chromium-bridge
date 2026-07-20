@@ -11,7 +11,8 @@ import type {
   BrowserRow,
   ClientsPayload,
   CliToolStatus,
-  EnclaveOutcome as EnclaveOutcomeGen,
+  EnclaveOutcome,
+  EnclaveStatusReport,
   ExtensionInfo,
   FirstRunReport,
   McpSnippet,
@@ -19,32 +20,8 @@ import type {
 } from "./commands.gen";
 
 // Re-export the generated types under the module the rest of the UI already
-// imports from. Locally declared exports (EnclaveOutcome below) take
-// precedence over this star re-export.
+// imports from.
 export type * from "./commands.gen";
-
-/** `chromium-bridge enclave-status --json` passed through the app verbatim
- * (snake_case: this object comes from the host CLI, not a Tauri struct, so
- * on the Rust side it is `serde_json::Value` and generation cannot type it -
- * this is the one hand-written shape left in this seam). */
-export interface EnclaveStatusJson {
-  v: number;
-  supported: boolean;
-  key_label: string;
-  key: "present" | "none" | "invalid" | "unsupported" | "error";
-  public_key_b64?: string;
-  fingerprint?: string;
-  detail?: string;
-  policy: { enrolled: boolean; granularity: string } | null;
-  policy_error?: string;
-}
-
-/** The generated EnclaveOutcome with its `status` field (generated as
- * `unknown`, since the Rust side holds the host CLI's JSON as a plain
- * Value) narrowed to the same hand-typed shape enclaveStatus() returns. */
-export type EnclaveOutcome = Omit<EnclaveOutcomeGen, "status"> & {
-  status: EnclaveStatusJson | null;
-};
 
 export function isUnrecognized(line: AuditLine): line is { unrecognized: boolean } {
   return "unrecognized" in line;
@@ -52,7 +29,7 @@ export function isUnrecognized(line: AuditLine): line is { unrecognized: boolean
 
 export const api = {
   bridgeStatus: () => invoke<BridgeStatus>("bridge_status"),
-  enclaveStatus: () => invoke<EnclaveStatusJson>("enclave_status"),
+  enclaveStatus: () => invoke<EnclaveStatusReport>("enclave_status"),
   enclavePair: (reset: boolean) => invoke<EnclaveOutcome>("enclave_pair", { reset }),
   enclaveRevoke: () => invoke<EnclaveOutcome>("enclave_revoke"),
   browsersList: () => invoke<BrowserRow[]>("browsers_list"),

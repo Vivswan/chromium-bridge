@@ -1,5 +1,7 @@
 //! CLI runners: `pair` / `revoke` / `enclave-status`.
 
+use serde::{Deserialize, Serialize};
+
 use super::config::HostConfig;
 use super::key::EnrollmentKey;
 use super::pubkey::EnclavePublicKey;
@@ -290,8 +292,24 @@ pub fn run_status_json() -> i32 {
         Err(e) => KeyReport::Error(e.to_string()),
     };
     let policy = HostConfig::read().map_err(|e| e.to_string());
-    println!("{}", render_status_json(&key, &policy));
-    0
+    let report = build_status_report(&key, &policy);
+    // Serialize through `Value` so the object keys stay sorted (serde_json's
+    // default `Map` ordering), byte-for-byte as the previous ad-hoc `json!`
+    // rendering emitted them: this JSON is a frozen wire contract the desktop
+    // app parses, and routing through `to_value` keeps the emitted bytes
+    // identical regardless of the struct's field declaration order.
+    match serde_json::to_value(&report) {
+        Ok(value) => {
+            println!("{value}");
+            0
+        }
+        // A struct of plain scalars cannot fail to serialize; refuse loudly on
+        // the impossible rather than print a half-formed object on stdout.
+        Err(e) => {
+            eprintln!("enclave-status --json failed to serialize the report: {e}");
+            1
+        }
+    }
 }
 
 /// What the keychain lookup found, reduced to the states the JSON report
@@ -305,61 +323,126 @@ enum KeyReport {
     Error(String),
 }
 
-/// Render the JSON status object. `key: "present" | "none" | "invalid" |
-/// "unsupported" | "error"`; `invalid` means a key exists under our label but
-/// must be treated as untrusted (planted or malformed), which a consumer must
-/// surface as loudly as the human report does.
-fn render_status_json(
+/// The versioned, machine-readable enclave status: the exact object
+/// `chromium-bridge enclave-status --json` prints (ADR-0029). It is a typed
+/// mirror of what used to be an ad-hoc `serde_json::json!`, so the host that
+/// emits it and the desktop app that parses it back (`src/apps/desktop`) share
+/// one Rust definition instead of two hand-kept shapes.
+///
+/// The wire form is frozen: a consumer refuses an unrecognized `v` BEFORE it
+/// trusts any other field, so field names and `v` must not change without a
+/// version bump. `deny_unknown_fields` makes an unexpected shape a loud
+/// refusal on the parsing side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct EnclaveStatusReport {
+    /// Schema version. `1` today; a newer value must be refused before any
+    /// field below is read (fail closed).
+    pub v: u32,
+    /// Whether this platform has a Secure Enclave (macOS today).
+    pub supported: bool,
+    /// The keychain label the enrollment key lives under.
+    pub key_label: String,
+    /// The keychain lookup outcome.
+    pub key: EnclaveKeyState,
+    /// Base64 X9.63 public key; present only when `key == present`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub public_key_b64: Option<String>,
+    /// The public key's SHA-256 fingerprint; present only when `key == present`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub fingerprint: Option<String>,
+    /// Human detail for a `key == invalid` or `key == error` state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub detail: Option<String>,
+    /// The recorded enrollment policy, or `null` when there is no readable
+    /// config. Always present on the wire (as `null`), never omitted.
+    pub policy: Option<EnclavePolicyReport>,
+    /// Set only when the policy read itself failed; `policy` is then `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub policy_error: Option<String>,
+}
+
+/// The keychain lookup outcome, lowercased on the wire. `invalid` means a key
+/// exists under our label but must be treated as untrusted (planted or
+/// malformed), which a consumer surfaces as loudly as the human report does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum EnclaveKeyState {
+    /// A key is present and its public half is readable.
+    Present,
+    /// No key on this machine.
+    None,
+    /// A key exists under our label but is untrusted (planted or malformed).
+    Invalid,
+    /// This platform has no Secure Enclave.
+    Unsupported,
+    /// The lookup itself failed (keychain error, unreadable key).
+    Error,
+}
+
+/// The enrollment policy carried in the report, mirrored from [`HostConfig`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct EnclavePolicyReport {
+    pub enrolled: bool,
+    pub granularity: String,
+}
+
+/// Build the typed status report. Pure (no keychain access): the caller
+/// resolves the key state and policy, this maps them onto the wire struct.
+fn build_status_report(
     key: &KeyReport,
     policy: &Result<Option<HostConfig>, String>,
-) -> serde_json::Value {
-    let mut out = serde_json::json!({
-        "v": 1,
-        "supported": cfg!(target_os = "macos"),
-        "key_label": KEY_LABEL,
-    });
-    // The json! literal above always builds an object; guard anyway so this
-    // renderer can never panic on the impossible.
-    let Some(obj) = out.as_object_mut() else {
-        return serde_json::json!({ "v": 1, "key": "error", "detail": "internal render error" });
+) -> EnclaveStatusReport {
+    let mut report = EnclaveStatusReport {
+        v: 1,
+        supported: cfg!(target_os = "macos"),
+        key_label: KEY_LABEL.to_string(),
+        key: EnclaveKeyState::None,
+        public_key_b64: None,
+        fingerprint: None,
+        detail: None,
+        policy: None,
+        policy_error: None,
     };
     match key {
         KeyReport::Present(public) => {
-            obj.insert("key".into(), "present".into());
-            obj.insert("public_key_b64".into(), public.to_base64().into());
-            obj.insert("fingerprint".into(), public.fingerprint_display().into());
+            report.key = EnclaveKeyState::Present;
+            report.public_key_b64 = Some(public.to_base64());
+            report.fingerprint = Some(public.fingerprint_display());
         }
-        KeyReport::None => {
-            obj.insert("key".into(), "none".into());
-        }
+        KeyReport::None => report.key = EnclaveKeyState::None,
         KeyReport::Invalid(detail) => {
-            obj.insert("key".into(), "invalid".into());
-            obj.insert("detail".into(), detail.as_str().into());
+            report.key = EnclaveKeyState::Invalid;
+            report.detail = Some(detail.clone());
         }
-        KeyReport::Unsupported => {
-            obj.insert("key".into(), "unsupported".into());
-        }
+        KeyReport::Unsupported => report.key = EnclaveKeyState::Unsupported,
         KeyReport::Error(detail) => {
-            obj.insert("key".into(), "error".into());
-            obj.insert("detail".into(), detail.as_str().into());
+            report.key = EnclaveKeyState::Error;
+            report.detail = Some(detail.clone());
         }
     }
     match policy {
         Ok(Some(cfg)) => {
-            obj.insert(
-                "policy".into(),
-                serde_json::json!({ "enrolled": cfg.enrolled, "granularity": cfg.granularity }),
-            );
+            report.policy = Some(EnclavePolicyReport {
+                enrolled: cfg.enrolled,
+                granularity: cfg.granularity.clone(),
+            });
         }
-        Ok(None) => {
-            obj.insert("policy".into(), serde_json::Value::Null);
-        }
+        Ok(None) => report.policy = None,
         Err(e) => {
-            obj.insert("policy".into(), serde_json::Value::Null);
-            obj.insert("policy_error".into(), e.as_str().into());
+            report.policy = None;
+            report.policy_error = Some(e.clone());
         }
     }
-    out
+    report
 }
 
 #[cfg(test)]
@@ -376,11 +459,69 @@ mod tests {
         }
     }
 
+    /// The wire bytes `enclave-status --json` emits: the typed struct serialized
+    /// through `Value` exactly as `run_status_json` does. A helper so the tests
+    /// assert against the real emitted form.
+    fn wire(key: &KeyReport, policy: &Result<Option<HostConfig>, String>) -> serde_json::Value {
+        serde_json::to_value(build_status_report(key, policy)).expect("report serializes")
+    }
+
+    /// The pre-refactor ad-hoc `json!` rendering, kept ONLY here as the golden
+    /// reference: the typed struct must serialize to byte-identical JSON.
+    fn legacy_render(
+        key: &KeyReport,
+        policy: &Result<Option<HostConfig>, String>,
+    ) -> serde_json::Value {
+        let mut out = serde_json::json!({
+            "v": 1,
+            "supported": cfg!(target_os = "macos"),
+            "key_label": KEY_LABEL,
+        });
+        let obj = out.as_object_mut().expect("json! literal is an object");
+        match key {
+            KeyReport::Present(public) => {
+                obj.insert("key".into(), "present".into());
+                obj.insert("public_key_b64".into(), public.to_base64().into());
+                obj.insert("fingerprint".into(), public.fingerprint_display().into());
+            }
+            KeyReport::None => {
+                obj.insert("key".into(), "none".into());
+            }
+            KeyReport::Invalid(detail) => {
+                obj.insert("key".into(), "invalid".into());
+                obj.insert("detail".into(), detail.as_str().into());
+            }
+            KeyReport::Unsupported => {
+                obj.insert("key".into(), "unsupported".into());
+            }
+            KeyReport::Error(detail) => {
+                obj.insert("key".into(), "error".into());
+                obj.insert("detail".into(), detail.as_str().into());
+            }
+        }
+        match policy {
+            Ok(Some(cfg)) => {
+                obj.insert(
+                    "policy".into(),
+                    serde_json::json!({ "enrolled": cfg.enrolled, "granularity": cfg.granularity }),
+                );
+            }
+            Ok(None) => {
+                obj.insert("policy".into(), serde_json::Value::Null);
+            }
+            Err(e) => {
+                obj.insert("policy".into(), serde_json::Value::Null);
+                obj.insert("policy_error".into(), e.as_str().into());
+            }
+        }
+        out
+    }
+
     #[test]
     fn json_report_carries_the_fingerprint_for_a_present_key() {
         let public = present_key();
         let (b64, fingerprint) = (public.to_base64(), public.fingerprint_display());
-        let v = render_status_json(
+        let v = wire(
             &KeyReport::Present(public),
             &Ok(Some(HostConfig {
                 enrolled: true,
@@ -397,30 +538,134 @@ mod tests {
 
     #[test]
     fn json_report_states_map_one_to_one() {
-        let none = render_status_json(&KeyReport::None, &Ok(None));
+        let none = wire(&KeyReport::None, &Ok(None));
         assert_eq!(none["key"], "none");
         assert!(none["policy"].is_null());
         assert!(none.get("fingerprint").is_none());
 
-        let invalid = render_status_json(
+        let invalid = wire(
             &KeyReport::Invalid("planted software key".into()),
             &Ok(None),
         );
         assert_eq!(invalid["key"], "invalid");
         assert_eq!(invalid["detail"], "planted software key");
 
-        let unsupported = render_status_json(&KeyReport::Unsupported, &Ok(None));
+        let unsupported = wire(&KeyReport::Unsupported, &Ok(None));
         assert_eq!(unsupported["key"], "unsupported");
 
-        let err = render_status_json(&KeyReport::Error("keychain: -25300".into()), &Ok(None));
+        let err = wire(&KeyReport::Error("keychain: -25300".into()), &Ok(None));
         assert_eq!(err["key"], "error");
         assert_eq!(err["detail"], "keychain: -25300");
     }
 
     #[test]
     fn json_report_surfaces_an_unreadable_policy() {
-        let v = render_status_json(&KeyReport::None, &Err("config decode: bad".into()));
+        let v = wire(&KeyReport::None, &Err("config decode: bad".into()));
         assert!(v["policy"].is_null());
         assert_eq!(v["policy_error"], "config decode: bad");
+    }
+
+    /// Byte-for-byte wire compatibility: the typed struct must serialize to
+    /// exactly the JSON string the old ad-hoc `json!` renderer produced, for
+    /// every key/policy combination. This is the contract the desktop app and
+    /// any older host binary depend on.
+    #[test]
+    fn typed_report_is_byte_identical_to_the_legacy_json() {
+        let enrolled = Ok(Some(HostConfig {
+            enrolled: true,
+            ..HostConfig::default()
+        }));
+        let no_config: Result<Option<HostConfig>, String> = Ok(None);
+        let unreadable: Result<Option<HostConfig>, String> = Err("config decode: bad".into());
+        let cases: Vec<(KeyReport, &Result<Option<HostConfig>, String>)> = vec![
+            (KeyReport::Present(present_key()), &enrolled),
+            (KeyReport::None, &no_config),
+            (
+                KeyReport::Invalid("planted software key".into()),
+                &no_config,
+            ),
+            (KeyReport::Unsupported, &no_config),
+            (KeyReport::Error("keychain: -25300".into()), &no_config),
+            (KeyReport::None, &unreadable),
+        ];
+        for (key, policy) in &cases {
+            let typed = serde_json::to_string(&build_status_report(key, policy))
+                .expect("report serializes");
+            // The emitted form: routed through `Value` so keys stay sorted.
+            let emitted = serde_json::to_value(build_status_report(key, policy))
+                .expect("report serializes")
+                .to_string();
+            let legacy = legacy_render(key, policy).to_string();
+            assert_eq!(
+                emitted, legacy,
+                "emitted wire JSON drifted from the legacy form"
+            );
+            // A struct serialized directly is NOT sorted; it must still round-trip
+            // to the same value, proving no field was dropped or renamed.
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&typed).unwrap(),
+                legacy_render(key, policy),
+            );
+        }
+    }
+
+    /// A literal byte-golden for the common `key=none`, enrolled case: the
+    /// exact string `enclave-status --json` prints today. Unlike the
+    /// legacy-comparison test (both sides share the serializer), this pins the
+    /// concrete bytes, so a serializer-config change (e.g. enabling
+    /// `preserve_order`) that silently altered the wire form would fail here.
+    #[test]
+    fn emitted_wire_bytes_match_the_frozen_golden() {
+        let report = build_status_report(
+            &KeyReport::None,
+            &Ok(Some(HostConfig {
+                enrolled: true,
+                ..HostConfig::default()
+            })),
+        );
+        let emitted = serde_json::to_value(&report)
+            .expect("report serializes")
+            .to_string();
+        // Keys sorted (serde_json default Map ordering), `key_label` is KEY_LABEL.
+        let golden = format!(
+            "{{\"key\":\"none\",\"key_label\":\"{KEY_LABEL}\",\
+             \"policy\":{{\"enrolled\":true,\"granularity\":\"session\"}},\
+             \"supported\":{},\"v\":1}}",
+            cfg!(target_os = "macos"),
+        );
+        assert_eq!(
+            emitted, golden,
+            "the enclave-status --json wire bytes drifted"
+        );
+    }
+
+    /// The typed report round-trips through serde: what the host emits, the
+    /// desktop app deserializes back into the same struct (its parse path).
+    #[test]
+    fn typed_report_round_trips_through_serde() {
+        let report = build_status_report(
+            &KeyReport::Present(present_key()),
+            &Ok(Some(HostConfig {
+                enrolled: true,
+                ..HostConfig::default()
+            })),
+        );
+        let json = serde_json::to_string(&report).expect("serializes");
+        let back: EnclaveStatusReport = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(report, back);
+    }
+
+    /// The parse side rejects an unexpected field rather than silently
+    /// coercing it: `deny_unknown_fields` is the fail-closed guard the desktop
+    /// app relies on when a host emits a shape it does not understand.
+    #[test]
+    fn typed_report_rejects_unknown_fields() {
+        let with_extra =
+            r#"{"v":1,"supported":true,"key_label":"x","key":"none","policy":null,"surprise":1}"#;
+        let parsed: Result<EnclaveStatusReport, _> = serde_json::from_str(with_extra);
+        assert!(
+            parsed.is_err(),
+            "an unknown field must be refused, not ignored"
+        );
     }
 }
