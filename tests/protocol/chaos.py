@@ -684,14 +684,14 @@ def c6_peer_death_in_handshake_window():
             except Exception:
                 pass
             s.close()
-        # Poll the server's stderr snapshot for the rejection marker (do NOT use
-        # adv.server_stderr, which joins the drain thread and would block while
-        # the server is still alive). Polling instead of a single read closes the
-        # tiny window where the drain thread has not yet appended the line.
+        # Poll the server's stderr for the rejection marker (adv.server_stderr
+        # returns a non-blocking snapshot while the server is alive). Polling
+        # instead of a single read closes the tiny window where the drain
+        # thread has not yet appended the line.
         deadline = time.time() + 5
         saw_reject = False
         while time.time() < deadline:
-            if "rejected bridge connection" in host_stderr_from_server(srv):
+            if "rejected bridge connection" in adv.server_stderr(srv):
                 saw_reject = True
                 break
             time.sleep(0.1)
@@ -740,12 +740,6 @@ def c6_peer_death_in_handshake_window():
     finally:
         close_host(nh)
         adv._reap(srv)
-
-
-def host_stderr_from_server(srv):
-    """The server's captured stderr so far (adversarial.start_server drains it
-    into proc.err_lines from a daemon thread)."""
-    return "".join(getattr(srv, "err_lines", []))
 
 
 # ---------------------------------------------------------------------------
