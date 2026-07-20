@@ -114,6 +114,52 @@ bunx biome ci .                 # lint + format check (biome.json)
 bun run --cwd src/apps/extension build
 ```
 
+## moon task orchestration (phase one)
+
+The per-project TypeScript recipes (`build-ext`, `test-ext`, `test-shared`,
+`build-app-ui`, `test-app-ui`, `build-web`) and the repo-wide Biome recipes
+(`lint-ts`, `check-ts`, `fmt-check-ts`) delegate to
+[moon](https://moonrepo.dev) under the hood, so each task has one definition
+with declared inputs and outputs. moon is a pinned dev dependency
+(`@moonrepo/cli` in the root `package.json`); `bun install` provides it, and
+no global install or proto is needed. The justfile stays the canonical command
+interface - `moon run` is what the recipes call, not a second front door.
+
+What moon buys locally:
+
+```sh
+bunx moon run extension:build   # what `just build-ext` runs; cached
+bunx moon run :test             # every project's test task
+bunx moon ci                    # affected-only, based on touched files
+```
+
+Projects: `core` (Rust), `shared`, `extension`, `desktop-ui`, `web`, plus a
+`root` project for the repo-wide Biome passes. The `core` tasks (`test`,
+`test-doc`, `lint`, `fmt-check`, `build`) are additive conveniences: `just ci`
+and the Rust recipes keep calling cargo directly.
+
+What moon deliberately does not own yet: the `ci` recipe's structure and the
+GitHub Actions jobs (unchanged, and CI never runs moon), the contract codegen
+recipes (`gen`, `check-gen`, `check-envelope`), the desktop bundle / signing /
+release recipes, and the dev daemons (`dev-web` manages the astro dev daemon's
+stop/background lifecycle itself; there is intentionally no `web:dev` moon
+task).
+
+Cache trust, and the one edge that must never be narrowed: the Rust core is
+the canonical cross-process contract (ADR-0028), so the `shared` and
+`extension` tasks declare the whole core crate (plus `scripts/gen-ops.ts` and
+the cargo manifests) as inputs - the `rust-contract` file group in
+`.moon/tasks/all.yml`. That list is deliberately over-broad; a change anywhere
+in `src/packages/core` invalidates the downstream TS caches, because a stale
+cache hit on the contract path is the one failure mode this repo cannot
+accept. If you edit these task definitions, it is always safe to widen inputs
+and never safe to narrow them. Generated and downloaded output (target/,
+build/, .wxt/, rendered icons, ...) is kept out of every hash by
+`hasher.ignorePatterns` in `.moon/workspace.yml`; if you add a new gitignored
+output directory, add it there too (forgetting only over-invalidates, it
+cannot go stale). `.moon/cache/` is local state and gitignored;
+`rm -rf .moon/cache` is the reset button.
+
 ## Working on the extension
 
 The extension is built on WXT
