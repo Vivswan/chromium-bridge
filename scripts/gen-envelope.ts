@@ -4,18 +4,14 @@
 // schemars-derived JSON Schemas (ADR-0028): the BridgeReq/BridgeResp envelope
 // pair and every host->extension control frame the extension validates.
 // Runs the core's `emit_envelope_schema` example (schemars behind the
-// gen-only `envelope-schema` cargo feature, absent from every binary), feeds
-// each schema through json-schema-to-zod (a gen-time-only dev dependency,
-// never bundled), and writes src/packages/shared/src/envelope-wire.gen.ts.
+// gen-only `envelope-schema` cargo feature, absent from every binary),
+// reduces each schema to the supported subset below (prepare), emits Zod
+// source for it with the in-repo emitter (emitZod - the schema subset the
+// G-rules admit is small enough that every form maps to exactly one Zod
+// expression, in the style of gen-ops.ts; it replaced the archived
+// json-schema-to-zod dependency), and writes
+// src/packages/shared/src/envelope-wire.gen.ts.
 // Run via `moon run gen`; CI regenerates and fails on a stale diff (check-gen).
-//
-// Dependency status, reviewed 2026-07-20: json-schema-to-zod's upstream repo
-// was archived June 2026 (unmaintained since March 2026). Accepted because it
-// runs only at gen time, is exact-pinned, and its output is re-asserted by
-// the G-rules below plus the parity gate and the adversarial tests - a bad
-// conversion cannot ship silently. If a future schema shape breaks it,
-// vendor the converter or replace it; do not loosen a G-rule to work around
-// it.
 //
 // The emitted schemas are the FAITHFUL Rust contract: strict objects
 // (serde's deny_unknown_fields -> Zod's .strict()), required fields
@@ -25,42 +21,44 @@
 // in tests/envelope-wire.gen.test.ts.
 //
 // Fail-closed generation rules (a violation aborts generation; shipping a
-// weaker parser than the Rust contract is never an option):
+// weaker parser than the Rust contract is never an option). These assert the
+// CONTRACT the emitted validators must uphold, independent of how the
+// emission is implemented:
 //   G1 every object schema must declare type: "object" and carry
-//      additionalProperties: false, and the converted source must call
+//      additionalProperties: false, and the emitted source must call
 //      .strict() once per z.object( - so neither a Rust type losing
-//      deny_unknown_fields nor the converter dropping strictness can slip
+//      deny_unknown_fields nor an emitter bug dropping strictness can slip
 //      through. Object-shaped keywords (properties/required/
 //      additionalProperties) on a node without the explicit object type
-//      abort: the converter would emit z.any() for it.
-//   G2 `default` keywords are stripped before conversion: serde fills
+//      abort: the object claim must be stated, never inferred.
+//   G2 `default` keywords are stripped before emission: serde fills
 //      defaults on the Rust READ side; a Zod validator that invented fields
 //      (.default(...)) would silently hand consumers values the frame never
 //      carried. Stripping never changes required-ness - schemars already
 //      leaves defaulted fields out of `required`.
-//   G3 a oneOf is converted only when it is a discriminated union (every
+//   G3 a oneOf is emitted only when it is a discriminated union (every
 //      branch an object schema with the same required const-tag property,
 //      all tag values distinct - so the branches are mutually exclusive and
 //      oneOf equals anyOf over the same instance set). It is rewritten to
-//      anyOf, which converts to a plain z.union instead of the converter's
-//      type-erased z.any().superRefine form. Anything else aborts.
-//   G4 $refs must all be inlined before conversion (json-schema-to-zod does
-//      not resolve them); a surviving $ref aborts.
-//   G5 every keyword and type must be on the explicit supported list below.
-//      A keyword this generator does not model (minProperties, contains,
-//      patternProperties, ...) would be silently dropped or misread by the
-//      converter - weaker validation than the contract claims - so its
-//      appearance aborts until support is added here AND in the adversarial
-//      tests. Same philosophy as gen-ops.ts's assertSupportedProp. The
-//      empty schema {} (accept anything) is allowed: it is the contract's
-//      own free-form claim (BridgeReq.args, BridgeResp.data), faithfully
-//      converted to z.any() and still held to the R3 rule by the parity
-//      gate.
+//      anyOf and emitted as a plain z.union; the mutual exclusivity that
+//      distinguishes oneOf needs no extra runtime check. Anything else
+//      aborts.
+//   G4 $refs must all be inlined before emission (the emitter does not
+//      resolve them); a surviving $ref aborts.
+//   G5 every keyword and type must be on the explicit supported list below,
+//      in a position the emitter models. A keyword it does not model
+//      (minProperties, contains, patternProperties, a format or bound on a
+//      non-numeric node, ...) would have to be silently dropped - weaker
+//      validation than the contract claims - so its appearance aborts until
+//      support is added here AND in the adversarial tests. Same philosophy
+//      as gen-ops.ts's assertSupportedProp. The empty schema {} (accept
+//      anything) is allowed: it is the contract's own free-form claim
+//      (BridgeReq.args, BridgeResp.data), faithfully emitted as z.any() and
+//      still held to the R3 rule by the parity gate.
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type JsonSchema, type JsonSchemaObject, jsonSchemaToZod } from "json-schema-to-zod";
 import { splitTaggedUnionSchema } from "../src/packages/shared/src/json-schema-normalize";
 
 type JsonObject = Record<string, unknown>;
@@ -101,7 +99,7 @@ export function assertDiscriminatedUnion(branches: unknown[], path: string): voi
   throw new Error(`gen-envelope: oneOf at ${path} is not a discriminated union (G3)`);
 }
 
-// Reduce one schema to the form fed to the converter: annotations and
+// Reduce one schema to the form the emitter consumes: annotations and
 // `default` stripped, every keyword and type checked against the supported
 // list (G5), object strictness asserted (G1), discriminated oneOf -> anyOf
 // (G3), no $refs (G4). Structure is otherwise preserved verbatim. This is a
@@ -134,8 +132,8 @@ const SUPPORTED_TYPES = new Set([
 
 export function prepare(node: unknown, path: string): unknown {
   // The boolean schema `true` and the empty schema {} both mean "accept
-  // anything"; canonicalize to {} (converted to z.any()). `false` (accept
-  // nothing) and any other non-object form have no faithful conversion.
+  // anything"; canonicalize to {} (emitted as z.any()). `false` (accept
+  // nothing) and any other non-object form have no faithful emission.
   if (node === true) return {};
   if (!isObject(node)) {
     throw new Error(`gen-envelope: unsupported schema form at ${path}: ${JSON.stringify(node)}`);
@@ -153,14 +151,36 @@ export function prepare(node: unknown, path: string): unknown {
   }
 
   const types = out.type === undefined ? [] : Array.isArray(out.type) ? out.type : [out.type];
+  if (Array.isArray(out.type) && out.type.length === 0) {
+    throw new Error(`gen-envelope: empty type list at ${path} (G5)`);
+  }
   for (const t of types) {
     if (typeof t !== "string" || !SUPPORTED_TYPES.has(t)) {
       throw new Error(`gen-envelope: unsupported type ${JSON.stringify(t)} at ${path} (G5)`);
     }
   }
 
+  // G5 placement: format is modeled only as schemars' integer-width claim
+  // and the numeric bounds only as z.number() bounds, so both may sit only
+  // on a numeric node (JSON Schema scopes them per instance type: the
+  // Option null-arm beside a numeric type is inert and stays allowed, but a
+  // string arm would give `format` a string-format meaning - uuid, email,
+  // ... - that this emitter does not model).
+  const numeric = types.includes("integer") || types.includes("number");
+  const numericOrNull = numeric && types.every((t) => t !== "string" && t !== "boolean");
+  for (const key of ["format", "minimum", "maximum"] as const) {
+    if (key in out && !numericOrNull) {
+      throw new Error(`gen-envelope: "${key}" at ${path} sits on a non-numeric node (G5)`);
+    }
+  }
+  for (const key of ["minimum", "maximum"] as const) {
+    if (key in out && typeof out[key] !== "number") {
+      throw new Error(`gen-envelope: non-numeric ${key} at ${path} (G5)`);
+    }
+  }
+
   // G1: object-shaped keywords demand the explicit, sole object type and
-  // deny_unknown_fields; the converter would otherwise fall back to z.any().
+  // deny_unknown_fields; an object claim is stated, never inferred.
   const objectish = ["properties", "required", "additionalProperties"].filter((k) => k in out);
   if (objectish.length > 0 || types.includes("object")) {
     if (types.length !== 1 || types[0] !== "object") {
@@ -203,8 +223,8 @@ export function prepare(node: unknown, path: string): unknown {
   }
 
   // Unions: a combinator node must be EXACTLY one non-empty combinator -
-  // json-schema-to-zod drops sibling constraints beside a combinator and
-  // turns an empty union into z.any(), both weaker than the contract.
+  // sibling constraints beside a combinator have no single faithful Zod
+  // form, and an empty union claims nothing, both weaker than the contract.
   const [combinator, ...extraCombinators] = (["oneOf", "anyOf"] as const).filter(
     (key) => key in out,
   );
@@ -213,7 +233,7 @@ export function prepare(node: unknown, path: string): unknown {
     if (extraCombinators.length > 0 || others.length > 0) {
       throw new Error(
         `gen-envelope: ${path} mixes ${combinator} with ` +
-          `${[...extraCombinators, ...others].join("/")} - the converter would drop constraints (G5)`,
+          `${[...extraCombinators, ...others].join("/")} - constraints would be dropped (G5)`,
       );
     }
     const branches = out[combinator];
@@ -228,37 +248,109 @@ export function prepare(node: unknown, path: string): unknown {
     delete out.oneOf; // G3
   }
 
-  if ("const" in out && typeof out.const !== "string") {
-    throw new Error(`gen-envelope: unsupported non-string const at ${path} (G5)`);
+  // G5 placement: const is modeled only as a string literal, alone or on a
+  // plain string node (the enum tags schemars emits); on any other type it
+  // would be ignored rather than enforced.
+  if ("const" in out) {
+    if (typeof out.const !== "string") {
+      throw new Error(`gen-envelope: unsupported non-string const at ${path} (G5)`);
+    }
+    if (types.length > 0 && (types.length !== 1 || types[0] !== "string")) {
+      throw new Error(`gen-envelope: const on a non-string node at ${path} (G5)`);
+    }
   }
 
   return out;
+}
+
+// Emit Zod source for one prepared node. Total over the subset prepare
+// admits: every branch below is a shape prepare guarantees, and anything
+// else is a bug in prepare, so it throws rather than guesses. `override`
+// lets a caller substitute a named schema for a specific node (matched by
+// identity) instead of inlining it.
+function emitZod(node: unknown, override?: (node: unknown) => string | undefined): string {
+  const custom = override?.(node);
+  if (custom !== undefined) return custom;
+  if (!isObject(node)) {
+    throw new Error(`gen-envelope: emitter reached an unprepared node: ${JSON.stringify(node)}`);
+  }
+  if (Array.isArray(node.anyOf)) {
+    // prepare guarantees a non-empty, pure combinator; a one-branch union
+    // is the branch itself.
+    if (node.anyOf.length === 1) return emitZod(node.anyOf[0], override);
+    const branches = node.anyOf.map((branch) => emitZod(branch, override));
+    return `z.union([${branches.join(", ")}])`;
+  }
+  if ("const" in node) return `z.literal(${JSON.stringify(node.const)})`;
+  if (Array.isArray(node.type)) {
+    // serde's Option null-arm and friends: one branch per type, each keeping
+    // the node's other keywords (only numeric ones exist, per G5 placement).
+    const branches = node.type.map((type) => emitZod({ ...node, type }, override));
+    return `z.union([${branches.join(", ")}])`;
+  }
+  switch (node.type) {
+    case "object": {
+      // additionalProperties: false is guaranteed by G1; .strict() is its
+      // one faithful spelling. prepare always materializes `properties`.
+      const required = new Set(Array.isArray(node.required) ? node.required : []);
+      const fields = Object.entries(node.properties as JsonObject).map(([key, sub]) => {
+        const value = emitZod(sub, override);
+        return `${JSON.stringify(key)}: ${required.has(key) ? value : `${value}.optional()`}`;
+      });
+      const object = fields.length === 0 ? "z.object({})" : `z.object({ ${fields.join(", ")} })`;
+      return `${object}.strict()`;
+    }
+    case "array":
+      return `z.array(${emitZod(node.items, override)})`;
+    case "integer":
+    case "number": {
+      // schemars' integer-width formats: `integer` is already .int(); the
+      // int64 format on a plain number carries the same integer claim.
+      // Other formats (uint64, double, ...) add nothing beyond the type and
+      // the explicit bounds.
+      let out =
+        node.type === "integer" || node.format === "int64" ? "z.number().int()" : "z.number()";
+      if (typeof node.minimum === "number") out += `.gte(${JSON.stringify(node.minimum)})`;
+      if (typeof node.maximum === "number") out += `.lte(${JSON.stringify(node.maximum)})`;
+      return out;
+    }
+    case "string":
+      return "z.string()";
+    case "boolean":
+      return "z.boolean()";
+    case "null":
+      return "z.null()";
+    case undefined: {
+      // The only typeless survivor of prepare is the empty any-schema.
+      if (Object.keys(node).length > 0) {
+        throw new Error(
+          `gen-envelope: emitter reached an unprepared node: ${JSON.stringify(node)}`,
+        );
+      }
+      return "z.any()";
+    }
+    default:
+      throw new Error(`gen-envelope: emitter has no form for type ${JSON.stringify(node.type)}`);
+  }
 }
 
 function count(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
-// Convert one prepared schema to Zod source, then re-assert G1 on the
-// OUTPUT: every emitted z.object( must be closed by a .strict().
+// Emit one prepared schema as Zod source, then re-assert G1 on the OUTPUT:
+// every emitted z.object( must be closed by a .strict().
 export function convert(
   schema: unknown,
   name: string,
   parserOverride?: (node: unknown) => string | undefined,
 ): string {
-  // prepare() has validated the shape; the converter's JsonSchema input type
-  // is a loose structural alias, so the assertion is safe.
-  const code = jsonSchemaToZod(schema as JsonSchema, {
-    zodVersion: 4,
-    parserOverride: parserOverride
-      ? (node: JsonSchemaObject): string | undefined => parserOverride(node)
-      : undefined,
-  });
+  const code = emitZod(schema, parserOverride);
   const objects = count(code, "z.object(");
   const stricts = count(code, ".strict()");
   if (objects !== stricts) {
     throw new Error(
-      `gen-envelope: ${name}: converter emitted ${objects} z.object( but ${stricts} .strict() (G1)`,
+      `gen-envelope: ${name}: emitted ${objects} z.object( but ${stricts} .strict() (G1)`,
     );
   }
   return code;
