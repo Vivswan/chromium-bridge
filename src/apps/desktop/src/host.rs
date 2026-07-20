@@ -120,23 +120,48 @@ pub fn run_host(args: &[&str]) -> Result<HostRun, String> {
 }
 
 /// The machine-readable enclave state, via `enclave-status --json` on the
-/// bundled host. The report version is checked here so a newer host schema is
-/// refused loudly instead of half-rendered.
-pub fn enclave_status_value() -> Result<serde_json::Value, String> {
+/// bundled host, parsed into the core's typed [`EnclaveStatusReport`]. The
+/// report version is checked FIRST so a newer host schema is refused loudly
+/// (fail closed) before any other field is trusted; only then is the body
+/// deserialized into the typed struct, whose `deny_unknown_fields` rejects an
+/// unexpected shape rather than coercing it.
+pub fn enclave_status_report() -> Result<chromium_bridge_core::enclave::EnclaveStatusReport, String>
+{
     let run = run_host(&["enclave-status", "--json"])?;
     if !run.ok {
         return Err(format!("enclave-status failed: {}", run.transcript()));
     }
-    let v: serde_json::Value = serde_json::from_str(run.stdout.trim())
+    parse_status_json(run.stdout.trim())
+}
+
+/// Parse and validate the host's `enclave-status --json` stdout. Split from
+/// the subprocess call so the fail-closed rules are unit-testable without a
+/// bundled host: the version gate runs before any field is trusted, and an
+/// unrecognized shape is refused, not coerced.
+fn parse_status_json(
+    stdout: &str,
+) -> Result<chromium_bridge_core::enclave::EnclaveStatusReport, String> {
+    use chromium_bridge_core::enclave::EnclaveStatusReport;
+
+    // Version gate FIRST: peek only `v` and refuse an unrecognized schema
+    // before trusting any field below it. A host newer than this app is
+    // rejected, never half-read.
+    let raw: serde_json::Value = serde_json::from_str(stdout)
         .map_err(|e| format!("enclave-status --json did not return JSON: {e}"))?;
-    if v.get("v").and_then(serde_json::Value::as_u64) != Some(1) {
+    if raw.get("v").and_then(serde_json::Value::as_u64) != Some(1) {
         return Err(
             "enclave-status --json reported an unsupported schema version; \
              the bundled host is newer than this app"
                 .to_string(),
         );
     }
-    Ok(v)
+    // Only now bind the fields to the typed report, deserializing from the
+    // original bytes (not the `Value` above, which would already have collapsed
+    // duplicate keys last-write-wins). The derived parse rejects duplicate
+    // fields, an unknown field (`deny_unknown_fields`), or a mistyped value -
+    // a strictly stronger check than trusting the free-form JSON as-is.
+    serde_json::from_str::<EnclaveStatusReport>(stdout)
+        .map_err(|e| format!("enclave-status --json had an unexpected shape: {e}"))
 }
 
 #[cfg(test)]
@@ -188,5 +213,57 @@ mod tests {
             stderr: "".into(),
         };
         assert_eq!(quiet.transcript(), "");
+    }
+
+    #[test]
+    fn parse_accepts_a_well_formed_v1_report() {
+        let stdout = r#"{"key":"none","key_label":"com.vivswan.chromium-bridge.enclave.signing.v1","policy":{"enrolled":true,"granularity":"session"},"supported":true,"v":1}"#;
+        let report = parse_status_json(stdout).expect("a v1 report parses");
+        assert_eq!(report.v, 1);
+        assert!(report.policy.is_some());
+    }
+
+    #[test]
+    fn parse_refuses_an_unsupported_schema_version_first() {
+        // A newer schema (v2), otherwise well-formed for v1: the version gate
+        // must refuse it before trusting any field (fail closed).
+        let stdout = r#"{"key":"none","key_label":"x","policy":null,"supported":true,"v":2}"#;
+        let err = parse_status_json(stdout).expect_err("v2 must be refused");
+        assert!(err.contains("unsupported schema version"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_refuses_a_missing_version() {
+        let stdout = r#"{"key":"none","key_label":"x","policy":null,"supported":true}"#;
+        let err = parse_status_json(stdout).expect_err("a missing v must be refused");
+        assert!(err.contains("unsupported schema version"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_refuses_an_unrecognized_shape() {
+        // v is 1, so the version gate passes, but the body carries an unknown
+        // field: deny_unknown_fields makes this a loud refusal, not a silent
+        // coercion of a shape this app does not understand.
+        let stdout =
+            r#"{"key":"none","key_label":"x","policy":null,"supported":true,"v":1,"surprise":1}"#;
+        let err = parse_status_json(stdout).expect_err("an unknown field must be refused");
+        assert!(err.contains("unexpected shape"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_refuses_non_json() {
+        let err = parse_status_json("not json at all").expect_err("garbage must be refused");
+        assert!(err.contains("did not return JSON"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_refuses_duplicate_keys() {
+        // A `Value` peek collapses duplicate keys last-write-wins, so this
+        // slips the version gate (v resolves to 1); the typed parse from the
+        // original bytes must still refuse the duplicate `v` rather than
+        // silently trust a smuggled value.
+        let stdout = r#"{"v":2,"v":1,"supported":true,"key_label":"x","key":"none","policy":null}"#;
+        let err = parse_status_json(stdout).expect_err("a duplicate key must be refused");
+        assert!(err.contains("unexpected shape"), "got: {err}");
     }
 }
