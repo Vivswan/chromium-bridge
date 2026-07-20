@@ -59,6 +59,10 @@ export interface AuditFields {
   tool?: string;
   name?: string;
   detail?: string;
+  /** Per-confirmation correlation id (ADR-0030): set on a confirm_shown and
+   * its later verdict so the audit panel joins them exactly. Spread onto both
+   * the stored ring entry and the forwarded host frame. */
+  cid?: string;
 }
 
 /** Record one event. Never throws, never blocks the caller. `forward: false`

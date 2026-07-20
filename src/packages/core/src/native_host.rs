@@ -275,6 +275,7 @@ fn handle_audit_event(
     tool: Option<String>,
     name: Option<String>,
     detail: Option<String>,
+    cid: Option<String>,
 ) {
     let Some(kind) = crate::audit::extension_kind(&kind) else {
         log_warn!(
@@ -288,6 +289,7 @@ fn handle_audit_event(
     rec.tool = tool;
     rec.name = name;
     rec.detail = detail;
+    rec.cid = cid;
     crate::audit::record(rec);
 }
 
@@ -622,9 +624,10 @@ fn handle_control_frame(
             tool,
             name,
             detail,
+            cid,
         } => {
             // Fire-and-forget by contract: no reply frame.
-            handle_audit_event(kind, outcome, tool, name, detail);
+            handle_audit_event(kind, outcome, tool, name, detail, cid);
             Ok(Inbound::Handled)
         }
         FrameDisposition::MalformedAdmin(kind) => {
@@ -1334,8 +1337,8 @@ mod tests {
         // handle_audit_event must refuse to stamp host-side kinds from the
         // browser leg. Success here is the absence of a panic plus the
         // whitelist test in audit.rs; this exercises the wiring.
-        handle_audit_event("kill_engage".into(), None, None, None, None);
-        handle_audit_event("harness_admit".into(), None, None, None, None);
+        handle_audit_event("kill_engage".into(), None, None, None, None, None);
+        handle_audit_event("harness_admit".into(), None, None, None, None, None);
     }
 
     #[cfg(not(target_os = "macos"))]

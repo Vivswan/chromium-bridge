@@ -157,6 +157,18 @@ pub struct AuditRecord {
     /// Bounded free-text detail (a reason, an anchor kind).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Confirmation-correlation id, for the extension `confirm_*` kinds
+    /// (ADR-0030). The extension mints one opaque id per confirmation and
+    /// stamps it on the `confirm_shown` record AND on that confirmation's
+    /// later `confirm_allowed`/`confirm_denied` verdict, so a reader (the
+    /// desktop audit panel) joins a verdict to exactly its own shown row
+    /// instead of guessing by tool/origin. Pre-surface denials - the panic
+    /// latch denying a confirmation that never reached a surface - carry
+    /// none, so they resolve no shown row. Distinct from `req`: `req` is the
+    /// host-side per-tool-call id (a `u64`), this is the browser-minted
+    /// confirmation id (an opaque string), a different subsystem.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cid: Option<String>,
     /// Per-call request id, for [`AuditKind::ToolCall`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub req: Option<u64>,
@@ -185,6 +197,7 @@ impl AuditRecord {
             code: None,
             name: None,
             detail: None,
+            cid: None,
             req: None,
             conn: None,
             dur_ms: None,
@@ -219,6 +232,7 @@ impl AuditRecord {
             &mut self.code,
             &mut self.name,
             &mut self.detail,
+            &mut self.cid,
         ] {
             if let Some(s) = f.as_mut() {
                 if s.len() > AUDIT_MAX_FIELD {
@@ -346,6 +360,9 @@ fn emit_stderr(rec: &AuditRecord) {
     }
     if let Some(c) = rec.conn {
         owned.push(("conn", c.to_string()));
+    }
+    if let Some(c) = &rec.cid {
+        owned.push(("cid", c.to_string()));
     }
     for (k, v) in [
         ("tool", &rec.tool),
@@ -638,6 +655,12 @@ mod tests {
         rec.detail = Some("x".repeat(AUDIT_MAX_FIELD * 4));
         rec.truncate_fields();
         assert_eq!(rec.detail.as_ref().unwrap().len(), AUDIT_MAX_FIELD);
+        // The extension-supplied cid is untrusted text like any other and is
+        // bounded too (a hostile browser leg cannot bloat the trail with it).
+        let mut rec = AuditRecord::new(AuditKind::ConfirmShown);
+        rec.cid = Some("c".repeat(AUDIT_MAX_FIELD * 4));
+        rec.truncate_fields();
+        assert_eq!(rec.cid.as_ref().unwrap().len(), AUDIT_MAX_FIELD);
         // Truncation lands on a char boundary for multi-byte text.
         let mut rec = AuditRecord::new(AuditKind::ToolCall);
         rec.detail = Some("\u{4e2d}".repeat(AUDIT_MAX_FIELD));
@@ -648,6 +671,23 @@ mod tests {
             .unwrap()
             .is_char_boundary(rec.detail.as_ref().unwrap().len()));
         assert!(rec.detail.as_ref().unwrap().len() <= AUDIT_MAX_FIELD);
+    }
+
+    #[test]
+    fn confirm_record_carries_the_cid_through_serde() {
+        // A confirm_* record round-trips its correlation id, so the desktop
+        // panel can join a verdict to its own shown row.
+        let mut rec = AuditRecord::new(AuditKind::ConfirmShown).surface(Surface::Extension);
+        rec.cid = Some("11111111-2222-3333-4444-555555555555".into());
+        rec.v = AUDIT_VERSION;
+        rec.ts_ms = 7;
+        let line = serde_json::to_string(&rec).unwrap();
+        let back: AuditRecord = serde_json::from_str(&line).unwrap();
+        assert_eq!(back, rec);
+        assert_eq!(
+            back.cid.as_deref(),
+            Some("11111111-2222-3333-4444-555555555555")
+        );
     }
 
     #[test]

@@ -235,6 +235,19 @@ export type AuditRecord = {
    */
   detail?: string;
   /**
+   * Confirmation-correlation id, for the extension `confirm_*` kinds
+   * (ADR-0030). The extension mints one opaque id per confirmation and
+   * stamps it on the `confirm_shown` record AND on that confirmation's
+   * later `confirm_allowed`/`confirm_denied` verdict, so a reader (the
+   * desktop audit panel) joins a verdict to exactly its own shown row
+   * instead of guessing by tool/origin. Pre-surface denials - the panic
+   * latch denying a confirmation that never reached a surface - carry
+   * none, so they resolve no shown row. Distinct from `req`: `req` is the
+   * host-side per-tool-call id (a `u64`), this is the browser-minted
+   * confirmation id (an opaque string), a different subsystem.
+   */
+  cid?: string;
+  /**
    * Per-call request id, for [`AuditKind::ToolCall`].
    */
   req?: number;
