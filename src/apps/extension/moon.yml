@@ -59,8 +59,10 @@ tasks:
       - '!**/node_modules/**'
       - '@group(upstream)'
       - '@group(rust-contract)'
-      # The theme-parity test reads the desktop UI's stylesheet.
+      # The theme-parity test reads the desktop UI's stylesheet (canonical)
+      # and the landing page's palette copy.
       - '/src/apps/desktop/ui/**/*'
+      - '/src/apps/web/src/styles/landing.css'
     options:
       cache: false # in the ci gate: gates are never cached
 
