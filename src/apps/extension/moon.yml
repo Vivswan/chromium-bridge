@@ -32,7 +32,6 @@ tasks:
       - '!**/node_modules/**'
       - '@group(upstream)'
       - '@group(rust-contract)'
-      - '/assets/icon/**/*'
       - '/scripts/**/*'
     outputs:
       # Only the bundle. The intermediate icon rasters the build writes into
