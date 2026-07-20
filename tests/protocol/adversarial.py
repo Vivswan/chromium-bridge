@@ -165,7 +165,11 @@ def start_server(bin_path=None):
 
 
 def server_stderr(proc):
-    proc.err_thread.join(timeout=2)
+    """The server's captured stderr so far. Joins the drain thread only after
+    the server has exited (the pipe has hit EOF); on a live server it returns
+    the snapshot drained so far without blocking, so callers may poll it."""
+    if proc.poll() is not None:
+        proc.err_thread.join(timeout=2)
     return "".join(proc.err_lines)
 
 
