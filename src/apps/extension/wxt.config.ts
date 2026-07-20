@@ -37,10 +37,12 @@ export default defineConfig({
   // still builds, serves, and reloads the extension over its dev-server
   // websocket - reload does not depend on who launched Chrome.
   //
-  // The `config:resolved` hook below stays as defense-in-depth: it fail-closes
-  // if an rc file (web-ext.config.ts, .webextrc, ~/.webextrc) ever hands
-  // WXT's runner a real profile - even though, with `disabled`, that runner no
-  // longer launches anything.
+  // This block is only the DEFAULTS layer of WXT's config resolution - an rc
+  // file (web-ext.config.ts, .webextrc, ~/.webextrc) overrides it, so
+  // `disabled` here does not by itself guarantee WXT stays out of the launch
+  // business. The `config:resolved` hook below enforces both invariants on the
+  // RESOLVED config: disabled must still be true, and no override may hand a
+  // runner a real profile.
   webExt: {
     disabled: true,
   },
@@ -65,6 +67,12 @@ export default defineConfig({
       if (wxt.config.command !== "serve") return;
       const resolved = wxt.config.runnerConfig.config ?? {};
       const problems: string[] = [];
+      if (resolved.disabled !== true) {
+        problems.push(
+          "disabled was overridden off: WXT would launch a second dev browser; " +
+            "scripts/dev-browser.ts owns the dev browser",
+        );
+      }
       if (resolved.chromiumProfile || resolved.firefoxProfile || resolved.keepProfileChanges) {
         problems.push(
           "chromiumProfile/firefoxProfile/keepProfileChanges reuse or persist a browser profile",
