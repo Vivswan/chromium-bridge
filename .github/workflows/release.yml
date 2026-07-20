@@ -147,11 +147,11 @@ jobs:
             echo "binsha256file=$NAME.binary.sha256"
           } >> "$GITHUB_OUTPUT"
 
-      # The built extension bundle is platform-independent, so we emit the
-      # standalone zip on ONLY the macos/arm64 leg to avoid uploading duplicate
-      # (conflicting) assets from both matrix legs. The linux leg skips this
-      # step, and `assets` below is empty there (harmless blank lines in the
-      # upload glob), so its release upload still matches only its own tarball.
+      # The built extension bundle is platform-independent, so ONLY the
+      # macos/arm64 leg builds the standalone zip - every leg uploading the
+      # same asset name would conflict. Its upload is the separate macos-only
+      # Publish step below, so the shared Publish step's file list never
+      # carries patterns that are blank on the other legs.
       - name: Package standalone extension zip
         id: extzip
         if: matrix.platform == 'macos'
@@ -169,12 +169,6 @@ jobs:
             sha256sum "$NAME.zip" > "$NAME.zip.sha256"
           fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          {
-            echo "assets<<EOF"
-            echo "$NAME.zip"
-            echo "$NAME.zip.sha256"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
@@ -201,10 +195,23 @@ jobs:
             ${{ steps.pkg.outputs.archive }}
             ${{ steps.pkg.outputs.sha256file }}
             ${{ steps.pkg.outputs.binsha256file }}
-            ${{ steps.extzip.outputs.assets }}
           fail_on_unmatched_files: true
           generate_release_notes: true
           # any tag with a suffix (v0.1.0-dev, -rc.1, ...) is a prerelease
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+
+      # The standalone extension zip rides its own macos-only upload (matching
+      # the extzip step above) so fail_on_unmatched_files genuinely covers it:
+      # each asset here is named explicitly and must exist on this leg.
+      - name: Publish extension zip to GitHub Release
+        if: matrix.platform == 'macos'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            ${{ steps.extzip.outputs.name }}.zip
+            ${{ steps.extzip.outputs.name }}.zip.sha256
+          fail_on_unmatched_files: true
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
 
   # The secrets context is not available in a job-level `if`, so a tiny
