@@ -219,6 +219,11 @@ export const AuditEntrySchema = z.strictObject({
   tool: z.string().max(256).optional(),
   name: z.string().max(256).optional(),
   detail: z.string().max(512).optional(),
+  // Per-confirmation correlation id (ADR-0030): minted once per confirmation
+  // and stamped on both its confirm_shown and its later verdict, so a reader
+  // joins a verdict to exactly its own shown row. Only the confirm_* kinds
+  // set it; pre-surface (panic-latch) denials carry none.
+  cid: z.string().max(256).optional(),
 });
 
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;

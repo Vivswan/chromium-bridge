@@ -11,7 +11,7 @@ import type { ConfirmPayload } from "@chromium-bridge/shared";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
-import { resetAuditForTests } from "@/lib/background/audit-log";
+import { readRing, resetAuditForTests } from "@/lib/background/audit-log";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
   confirmWithUser,
@@ -633,5 +633,69 @@ describe("confirm_deny_kill", () => {
     // The confirmation is still pending and still answerable.
     expect(resolveConfirm(id, false).ok).toBe(true);
     await expect(verdict).resolves.toBe(false);
+  });
+});
+
+// The audit correlation id (ADR-0030): the extension mints one per-attempt
+// `cid` and stamps it on EVERY audit event that attempt emits - its
+// confirm_shown, its verdict, and a denial issued before any surface showed -
+// so the desktop audit panel joins a verdict to exactly its own shown row. The
+// security-relevant property, and the fix for the panic-latch bug: a denial of
+// a confirmation that never reached a surface carries an id that matches no
+// shown row, so it can never close an unrelated open confirmation.
+describe("audit correlation id (cid)", () => {
+  test("a confirmation's shown and its verdict share the same cid", async () => {
+    const presented = fakeProvider(installConfirmationProvider);
+    const verdict = confirmWithUser(WINDOW_REQ);
+    await vi.advanceTimersByTimeAsync(0);
+    const id = presented[0]!.payload.id;
+    expect(resolveConfirm(id, true).ok).toBe(true);
+    await expect(verdict).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const ring = await readRing();
+    const shown = ring.find((e) => e.kind === "confirm_shown");
+    const allowed = ring.find((e) => e.kind === "confirm_allowed");
+    expect(shown?.cid).toBe(id);
+    expect(allowed?.cid).toBe(id);
+    // A non-empty, collision-resistant id (crypto.randomUUID), not a guessable
+    // counter, so a verdict cannot be steered to close another's row.
+    expect(id).toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+  });
+
+  test("the active denial reuses its shown cid; a never-shown denial gets a fresh cid that matches no row", async () => {
+    const presented = fakeProvider(installConfirmationProvider);
+    const first = confirmWithUser(WINDOW_REQ); // shown, active
+    const queued = confirmWithUser(WINDOW_REQ); // waits behind the first, never shown
+    await vi.advanceTimersByTimeAsync(0);
+    expect(presented).toHaveLength(1);
+    const shownId = presented[0]!.payload.id;
+
+    // The panic latch: deny-and-kill settles the active one and drains the
+    // queue without ever presenting a second surface.
+    attachPort(() => true);
+    route({ type: "confirm_deny_kill" }, confirmSender, () => {});
+    await expect(first).resolves.toBe(false);
+    await expect(queued).resolves.toBe(false);
+    expect(presented).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const ring = await readRing();
+    const showns = ring.filter((e) => e.kind === "confirm_shown");
+    const denials = ring.filter((e) => e.kind === "confirm_denied");
+    // Exactly one confirmation was ever shown; its cid is the payload id.
+    expect(showns.map((e) => e.cid)).toEqual([shownId]);
+    // Two denials, both carrying a cid: the active confirmation's verdict reuses
+    // its own shown cid (resolving its own row), while the queued one - denied
+    // before any surface - carries a DISTINCT cid that matches no shown row, so
+    // the audit panel resolves nothing from it. Neither denial is cid-less, so
+    // neither can fall into the pre-upgrade subject fallback.
+    const cids = denials.map((d) => d.cid);
+    expect(cids).toHaveLength(2);
+    expect(cids.every((c) => c !== undefined)).toBe(true);
+    expect(cids.filter((c) => c === shownId)).toEqual([shownId]);
+    const strayCid = cids.find((c) => c !== shownId);
+    expect(strayCid).toBeDefined();
+    expect(strayCid).not.toBe(shownId);
   });
 });
