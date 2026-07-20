@@ -497,6 +497,17 @@ against it. The canonical modules and their derived artifacts:
   when it exactly matches the approved form recorded there, so any drift
   beyond the recorded decisions fails CI. No generated schema is checked
   in anywhere.
+- **Desktop command DTOs** (`src/apps/desktop/src/`): the payload structs
+  the app's Tauri commands return, exported to the webview as
+  `src/apps/desktop/ui/src/lib/commands.gen.ts` by ts-rs (`#[derive(TS)]`
+  behind the gen-only `ts-export` feature). ts-rs writes bindings by
+  executing generated code, so the export runs as a cargo test; `just gen`
+  runs it (the `gen-app-types` recipe), and CI's macOS desktop job
+  regenerates and fails on a stale diff. Unlike the boundaries above, this
+  seam is same-author IPC inside one signed app, so it gets static types
+  only - no runtime validators - and `ui/src/lib/tauri.ts` wraps the
+  generated types in the typed `api` facade. Like schemars, ts-rs never
+  enters a shipped binary's dependency graph (`just check-gen-isolation`).
 
 ### 11.1 Error taxonomy (ERROR_SPECS)
 

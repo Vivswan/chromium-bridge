@@ -64,6 +64,7 @@ const AUDIT_MAX_FIELD: usize = 512;
 /// arrive over the ADR-0030 `audit_event` control frame; everything else is
 /// recorded by the host-side surface that made the decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AuditKind {
     /// One MCP tool invocation (outcome + taxonomy code).
@@ -114,6 +115,7 @@ pub enum AuditKind {
 
 /// Which trusted surface performed the recorded act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Surface {
     Cli,
@@ -128,6 +130,7 @@ pub enum Surface {
 /// three is optional so one flat shape covers every kind without inventing a
 /// nested schema per event; `deny_unknown_fields` keeps reads strict.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(optional_fields))]
 #[serde(deny_unknown_fields)]
 pub struct AuditRecord {
     /// Schema version; see [`AUDIT_VERSION`]. Stamped by [`record`].

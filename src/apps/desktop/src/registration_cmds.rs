@@ -17,15 +17,18 @@ use chromium_bridge_core::registration::{self, RegState, Registrar, Target};
 use crate::host;
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserRow {
     /// Stable key (`chrome`, `brave`, ...), also the register/unregister handle.
     pub key: &'static str,
     pub detected: bool,
-    /// `RegState::describe()` output: ok / missing / stale (why) / ...
+    /// `RegState::describe()` output: human wording, display only.
     pub state: String,
-    /// `RegState::code()`: the machine form the UI branches on. The human
-    /// `state` string is display-only.
+    /// `RegState::code()`: ok | missing | stale | foreign | unreadable. The
+    /// machine form the UI branches on; an unknown code offers no action.
+    /// Typed as plain `string`: the value set lives in core's RegState, not
+    /// in this crate.
     pub code: &'static str,
     pub healthy: bool,
     /// Where the registration lives (manifest path, or the HKCU key).
@@ -109,6 +112,7 @@ pub fn unregister_manifest_dir(dir: &str) -> Result<String, String> {
 /// browser configuration is touched (ADR-0029 as amended); every manifest
 /// write goes through the user-initiated register commands above.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct FirstRunReport {
     /// Keys of the browsers detected for this user (may be empty).

@@ -25,9 +25,11 @@ pub fn engage() -> Result<u64, String> {
 /// A granted release: the new epoch, and the presence path that authorized
 /// it (the UI shows which proof was used - Touch ID or the app floor).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseOutcome {
     pub epoch: u64,
+    /// Which presence proof authorized the release (touch_id, app_confirm, ...).
     pub auth: &'static str,
 }
 
@@ -62,6 +64,7 @@ pub fn release() -> Result<ReleaseOutcome, String> {
 /// One line of the audit panel: a strictly parsed record, or an explicit
 /// unrecognized marker in its place (order preserved).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(untagged)]
 pub enum AuditLine {
     Record(AuditRecord),
@@ -69,6 +72,7 @@ pub enum AuditLine {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AuditPage {
     /// Oldest first, rotated file included, capped to `limit` newest.

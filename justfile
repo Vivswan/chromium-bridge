@@ -109,15 +109,17 @@ build-app-ui:
 test-app-ui:
     bun run --cwd src/apps/desktop/ui test
 
-# Desktop Rust crate: clippy + tests. Needs the UI dist (tauri's
-# generate_context! embeds it) and the generated app icon (tauri-build reads
-# icons/icon.png at compile time), hence the dependencies. Not part of
-# `just ci`: the crate is deliberately not a default workspace member, and
-# compiling Tauri needs platform GUI toolchains (WebKitGTK on Linux); CI runs
-# this on macOS in the dedicated desktop job.
+# Desktop Rust crate: clippy + tests, plus the commands.gen.ts staleness gate
+# (check-gen-app). Needs the UI dist (tauri's generate_context! embeds it) and
+# the generated app icon (tauri-build reads icons/icon.png at compile time),
+# hence the dependencies. Clippy runs with --features ts-export so the
+# gen-only derive code is linted too. Not part of `just ci`: the crate is
+# deliberately not a default workspace member, and compiling Tauri needs
+# platform GUI toolchains (WebKitGTK on Linux); CI runs this on macOS in the
+# dedicated desktop job.
 [private]
-check-app-rust: build-app-ui gen-icons
-    cargo clippy -p chromium-bridge-desktop --all-targets -- -D warnings
+check-app-rust: build-app-ui gen-icons check-gen-app
+    cargo clippy -p chromium-bridge-desktop --all-targets --features ts-export -- -D warnings
     cargo test -p chromium-bridge-desktop
 
 # Touch ID proof for the bundled host (USER-RUN: raises a real Touch ID
@@ -197,30 +199,68 @@ audit:
     cargo deny check
     cargo audit
 
+# Regenerate ALL generated TS from Rust: the shared contract modules and the
+# desktop UI's Tauri command types (the latter compiles the desktop crate)
+[private]
+gen: gen-shared gen-app-types
+
 # Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)
 [private]
-gen:
+gen-shared:
     bun scripts/gen-ops.ts
     bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
 
-# The checked-in generated TS must match what the Rust core emits today
+# Regenerate the desktop UI's Tauri command types from the desktop crate's
+# command DTOs (src/apps/desktop/ui/src/lib/commands.gen.ts). ts-rs writes
+# bindings by executing generated code, so the export runs as a cargo test
+# (src/apps/desktop/src/ts_export.rs) behind the gen-only ts-export feature;
+# the file is deleted first and must be recreated, so a renamed or missing
+# export test fails here instead of silently leaving a stale file. Compiling
+# the desktop crate needs the UI dist and the generated icon, hence the
+# dependencies - and the platform GUI toolchain, like check-app-rust.
 [private]
-check-gen: gen
+gen-app-types: build-app-ui gen-icons
+    rm -f src/apps/desktop/ui/src/lib/commands.gen.ts
+    cargo test -p chromium-bridge-desktop --features ts-export export_commands_gen_ts
+    test -f src/apps/desktop/ui/src/lib/commands.gen.ts
+    bunx biome format --write src/apps/desktop/ui/src/lib/commands.gen.ts
+
+# The checked-in generated TS must match what the Rust core emits today
+# (part of `just ci`; commands.gen.ts has its own macOS-side gate, check-gen-app)
+[private]
+check-gen: gen-shared
     git diff --exit-code -- src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
+
+# Staleness gate for the desktop command types. Not part of `just ci` for the
+# same reason as check-app-rust (compiling Tauri needs the platform GUI
+# toolchain); CI's macOS desktop job runs it.
+[private]
+check-gen-app: gen-app-types
+    git diff --exit-code -- src/apps/desktop/ui/src/lib/commands.gen.ts
 
 # Envelope double-derivation gate: Rust schemars vs Zod z.toJSONSchema
 [private]
 check-envelope:
     bun scripts/check-envelope-parity.ts
 
-# schemars is gen-only tooling: it must never enter a shipped binary's graph
+# Gen-only tooling (schemars, ts-rs) must never enter a shipped binary's
+# graph. The desktop crate is checked for ts-rs only: Tauri's macro stack
+# carries its own schemars 0.8 - Tauri's dependency, not our gen feature
+# (schemars 1, off by default, asserted out of the host binary below).
 [private]
-check-schemars-isolation:
+check-gen-isolation:
     #!/usr/bin/env sh
     set -eu
     tree="$(cargo tree -e normal -p chromium-bridge --locked)"
-    if printf '%s\n' "$tree" | grep -q schemars; then
-        echo "schemars leaked into the chromium-bridge binary dependency graph" >&2
+    for crate in schemars ts-rs; do
+        if printf '%s\n' "$tree" | grep -q "$crate"; then
+            echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
+            exit 1
+        fi
+    done
+    tree="$(cargo tree -e normal -p chromium-bridge-desktop --locked)"
+    if printf '%s\n' "$tree" | grep -q ts-rs; then
+        echo "ts-rs leaked into the chromium-bridge-desktop binary dependency graph" >&2
         exit 1
     fi
 
@@ -316,7 +356,7 @@ test: test-rust test-e2e
 # so the lint meta-recipe would pay for the same Biome pass twice.
 # Everything CI runs (except the macOS-only desktop Rust job: check-app-rust)
 [group('main')]
-ci: fmt-check-rust lint-rust typos machete test-rust typecheck check-ts test-shared test-ext test-app-ui build-ext test-e2e check-extension-id check-cjk check-typography check-all-green check-gen check-envelope check-schemars-isolation
+ci: fmt-check-rust lint-rust typos machete test-rust typecheck check-ts test-shared test-ext test-app-ui build-ext test-e2e check-extension-id check-cjk check-typography check-all-green check-gen check-envelope check-gen-isolation
 
 # Register this checkout's release binary with your browsers (build + doctor --fix)
 [group('main')]

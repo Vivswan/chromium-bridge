@@ -21,6 +21,8 @@ mod killswitch;
 mod presence_seam;
 mod registration_cmds;
 mod status;
+#[cfg(all(test, feature = "ts-export"))]
+mod ts_export;
 
 use serde::Serialize;
 
@@ -46,12 +48,17 @@ async fn bridge_status() -> Result<status::BridgeStatus, String> {
 // ---- enclave (via the bundled host subprocess) ----------------------------------
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 struct EnclaveOutcome {
     ok: bool,
     /// The host subcommand's own words, verbatim (stdout + stderr).
     transcript: String,
     /// Fresh `enclave-status --json` after the operation, when readable.
+    /// On the wire this is the host CLI's own JSON (not a struct of this
+    /// crate), so it exports as `unknown`; tauri.ts re-narrows it to the
+    /// hand-typed EnclaveStatusJson.
+    #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
     status: Option<serde_json::Value>,
 }
 

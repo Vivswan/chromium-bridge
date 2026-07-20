@@ -48,6 +48,11 @@ winreg = "0.56"
 # double-derivation diff against the extension's Zod validators. Excluded from
 # default and release builds - the shipped binary never compiles schemars.
 schemars = "1"
+# TypeScript type generation for the desktop app's Tauri command DTOs (the
+# `just gen` -> commands.gen.ts flow). Like schemars, this is gen-only
+# tooling behind a non-default `ts-export` feature: no shipped binary
+# compiles it, and the isolation check in the justfile asserts that.
+ts-rs = "12"
 # The version is stated alongside the path so the dependency is not a
 # version-less wildcard: `cargo deny check bans` (wildcards = "deny") treats
 # a bare path dependency as `*` and fails the supply-chain gate.

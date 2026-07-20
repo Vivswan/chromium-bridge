@@ -1,34 +1,32 @@
 // Typed wrappers over the Tauri command surface (src/apps/desktop/src/main.rs).
-// The types here mirror the Rust payload structs field for field; they are
-// display contracts, not enforcement - every decision stays in Rust.
+// The payload types are GENERATED from the Rust command DTOs into
+// commands.gen.ts (`just gen`), so this facade cannot drift from Rust. They
+// are display contracts, not enforcement - every decision stays in Rust.
 
 import { invoke } from "@tauri-apps/api/core";
+import type {
+  AuditLine,
+  AuditPage,
+  BridgeStatus,
+  BrowserRow,
+  ClientsPayload,
+  CliToolStatus,
+  EnclaveOutcome as EnclaveOutcomeGen,
+  ExtensionInfo,
+  FirstRunReport,
+  McpSnippet,
+  ReleaseOutcome,
+} from "./commands.gen";
 
-export type KillState =
-  | { state: "off" }
-  | { state: "engaged" }
-  | { state: "unreadable"; detail: string };
+// Re-export the generated types under the module the rest of the UI already
+// imports from. Locally declared exports (EnclaveOutcome below) take
+// precedence over this star re-export.
+export type * from "./commands.gen";
 
-export interface ServerStatus {
-  lockPresent: boolean;
-  lockError: string | null;
-  endpoint: string | null;
-  pid: number | null;
-  reachable: boolean | null;
-}
-
-export interface BridgeStatus {
-  version: string;
-  os: string;
-  arch: string;
-  kill: KillState;
-  server: ServerStatus;
-  hostPath: string | null;
-  hostError: string | null;
-}
-
-/** `chromium-bridge enclave-status --json` passed through the app
- * (snake_case: this object comes from the host CLI, not a Tauri struct). */
+/** `chromium-bridge enclave-status --json` passed through the app verbatim
+ * (snake_case: this object comes from the host CLI, not a Tauri struct, so
+ * on the Rust side it is `serde_json::Value` and generation cannot type it -
+ * this is the one hand-written shape left in this seam). */
 export interface EnclaveStatusJson {
   v: number;
   supported: boolean;
@@ -41,92 +39,15 @@ export interface EnclaveStatusJson {
   policy_error?: string;
 }
 
-export interface EnclaveOutcome {
-  ok: boolean;
-  transcript: string;
+/** The generated EnclaveOutcome with its `status` field (generated as
+ * `unknown`, since the Rust side holds the host CLI's JSON as a plain
+ * Value) narrowed to the same hand-typed shape enclaveStatus() returns. */
+export type EnclaveOutcome = Omit<EnclaveOutcomeGen, "status"> & {
   status: EnclaveStatusJson | null;
-}
+};
 
-export interface BrowserRow {
-  key: string;
-  detected: boolean;
-  /** RegState::describe(): human wording, display only. */
-  state: string;
-  /** RegState::code(): ok | missing | stale | foreign | unreadable. The UI
-   * branches on this; an unknown code offers no action. */
-  code: string;
-  healthy: boolean;
-  location: string;
-}
-
-export interface FirstRunReport {
-  /** Browser keys detected on first launch; nothing is registered for them. */
-  detected: string[];
-}
-
-/** One audit line: a strictly parsed record (snake_case wire fields from the
- * core's AuditRecord), or an explicit unrecognized marker. */
-export interface AuditRecord {
-  v: number;
-  ts_ms: number;
-  kind: string;
-  surface?: string;
-  outcome?: string;
-  tool?: string;
-  code?: string;
-  name?: string;
-  detail?: string;
-  req?: number;
-  conn?: number;
-  dur_ms?: number;
-  dropped?: number;
-}
-
-export type AuditLine = AuditRecord | { unrecognized: true };
-
-export function isUnrecognized(line: AuditLine): line is { unrecognized: true } {
+export function isUnrecognized(line: AuditLine): line is { unrecognized: boolean } {
   return "unrecognized" in line;
-}
-
-export interface AuditPage {
-  lines: AuditLine[];
-  unrecognized: number;
-  path: string;
-}
-
-export interface ClientRow {
-  name: string;
-  anchorKind: "hash" | "team_id";
-  anchorValue: string;
-  addedUnix: number;
-}
-
-export interface ClientsPayload {
-  posture: "unenrolled" | "enforced";
-  clients: ClientRow[];
-}
-
-export interface CliToolStatus {
-  path: string;
-  state: "installed" | "missing" | "foreign";
-  target: string | null;
-  current: boolean;
-}
-
-export interface McpSnippet {
-  hostPath: string;
-  command: string;
-}
-
-export interface ExtensionInfo {
-  path: string | null;
-  exists: boolean;
-}
-
-export interface ReleaseOutcome {
-  epoch: number;
-  /** Which presence proof authorized the release (touch_id, app_confirm, ...). */
-  auth: string;
 }
 
 export const api = {
