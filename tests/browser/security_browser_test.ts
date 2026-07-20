@@ -35,8 +35,9 @@
  * SAFETY: this launches a NON-HEADLESS Chrome with --load-extension. Driving
  * your daily Chrome/Brave this way can capture and close your real session, so
  * it refuses unless CHROME_BIN points at an isolated Chrome for Testing /
- * Chromium (see tests/README.md). Native messaging is NOT exercised (forbidden
- * under automated --load-extension), matching ext_test.ts.
+ * Chromium (see tests/README.md). Native messaging is NOT exercised here
+ * (this suite never registers or connects a host; integration_e2e.ts drives
+ * the real chain), matching ext_test.ts.
  *
  * Run:  CHROME_BIN=/path/to/chrome-for-testing bun tests/browser/security_browser_test.ts
  * Requires: bun + puppeteer-core + isolated Chrome (CHROME_BIN). Override the

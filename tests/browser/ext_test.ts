@@ -3,12 +3,13 @@
  * extension loaded in a throwaway profile and verifies the extension
  * installs and its service worker boots with the expected APIs.
  *
- * SCOPE (deliberately limited): this only verifies that the extension
- * LOADS. It does NOT verify the native-messaging bridge end-to-end, because
- * Chrome restricts the `nativeMessaging` permission under automated
- * (`--load-extension`) launches - `chrome.runtime.connectNative` is present
- * but the host connection is forbidden without an interactive user load.
- * End-to-end verification is therefore a manual step (see README → Testing).
+ * SCOPE (deliberately limited): this only verifies that the extension LOADS.
+ * It does NOT verify the native-messaging bridge end-to-end: connectNative
+ * works fine under `--load-extension` (integration_e2e.ts proves the full
+ * chain under this same launch mode); what this run lacks is a registered
+ * host manifest. A probe below calls connectNative with a deliberately
+ * unregistered host id and pins the "host not found" disconnect. The real
+ * end-to-end run is `BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts`.
  *
  * Run:  bun tests/browser/ext_test.ts
  * Requires: bun + puppeteer-core + system Chrome (CHROME_BIN).
@@ -152,12 +153,43 @@ async function main(): Promise<void> {
     check(apis.hasTabs, "chrome.tabs API available");
     check(apis.hasStorage, "chrome.storage API available");
     check(apis.hasScripting, "chrome.scripting API available");
-    // connectNative is present but the host connection itself is forbidden
-    // under automated --load-extension; that leg is the manual/integration
-    // step (see README).
     console.log(
       `  debugger=${apis.hasDebugger} cookies=${apis.hasCookies} ` +
         `connectNative=${apis.hasConnectNative}`,
+    );
+
+    // connectNative works under --load-extension (integration_e2e.ts drives
+    // the full chain under this exact launch mode); the only missing piece
+    // here is host-manifest registration. Probe that boundary with a
+    // deliberately UNREGISTERED host id - never the real one: host
+    // registration is not always profile-scoped (on Windows it is a shared
+    // HKCU value), so probing the real id from this throwaway profile could
+    // reach - and spawn - a genuinely installed host. The call must be
+    // permitted (no permission throw) and the port must disconnect with the
+    // "host not found" error, nothing else.
+    const nmProbe = await worker.evaluate(
+      () =>
+        new Promise<string>((resolve) => {
+          try {
+            const port = chrome.runtime.connectNative(
+              "com.vivswan.chromium_bridge.host_probe_unregistered",
+            );
+            const timer = setTimeout(() => {
+              port.disconnect();
+              resolve("no disconnect within 5s");
+            }, 5000);
+            port.onDisconnect.addListener(() => {
+              clearTimeout(timer);
+              resolve(chrome.runtime.lastError?.message ?? "disconnected without lastError");
+            });
+          } catch (e) {
+            resolve(`connectNative threw: ${e}`);
+          }
+        }),
+    );
+    check(
+      /not found/i.test(nmProbe),
+      `connectNative is callable; only the missing host registration blocks it (got: ${nmProbe})`,
     );
 
     // ---- i18n: English default, three locales, native-name picker ----------
@@ -260,7 +292,9 @@ async function main(): Promise<void> {
     await page.close();
 
     console.log("\n✓ Extension loads and service worker boots with expected APIs.");
-    console.log("  Native-messaging bridge requires interactive verification (see README).");
+    console.log(
+      "  Full native-messaging chain: BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts",
+    );
   } finally {
     await browser.close();
     try {
