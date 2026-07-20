@@ -65,6 +65,7 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   typecheck:
+    description: "Type-check the extension (tsc against the WXT-generated tsconfig)"
     # tsconfig.json extends the generated .wxt/tsconfig.json (gitignored, so
     # invisible to moon's hasher); never cache against an unhashed input.
     command: 'bun run typecheck'
@@ -73,6 +74,7 @@ tasks:
       cache: false
 
   lint:
+    description: "Biome lint for the extension workspace"
     command: 'bunx biome lint $projectSource'
     toolchains: ['system']
     inputs:

@@ -37,6 +37,7 @@ tasks:
       - '/build/web'
 
   lint:
+    description: "Biome lint for the web app workspace"
     command: 'bunx biome lint $projectSource'
     toolchains: ['system']
     inputs:
