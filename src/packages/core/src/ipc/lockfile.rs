@@ -301,15 +301,6 @@ pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::
         f.write_all(bytes)?;
         f.flush()?;
     }
-    // Unix rename atomically replaces an existing destination. Windows'
-    // std::fs::rename does not, so remove a stale destination first. That
-    // creates a tiny not-found window, but the extension's reconnect loop
-    // retries after 2 seconds and can never observe a half-written JSON
-    // file because all bytes were flushed to the temporary file first.
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
     fs::rename(&tmp, path)?;
     Ok(())
 }
