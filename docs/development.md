@@ -12,7 +12,7 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 |------|----------|-------|
 | Rust (cargo) | the `chromium-bridge` binary | stable toolchain; `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
 | bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned via the root `package.json` `packageManager` field |
-| Python 3 | protocol e2e tests | stdlib only |
+| [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. Install: `curl -LsSf https://astral.sh/uv/install.sh \| sh` (or `brew install uv`). The suites themselves are stdlib-only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
 | [`just`](https://just.systems/) | task runner | the `justfile` collects every dev task; `just` lists the human-facing ones, grouped (internal sub-checks are `[private]`: hidden from the list, still runnable by name). Each recipe is a plain command you can also run by hand |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `just typos` / `just machete`; CI gates both |
@@ -107,7 +107,7 @@ you can also run by hand:
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
-python3 tests/protocol/e2e.py
+uv run --no-project --isolated tests/protocol/e2e.py
 bun install
 bunx tsc -p src/apps/extension  # one TS project; `just typecheck` covers all five
 bunx biome ci .                 # lint + format check (biome.json)

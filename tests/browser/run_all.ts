@@ -5,7 +5,8 @@
 //
 // Requirements:
 //   - Rust toolchain (cargo) for building the release binary
-//   - Python 3 for tests/protocol/e2e.py
+//   - uv for tests/protocol/e2e.py (provisions the interpreter pinned in
+//     the repo-root .python-version)
 //   - bun + Chrome for tests/browser/dom_test.ts and tests/browser/ext_test.ts
 //     (set CHROME_BIN to override the path)
 //
@@ -72,7 +73,15 @@ if (!run(["bun", "run", "--cwd", join(repo, "src/apps/extension"), "build"])) {
 
 console.log("");
 console.log("(3/4) protocol-layer tests (tests/protocol/e2e.py)");
-if (!run(["python3", join(repo, "tests/protocol/e2e.py")])) {
+// uv provisions the interpreter pinned in the repo-root .python-version, so
+// this run matches CI exactly. No PATH-python3 fallback by design.
+if (!Bun.which("uv")) {
+  console.error("error: uv not found - it provisions the pinned Python for tests/protocol/.");
+  console.error(
+    "install it: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: brew install uv)",
+  );
+  failed = true;
+} else if (!run(["uv", "run", "--no-project", "--isolated", join(repo, "tests/protocol/e2e.py")])) {
   console.error("PROTOCOL TESTS FAILED");
   failed = true;
 }

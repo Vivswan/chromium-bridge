@@ -6,7 +6,7 @@ and `browser/` (TypeScript, a bun workspace member), with shared pages in
 
 | Suite | File | Runtime | Why this language |
 |-------|------|---------|-------------------|
-| **Protocol** | `protocol/e2e.py` | `python3` (stdlib only) | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the TCP bridge) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
+| **Protocol** | `protocol/e2e.py` | `uv run` (stdlib only) | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the TCP bridge) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
 | **DOM** | `browser/dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `build/extension/chrome-mv3` content script into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
 | **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `build/extension/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
 | **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
@@ -14,6 +14,15 @@ and `browser/` (TypeScript, a bun workspace member), with shared pages in
 The two browser suites are TypeScript run under bun (matching the
 extension). The protocol suite stays Python on purpose - rewriting it in
 TS/JS would remove the independent-implementation value and add nothing.
+It runs via [`uv`](https://docs.astral.sh/uv/), which provisions the exact
+interpreter pinned in the repo-root `.python-version` - the same version
+locally and in CI (an unpinned PATH `python3` once let a 3.12/3.14
+`subprocess` difference slip through). Two properties are deliberate and
+must stay: the suite is **stdlib-only** (never add dependencies - the
+no-deps independence is part of the testing strategy, and uv is here to pin
+the interpreter, not to open the door to packages), and it runs with
+`uv run --no-project --isolated`, staying a plain script that no stray
+project or virtualenv can leak into.
 
 ## ⚠ Safety - never point browser tests at your daily Chrome
 
@@ -43,7 +52,8 @@ bun browser/run_all.ts
 CHROME_BIN="/path/to/chrome" bun browser/run_all.ts   # override Chrome location
 
 # Individually:
-python3 protocol/e2e.py                     # protocol - no browser needed
+uv run --no-project --isolated protocol/e2e.py   # protocol - no browser needed
+# (or: just test-e2e / test-adversarial / test-chaos - CI's three python jobs)
 bun run --cwd browser test:dom              # DOM     - bun + Chrome
 bun run --cwd browser test:smoke            # smoke   - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
 ```

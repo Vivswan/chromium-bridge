@@ -1,5 +1,6 @@
 # chromium-bridge developer tasks. `just` (no args) lists them.
-# Requires: cargo (+ cargo-nextest), bun, python3. Optional: Chrome for the
+# Requires: cargo (+ cargo-nextest), bun, uv (provisions the Python pinned in
+# .python-version for the protocol suites). Optional: Chrome for the
 # browser suites, typos + cargo-machete for the hygiene checks.
 # Every recipe is a plain command you can also run by hand (see docs/development.md).
 #
@@ -270,10 +271,35 @@ test-rust:
     cargo nextest run
     cargo test --doc
 
-# Protocol-layer e2e tests (drives the real release binary)
+# The protocol suites run under the exact interpreter pinned in
+# .python-version, provisioned by uv, so local runs and CI cannot diverge
+# (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess semantics).
+# No fallback by design - fail loudly with an install hint instead.
 [private]
-test-e2e: build-release
-    python3 tests/protocol/e2e.py
+check-uv:
+    #!/usr/bin/env sh
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "error: uv not found - it provisions the Python pinned in .python-version for the protocol suites" >&2
+        echo "install it: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: brew install uv)" >&2
+        exit 1
+    fi
+
+# Protocol-layer e2e tests (drives the real release binary). --no-project:
+# the harness is stdlib-only by design (its independence from our code and
+# from any package is the point) - never add dependencies to it.
+[private]
+test-e2e: check-uv build-release
+    uv run --no-project --isolated tests/protocol/e2e.py
+
+# Adversarial break-in suite (CI's adversarial job; drives the real release binary)
+[private]
+test-adversarial: check-uv build-release
+    uv run --no-project --isolated tests/protocol/adversarial.py
+
+# Fault-injection chaos suite (CI's chaos job; drives the real release binary)
+[private]
+test-chaos: check-uv build-release
+    uv run --no-project --isolated tests/protocol/chaos.py
 
 # Render the extension + desktop icon rasters from the assets/icon/ SVGs
 # (build artifacts, gitignored; the extension and desktop builds run this
