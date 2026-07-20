@@ -9,6 +9,14 @@
 // never bundled), and writes src/packages/shared/src/envelope-wire.gen.ts.
 // Run via `just gen`; CI regenerates and fails on a stale diff (check-gen).
 //
+// Dependency status, reviewed 2026-07-20: json-schema-to-zod's upstream repo
+// was archived June 2026 (unmaintained since March 2026). Accepted because it
+// runs only at gen time, is exact-pinned, and its output is re-asserted by
+// the G-rules below plus the parity gate and the adversarial tests - a bad
+// conversion cannot ship silently. If a future schema shape breaks it,
+// vendor the converter or replace it; do not loosen a G-rule to work around
+// it.
+//
 // The emitted schemas are the FAITHFUL Rust contract: strict objects
 // (serde's deny_unknown_fields -> Zod's .strict()), required fields
 // required, no defaults. The deliberate parser asymmetries the extension
