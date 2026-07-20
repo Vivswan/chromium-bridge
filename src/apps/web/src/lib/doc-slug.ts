@@ -2,22 +2,34 @@
 // (docs.ts) and the md-link rewriter (satteri-md-links.ts) so the two can
 // never disagree about which route a markdown file gets.
 
-// Agent-facing instruction files are not user documentation, wherever they
-// sit in the tree. HANDOFF/CONSOLIDATION-AUDIT are uncommitted working notes
-// that would otherwise render from a local checkout's repo-root glob.
-export const EXCLUDED = new Set(["AGENTS.md", "CLAUDE.md", "HANDOFF.md", "CONSOLIDATION-AUDIT.md"]);
+// The repo-root docs the site ships. This is an allowlist on purpose: the
+// root glob in docs.ts picks up whatever sits in the checkout, including
+// untracked scratch notes, so an unrecognized root file must fail closed
+// (not rendered) instead of publishing by accident. Rendering a new root
+// doc means adding it here, deliberately.
+export const ROOT_DOCS = new Set([
+  "README.md",
+  "README.zh_CN.md",
+  "README.zh_TW.md",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "SECURITY.md",
+  "GOVERNANCE.md",
+]);
 
 // Maps a repo-relative markdown path ("docs/architecture.md") to its /docs/
 // route slug, or undefined when the site does not render that file. The
-// rendered set mirrors the globs in docs.ts: repo-root *.md plus docs/,
-// docs/security/, and docs/adr/.
+// rendered set mirrors the globs in docs.ts: the allowlisted repo-root docs
+// plus docs/, docs/security/, and docs/adr/.
 export function repoPathToSlug(rel: string): string | undefined {
-  const name = rel.slice(rel.lastIndexOf("/") + 1);
-  if (!rel.endsWith(".md") || EXCLUDED.has(name)) return undefined;
+  if (!rel.endsWith(".md")) return undefined;
   if (rel === "docs/README.md") return "overview";
-  const scoped = rel.startsWith("docs/") ? rel.slice("docs/".length) : rel;
+  if (!rel.startsWith("docs/")) {
+    if (!ROOT_DOCS.has(rel)) return undefined;
+    return rel.replace(/\.md$/, "").replace(/^README/, "readme");
+  }
+  const scoped = rel.slice("docs/".length);
   const dir = scoped.includes("/") ? scoped.slice(0, scoped.lastIndexOf("/")) : "";
-  const renderedDirs = rel.startsWith("docs/") ? ["", "security", "adr"] : [""];
-  if (!renderedDirs.includes(dir)) return undefined;
+  if (!["", "security", "adr"].includes(dir)) return undefined;
   return scoped.replace(/\.md$/, "").replace(/^README/, "readme");
 }
