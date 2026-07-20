@@ -1,4 +1,4 @@
-import type { EnclaveStatusJson } from "@/lib/tauri";
+import type { EnclaveStatusReport } from "@/lib/tauri";
 
 /** The ONE armed/attested predicate, shared by every view (Overview,
  * Security). Green claims about the host hang off this and nothing else:
@@ -11,7 +11,7 @@ import type { EnclaveStatusJson } from "@/lib/tauri";
  * settled answer keeps rendering (no unknown-flash on every window focus);
  * the moment a read settles as a failure, the claim drops. */
 export function isArmed(
-  enclave: { data: EnclaveStatusJson | undefined; error: string | undefined },
+  enclave: { data: EnclaveStatusReport | undefined; error: string | undefined },
   statusFresh: boolean,
 ): boolean {
   return (

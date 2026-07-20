@@ -54,12 +54,10 @@ struct EnclaveOutcome {
     ok: bool,
     /// The host subcommand's own words, verbatim (stdout + stderr).
     transcript: String,
-    /// Fresh `enclave-status --json` after the operation, when readable.
-    /// On the wire this is the host CLI's own JSON (not a struct of this
-    /// crate), so it exports as `unknown`; tauri.ts re-narrows it to the
-    /// hand-typed EnclaveStatusJson.
-    #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
-    status: Option<serde_json::Value>,
+    /// Fresh `enclave-status --json` after the operation, when readable. The
+    /// typed report the core defines and the host emits (`null` when the
+    /// follow-up read failed).
+    status: Option<chromium_bridge_core::enclave::EnclaveStatusReport>,
 }
 
 fn run_enclave_op(args: &'static [&'static str]) -> Result<EnclaveOutcome, String> {
@@ -67,13 +65,13 @@ fn run_enclave_op(args: &'static [&'static str]) -> Result<EnclaveOutcome, Strin
     Ok(EnclaveOutcome {
         ok: run.ok,
         transcript: run.transcript(),
-        status: host::enclave_status_value().ok(),
+        status: host::enclave_status_report().ok(),
     })
 }
 
 #[tauri::command]
-async fn enclave_status() -> Result<serde_json::Value, String> {
-    blocking(host::enclave_status_value).await
+async fn enclave_status() -> Result<chromium_bridge_core::enclave::EnclaveStatusReport, String> {
+    blocking(host::enclave_status_report).await
 }
 
 /// The enrollment ceremony (`pair` / `pair --reset`): raises the real Touch

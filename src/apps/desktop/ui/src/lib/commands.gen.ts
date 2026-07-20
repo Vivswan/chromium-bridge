@@ -40,6 +40,71 @@ export type BridgeStatus = {
   hostError: string | null;
 };
 
+/**
+ * The keychain lookup outcome, lowercased on the wire. `invalid` means a key
+ * exists under our label but must be treated as untrusted (planted or
+ * malformed), which a consumer surfaces as loudly as the human report does.
+ */
+export type EnclaveKeyState = "present" | "none" | "invalid" | "unsupported" | "error";
+
+/**
+ * The enrollment policy carried in the report, mirrored from [`HostConfig`].
+ */
+export type EnclavePolicyReport = { enrolled: boolean; granularity: string };
+
+/**
+ * The versioned, machine-readable enclave status: the exact object
+ * `chromium-bridge enclave-status --json` prints (ADR-0029). It is a typed
+ * mirror of what used to be an ad-hoc `serde_json::json!`, so the host that
+ * emits it and the desktop app that parses it back (`src/apps/desktop`) share
+ * one Rust definition instead of two hand-kept shapes.
+ *
+ * The wire form is frozen: a consumer refuses an unrecognized `v` BEFORE it
+ * trusts any other field, so field names and `v` must not change without a
+ * version bump. `deny_unknown_fields` makes an unexpected shape a loud
+ * refusal on the parsing side.
+ */
+export type EnclaveStatusReport = {
+  /**
+   * Schema version. `1` today; a newer value must be refused before any
+   * field below is read (fail closed).
+   */
+  v: number;
+  /**
+   * Whether this platform has a Secure Enclave (macOS today).
+   */
+  supported: boolean;
+  /**
+   * The keychain label the enrollment key lives under.
+   */
+  key_label: string;
+  /**
+   * The keychain lookup outcome.
+   */
+  key: EnclaveKeyState;
+  /**
+   * Base64 X9.63 public key; present only when `key == present`.
+   */
+  public_key_b64?: string;
+  /**
+   * The public key's SHA-256 fingerprint; present only when `key == present`.
+   */
+  fingerprint?: string;
+  /**
+   * Human detail for a `key == invalid` or `key == error` state.
+   */
+  detail?: string;
+  /**
+   * The recorded enrollment policy, or `null` when there is no readable
+   * config. Always present on the wire (as `null`), never omitted.
+   */
+  policy: EnclavePolicyReport | null;
+  /**
+   * Set only when the policy read itself failed; `policy` is then `null`.
+   */
+  policy_error?: string;
+};
+
 export type EnclaveOutcome = {
   ok: boolean;
   /**
@@ -47,12 +112,11 @@ export type EnclaveOutcome = {
    */
   transcript: string;
   /**
-   * Fresh `enclave-status --json` after the operation, when readable.
-   * On the wire this is the host CLI's own JSON (not a struct of this
-   * crate), so it exports as `unknown`; tauri.ts re-narrows it to the
-   * hand-typed EnclaveStatusJson.
+   * Fresh `enclave-status --json` after the operation, when readable. The
+   * typed report the core defines and the host emits (`null` when the
+   * follow-up read failed).
    */
-  status: unknown;
+  status: EnclaveStatusReport | null;
 };
 
 export type BrowserRow = {

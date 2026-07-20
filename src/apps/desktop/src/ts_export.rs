@@ -48,7 +48,12 @@ fn export_commands_gen_ts() {
     push::<crate::status::KillState>(&mut out, &cfg);
     push::<crate::status::ServerStatus>(&mut out, &cfg);
     push::<crate::status::BridgeStatus>(&mut out, &cfg);
-    // Enclave (via the bundled host subprocess).
+    // Enclave (via the bundled host subprocess). The status report and its
+    // nested types come from the core, which the host emits and the app parses
+    // back; they must precede EnclaveOutcome, which references the report.
+    push::<chromium_bridge_core::enclave::EnclaveKeyState>(&mut out, &cfg);
+    push::<chromium_bridge_core::enclave::EnclavePolicyReport>(&mut out, &cfg);
+    push::<chromium_bridge_core::enclave::EnclaveStatusReport>(&mut out, &cfg);
     push::<crate::EnclaveOutcome>(&mut out, &cfg);
     // Native-messaging registration.
     push::<crate::registration_cmds::BrowserRow>(&mut out, &cfg);
