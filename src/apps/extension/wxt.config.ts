@@ -1,10 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "wxt";
-import {
-  EXTENSION_MANIFEST_KEY,
-  PINNED_EXTENSION_ID,
-} from "../../packages/shared/src/identity.gen";
+import { EXTENSION_MANIFEST_KEY } from "../../packages/shared/src/identity.gen";
 import { MANIFEST_PERMISSIONS } from "./src/lib/shared/manifest-permissions";
 
 // The pinned manifest `key` comes from the Rust core's identity constants
@@ -30,43 +27,22 @@ export default defineConfig({
   vite: () => ({
     plugins: [react(), tailwindcss()],
   }),
-  // DEV BROWSER ONLY: webExt configures how `wxt` (serve mode) launches its
-  // throwaway browser; nothing here reaches a build artifact. Profile
-  // isolation is load-bearing: no `chromiumProfile`, no `keepProfileChanges`,
-  // so web-ext-run creates a fresh temporary --user-data-dir for every dev
-  // session. This block is only web-ext's DEFAULTS layer - a project or
-  // global rc file could override it - so the `config:resolved` hook below
-  // enforces the isolation on the RESOLVED config rather than assuming it.
+  // DEV BROWSER ONLY: webExt configures how `wxt` (serve mode) would launch a
+  // throwaway browser; nothing here reaches a build artifact. We DISABLE WXT's
+  // own launcher and hand browser ownership to the dev orchestrator
+  // (scripts/dev-browser.ts), which drives web-ext-run directly so it can
+  // relaunch the browser from web-ext-run's cleanup callback instead of the
+  // old ps-poll watchdog. The launch config (fresh temp profile, startUrl docs
+  // tab, pinned-extension pref, CDP unpacked-load path) lives there now. WXT
+  // still builds, serves, and reloads the extension over its dev-server
+  // websocket - reload does not depend on who launched Chrome.
+  //
+  // The `config:resolved` hook below stays as defense-in-depth: it fail-closes
+  // if an rc file (web-ext.config.ts, .webextrc, ~/.webextrc) ever hands
+  // WXT's runner a real profile - even though, with `disabled`, that runner no
+  // longer launches anything.
   webExt: {
-    // The docs site's dev server, started alongside this one by `moon run dev`.
-    // Best-effort by design: extension-only dev opens this tab to a
-    // connection error, and when 4321 is taken astro falls back to another
-    // port and the tab misses it - both accepted; the tab is a convenience,
-    // not something dev correctness depends on.
-    startUrls: ["http://localhost:4321/chromium-bridge/"],
-    // chrome-launcher seeds these into the temp profile's
-    // Default/Preferences BEFORE Chrome first reads it. Flat dotted key on
-    // purpose: web-ext-run deep-sets each entry individually, so it merges
-    // with its own defaults instead of replacing the whole `extensions`
-    // subtree.
-    //
-    // Only UNTRACKED prefs can be seeded this way. Chrome's tracked-pref
-    // hash guard silently resets any protected pref written without a valid
-    // per-profile MAC - verified live on Chrome 151 with
-    // extensions.ui.developer_mode (it also carries a companion
-    // _encrypted_hash pref), so the chrome://extensions Developer mode
-    // toggle CANNOT be preseeded, by us or by web-ext-run's own default.
-    // Dev still works without it: web-ext-run loads the unpacked extension
-    // over CDP behind --enable-unsafe-extension-debugging, which does not
-    // need the UI toggle.
-    chromiumPref: {
-      // Pin our toolbar icon in the dev browser (untracked pref; verified
-      // it survives Chrome's preference rewrite). The id is stable across
-      // machines and sessions because the manifest `key` below pins it
-      // (identity.rs -> identity.gen.ts, verified by
-      // scripts/check-extension-id.ts).
-      "extensions.pinned_extensions": [PINNED_EXTENSION_ID],
-    },
+    disabled: true,
   },
   hooks: {
     // FAIL CLOSED on dev-profile reuse. WXT resolves the final web-ext

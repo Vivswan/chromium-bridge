@@ -7,9 +7,10 @@
 //
 // Why not `bun run --filter '*' dev`? The filter runner closes each child's
 // stdin; WXT's readline-based key listener hits EOF and shuts the dev server
-// down seconds after launch. WXT needs a live stdin (its `o` + enter shortcut
-// reopens the dev browser). Only one child can own the terminal, so the site
-// and the app run backgrounded with prefixed, non-interactive output.
+// down seconds after launch. WXT needs a live stdin for its keyboard shortcuts
+// (r to reload, Ctrl-C to quit). Only one child can own the terminal, so the
+// site, the app, and the browser lane run backgrounded with prefixed,
+// non-interactive output.
 //
 // `moon run dev-app` remains the app-only convenience loop.
 
@@ -167,13 +168,15 @@ const startApp = async () => {
 };
 void startApp();
 
-// Extension: foreground with the real terminal for output; stdin is piped so
-// the browser watchdog below can inject WXT's `o` (reopen) keypress. Your own
-// keystrokes are forwarded through, so the shortcut still works by hand.
-// Detached for the same reason as the site: the chain is bun wrapper ->
-// bash -c -> node wxt, and bash dies on SIGTERM WITHOUT forwarding it, which
-// orphans node wxt and leaves the dev browser open (observed). Signaling the
-// group reaches node wxt, whose own handlers close the browser.
+// Extension (WXT): foreground with the real terminal so its output shows and
+// its keyboard shortcuts work; stdin is piped so your keystrokes (WXT's `r`
+// reload, Ctrl-C) reach it. WXT builds, serves, and reloads the extension over
+// its dev-server websocket but no longer opens a browser (webExt.disabled in
+// wxt.config.ts) - the [browser] lane below owns that. Detached for the same
+// reason as the site: the chain is bun wrapper -> bash -c -> node wxt, and
+// bash dies on SIGTERM WITHOUT forwarding it, which orphans node wxt;
+// signaling the group reaches node wxt, whose own handlers close its dev
+// server.
 const wxt = spawn("bun", ["run", "dev"], {
   cwd: extensionDir,
   stdio: ["pipe", "inherit", "inherit"],
@@ -181,77 +184,40 @@ const wxt = spawn("bun", ["run", "dev"], {
 });
 if (wxt.stdin) {
   process.stdin.pipe(wxt.stdin, { end: false });
-  // A watchdog write can race WXT's own exit; without a handler that EPIPE
-  // would crash the orchestrator mid-shutdown.
+  // A forwarded keystroke can race WXT's own exit; without a handler that
+  // EPIPE would crash the orchestrator mid-shutdown.
   wxt.stdin.on("error", () => {});
 }
 
-// Browser watchdog: WXT never reopens the dev browser on its own. Quitting
-// Chrome (cmd-Q) or a crash leaves dev running headless until someone types
-// `o`. Poll for the dev browser and, on an alive -> gone transition, press
-// `o` automatically. WXT 0.20 only attaches its stdin listener after the
-// first file-watcher event, so a press that lands before then stays buffered
-// in the pipe and the reopen happens with your next file save - verified, not
-// lost.
-//
-// This repo configures no persistent chromiumProfile, so web-ext-run gives
-// the dev browser a fresh temporary --user-data-dir on every (re)open - there
-// is no fixed profile path to poll for. Instead a process is counted as OUR
-// dev browser only if BOTH hold: its command line carries the flag pair
-// web-ext-run always launches with (--remote-debugging-pipe plus
-// --enable-unsafe-extension-debugging - no normal browser session has them),
-// AND its parent chain leads back to our wxt child, so someone else's WXT
-// project dev-ing on this machine is never mistaken for ours. Read-only ps;
-// nothing here ever signals a browser process. Returns null when ps itself
-// fails, so one bad scan reads as "unknown", never as "gone".
-const devBrowserAlive = (rootPid: number): boolean | null => {
-  let table: string;
-  try {
-    table = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
-  } catch {
-    return null;
-  }
-  const parentOf = new Map<number, number>();
-  const candidates: number[] = [];
-  for (const row of table.split("\n")) {
-    const m = row.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
-    if (!m) continue;
-    const pid = Number(m[1]);
-    const ppid = Number(m[2]);
-    const command = m[3] ?? "";
-    parentOf.set(pid, ppid);
-    if (
-      command.includes("--remote-debugging-pipe") &&
-      command.includes("--enable-unsafe-extension-debugging")
-    ) {
-      candidates.push(pid);
+// Dev browser: a dedicated detached lane (scripts/dev-browser.ts) OWNS the
+// throwaway dev browser through web-ext-run and relaunches it from
+// web-ext-run's own cleanup callback when the developer quits it or it
+// crashes - replacing the old ps-poll / command-line-fingerprint /
+// parent-chain-walk / stdin-`o`-injection watchdog. Detached so one group
+// signal tears down the lane AND the Chromium it spawned; the lane's own
+// SIGTERM handler exits the runner, which closes Chrome by the pid
+// chrome-launcher recorded. Output prefixed [browser].
+const browser = spawn("bun", [join(repoRoot, "scripts/dev-browser.ts")], {
+  cwd: repoRoot,
+  stdio: ["ignore", "pipe", "pipe"],
+  detached: true,
+});
+pipePrefixed(browser, "browser");
+let browserKilled = false;
+const killBrowser = () => {
+  if (browserKilled) return;
+  browserKilled = true;
+  if (browser.pid !== undefined) {
+    try {
+      process.kill(-browser.pid, "SIGTERM");
+    } catch {
+      // Group already gone; the lane closes its own browser on exit.
     }
   }
-  return candidates.some((pid) => {
-    // Walk up the parent chain; hop cap guards against a cycle in a torn read.
-    for (let p = pid, hops = 0; p > 1 && hops < 32; hops++) {
-      if (p === rootPid) return true;
-      const parent = parentOf.get(p);
-      if (parent === undefined) return false;
-      p = parent;
-    }
-    return false;
-  });
 };
 
 let shuttingDown = false;
 let startFailed = false;
-let wasAlive = false;
-const watchdog = setInterval(() => {
-  if (shuttingDown || wxt.pid === undefined || wxt.exitCode !== null) return;
-  const alive = devBrowserAlive(wxt.pid);
-  if (alive === null) return;
-  if (wasAlive && !alive) {
-    console.log("[dev] Dev browser closed, reopening...");
-    if (wxt.stdin?.writable) wxt.stdin.write("o\n");
-  }
-  wasAlive = alive;
-}, 3000);
 
 const killWxt = () => {
   // Group signal (negative pid): SIGTERM to just the bun wrapper never
@@ -269,9 +235,9 @@ const killWxt = () => {
 
 const shutdown = () => {
   shuttingDown = true;
-  clearInterval(watchdog);
   // All the fast group signals first; killWeb ends with the potentially
   // slow, synchronous `astro dev stop`.
+  killBrowser();
   killWxt();
   killApp();
   killWeb();
@@ -293,7 +259,7 @@ wxt.on("error", (error: Error) => {
 });
 
 wxt.on("exit", (code, signal) => {
-  clearInterval(watchdog);
+  killBrowser();
   killApp();
   killWeb();
   if (startFailed) process.exit(1);
@@ -301,6 +267,19 @@ wxt.on("exit", (code, signal) => {
   // anywhere else means dev died under us and the caller should see failure.
   if (shuttingDown) process.exit(code ?? 0);
   process.exit(code ?? (signal ? 1 : 0));
+});
+browser.on("error", (error: Error) =>
+  console.error(`[browser] failed to start the dev browser lane: ${error.message}`),
+);
+browser.on("exit", (code) => {
+  // Its process group is gone; mark it killed so a later killBrowser() never
+  // signals -browser.pid after the OS may have recycled that pid as another
+  // group's leader.
+  const alreadyHandled = browserKilled;
+  browserKilled = true;
+  if (alreadyHandled || shuttingDown) return;
+  const how = code === null ? "on a signal" : `with code ${code}`;
+  console.error(`[browser] dev browser lane exited ${how}; extension and site keep running`);
 });
 web.on("exit", (code) => {
   if (!webKilled && code !== 0 && code !== null) {
