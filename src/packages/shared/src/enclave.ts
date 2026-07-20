@@ -3,14 +3,35 @@
 // host over the native-messaging port, and the records the extension persists
 // in chrome.storage.local.
 //
-// Frames are loose objects (the host may add fields; unknown extras are
-// ignored), because the security decision is made from the validated fields
-// plus the cryptographic verification in background/enclave-verify.ts - never
-// from a frame merely having the right shape. Storage records are strict: a
+// The canonical frame contract is the Rust control-frame enums
+// (EnclaveControl / AdminControl in src/packages/core/src/protocol.rs,
+// ADR-0028). The base wire schemas are GENERATED from them
+// (envelope-wire.gen.ts, `just gen`); this module layers the extension's
+// DELIBERATE parser asymmetries on top, each pinned in RECONCILED_FIELDS
+// (json-schema-normalize.ts), held to exactly that list by the parity gate
+// (scripts/check-envelope-parity.ts), and exercised behaviorally in
+// tests/envelope-wire.gen.test.ts.
+//
+// ASYMMETRY (loose frames, rule R5): the generated bases are strict (the
+// host refuses unknown fields on these security frames), but the extension
+// reads them loose - .catchall(z.unknown()) below - because the host may add
+// fields and the security decision is made from the validated fields plus
+// the cryptographic verification in background/enclave-verify.ts, never from
+// a frame merely having the right shape. Storage records are strict: a
 // record with unexpected fields is treated as absent, which fails closed at
 // the enrollment gate.
 
 import { z } from "zod";
+import {
+  ClientEntryWireSchema,
+  ClientListResultWireSchema,
+  ClientRevokeResultWireSchema,
+  EnclaveErrorWireSchema,
+  EnclaveProofWireSchema,
+  KillStatusResultWireSchema,
+  PresenceErrorWireSchema,
+  PresenceProofWireSchema,
+} from "./envelope-wire.gen";
 
 export const ENCLAVE_FRAME_TYPES = [
   "enclave_challenge",
@@ -35,21 +56,20 @@ export type EnclaveInboundFrame = z.infer<typeof EnclaveInboundFrameSchema>;
 
 // A proof answering an outstanding challenge: the enclave signature over the
 // nonce+context, the key's fingerprint, and the public key (X9.63, base64).
-export const EnclaveProofFrameSchema = z.looseObject({
-  type: z.literal("enclave_proof"),
+// ASYMMETRY (sig/key_id/pubkey): refuse the empty string early on the key
+// material the host always sends non-empty; the Rust side leaves that to the
+// consumer (signature verification). Plus R5 loose (module doc).
+export const EnclaveProofFrameSchema = EnclaveProofWireSchema.extend({
   sig: z.string().min(1),
   key_id: z.string().min(1),
   pubkey: z.string().min(1),
-});
+}).catchall(z.unknown());
 
 export type EnclaveProofFrame = z.infer<typeof EnclaveProofFrameSchema>;
 
-export const EnclaveErrorFrameSchema = z.looseObject({
-  type: z.literal("enclave_error"),
-  // Required: the host always names its denial (EnclaveControl::EnclaveError
-  // carries a non-optional reason; the parity gate holds this in sync).
-  reason: z.string(),
-});
+// `reason` is required on both sides (the host always names its denial);
+// only the R5 looseness (module doc) distinguishes this from the base.
+export const EnclaveErrorFrameSchema = EnclaveErrorWireSchema.catchall(z.unknown());
 
 export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
 
@@ -70,22 +90,19 @@ export type PresenceInboundFrame = z.infer<typeof PresenceInboundFrameSchema>;
 
 // The signed per-action approval: same encoding as an enclave_proof, under
 // the presence domain. MUST be verified against the PINNED key.
-export const PresenceProofFrameSchema = z.looseObject({
-  type: z.literal("presence_proof"),
+// ASYMMETRY (sig/key_id/pubkey): non-empty early, like EnclaveProofFrameSchema.
+export const PresenceProofFrameSchema = PresenceProofWireSchema.extend({
   sig: z.string().min(1),
   key_id: z.string().min(1),
   pubkey: z.string().min(1),
-});
+}).catchall(z.unknown());
 
 export type PresenceProofFrame = z.infer<typeof PresenceProofFrameSchema>;
 
 // Stable reasons: the enclave reason codes plus "bridge_killed" and "busy".
 // Every reason is a denial; there is no fallback surface (no-downgrade rule).
 // Required, like enclave_error: the host always names its denial.
-export const PresenceErrorFrameSchema = z.looseObject({
-  type: z.literal("presence_error"),
-  reason: z.string(),
-});
+export const PresenceErrorFrameSchema = PresenceErrorWireSchema.catchall(z.unknown());
 
 export type PresenceErrorFrame = z.infer<typeof PresenceErrorFrameSchema>;
 
@@ -104,35 +121,38 @@ export type AdminInboundFrame = z.infer<typeof AdminInboundFrameSchema>;
 // One trusted MCP client, in the host's on-disk entry shape. The anchor is
 // the authorization key (attested image hash or macOS signing Team ID); the
 // name is a human-facing label.
-export const TrustedClientSchema = z.looseObject({
+export const TrustedClientSchema = ClientEntryWireSchema.extend({
+  // ASYMMETRY (name): non-empty early (a validated client label).
   name: z.string().min(1),
+  // ASYMMETRY (anchor): the Rust side is serde adjacently-tagged (one strict
+  // object variant per kind); this side spells the same instance set as a
+  // single loose object with a two-value kind enum plus the non-empty guard
+  // on value (pinned as ANCHOR_FIELD in json-schema-normalize.ts).
   anchor: z.looseObject({
     kind: z.enum(["hash", "team_id"]),
     value: z.string().min(1),
   }),
-  // Unix seconds: u64 on the host side, hardened to a JS-safe non-negative
-  // integer here (same idiom as the envelope id). Absent reads as unset.
+  // ASYMMETRY (added_unix): u64 + #[serde(default)] on the Rust side (absent
+  // reads as 0 there); here absence stays absent - no invented value - and
+  // the integer is hardened to the JS-safe non-negative range (same idiom as
+  // the envelope id). Unix seconds, for the audit/status surface.
   added_unix: z.int().nonnegative().optional(),
-});
+}).catchall(z.unknown());
 
 export type TrustedClient = z.infer<typeof TrustedClientSchema>;
 
-export const ClientListResultSchema = z.looseObject({
-  type: z.literal("client_list_result"),
-  ok: z.boolean(),
-  // Whether admission is enforced (an allowlist exists on the host).
-  enrolled: z.boolean(),
+export const ClientListResultSchema = ClientListResultWireSchema.extend({
   clients: z.array(TrustedClientSchema),
+  // ASYMMETRY (error): no null arm (serde's Option; writers omit absent errors).
   error: z.string().optional(),
-});
+}).catchall(z.unknown());
 
 export type ClientListResult = z.infer<typeof ClientListResultSchema>;
 
-export const ClientRevokeResultSchema = z.looseObject({
-  type: z.literal("client_revoke_result"),
-  ok: z.boolean(),
+export const ClientRevokeResultSchema = ClientRevokeResultWireSchema.extend({
+  // ASYMMETRY (error): no null arm, as above.
   error: z.string().optional(),
-});
+}).catchall(z.unknown());
 
 export type ClientRevokeResult = z.infer<typeof ClientRevokeResultSchema>;
 
@@ -142,12 +162,12 @@ export type ClientRevokeResult = z.infer<typeof ClientRevokeResultSchema>;
 // unsolicited at host startup and on observed transitions. `ok: false` (state
 // unreadable host-side) deliberately carries no `killed` claim; the extension
 // treats it as unknown and fails closed.
-export const KillStatusResultSchema = z.looseObject({
-  type: z.literal("kill_status_result"),
-  ok: z.boolean(),
+export const KillStatusResultSchema = KillStatusResultWireSchema.extend({
+  // ASYMMETRY (killed): no null arm (serde's Option<bool>).
   killed: z.boolean().optional(),
+  // ASYMMETRY (error): no null arm, as above.
   error: z.string().optional(),
-});
+}).catchall(z.unknown());
 
 export type KillStatusResult = z.infer<typeof KillStatusResultSchema>;
 

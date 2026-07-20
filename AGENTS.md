@@ -108,13 +108,14 @@ against its own isolated Chrome.
   stable codes in `ERROR_SPECS` (same file, the canonical taxonomy).
 - The Rust core is the canonical cross-process contract (ADR-0028): the tool
   catalogue (`src/packages/core/src/tools/catalogue.rs`), error taxonomy,
-  capabilities, protocol version, and identity generate the TS side
-  (`just gen` -> `src/packages/shared/src/*.gen.ts`, with Zod validators the
-  extension enforces at its trust boundaries; CI fails on a stale diff), and
-  the hand-written Zod envelope validators are checked against the Rust
-  wire types by the double-derivation diff (`just check-envelope`):
-  structural equivalence, modulo a short list of deliberate, individually
-  asserted parser asymmetries. Adding a
+  capabilities, protocol version, identity, and wire envelopes generate the
+  TS side (`just gen` -> `src/packages/shared/src/*.gen.ts`, with Zod
+  validators the extension enforces at its trust boundaries; CI fails on a
+  stale diff). The enforced envelope validators wrap the generated wire
+  schemas (`envelope-wire.gen.ts`, via json-schema-to-zod at gen time) with
+  a hand-written layer of deliberate, individually pinned parser
+  asymmetries, held to exactly that list by the asymmetry gate
+  (`just check-envelope`). Adding a
   tool touches both sides - see `CONTRIBUTING.md`.
 - Never develop on `main`; work in a git worktree under `.worktree/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge

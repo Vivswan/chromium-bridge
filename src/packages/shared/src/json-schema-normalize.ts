@@ -1,18 +1,21 @@
-// Structural JSON Schema comparison for the envelope double-derivation gate
+// Structural JSON Schema comparison for the envelope asymmetry gate
 // (scripts/check-envelope-parity.ts).
 //
 // The canonical wire contract is the Rust types in
 // src/packages/core/src/protocol.rs (ADR-0028): the BridgeReq / BridgeResp
 // envelope pair, and the host-handled control frames (EnclaveControl and
 // AdminControl, the latter embedding allowlist::ClientEntry). The extension
-// enforces hand-written Zod validators (envelope.ts for the envelopes,
-// enclave.ts for the control frames). Both sides derive a JSON Schema
-// (schemars on the Rust side, z.toJSONSchema on the Zod side), and this
-// module reduces the two to one canonical structural form so the diff that
-// remains is a real contract difference: property sets, base types,
-// required-ness, additionalProperties, bounds, patterns, and formats are
-// compared verbatim, and resolving a mismatch means changing one of the
-// two parsers, not this module.
+// enforces two-layer validators: a base GENERATED from the Rust schemas
+// (envelope-wire.gen.ts, via scripts/gen-envelope.ts) wrapped by a
+// hand-written asymmetry layer (envelope.ts for the envelopes, enclave.ts
+// for the control frames). Both sides derive a JSON Schema (schemars on the
+// Rust side, z.toJSONSchema on the wrapped Zod side), and this module
+// reduces the two to one canonical structural form so the diff that remains
+// is a real contract difference - with the base generated, that means the
+// hand-written layer drifted: property sets, base types, required-ness,
+// additionalProperties, bounds, patterns, and formats are compared verbatim,
+// and resolving a mismatch means changing one of the two parsers, not this
+// module.
 //
 // The two parsers DELIBERATELY differ in a few places (each decision is
 // documented on the field in protocol.rs / envelope.ts / enclave.ts). Every
