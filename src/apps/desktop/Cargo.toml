@@ -17,6 +17,14 @@ chromium-bridge-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Generates the UI's Tauri command types (ui/src/lib/commands.gen.ts) from
+# the command DTOs in this crate. Gen-only: the export runs as a cargo test
+# (`just gen-app-types`), the feature is off by default, and no shipped
+# binary compiles ts-rs (asserted by the justfile's isolation check).
+ts-export = ["dep:ts-rs", "chromium-bridge-core/ts-export"]
 
 [lints]
 workspace = true

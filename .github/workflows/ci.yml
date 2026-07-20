@@ -152,13 +152,22 @@ jobs:
             || { echo "::error::generated contract code is stale - run 'just gen' after editing the Rust catalogue/taxonomy"; exit 1; }
       - name: Envelope double-derivation diff (schemars vs z.toJSONSchema)
         run: bun scripts/check-envelope-parity.ts
-      - name: schemars stays out of every shipped binary's graph
+      - name: Gen-only tooling (schemars, ts-rs) stays out of every shipped binary's graph
         run: |
           # Capture first: a cargo failure must fail the step, not vacuously
-          # satisfy the grep (the default shell has no pipefail).
+          # satisfy the grep (the default shell has no pipefail). The desktop
+          # crate is checked for ts-rs only: Tauri's macro stack carries its
+          # own schemars 0.8 - Tauri's dependency, not our gen feature.
           tree="$(cargo tree -e normal -p chromium-bridge --locked)"
-          if grep -q schemars <<<"$tree"; then
-            echo "::error::schemars leaked into the chromium-bridge binary dependency graph"
+          for crate in schemars ts-rs; do
+            if grep -q "$crate" <<<"$tree"; then
+              echo "::error::$crate leaked into the chromium-bridge binary dependency graph"
+              exit 1
+            fi
+          done
+          tree="$(cargo tree -e normal -p chromium-bridge-desktop --locked)"
+          if grep -q ts-rs <<<"$tree"; then
+            echo "::error::ts-rs leaked into the chromium-bridge-desktop binary dependency graph"
             exit 1
           fi
 
@@ -432,8 +441,24 @@ jobs:
       - run: bun scripts/gen-icons.ts desktop
       - run: bun run --cwd src/apps/desktop/ui build
       - run: bun run --cwd src/apps/desktop/ui test
-      - run: cargo clippy -p chromium-bridge-desktop --all-targets -- -D warnings
+      # --features ts-export so the gen-only derive code is linted too.
+      - run: cargo clippy -p chromium-bridge-desktop --all-targets --features ts-export -- -D warnings
       - run: cargo test -p chromium-bridge-desktop
+      # The UI's command types are generated from the crate's DTOs by the
+      # ts-export cargo test (src/apps/desktop/src/ts_export.rs); regenerate
+      # and fail on a stale diff, like the contract job does for the shared
+      # *.gen.ts modules. Runs here, not there: it compiles Tauri, which
+      # needs this job's macOS toolchain. The file is deleted first and must
+      # be recreated, so a renamed or missing export test fails loudly
+      # instead of leaving a stale file that diffs clean.
+      - name: Generated commands.gen.ts in sync with the command DTOs
+        run: |
+          rm -f src/apps/desktop/ui/src/lib/commands.gen.ts
+          cargo test -p chromium-bridge-desktop --features ts-export export_commands_gen_ts
+          test -f src/apps/desktop/ui/src/lib/commands.gen.ts
+          bunx biome format --write src/apps/desktop/ui/src/lib/commands.gen.ts
+          git diff --exit-code -- src/apps/desktop/ui/src/lib/commands.gen.ts \
+            || { echo "::error::commands.gen.ts is stale - run 'just gen' after editing the desktop command DTOs"; exit 1; }
 
   all-green:
     name: all-green

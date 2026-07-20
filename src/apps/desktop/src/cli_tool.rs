@@ -16,14 +16,26 @@ use crate::host;
 /// `chromium-bridge doctor` etc. read naturally.
 const LINK_NAME: &str = "chromium-bridge";
 
+/// The symlink's assessed state: `installed` (a symlink to a chromium-bridge
+/// binary), `missing`, or `foreign` (something else occupies the path; we
+/// will not touch it). An enum rather than a string so the generated TS
+/// carries the literal union straight from the serde attribute.
+#[derive(Serialize, Clone, Copy)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum LinkState {
+    Installed,
+    Missing,
+    Foreign,
+}
+
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct CliToolStatus {
     /// Where the link lives (or would live): `~/.local/bin/chromium-bridge`.
     pub path: String,
-    /// `installed` (a symlink to a chromium-bridge binary), `missing`, or
-    /// `foreign` (something else occupies the path; we will not touch it).
-    pub state: &'static str,
+    pub state: LinkState,
     /// The link's current target, when installed.
     pub target: Option<String>,
     /// Whether the link's target is exactly the host this app bundles (an
@@ -59,7 +71,7 @@ pub fn status() -> Result<CliToolStatus, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Ok(CliToolStatus {
                 path,
-                state: "missing",
+                state: LinkState::Missing,
                 target: None,
                 current: false,
             });
@@ -70,7 +82,7 @@ pub fn status() -> Result<CliToolStatus, String> {
     if !meta.file_type().is_symlink() {
         return Ok(CliToolStatus {
             path,
-            state: "foreign",
+            state: LinkState::Foreign,
             target: None,
             current: false,
         });
@@ -79,7 +91,7 @@ pub fn status() -> Result<CliToolStatus, String> {
     if !is_our_target(&target) {
         return Ok(CliToolStatus {
             path,
-            state: "foreign",
+            state: LinkState::Foreign,
             target: Some(target.display().to_string()),
             current: false,
         });
@@ -87,7 +99,7 @@ pub fn status() -> Result<CliToolStatus, String> {
     let current = host::resolve_host().is_ok_and(|h| h == target);
     Ok(CliToolStatus {
         path,
-        state: "installed",
+        state: LinkState::Installed,
         target: Some(target.display().to_string()),
         current,
     })
@@ -155,6 +167,7 @@ pub fn uninstall() -> Result<CliToolStatus, String> {
 // ---- MCP snippet and extension pointers --------------------------------------
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct McpSnippet {
     pub host_path: String,
@@ -181,6 +194,7 @@ pub fn mcp_snippet() -> Result<McpSnippet, String> {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionInfo {
     pub path: Option<String>,

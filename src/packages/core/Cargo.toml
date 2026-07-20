@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+ts-rs = { workspace = true, optional = true }
 
 [features]
 # Contract-generation apparatus (ADR-0028): JSON Schema derivation for the
@@ -21,6 +22,11 @@ thiserror.workspace = true
 # default and enabled by no binary, so default and release builds never
 # compile schemars (--all-features builds do).
 envelope-schema = ["dep:schemars"]
+# TypeScript derivation for the audit types the desktop app returns verbatim
+# (`just gen` -> src/apps/desktop/ui/src/lib/commands.gen.ts). Gen-only, same
+# posture as envelope-schema: off by default, enabled only by the desktop
+# crate's own ts-export feature, never compiled into a shipped binary.
+ts-export = ["dep:ts-rs"]
 
 [[example]]
 name = "emit_envelope_schema"

@@ -52,13 +52,22 @@ Headless checks:
 
 ```sh
 just test-app-ui         # UI unit tests (locale coverage, i18n resolution)
-just check-app-rust      # UI build, then clippy + tests for the crate
+just check-app-rust      # UI build, then clippy + tests + the commands.gen.ts gate
 just check-app-signing   # re-verify an already-built bundle's signatures
 ```
 
 `just ci` covers the UI typecheck and unit tests. The Rust crate's clippy and
 tests run in the dedicated macOS CI job (`desktop`), since compiling Tauri
 needs platform GUI toolchains.
+
+The webview's types for the Tauri command payloads are generated, not
+hand-written: `src/apps/desktop/ui/src/lib/commands.gen.ts` comes from the
+crate's DTO structs via ts-rs (`just gen`, or `just gen-app-types` alone).
+The export runs as a cargo test behind the gen-only `ts-export` feature,
+because ts-rs writes bindings by executing generated code. Edit a DTO and
+forget to regenerate, and the macOS desktop CI job fails on the stale diff,
+the same way the contract job guards the shared `*.gen.ts` modules. See
+[architecture.md section 11](./architecture.md#11-protocol-boundary-contracts-error-taxonomy-and-handshake).
 
 ## What to verify by hand (needs a human and a fingerprint)
 
