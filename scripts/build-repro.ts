@@ -102,10 +102,10 @@ rustflags += ` --remap-path-prefix=${cargoHomeDir}=/cargo-home`;
 rustflags += ` --remap-path-prefix=${home}=/home`;
 env.RUSTFLAGS = rustflags;
 
-// codeql[js/clear-text-logging] -- printing the repro inputs IS this script's job: a commit timestamp, not a secret
-console.error(`[build-repro] SOURCE_DATE_EPOCH=${env.SOURCE_DATE_EPOCH}`);
-// codeql[js/clear-text-logging] -- same: the path-remap flags built above, so two builders can diff them
-console.error(`[build-repro] RUSTFLAGS=${env.RUSTFLAGS}`);
+// Printing the repro inputs IS this script's job: a commit timestamp and the
+// path-remap flags built above, so two builders can diff them - not secrets.
+console.error(`[build-repro] SOURCE_DATE_EPOCH=${env.SOURCE_DATE_EPOCH}`); // codeql[js/clear-text-logging]
+console.error(`[build-repro] RUSTFLAGS=${env.RUSTFLAGS}`); // codeql[js/clear-text-logging]
 const result = spawnSync(
   bbCargo,
   [
