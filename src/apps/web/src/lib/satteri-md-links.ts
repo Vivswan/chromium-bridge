@@ -14,7 +14,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const GITHUB_BLOB = "https://github.com/Vivswan/chromium-bridge/blob/main";
 const GITHUB_TREE = "https://github.com/Vivswan/chromium-bridge/tree/main";
 
-export function rewriteMdHref(href: string, fromDir: string, base: string): string | undefined {
+export function rewriteMdHref(href: string, fromFile: string, base: string): string | undefined {
+  const fromDir = path.dirname(fromFile);
   // Leave schemes, root-absolute paths, and pure fragments alone.
   if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("/") || href.startsWith("#")) {
     return undefined;
@@ -30,10 +31,15 @@ export function rewriteMdHref(href: string, fromDir: string, base: string): stri
   if (target.endsWith("/")) {
     // A repo directory has no rendered route; send it to the repo tree -
     // exactly where the same link lands when read on GitHub. A trailing
-    // slash that is not a real directory is an authoring error with no
-    // meaning to recover, so leave it as written.
+    // slash on anything that is not a real directory is an authoring error
+    // that would ship as a guaranteed 404, so fail the build and name it.
     const abs = path.join(REPO_ROOT, rel);
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) return undefined;
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+      const source = path.relative(REPO_ROOT, fromFile).split(path.sep).join("/");
+      throw new Error(
+        `md link "${href}" in ${source}: trailing slash, but "${rel}" is not a repo directory`,
+      );
+    }
     return `${GITHUB_TREE}/${rel}${suffix}`;
   }
   const slug = repoPathToSlug(rel);
@@ -60,7 +66,7 @@ export function mdLinksPlugin(base: string) {
       visit(node: AnchorNode, ctx: VisitorContext): void {
         const href = node.properties?.href;
         if (ctx.fileURL === undefined || typeof href !== "string") return;
-        const next = rewriteMdHref(href, path.dirname(fileURLToPath(ctx.fileURL)), base);
+        const next = rewriteMdHref(href, fileURLToPath(ctx.fileURL), base);
         if (next !== undefined) ctx.setProperty(node, "href", next);
       },
     },
