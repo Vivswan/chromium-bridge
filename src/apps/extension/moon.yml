@@ -1,5 +1,6 @@
-# moon tasks for the MV3 extension. The justfile recipes build-ext / test-ext
-# delegate here; the justfile stays the front door (AGENTS.md).
+# moon tasks for the MV3 extension. moon is the canonical command interface
+# (phase two); extension:build and extension:test are steps of the root ci
+# gate.
 #
 # Inputs include src/packages/shared (imported as source via workspace:*) and
 # the inherited rust-contract file group (.moon/tasks/all.yml): the extension
@@ -25,6 +26,7 @@ tasks:
     # assets/icon/*.svg and lives in scripts/ (gen-icons.ts + its imports);
     # the whole scripts/ tree is declared so a new helper import there can
     # never be an undeclared input.
+    description: 'Build the extension bundle (src/ -> build/extension/; generates icons first)'
     command: 'bun run build'
     toolchains: ['system']
     inputs:
@@ -39,13 +41,17 @@ tasks:
       # nothing else, and declaring a gitignored dir the command deletes and
       # rewrites races moon's hasher.
       - '/build/extension'
+    options:
+      cache: false # in the ci gate: gates are never cached
 
   dev:
+    description: 'WXT dev mode: rebuild on change'
     command: 'bun run dev'
     toolchains: ['system']
     preset: 'server'
 
   test:
+    description: "Unit-test the extension's shared modules (vitest + fakeBrowser; no real browser)"
     command: 'bun run test'
     toolchains: ['system']
     inputs:
@@ -55,6 +61,8 @@ tasks:
       - '@group(rust-contract)'
       # The theme-parity test reads the desktop UI's stylesheet.
       - '/src/apps/desktop/ui/**/*'
+    options:
+      cache: false # in the ci gate: gates are never cached
 
   typecheck:
     # tsconfig.json extends the generated .wxt/tsconfig.json (gitignored, so

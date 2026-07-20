@@ -1,6 +1,6 @@
 // GENERATED from the desktop crate's Tauri command DTOs (src/apps/desktop/src/)
 // by the ts-export cargo test (src/apps/desktop/src/ts_export.rs) - DO NOT
-// EDIT. Edit the Rust structs, then run `just gen`.
+// EDIT. Edit the Rust structs, then run `moon run gen`.
 //
 // Display contracts for the app's own webview (trusted same-author IPC over
 // Tauri invoke): static types only, no runtime validators - every decision

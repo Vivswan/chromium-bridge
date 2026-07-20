@@ -403,7 +403,7 @@ in the SW, `storage_get` in content, both read-only and always masked. See
 | Extension platform | MV3 on WXT, React UI, Vitest | Generated manifest with the pinned key; unified `browser.*`; testable SW. See [ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md) |
 | Desktop app | Tauri v2 (macOS) | Bundles the entitled host next to a webview UI; the UI carries no security weight. See [ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md), [ADR-0029](./adr/0029-desktop-app-management-surface.md) |
 | Contracts | The Rust core generates the TS side | One source of truth; CI fails on drift. See [ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md) and section 11 |
-| Engineering gates | justfile + GitHub Actions, bun workspace, Biome, cargo-nextest, typos/machete, cargo-vet | One `just ci` compiles and gates the whole graph. See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by ADR-0023 |
+| Engineering gates | moon + proto + GitHub Actions, bun workspace, Biome, cargo-nextest, typos/machete, cargo-vet | One `moon run ci` runs the local cross-platform gate; CI layers additional jobs on top (`.github/workflows/ci.yml` is exhaustive). See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by ADR-0023 and the moon adoption |
 | MCP version | 2025-06-18 | The current stable version MCP clients implement. See [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md) |
 
 ## 9. Known limitations
@@ -424,7 +424,7 @@ in the SW, `storage_get` in content, both read-only and always masked. See
 
 ## 10. Extension points
 
-- **Adding a tool**: one catalogue entry + handler in the core, `just gen`,
+- **Adding a tool**: one catalogue entry + handler in the core, `moon run gen`,
   an op home in the extension, a risk-matrix row, and tests; the drift
   guards fail until every surface is covered. The step-by-step list is in
   [CONTRIBUTING.md](../CONTRIBUTING.md#adding-a-tool).
@@ -442,7 +442,7 @@ against it. The canonical modules and their derived artifacts:
 
 - **Tool catalogue** (`src/packages/core/src/tools/catalogue.rs`): each tool's
   name, English model-facing description, JSON-Schema `inputSchema`, and
-  policy metadata (risk / scope / permission / confirmation). `just gen`
+  policy metadata (risk / scope / permission / confirmation). `moon run gen`
   runs the core's `emit_contract` example and `scripts/gen-ops.ts` to
   produce `src/packages/shared/src/ops.gen.ts`: op names, policy metadata, and
   a Zod arg validator per tool. The `BridgeCommand` request union is
@@ -469,8 +469,8 @@ against it. The canonical modules and their derived artifacts:
   `src/packages/shared/src/identity.gen.ts` (the extension imports
   `NATIVE_HOST_ID` for `connectNative`, `EXTENSION_MANIFEST_KEY` for the
   built manifest, and `PINNED_EXTENSION_ID`, derived from the key, for its
-  startup self-check). `scripts/check-extension-id.ts` (`just
-  check-extension-id`, part of `just ci`) verifies the generated TS, the
+  startup self-check). `scripts/check-extension-id.ts` (`moon run
+  check-extension-id`, part of `moon run ci`) verifies the generated TS, the
   built manifest, and the single-definition-site rule against the same
   values; the registration engine consumes the constants directly, so no
   installer copy exists to drift.
@@ -478,7 +478,7 @@ against it. The canonical modules and their derived artifacts:
   `EnclaveControl`, and `AdminControl` - the latter embedding
   `allowlist::ClientEntry` - in `src/packages/core/src/protocol.rs`): the
   Rust types ARE the contract, and the extension's validators are built
-  from it in two layers. The base layer is generated: `just gen` runs the
+  from it in two layers. The base layer is generated: `moon run gen` runs the
   core's `emit_envelope_schema` example (schemars behind the gen-only
   `envelope-schema` feature, never in a shipped binary) and
   `scripts/gen-envelope.ts` (json-schema-to-zod, a gen-time-only dev
@@ -487,13 +487,13 @@ against it. The canonical modules and their derived artifacts:
   schema per envelope and per host->extension control frame - unknown
   fields rejected, required fields required, no invented defaults, and
   generation aborts rather than emit anything weaker (rules G1-G5 in the
-  script). CI regenerates and fails on a stale diff (`just check-gen`).
+  script). CI regenerates and fails on a stale diff (`moon run check-gen`).
   The enforced validators (`envelope.ts` for the envelopes, `enclave.ts`
   for the control frames) wrap those bases with the deliberate parser
   asymmetries (Option null-arms, JS-safe integer bounds, the id's
   forward-compat string arm, the control frames' strict-host /
   loose-extension split), each named in a comment at the override site.
-  The asymmetry gate (`scripts/check-envelope-parity.ts`, `just
+  The asymmetry gate (`scripts/check-envelope-parity.ts`, `moon run
   check-envelope`) pins that hand-written layer: schemars derives a schema
   from the Rust types, `z.toJSONSchema` derives one from the wrapped
   validators, both are normalized through the documented rules in
@@ -521,13 +521,13 @@ against it. The canonical modules and their derived artifacts:
   the app's Tauri commands return, exported to the webview as
   `src/apps/desktop/ui/src/lib/commands.gen.ts` by ts-rs (`#[derive(TS)]`
   behind the gen-only `ts-export` feature). ts-rs writes bindings by
-  executing generated code, so the export runs as a cargo test; `just gen`
+  executing generated code, so the export runs as a cargo test; `moon run gen`
   runs it (the `gen-app-types` recipe), and CI's macOS desktop job
   regenerates and fails on a stale diff. Unlike the boundaries above, this
   seam is same-author IPC inside one signed app, so it gets static types
   only - no runtime validators - and `ui/src/lib/tauri.ts` wraps the
   generated types in the typed `api` facade. Like schemars, ts-rs never
-  enters a shipped binary's dependency graph (`just check-gen-isolation`).
+  enters a shipped binary's dependency graph (`moon run check-gen-isolation`).
 
 ### 11.1 Error taxonomy (ERROR_SPECS)
 

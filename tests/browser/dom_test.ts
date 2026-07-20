@@ -22,7 +22,7 @@ import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
 // The built bundle (esbuild strips TS types from src/content.ts). Run
-// `bun run --cwd src/apps/extension build` first; `run_all.ts` / `just` do this.
+// `bun run --cwd src/apps/extension build` first; `run_all.ts` / `moon run test-browser` do this.
 const CONTENT_JS = path.join(
   REPO,
   "build",

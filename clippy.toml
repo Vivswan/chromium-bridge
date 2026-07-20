@@ -1,4 +1,4 @@
-# Clippy configuration. Lint enforcement (`-D warnings`) lives in the justfile
+# Clippy configuration. Lint enforcement (`-D warnings`) lives in the moon tasks
 # and CI, not here; this file only tunes thresholds.
 cognitive-complexity-threshold = 30
 

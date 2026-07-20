@@ -11,7 +11,7 @@
 // Rendering uses @resvg/resvg-js (resvg compiled to a native module): pure
 // build tooling, no runtime or security surface. The .icns is assembled with
 // macOS iconutil and is skipped, with a log line, on other platforms - only
-// the macOS bundle (just bundle-app, CI's desktop job) needs it.
+// the macOS bundle (moon run bundle-app, CI's desktop job) needs it.
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

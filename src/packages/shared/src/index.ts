@@ -4,7 +4,7 @@
 //
 // The *.gen.ts modules are generated from the Rust core - the canonical
 // contract source (ADR-0028) - by scripts/gen-ops.ts and
-// scripts/gen-envelope.ts (`just gen`); everything else is hand-written.
+// scripts/gen-envelope.ts (`moon run gen`); everything else is hand-written.
 // The enforced envelope validators wrap the generated wire schemas with a
 // short, documented list of parser asymmetries, pinned by the CI asymmetry
 // gate (scripts/check-envelope-parity.ts).

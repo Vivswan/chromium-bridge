@@ -38,7 +38,7 @@ export default defineConfig({
   // global rc file could override it - so the `config:resolved` hook below
   // enforces the isolation on the RESOLVED config rather than assuming it.
   webExt: {
-    // The docs site's dev server, started alongside this one by `just dev`.
+    // The docs site's dev server, started alongside this one by `moon run dev`.
     // Best-effort by design: extension-only dev opens this tab to a
     // connection error, and when 4321 is taken astro falls back to another
     // port and the tab misses it - both accepted; the tab is a convenience,

@@ -14,7 +14,7 @@
 //     directly from identity.rs, so it has no textual copy to verify.
 //
 // This script runs without cargo, so the Rust constants are read from the
-// source text; `just gen` idempotency (CI) separately proves the generated
+// source text; `moon run gen` idempotency (CI) separately proves the generated
 // TS is fresh, and the two checks together pin every copy to identity.rs.
 
 import { createHash } from "node:crypto";
@@ -89,7 +89,7 @@ if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(NATIVE_HOST_ID)) {
 // shipped artifact: the pinned key, the exact permission set, no install-time
 // host access, and no manifest-declared content scripts. This catches drift
 // between wxt.config.ts and what the build actually emits (the config-level
-// assertions live in src/apps/extension/tests/shared/manifest.test.ts). `just ci`
+// assertions live in src/apps/extension/tests/shared/manifest.test.ts). `moon run ci`
 // builds before this check runs; a standalone run without build/extension/
 // skips it loudly rather than failing a build-free environment.
 const builtManifestPath = resolve(root, "build/extension/chrome-mv3/manifest.json");

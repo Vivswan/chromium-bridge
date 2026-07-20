@@ -1,7 +1,7 @@
 // Generate the contract-derived TypeScript from the Rust core, the canonical
 // contract source (ADR-0028). Runs the core's `emit_contract` example to get
 // the contract as JSON, then writes the src/packages/shared *.gen.ts modules.
-// Run `just gen` after editing the catalogue/taxonomy in src/packages/core; CI
+// Run `moon run gen` after editing the catalogue/taxonomy in src/packages/core; CI
 // regenerates and fails if the checked-in files are stale.
 //
 // Outputs:
@@ -187,7 +187,7 @@ const opArgsFields = [...unionProps.entries()]
   .join("\n");
 
 const opsOut = `// GENERATED from the Rust core (src/packages/core/src/tools/catalogue.rs) by
-// scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run \`just gen\`.
+// scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run \`moon run gen\`.
 //
 // The tool catalogue, TS side: op names, policy metadata (risk / scope /
 // permission / confirmation), and the per-op Zod arg validators the extension
@@ -269,7 +269,7 @@ const errorMeta = contract.errors
   .join("\n");
 
 const errorsOut = `// GENERATED from the Rust core (src/packages/core/src/error.rs ERROR_SPECS) by
-// scripts/gen-ops.ts - DO NOT EDIT. Edit the taxonomy, then run \`just gen\`.
+// scripts/gen-ops.ts - DO NOT EDIT. Edit the taxonomy, then run \`moon run gen\`.
 //
 // The stable cross-process error codes. The Rust server assigns them via
 // CallError::code(); the extension reports its own failures with the same
@@ -317,7 +317,7 @@ const capabilityItems = contract.capabilities
 
 const protocolOut = `// GENERATED from the Rust core (src/packages/core/src/protocol.rs and
 // src/packages/core/src/tools/capabilities.rs) by scripts/gen-ops.ts - DO NOT EDIT.
-// Run \`just gen\`.
+// Run \`moon run gen\`.
 
 // The INTERNAL bridge protocol version (MCP server <-> native host <->
 // extension). Not the MCP JSON-RPC version and not the extension release
@@ -377,7 +377,7 @@ if (
 }
 
 const identityOut = `// GENERATED from the Rust core (src/packages/core/src/identity.rs) by
-// scripts/gen-ops.ts - DO NOT EDIT. Run \`just gen\`.
+// scripts/gen-ops.ts - DO NOT EDIT. Run \`moon run gen\`.
 //
 // The bridge's identity constants. PINNED_EXTENSION_ID is DERIVED from
 // EXTENSION_MANIFEST_KEY (Chrome's own id derivation), so it cannot drift

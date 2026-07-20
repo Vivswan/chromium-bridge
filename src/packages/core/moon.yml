@@ -1,6 +1,6 @@
-# moon tasks for the Rust security core. Phase one: these are additive local
-# conveniences (`moon run core:test`, affected-only runs); `just ci` and the
-# justfile's rust recipes keep calling cargo directly.
+# moon tasks for the Rust security core. These are the canonical rust gate
+# steps: the root ci gate depends on core:fmt-check, core:lint, core:test,
+# and core:test-doc (moon is the canonical command interface, phase two).
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'rust'
@@ -8,7 +8,7 @@ layer: 'library'
 
 # Cargo resolves the workspace from the root Cargo.toml (which pins the
 # default members to the core + host), so run every cargo verb from the
-# workspace root - byte-identical to the justfile recipes.
+# workspace root - byte-identical to running the cargo verbs by hand.
 taskOptions:
   runFromWorkspaceRoot: true
 
@@ -29,6 +29,7 @@ fileGroups:
 
 tasks:
   build:
+    description: 'Build the cargo workspace default members (debug)'
     command: 'cargo build'
     toolchains: ['system']
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
@@ -38,21 +39,33 @@ tasks:
       cache: false
 
   test:
+    description: 'Rust unit + integration tests (cargo-nextest)'
     command: 'cargo nextest run'
     toolchains: ['system']
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
+    options:
+      cache: false # in the ci gate: gates are never cached
 
   test-doc:
+    description: 'Rust doctests'
     command: 'cargo test --doc'
     toolchains: ['system']
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS', '$RUSTDOCFLAGS']
+    options:
+      cache: false # in the ci gate: gates are never cached
 
   lint:
+    description: 'Lint Rust, denying all warnings (the CI gate)'
     command: 'cargo clippy --all-targets -- -D warnings'
     toolchains: ['system']
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
+    options:
+      cache: false # in the ci gate: gates are never cached
 
   fmt-check:
+    description: 'Verify Rust formatting (CI gate)'
     command: 'cargo fmt --check'
     toolchains: ['system']
     inputs: ['@group(workspace-rust)']
+    options:
+      cache: false # in the ci gate: gates are never cached

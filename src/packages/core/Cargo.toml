@@ -23,7 +23,7 @@ ts-rs = { workspace = true, optional = true }
 # compile schemars (--all-features builds do).
 envelope-schema = ["dep:schemars"]
 # TypeScript derivation for the audit types the desktop app returns verbatim
-# (`just gen` -> src/apps/desktop/ui/src/lib/commands.gen.ts). Gen-only, same
+# (`moon run gen` -> src/apps/desktop/ui/src/lib/commands.gen.ts). Gen-only, same
 # posture as envelope-schema: off by default, enabled only by the desktop
 # crate's own ts-export feature, never compiled into a shipped binary.
 ts-export = ["dep:ts-rs"]
@@ -33,7 +33,7 @@ name = "emit_envelope_schema"
 required-features = ["envelope-schema"]
 
 # Emits the canonical contract (tools, errors, capabilities, identity,
-# protocol version) as JSON for scripts/gen-ops.ts (`just gen`). Plain
+# protocol version) as JSON for scripts/gen-ops.ts (`moon run gen`). Plain
 # serde_json over the library's own data - no feature, no extra deps.
 [[example]]
 name = "emit_contract"

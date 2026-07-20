@@ -53,13 +53,13 @@ CHROME_BIN="/path/to/chrome" bun browser/run_all.ts   # override Chrome location
 
 # Individually:
 uv run --no-project --isolated protocol/e2e.py   # protocol - no browser needed
-# (or: just test-e2e / test-adversarial / test-chaos - CI's three python jobs)
+# (or: moon run test-e2e / test-adversarial / test-chaos - CI's three python jobs)
 bun run --cwd browser test:dom              # DOM     - bun + Chrome
 bun run --cwd browser test:smoke            # smoke   - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
 ```
 
 The browser suites read the **built** bundle, so build the extension first
-(`bun run --cwd ../src/apps/extension build`); `run_all.ts` and `just test-browser` do
+(`bun run --cwd ../src/apps/extension build`); `run_all.ts` and `moon run test-browser` do
 this for you.
 
 ## Types
@@ -68,7 +68,7 @@ The `.ts` suites are type-checked (`bun`, `chrome`, and DOM types):
 
 ```sh
 bun install            # workspace install (puppeteer-core + type packages)
-just typecheck         # tsc --noEmit (CI gates this)
+moon run typecheck     # tsc --noEmit (CI gates this)
 ```
 
 ## Fixtures

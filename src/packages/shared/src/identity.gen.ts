@@ -1,5 +1,5 @@
 // GENERATED from the Rust core (src/packages/core/src/identity.rs) by
-// scripts/gen-ops.ts - DO NOT EDIT. Run `just gen`.
+// scripts/gen-ops.ts - DO NOT EDIT. Run `moon run gen`.
 //
 // The bridge's identity constants. PINNED_EXTENSION_ID is DERIVED from
 // EXTENSION_MANIFEST_KEY (Chrome's own id derivation), so it cannot drift

@@ -15,13 +15,13 @@ entitlement chain it rides on is
 ## Building and running
 
 ```sh
-just dev-app      # dev loop: builds the host, then Vite dev server + tauri dev
-just run-app      # build + sign + verify the real bundle, then launch it
-just dmg-app      # build + sign the bundle, then wrap it in a verified .dmg
-just install-app  # copy the built app into /Applications
+moon run dev-app      # dev loop: builds the host, then Vite dev server + tauri dev
+moon run run-app      # build + sign + verify the real bundle, then launch it
+moon run dmg-app      # build + sign the bundle, then wrap it in a verified .dmg
+moon run install-app  # copy the built app into /Applications
 ```
 
-`run-app` goes through `just bundle-app`, which builds the release host
+`run-app` goes through `moon run bundle-app`, which builds the release host
 and the extension, runs `tauri build`, assembles the signed helper bundle for
 the host, copies the extension into the app's Resources, stamps the helper
 Info.plist with the workspace version, signs inside-out, and re-verifies with
@@ -51,18 +51,18 @@ unsigned callers; the signed bundle from `run-app` is the real thing.
 Headless checks:
 
 ```sh
-just test-app-ui         # UI unit tests (locale coverage, i18n resolution)
-just check-app-rust      # UI build, then clippy + tests + the commands.gen.ts gate
-just check-app-signing   # re-verify an already-built bundle's signatures
+moon run desktop-ui:test    # UI unit tests (locale coverage, i18n resolution)
+moon run check-app-rust     # UI build, then clippy + tests + the commands.gen.ts gate
+moon run check-app-signing  # re-verify an already-built bundle's signatures
 ```
 
-`just ci` covers the UI typecheck and unit tests. The Rust crate's clippy and
+`moon run ci` covers the UI typecheck and unit tests. The Rust crate's clippy and
 tests run in the dedicated macOS CI job (`desktop`), since compiling Tauri
 needs platform GUI toolchains.
 
 The webview's types for the Tauri command payloads are generated, not
 hand-written: `src/apps/desktop/ui/src/lib/commands.gen.ts` comes from the
-crate's DTO structs via ts-rs (`just gen`, or `just gen-app-types` alone).
+crate's DTO structs via ts-rs (`moon run gen`, or `moon run gen-app-types` alone).
 The export runs as a cargo test behind the gen-only `ts-export` feature,
 because ts-rs writes bindings by executing generated code. Edit a DTO and
 forget to regenerate, and the macOS desktop CI job fails on the stale diff,
@@ -71,7 +71,7 @@ the same way the contract job guards the shared `*.gen.ts` modules. See
 
 ## What to verify by hand (needs a human and a fingerprint)
 
-The GUI itself cannot be clicked headlessly. After `just run-app`:
+The GUI itself cannot be clicked headlessly. After `moon run run-app`:
 
 1. First launch: the Overview page shows a "First launch" card naming the
    detected browsers, with a "Connect all detected browsers" button. The app

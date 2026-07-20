@@ -1,9 +1,14 @@
-# moon tasks for the Astro site. The justfile recipe build-web delegates here.
+# moon tasks for the Astro site (moon is the canonical command interface,
+# phase two).
 #
-# There is deliberately NO dev task: `bun run dev` in this project manages the
-# astro dev daemon (`astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev`), a
-# backgrounding lifecycle moon's persistent-task model would fight. The
-# justfile's dev-web recipe keeps calling it directly.
+# There is deliberately NO dev task HERE: `bun run dev` in this project
+# manages the astro dev daemon (`astro dev stop; ASTRO_DEV_BACKGROUND=1
+# astro dev`), a backgrounding lifecycle moon's persistent-task preset would
+# fight. The root dev-web task wraps it as a plain one-shot command instead.
+#
+# web:build keeps moon caching (the one build task that does): it is not a
+# gate step - CI's web job builds on a fresh runner, and the ci gate does
+# not include it - so a cache hit can never satisfy a gate.
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'typescript'
@@ -11,6 +16,7 @@ layer: 'application'
 
 tasks:
   build:
+    description: "Build the web app (src/apps/web: Astro over the repo's markdown docs)"
     command: 'bun run build'
     toolchains: ['system']
     inputs:

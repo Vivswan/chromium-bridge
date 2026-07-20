@@ -2,7 +2,7 @@
 //! the bridge exposes (ADR-0028). Each [`Tool`] carries its MCP-facing name,
 //! description, and JSON-Schema `inputSchema`, plus the policy metadata
 //! (risk / scope / permission / confirmation) the extension's policy layer
-//! enforces. The TypeScript side is generated from this module (`just gen`
+//! enforces. The TypeScript side is generated from this module (`moon run gen`
 //! runs the `emit-contract` example and feeds `scripts/gen-ops.ts`), so a
 //! tool's identity lives here and only here.
 
