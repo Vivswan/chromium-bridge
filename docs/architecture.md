@@ -477,26 +477,40 @@ against it. The canonical modules and their derived artifacts:
 - **Wire envelopes and control frames** (`BridgeReq` / `BridgeResp`,
   `EnclaveControl`, and `AdminControl` - the latter embedding
   `allowlist::ClientEntry` - in `src/packages/core/src/protocol.rs`): the
-  Rust types ARE the contract. The extension enforces hand-written Zod
-  validators (`src/packages/shared/src/envelope.ts` for the envelopes,
-  `enclave.ts` for the control frames), and the double-derivation gate
-  (`scripts/check-envelope-parity.ts`, `just check-envelope`) holds the
-  two structurally equivalent in CI: schemars derives a schema from the
-  Rust types (behind the gen-only `envelope-schema` feature, never in a
-  shipped binary), `z.toJSONSchema` derives one from the Zod side, and
-  both are normalized through the documented rules in
-  `src/packages/shared/src/json-schema-normalize.ts` before an exact diff.
-  Control frames are diffed per `type` tag against a coverage plan in the
-  script: every host->extension frame is held to its Zod validator (or
-  pinned as a bare classification tag), extension->host frames are named
-  as enforced by the Rust serde parser itself, and an added or renamed
-  variant fails until the plan says how it is covered. The parsers
-  deliberately differ in a few places (Option null-arms, JS-safe integer
-  bounds, the id's forward-compat string arm, the control frames'
-  strict-host/loose-extension split); each such asymmetry is erased only
-  when it exactly matches the approved form recorded there, so any drift
-  beyond the recorded decisions fails CI. No generated schema is checked
-  in anywhere.
+  Rust types ARE the contract, and the extension's validators are built
+  from it in two layers. The base layer is generated: `just gen` runs the
+  core's `emit_envelope_schema` example (schemars behind the gen-only
+  `envelope-schema` feature, never in a shipped binary) and
+  `scripts/gen-envelope.ts` (json-schema-to-zod, a gen-time-only dev
+  dependency, never bundled) to produce
+  `src/packages/shared/src/envelope-wire.gen.ts`: one faithful strict Zod
+  schema per envelope and per host->extension control frame - unknown
+  fields rejected, required fields required, no invented defaults, and
+  generation aborts rather than emit anything weaker (rules G1-G5 in the
+  script). CI regenerates and fails on a stale diff (`just check-gen`).
+  The enforced validators (`envelope.ts` for the envelopes, `enclave.ts`
+  for the control frames) wrap those bases with the deliberate parser
+  asymmetries (Option null-arms, JS-safe integer bounds, the id's
+  forward-compat string arm, the control frames' strict-host /
+  loose-extension split), each named in a comment at the override site.
+  The asymmetry gate (`scripts/check-envelope-parity.ts`, `just
+  check-envelope`) pins that hand-written layer: schemars derives a schema
+  from the Rust types, `z.toJSONSchema` derives one from the wrapped
+  validators, both are normalized through the documented rules in
+  `src/packages/shared/src/json-schema-normalize.ts` - each asymmetry is
+  erased only when it exactly matches the approved form recorded there -
+  and any remaining diff fails CI. With the base generated, a surviving
+  diff means the wrapper drifted outside the approved list; the check is
+  not tautological because the wrapper is hand-written. Control frames
+  are covered per `type` tag by a plan in the script: every
+  host->extension frame is held to its wrapped validator (or pinned as a
+  bare classification tag), extension->host frames are named as enforced
+  by the Rust serde parser itself, the `{ zod }` plans are cross-checked
+  against the generated frame list, and an added or renamed variant fails
+  until the plan says how it is covered. Each asymmetry and the
+  fail-closed behavior of the generated bases (unknown fields, missing
+  required fields, type confusion, nested extras) are also exercised
+  behaviorally in `src/packages/shared/tests/envelope-wire.gen.test.ts`.
 - **Desktop command DTOs** (`src/apps/desktop/src/`): the payload structs
   the app's Tauri commands return, exported to the webview as
   `src/apps/desktop/ui/src/lib/commands.gen.ts` by ts-rs (`#[derive(TS)]`

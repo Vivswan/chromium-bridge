@@ -3,40 +3,53 @@
 // them.
 //
 // The canonical envelope contract is the Rust wire types (BridgeReq /
-// BridgeResp in src/packages/core/src/protocol.rs, ADR-0028). These schemas are the
-// extension's runtime form of that contract, and the double-derivation diff
-// (scripts/check-envelope-parity.ts, CI + `just ci`) proves them structurally
-// equivalent to the Rust types - modulo the documented erasure rules in
-// json-schema-normalize.ts - so the two cannot drift apart silently.
+// BridgeResp in src/packages/core/src/protocol.rs, ADR-0028). The base wire
+// schemas are GENERATED from them (envelope-wire.gen.ts, `just gen`), so the
+// field inventory, required-ness, and envelope strictness come straight from
+// the contract. This module layers the extension's DELIBERATE parser
+// asymmetries on top of the generated base - each field override below is
+// one asymmetry, named and pinned in RECONCILED_FIELDS
+// (json-schema-normalize.ts), held to exactly that list by the parity gate
+// (scripts/check-envelope-parity.ts, CI + `just ci`), and exercised
+// behaviorally in tests/envelope-wire.gen.test.ts.
 
 import { z } from "zod";
+import { BridgeReqWireSchema, BridgeRespWireSchema } from "./envelope-wire.gen";
 import { type BridgeCommand, isOpName, OP_ARG_SCHEMAS, OpArgsSchema } from "./ops.gen";
 
-// The correlation id: a JS-safe integer (the extension is a JS runtime, so
-// larger integers have already lost precision in JSON.parse) or a string for
+// ASYMMETRY (id): a JS-safe integer (the extension is a JS runtime, so larger
+// integers have already lost precision in JSON.parse) or a string for
 // forward-compatibility. Deliberately wider than the Rust side's u64-only id
 // (see BridgeReq::id in src/packages/core/src/protocol.rs).
 export const BridgeIdSchema = z.union([z.int(), z.string()]);
 
 // The request envelope (BridgeReq on the wire): { id, op, tabId?, browser?, args }.
-// Mirrors the Rust BridgeReq wire type.
-export const BridgeReqSchema = z.strictObject({
-  // Correlation id echoed back on the matching BridgeResp.
+// The generated base contributes the shape and the strict envelope (unknown
+// top-level fields rejected); every override below is a pinned asymmetry.
+export const BridgeReqSchema = BridgeReqWireSchema.extend({
+  // ASYMMETRY (id): see BridgeIdSchema.
   id: BridgeIdSchema,
-  // The operation name. A plain string at the envelope level; the per-op
-  // narrowing happens against OP_ARG_SCHEMAS in parseBridgeReq.
+  // ASYMMETRY (op): refuse the empty string early; the Rust side leaves op
+  // validation to the catalogue lookup. The per-op narrowing happens against
+  // OP_ARG_SCHEMAS in parseBridgeReq.
   op: z.string().min(1),
-  // Optional target tab. When omitted, the handler resolves the active tab.
+  // ASYMMETRY (tabId): no null arm (serde's Option accepts an explicit null;
+  // our writers omit absent fields) and JS-safe bounds. When omitted, the
+  // handler resolves the active tab.
   tabId: z.int().optional(),
-  // The label of the browser connection the MCP server routed this request
-  // to. Informational for the extension: each native-messaging port already
-  // belongs to exactly one browser.
+  // ASYMMETRY (browser): no null arm, and the browser-label grammar enforced
+  // early. The label of the browser connection the MCP server routed this
+  // request to - informational for the extension: each native-messaging port
+  // already belongs to exactly one browser.
   browser: z
     .string()
     .min(1)
     .max(32)
     .regex(/^[A-Za-z0-9._-]+$/)
     .optional(),
+  // ASYMMETRY (args, rule R3): free-form on the Rust side (validated per-op
+  // downstream), narrowed here to the generated OpArgs union before the
+  // per-op validation in parseBridgeReq.
   args: OpArgsSchema,
 });
 
@@ -45,15 +58,18 @@ export const BridgeReqSchema = z.strictObject({
 export type BridgeReqEnvelope = z.infer<typeof BridgeReqSchema>;
 
 // The response envelope posted back to the native host over the Port.
-// Mirrors the Rust BridgeResp wire type.
-export const BridgeRespSchema = z.strictObject({
+// The generated base contributes the shape and strictness; the overrides are
+// pinned asymmetries plus one type-level tightening.
+export const BridgeRespSchema = BridgeRespWireSchema.extend({
+  // ASYMMETRY (id): see BridgeIdSchema.
   id: BridgeIdSchema,
-  ok: z.boolean(),
-  // The op's payload on success. Shape varies per op; intentionally
-  // unconstrained.
+  // Type-level only: the op's payload on success is intentionally
+  // unconstrained on both sides; `unknown` instead of the generated base's
+  // `any` so consumers must narrow it. Same instance set, no wire asymmetry.
   data: z.unknown().optional(),
-  // Human-readable failure reason when ok is false. The stable programmatic
-  // code (errors.gen.ts) is assigned on the Rust side.
+  // ASYMMETRY (error): no null arm (serde's Option; writers omit absent
+  // errors). Human-readable failure reason when ok is false. The stable
+  // programmatic code (errors.gen.ts) is assigned on the Rust side.
   error: z.string().optional(),
 });
 

@@ -1,18 +1,33 @@
 #!/usr/bin/env bun
 
-// The envelope double-derivation gate (ADR-0028). The Rust wire types in
+// The envelope asymmetry gate (ADR-0028). The Rust wire types in
 // src/packages/core/src/protocol.rs are the canonical contract: the
 // BridgeReq/BridgeResp envelope pair, and the host-handled control frames
 // (EnclaveControl and AdminControl, the latter embedding
-// allowlist::ClientEntry). The extension enforces hand-written Zod
-// validators (src/packages/shared/src/envelope.ts for the envelopes,
-// enclave.ts for the control frames). Neither side checks in a schema:
-// this script derives one from each side - schemars on the Rust side
-// (behind the gen-only `envelope-schema` cargo feature, absent from every
-// binary), z.toJSONSchema on the Zod side - normalizes both through the
-// documented erasure rules in src/packages/shared/src/json-schema-normalize.ts,
-// and fails on any remaining difference. Run via `just check-envelope`
-// (part of `just ci`).
+// allowlist::ClientEntry). The validators the extension enforces are built
+// in two layers: a GENERATED base (scripts/gen-envelope.ts ->
+// src/packages/shared/src/envelope-wire.gen.ts, faithful to the Rust
+// schemas; freshness is `just check-gen`'s job) wrapped by a hand-written
+// asymmetry layer (envelope.ts / enclave.ts) that deliberately diverges from
+// the contract in a short, documented list of places.
+//
+// This gate pins that hand-written layer. It derives one schema from each
+// side - schemars on the Rust side (behind the gen-only `envelope-schema`
+// cargo feature, absent from every binary), z.toJSONSchema on the WRAPPED
+// exported validators - normalizes both through the documented rules in
+// src/packages/shared/src/json-schema-normalize.ts (each asymmetry is erased
+// only when it exactly matches its approved form there), and fails on any
+// remaining difference. With the base generated, a surviving diff means the
+// wrapper drifted outside the approved asymmetry list; the diff is NOT
+// tautological because the wrapper is hand-written. The same asymmetries are
+// exercised behaviorally in
+// src/packages/shared/tests/envelope-wire.gen.test.ts.
+//
+// The gate also checks coverage: every control frame must have a plan
+// (FRAME_PLANS below), the plans with a Zod reader must exactly match the
+// set of generated base schemas (GENERATED_WIRE_FRAMES), and every gated
+// inbound frame must be reachable through a runtime classifier. Run via
+// `just check-envelope` (part of `just ci`).
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +45,7 @@ import {
   PresenceProofFrameSchema,
 } from "../src/packages/shared/src/enclave";
 import { BridgeReqSchema, BridgeRespSchema } from "../src/packages/shared/src/envelope";
+import { GENERATED_WIRE_FRAMES } from "../src/packages/shared/src/envelope-wire.gen";
 import {
   type ControlFrameKind,
   diffSchemas,
@@ -93,10 +109,11 @@ for (const [kind, name, rustSchema, zodSchema] of [
 
 // How each control-frame tag is covered, one entry per Rust enum variant:
 //
-//   { zod }       a host->extension frame with a hand-written Zod mirror in
-//                 shared/enclave.ts (the extension's contract surface for
-//                 it); its two derivations are diffed exactly like the
-//                 envelopes.
+//   { zod }       a host->extension frame the extension validates: a
+//                 generated base schema (envelope-wire.gen.ts) wrapped by
+//                 the asymmetry layer in shared/enclave.ts (the extension's
+//                 contract surface for it); its two derivations are diffed
+//                 exactly like the envelopes.
 //   "bare-tag"    a host->extension frame that must stay fieldless: the
 //                 `type` classification IS its whole shape, so there is no
 //                 per-frame Zod validator. Pinned to the bare tag - a field
@@ -109,7 +126,9 @@ for (const [kind, name, rustSchema, zodSchema] of [
 //                 unknown fields (deny_unknown_fields lost anywhere).
 //
 // Both directions are checked against the emitted enum, so adding, renaming,
-// or removing a variant fails here until this plan says how it is covered.
+// or removing a variant fails here until this plan says how it is covered;
+// the { zod } set is additionally cross-checked against the generated frame
+// list below, so a frame cannot silently drop out of generation either.
 type FramePlan = { zod: z.ZodType } | "bare-tag" | "rust-parsed";
 
 const FRAME_PLANS: Record<"enclave" | "admin", Readonly<Record<string, FramePlan>>> = {
@@ -142,6 +161,26 @@ function bareTag(tag: string): unknown {
     properties: { type: { type: "string", const: tag } },
     required: ["type"],
   };
+}
+
+// Generation coverage: the frames planned as { zod } must be exactly the
+// frames gen-envelope.ts generates a base schema for. A mismatch either way
+// means a validator without a generated base (hand-written from scratch
+// again) or a generated base no plan holds to the contract.
+for (const group of ["enclave", "admin"] as const) {
+  const generated = new Set<string>(GENERATED_WIRE_FRAMES[group]);
+  const planned = new Set(
+    Object.entries(FRAME_PLANS[group])
+      .filter(([, plan]) => typeof plan === "object")
+      .map(([tag]) => tag),
+  );
+  for (const tag of planned) {
+    if (!generated.has(tag))
+      fail(`${group}: ${tag} is planned as { zod } but has no generated base`);
+  }
+  for (const tag of generated) {
+    if (!planned.has(tag)) fail(`${group}: ${tag} has a generated base but no { zod } plan`);
+  }
 }
 
 const rustTags: Record<"enclave" | "admin", Set<string>> = { enclave: new Set(), admin: new Set() };
