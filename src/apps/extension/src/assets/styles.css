@@ -10,19 +10,21 @@
 /* Class-based dark mode (we toggle .dark on <html>, see src/lib/theme.ts). */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* "Control Tower" token layer, extracted from
-   design-explorations/control-tower/theme.css. Color is a strict signal
-   vocabulary: green = live/attested, amber = pending/needs you,
-   red = kill/deny; everything else is neutral surfaces + ink.
+/* "Control Tower" token layer, a hand-synchronized copy of the canonical
+   one in src/apps/desktop/ui/src/styles.css (only the dark-mode wrapper
+   differs: .dark class here since src/lib/theme.ts toggles it from JS,
+   prefers-color-scheme there). Color is a strict signal vocabulary:
+   green = live/attested, amber = pending/needs you, red = kill/deny;
+   everything else is neutral surfaces + ink.
 
-   This block is duplicated verbatim in src/apps/desktop/ui/src/styles.css
-   (only the dark-mode wrapper differs: .dark class here, prefers-color-scheme
-   there). Keep the two in sync by hand; deduplicating into
-   src/packages/shared is future work.
+   The parity test in tests/shared/theme-tokens.test.ts fails CI when this
+   copy (or the landing page's, src/apps/web/src/styles/landing.css) drifts
+   from the desktop stylesheet.
 
    Contexts that cannot read CSS custom properties (action badges, the
    inline-styled content-script toast) mirror these hexes in
-   src/lib/shared/theme-colors.ts - update both together. */
+   src/lib/shared/theme-colors.ts - the same test holds them to the token
+   values. */
 @theme inline {
   /* Control Tower tokens */
   --color-bg: var(--bg);

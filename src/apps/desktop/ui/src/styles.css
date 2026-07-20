@@ -1,15 +1,17 @@
 @import "tailwindcss";
 
-/* "Control Tower" token layer, extracted from
-   design-explorations/control-tower/theme.css. Color is a strict signal
-   vocabulary: green = live/attested, amber = pending/needs you,
-   red = kill/deny; everything else is neutral surfaces + ink.
+/* "Control Tower" token layer - this file is the canonical copy. Color is
+   a strict signal vocabulary: green = live/attested, amber = pending/needs
+   you, red = kill/deny; everything else is neutral surfaces + ink.
 
-   This block is duplicated verbatim in
+   Hand-synchronized copies live in
    src/apps/extension/src/assets/styles.css (only the dark-mode wrapper
    differs: prefers-color-scheme here, a .dark class there since the
-   extension toggles it from JS). Keep the two in sync by hand;
-   deduplicating into src/packages/shared is future work. */
+   extension toggles it from JS) and in the landing page's palette blocks
+   (src/apps/web/src/styles/landing.css). The parity test in
+   src/apps/extension/tests/shared/theme-tokens.test.ts fails CI when any
+   copy drifts from this one; deduplicating into src/packages/shared is
+   future work. */
 @theme inline {
   /* Control Tower tokens */
   --color-bg: var(--bg);

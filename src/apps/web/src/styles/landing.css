@@ -1,8 +1,9 @@
-/* Landing page stylesheet. Extracted verbatim from the approved mockup
-   (design-explorations/site/mockup.html). Tokens come from
-   design-explorations/control-tower/theme.css (the app's design system);
-   the palette values must stay byte-identical to that file. Fonts are
-   self-hosted via @fontsource (imported in index.astro), never a CDN. */
+/* Landing page stylesheet. The Control Tower palette blocks below are a
+   hand-synchronized copy of the desktop UI's token layer
+   (src/apps/desktop/ui/src/styles.css, the canonical one); the parity test
+   in src/apps/extension/tests/shared/theme-tokens.test.ts fails CI if they
+   drift. Fonts are self-hosted via @fontsource (imported in index.astro),
+   never a CDN. */
 
 :root {
   --r-sm: 4px; --r-md: 6px; --r-lg: 10px;
@@ -12,7 +13,7 @@
   --t-fast: 150ms; --t-slow: 200ms;
 }
 
-/* ---- DARK (fallback) - identical values to control-tower/theme.css ---- */
+/* ---- DARK (fallback) - same values as the desktop dark palette ---- */
 :root {
   color-scheme: dark;
   --bg: #090b0f;
@@ -170,7 +171,7 @@ img { display: block; max-width: 100%; height: auto; }
   html { scroll-behavior: auto; }
 }
 
-/* ---- theme flip chip (verbatim mechanism from theme.css) ---- */
+/* ---- theme flip chip (the app's flip mechanism, at landing scale) ---- */
 .theme-flip { position: fixed; top: 14px; right: 14px; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .theme-flip-chip {
   position: fixed; top: 14px; right: 16px; z-index: 100;
