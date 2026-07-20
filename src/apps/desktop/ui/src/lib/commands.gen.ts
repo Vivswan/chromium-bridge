@@ -242,9 +242,12 @@ export type AuditRecord = {
    * desktop audit panel) joins a verdict to exactly its own shown row
    * instead of guessing by tool/origin. Pre-surface denials - the panic
    * latch denying a confirmation that never reached a surface - carry
-   * none, so they resolve no shown row. Distinct from `req`: `req` is the
-   * host-side per-tool-call id (a `u64`), this is the browser-minted
-   * confirmation id (an opaque string), a different subsystem.
+   * their own fresh cid that matches no `confirm_shown` row, so they
+   * resolve none. (This is load-bearing: a cid-less denial would fall to
+   * the subject fallback and could close an unrelated legacy row.)
+   * Distinct from `req`: `req` is the host-side per-tool-call id (a
+   * `u64`), this is the browser-minted confirmation id (an opaque
+   * string), a different subsystem.
    */
   cid?: string;
   /**
