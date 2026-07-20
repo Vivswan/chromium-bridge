@@ -11,8 +11,11 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 [proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one
 `proto install` in a fresh checkout provisions every tool pinned in the
 repo-root `.prototools` (bun, moon, a rustup pre-install of the pinned rust,
-uv). Install proto once, make sure `~/.proto/shims` and `~/.proto/bin` are on
-your PATH, then:
+uv). One prerequisite proto does not cover: `rustup` itself must already be
+installed (proto's rust plugin manages toolchains *through* rustup rather
+than installing it) - a truly fresh machine needs
+[rustup.rs](https://rustup.rs) first. Install proto once, make sure
+`~/.proto/shims` and `~/.proto/bin` are on your PATH, then:
 
 ```sh
 proto install    # provisions bun, moon, rust, uv at the pinned versions

@@ -27,6 +27,7 @@ tasks:
       cache: false
 
   dev:
+    description: "Vite dev server for the desktop UI (webview frontend only; use dev-app for the full app)"
     command: 'bun run dev'
     toolchains: ['system']
     preset: 'server'
@@ -44,6 +45,7 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   typecheck:
+    description: "Type-check the desktop UI (tsc, no emit)"
     command: 'bun run typecheck'
     toolchains: ['system']
     inputs:
@@ -53,6 +55,7 @@ tasks:
       - '/bun.lock'
 
   lint:
+    description: "Biome lint for the desktop UI workspace"
     command: 'bunx biome lint $projectSource'
     toolchains: ['system']
     inputs:
