@@ -337,9 +337,9 @@ fn rotate_locked(path: &Path, add: u64, max: u64) {
 /// JSON per `BB_LOG_FORMAT`, gated at the `info` threshold like every other
 /// audit line).
 fn emit_stderr(rec: &AuditRecord) {
-    let mut owned: Vec<(&str, String)> = vec![("kind", serde_variant_name(&rec.kind).to_string())];
+    let mut owned: Vec<(&str, String)> = vec![("kind", serde_variant_name(&rec.kind))];
     if let Some(s) = &rec.surface {
-        owned.push(("surface", serde_variant_name(s).to_string()));
+        owned.push(("surface", serde_variant_name(s)));
     }
     if let Some(r) = rec.req {
         owned.push(("req", r.to_string()));
@@ -371,48 +371,12 @@ fn emit_stderr(rec: &AuditRecord) {
 /// A serde-renamed variant's wire name (e.g. `tool_call`), obtained by
 /// serializing the value. Falls back to `?` if serialization somehow fails
 /// (it cannot for these unit enums, but audit code never panics).
-fn serde_variant_name<T: Serialize>(v: &T) -> &'static str {
+fn serde_variant_name<T: Serialize>(v: &T) -> String {
     match serde_json::to_value(v) {
-        Ok(serde_json::Value::String(s)) => {
-            // Leak-free static mapping: match against the known names.
-            KNOWN_WIRE_NAMES
-                .iter()
-                .find(|k| **k == s)
-                .copied()
-                .unwrap_or("?")
-        }
-        _ => "?",
+        Ok(serde_json::Value::String(s)) => s,
+        _ => "?".to_string(),
     }
 }
-
-/// Every wire name [`serde_variant_name`] can return, so the lookup needs no
-/// allocation-leaking tricks. The `wire_names_cover_every_variant` test keeps
-/// this list complete.
-const KNOWN_WIRE_NAMES: &[&str] = &[
-    "tool_call",
-    "harness_admit",
-    "harness_refuse",
-    "attach_refuse",
-    "browser_attach",
-    "browser_refuse",
-    "pair_client",
-    "revoke_client",
-    "host_key_revoke",
-    "kill_engage",
-    "kill_release",
-    "presence_sign",
-    "confirm_shown",
-    "confirm_allowed",
-    "confirm_denied",
-    "enroll_approved",
-    "enroll_rejected",
-    "enroll_revoked",
-    "cli",
-    "extension",
-    "broker",
-    "host",
-    "core",
-];
 
 /// The audit kinds an extension-forwarded `audit_event` frame may carry
 /// (ADR-0030). Everything else is host-side and must not be forgeable from
@@ -684,44 +648,6 @@ mod tests {
             .unwrap()
             .is_char_boundary(rec.detail.as_ref().unwrap().len()));
         assert!(rec.detail.as_ref().unwrap().len() <= AUDIT_MAX_FIELD);
-    }
-
-    #[test]
-    fn wire_names_cover_every_variant() {
-        // serde_variant_name must never fall back to "?" for a real variant:
-        // exercise every kind and surface through it.
-        let kinds = [
-            AuditKind::ToolCall,
-            AuditKind::HarnessAdmit,
-            AuditKind::HarnessRefuse,
-            AuditKind::AttachRefuse,
-            AuditKind::BrowserAttach,
-            AuditKind::BrowserRefuse,
-            AuditKind::PairClient,
-            AuditKind::RevokeClient,
-            AuditKind::HostKeyRevoke,
-            AuditKind::KillEngage,
-            AuditKind::KillRelease,
-            AuditKind::PresenceSign,
-            AuditKind::ConfirmShown,
-            AuditKind::ConfirmAllowed,
-            AuditKind::ConfirmDenied,
-            AuditKind::EnrollApproved,
-            AuditKind::EnrollRejected,
-            AuditKind::EnrollRevoked,
-        ];
-        for k in kinds {
-            assert_ne!(serde_variant_name(&k), "?", "{k:?}");
-        }
-        for s in [
-            Surface::Cli,
-            Surface::Extension,
-            Surface::Broker,
-            Surface::Host,
-            Surface::Core,
-        ] {
-            assert_ne!(serde_variant_name(&s), "?", "{s:?}");
-        }
     }
 
     #[test]
