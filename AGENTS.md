@@ -120,7 +120,8 @@ against its own isolated Chrome.
   TS side (`moon run gen` -> `src/packages/shared/src/*.gen.ts`, with Zod
   validators the extension enforces at its trust boundaries; CI fails on a
   stale diff). The enforced envelope validators wrap the generated wire
-  schemas (`envelope-wire.gen.ts`, via json-schema-to-zod at gen time) with
+  schemas (`envelope-wire.gen.ts`, emitted at gen time by the in-repo
+  emitter in `scripts/gen-envelope.ts`) with
   a hand-written layer of deliberate, individually pinned parser
   asymmetries, held to exactly that list by the asymmetry gate
   (`moon run check-envelope`). Adding a

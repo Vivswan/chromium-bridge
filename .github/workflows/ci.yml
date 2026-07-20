@@ -142,7 +142,7 @@ jobs:
 
   # The Rust core is the canonical cross-process contract (ADR-0028); this job
   # holds the two checks that need BOTH toolchains: the generated TS -
-  # including the envelope wire validators built via json-schema-to-zod -
+  # including the generated envelope wire validators -
   # must be exactly what the Rust emitters produce today (regenerate + diff),
   # and the hand-written asymmetry layer over those validators must stay
   # within the pinned parser asymmetries (double-derivation diff via
@@ -165,7 +165,7 @@ jobs:
       - run: proto install bun
       - run: bun install --frozen-lockfile
       # check-gen regenerates the shared *.gen.ts modules (including the
-      # envelope wire validators built via json-schema-to-zod), fails on a
+      # envelope wire validators), fails on a
       # stale diff, and runs the envelope generator's fail-closed rules
       # (G1-G5).
       - name: Generated TS in sync with the Rust core (src/packages/shared *.gen.ts)
