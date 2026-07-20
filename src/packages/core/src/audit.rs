@@ -328,9 +328,6 @@ fn rotate_locked(path: &Path, add: u64, max: u64) {
     // rotating on a stale check would clobber the rotation that just won.
     if needs_rotation(path, add, max) {
         let old = rotated_path(path);
-        // Unix rename replaces the destination; Windows needs it removed.
-        #[cfg(windows)]
-        let _ = fs::remove_file(&old);
         let _ = fs::rename(path, &old);
     }
     // Dropping `lock` releases it.
