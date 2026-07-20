@@ -3,7 +3,8 @@ import { useI18n } from "@/hooks/useI18n";
 import { cn } from "@/lib/cn";
 
 /* The Control Tower primitive set. Every class name here is defined in
-   styles.css, ported from design-explorations/control-tower/theme.css. */
+   styles.css (the canonical stylesheet; theme-tokens.test.ts enforces the
+   shared palette). */
 
 /** A bordered surface; `hero` marks the screen's one centerpiece (raised
  * edge, larger radius), `flush` makes it a table-card (content to edges). */

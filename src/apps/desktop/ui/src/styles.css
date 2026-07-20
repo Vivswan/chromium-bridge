@@ -212,9 +212,10 @@ textarea,
 
 @layer components {
 /* =====================================================================
-   Control Tower component classes, ported from the mockups
-   (design-explorations/control-tower/*.html). Tailwind utilities handle
-   one-off layout; anything with a name below is shared design language.
+   Control Tower component classes, ported from the (since removed)
+   design-exploration mockups; this file is now the canonical design
+   language. Tailwind utilities handle one-off layout; anything with a
+   name below is shared design language.
    ===================================================================== */
 
 .mono {
