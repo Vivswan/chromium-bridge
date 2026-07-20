@@ -511,6 +511,12 @@ against it. The canonical modules and their derived artifacts:
   fail-closed behavior of the generated bases (unknown fields, missing
   required fields, type confusion, nested extras) are also exercised
   behaviorally in `src/packages/shared/tests/envelope-wire.gen.test.ts`.
+  Two named limits: the schema-derived parity gate cannot see
+  refinement-level runtime semantics (a `z.preprocess`/`z.coerce` slipped
+  into a validator is invisible to it - the behavioral test file exists to
+  catch exactly that class), and json-schema-to-zod's upstream was archived
+  in June 2026 (accepted: gen-time only, exact-pinned, output re-asserted
+  by the G-rules and this gate; vendor or replace it if it ever breaks).
 - **Desktop command DTOs** (`src/apps/desktop/src/`): the payload structs
   the app's Tauri commands return, exported to the webview as
   `src/apps/desktop/ui/src/lib/commands.gen.ts` by ts-rs (`#[derive(TS)]`
