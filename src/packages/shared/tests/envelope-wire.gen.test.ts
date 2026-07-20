@@ -1,8 +1,8 @@
 // The generated base wire schemas (envelope-wire.gen.ts), exercised
 // adversarially: hostile frames - unknown fields, missing required fields,
 // type confusion, nested extras - must all be refused, and nothing may be
-// silently defaulted. This is the runtime proof that the json-schema-to-zod
-// output fails closed like the Rust serde parsers it is derived from.
+// silently defaulted. This is the runtime proof that the generated
+// validators fail closed like the Rust serde parsers they are derived from.
 //
 // The second half pins the DELIBERATE parser asymmetries: for every place
 // the enforced validators (envelope.ts / enclave.ts) diverge from the

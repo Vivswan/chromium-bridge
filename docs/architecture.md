@@ -481,8 +481,8 @@ against it. The canonical modules and their derived artifacts:
   from it in two layers. The base layer is generated: `moon run gen` runs the
   core's `emit_envelope_schema` example (schemars behind the gen-only
   `envelope-schema` feature, never in a shipped binary) and
-  `scripts/gen-envelope.ts` (json-schema-to-zod, a gen-time-only dev
-  dependency, never bundled) to produce
+  `scripts/gen-envelope.ts` (whose Zod emitter is in-repo - the schema
+  subset the rules below admit needs no external converter) to produce
   `src/packages/shared/src/envelope-wire.gen.ts`: one faithful strict Zod
   schema per envelope and per host->extension control frame - unknown
   fields rejected, required fields required, no invented defaults, and
@@ -511,12 +511,10 @@ against it. The canonical modules and their derived artifacts:
   fail-closed behavior of the generated bases (unknown fields, missing
   required fields, type confusion, nested extras) are also exercised
   behaviorally in `src/packages/shared/tests/envelope-wire.gen.test.ts`.
-  Two named limits: the schema-derived parity gate cannot see
+  One named limit: the schema-derived parity gate cannot see
   refinement-level runtime semantics (a `z.preprocess`/`z.coerce` slipped
   into a validator is invisible to it - the behavioral test file exists to
-  catch exactly that class), and json-schema-to-zod's upstream was archived
-  in June 2026 (accepted: gen-time only, exact-pinned, output re-asserted
-  by the G-rules and this gate; vendor or replace it if it ever breaks).
+  catch exactly that class).
 - **Desktop command DTOs** (`src/apps/desktop/src/`): the payload structs
   the app's Tauri commands return, exported to the webview as
   `src/apps/desktop/ui/src/lib/commands.gen.ts` by ts-rs (`#[derive(TS)]`
