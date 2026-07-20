@@ -2,7 +2,7 @@
 // validators, the envelope-level OpArgs union, and the inferred BridgeCommand
 // types must all agree with each other. The catalogue's SOURCE is the Rust
 // core (src/packages/core/src/tools/catalogue.rs); faithful generation is enforced
-// by CI regenerating and diffing the checked-in files (`just gen`
+// by CI regenerating and diffing the checked-in files (`moon run gen`
 // idempotency), so these tests own the semantics, not the provenance.
 
 import { describe, expect, test } from "bun:test";

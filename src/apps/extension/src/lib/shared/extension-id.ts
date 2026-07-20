@@ -2,7 +2,7 @@
 //
 // The constant itself is generated from the pinned key in
 // src/packages/core/src/identity.rs into @chromium-bridge/shared (identity.gen.ts) by
-// `just gen`, so it cannot drift from the wxt.config.ts-generated manifest;
+// `moon run gen`, so it cannot drift from the wxt.config.ts-generated manifest;
 // `scripts/check-extension-id.ts` (a CI gate) re-derives the ID from the key
 // and asserts every copy (generated TS, built manifest) agrees. If you
 // rotate the key (e.g. to adopt a Chrome Web Store-assigned id), regenerate

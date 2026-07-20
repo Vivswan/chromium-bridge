@@ -1,5 +1,5 @@
 // GENERATED from the Rust core (src/packages/core/src/tools/catalogue.rs) by
-// scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run `just gen`.
+// scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run `moon run gen`.
 //
 // The tool catalogue, TS side: op names, policy metadata (risk / scope /
 // permission / confirmation), and the per-op Zod arg validators the extension

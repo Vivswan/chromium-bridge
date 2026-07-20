@@ -281,13 +281,13 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
           <span class="step-num">01</span>
           <div class="step-body">
             <h3>Build the app, then connect a browser.</h3>
-            <p>Clone the repository and let <span class="mono-inline">just</span>
+            <p>Clone the repository and let <span class="mono-inline">moon</span>
               build, sign, and place the app in /Applications. First launch only
               detects your Chromium browsers and writes nothing into any of
               them; you connect each one yourself on the Browsers page, or all
               at once from the first-run card.</p>
             <pre class="code-block"><code>git clone https://github.com/Vivswan/chromium-bridge
-cd chromium-bridge &amp;&amp; just install-app</code></pre>
+cd chromium-bridge &amp;&amp; moon run bundle-app &amp;&amp; moon run install-app</code></pre>
           </div>
         </li>
         <li class="step">

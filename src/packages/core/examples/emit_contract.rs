@@ -1,7 +1,7 @@
 //! Emit the canonical cross-process contract as one JSON document on stdout:
 //! the tool catalogue, the error taxonomy, the capability groupings, the
 //! identity constants, and the bridge protocol version. `scripts/gen-ops.ts`
-//! (run via `just gen`) consumes this to generate the TypeScript side
+//! (run via `moon run gen`) consumes this to generate the TypeScript side
 //! (`src/packages/shared/src/*.gen.ts`); the emitted JSON itself is never checked
 //! in - the Rust sources are the contract (ADR-0028).
 //!

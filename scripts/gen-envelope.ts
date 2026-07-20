@@ -7,7 +7,7 @@
 // gen-only `envelope-schema` cargo feature, absent from every binary), feeds
 // each schema through json-schema-to-zod (a gen-time-only dev dependency,
 // never bundled), and writes src/packages/shared/src/envelope-wire.gen.ts.
-// Run via `just gen`; CI regenerates and fails on a stale diff (check-gen).
+// Run via `moon run gen`; CI regenerates and fails on a stale diff (check-gen).
 //
 // Dependency status, reviewed 2026-07-20: json-schema-to-zod's upstream repo
 // was archived June 2026 (unmaintained since March 2026). Accepted because it
@@ -21,7 +21,7 @@
 // (serde's deny_unknown_fields -> Zod's .strict()), required fields
 // required, no defaults. The deliberate parser asymmetries the extension
 // layers on top stay hand-written in envelope.ts / enclave.ts, each pinned
-// by scripts/check-envelope-parity.ts (`just check-envelope`) and exercised
+// by scripts/check-envelope-parity.ts (`moon run check-envelope`) and exercised
 // in tests/envelope-wire.gen.test.ts.
 //
 // Fail-closed generation rules (a violation aborts generation; shipping a
@@ -384,14 +384,14 @@ function main(): void {
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs;
 // AdminControl embeds allowlist::ClientEntry) by scripts/gen-envelope.ts -
-// DO NOT EDIT. Edit the Rust types, then run \`just gen\`.
+// DO NOT EDIT. Edit the Rust types, then run \`moon run gen\`.
 //
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
 // .strict()), required fields required, no defaults (see the fail-closed
 // generation rules G1-G5 in scripts/gen-envelope.ts). The extension never
 // consumes these directly: envelope.ts and enclave.ts layer the deliberate
 // parser asymmetries on top - each pinned by scripts/check-envelope-parity.ts
-// (\`just check-envelope\`) and exercised in tests/envelope-wire.gen.test.ts.
+// (\`moon run check-envelope\`) and exercised in tests/envelope-wire.gen.test.ts.
 
 import { z } from "zod";
 

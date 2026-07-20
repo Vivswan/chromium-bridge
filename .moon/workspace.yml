@@ -1,9 +1,14 @@
-# moon workspace registry (phase one, under-the-hood only).
+# moon workspace registry.
 #
-# moon is the task orchestrator behind the per-project TS recipes in the
-# justfile; the justfile remains the canonical command interface (AGENTS.md).
-# CI does not run moon. See docs/development.md ("moon task orchestration").
+# moon is the canonical command interface (phase two of the moon adoption;
+# the justfile is gone): `moon run ci` is the gate, `moon query tasks` is the
+# menu, and CI runs moon tasks directly. proto (.prototools) provisions moon
+# itself. See docs/development.md ("moon: the canonical command interface").
 $schema: 'https://moonrepo.dev/schemas/workspace.json'
+
+# Lets unscoped targets (`moon run ci`, `moon run gen`, ...) resolve to the
+# root project, whose moon.yml holds every repo-wide task and runbook.
+defaultProject: 'root'
 
 projects:
   # The workspace root itself: repo-wide Biome tasks (lint/check/fmt-check)
@@ -33,6 +38,8 @@ vcs:
 # generic '**/build/**' and '**/tmp/**' entries are the risky ones - never
 # name a tracked source directory build/ or tmp/, and when adding a pattern
 # check `git ls-files | grep <pattern-ish>` matches nothing.
+# scripts/check-moon-hasher.ts (`moon run check-hasher`, part of the ci
+# gate) enforces exactly that: no tracked file may match any pattern below.
 hasher:
   ignorePatterns:
     - '**/node_modules/**'

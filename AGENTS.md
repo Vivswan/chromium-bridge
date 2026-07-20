@@ -10,12 +10,15 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 
 ## Toolchain
 
+- Bootstrap: [proto](https://moonrepo.dev/proto) provisions every pinned
+  tool from `.prototools` (bun, moon, rust pre-install, uv) - one
+  `proto install` in a fresh checkout. uv keeps owning python
+  (`.python-version`); cargo-nextest, typos, and cargo-machete are separate
+  one-time installs (docs/development.md).
 - Runtime and package manager: bun (`bun install`, `bun test`, `bun run <script>`)
-- See `package.json` scripts for the available commands.
-- Task orchestration: most per-project TS recipes and the repo-wide Biome
-  recipes delegate to moon (`@moonrepo/cli`, a pinned dev dependency) for
-  caching and affected-only runs; the justfile remains the canonical command
-  interface. See `docs/development.md` ("moon task orchestration").
+- Task runner: [moon](https://moonrepo.dev) is the canonical command
+  interface. `moon run <task>` runs a task; `moon run help` (or
+  `moon query tasks`) lists them all. See `docs/development.md`.
 
 ## Conventions
 
@@ -28,10 +31,10 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
   all-green's `needs` list.
 - Scripts used ONLY by GitHub Actions live in `.github/scripts/`
   (e.g. the nightly fuzz smoke). `scripts/` holds local and dual-use tooling:
-  everything `just` recipes or developers run, even if CI also calls it.
+  everything moon tasks or developers run, even if CI also calls it.
 - No typographic look-alike characters (curly quotes, em-dashes, invisible
   unicode). CI enforces this with `scripts/check-typography.ts` (also run by
-  `just ci`); use plain ASCII punctuation.
+  `moon run ci`); use plain ASCII punctuation.
 - Files marked "managed by Vivswan/repo-platform" keep their markers for a
   planned re-adoption of the template, but are NOT currently synced (the
   template-sync workflow was removed). Put repository-specific content in
@@ -72,21 +75,26 @@ is authoritative; this file only summarizes.**
 ### Gates
 
 ```sh
-just ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
+moon run ci    # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
 ```
 
-The justfile is the canonical command interface: `just --list` shows the
-top-level verbs (sub-steps are `[private]`: hidden, still runnable by name),
-the root `package.json` scripts are thin aliases delegating to just,
-and the per-workspace `package.json` scripts are implementation details the
-justfile and CI call.
+moon is the canonical command interface: every task lives in a `moon.yml`
+(the repo-wide tasks and runbooks in the root `moon.yml`, per-project tasks
+next to their code), `moon run help` lists them all with descriptions, the
+root `package.json` scripts are thin aliases delegating to moon, and the
+per-workspace `package.json` scripts are implementation details the moon
+tasks and CI call. The gate and every check task set `cache: false` - a gate
+must never be skippable by a cache hit - so `moon run ci` always executes
+the full suite in a fixed order; affected-only runs (`moon ci`) are a local
+convenience only.
 Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo nextest run`; `just typecheck`, `bunx biome ci .`,
+`cargo nextest run`; `moon run typecheck`, `bunx biome ci .`,
 `bun run --cwd src/packages/shared test`, `bun run --cwd src/apps/extension test`;
 `bun scripts/gen-ops.ts` (must leave no diff); `bun scripts/check-extension-id.ts`.
-A lefthook pre-commit hook runs `just ci` automatically (`bun install` wires
-it). Browser suites (`just test-browser`) need `CHROME_BIN` -> isolated Chrome
-and are **not** part of `just ci`; CI runs them in the required `browser` job
+A lefthook pre-commit hook runs `moon run ci` automatically (`bun install`
+wires it; moon itself comes from `proto install`). Browser suites
+(`moon run test-browser`) need `CHROME_BIN` -> isolated Chrome and are
+**not** part of `moon run ci`; CI runs them in the required `browser` job
 against its own isolated Chrome.
 
 ### Project map
@@ -94,7 +102,7 @@ against its own isolated Chrome.
 | Area | Where | Notes |
 |------|-------|-------|
 | Dev process | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | branch/commit/sync/merge rules (authoritative) |
-| Build & test toolchain | [`docs/development.md`](./docs/development.md) | prerequisites, `just` recipes, releasing |
+| Build & test toolchain | [`docs/development.md`](./docs/development.md) | prerequisites, moon tasks, releasing |
 | Architecture | [`docs/architecture.md`](./docs/architecture.md) | components, protocols, security model |
 | Cross-process contracts | [`docs/architecture.md` section 11](./docs/architecture.md#11-protocol-boundary-contracts-error-taxonomy-and-handshake) | the Rust core is the single source (ADR-0028); tools, error codes, capabilities, protocol version, envelopes |
 | Operations / CLI | [`docs/operations.md`](./docs/operations.md), [`docs/cli.md`](./docs/cli.md) | `doctor`/`status`, `BB_LOG`/audit |
@@ -109,13 +117,13 @@ against its own isolated Chrome.
 - The Rust core is the canonical cross-process contract (ADR-0028): the tool
   catalogue (`src/packages/core/src/tools/catalogue.rs`), error taxonomy,
   capabilities, protocol version, identity, and wire envelopes generate the
-  TS side (`just gen` -> `src/packages/shared/src/*.gen.ts`, with Zod
+  TS side (`moon run gen` -> `src/packages/shared/src/*.gen.ts`, with Zod
   validators the extension enforces at its trust boundaries; CI fails on a
   stale diff). The enforced envelope validators wrap the generated wire
   schemas (`envelope-wire.gen.ts`, via json-schema-to-zod at gen time) with
   a hand-written layer of deliberate, individually pinned parser
   asymmetries, held to exactly that list by the asymmetry gate
-  (`just check-envelope`). Adding a
+  (`moon run check-envelope`). Adding a
   tool touches both sides - see `CONTRIBUTING.md`.
 - Never develop on `main`; work in a git worktree under `.worktree/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge

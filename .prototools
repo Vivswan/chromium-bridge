@@ -1,0 +1,38 @@
+# proto is the single bootstrap toolchain manager (phase two of the moon
+# adoption): one `proto install` in a fresh checkout provisions every pinned
+# tool below. CI provisions from this same file (moonrepo/setup-toolchain in
+# .github/workflows/ci.yml, pinned by commit SHA).
+#
+# Pin discipline - scripts/check-toolchain.ts (part of `moon run ci`) fails
+# the gate if any duplicated pin disagrees:
+#   proto  must match every proto-version input in .github/workflows/ci.yml
+#   moon   must match every moon-version input in .github/workflows/ci.yml
+#   bun    must match package.json's packageManager field
+#   rust   must match rust-toolchain.toml's channel. rust-toolchain.toml is
+#          the AUTHORITATIVE rust pin (rustup, IDEs, and CI's
+#          setup-rust-toolchain read it natively, and it also carries the
+#          components + profile); the pin here only tells proto which
+#          toolchain to pre-install, and may never disagree.
+#   uv     pinned ONLY here (single authority). uv itself keeps owning
+#          python exactly as before: the protocol suites run under the
+#          interpreter pinned in .python-version via
+#          `uv run --no-project --isolated`; proto never provisions python
+#          (builtin-plugins below deliberately excludes it).
+#
+# Named residual gap: three gate tools have no first-party proto plugin and
+# are NOT provisioned here - cargo-nextest, typos, cargo-machete. Install
+# them once by hand (docs/development.md); CI pins typos + cargo-machete in
+# the tooling job (taiki-e/install-action), so a local version skew there
+# can at worst surface findings early, never hide them from CI.
+proto = "0.58.2"
+bun = "1.3.14"
+moon = "2.4.5"
+rust = "1.96.1"
+uv = "0.11.26"
+
+[settings]
+# Only the tools we pin. Without this allow-list, `proto install` would also
+# detect .python-version and install its own python - but python is owned by
+# uv (see above), and two provisioners for one interpreter is exactly the
+# drift this file exists to prevent.
+builtin-plugins = ["bun", "moon", "rust", "uv"]

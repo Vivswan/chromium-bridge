@@ -8,18 +8,36 @@ the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 
 ## Prerequisites
 
+[proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one
+`proto install` in a fresh checkout provisions every tool pinned in the
+repo-root `.prototools` (bun, moon, a rustup pre-install of the pinned rust,
+uv). Install proto once, make sure `~/.proto/shims` and `~/.proto/bin` are on
+your PATH, then:
+
+```sh
+proto install    # provisions bun, moon, rust, uv at the pinned versions
+bun install      # workspace deps + wires the git hooks (lefthook)
+```
+
+Three gate tools have no first-party proto plugin and are installed once by
+hand: `cargo install cargo-nextest` and `brew install typos-cli
+cargo-machete` (or `cargo install typos-cli cargo-machete`). CI pins typos
+and cargo-machete in its tooling job, so a local version skew can at worst
+surface a finding early, never hide one from CI.
+
 | Tool | Used for | Notes |
 |------|----------|-------|
-| Rust (cargo) | the `chromium-bridge` binary | stable toolchain; `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
-| bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned via the root `package.json` `packageManager` field |
-| [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. Install: `curl -LsSf https://astral.sh/uv/install.sh \| sh` (or `brew install uv`). The suites themselves are stdlib-only |
+| [proto](https://moonrepo.dev/proto) | toolchain bootstrap | provisions everything pinned in `.prototools`; the pins are cross-checked by `moon run check-toolchain` |
+| [moon](https://moonrepo.dev) | task runner | the canonical command interface: every dev task is a moon task. `moon run help` lists them; `moon run <task>` runs one |
+| Rust (cargo) | the `chromium-bridge` binary | pinned by `rust-toolchain.toml` (the authoritative pin; rustup and IDEs read it); `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
+| bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned in `.prototools` (and mirrored in `package.json` `packageManager`) |
+| [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. uv itself is pinned only in `.prototools`. The suites are stdlib-only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
-| [`just`](https://just.systems/) | task runner | the `justfile` collects every dev task; `just` lists the human-facing ones, grouped (internal sub-checks are `[private]`: hidden from the list, still runnable by name). Each recipe is a plain command you can also run by hand |
-| [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `just typos` / `just machete`; CI gates both |
+| [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates both |
 
 Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`):
-`bun install` wires a pre-commit hook that runs `just ci`, so a commit that
-would fail CI fails at commit time instead.
+`bun install` wires a pre-commit hook that runs `moon run ci`, so a commit
+that would fail CI fails at commit time instead.
 
 ## Layout
 
@@ -34,7 +52,7 @@ folders (`src/` and `tests/`).
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension/ (gitignored)
 src/apps/desktop/        Tauri v2 desktop app (ADR-0026/0029): workspace member but
-                         NOT a default member; `just bundle-app` builds + signs
+                         NOT a default member; `moon run bundle-app` builds + signs
                          it with the bundled host (see docs/desktop-app.md)
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace for the wire parsers (nightly + libFuzzer)
@@ -48,13 +66,13 @@ scripts/                 bun workspace member: gen-ops.ts, check-version.ts, syn
 .github/scripts/         CI-only scripts (fuzz_smoke.ts, run by the nightly fuzz job;
                          typechecked by `tsc -p scripts` alongside scripts/)
 src/apps/web/           bun workspace member: minimal Astro site rendering the
-                         repo's markdown docs + translations (just build-web;
-                         not part of `just ci`)
+                         repo's markdown docs + translations (moon run web:build;
+                         not part of `moon run ci`)
 ```
 
 All tooling scripts are TypeScript run via bun. Scripts whose only consumer
 is a GitHub workflow live in `.github/scripts/`; everything with a local
-consumer (justfile, other scripts) stays in `scripts/`. Two of them
+consumer (moon tasks, other scripts) stays in `scripts/`. Two of them
 (`scripts/build-repro.ts` and `.github/scripts/fuzz_smoke.ts`) are
 deliberately self-contained on node builtins so they work before
 `bun install` - the release workflow builds the binary before installing
@@ -70,38 +88,45 @@ code enters the build without someone choosing to let it in.
 
 ## Common tasks
 
-With `just` (`just` lists the top-level verbs; every sub-step - `build-ext`,
-`test-browser`, `gen`, `typecheck`, `build-repro`, the CI sub-checks, ... -
-is `[private]`: hidden from the list but runnable by name):
+moon is the canonical command interface: every dev task is a moon task, and
+`moon run help` prints the full menu with descriptions (raw JSON:
+`moon query tasks`). Unscoped names (`moon run ci`) resolve to the root
+project; per-project tasks are `project:task` (`moon run extension:build`).
 
 ```sh
-just build     # build everything (see below)
-just dev       # dev everything: extension (WXT) + docs site (Astro) + desktop app (tauri)
-just test      # rust tests (nextest) + protocol e2e
-just ci        # everything CI runs, minus the browser job
-just release   # pre-release gate: version checks + full ci
-just install   # build the release binary, then register it (doctor --fix)
-just lint      # lint everything: clippy -D warnings + biome lint
-just fmt       # format everything: cargo fmt + biome format
-just fix       # auto-fix everything: biome check --write + cargo fmt
-just run-app   # build, sign, verify, then launch the desktop app
+moon run build     # build everything (see below)
+moon run dev       # dev everything: extension (WXT) + docs site (Astro) + desktop app (tauri)
+moon run test      # rust tests (nextest + doctests) + protocol e2e
+moon run ci        # THE GATE: the cross-platform CI steps (see below for what CI adds)
+moon run release   # pre-release gate: version checks + full ci
+moon run install   # build the release binary, then register it (doctor --fix)
+moon run lint      # lint everything: clippy -D warnings + biome lint
+moon run fmt       # format everything: cargo fmt + biome format
+moon run fix       # auto-fix everything: biome check --write + cargo fmt
+moon run run-app   # build, sign, verify, then launch the desktop app
 ```
 
-`just build` builds the entire repo in one command: it typechecks
-`src/packages/shared`, bundles the extension, builds the desktop UI,
-typechecks `scripts/`, runs `cargo build --workspace`, and finishes by
-building the docs site. Use it to
-prove the whole graph still compiles after a cross-cutting change.
+`moon run build` builds the entire repo in one command: it renders the
+icons, typechecks `src/packages/shared`, bundles the extension, builds the
+desktop UI and the docs site, typechecks `scripts/`, and runs
+`cargo build --workspace`. Use it to prove the whole graph still compiles
+after a cross-cutting change.
 
-The justfile is the canonical command interface: every task is a `just`
-recipe, and the root `package.json` scripts are thin aliases that delegate to
-the corresponding recipe, so both entry points share one implementation. The
+`moon run ci` runs the cross-platform gate steps - the same list the old
+`just ci` ran: rust fmt/clippy/nextest+doctests, typos/machete, TS
+typecheck/biome/tests/extension build, protocol e2e, and the contract +
+hygiene checks. CI runs more on top: the macOS/Windows rust matrices,
+cargo-vet, linux-install, the adversarial/chaos suites, the browser suites,
+the web build, and the macOS-only desktop gate.
+
+The root `package.json` scripts are thin aliases that delegate to the
+corresponding moon task, so both entry points share one implementation. The
 JS-flavored root verbs (`lint`, `format`, `format:check`, `check`, `test`)
-delegate to the `*-ts` recipes; `build`, `gen`, and `typecheck` delegate to
-the same-named recipes; the repo-wide verbs in `just` cover every language at
-once (`just lint` = clippy + biome lint, `just fmt` = cargo fmt + biome
-format, `just test` = Rust + protocol e2e). Each recipe is a plain command
-you can also run by hand:
+delegate to the `*-ts` tasks; `build`, `gen`, and `typecheck` delegate to the
+same-named tasks; the repo-wide verbs cover every language at once
+(`moon run lint` = clippy + biome lint, `moon run fmt` = cargo fmt + biome
+format, `moon run test` = Rust + protocol e2e). Each task body is a plain
+command you can also run by hand:
 
 ```sh
 cargo build --release
@@ -109,56 +134,101 @@ cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
 bun install
-bunx tsc -p src/apps/extension  # one TS project; `just typecheck` covers all five
+bunx tsc -p src/apps/extension  # one TS project; `moon run typecheck` covers all five
 bunx biome ci .                 # lint + format check (biome.json)
 bun run --cwd src/apps/extension build
 ```
 
-## moon task orchestration (phase one)
+The full task menu, by area:
 
-The per-project TypeScript recipes (`build-ext`, `test-ext`, `test-shared`,
-`build-app-ui`, `test-app-ui`, `build-web`) and the repo-wide Biome recipes
-(`lint-ts`, `check-ts`, `fmt-check-ts`) delegate to
-[moon](https://moonrepo.dev) under the hood, so each task has one definition
-with declared inputs and outputs. moon is a pinned dev dependency
-(`@moonrepo/cli` in the root `package.json`); `bun install` provides it, and
-no global install or proto is needed. The justfile stays the canonical command
-interface - `moon run` is what the recipes call, not a second front door.
+| Area | Tasks |
+|------|-------|
+| Aggregates | `build`, `test`, `ci`, `release`, `lint`, `fmt`, `fix` |
+| Dev loops | `dev`, `dev-app`, `dev-web`, `extension:dev`, `desktop-ui:dev` |
+| Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc`), `build-release`, `build-repro`, `typos`, `machete`, `audit` |
+| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `desktop-ui:build`, `web:build` |
+| Contract codegen | `gen` (= `gen-shared` + `gen-app-types`), `gen-icons`, `check-gen`, `check-gen-app`, `check-envelope`, `check-gen-isolation` |
+| Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
+| Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
+| Desktop app | `bundle-app`, `dmg-app`, `run-app`, `install-app`, `check-app-signing`, `check-app-rust`, `desktop-ui:test` |
+| Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
+| Versioning | `sync-version`, `check-version`, `check-extension-id` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-all-green`, `check-toolchain`, `check-hasher` |
 
-What moon buys locally:
+## moon: the canonical command interface
+
+Every task has one definition with declared inputs: the repo-wide tasks and
+runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`,
+`extension`, `desktop-ui`, `web`) live in a `moon.yml` next to their code,
+and CI runs the same tasks (`.github/workflows/ci.yml` calls
+`moon run <task>` wherever the step is more than a single thin command).
+
+**Gates are never cached.** The `ci` aggregate, every task reachable from
+it, every `check-*` task, the python suites, and the runbook/ceremony tasks
+all set `options.cache: false` in their moon.yml: a gate that a cache hit
+can satisfy is not a gate, because a wrong hash (moon cannot hash gitignored
+inputs like the generated `.wxt/tsconfig.json`, and a mistaken
+`hasher.ignorePattern` would silently drop tracked files from every hash)
+would let unverified code land. `moon run ci` therefore always executes the
+full suite, in the fixed order its `deps` list declares
+(`runDepsInParallel: false`). The underlying tools (cargo, tsc, vite, bun)
+keep their own incremental caches, so warm reruns stay fast.
+
+What moon still buys beyond one task vocabulary:
 
 ```sh
-bunx moon run extension:build   # what `just build-ext` runs; cached
-bunx moon run :test             # every project's test task
-bunx moon ci                    # affected-only, based on touched files
+moon run extension:build   # one task, one definition, used by dev + CI
+moon run :test             # every project's test task
+moon ci                    # affected-only, based on touched files - a LOCAL
+                           # convenience for quick iteration, NEVER the gate
 ```
 
-Projects: `core` (Rust), `shared`, `extension`, `desktop-ui`, `web`, plus a
-`root` project for the repo-wide Biome passes. The `core` tasks (`test`,
-`test-doc`, `lint`, `fmt-check`, `build`) are additive conveniences: `just ci`
-and the Rust recipes keep calling cargo directly.
-
-What moon deliberately does not own yet: the `ci` recipe's structure and the
-GitHub Actions jobs (unchanged, and CI never runs moon), the contract codegen
-recipes (`gen`, `check-gen`, `check-envelope`), the desktop bundle / signing /
-release recipes, and the dev daemons (`dev-web` manages the astro dev daemon's
-stop/background lifecycle itself; there is intentionally no `web:dev` moon
-task).
+Two tasks are macOS-shaped: `gen-app-types` and `check-app-rust` compile the
+Tauri desktop crate, which needs the platform GUI toolchain (WebKitGTK on
+Linux; nothing ships that setup). They refuse with a pointer to
+`gen-shared` on a box without it, are not part of `moon run ci`, and CI runs
+them in the dedicated macOS `desktop` job.
 
 Cache trust, and the one edge that must never be narrowed: the Rust core is
 the canonical cross-process contract (ADR-0028), so the `shared` and
 `extension` tasks declare the whole core crate (plus `scripts/gen-ops.ts` and
 the cargo manifests) as inputs - the `rust-contract` file group in
 `.moon/tasks/all.yml`. That list is deliberately over-broad; a change anywhere
-in `src/packages/core` invalidates the downstream TS caches, because a stale
-cache hit on the contract path is the one failure mode this repo cannot
-accept. If you edit these task definitions, it is always safe to widen inputs
-and never safe to narrow them. Generated and downloaded output (target/,
-build/, .wxt/, rendered icons, ...) is kept out of every hash by
+in `src/packages/core` marks the downstream TS tasks affected, because a stale
+result on the contract path is the one failure mode this repo cannot accept.
+If you edit these task definitions, it is always safe to widen inputs and
+never safe to narrow them. Generated and downloaded output (target/, build/,
+.wxt/, rendered icons, ...) is kept out of every hash by
 `hasher.ignorePatterns` in `.moon/workspace.yml`; if you add a new gitignored
 output directory, add it there too (forgetting only over-invalidates, it
-cannot go stale). `.moon/cache/` is local state and gitignored;
-`rm -rf .moon/cache` is the reset button.
+cannot go stale), and `moon run check-hasher` (part of the gate) proves no
+tracked file matches any pattern. `.moon/cache/` is local state and
+gitignored; `rm -rf .moon/cache` is the reset button.
+
+## Toolchain pinning (proto)
+
+`.prototools` pins proto itself, bun, moon, rust, and uv; `proto install`
+provisions them all, and CI provisions the same way (the
+`moonrepo/setup-toolchain` action, pinned by commit SHA, installs proto +
+moon and the jobs `proto install` what they need). Four pins are
+necessarily duplicated, and `moon run check-toolchain` (part of the gate and
+of CI's version-consistency job) fails if any pair disagrees (for proto and
+moon it checks every setup-toolchain invocation in ci.yml individually, and
+that each is pinned to a full commit SHA):
+
+- **rust**: `rust-toolchain.toml` is the authoritative pin - rustup, IDEs,
+  and CI's `setup-rust-toolchain` read it natively, and it carries the
+  components + profile. The `.prototools` entry only pre-installs that
+  toolchain.
+- **bun**: mirrored in `package.json` `packageManager` (read by `setup-bun`
+  in the CI jobs that do not go through proto).
+- **proto/moon**: `ci.yml` passes explicit `proto-version` / `moon-version`
+  inputs (the action cannot read the proto pin from `.prototools`).
+
+uv is pinned only in `.prototools`, and python is owned by uv exactly as
+before: the protocol suites run under the interpreter pinned in
+`.python-version` via `uv run --no-project --isolated`. proto deliberately
+never provisions python (`settings.builtin-plugins` in `.prototools`).
 
 ## Working on the extension
 
@@ -215,10 +285,10 @@ BB_LOG=error chromium-bridge          # quiet
 ```sh
 # 1. bump the version in Cargo.toml
 # 2. propagate it to the extension manifest + package files
-just sync-version        # bun scripts/sync-version.ts
+moon run sync-version    # bun scripts/sync-version.ts
 # 3. update CHANGELOG.md (move [Unreleased] items under the new version)
 # 4. gate on a clean tree
-just release             # check-version + full ci
+moon run release         # check-version + full ci
 # 5. tag - pushing a v* tag triggers .github/workflows/release.yml, which
 #    builds macOS Apple Silicon, Linux x64, and Windows x64 archives (binary
 #    + built extension) and publishes them to GitHub Releases.

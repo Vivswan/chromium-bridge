@@ -6,7 +6,7 @@
 // The canonical frame contract is the Rust control-frame enums
 // (EnclaveControl / AdminControl in src/packages/core/src/protocol.rs,
 // ADR-0028). The base wire schemas are GENERATED from them
-// (envelope-wire.gen.ts, `just gen`); this module layers the extension's
+// (envelope-wire.gen.ts, `moon run gen`); this module layers the extension's
 // DELIBERATE parser asymmetries on top, each pinned in RECONCILED_FIELDS
 // (json-schema-normalize.ts), held to exactly that list by the parity gate
 // (scripts/check-envelope-parity.ts), and exercised behaviorally in

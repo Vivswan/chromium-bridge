@@ -4,13 +4,13 @@
 //
 // The canonical envelope contract is the Rust wire types (BridgeReq /
 // BridgeResp in src/packages/core/src/protocol.rs, ADR-0028). The base wire
-// schemas are GENERATED from them (envelope-wire.gen.ts, `just gen`), so the
+// schemas are GENERATED from them (envelope-wire.gen.ts, `moon run gen`), so the
 // field inventory, required-ness, and envelope strictness come straight from
 // the contract. This module layers the extension's DELIBERATE parser
 // asymmetries on top of the generated base - each field override below is
 // one asymmetry, named and pinned in RECONCILED_FIELDS
 // (json-schema-normalize.ts), held to exactly that list by the parity gate
-// (scripts/check-envelope-parity.ts, CI + `just ci`), and exercised
+// (scripts/check-envelope-parity.ts, CI + `moon run ci`), and exercised
 // behaviorally in tests/envelope-wire.gen.test.ts.
 
 import { z } from "zod";

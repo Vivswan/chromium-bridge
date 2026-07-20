@@ -5,9 +5,9 @@
 //! The Rust types in `protocol.rs` are the canonical envelope contract
 //! (ADR-0028). Two consumers read this output:
 //!
-//! - `scripts/gen-envelope.ts` (`just gen`) generates the extension's base
+//! - `scripts/gen-envelope.ts` (`moon run gen`) generates the extension's base
 //!   wire validators from it (`src/packages/shared/src/envelope-wire.gen.ts`);
-//! - `scripts/check-envelope-parity.ts` (CI + `just ci`) diffs it against
+//! - `scripts/check-envelope-parity.ts` (CI + `moon run ci`) diffs it against
 //!   `z.toJSONSchema()` of the validators the extension actually enforces -
 //!   the generated bases wrapped by a hand-written asymmetry layer - after a
 //!   small, documented set of erasure rules (see the rule list in

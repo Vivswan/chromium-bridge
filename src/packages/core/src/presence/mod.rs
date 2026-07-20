@@ -81,7 +81,7 @@
 //! challenges (refused before the keychain), and the presence-gated CLI
 //! commands are skipped on an enrolled machine (see `tests/protocol/e2e.py`,
 //! `enclave_key_present`). The real hardware path is exercised only by the
-//! explicit user runbook (`just touchid-gates`), consciously run and
+//! explicit user runbook (`moon run touchid-gates`), consciously run and
 //! tapped.
 
 // The real hardware backend is compiled only into non-test macOS builds:

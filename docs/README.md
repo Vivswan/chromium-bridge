@@ -27,7 +27,7 @@ project. Code comments answer "what does this code do"; this directory answers
 
 > The single source of truth for cross-process contracts (tool catalogue,
 > error taxonomy, capabilities, protocol version, identity, wire envelopes)
-> is the Rust core; the TS side is generated from it (`just gen`). See
+> is the Rust core; the TS side is generated from it (`moon run gen`). See
 > [architecture.md section 11](./architecture.md#11-protocol-boundary-contracts-error-taxonomy-and-handshake)
 > and [ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md).
 
@@ -36,7 +36,7 @@ project. Code comments answer "what does this code do"; this directory answers
 > entry point for agents is [`AGENTS.md`](../AGENTS.md). The build/test
 > toolchain is in [development.md](./development.md).
 
-> `src/apps/web/` holds a minimal Astro site (`just build-web`) that renders
+> `src/apps/web/` holds a minimal Astro site (`moon run web:build`) that renders
 > these markdown docs and their translations; the markdown stays the single
 > source. Cross-doc links on the rendered site still point at `.md` paths
 > (a link rewrite is a tracked follow-up); navigate from its index page.
@@ -68,7 +68,7 @@ choices do not get an ADR.
 | [0010](./adr/0010-cookie-storage-readonly.md) | Read-only Cookie/Storage access | Accepted |
 | [0011](./adr/0011-options-page-for-settings.md) | Settings managed through a dedicated Options page | Accepted |
 | [0012](./adr/0012-typescript-esbuild-extension-build.md) | TypeScript + esbuild extension build | Superseded by #0027 (WXT) |
-| [0013](./adr/0013-ci-and-toolchain.md) | CI and toolchain | Accepted; revised by #0023 (bun/Biome/just) |
+| [0013](./adr/0013-ci-and-toolchain.md) | CI and toolchain | Accepted; revised by #0023 (bun/Biome) and the moon/proto adoption |
 | [0014](./adr/0014-leveled-logging.md) | Leveled stderr logging + typed errors | Accepted |
 | [0015](./adr/0015-windows-support.md) | Windows support | Accepted (best-effort; see SECURITY.md) |
 | [0016](./adr/0016-linux-wsl-support.md) | Linux and WSL support | Accepted |

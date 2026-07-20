@@ -1,8 +1,8 @@
 //! The bridge's identity constants: the values that make this deployment of
 //! chromium-bridge recognizably itself across every process boundary. This
 //! module is the canonical source (ADR-0028); the TypeScript side receives
-//! them through the generated `src/packages/shared/src/identity.gen.ts` (`just
-//! gen`), the registration engine consumes them directly, and
+//! them through the generated `src/packages/shared/src/identity.gen.ts` (`moon
+//! run gen`), the registration engine consumes them directly, and
 //! `scripts/check-extension-id.ts` verifies the built extension manifest
 //! against the same values.
 
@@ -25,8 +25,8 @@ pub const EXTENSION_MANIFEST_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCg
 /// constant because the host manifest's `allowed_origins` and the
 /// registration/doctor surfaces need it without a crypto round-trip; the
 /// derivation is recomputed and asserted against this literal by
-/// `scripts/gen-ops.ts` (`just gen`) and `scripts/check-extension-id.ts`
-/// (`just ci`), so this value cannot drift from the key.
+/// `scripts/gen-ops.ts` (`moon run gen`) and `scripts/check-extension-id.ts`
+/// (`moon run ci`), so this value cannot drift from the key.
 pub const PINNED_EXTENSION_ID: &str = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
 
 #[cfg(test)]

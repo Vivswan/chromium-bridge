@@ -1,13 +1,13 @@
 // GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs;
 // AdminControl embeds allowlist::ClientEntry) by scripts/gen-envelope.ts -
-// DO NOT EDIT. Edit the Rust types, then run `just gen`.
+// DO NOT EDIT. Edit the Rust types, then run `moon run gen`.
 //
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
 // .strict()), required fields required, no defaults (see the fail-closed
 // generation rules G1-G5 in scripts/gen-envelope.ts). The extension never
 // consumes these directly: envelope.ts and enclave.ts layer the deliberate
 // parser asymmetries on top - each pinned by scripts/check-envelope-parity.ts
-// (`just check-envelope`) and exercised in tests/envelope-wire.gen.test.ts.
+// (`moon run check-envelope`) and exercised in tests/envelope-wire.gen.test.ts.
 
 import { z } from "zod";
 

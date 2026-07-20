@@ -1,10 +1,10 @@
 # moon tasks for src/packages/shared (contract-derived types + validators).
-# The justfile recipes test-shared (and friends) delegate here; the justfile
-# stays the front door (AGENTS.md).
+# moon is the canonical command interface (phase two); shared:test is a step
+# of the root ci gate.
 #
 # Inputs include the inherited rust-contract file group (.moon/tasks/all.yml):
 # the *.gen.ts modules in src/ are generated FROM the Rust core, so a core
-# change must invalidate these caches even before `just gen` refreshes the
+# change must invalidate these caches even before `moon run gen` refreshes the
 # checked-in output. Never narrow that edge.
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
@@ -13,6 +13,7 @@ layer: 'library'
 
 tasks:
   typecheck:
+    description: 'Type-check src/packages/shared alone (the repo-wide pass is the root typecheck task)'
     command: 'bun run typecheck'
     toolchains: ['system']
     inputs:
@@ -24,6 +25,7 @@ tasks:
       - '@group(rust-contract)'
 
   test:
+    description: 'Unit-test src/packages/shared: generated catalogue, boundary validators'
     command: 'bun run test'
     toolchains: ['system']
     inputs:
@@ -33,6 +35,8 @@ tasks:
       - '/package.json'
       - '/bun.lock'
       - '@group(rust-contract)'
+    options:
+      cache: false # in the ci gate: gates are never cached
 
   lint:
     # Same invocation shape as the repo-wide gate (`bunx biome lint .` from

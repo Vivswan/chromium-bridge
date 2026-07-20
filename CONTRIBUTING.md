@@ -33,17 +33,21 @@ lands via a squash-merged PR whose gates are green.
    ```sh
    git pull --rebase origin main
    ```
-4. **Gate locally - everything must pass** (`just` lists all recipes; the
-   lefthook pre-commit hook, wired by `bun install`, runs this for you):
+4. **Gate locally - everything must pass** (`moon run help` lists every
+   task; the lefthook pre-commit hook, wired by `bun install`, runs this for
+   you):
    ```sh
-   just ci            # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
+   moon run ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
    ```
-   Browser tests (`just test-browser`) run **only** against an isolated Chrome
-   for Testing via `CHROME_BIN`, never your daily Chrome (see Safety below and
-   [tests/README.md](./tests/README.md)). They are not part of `just ci`; CI
-   runs them in its required `browser` job against an isolated Chrome, and
-   runtime-behavior changes (reconnect, handshake, service worker) must still
-   be verified there manually.
+   The gate is uncached by design (every step sets `cache: false` in its
+   moon.yml), so it always runs the full suite; `moon ci` (affected-only) is
+   a local convenience, never the gate. Browser tests
+   (`moon run test-browser`) run **only** against an isolated Chrome for
+   Testing via `CHROME_BIN`, never your daily Chrome (see Safety below and
+   [tests/README.md](./tests/README.md)). They are not part of
+   `moon run ci`; CI runs them in its required `browser` job against an
+   isolated Chrome, and runtime-behavior changes (reconnect, handshake,
+   service worker) must still be verified there manually.
 5. **Open a PR and squash-merge.** Push the branch, open a PR against `main`,
    wait for **all required checks green**, then **squash-merge** (one change =
    one commit on `main`):
@@ -88,7 +92,7 @@ window you didn't start yourself: stop and ask first.
   (`src/packages/core/src/log.rs`), never bare `eprintln!` for diagnostics.
   Remember: **stdout is protocol** - all logging goes to stderr.
 - **TypeScript** - Biome lints and formats every TS/JS/JSON file in the bun
-  workspace (`bunx biome ci .` to check, `just fix` to auto-fix; config in
+  workspace (`bunx biome ci .` to check, `moon run fix` to auto-fix; config in
   `biome.json`). `noExplicitAny` is enforced in extension source; test files
   and the tests/ harness are exempt until their CDP plumbing gets real types.
 - The cross-boundary TS shapes (settings, envelopes, runtime messages) live as
@@ -108,12 +112,12 @@ A new tool touches both sides (see architecture.md section 10):
    [`src/packages/core/src/tools/capabilities.rs`](src/packages/core/src/tools/capabilities.rs),
    and bump the count in `tool_count_is_pinned`. The `registry_covers_catalogue`
    and capability-parity tests (`cargo test`) point at whichever you miss.
-2. Run `just gen` to regenerate the TS side
+2. Run `moon run gen` to regenerate the TS side
    (`src/packages/shared/src/*.gen.ts`); CI fails if the generated files are
    stale. A new arg that widens the envelope's args bag is picked up
    automatically; a new envelope FIELD is a protocol change (see
    `BridgeReq` in `src/packages/core/src/protocol.rs` and the envelope parity
-   gate, `just check-envelope`).
+   gate, `moon run check-envelope`).
 3. Give the op a home in the extension: `SW_OPS` + a `dispatchSw` case in
    `src/apps/extension/src/lib/background/dispatch.ts`, or `PAGE_OPS`
    (`src/apps/extension/src/lib/shared/page-ops.ts`) + cases in
@@ -128,7 +132,7 @@ A new tool touches both sides (see architecture.md section 10):
 
 ## Versioning
 
-`Cargo.toml` is the source of truth. Bump it, run `just sync-version`, and update
+`Cargo.toml` is the source of truth. Bump it, run `moon run sync-version`, and update
 `CHANGELOG.md`. CI fails if the crate and extension versions drift.
 
 ## License

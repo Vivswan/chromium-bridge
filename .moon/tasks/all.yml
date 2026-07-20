@@ -1,4 +1,4 @@
-# Inherited task settings for every moon project (phase one).
+# Inherited task settings for every moon project.
 #
 # THE CONTRACT EDGE. The Rust core is the canonical cross-process contract
 # (ADR-0028): scripts/gen-ops.ts runs the core's emit_contract example

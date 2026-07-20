@@ -93,15 +93,15 @@ know why it is there:
 - **Convention / GitHub-surfaced (keep at root):** `README.md`, `LICENSE`,
   `SECURITY.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `CHANGELOG.md`, `AGENTS.md`.
 - **Referenced by path (moving requires editing every reference):**
-  `justfile` (root) is the canonical task entrypoint.
+  the root `moon.yml` (with `.moon/` + the per-project `moon.yml` files) is the canonical task entrypoint.
 
 If a genuine reason to relocate one appears, update every reference in the same
-change (CI workflows, `justfile`, `scripts/`, docs, `CODEOWNERS`) and confirm the
+change (CI workflows, moon tasks, `scripts/`, docs, `CODEOWNERS`) and confirm the
 lint/build gates still find their config.
 
 ## Versioning & release
 
-`Cargo.toml` is the single source of truth; `just sync-version` propagates it.
+`Cargo.toml` is the single source of truth; `moon run sync-version` propagates it.
 Tagging `vX.Y.Z` triggers the release build. SemVer discipline applies even
 pre-1.0 - a `0.x` bump is not a license to break compatibility silently
 (tool removal/rename, permission widening, protocol breaks are "major"-shaped).

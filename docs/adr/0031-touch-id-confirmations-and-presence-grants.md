@@ -41,7 +41,7 @@ macOS gives two candidate primitives. We measured both:
 - A Secure Enclave signing operation on a key whose ACL carries
   `kSecAccessControlUserPresence` cannot complete without a live Touch ID (or
   login-password) response. This is the primitive ADR-0021 already relies on,
-  and the one the hardware proof (`just touchid-proof`) confirmed
+  and the one the hardware proof (`moon run touchid-proof`) confirmed
   prompts on real hardware.
 
 ## Decision
@@ -133,7 +133,7 @@ opt-out-able.
 - The gate cannot be fully verified without a finger on the sensor. The
   headless suites exercise every reachable path (the no-downgrade rule, the
   refused-window approval, forged and replayed proofs, the floors); the
-  hardware path itself is driven by `just touchid-gates`, a runbook
+  hardware path itself is driven by `moon run touchid-gates`, a runbook
   the user runs to see each prompt appear.
 
 ## Residual risk

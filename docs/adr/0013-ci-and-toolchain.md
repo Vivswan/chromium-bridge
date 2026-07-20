@@ -1,6 +1,6 @@
 # ADR-0013: Unified toolchain and CI (task entry point + GitHub Actions + single version source)
 
-- **Status**: Accepted (the task-entry-point part was later amended: justfile -> Makefile-only)
+- **Status**: Accepted (the task-entry-point part was amended twice: justfile -> Makefile-only upstream, then moon after the ADR-0023 rebuild)
 - **Date**: 2026-07-10
 - **Deciders**: user + AI assistant
 
@@ -8,10 +8,20 @@
 > point, and for a while carried a 1:1 mirrored `Makefile` (for environments
 > without `just`). Two hand-synced task runners carry drift risk, so this later
 > **converged on keeping only the `Makefile`** (zero install, no
-> `cargo install just` needed); the `justfile` has been deleted. Wherever the text
+> `cargo install just` needed); the `justfile` had been deleted. Wherever the text
 > below says `justfile` / `just <recipe>`, read `Makefile` / `make <target>`; the
 > recipe names and aggregates (`make ci` etc.) are unchanged, and the remaining
 > decisions (CI, gates, version sync) are unaffected.
+>
+> **Second amendment (2026-07, after the ADR-0023 rebuild)**: the rebuilt repo
+> readopted a justfile, then retired it for **[moon](https://moonrepo.dev)** as
+> the canonical command interface, with **proto** (`.prototools`) as the
+> bootstrap toolchain manager. Wherever the text below says `just <recipe>`,
+> read `moon run <task>` (`moon run ci`, `moon run test-e2e`, ...); the task
+> names and aggregates survive, gate tasks are deliberately uncached
+> (`options.cache: false` - a gate must never be skippable by a cache hit),
+> and the remaining decisions (CI shape, gates, version sync) still stand.
+> See docs/development.md for the current interface.
 
 ## Context
 

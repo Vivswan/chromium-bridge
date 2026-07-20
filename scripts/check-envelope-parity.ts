@@ -7,7 +7,7 @@
 // allowlist::ClientEntry). The validators the extension enforces are built
 // in two layers: a GENERATED base (scripts/gen-envelope.ts ->
 // src/packages/shared/src/envelope-wire.gen.ts, faithful to the Rust
-// schemas; freshness is `just check-gen`'s job) wrapped by a hand-written
+// schemas; freshness is `moon run check-gen`'s job) wrapped by a hand-written
 // asymmetry layer (envelope.ts / enclave.ts) that deliberately diverges from
 // the contract in a short, documented list of places.
 //
@@ -27,7 +27,7 @@
 // (FRAME_PLANS below), the plans with a Zod reader must exactly match the
 // set of generated base schemas (GENERATED_WIRE_FRAMES), and every gated
 // inbound frame must be reachable through a runtime classifier. Run via
-// `just check-envelope` (part of `just ci`).
+// `moon run check-envelope` (part of `moon run ci`).
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

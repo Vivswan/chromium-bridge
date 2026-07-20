@@ -1,6 +1,6 @@
 // Typed wrappers over the Tauri command surface (src/apps/desktop/src/main.rs).
 // The payload types are GENERATED from the Rust command DTOs into
-// commands.gen.ts (`just gen`), so this facade cannot drift from Rust. They
+// commands.gen.ts (`moon run gen`), so this facade cannot drift from Rust. They
 // are display contracts, not enforcement - every decision stays in Rust.
 
 import { invoke } from "@tauri-apps/api/core";

@@ -49,7 +49,7 @@ desktop bundle (the helper-bundle host with its own entitlements,
 [ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md)), wraps it in a
 disk image, and attaches `chromium-bridge-app-<tag>-macos-arm64.dmg` plus its
 `.sha256` and a provenance attestation to the same release. It is the CI
-equivalent of `just dmg-app`, including the re-verification of the app inside
+equivalent of `moon run dmg-app`, including the re-verification of the app inside
 the mounted image by `scripts/check-desktop-signing.ts`.
 
 The job needs signing material that forks and secretless checkouts do not

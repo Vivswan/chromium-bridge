@@ -3,7 +3,7 @@
 // src/apps/extension/package.json (the WXT-generated manifest reads its version from
 // there), then verify consistency.
 //
-// Usage: bump the version in Cargo.toml, then run `just sync-version`
+// Usage: bump the version in Cargo.toml, then run `moon run sync-version`
 // (or `bun scripts/sync-version.ts`) and commit the result.
 
 import { spawnSync } from "node:child_process";

@@ -1,6 +1,6 @@
 // GENERATED from the Rust core (src/packages/core/src/protocol.rs and
 // src/packages/core/src/tools/capabilities.rs) by scripts/gen-ops.ts - DO NOT EDIT.
-// Run `just gen`.
+// Run `moon run gen`.
 
 // The INTERNAL bridge protocol version (MCP server <-> native host <->
 // extension). Not the MCP JSON-RPC version and not the extension release
