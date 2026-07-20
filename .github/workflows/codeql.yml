@@ -37,4 +37,8 @@ jobs:
       - uses: github/codeql-action/init@eec0bff2f6c15bf3f1e8a0152f94d17664a06a06 # v4
         with:
           languages: javascript-typescript
+          # Advanced setup does not run the alert-suppression queries by
+          # default, so inline `codeql[query-id]` comments are inert without
+          # this: append the suppression query to the default suite.
+          packs: +codeql/javascript-queries:AlertSuppression.ql
       - uses: github/codeql-action/analyze@eec0bff2f6c15bf3f1e8a0152f94d17664a06a06 # v4
