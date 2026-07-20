@@ -301,11 +301,17 @@ jobs:
         with:
           cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          python-version: "3.12"
+          # uv provisions the exact interpreter pinned in .python-version -
+          # the same one local runs get. Pinned: its resolution semantics
+          # decide which interpreter a gating suite runs under; bump
+          # deliberately. The harness is dependency-free by design, so the
+          # package cache would always be empty; skip it.
+          version: "0.11.26"
+          enable-cache: false
       - run: cargo build --release
-      - run: python3 tests/protocol/e2e.py
+      - run: uv run --no-project --isolated tests/protocol/e2e.py
 
   adversarial:
     name: Adversarial break-in (Python)
@@ -316,11 +322,13 @@ jobs:
         with:
           cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          python-version: "3.12"
+          # Same pinned-interpreter setup as the e2e job (see the comment there).
+          version: "0.11.26"
+          enable-cache: false
       - run: cargo build --release
-      - run: python3 tests/protocol/adversarial.py
+      - run: uv run --no-project --isolated tests/protocol/adversarial.py
 
   chaos:
     name: Fault-injection chaos (Python)
@@ -331,11 +339,13 @@ jobs:
         with:
           cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          python-version: "3.12"
+          # Same pinned-interpreter setup as the e2e job (see the comment there).
+          version: "0.11.26"
+          enable-cache: false
       - run: cargo build --release
-      - run: python3 tests/protocol/chaos.py
+      - run: uv run --no-project --isolated tests/protocol/chaos.py
 
   browser:
     name: DOM + smoke + security proofs (Chrome)
