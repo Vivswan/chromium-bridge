@@ -109,6 +109,7 @@ class Page {
   sessionId: string;
   private id = 0;
   private pending = new Map<number, (v: any) => void>();
+  private eventWaiters = new Map<string, ((params: any) => void)[]>();
   private constructor(ws: WebSocket, sessionId: string) {
     this.ws = ws;
     this.sessionId = sessionId;
@@ -117,6 +118,15 @@ class Page {
       if (msg.id && this.pending.has(msg.id)) {
         this.pending.get(msg.id)!(msg);
         this.pending.delete(msg.id);
+        return;
+      }
+      // CDP events for this session (no id, a method) -> registered waiters.
+      if (!msg.id && msg.method && msg.sessionId === this.sessionId) {
+        const waiters = this.eventWaiters.get(msg.method);
+        if (waiters) {
+          this.eventWaiters.delete(msg.method);
+          for (const w of waiters) w(msg.params);
+        }
       }
     };
   }
@@ -166,16 +176,34 @@ class Page {
       this.ws.send(JSON.stringify({ id, method, params, sessionId: this.sessionId }));
     });
   }
-  /** Evaluate an expression in the page, return the value (must be JSON via returnByValue). */
-  /** Navigate the page to a URL. Enables switching fixtures per test. */
-  async navigate(url: string, settleMs = 400): Promise<void> {
-    await this.send("Page.enable", {});
-    await this.send("Page.navigate", { url });
-    // Give inline scripts time to run. CDP doesn't expose a clean "load done"
-    // without listening to events; a short settle is reliable for our static
-    // fixtures.
-    await new Promise((r) => setTimeout(r, settleMs));
+  /** Resolve with the next `method` CDP event's params, or reject at the
+   * deadline. Register BEFORE sending the command that triggers the event so
+   * a fast event cannot fire between the command and the listener. */
+  waitForEvent(method: string, timeoutMs = 10000): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const rest = (this.eventWaiters.get(method) ?? []).filter((w) => w !== waiter);
+        if (rest.length > 0) this.eventWaiters.set(method, rest);
+        else this.eventWaiters.delete(method);
+        reject(new Error(`timed out after ${timeoutMs}ms waiting for ${method}`));
+      }, timeoutMs);
+      const waiter = (params: any) => {
+        clearTimeout(timer);
+        resolve(params);
+      };
+      this.eventWaiters.set(method, [...(this.eventWaiters.get(method) ?? []), waiter]);
+    });
   }
+  /** Navigate the page to a URL. Enables switching fixtures per test.
+   * Awaits Page.loadEventFired, so inline scripts in the (static, non-async)
+   * fixtures have run by the time this returns. */
+  async navigate(url: string): Promise<void> {
+    await this.send("Page.enable", {});
+    const loaded = this.waitForEvent("Page.loadEventFired");
+    await this.send("Page.navigate", { url });
+    await loaded;
+  }
+  /** Evaluate an expression in the page, return the value (must be JSON via returnByValue). */
   async evaluate(expr: string): Promise<any> {
     const r = await this.send("Runtime.evaluate", {
       expression: expr,
@@ -304,8 +332,6 @@ async function main() {
   try {
     await chrome.waitReady();
     const page = await Page.connect(9444);
-    // Give the page's inline <script> (localStorage setup) time to run.
-    await new Promise((r) => setTimeout(r, 300));
 
     await runAllTests(page);
   } finally {
