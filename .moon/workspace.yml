@@ -27,7 +27,12 @@ vcs:
 # .gitignore; every pattern is '**/'-prefixed because moon only reliably
 # matches these patterns with a leading '**'. Getting the list wrong is safe
 # in the direction that matters: a missing pattern can only over-invalidate
-# caches or fail a run loudly, never produce a stale cache hit.
+# caches or fail a run loudly, never produce a stale cache hit. The OPPOSITE
+# drift is the dangerous one: a pattern here that matches a TRACKED source
+# file silently drops it from every hash (a real stale-cache hole). The
+# generic '**/build/**' and '**/tmp/**' entries are the risky ones - never
+# name a tracked source directory build/ or tmp/, and when adding a pattern
+# check `git ls-files | grep <pattern-ish>` matches nothing.
 hasher:
   ignorePatterns:
     - '**/node_modules/**'
