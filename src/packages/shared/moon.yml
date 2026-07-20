@@ -39,6 +39,7 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   lint:
+    description: "Biome lint for the shared package"
     # Same invocation shape as the repo-wide gate (`bunx biome lint .` from
     # the root), scoped to this project so config resolution is identical.
     command: 'bunx biome lint $projectSource'
