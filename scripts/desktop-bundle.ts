@@ -27,17 +27,16 @@
 //      hdiutil runs AFTER the re-sign because tauri's own dmg target would
 //      capture the .app before the helper bundle exists). The image gets the
 //      branded install window (background from assets/dmg/background.svg,
-//      fixed icon positions, volume icon) via Finder scripting on a
-//      temporary read-write image; --plain-dmg skips the styling and ships
-//      the bare drag-to-install layout (the fallback when Finder automation
-//      is unavailable).
+//      fixed icon positions, volume icon) by writing the mounted volume's
+//      .DS_Store deterministically (scripts/dmg-dsstore.ts) - no Finder, no
+//      AppleScript - so it styles identically on a headless CI runner and
+//      locally.
 //
 // macOS-only by design: the entitlement chain is the thing under test.
 
 import {
   copyFileSync,
   cpSync,
-  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -68,8 +67,17 @@ if (process.platform !== "darwin") {
   process.exit(1);
 }
 
-const wantDmg = process.argv.includes("--dmg") || process.argv.includes("--plain-dmg");
-const plainDmg = process.argv.includes("--plain-dmg");
+const wantDmg = process.argv.includes("--dmg");
+
+// --plain-dmg used to skip the Finder-based styling; the styling is now
+// deterministic and Finder-free (see below), so there is no unstyled path to
+// fall back to. Reject it explicitly rather than silently building no dmg.
+if (process.argv.includes("--plain-dmg")) {
+  console.error(
+    "error: --plain-dmg was removed; the styled dmg is now built without Finder. Use --dmg.",
+  );
+  process.exit(1);
+}
 
 function run(cmd: string[], cwd: string = root): void {
   console.log(`+ ${cmd.join(" ")}`);
@@ -92,6 +100,13 @@ function attempt(cmd: string[]): boolean {
     console.error(`error: could not execute ${cmd[0]}`);
     return false;
   }
+}
+
+// Best-effort detach so a partial run never leaves a read-write image
+// attached: a plain detach first, then -force if something transient (a
+// stray mds indexer, say) still holds the volume.
+function detach(target: string): boolean {
+  return attempt(["hdiutil", "detach", target]) || attempt(["hdiutil", "detach", "-force", target]);
 }
 
 // The signing identity and bundle id come from tauri.conf.json (single
@@ -253,14 +268,13 @@ run(["bun", resolve(root, "scripts/check-desktop-signing.ts")]);
 // re-verified so "check-desktop-signing passed" holds for the artifact that
 // ships, not just the build-tree .app.
 //
-// By default the install window is branded: the stage carries the rendered
-// background (assets/dmg/background.svg -> hidpi TIFF) and the volume icon,
-// and Finder scripting on a temporary read-write image writes the .DS_Store
-// (window size, icon positions) before conversion to the final compressed
-// UDZO image. Styling is cosmetic, not a security gate, but it still fails
-// loudly rather than shipping a half-styled image; --plain-dmg is the
-// explicit fallback when Finder automation is unavailable (e.g. a CI runner
-// without an automation-capable UI session).
+// The install window is branded: the stage carries the rendered background
+// (assets/dmg/background.svg -> hidpi TIFF) and the volume icon, and the
+// mounted volume's .DS_Store (window size, icon positions, background) is
+// written DETERMINISTICALLY by scripts/dmg-dsstore.ts - no Finder, no
+// AppleScript - so the styled image is produced identically on a headless CI
+// runner and locally. Styling is cosmetic, not a security gate, but it still
+// fails loudly rather than shipping a half-styled image.
 if (wantDmg) {
   const arch = process.arch === "arm64" ? "arm64" : process.arch;
   const dmgDir = resolve(root, "build/dmg");
@@ -268,181 +282,101 @@ if (wantDmg) {
   const mount = resolve(dmgDir, "mnt");
   const dmg = resolve(dmgDir, `chromium-bridge-app-${version}-macos-${arch}.dmg`);
   const volname = "Chromium Bridge";
-  // Finder is scripted against the volume by NAME, so an already-mounted
-  // volume with the same name would make it style the wrong disk. Checked
-  // before the rmSync: if a previous run failed to detach, deleting dmgDir
-  // here would pull the still-mounted rw.dmg out from under the mount.
-  const volume = `/Volumes/${volname}`;
-  if (!plainDmg && existsSync(volume)) {
-    console.error(`error: a volume is already mounted at ${volume}; detach it and re-run`);
-    process.exit(1);
-  }
+  const appName = "Chromium Bridge.app";
   rmSync(dmgDir, { recursive: true, force: true });
   mkdirSync(stage, { recursive: true });
-  run(["ditto", appDeliverable, resolve(stage, "Chromium Bridge.app")]);
+  run(["ditto", appDeliverable, resolve(stage, appName)]);
   symlinkSync("/Applications", resolve(stage, "Applications"));
 
-  if (plainDmg) {
-    run([
-      "hdiutil",
-      "create",
-      "-volname",
-      volname,
-      "-srcfolder",
-      stage,
-      "-format",
-      "UDZO",
-      "-ov",
-      dmg,
-    ]);
-  } else {
-    // Window dressing travels inside the image (dotfiles stay hidden in
-    // Finder). The volume icon reuses the app's own icns; the background
-    // TIFF is rendered from the committed SVG at build time.
-    mkdirSync(resolve(stage, ".background"));
-    run([
-      "bun",
-      resolve(root, "scripts/gen-dmg-background.ts"),
-      resolve(stage, ".background/background.tiff"),
-    ]);
-    copyFileSync(resolve(desktop, "icons/icon.icns"), resolve(stage, ".VolumeIcon.icns"));
+  // Window dressing travels inside the image (dotfiles stay hidden in
+  // Finder). The volume icon reuses the app's own icns; the background
+  // TIFF is rendered from the committed SVG at build time.
+  mkdirSync(resolve(stage, ".background"));
+  run([
+    "bun",
+    resolve(root, "scripts/gen-dmg-background.ts"),
+    resolve(stage, ".background/background.tiff"),
+  ]);
+  copyFileSync(resolve(desktop, "icons/icon.icns"), resolve(stage, ".VolumeIcon.icns"));
 
-    const rw = resolve(dmgDir, "rw.dmg");
-    run([
-      "hdiutil",
-      "create",
-      "-volname",
-      volname,
-      "-srcfolder",
-      stage,
-      "-fs",
-      "HFS+",
-      "-format",
-      "UDRW",
-      "-ov",
-      rw,
-    ]);
-    // Attach and take the actual mount point from hdiutil's output (the
-    // last tab-separated field of the volume line), so every later step -
-    // and above all the detach - targets the exact mount this run created.
-    console.log(`+ hdiutil attach ${rw} -nobrowse -noautoopen`);
-    const attach = Bun.spawnSync(["hdiutil", "attach", rw, "-nobrowse", "-noautoopen"], {
-      cwd: root,
-      stdout: "pipe",
-      stderr: "inherit",
-    });
-    const attachOut = attach.stdout.toString();
-    process.stdout.write(attachOut);
-    if (attach.exitCode !== 0) {
-      console.error(`error: hdiutil attach exited with ${attach.exitCode}`);
-      process.exit(attach.exitCode ?? 1);
-    }
-    const mounted = attachOut
-      .split("\n")
-      .map((line) => line.split("\t").map((field) => field.trim()))
-      .map((fields) => fields[fields.length - 1])
-      .find((last) => last?.startsWith("/Volumes/"));
-    if (mounted === undefined) {
-      attempt(["hdiutil", "detach", volume]);
-      console.error("error: no mount point in hdiutil attach output");
-      process.exit(1);
-    }
-
-    // Icon coordinates and window size are a layout contract with
-    // assets/dmg/background.svg (app at 165,190; Applications at 495,190;
-    // 660x400 content area) - keep them in sync.
-    const style = `
-tell application "Finder"
-  tell disk "${volname}"
-    open
-    delay 1
-    set current view of container window to icon view
-    set toolbar visible of container window to false
-    set statusbar visible of container window to false
-    set the bounds of container window to {200, 120, 860, 520}
-    set viewOptions to the icon view options of container window
-    set arrangement of viewOptions to not arranged
-    set icon size of viewOptions to 128
-    set text size of viewOptions to 12
-    set background picture of viewOptions to file ".background:background.tiff"
-    set position of item "Chromium Bridge.app" of container window to {165, 190}
-    set position of item "Applications" of container window to {495, 190}
-    close
-    open
-    update without registering applications
-    delay 1
-    close
-  end tell
-end tell`;
-
-    // Finder automation is the flaky link (slow first launch, occasional
-    // AppleEvent timeouts on CI), so it gets retries.
-    let styled = false;
-    for (let i = 1; i <= 3 && !styled; i++) {
-      if (i > 1) {
-        console.error(`finder styling attempt ${i - 1} failed; retrying`);
-        Bun.sleepSync(2000);
-      }
-      styled = attempt(["osascript", "-e", style]);
-    }
-
-    // kHasCustomIcon on the volume root makes Finder use .VolumeIcon.icns.
-    // SetFile comes with the Xcode command-line tools; if it is absent,
-    // attempt() fails the build loudly below.
-    let ok = styled && attempt(["SetFile", "-a", "C", mounted]);
-
-    // Finder writes the .DS_Store asynchronously; give it a moment to land
-    // before the volume is detached.
-    if (ok) {
-      let flushed = existsSync(resolve(mounted, ".DS_Store"));
-      for (let i = 0; i < 20 && !flushed; i++) {
-        Bun.sleepSync(500);
-        flushed = existsSync(resolve(mounted, ".DS_Store"));
-      }
-      if (!flushed) {
-        console.error("error: Finder never wrote the volume .DS_Store");
-        ok = false;
-      }
-      Bun.spawnSync(["sync"], { stdout: "inherit", stderr: "inherit" });
-    }
-
-    let detached = false;
-    for (let i = 0; i < 6 && !detached; i++) {
-      if (i > 0) Bun.sleepSync(1000);
-      detached = attempt(["hdiutil", "detach", mounted]);
-    }
-    if (!ok || !detached) {
-      console.error(
-        "error: DMG window styling failed; fix Finder automation or re-run with --plain-dmg",
-      );
-      process.exit(1);
-    }
-
-    run([
-      "hdiutil",
-      "convert",
-      rw,
-      "-format",
-      "UDZO",
-      "-imagekey",
-      "zlib-level=9",
-      "-ov",
-      "-o",
-      dmg,
-    ]);
-    rmSync(rw, { force: true });
+  const rw = resolve(dmgDir, "rw.dmg");
+  run([
+    "hdiutil",
+    "create",
+    "-volname",
+    volname,
+    "-srcfolder",
+    stage,
+    "-fs",
+    "HFS+",
+    "-format",
+    "UDRW",
+    "-ov",
+    rw,
+  ]);
+  // Attach, and from hdiutil's output take both the /Volumes mount point (for
+  // the styling steps, which need a filesystem path) and the whole-disk device
+  // node like /dev/disk4 (for the detach). Detaching by device node is
+  // unambiguous: if a same-named volume was already mounted, macOS gives this
+  // image a suffixed /Volumes path, but the device node still names exactly the
+  // image this run attached - never someone else's volume.
+  console.log(`+ hdiutil attach ${rw} -nobrowse -noautoopen`);
+  const attach = Bun.spawnSync(["hdiutil", "attach", rw, "-nobrowse", "-noautoopen"], {
+    cwd: root,
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  const attachOut = attach.stdout.toString();
+  process.stdout.write(attachOut);
+  if (attach.exitCode !== 0) {
+    console.error(`error: hdiutil attach exited with ${attach.exitCode}`);
+    process.exit(attach.exitCode ?? 1);
   }
+  const rows = attachOut.split("\n").map((line) => line.split("\t").map((field) => field.trim()));
+  const mounted = rows
+    .map((fields) => fields[fields.length - 1])
+    .find((last) => last?.startsWith("/Volumes/"));
+  const device = rows.map((fields) => fields[0]?.match(/^\/dev\/disk\d+/)?.[0]).find((d) => d);
+  if (device === undefined) {
+    // Should never happen (the device node is hdiutil's primary output); with
+    // no handle on what we attached, refuse rather than risk detaching the
+    // wrong disk.
+    console.error("error: no device node in hdiutil attach output; detach manually");
+    process.exit(1);
+  }
+  if (mounted === undefined) {
+    // Attached but no mount point parsed: detach OUR device node best-effort so
+    // the image is not left attached.
+    detach(device);
+    console.error("error: no mount point in hdiutil attach output");
+    process.exit(1);
+  }
+
+  // Write the .DS_Store deterministically (window bounds, icon positions, the
+  // background alias generated per build against THIS mount), then set
+  // kHasCustomIcon so Finder uses .VolumeIcon.icns. Both must land while the
+  // volume is mounted; on failure, detach before exiting so a partial run
+  // never leaves the read-write image attached. `sync` flushes our writes to
+  // the image before detach.
+  let ok = attempt(["bun", resolve(root, "scripts/dmg-dsstore.ts"), mounted, volname, appName]);
+  ok = ok && attempt(["SetFile", "-a", "C", mounted]);
+  Bun.spawnSync(["sync"], { stdout: "inherit", stderr: "inherit" });
+
+  const detached = detach(device);
+  if (!ok || !detached) {
+    console.error("error: DMG window styling failed");
+    process.exit(1);
+  }
+
+  run(["hdiutil", "convert", rw, "-format", "UDZO", "-imagekey", "zlib-level=9", "-ov", "-o", dmg]);
+  rmSync(rw, { force: true });
 
   rmSync(stage, { recursive: true, force: true });
   run(["codesign", "--force", "--sign", identity, dmg]);
   run(["hdiutil", "attach", dmg, "-readonly", "-nobrowse", "-mountpoint", mount]);
   // Not run(): the image must be detached whether or not the check passes.
   const check = Bun.spawnSync(
-    [
-      "bun",
-      resolve(root, "scripts/check-desktop-signing.ts"),
-      resolve(mount, "Chromium Bridge.app"),
-    ],
+    ["bun", resolve(root, "scripts/check-desktop-signing.ts"), resolve(mount, appName)],
     { cwd: root, stdout: "inherit", stderr: "inherit" },
   );
   run(["hdiutil", "detach", mount]);
