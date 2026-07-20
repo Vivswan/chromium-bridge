@@ -163,15 +163,23 @@ class CapturingRunner {
     // possibly-recycled pid) and process.exit(130)s, bypassing this lane's
     // orderly teardown. This lane owns its signals. We wrap each chromium
     // runner's own chromiumLaunch (which IS chrome-launcher's launch), adding
-    // the opt; a no-op if web-ext renamed the field.
+    // the opt. FAIL CLOSED if web-ext renamed the field: launching anyway
+    // would silently restore the killAll handler and its recycled-pid hazard,
+    // so refuse to launch instead (the throw lands in launch()'s catch, which
+    // closes anything spawned and exits).
     for (const r of this.#runners) {
       const patchable = r as unknown as {
         chromiumLaunch?: (opts: Record<string, unknown>) => unknown;
       };
       const inner = patchable.chromiumLaunch;
-      if (typeof inner === "function") {
-        patchable.chromiumLaunch = (opts) => inner({ ...opts, handleSIGINT: false });
+      if (typeof inner !== "function") {
+        throw new Error(
+          "refusing to launch the dev browser: web-ext-run's chromium runner no longer " +
+            "exposes chromiumLaunch, so chrome-launcher's SIGINT killAll handler cannot " +
+            "be disabled; update the wrap in scripts/dev-browser.ts for the new version",
+        );
       }
+      patchable.chromiumLaunch = (opts) => inner({ ...opts, handleSIGINT: false });
     }
     await Promise.all(this.#runners.map((r) => r.run()));
   }
