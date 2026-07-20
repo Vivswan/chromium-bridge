@@ -1,0 +1,58 @@
+# moon tasks for the Rust security core. Phase one: these are additive local
+# conveniences (`moon run core:test`, affected-only runs); `just ci` and the
+# justfile's rust recipes keep calling cargo directly.
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'rust'
+layer: 'library'
+
+# Cargo resolves the workspace from the root Cargo.toml (which pins the
+# default members to the core + host), so run every cargo verb from the
+# workspace root - byte-identical to the justfile recipes.
+taskOptions:
+  runFromWorkspaceRoot: true
+
+fileGroups:
+  # Everything a workspace-level cargo verb can read: every member's sources
+  # (cargo fmt formats ALL members, including the non-default desktop crate),
+  # the workspace manifests, and the toolchain/lint pins.
+  workspace-rust:
+    - '/src/packages/core/**/*'
+    - '/src/apps/host/**/*'
+    - '/src/apps/desktop/**/*.rs'
+    - '/src/apps/desktop/Cargo.toml'
+    - '/Cargo.toml'
+    - '/Cargo.lock'
+    - '/rust-toolchain.toml'
+    - '/rustfmt.toml'
+    - '/clippy.toml'
+
+tasks:
+  build:
+    command: 'cargo build'
+    toolchains: ['system']
+    inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
+    options:
+      # cargo owns target/ and its own incremental cache; a moon cache hit
+      # must never stand in for a missing build artifact.
+      cache: false
+
+  test:
+    command: 'cargo nextest run'
+    toolchains: ['system']
+    inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
+
+  test-doc:
+    command: 'cargo test --doc'
+    toolchains: ['system']
+    inputs: ['@group(workspace-rust)', '$RUSTFLAGS', '$RUSTDOCFLAGS']
+
+  lint:
+    command: 'cargo clippy --all-targets -- -D warnings'
+    toolchains: ['system']
+    inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
+
+  fmt-check:
+    command: 'cargo fmt --check'
+    toolchains: ['system']
+    inputs: ['@group(workspace-rust)']

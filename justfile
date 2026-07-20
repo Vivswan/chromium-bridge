@@ -103,12 +103,12 @@ install-app:
 # Desktop UI: production build (also what `bunx tauri build` runs first)
 [private]
 build-app-ui:
-    bun run --cwd src/apps/desktop/ui build
+    bunx moon run desktop-ui:build
 
 # Desktop UI unit tests (locale coverage, i18n resolution; no browser)
 [private]
 test-app-ui:
-    bun run --cwd src/apps/desktop/ui test
+    bunx moon run desktop-ui:test
 
 # Desktop Rust crate: clippy + tests, plus the commands.gen.ts staleness gate
 # (check-gen-app). Needs the UI dist (tauri's generate_context! embeds it) and
@@ -311,7 +311,7 @@ gen-icons:
 # Build the extension bundle (src/ -> build/extension/; generates icons first)
 [private]
 build-ext:
-    bun run --cwd src/apps/extension build
+    bunx moon run extension:build
 
 # Type-check every TS project (extension, desktop UI, tests, scripts, src/packages/shared)
 [private]
@@ -325,12 +325,12 @@ typecheck:
 # Lint + format-check all TS/JS/JSON (Biome; what `bun run check` delegates to)
 [private]
 check-ts:
-    bunx biome ci .
+    bunx moon run root:check
 
 # Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)
 [private]
 lint-ts:
-    bunx biome lint .
+    bunx moon run root:lint
 
 # Format TS/JS/JSON in place (Biome; what `bun run format` delegates to)
 [private]
@@ -340,7 +340,7 @@ fmt-ts:
 # Verify TS/JS/JSON formatting (Biome; what `bun run format:check` delegates to)
 [private]
 fmt-check-ts:
-    bunx biome format .
+    bunx moon run root:fmt-check
 
 # Auto-fix everything: Biome lint+format fixes, then cargo fmt
 [group('quality')]
@@ -351,12 +351,12 @@ fix:
 # Unit-test the extension's shared modules (bun; no browser)
 [private]
 test-ext:
-    bun run --cwd src/apps/extension test
+    bunx moon run extension:test
 
 # Unit-test src/packages/shared: generated catalogue, boundary validators
 [private]
 test-shared:
-    bun run --cwd src/packages/shared test
+    bunx moon run shared:test
 
 # Unit-test shared + extension (the `bun run test` set; the desktop UI's suite is test-app-ui)
 [private]
@@ -392,9 +392,11 @@ install: build-release
 # Build the web app (src/apps/web: Astro over the repo's markdown docs)
 [private]
 build-web:
-    bun run --cwd src/apps/web build
+    bunx moon run web:build
 
 # Docs site dev server only; replaces any already-running astro dev (`just dev` supersets this)
+# (Deliberately NOT a moon task: this command manages the astro dev daemon's
+# stop/background lifecycle, which moon's persistent-task model would fight.)
 [private]
 dev-web:
     bun run --cwd src/apps/web dev

@@ -56,6 +56,9 @@ tests/protocol/__pycache__/
 /tests/chrome/
 /tests/chromium/
 
+# moon's local task cache and state (.moon/*.yml configs ARE tracked)
+/.moon/cache/
+
 # Development worktrees (see CONTRIBUTING.md - one per branch, never committed)
 /.worktree/
 

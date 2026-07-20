@@ -1,0 +1,51 @@
+# moon workspace registry (phase one, under-the-hood only).
+#
+# moon is the task orchestrator behind the per-project TS recipes in the
+# justfile; the justfile remains the canonical command interface (AGENTS.md).
+# CI does not run moon. See docs/development.md ("moon task orchestration").
+$schema: 'https://moonrepo.dev/schemas/workspace.json'
+
+projects:
+  # The workspace root itself: repo-wide Biome tasks (lint/check/fmt-check)
+  # that have no single-project home.
+  root: '.'
+  core: 'src/packages/core'
+  shared: 'src/packages/shared'
+  extension: 'src/apps/extension'
+  desktop-ui: 'src/apps/desktop/ui'
+  web: 'src/apps/web'
+
+vcs:
+  client: 'git'
+  defaultBranch: 'main'
+
+# Keep generated/downloaded output out of every task hash. moon's native file
+# walk does not honor .gitignore (observed: the root project's '**/*' inputs
+# enumerated target/, build/, and the generated extension icons, and racing a
+# task that rewrites its own gitignored scratch dir mid-pipeline aborts the
+# run with a git hash error). This list mirrors the build-output entries in
+# .gitignore; every pattern is '**/'-prefixed because moon only reliably
+# matches these patterns with a leading '**'. Getting the list wrong is safe
+# in the direction that matters: a missing pattern can only over-invalidate
+# caches or fail a run loudly, never produce a stale cache hit.
+hasher:
+  ignorePatterns:
+    - '**/node_modules/**'
+    - '**/*.tsbuildinfo'
+    - '**/__pycache__/**'
+    - '**/.moon/cache/**'
+    - '**/.worktree/**'
+    - '**/build/**'
+    - '**/src/apps/desktop/gen/**'
+    - '**/src/apps/desktop/icons/**'
+    - '**/.wxt/**'
+    - '**/src/public/icons/**'
+    - '**/.astro/**'
+    - '**/fuzz/artifacts/**'
+    - '**/fuzz/corpus/**'
+    - '**/fuzz/coverage/**'
+    - '**/target/**'
+    - '**/tests/.chrome-for-testing/**'
+    - '**/tests/chrome/**'
+    - '**/tests/chromium/**'
+    - '**/tmp/**'

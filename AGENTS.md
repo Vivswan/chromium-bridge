@@ -12,6 +12,10 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 
 - Runtime and package manager: bun (`bun install`, `bun test`, `bun run <script>`)
 - See `package.json` scripts for the available commands.
+- Task orchestration: most per-project TS recipes and the repo-wide Biome
+  recipes delegate to moon (`@moonrepo/cli`, a pinned dev dependency) for
+  caching and affected-only runs; the justfile remains the canonical command
+  interface. See `docs/development.md` ("moon task orchestration").
 
 ## Conventions
 

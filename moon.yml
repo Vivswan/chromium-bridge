@@ -1,0 +1,27 @@
+# moon tasks for the workspace root: the repo-wide Biome passes, which have no
+# single-project home. The justfile recipes lint-ts / check-ts / fmt-check-ts
+# delegate here. fmt-ts (`biome format --write`) mutates the tree and stays a
+# plain justfile recipe.
+#
+# Inputs are the whole repo ('**/*' of the root project): `biome ci .` scans
+# every file Biome supports, so anything narrower would risk a stale pass.
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'typescript'
+layer: 'tool'
+
+tasks:
+  lint:
+    command: 'bunx biome lint .'
+    toolchains: ['system']
+    inputs: ['**/*', '!**/node_modules/**']
+
+  check:
+    command: 'bunx biome ci .'
+    toolchains: ['system']
+    inputs: ['**/*', '!**/node_modules/**']
+
+  fmt-check:
+    command: 'bunx biome format .'
+    toolchains: ['system']
+    inputs: ['**/*', '!**/node_modules/**']
