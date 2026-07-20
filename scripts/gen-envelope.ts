@@ -197,21 +197,22 @@ export function prepare(node: unknown, path: string): unknown {
   // Unions: a combinator node must be EXACTLY one non-empty combinator -
   // json-schema-to-zod drops sibling constraints beside a combinator and
   // turns an empty union into z.any(), both weaker than the contract.
-  const combinators = (["oneOf", "anyOf"] as const).filter((key) => key in out);
-  if (combinators.length > 0) {
-    const others = Object.keys(out).filter((key) => key !== combinators[0]);
-    if (combinators.length > 1 || others.length > 0) {
+  const [combinator, ...extraCombinators] = (["oneOf", "anyOf"] as const).filter(
+    (key) => key in out,
+  );
+  if (combinator !== undefined) {
+    const others = Object.keys(out).filter((key) => key !== combinator);
+    if (extraCombinators.length > 0 || others.length > 0) {
       throw new Error(
-        `gen-envelope: ${path} mixes ${combinators.join("/")} with ` +
-          `${others.join("/") || "another combinator"} - the converter would drop constraints (G5)`,
+        `gen-envelope: ${path} mixes ${combinator} with ` +
+          `${[...extraCombinators, ...others].join("/")} - the converter would drop constraints (G5)`,
       );
     }
-    const key = combinators[0];
-    const branches = out[key];
+    const branches = out[combinator];
     if (!Array.isArray(branches) || branches.length === 0) {
-      throw new Error(`gen-envelope: empty or malformed ${key} at ${path} (G5)`);
+      throw new Error(`gen-envelope: empty or malformed ${combinator} at ${path} (G5)`);
     }
-    out[key] = branches.map((branch, i) => prepare(branch, `${path}.${key}[${i}]`));
+    out[combinator] = branches.map((branch, i) => prepare(branch, `${path}.${combinator}[${i}]`));
   }
   if (Array.isArray(out.oneOf)) {
     assertDiscriminatedUnion(out.oneOf, path);
