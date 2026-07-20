@@ -67,7 +67,7 @@ pub fn release() -> Result<ReleaseOutcome, String> {
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(untagged)]
 pub enum AuditLine {
-    Record(AuditRecord),
+    Record(Box<AuditRecord>),
     Unrecognized { unrecognized: bool },
 }
 
@@ -103,7 +103,7 @@ pub fn read(limit: usize) -> Result<AuditPage, String> {
     let mut unrecognized = 0usize;
     for line in raw.iter().skip(start) {
         match parse_record(line) {
-            Some(rec) => lines.push(AuditLine::Record(rec)),
+            Some(rec) => lines.push(AuditLine::Record(Box::new(rec))),
             None => {
                 unrecognized += 1;
                 lines.push(AuditLine::Unrecognized { unrecognized: true });
