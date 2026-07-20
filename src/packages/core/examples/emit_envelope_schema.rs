@@ -3,13 +3,16 @@
 //! ..., "admin": ... }` on stdout.
 //!
 //! The Rust types in `protocol.rs` are the canonical envelope contract
-//! (ADR-0028). The extension enforces its own hand-written Zod validators at
-//! the native-messaging boundary, and `scripts/check-envelope-parity.ts`
-//! (CI + `just ci`) diffs this output against `z.toJSONSchema()` of those
-//! validators after a small, documented set of erasure rules - the two
-//! parsers deliberately accept different languages in a few places (see the
-//! rule list in `src/packages/shared/src/json-schema-normalize.ts`), and
-//! everything outside those rules must match exactly.
+//! (ADR-0028). Two consumers read this output:
+//!
+//! - `scripts/gen-envelope.ts` (`just gen`) generates the extension's base
+//!   wire validators from it (`src/packages/shared/src/envelope-wire.gen.ts`);
+//! - `scripts/check-envelope-parity.ts` (CI + `just ci`) diffs it against
+//!   `z.toJSONSchema()` of the validators the extension actually enforces -
+//!   the generated bases wrapped by a hand-written asymmetry layer - after a
+//!   small, documented set of erasure rules (see the rule list in
+//!   `src/packages/shared/src/json-schema-normalize.ts`); everything outside
+//!   the approved asymmetries must match exactly.
 //!
 //! Built only when the `envelope-schema` feature is enabled (this example's
 //! `required-features`), so schemars stays out of every binary's dependency

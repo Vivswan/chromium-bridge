@@ -209,7 +209,8 @@ gen: gen-shared gen-app-types
 [private]
 gen-shared:
     bun scripts/gen-ops.ts
-    bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
+    bun scripts/gen-envelope.ts
+    bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/envelope-wire.gen.ts
 
 # Regenerate the desktop UI's Tauri command types from the desktop crate's
 # command DTOs (src/apps/desktop/ui/src/lib/commands.gen.ts). ts-rs writes
@@ -226,11 +227,13 @@ gen-app-types: build-app-ui gen-icons
     test -f src/apps/desktop/ui/src/lib/commands.gen.ts
     bunx biome format --write src/apps/desktop/ui/src/lib/commands.gen.ts
 
-# The checked-in generated TS must match what the Rust core emits today
-# (part of `just ci`; commands.gen.ts has its own macOS-side gate, check-gen-app)
+# The checked-in generated TS must match what the Rust core emits today, and
+# the envelope generator's fail-closed rules (G1-G5) must hold (part of
+# `just ci`; commands.gen.ts has its own macOS-side gate, check-gen-app)
 [private]
 check-gen: gen-shared
-    git diff --exit-code -- src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
+    git diff --exit-code -- src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/envelope-wire.gen.ts
+    bun test scripts/gen-envelope.test.ts
 
 # Staleness gate for the desktop command types. Not part of `just ci` for the
 # same reason as check-app-rust (compiling Tauri needs the platform GUI
@@ -239,7 +242,9 @@ check-gen: gen-shared
 check-gen-app: gen-app-types
     git diff --exit-code -- src/apps/desktop/ui/src/lib/commands.gen.ts
 
-# Envelope double-derivation gate: Rust schemars vs Zod z.toJSONSchema
+# Envelope asymmetry gate: the hand-written layer over the generated wire
+# schemas (Rust schemars vs Zod z.toJSONSchema) must stay within the pinned
+# parser asymmetries; base freshness is check-gen's job
 [private]
 check-envelope:
     bun scripts/check-envelope-parity.ts

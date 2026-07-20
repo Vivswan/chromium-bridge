@@ -126,13 +126,15 @@ jobs:
         run: bun scripts/check-extension-id.ts
 
   # The Rust core is the canonical cross-process contract (ADR-0028); this job
-  # holds the two checks that need BOTH toolchains: the generated TS must be
-  # exactly what the Rust emitter produces today (regenerate + diff), and the
-  # hand-written Zod envelope validators must be structurally equivalent to
-  # the Rust wire types (double-derivation diff via schemars, which stays
-  # behind a gen-only feature - the shipped binary graph is asserted clean).
+  # holds the two checks that need BOTH toolchains: the generated TS -
+  # including the envelope wire validators built via json-schema-to-zod -
+  # must be exactly what the Rust emitters produce today (regenerate + diff),
+  # and the hand-written asymmetry layer over those validators must stay
+  # within the pinned parser asymmetries (double-derivation diff via
+  # schemars, which stays behind a gen-only feature - the shipped binary
+  # graph is asserted clean).
   contract:
-    name: Contract (gen idempotency, envelope double-derivation)
+    name: Contract (gen idempotency, envelope asymmetry gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -147,10 +149,13 @@ jobs:
       - name: Generated TS in sync with the Rust core (src/packages/shared *.gen.ts)
         run: |
           bun scripts/gen-ops.ts
-          bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts
+          bun scripts/gen-envelope.ts
+          bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/envelope-wire.gen.ts
           git diff --exit-code -- src/packages/shared/src/ \
-            || { echo "::error::generated contract code is stale - run 'just gen' after editing the Rust catalogue/taxonomy"; exit 1; }
-      - name: Envelope double-derivation diff (schemars vs z.toJSONSchema)
+            || { echo "::error::generated contract code is stale - run 'just gen' after editing the Rust catalogue/taxonomy or wire types"; exit 1; }
+      - name: Envelope generator fail-closed rules (G1-G5)
+        run: bun test scripts/gen-envelope.test.ts
+      - name: Envelope asymmetry gate (schemars vs z.toJSONSchema)
         run: bun scripts/check-envelope-parity.ts
       - name: Gen-only tooling (schemars, ts-rs) stays out of every shipped binary's graph
         run: |
