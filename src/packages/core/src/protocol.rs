@@ -612,10 +612,12 @@ pub enum EnclaveControl {
 ///   SW-only mirror tracks CLI-driven transitions without polling. `ok: false`
 ///   (state unreadable) carries no `killed` claim; the extension treats it as
 ///   unknown and fails closed.
-/// - `audit_event { kind, outcome?, tool?, name?, detail? }` (ADR-0030,
+/// - `audit_event { kind, outcome?, tool?, name?, detail?, cid? }` (ADR-0030,
 ///   fire-and-forget, no reply): the extension reports one of ITS OWN
 ///   user-facing decisions (confirmations, enrollment approvals) for the
-///   host's on-disk audit trail. The host accepts only the extension-owned
+///   host's on-disk audit trail. `cid` is the per-confirmation correlation id
+///   the extension stamps on a `confirm_shown` and its later verdict so the
+///   audit panel joins them exactly. The host accepts only the extension-owned
 ///   kinds ([`crate::audit::extension_kind`]) and stamps the surface itself,
 ///   so the frame cannot forge host-side events like admissions or kills.
 ///
@@ -679,6 +681,9 @@ pub enum AdminControl {
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
+        /// Per-confirmation correlation id (ADR-0030); see the module docs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cid: Option<String>,
     },
 }
 
@@ -720,6 +725,7 @@ pub enum FrameDisposition {
         tool: Option<String>,
         name: Option<String>,
         detail: Option<String>,
+        cid: Option<String>,
     },
     /// A control-frame `type` that is not addressed to the host (a stray
     /// proof/error/revoked/result, or a malformed host-directed frame with no
@@ -792,12 +798,14 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
                 tool,
                 name,
                 detail,
+                cid,
             }) => FrameDisposition::AuditEvent {
                 kind,
                 outcome,
                 tool,
                 name,
                 detail,
+                cid,
             },
             // Fire-and-forget has no reply contract; a malformed event is
             // dropped (and logged), never recorded as if it were valid.
@@ -1661,11 +1669,16 @@ mod tests {
         ));
         // ...an audit event carries its fields to the handler...
         match classify_nm_frame(&json!({
-            "type": "audit_event", "kind": "confirm_denied", "tool": "eval"
+            "type": "audit_event", "kind": "confirm_denied", "tool": "eval", "cid": "c-42"
         })) {
-            FrameDisposition::AuditEvent { kind, tool, .. } => {
+            FrameDisposition::AuditEvent {
+                kind, tool, cid, ..
+            } => {
                 assert_eq!(kind, "confirm_denied");
                 assert_eq!(tool.as_deref(), Some("eval"));
+                // The per-confirmation correlation id survives parsing so the
+                // host writes it into the audit record for the panel to join on.
+                assert_eq!(cid.as_deref(), Some("c-42"));
             }
             other => panic!("expected AuditEvent, got {other:?}"),
         }

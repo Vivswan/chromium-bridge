@@ -67,7 +67,6 @@ interface Active {
 const queue: Array<() => void> = [];
 let active: Active | null = null;
 let running = false;
-let counter = 0;
 
 // Installed by the background entrypoint at SW startup. No provider
 // installed = every confirmation denies (fail closed).
@@ -174,11 +173,24 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
     // panic - active, queued behind a slow provider selection, or itself
     // mid-selection - denies on the mismatch even after the latch lifts.
     const epoch = panicEpoch;
+    // One collision-resistant id per confirmation ATTEMPT, minted once here so
+    // EVERY audit event this attempt emits carries the same `cid` (ADR-0030) -
+    // whether it is shown and gets a verdict, or denied before any surface
+    // exists. It doubles as the surface routing handle (payload.id below;
+    // getPendingConfirm/resolveConfirm match on it). A random 128-bit UUID, not
+    // a monotonic counter: the host merges audit records from every browser, so
+    // per-worker counters would collide across browsers, and a random id cannot
+    // be steered to match another attempt's row. The audit panel joins a
+    // verdict to its shown row by this exact id; a pre-surface denial's id
+    // simply matches no shown row (it resolves nothing), which is what makes a
+    // panic-latch denial closing an unrelated confirmation impossible.
+    const cid = crypto.randomUUID();
     if (panicDeny) {
       // Created while the latch is on: denied at the door. Waiting in the
       // queue instead would let it present if the latch lifts before it
-      // reaches the front (its own epoch is the post-panic one).
-      auditEvent("confirm_denied", { tool: req.kind, name: req.origin });
+      // reaches the front (its own epoch is the post-panic one). No surface was
+      // shown, so this cid matches no confirm_shown row - it resolves nothing.
+      auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
       resolve(false);
       return;
     }
@@ -192,28 +204,32 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
       running = true;
       if (panicDeny || panicEpoch !== epoch) {
         // Denied unseen: the user already chose "kill everything" - showing
-        // more consent surfaces after that choice would invert it.
-        auditEvent("confirm_denied", { tool: req.kind, name: req.origin });
+        // more consent surfaces after that choice would invert it. Same
+        // attempt cid, but no surface was shown, so it resolves no row.
+        auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
         resolve(false);
         advance();
         return;
       }
       void (async () => {
-        counter += 1;
         const { provider, hardware } = await providerFor(req.kind);
         if (panicDeny || panicEpoch !== epoch) {
           // The panic landed DURING provider selection: `active` was not yet
           // registered, so denyAllConfirmations could not settle this one -
           // and the latch may even have lifted again already (kill confirmed
           // fast), which is why the epoch is checked, not just the level.
-          // Same denial, before any surface exists.
-          auditEvent("confirm_denied", { tool: req.kind, name: req.origin });
+          // Same denial, before any surface exists - its cid matches no row.
+          auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
           resolve(false);
           advance();
           return;
         }
         const payload: ConfirmPayload = {
-          id: `confirm_${Date.now()}_${counter}`,
+          // The attempt's id doubles as the surface routing handle
+          // (getPendingConfirm/resolveConfirm match on it). Same value the
+          // audit events above and below carry, so the shown row and its
+          // verdict join exactly.
+          id: cid,
           kind: req.kind,
           origin: req.origin,
           tabTitle: req.tabTitle,
@@ -253,9 +269,14 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
           }
           // Log-after-decide (ADR-0030): the verdict is already settled; the
           // audit ring and the host's audit file record it, never gate it.
+          // `cid` ties this verdict to THIS attempt's confirm_shown row. Only a
+          // shown attempt reaches settle(), so this resolves exactly its own
+          // row; the pre-surface denials above carry the same-shaped cid but no
+          // shown row exists for them, so they resolve nothing.
           auditEvent(approved ? "confirm_allowed" : "confirm_denied", {
             tool: req.kind,
             name: req.origin,
+            cid,
           });
           resolve(approved);
           advance();
@@ -263,7 +284,8 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
         const timer = setTimeout(() => settle(false), req.timeoutMs);
         active = { payload, settle };
         // The surface is up in front of the user from here (ADR-0030 audit).
-        auditEvent("confirm_shown", { tool: req.kind, name: req.origin });
+        // Same cid as the verdict above, so the panel joins the pair exactly.
+        auditEvent("confirm_shown", { tool: req.kind, name: req.origin, cid });
         presentation.verdict.then(settle, (e: unknown) => {
           console.error("[bb] confirmation presentation failed; denying", e);
           settle(false);

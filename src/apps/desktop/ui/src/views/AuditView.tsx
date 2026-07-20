@@ -3,7 +3,8 @@ import { Card, Dot, ErrorNote, ViewShell } from "@/components/ui/bits";
 import { Button } from "@/components/ui/button";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
-import { type AuditLine, type AuditRecord, api, errorText, isUnrecognized } from "@/lib/tauri";
+import { resolvedShownRows } from "@/lib/audit-correlate";
+import { type AuditRecord, api, errorText, isUnrecognized } from "@/lib/tauri";
 
 const LIMIT = 500;
 
@@ -53,36 +54,9 @@ function outcomeClass(outcome: string | undefined): string {
 }
 
 /** Indices of CONFIRM_SHOWN rows a later confirm_allowed/confirm_denied
- * with the same subject (tool + name) resolves. Amber "pending" is reserved
- * for a confirmation genuinely still waiting on the user; a resolved one
- * claiming to wait is stale-state dishonesty in the ledger. A timeout
- * settles as confirm_denied, so it correlates too.
- *
- * Best-effort, display-only: the wire records carry no request id, so the
- * verdict closes the OLDEST still-open confirmation with the same subject
- * (the extension shows confirmations one at a time, so collisions need two
- * browsers raising the identical prompt concurrently). Unrecognized lines
- * are skipped; when any exist, the page already flags the whole trail as
- * suspect above the table. */
-function resolvedShownRows(lines: AuditLine[]): Set<number> {
-  const resolved = new Set<number>();
-  const open: { idx: number; key: string }[] = [];
-  lines.forEach((line, idx) => {
-    if (isUnrecognized(line)) return;
-    const key = `${line.tool ?? "-"}::${line.name ?? "-"}`;
-    if (line.kind === "confirm_shown") {
-      open.push({ idx, key });
-    } else if (line.kind === "confirm_allowed" || line.kind === "confirm_denied") {
-      const at = open.findIndex((o) => o.key === key);
-      if (at >= 0) {
-        const shown = open[at];
-        if (shown !== undefined) resolved.add(shown.idx);
-        open.splice(at, 1);
-      }
-    }
-  });
-  return resolved;
-}
+ * resolves. The correlation logic (an exact per-confirmation `cid` join, with
+ * the old subject heuristic kept only as a pre-upgrade fallback) lives in
+ * `@/lib/audit-correlate`, where it is unit-tested without this view. */
 
 export function AuditView() {
   const { t } = useI18n();
