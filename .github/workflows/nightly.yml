@@ -53,8 +53,9 @@ jobs:
 
   # Mutation testing lives here rather than in the PR gate because a full
   # cargo-mutants pass is far too slow for every PR. Missed mutants (exit 2)
-  # are reported, not fatal: they measure test quality and get fixed
-  # deliberately, whereas a baseline build/test failure is a real break.
+  # and mutant timeouts (exit 3) are reported, not fatal: they measure test
+  # quality and get fixed deliberately, whereas a baseline build/test failure
+  # is a real break.
   mutants:
     name: Mutation testing (cargo-mutants, scheduled)
     runs-on: ubuntu-latest
@@ -68,7 +69,7 @@ jobs:
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
           tool: cargo-mutants
-      - name: cargo mutants (missed mutants reported, not fatal)
+      - name: cargo mutants (missed mutants and timeouts reported, not fatal)
         run: |
           rc=0
           cargo mutants --no-shuffle || rc=$?
@@ -79,9 +80,10 @@ jobs:
               cat "mutants.out/$f.txt"
             fi
           done
-          # Exit 2 means the tests missed some mutants: informational here.
-          # Anything else (baseline build/test failure, usage error) is real.
-          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+          # Exit 2 (missed mutants) and exit 3 (mutant timeouts) both mean a
+          # mutant survived the test suite: informational here. Anything else
+          # (baseline build/test failure, usage error) is real.
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ] && [ "$rc" -ne 3 ]; then
             exit "$rc"
           fi
 

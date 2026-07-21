@@ -50,12 +50,34 @@ if (cargoFuzz.error || cargoFuzz.status !== 0) {
   process.exit(0);
 }
 
+// cargo-fuzz defaults --target to its own compile-time host triple, which is
+// wrong when it was installed as a prebuilt musl binary (taiki-e/install-action
+// in CI passes x86_64-unknown-linux-musl): ASan cannot link a statically
+// linked libc. Pin the target to the nightly toolchain's real host triple.
+const rustcInfo = spawnSync("rustc", ["+nightly", "-vV"], { cwd: core, encoding: "utf8" });
+const host =
+  rustcInfo.status === 0 ? /^host: (\S+)$/m.exec(rustcInfo.stdout ?? "")?.[1] : undefined;
+if (!host) {
+  console.error("error: could not determine the host triple from `rustc +nightly -vV`");
+  process.exit(1);
+}
+
 const targets = ["nm_frame", "mcp_jsonrpc", "bridge_envelope", "handshake", "attach"];
 for (const target of targets) {
-  console.log(`[fuzz-smoke] ${target}: ${runs} runs`);
+  console.log(`[fuzz-smoke] ${target}: ${runs} runs (target ${host})`);
   const run = spawnSync(
     "cargo",
-    ["+nightly", "fuzz", "run", target, "--", `-runs=${runs}`, "-max_total_time=30"],
+    [
+      "+nightly",
+      "fuzz",
+      "run",
+      "--target",
+      host,
+      target,
+      "--",
+      `-runs=${runs}`,
+      "-max_total_time=30",
+    ],
     { cwd: core, stdio: "inherit" },
   );
   if (run.error) {
