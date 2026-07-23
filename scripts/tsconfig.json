@@ -4,5 +4,5 @@
     "lib": ["ES2022"],
     "types": ["bun"]
   },
-  "include": ["*.ts", "../.github/scripts/*.ts"]
+  "include": ["*.ts"]
 }
