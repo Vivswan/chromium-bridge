@@ -58,16 +58,15 @@ src/apps/desktop/        Tauri v2 desktop app (ADR-0026/0029): workspace member 
                          NOT a default member; `moon run bundle-app` builds + signs
                          it with the bundled host (see docs/desktop-app.md)
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
-src/packages/core/fuzz/  cargo-fuzz workspace for the wire parsers (nightly + libFuzzer)
+src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validators
+                         (nightly + libFuzzer; see the Fuzzing section below)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)
 tests/protocol/          e2e.py, adversarial.py, chaos.py - drive the real release binary
 tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
                          integration_e2e.ts, run_all.ts (bun workspace member; isolated Chrome only)
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
 scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
-                         check-extension-id.ts, build-repro.ts, lib.ts, ...
-.github/scripts/         CI-only scripts (fuzz_smoke.ts, run by the nightly fuzz job;
-                         typechecked by `tsc -p scripts` alongside scripts/)
+                         check-extension-id.ts, build-repro.ts, fuzz-smoke.ts, lib.ts, ...
 src/apps/web/           bun workspace member: minimal Astro site rendering the
                          repo's markdown docs + translations (moon run web:build;
                          not part of `moon run ci`)
@@ -75,11 +74,13 @@ src/apps/web/           bun workspace member: minimal Astro site rendering the
 
 All tooling scripts are TypeScript run via bun. Scripts whose only consumer
 is a GitHub workflow live in `.github/scripts/`; everything with a local
-consumer (moon tasks, other scripts) stays in `scripts/`. Two of them
-(`scripts/build-repro.ts` and `.github/scripts/fuzz_smoke.ts`) are
-deliberately self-contained on node builtins so they work before
-`bun install` - the release workflow builds the binary before installing
-the workspace.
+consumer (moon tasks, other scripts) stays in `scripts/`. The fuzz smoke
+moved from the former to the latter when it grew a local moon task, which
+currently leaves `.github/scripts/` empty. Two scripts
+(`scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`) are deliberately
+self-contained on node builtins so they run without a `bun install`: the
+release workflow builds the binary before installing the workspace, and the
+nightly fuzz job never installs it at all.
 
 Rust dependencies are gated by supply-chain review (`cargo vet`, the
 `cargo-vet` CI job). Adding or bumping a crate fails CI until the new version
@@ -87,7 +88,9 @@ has a recorded decision in `supply-chain/`: run `cargo vet` to see what is
 missing, then `cargo vet certify` if you actually reviewed the code, or
 `cargo vet add-exemption` to record a deliberate exemption. The initial
 baseline exempts the pre-existing tree; the point of the gate is that no new
-code enters the build without someone choosing to let it in.
+code enters the build without someone choosing to let it in. The fuzz
+workspace (`src/packages/core/fuzz/`) is the one deliberate exception to the
+vet gate; the [Fuzzing](#fuzzing) section records that scope decision.
 
 ## Common tasks
 
@@ -148,7 +151,7 @@ The full task menu, by area:
 |------|-------|
 | Aggregates | `build`, `test`, `ci`, `release`, `lint`, `fmt`, `fix` |
 | Dev loops | `dev`, `dev-app`, `dev-web`, `extension:dev`, `desktop-ui:dev` |
-| Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc`), `build-release`, `build-repro`, `typos`, `machete`, `audit` |
+| Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc`), `build-release`, `build-repro`, `typos`, `machete`, `audit`, `fuzz-smoke` |
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `desktop-ui:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared` + `gen-app-types`), `gen-icons`, `check-gen`, `check-gen-app`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
@@ -269,6 +272,93 @@ Three suites, all wired into `tests/browser/run_all.ts` (and CI):
 bun tests/browser/run_all.ts          # all three (skips browser tests if Chrome absent)
 CHROME_BIN=/path/to/chrome bun tests/browser/run_all.ts
 ```
+
+## Fuzzing
+
+`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer,
+nightly rust) with ten targets. Five fuzz the wire-frame decoders
+(`nm_frame`, `mcp_jsonrpc`, `bridge_envelope`, `handshake`, `attach`); five
+fuzz the semantic validators behind them (`handshake_verify`,
+`classify_frame`, `enclave_der`, `enclave_challenge`,
+`registration_manifest`). Where a correctness property exists, the semantic
+targets assert it instead of only checking for panics: the MAC verifier must
+accept a correctly computed MAC, the challenge and presence messages must
+stay domain-separated, and manifest ownership must answer `Foreign` for
+anything not provably ours. (The `handshake_verify` target also drives the
+full server handshake over in-memory I/O; the server generates a fresh nonce
+per handshake and the response MAC must bind it, so a static fuzzed response
+can only exercise the fail-closed rejection path there. The accept path is
+covered by the same target's MAC oracle and the socketpair unit tests in
+`handshake.rs`.)
+
+The semantic targets reach private functions through the core crate's
+`fuzzing` feature: off by default, enabled only by the fuzz workspace, and
+consisting of re-exports with no runtime behavior. `--all-features` does
+compile it; the isolation argument is that no shipped binary enables the
+feature and the fuzz crate lives in a separate workspace, so feature
+unification cannot pull it into a real build.
+
+Three directories with different lifecycles:
+
+- `fuzz/seeds/<target>/`: committed, hand-curated starting inputs for the
+  byte-input targets (a valid frame per shape, a valid DER signature plus
+  truncations, our real manifest plus near-misses). The structured targets
+  (`handshake_verify`, `enclave_challenge`) take `Arbitrary`-derived input
+  whose encoding is unstable across `arbitrary` versions, so they get no
+  committed seeds.
+- `fuzz/corpus/<target>/`: gitignored, fuzzer-generated. Nightly CI restores
+  and saves it through `actions/cache`, so exploration accumulates across
+  runs instead of restarting from zero every night.
+- `fuzz/dictionaries/`: token dictionaries handed to libFuzzer
+  (`json_protocol.dict` for the JSON-shaped targets, `der.dict` for
+  `enclave_der`).
+
+Run it locally:
+
+```sh
+moon run fuzz-smoke      # bun scripts/fuzz-smoke.ts: every target, bounded run
+```
+
+The smoke needs a nightly toolchain plus `cargo install cargo-fuzz` and
+skips with a message when either is missing. It discovers targets from
+`cargo +nightly fuzz list`, so the list cannot drift from `fuzz/Cargo.toml`.
+Locally each target gets 30 seconds; the nightly `fuzz` job runs the same
+script at 120 seconds per target and passes `--cmin`, which minimizes each
+corpus before the cache save (cmin bounds the size of each snapshot; the
+number of accumulated cache entries is bounded by GitHub's LRU cache
+eviction, not by cmin). On a crash the job uploads `fuzz/artifacts/` as a
+workflow artifact so the reproducing input outlives the runner. For a real
+campaign on one target, `cargo +nightly fuzz run <target>` from
+`src/packages/core` runs unbounded.
+
+Deliberately not fuzzed, and why:
+
+- `allowlist.rs`, `revocation.rs`, `ipc/lockfile.rs`: pure
+  `serde_json::from_slice` into derived `deny_unknown_fields` structs.
+  Fuzzing them would fuzz serde_json, not our code; negative unit tests
+  already pin the fail-closed behavior.
+- `enclave/pubkey.rs`: `EnclavePublicKey::from_x963` is a length check plus
+  a lead-byte check, not point validation. Too trivial to earn a target.
+- Broker semantics: owned by loom model checking and
+  `tests/protocol/adversarial.py`, which exercise interleavings and hostile
+  peers rather than byte parsing.
+- Presence signing: Security.framework calls, not a byte parser.
+- The TypeScript side (the generated Zod schemas and the hand-written
+  envelope asymmetry layer): a scope decision, not a claim that the code is
+  many-eyes-reviewed.
+
+Policy: a PR that adds or changes a bespoke parser or semantic validator at
+a trust boundary in the Rust core must add or extend a fuzz target, or add
+the exclusion, with its reason, to the list above. The exact rule, with its
+scoping, lives in
+[SECURITY.md](../SECURITY.md#security-relevant-changes-review-bar).
+
+Supply-chain scope: the fuzz workspace sits outside the `cargo vet` gate by
+design. It runs in nightly CI only, is never linked into a shipped binary,
+and its direct dependencies are limited to `libfuzzer-sys`, `arbitrary`,
+`derive_arbitrary`, and `serde_json`. A new fuzz dependency still goes
+through the `cargo deny` pass over `fuzz/Cargo.toml` in the security
+workflow, plus ordinary PR review.
 
 ## Logging
 
