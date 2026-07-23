@@ -303,8 +303,17 @@ if it:
 - adds outbound network/IPC, or widens `page_eval`.
 
 Such PRs should add a **negative** security test (proving the boundary
-holds), in addition to the positive one. Extra review care applies to the
-security-critical surfaces listed in [AGENTS.md](AGENTS.md):
+holds), in addition to the positive one. A PR that adds or changes a bespoke
+parser or semantic validator at a trust boundary in the Rust core (wire
+frames, hand-written byte parsers, ownership or identity decisions over
+attacker-controlled input) must also add or extend a cargo-fuzz target in
+`src/packages/core/fuzz/`, or record a deliberate exclusion with its reason
+in the [Fuzzing section](docs/development.md#fuzzing) of the development
+guide; plain derived-serde readers guarded by negative tests (the allowlist,
+revocation, and lockfile readers) do not trigger the rule at all, which is
+about bespoke parsing or semantic-validation logic rather than `serde_json`.
+Extra review care applies to the security-critical surfaces listed in
+[AGENTS.md](AGENTS.md):
 `src/packages/core/src/ipc/`, `protocol.rs`, `broker.rs`, `allowlist.rs`,
 `revocation.rs`, `kill.rs`, `presence/`, `enclave/`, the extension's
 allowlist/eval/confirmation code, and `wxt.config.ts`.

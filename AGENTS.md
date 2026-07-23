@@ -29,9 +29,10 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 - CI gates on a single required check named `all-green`, which `needs:` every
   other job in `.github/workflows/ci.yml`. When adding a CI job, add it to
   all-green's `needs` list.
-- Scripts used ONLY by GitHub Actions live in `.github/scripts/`
-  (e.g. the nightly fuzz smoke). `scripts/` holds local and dual-use tooling:
-  everything moon tasks or developers run, even if CI also calls it.
+- Scripts used ONLY by GitHub Actions live in `.github/scripts/`. `scripts/`
+  holds local and dual-use tooling: everything moon tasks or developers run,
+  even if CI also calls it (e.g. `scripts/fuzz-smoke.ts`, run by both
+  `moon run fuzz-smoke` and the nightly fuzz job).
 - No typographic look-alike characters (curly quotes, em-dashes, invisible
   unicode). CI enforces this with `scripts/check-typography.ts` (also run by
   `moon run ci`); use plain ASCII punctuation.
