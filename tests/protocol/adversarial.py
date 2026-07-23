@@ -1137,6 +1137,11 @@ def a21_corrupt_kill_marker_fails_closed():
         c = e2e.McpClient(srv)
         c.initialize()
         c.initialized()
+        # Drain the pipe before corrupting: the guard runs on EVERY inbound
+        # message, and `initialized` is fire-and-forget, so corrupting while
+        # it is still unprocessed drops the connection before the tools/call
+        # below is even written (a BrokenPipeError instead of the EOF).
+        c.ping(_id=69)
 
         with open(_revocation_path(), "w") as f:
             f.write("{ this is not json")
