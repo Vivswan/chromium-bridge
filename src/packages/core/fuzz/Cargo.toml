@@ -21,9 +21,10 @@ cargo-fuzz = true
 unsafe_code = "deny"
 
 [dependencies]
+arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
 serde_json = "1"
-chromium-bridge-core = { path = ".." }
+chromium-bridge-core = { path = "..", features = ["fuzzing"] }
 
 [profile.release]
 debug = 1
@@ -63,6 +64,16 @@ bench = false
 [[bin]]
 name = "attach"
 path = "fuzz_targets/attach.rs"
+test = false
+doc = false
+bench = false
+
+# The semantic layer behind the decoders: verifiers and validators that run on
+# attacker-controlled input after it parses. Structured (Arbitrary) inputs
+# where the surface is typed fields, raw bytes where it is a byte parser.
+[[bin]]
+name = "handshake_verify"
+path = "fuzz_targets/handshake_verify.rs"
 test = false
 doc = false
 bench = false
