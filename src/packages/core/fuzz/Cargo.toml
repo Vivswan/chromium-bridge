@@ -77,3 +77,31 @@ path = "fuzz_targets/handshake_verify.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "classify_frame"
+path = "fuzz_targets/classify_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "enclave_der"
+path = "fuzz_targets/enclave_der.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "enclave_challenge"
+path = "fuzz_targets/enclave_challenge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "registration_manifest"
+path = "fuzz_targets/registration_manifest.rs"
+test = false
+doc = false
+bench = false
