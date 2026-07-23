@@ -201,6 +201,39 @@ fn client_handshake_with_secret<R: BufRead, W: Write>(
     }
 }
 
+/// Fuzz-only wrappers over the private handshake internals, for the cargo-fuzz
+/// workspace (see the `fuzzing` feature in Cargo.toml). Thin delegations only;
+/// the real functions stay private and nothing here adds behavior.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz_api {
+    use std::io::{self, BufRead, Write};
+
+    pub fn compute_mac(key: &[u8], msg: &[u8]) -> io::Result<String> {
+        super::compute_mac(key, msg)
+    }
+
+    pub fn handshake_mac_message(nonce: &str, label: Option<&str>) -> Vec<u8> {
+        super::handshake_mac_message(nonce, label)
+    }
+
+    pub fn verify_mac(key: &[u8], msg: &[u8], provided_hex: &str) -> io::Result<()> {
+        super::verify_mac(key, msg, provided_hex)
+    }
+
+    pub fn hex_decode(s: &str) -> Option<Vec<u8>> {
+        super::hex_decode(s)
+    }
+
+    pub fn server_handshake_with_secret<R: BufRead, W: Write>(
+        reader: &mut R,
+        writer: &mut W,
+        secret: &str,
+    ) -> io::Result<Option<String>> {
+        super::server_handshake_with_secret(reader, writer, secret)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

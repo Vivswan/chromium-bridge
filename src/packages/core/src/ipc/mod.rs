@@ -65,6 +65,8 @@ pub struct ClientIdentity {
 pub use attest::attest_parent;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use attest::{attest_peer, attest_pid, ensure_own_identity};
+#[cfg(feature = "fuzzing")]
+pub use handshake::fuzz_api as handshake_fuzz;
 pub use handshake::{client_handshake, server_handshake, validate_label};
 pub use lockfile::{listen_and_publish, LockFile, PublishOutcome};
 #[cfg(unix)]
