@@ -1,0 +1,30 @@
+# libFuzzer dictionary for enclave_der: strict-DER ECDSA-Sig-Value atoms.
+# Tags, plausible short-form lengths, the sign-padding byte, forbidden
+# long-form length markers, and one whole minimal signature.
+
+# Tags
+"\x30"
+"\x02"
+
+# Short-form lengths around the P-256 bounds (32/33-byte scalars, 70-byte body)
+"\x20"
+"\x21"
+"\x22"
+"\x44"
+"\x45"
+"\x46"
+
+# Sign padding / zero integer
+"\x00"
+"\x02\x01\x00"
+
+# Long-form lengths (must always be rejected)
+"\x81"
+"\x82"
+"\x7f"
+"\x80"
+
+# INTEGER headers and a whole minimal signature
+"\x02\x01\x01"
+"\x02\x21\x00"
+"\x30\x06\x02\x01\x01\x02\x01\x01"
