@@ -355,10 +355,12 @@ scoping, lives in
 
 Supply-chain scope: the fuzz workspace sits outside the `cargo vet` gate by
 design. It runs in nightly CI only, is never linked into a shipped binary,
-and its direct dependencies are limited to `libfuzzer-sys`, `arbitrary`,
-`derive_arbitrary`, and `serde_json`. A new fuzz dependency still goes
-through the `cargo deny` pass over `fuzz/Cargo.toml` in the security
-workflow, plus ordinary PR review.
+and its third-party direct dependencies are limited to `libfuzzer-sys`,
+`arbitrary`, and `serde_json` (alongside `chromium-bridge-core` itself, the
+crate under test); `derive_arbitrary` comes in transitively through
+`arbitrary`'s derive feature. A new fuzz dependency still goes through the
+`cargo deny` pass over `fuzz/Cargo.toml` in the security workflow, plus
+ordinary PR review.
 
 ## Logging
 

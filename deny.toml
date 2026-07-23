@@ -44,19 +44,12 @@ allow = [
   "BSD-3-Clause",
   "MPL-2.0",
   "Zlib",
-  # Permissive UIUC/NCSA license, carried only by libfuzzer-sys (bundled LLVM
-  # libFuzzer code) in the never-shipped fuzz workspace.
-  "NCSA",
 ]
 confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Private path-only crates may omit a version: the fuzz workspace's core dep
-# is `path = ".."`, and scripts/sync-version.ts does not maintain the fuzz
-# manifest, so a pinned version there would drift on every release.
-allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

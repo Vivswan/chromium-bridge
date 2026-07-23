@@ -28,9 +28,10 @@ jobs:
       - name: cargo deny (advisories + licenses + bans + sources)
         run: cargo deny check
       # The fuzz crate is its own workspace, excluded from the root one, so
-      # the root pass above never sees its lockfile - gate it separately.
+      # the root pass above never sees its lockfile - gate it separately with
+      # its own config (the shipped gate stays strict; see the fuzz deny.toml).
       - name: cargo deny (fuzz workspace)
-        run: cargo deny --manifest-path src/packages/core/fuzz/Cargo.toml check
+        run: cargo deny --manifest-path src/packages/core/fuzz/Cargo.toml --config src/packages/core/fuzz/deny.toml check
 
   bun-audit:
     name: bun audit (JS workspace)
