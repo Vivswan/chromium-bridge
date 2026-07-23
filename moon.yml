@@ -335,6 +335,14 @@ tasks:
       cache: false # a gating suite: gates are never cached
       runInCI: false # opt-in; needs an isolated Chrome
 
+  fuzz-smoke:
+    description: 'Bounded fuzz smoke over every cargo-fuzz target (needs nightly + cargo-fuzz; skips if missing)'
+    command: 'bun scripts/fuzz-smoke.ts'
+    toolchains: ['system']
+    options:
+      cache: false
+      runInCI: false
+
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
 
   check-uv:
