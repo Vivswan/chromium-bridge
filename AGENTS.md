@@ -13,8 +13,8 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 - Bootstrap: [proto](https://moonrepo.dev/proto) provisions every pinned
   tool from `.prototools` (bun, moon, rust pre-install, uv) - one
   `proto install` in a fresh checkout. uv keeps owning python
-  (`.python-version`); cargo-nextest, typos, and cargo-machete are separate
-  one-time installs (docs/development.md).
+  (`.python-version`); cargo-nextest, typos, cargo-machete, and actionlint
+  are separate one-time installs (docs/development.md).
 - Runtime and package manager: bun (`bun install`, `bun test`, `bun run <script>`)
 - Task runner: [moon](https://moonrepo.dev) is the canonical command
   interface. `moon run <task>` runs a task; `moon run help` (or
@@ -23,9 +23,11 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 ## Conventions
 
 - PR titles and commit subjects must be Conventional Commits (`feat:`, `fix:`,
-  `feat!:`, `chore:`, ...). PRs are squash-merged, so the PR title becomes the
-  commit subject and drives release-please versioning. CI validates both
-  (pr-title workflow + validate-commit-names).
+  `feat!:`, `ci:`, ...; CONTRIBUTING.md lists the allowed types - `chore` is
+  not one of them). PRs are squash-merged, so the PR title becomes the commit
+  subject and drives release-please versioning. CI validates both inside the
+  all-green gate: the conventional-title and commit-names jobs, one shared
+  validator (`scripts/check-commit-names.ts`).
 - CI gates on a single required check named `all-green`, which `needs:` every
   other job in `.github/workflows/ci.yml`. When adding a CI job, add it to
   all-green's `needs` list.
