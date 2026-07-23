@@ -3,10 +3,10 @@
 //
 //   import { repoRoot, cargoVersion } from "./lib.ts";
 //
-// (scripts/build-repro.ts and the CI-only .github/scripts/fuzz_smoke.ts
-// deliberately do NOT import this file: they stay self-contained on node
-// builtins so they run before `bun install` - the release workflow builds
-// the binary first, and the nightly fuzz job never installs the workspace.)
+// (scripts/build-repro.ts and scripts/fuzz-smoke.ts deliberately do NOT
+// import this file: they stay self-contained on node builtins so they run
+// before `bun install` - the release workflow builds the binary first, and
+// the nightly fuzz job never installs the workspace.)
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
