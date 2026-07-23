@@ -49,6 +49,17 @@ const MANIFEST_DESCRIPTION: &str =
 /// First line of every wrapper this project writes.
 const WRAPPER_SHEBANG: &str = "#!/usr/bin/env bash";
 
+/// Fuzz-only aliases of the two ownership markers, for the cargo-fuzz
+/// workspace's [`manifest_ownership`] oracle (see the `fuzzing` feature in
+/// Cargo.toml). Aliases of the real constants, so the oracle can never drift
+/// from what this module actually writes; they stay private otherwise.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz_api {
+    pub const MANIFEST_DESCRIPTION: &str = super::MANIFEST_DESCRIPTION;
+    pub const MANIFEST_DESCRIPTION_LEGACY: &str = super::MANIFEST_DESCRIPTION_LEGACY;
+}
+
 /// Everything the engine needs to lay a registration down. Paths are injected
 /// so tests drive it against temp trees, never real browser dirs, and so the
 /// app can point it at the same places the CLI does.

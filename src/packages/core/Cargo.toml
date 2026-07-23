@@ -27,11 +27,12 @@ envelope-schema = ["dep:schemars"]
 # posture as envelope-schema: off by default, enabled only by the desktop
 # crate's own ts-export feature, never compiled into a shipped binary.
 ts-export = ["dep:ts-rs"]
-# Fuzz-only surface: re-exports private handshake internals for the cargo-fuzz
-# workspace (the `fuzz/` subdirectory, its own workspace). Off by default; the
-# fuzz workspace is the only build in this repo that enables it. Features are
-# additive, so an --all-features build compiles it too - but no shipped binary
-# enables it, and the gated module is thin re-exports only, no behavior.
+# Fuzz-only surface: re-exports private internals (the handshake verifier, the
+# registration ownership markers) for the cargo-fuzz workspace (the `fuzz/`
+# subdirectory, its own workspace). Off by default; the fuzz workspace is the
+# only build in this repo that enables it. Features are additive, so an
+# --all-features build compiles it too - but no shipped binary enables it, and
+# the gated modules are thin re-exports only, no behavior.
 fuzzing = []
 
 [[example]]
