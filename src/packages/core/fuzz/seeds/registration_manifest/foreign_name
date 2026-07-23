@@ -1,0 +1,9 @@
+{
+  "name": "com.other.host",
+  "description": "Chromium Bridge native messaging host (managed by chromium-bridge)",
+  "path": "/usr/local/bin/chromium-bridge",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/"
+  ]
+}
