@@ -96,6 +96,8 @@ tasks:
       - '~:check-gen-isolation'
       - '~:check-toolchain'
       - '~:check-hasher'
+      - '~:check-yaml'
+      - '~:check-actions'
     toolchains: ['system']
     options:
       cache: false
@@ -722,3 +724,37 @@ tasks:
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
+
+  check-yaml:
+    # The yamllint version is pinned here and ONLY here: CI's yamllint job
+    # runs this same task, so local and CI verdicts cannot diverge. uvx
+    # comes with uv (proto-provisioned).
+    description: 'Lint every YAML file (yamllint, strict; the single place its version is pinned)'
+    command: 'uvx yamllint@1.38.0 -s .'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-actions:
+    # actionlint is a residual-gap tool like typos (no first-party proto
+    # plugin): `brew install actionlint` once (docs/development.md). CI pins
+    # its version in the actionlint job, so a local version skew can at
+    # worst surface a finding early, never hide one from CI.
+    description: 'Lint the GitHub Actions workflows (actionlint; install once with `brew install actionlint`)'
+    command: 'actionlint'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-commit-names:
+    # NOT part of the ci aggregate: the pre-commit hook runs `moon run ci`
+    # BEFORE the commit message exists, so there would be nothing to check.
+    # Run it before pushing; CI's commit-names job gates the real range.
+    description: 'Commit subjects on origin/main..HEAD are Conventional Commits (CONTRIBUTING.md types)'
+    script: |
+      set -e
+      bun scripts/check-commit-names.ts
+      bun test scripts/check-commit-names.test.ts
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached

@@ -6,6 +6,9 @@
 // the merge gate fails open. This script parses the workflow and fails CI
 // naming any job that is neither in all-green's needs nor explicitly exempted
 // below, so the only way to add an unrequired job is a reviewed edit here.
+// It also enforces the other direction: jobs listed in DOWNSTREAM (release)
+// must keep `needs: [all-green]`, so nothing that publishes can quietly
+// detach from the gate.
 //
 // It verifies the hand-written YAML rather than generating it (the workflow
 // stays hand-readable), and is dependency-free on purpose (Bun.YAML + node
@@ -24,6 +27,16 @@ export const EXEMPT: Record<string, string> = {
   [GATE]: "the aggregate gate itself - a job cannot need itself",
   coverage:
     "informational by design: no threshold, must never block a merge (see the job's comment in ci.yml)",
+  release:
+    "downstream of the gate (needs: [all-green]), so it cannot also be required by it; DOWNSTREAM below keeps it attached",
+};
+
+// Jobs that must run strictly AFTER the gate: each listed job must exist and
+// its `needs` must contain the gate. Exemption alone would let a future edit
+// silently drop `needs: [all-green]` from the release job and resurrect the
+// deploy-from-red-main incident this structure exists to prevent.
+export const DOWNSTREAM: Record<string, string> = {
+  release: "releases, release-PR refreshes, and site deploys must only ever happen on a green main",
 };
 
 interface Workflow {
@@ -31,9 +44,14 @@ interface Workflow {
 }
 
 /** Returns the list of completeness violations in the given workflow YAML
- * (empty = the merge gate covers every non-exempt job). `exempt` is
- * injectable for the unit tests; production always uses EXEMPT. */
-export function findGateGaps(yamlText: string, exempt: Record<string, string> = EXEMPT): string[] {
+ * (empty = the merge gate covers every non-exempt job and every downstream
+ * job hangs off the gate). `exempt` and `downstream` are injectable for the
+ * unit tests; production always uses EXEMPT and DOWNSTREAM. */
+export function findGateGaps(
+  yamlText: string,
+  exempt: Record<string, string> = EXEMPT,
+  downstream: Record<string, string> = DOWNSTREAM,
+): string[] {
   const jobs = (Bun.YAML.parse(yamlText) as Workflow | null)?.jobs;
   if (!jobs || typeof jobs !== "object") return ["workflow has no jobs map"];
   const gate = jobs[GATE];
@@ -70,6 +88,24 @@ export function findGateGaps(yamlText: string, exempt: Record<string, string> = 
       errors.push(`exempt list names "${id}", which is not a job in ci.yml`);
     if (reason.trim() === "") errors.push(`exempt entry "${id}" has no justification`);
   }
+  // Downstream enforcement: a job that must follow the gate has to actually
+  // exist and actually need it, or the constraint is fiction.
+  for (const [id, reason] of Object.entries(downstream)) {
+    if (reason.trim() === "") errors.push(`downstream entry "${id}" has no justification`);
+    // Object.hasOwn for the same prototype-chain reason as above.
+    const job = Object.hasOwn(jobs, id) ? jobs[id] : undefined;
+    if (!job) {
+      errors.push(`downstream list names "${id}", which is not a job in ci.yml`);
+      continue;
+    }
+    const jobNeeds = typeof job.needs === "string" ? [job.needs] : (job.needs ?? []);
+    if (!jobNeeds.includes(GATE)) {
+      errors.push(
+        `job "${id}" must run downstream of ${GATE} (${reason}), ` +
+          `but its needs [${jobNeeds.join(", ")}] does not include ${GATE}`,
+      );
+    }
+  }
   return errors;
 }
 
@@ -83,6 +119,7 @@ if (import.meta.main) {
   }
   console.log(
     `check-all-green: every non-exempt ci.yml job is in ${GATE}.needs ` +
-      `(exempt: ${Object.keys(EXEMPT).join(", ")})`,
+      `(exempt: ${Object.keys(EXEMPT).join(", ")}; ` +
+      `downstream of the gate: ${Object.keys(DOWNSTREAM).join(", ")})`,
   );
 }

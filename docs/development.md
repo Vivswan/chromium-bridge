@@ -22,11 +22,12 @@ proto install    # provisions bun, moon, rust, uv at the pinned versions
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
-Three gate tools have no first-party proto plugin and are installed once by
+Four gate tools have no first-party proto plugin and are installed once by
 hand: `cargo install cargo-nextest` and `brew install typos-cli
-cargo-machete` (or `cargo install typos-cli cargo-machete`). CI pins typos
-and cargo-machete in its tooling job, so a local version skew can at worst
-surface a finding early, never hide one from CI.
+cargo-machete actionlint` (typos and cargo-machete can also come from `cargo
+install`). CI pins typos, cargo-machete, and actionlint in its own jobs, so
+a local version skew can at worst surface a finding early, never hide one
+from CI.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -37,6 +38,7 @@ surface a finding early, never hide one from CI.
 | [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. uv itself is pinned only in `.prototools`. The suites are stdlib-only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates both |
+| [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI pins its version in the actionlint job |
 
 Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`):
 `bun install` wires a pre-commit hook that runs `moon run ci`, so a commit
@@ -159,7 +161,7 @@ The full task menu, by area:
 | Desktop app | `bundle-app`, `dmg-app`, `run-app`, `install-app`, `check-app-signing`, `check-app-rust`, `desktop-ui:test` |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `sync-version`, `check-version`, `check-extension-id` |
-| Repo hygiene | `check-cjk`, `check-typography`, `check-all-green`, `check-toolchain`, `check-hasher` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-all-green`, `check-toolchain`, `check-hasher`, `check-yaml`, `check-actions`, `check-commit-names` |
 
 ## moon: the canonical command interface
 

@@ -9,6 +9,7 @@ ignore:
   - dist
   - build
   - coverage
+  - .worktree # each worktree is its own checkout with its own lint run
 
 rules:
   document-start: disable # no --- preamble required

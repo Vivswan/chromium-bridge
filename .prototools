@@ -19,11 +19,12 @@
 #          `uv run --no-project --isolated`; proto never provisions python
 #          (builtin-plugins below deliberately excludes it).
 #
-# Named residual gap: three gate tools have no first-party proto plugin and
-# are NOT provisioned here - cargo-nextest, typos, cargo-machete. Install
-# them once by hand (docs/development.md); CI pins typos + cargo-machete in
-# the tooling job (taiki-e/install-action), so a local version skew there
-# can at worst surface findings early, never hide them from CI.
+# Named residual gap: four gate tools have no first-party proto plugin and
+# are NOT provisioned here - cargo-nextest, typos, cargo-machete, actionlint.
+# Install them once by hand (docs/development.md); CI pins typos +
+# cargo-machete in the tooling job and actionlint in the actionlint job
+# (both by exact version), so a local version skew there can at worst
+# surface findings early, never hide them from CI.
 proto = "0.58.2"
 bun = "1.3.14"
 moon = "2.4.5"

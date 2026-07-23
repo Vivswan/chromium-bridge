@@ -1,53 +1,80 @@
 name: release-please
 
-# Versioned GitHub releases from Conventional Commits. On every push to main,
-# release-please opens/updates ONE rolling "release PR" that bumps the version
-# (semver derived from feat:/fix:/feat!: prefixes) and regenerates CHANGELOG.md.
-# Merging that PR is what tags vX.Y.Z + publishes the GitHub Release -- a plain
-# push to main releases nothing.
+# Versioned GitHub releases from Conventional Commits. Called by ci.yml's
+# `release` job, downstream of the all-green gate, so it only ever runs for a
+# main commit whose full CI passed (PR #9 once deployed the site from a red
+# main; this call chain is the fix). release-please opens/updates ONE rolling
+# "release PR" that bumps the version (semver derived from feat:/fix:/feat!:
+# prefixes) and regenerates CHANGELOG.md. Merging that PR is what tags vX.Y.Z
+# + publishes the GitHub Release -- a plain push to main releases nothing.
 #
-# On every successful run this workflow also (re)deploys the site:
+# Every current run (see the head-moved guard) also (re)deploys the site:
 #   - the production root (vivswan.github.io/chromium-bridge/) is built from
 #     the LATEST release tag, so it changes only when a release PR is merged
-#   - the /staging/ path is built from main HEAD, so it refreshes every push
+#   - the /staging/ path is built from the exact main commit this run tested
 on:
-  push:
-    branches: [main]
+  workflow_call:
 
+# The effective token comes from the calling job; declaring the needs here
+# documents them and caps a caller that grants more.
 permissions:
   contents: write       # create the tag + release, push the changelog/version bump
   pull-requests: write  # open/update the release PR
   issues: write         # release-please's `autorelease:` labels (label = issues API)
 
-# Two concurrent passes would race on the release PR; serialize them.
-concurrency:
-  group: release-please
-  cancel-in-progress: false
-
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      # The step output must be mapped here: deploy's `if` reads
+      # needs.release-please.outputs.current, which is silently empty (so
+      # deploy never runs) without this mapping.
+      current: ${{ steps.head.outputs.current }}
     steps:
+      # A green run releases only the head it tested: if main moved on, skip
+      # and let the newer push's own run release (after its CI passes).
+      # gh api (not anonymous ls-remote) so private repositories work too.
+      - name: Check this run tested the current head
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::main moved to ${head:0:7} since this run started; the newer run releases"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # release-please opens/updates the rolling release PR. It is created with
       # RELEASE_PLEASE_TOKEN (a PAT or GitHub App token) when that secret is set, so
       # GitHub runs CI on the release PR like a normal PR. PRs opened by the built-in
       # GITHUB_TOKEN never trigger workflows (a recursion guard) -- that is why the
       # required `all-green` check used to sit unmet on the release PR. Falls back to
       # GITHUB_TOKEN when the secret is absent: the release PR still opens, but CI
-      # won't run on it (admin-merge) until you add the token. See AGENTS.md > Releases.
-      - uses: googleapis/release-please-action@v5
+      # won't run on it (admin-merge) until you add the token. The secret reaches
+      # this workflow via the caller's `secrets: inherit`.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        if: steps.head.outputs.current == 'true'
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
-  # Deploy the site on EVERY successful release-please run, NOT only when a
-  # release is created (no `if: release_created`): staging (main HEAD) must
-  # refresh on each push to main. deploy-site.yml rebuilds the production
-  # root from the latest release tag, so the root only actually changes when
-  # a release was just tagged.
+  # Deploy the site on EVERY current run, NOT only when a release is created
+  # (no `if: release_created`): staging (main HEAD) must refresh on each push
+  # to main. deploy-site.yml rebuilds the production root from the latest
+  # release tag, so the root only actually changes when a release was just
+  # tagged. Gated on `current`: a stale run must not overwrite /staging/ with
+  # an older tree.
   deploy:
     needs: release-please
+    if: needs.release-please.outputs.current == 'true'
     permissions:
       contents: read
       pages: write
       id-token: write
     uses: ./.github/workflows/deploy-site.yml
+    with:
+      # The exact commit all-green tested; deploy-site builds staging from it
+      # and re-checks it against live main right before publishing.
+      tested-sha: ${{ github.sha }}
