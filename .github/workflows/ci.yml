@@ -15,11 +15,26 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Giving `types` at all replaces the default set, so the three defaults
+    # are re-listed. `edited` is added on purpose: the PR title becomes the
+    # squash-commit subject, so a title edit must re-run conventional-title
+    # (it also fires on body/base edits - one extra full run per edit,
+    # bounded by the per-PR cancel-in-progress below).
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
+
+# Read-only by default for every job; the release job raises its own ceiling.
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, but let main runs queue: the release job runs
+  # downstream of all-green, and cancelling a main run mid-flight would kill
+  # a release or site deploy. GitHub keeps at most one PENDING run per group,
+  # so rapid main pushes collapse to the newest - correct here, and the
+  # head-moved guard in release-please.yml covers the rest.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   rust:
@@ -445,8 +460,9 @@ jobs:
 
   # The public web app (src/apps/web: the landing page plus Astro over the repo's
   # markdown docs) must keep building. Build-only here: deployment to GitHub
-  # Pages happens in deploy-site.yml, called by release-please.yml after
-  # every push to main (production root = latest release, /staging/ = main).
+  # Pages happens in deploy-site.yml, reached through the release job below -
+  # downstream of all-green, so only a fully tested main commit is ever
+  # published (production root = latest release, /staging/ = tested main).
   web:
     name: web app builds
     runs-on: ubuntu-latest
@@ -472,6 +488,83 @@ jobs:
           bun-version-file: package.json
       # Dependency-free (node builtins only), so no bun install.
       - run: bun scripts/check-cjk.ts
+
+  # PRs are squash-merged, so the PR title becomes the commit subject and
+  # drives release-please versioning; scripts/check-commit-names.ts is the
+  # single source of truth for what a valid subject is (commit-names below
+  # runs the same script over the pushed range). The guard sits on the STEP,
+  # not the job: a skipped JOB reports result "skipped", which all-green's
+  # success loop rejects, while a job whose only step was skipped reports
+  # "success" - so push/dispatch runs (which have no PR title) still pass.
+  conventional-title:
+    name: conventional-title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      # Dependency-free (node builtins only), so no bun install.
+      - name: PR title is a Conventional Commit
+        if: github.event_name == 'pull_request'
+        env:
+          # Via env, never interpolated into the script: a PR title is
+          # attacker-controlled input.
+          TITLE: ${{ github.event.pull_request.title }}
+        run: bun scripts/check-commit-names.ts --title "$TITLE"
+
+  commit-names:
+    name: Commit subjects are Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # the validator rev-lists the pushed/PR range; a shallow clone lacks it
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      # Dependency-free (node builtins only), so no bun install.
+      - run: |
+          bun scripts/check-commit-names.ts
+          bun test scripts/check-commit-names.test.ts
+
+  actionlint:
+    name: actionlint (workflow hygiene)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          # Pinned: this tool's verdict gates the build, so its version must
+          # not drift underneath us. Bump deliberately (and keep the local
+          # brew install in step - see docs/development.md).
+          version: 1.7.12
+
+  yamllint:
+    name: yamllint (YAML hygiene)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      # Pinned versions must match .prototools (see the extension job).
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+        with:
+          proto-version: "0.58.2"
+          moon-version: "2.4.5"
+      - run: proto install uv
+      # The yamllint version is pinned in exactly one place: the moon task
+      # (`uvx yamllint@...`), which local `moon run ci` runs too.
+      - run: moon run check-yaml
+
+  # The security audits gate merges: a new advisory lands as a red PR check,
+  # not a silent scheduled failure. security.yml calls the same reusable
+  # workflow weekly for advisories disclosed between pushes. A job calling a
+  # reusable workflow fails if any called job fails, so this single job
+  # aggregates both audit jobs for all-green.
+  audits:
+    name: Security audits
+    uses: ./.github/workflows/audits.yml
 
   # The desktop app (src/apps/desktop): UI build + unit tests, then the Rust
   # crate's clippy + tests. macOS only: the crate is macOS-focused (the
@@ -534,6 +627,11 @@ jobs:
         cjk,
         desktop,
         web,
+        conventional-title,
+        commit-names,
+        actionlint,
+        yamllint,
+        audits,
       ]
     runs-on: ubuntu-latest
     steps:
@@ -564,3 +662,33 @@ jobs:
               exit 1
             fi
           done
+
+  # Release from a green main only: release-please (and the site deploy it
+  # chains to) runs downstream of all-green, so a red commit can never cut a
+  # release, refresh the release PR, or publish the site - PR #9 once
+  # deployed the site from a red main, and this dependency is the structural
+  # fix. Deliberately NOT in all-green's needs: it depends on the gate, it is
+  # not gated by it (scripts/check-all-green.ts enforces both directions).
+  # A workflow_dispatch of ci.yml on main is the manual release/redeploy
+  # path. Secrets are inherited deliberately: release-please needs
+  # RELEASE_PLEASE_TOKEN, and this job never runs for pull requests.
+  release:
+    needs: [all-green]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # The permissions ceiling for the whole called tree (release-please +
+    # the Pages deploy); nested jobs can only narrow it, never raise it.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      pages: write
+      id-token: write
+    # Two concurrent passes would race on the release PR; serialize them at
+    # the call site, where the constraint is visible. GitHub keeps at most
+    # one PENDING run per group, so rapid main pushes collapse to the newest
+    # - the head-moved guard in release-please.yml covers the rest.
+    concurrency:
+      group: release-please
+      cancel-in-progress: false
+    uses: ./.github/workflows/release-please.yml
+    secrets: inherit

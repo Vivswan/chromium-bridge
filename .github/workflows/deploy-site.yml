@@ -1,12 +1,15 @@
 # Publishes src/apps/web (the landing page + rendered repo docs) to GitHub Pages
 # in ONE deployment with two environments:
 #   - the production root  <- built from the LATEST release tag
-#   - /staging/            <- built from main HEAD
-# Called by release-please.yml on every successful run (so staging tracks
-# main), plus workflow_dispatch for manual/urgent redeploys. The root is
-# rebuilt from the release tag each time, so it only changes when a release
-# PR merges. Before the FIRST release there is no tag: only staging is
-# published and the production root returns GitHub's default 404 (intended).
+#   - /staging/            <- built from the tested main commit
+# Called by release-please.yml (itself downstream of ci.yml's all-green gate)
+# with tested-sha = the exact main commit that gate tested, so staging tracks
+# main without ever publishing an untested tree; plus workflow_dispatch for
+# manual/urgent redeploys (which build staging from live main, no test
+# guarantee). The root is rebuilt from the release tag each time, so it only
+# changes when a release PR merges. Before the FIRST release there is no tag:
+# only staging is published and the production root returns GitHub's default
+# 404 (intended).
 #
 # CUSTOM DOMAIN (config-only cutover): CUSTOM_DOMAIN is a repository Actions
 # VARIABLE (Settings -> Secrets and variables -> Actions -> Variables), read
@@ -28,6 +31,18 @@ name: deploy-site
 
 on:
   workflow_call:
+    inputs:
+      tested-sha:
+        # Required on the call path: `github.event_name` inside a reusable
+        # workflow is the CALLER's event, so a workflow_dispatch of ci.yml
+        # reaching here through release-please.yml is indistinguishable from
+        # a direct dispatch of this workflow by event name alone. An explicit
+        # input keeps the two paths apart mechanically.
+        description: >-
+          The exact main commit CI tested; staging is built from it and the
+          publish is skipped if main has moved past it.
+        required: true
+        type: string
   workflow_dispatch:
 
 permissions:
@@ -79,15 +94,14 @@ jobs:
           # token in the checkout.
           persist-credentials: false
 
-      # Staging source = main HEAD. On the release-please call chain
-      # github.sha is the exact main commit that triggered the run; on a
-      # manual workflow_dispatch it would be the selected ref, so pin to
-      # `main` explicitly there to stop a dispatch from a tag/branch
-      # publishing that ref as staging.
-      - name: Checkout main HEAD (staging)
+      # Staging source: on the release-please call chain, the exact main
+      # commit the all-green gate tested (tested-sha); on a direct manual
+      # workflow_dispatch there is no input, so fall back to live main - a
+      # dispatch from a tag/branch must not publish that ref as staging.
+      - name: Checkout the tested main commit (staging)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.sha }}
+          ref: ${{ inputs.tested-sha || 'main' }}
           path: staging
           persist-credentials: false
 
@@ -176,5 +190,32 @@ jobs:
         with:
           path: _site
 
+      # Last look before publishing: if main moved past the tested commit
+      # while this run was building, skip the publish and let the newer
+      # push's own run deploy - publishing now would overwrite /staging/
+      # with an older tree. A push can still land in the seconds between
+      # this check and the publish finishing; that residual race is
+      # accepted and self-heals when the newer push's run deploys. On a
+      # direct workflow_dispatch (no tested-sha) staging was built from
+      # live main, so there is nothing to compare - always publish.
+      - name: Publish only if main still points at the tested commit
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ inputs.tested-sha }}
+        run: |
+          if [ -z "$TESTED_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          if [ "$head" = "$TESTED_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::main moved to ${head:0:7} since this run started; skipping the publish - the newer run deploys"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - id: deployment
+        if: steps.fresh.outputs.current == 'true'
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
