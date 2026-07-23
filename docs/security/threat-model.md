@@ -111,8 +111,8 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
    cargo-fuzz targets (`src/packages/core/fuzz/`) cover both the wire
    parsers (native-messaging framing, MCP JSON-RPC, the bridge and handshake
    decoders) and the semantic validators behind them (the handshake MAC
-   verifier, the frame classifier, the DER signature parser, and the
-   manifest ownership decision).
+   verifier, the frame classifier, the DER signature parser, the enclave
+   challenge builder, and the manifest ownership decision).
 
 6. **Silent pairing: a malicious `claude mcp add` (or any process able to
    write an MCP client config) stands up the whole chain without the user

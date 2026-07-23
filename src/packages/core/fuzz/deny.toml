@@ -1,0 +1,48 @@
+# cargo-deny config for the fuzz workspace ONLY.
+# Run: cargo deny --manifest-path src/packages/core/fuzz/Cargo.toml --config
+#      src/packages/core/fuzz/deny.toml check   (CI: .github/workflows/security.yml)
+#
+# Deliberately separate from the root deny.toml so the two relaxations this
+# never-shipped, nightly-only crate needs (NCSA license, wildcard path dep)
+# stay OUT of the shipped workspace's gate. The root config keeps
+# `wildcards = "deny"` with no path exception and never allows NCSA. This
+# file's third-party direct dependencies are libfuzzer-sys, arbitrary, and
+# serde_json (plus the core crate under test, and derive_arbitrary
+# transitively via arbitrary); its tree does NOT include the desktop/Tauri
+# tree, so it needs none of the root config's GTK advisory ignores.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Same permissive set as the root gate, plus NCSA. NCSA (permissive UIUC) is
+# carried only by libfuzzer-sys's bundled LLVM libFuzzer code, which exists
+# in this workspace alone and never links into a shipped binary. Keep this
+# allow list in sync with root deny.toml's when the shared crate tree changes.
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "Unicode-3.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "MPL-2.0",
+  "Zlib",
+  "NCSA",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The fuzz crate's core dependency is `path = ".."` with no version, and
+# scripts/sync-version.ts does not maintain this manifest, so a pinned
+# version would drift on every release. Scoped to this fuzz-only config so
+# the shipped workspace's gate keeps rejecting bare path dependencies.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
