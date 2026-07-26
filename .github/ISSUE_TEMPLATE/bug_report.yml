@@ -1,28 +1,41 @@
 name: Bug report
 description: Something isn't working
-labels: [bug]
+labels: ["type:bug"]
 body:
   - type: textarea
-    id: what-happened
+    id: what
     attributes:
-      label: What happened?
-      description: What did you do, what did you expect, and what happened instead?
-      placeholder: |
-        1. ...
-        2. Expected ..., got ...
+      label: What happened
+      description: Actual vs expected behavior.
     validations:
       required: true
   - type: textarea
-    id: environment
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Binary (`chromium-bridge --help`) + extension version"
+    validations:
+      required: true
+  - type: input
+    id: env
     attributes:
       label: Environment
-      description: Version, OS, and anything else relevant.
+      description: macOS version, Chrome version, CPU arch (arm64/x64), MCP client
     validations:
-      required: false
+      required: true
   - type: textarea
     id: logs
     attributes:
-      label: Logs or screenshots (optional)
-      description: Redact anything that looks like a credential or key.
-    validations:
-      required: false
+      label: Logs
+      description: "Relevant `BB_LOG=debug` stderr. **Redact any tokens/cookies/secrets.**"
+      render: text

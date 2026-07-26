@@ -403,7 +403,7 @@ in the SW, `storage_get` in content, both read-only and always masked. See
 | Extension platform | MV3 on WXT, React UI, Vitest | Generated manifest with the pinned key; unified `browser.*`; testable SW. See [ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md) |
 | Desktop app | Tauri v2 (macOS) | Bundles the entitled host next to a webview UI; the UI carries no security weight. See [ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md), [ADR-0029](./adr/0029-desktop-app-management-surface.md) |
 | Contracts | The Rust core generates the TS side | One source of truth; CI fails on drift. See [ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md) and section 11 |
-| Engineering gates | moon + proto + GitHub Actions, bun workspace, Biome, cargo-nextest, typos/machete, cargo-vet | One `moon run ci` runs the local cross-platform gate; CI layers additional jobs on top (`.github/workflows/ci.yml` is exhaustive). See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by ADR-0023 and the moon adoption |
+| Engineering gates | moon + proto + GitHub Actions, bun workspace, Biome, cargo-nextest, typos/machete, cargo-vet | One `moon run ci` runs the local cross-platform gate; CI layers additional jobs on top (the repo's jobs live in `.github/workflows/checks.yml`, called inside the managed ci.yml's all-green gate). See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by ADR-0023 and the moon adoption |
 | MCP version | 2025-06-18 | The current stable version MCP clients implement. See [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md) |
 
 ## 9. Known limitations

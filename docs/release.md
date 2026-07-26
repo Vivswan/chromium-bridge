@@ -1,21 +1,31 @@
-# Releasing: the tag-driven release pipeline
+# Releasing: the release-please pipeline
 
-> This doc explains how chromium-bridge is released: pushing a tag triggers
-> prebuilt artifacts, checksums, and provenance attestations, plus a
-> decoupled SBOM workflow. Version discipline is in
-> [compatibility.md](./compatibility.md); on-disk registration paths are in
+> This doc explains how chromium-bridge is released: merging the release PR
+> cuts a release and, in the same CI run, builds prebuilt artifacts,
+> checksums, and provenance attestations, plus a decoupled SBOM workflow.
+> Version discipline is in [compatibility.md](./compatibility.md); on-disk
+> registration paths are in
 > [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
 
-## Trigger: push a tag
+## Trigger: merge the release PR
 
-Releases are driven by a **git tag** (`.github/workflows/release.yml`,
-`on: push: tags: ["v*"]`, with a `workflow_dispatch` manual entry point as well):
+Releases are driven by **release-please**. Conventional commits on `main`
+accumulate into a rolling release PR (`chore(main): release X.Y.Z`); merging
+it tags and publishes the release. The machinery is the managed
+`.github/workflows/release-please.yml`, called from the repo-owned
+`.github/workflows/release.yml` pipeline, which the managed ci.yml runs
+downstream of the all-green gate - so a release can only ever be cut from a
+green `main`, and the packaging jobs below run in that same CI run, gated on
+release-please's `release_created` output. The release PR must be created with
+the `REPO_PLATFORM_TOKEN` repository secret (a PAT): a PAT-created release
+triggers `on: release` workflows (sbom.yml, the Pages production deploy),
+and the release PR gets CI runs. Without the secret, release-please falls
+back to `GITHUB_TOKEN`, whose events fire no workflows - the release PR
+needs a close/reopen to run its checks, and a published release silently
+skips the SBOM and the Pages root rebuild. Configure the secret before the
+first release.
 
-```bash
-git tag v0.1.0 && git push --tags
-```
-
-The pipeline's first step is a **version consistency check**: after stripping the leading
+Each packaging job's first step is a **version consistency check**: after stripping the leading
 `v` and any `-dev`/`-rc` prerelease suffix from the tag, its core version must equal the
 `version` in `Cargo.toml`, otherwise the run fails immediately. Cargo is the single
 version source (see [ADR-0013](./adr/0013-ci-and-toolchain.md)). Tags with a suffix (such
@@ -23,7 +33,7 @@ as `v0.1.0-rc.1`) are marked as prereleases.
 
 ## Build matrix and prebuilt archives
 
-release.yml builds on a matrix (currently `macos-14/arm64`, `ubuntu-22.04/x64`, and
+release.yml builds the `binaries` job on a matrix (currently `macos-14/arm64`, `ubuntu-22.04/x64`, and
 `windows-2022/x64`; Intel macOS is **deliberately omitted** because hosted runners are
 scarce, and Linux uses an older glibc baseline to widen compatibility). For each target:
 
@@ -77,7 +87,7 @@ on any Mac the profile does not provision.
 
 **Free-tier churn:** a free Apple Development profile expires seven days after
 Xcode mints it, so `MACOS_PROVISION_PROFILE_BASE64` has to be refreshed
-shortly before tagging a release:
+shortly before merging a release PR:
 
 ```sh
 base64 -i ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/<uuid>.provisionprofile \

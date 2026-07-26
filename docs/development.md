@@ -25,9 +25,10 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 Four gate tools have no first-party proto plugin and are installed once by
 hand: `cargo install cargo-nextest` and `brew install typos-cli
 cargo-machete actionlint` (typos and cargo-machete can also come from `cargo
-install`). CI pins typos, cargo-machete, and actionlint in its own jobs, so
-a local version skew can at worst surface a finding early, never hide one
-from CI.
+install`). CI pins typos and cargo-machete in checks.yml; the managed
+ci.yml's actionlint job follows the action's floating tag (a template-sync
+decision, recorded in ADR-0033), so a local version skew can at worst
+surface a finding early.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -38,7 +39,7 @@ from CI.
 | [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. uv itself is pinned only in `.prototools`. The suites are stdlib-only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates both |
-| [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI pins its version in the actionlint job |
+| [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI runs it in the managed ci.yml's actionlint job |
 
 Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`):
 `bun install` wires a pre-commit hook that runs `moon run ci`, so a commit
@@ -161,15 +162,16 @@ The full task menu, by area:
 | Desktop app | `bundle-app`, `dmg-app`, `run-app`, `install-app`, `check-app-signing`, `check-app-rust`, `desktop-ui:test` |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `sync-version`, `check-version`, `check-extension-id` |
-| Repo hygiene | `check-cjk`, `check-typography`, `check-all-green`, `check-toolchain`, `check-hasher`, `check-yaml`, `check-actions`, `check-commit-names` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-toolchain`, `check-hasher`, `check-yaml`, `check-actions` |
 
 ## moon: the canonical command interface
 
 Every task has one definition with declared inputs: the repo-wide tasks and
 runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`,
 `extension`, `desktop-ui`, `web`) live in a `moon.yml` next to their code,
-and CI runs the same tasks (`.github/workflows/ci.yml` calls
-`moon run <task>` wherever the step is more than a single thin command).
+and CI runs the same tasks (the repo-owned `.github/workflows/checks.yml`
+calls `moon run <task>` wherever the step is more than a single thin
+command).
 
 **Gates are never cached.** The `ci` aggregate, every task reachable from
 it, every `check-*` task, the python suites, and the runbook/ceremony tasks
@@ -221,8 +223,8 @@ provisions them all, and CI provisions the same way (the
 moon and the jobs `proto install` what they need). Four pins are
 necessarily duplicated, and `moon run check-toolchain` (part of the gate and
 of CI's version-consistency job) fails if any pair disagrees (for proto and
-moon it checks every setup-toolchain invocation in ci.yml individually, and
-that each is pinned to a full commit SHA):
+moon it checks every setup-toolchain invocation in checks.yml individually,
+and that each is pinned to a full commit SHA):
 
 - **rust**: `rust-toolchain.toml` is the authoritative pin - rustup, IDEs,
   and CI's `setup-rust-toolchain` read it natively, and it carries the
@@ -230,8 +232,9 @@ that each is pinned to a full commit SHA):
   toolchain.
 - **bun**: mirrored in `package.json` `packageManager` (read by `setup-bun`
   in the CI jobs that do not go through proto).
-- **proto/moon**: `ci.yml` passes explicit `proto-version` / `moon-version`
-  inputs (the action cannot read the proto pin from `.prototools`).
+- **proto/moon**: `checks.yml` passes explicit `proto-version` /
+  `moon-version` inputs (the action cannot read the proto pin from
+  `.prototools`).
 
 uv is pinned only in `.prototools`, and python is owned by uv exactly as
 before: the protocol suites run under the interpreter pinned in
@@ -377,21 +380,17 @@ BB_LOG=error chromium-bridge          # quiet
 
 ## Releasing
 
-`Cargo.toml` is the single source of truth for the version.
+Releases are cut by release-please: conventional commits on `main` accumulate
+into a rolling release PR that bumps the version (`Cargo.toml` and
+`src/apps/extension/package.json`, per release-please-config.json) and writes
+`CHANGELOG.md`; merging it tags the release, and the same CI run builds the
+macOS Apple Silicon, Linux x64, and Windows x64 archives (binary + built
+extension) and the desktop .dmg, and publishes them to GitHub Releases (see
+[docs/release.md](./release.md)).
 
-```sh
-# 1. bump the version in Cargo.toml
-# 2. propagate it to the extension manifest + package files
-moon run sync-version    # bun scripts/sync-version.ts
-# 3. update CHANGELOG.md (move [Unreleased] items under the new version)
-# 4. gate on a clean tree
-moon run release         # check-version + full ci
-# 5. tag - pushing a v* tag triggers .github/workflows/release.yml, which
-#    builds macOS Apple Silicon, Linux x64, and Windows x64 archives (binary
-#    + built extension) and publishes them to GitHub Releases.
-git tag vX.Y.Z && git push --tags
-```
-
-CI (`.github/workflows/ci.yml`) enforces version consistency on every push, so
-a forgotten `sync-version` fails the build. The release workflow also refuses to
-run if the tag doesn't match the Cargo version.
+`Cargo.toml` stays the single source of truth between releases: after a
+manual version change, `moon run sync-version` (`bun scripts/sync-version.ts`)
+propagates it to the extension manifest + package files, and CI enforces the
+consistency on every push (`moon run check-version`), so drift fails the
+build - including on the release PR itself. Each packaging job additionally
+refuses to run if the tag doesn't match the Cargo version.

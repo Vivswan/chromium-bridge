@@ -15,7 +15,7 @@ project. Code comments answer "what does this code do"; this directory answers
 | [desktop-app.md](./desktop-app.md) | The desktop app: what it manages, building it, what to verify by hand | Users, maintainers |
 | [operations.md](./operations.md) | Operations: the wire modes, logging/audit, the runtime directory, reconnect, kill-state recovery | Users, operators |
 | [compatibility.md](./compatibility.md) | Compatibility: the three kinds of version, the internal protocol version, the capability/version handshake (contract status) | Implementers, reviewers |
-| [release.md](./release.md) | Releasing: tag-driven pipeline, prebuilt archives + checksums + provenance, SBOM | Releasers, reviewers |
+| [release.md](./release.md) | Releasing: the release-please pipeline, prebuilt archives + checksums + provenance, SBOM | Releasers, reviewers |
 | [privacy-policy.md](./privacy-policy.md) | The extension's privacy policy ([Simplified](./privacy-policy.zh_CN.md) / [Traditional Chinese](./privacy-policy.zh_TW.md)) | Users, store review |
 | [chrome-web-store.md](./chrome-web-store.md) | Decision checklist for publishing to the Chrome Web Store: pinned-ID migration, review risks, prerequisites | Maintainers (decision) |
 | [wsl.md](./wsl.md) | The two WSL modes: Windows Chrome interop and WSLg | Users on WSL |
@@ -88,6 +88,7 @@ choices do not get an ADR.
 | [0030](./adr/0030-global-kill-switch-and-audit.md) | Global kill switch and the audit trail | Accepted |
 | [0031](./adr/0031-touch-id-confirmations-and-presence-grants.md) | Touch ID confirmations and presence-gated grants | Accepted |
 | [0032](./adr/0032-host-owned-policy-settings.md) | Host-owned policy settings and paired language sync | Accepted |
+| [0033](./adr/0033-adopt-repo-platform-fleet-template.md) | Full adoption of the repo-platform fleet template | Accepted |
 
 ## ADR writing conventions
 

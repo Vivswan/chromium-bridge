@@ -46,7 +46,7 @@ hasher:
     - '**/*.tsbuildinfo'
     - '**/__pycache__/**'
     - '**/.moon/cache/**'
-    - '**/.worktree/**'
+    - '**/.worktrees/**'
     - '**/build/**'
     - '**/src/apps/desktop/gen/**'
     - '**/src/apps/desktop/icons/**'
