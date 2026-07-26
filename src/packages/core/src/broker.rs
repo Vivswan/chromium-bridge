@@ -101,44 +101,74 @@ use std::sync::{Condvar, Mutex};
 /// client is still attached, and a relay that races the shutdown either
 /// attaches before the terminal decision or is cleanly refused afterwards.
 struct RefCount {
-    /// `(live_clients, terminal)`. `terminal` latches once [`wait_zero`] has
-    /// observed zero under the lock, after which [`try_incr`] refuses so a
-    /// racing relay cannot revive a broker that has committed to exit.
+    /// Guarded count + shutdown latch. `terminal` latches once [`wait_zero`]
+    /// has observed zero under the lock, after which [`try_acquire`] refuses
+    /// so a racing relay cannot revive a broker that has committed to exit.
     ///
-    /// [`try_incr`]: RefCount::try_incr
+    /// [`try_acquire`]: RefCount::try_acquire
     /// [`wait_zero`]: RefCount::wait_zero
-    state: Mutex<(usize, bool)>,
+    state: Mutex<CountState>,
     reached_zero: Condvar,
     max: usize,
 }
 
+/// The ref-count's guarded state, named so the two halves cannot be swapped
+/// or misread the way an anonymous `(usize, bool)` tuple could.
+struct CountState {
+    /// Live harness clients (own stdio harness + relays), each represented by
+    /// exactly one outstanding [`HarnessSlot`].
+    live: usize,
+    /// Latched by [`RefCount::wait_zero`] once it observes zero; refuses all
+    /// later acquisitions.
+    terminal: bool,
+}
+
+/// One live harness client's slot in the broker's [`RefCount`], released on
+/// Drop. The ONLY way to increment the count is [`RefCount::try_acquire`], and
+/// the only way to decrement it is dropping the returned slot, so an exit path
+/// that forgets to release -- or releases twice -- is unrepresentable.
+struct HarnessSlot<'a> {
+    refcount: &'a RefCount,
+}
+
+impl Drop for HarnessSlot<'_> {
+    fn drop(&mut self) {
+        self.refcount.decr();
+    }
+}
+
 impl RefCount {
-    fn new(initial: usize, max: usize) -> Self {
+    /// A fresh counter with no live clients. Every client -- including the
+    /// broker's own stdio harness -- is counted by acquiring a slot.
+    fn new(max: usize) -> Self {
         RefCount {
-            state: Mutex::new((initial, false)),
+            state: Mutex::new(CountState {
+                live: 0,
+                terminal: false,
+            }),
             reached_zero: Condvar::new(),
             max,
         }
     }
 
-    /// Try to add a client. Fails (returns false) if the broker is at capacity
-    /// or has already committed to shutting down (`terminal`).
-    fn try_incr(&self) -> bool {
+    /// Try to add a client, returning its slot (released on Drop). Fails
+    /// (returns `None`) if the broker is at capacity or has already committed
+    /// to shutting down (`terminal`).
+    fn try_acquire(&self) -> Option<HarnessSlot<'_>> {
         // A poisoned count is untrustworthy state: refuse the attach (the
         // client redials) rather than admit past an unknowable count.
         let Ok(mut g) = self.state.lock() else {
-            return false;
+            return None;
         };
-        let (count, terminal) = *g;
-        if terminal || count >= self.max {
-            return false;
+        if g.terminal || g.live >= self.max {
+            return None;
         }
-        g.0 = count + 1;
-        true
+        g.live += 1;
+        Some(HarnessSlot { refcount: self })
     }
 
-    /// Remove a client. Wakes [`wait_zero`](RefCount::wait_zero) when the count
-    /// reaches zero.
+    /// Remove a client (the [`HarnessSlot`] Drop path). Wakes
+    /// [`wait_zero`](RefCount::wait_zero) when the count reaches zero.
     fn decr(&self) {
         // Recover from poison rather than skip: failing to release a slot
         // would wedge wait_zero and keep the broker alive forever.
@@ -146,19 +176,19 @@ impl RefCount {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        debug_assert!(g.0 > 0, "decr underflow");
+        debug_assert!(g.live > 0, "decr underflow");
         // saturating_sub: a (never-observed) double-release must not wrap the
         // count in release builds and wedge the zero detection forever.
-        g.0 = g.0.saturating_sub(1);
-        if g.0 == 0 {
+        g.live = g.live.saturating_sub(1);
+        if g.live == 0 {
             self.reached_zero.notify_all();
         }
     }
 
     /// Block until the client count is zero, then latch `terminal` and return.
     /// After this returns, no new client can attach (see
-    /// [`try_incr`](RefCount::try_incr)), so the caller can tear the broker down
-    /// without racing a fresh attach.
+    /// [`try_acquire`](RefCount::try_acquire)), so the caller can tear the
+    /// broker down without racing a fresh attach.
     fn wait_zero(&self) {
         // Shutdown path: recover from poison and keep waiting -- refusing here
         // would abandon the terminal latch and let a racing relay revive us.
@@ -166,13 +196,13 @@ impl RefCount {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while g.0 != 0 {
+        while g.live != 0 {
             g = self
                 .reached_zero
                 .wait(g)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        g.1 = true;
+        g.terminal = true;
     }
 }
 
@@ -323,8 +353,9 @@ impl EpochGuard {
 /// shuts down the socket of any harness the fresh allowlist refuses, which
 /// ends that relay's serve loop (its own [`EpochGuard`] would equally refuse
 /// its next request; the sweep covers the no-request case). Slots are removed
-/// by the serve worker itself when its loop ends -- the sweep never removes,
-/// so ref-count bookkeeping stays in exactly one place.
+/// only by their [`RegistrySlot`] guard's Drop (held by the serve worker) --
+/// the sweep never removes, so occupancy bookkeeping stays in exactly one
+/// place, and by construction rather than by convention.
 struct ClientRegistry {
     slots: Mutex<RegistryInner>,
 }
@@ -340,6 +371,22 @@ struct RegisteredClient {
     stream: BridgeStream,
 }
 
+/// Occupancy of one [`ClientRegistry`] slot, released (deregistered) on Drop.
+/// The ONLY way to occupy a slot is [`ClientRegistry::register`], and the only
+/// way to release it is dropping the returned guard, so no exit path --
+/// rejection, serve-loop end, or an early return added later -- can leak one.
+/// `deregister` recovers from poison, so the Drop never unwinds.
+struct RegistrySlot<'a> {
+    registry: &'a ClientRegistry,
+    id: u64,
+}
+
+impl Drop for RegistrySlot<'_> {
+    fn drop(&mut self) {
+        self.registry.deregister(self.id);
+    }
+}
+
 impl ClientRegistry {
     fn new() -> Self {
         ClientRegistry {
@@ -350,7 +397,11 @@ impl ClientRegistry {
         }
     }
 
-    fn register(&self, identity: Option<ClientIdentity>, stream: BridgeStream) -> Option<u64> {
+    fn register(
+        &self,
+        identity: Option<ClientIdentity>,
+        stream: BridgeStream,
+    ) -> Option<RegistrySlot<'_>> {
         // Refuse on poison: this registry is the kill switch's reach, and the
         // thread most likely to have poisoned it is the sweep watcher itself.
         // Admitting a relay the (possibly dead) sweeper can never sever would
@@ -363,11 +414,12 @@ impl ClientRegistry {
         inner
             .clients
             .insert(id, RegisteredClient { identity, stream });
-        Some(id)
+        Some(RegistrySlot { registry: self, id })
     }
 
+    /// Release path, called only by [`RegistrySlot`]'s Drop.
     fn deregister(&self, id: u64) {
-        // Release path: recover from poison so slots cannot leak.
+        // Recover from poison so slots cannot leak.
         self.slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -498,26 +550,69 @@ struct Broker {
     registry: ClientRegistry,
 }
 
+/// An admitted relay's two resources, bundled so releasing one without the
+/// other is unrepresentable. Field order is load-bearing: struct fields drop
+/// in declaration order, so the registry slot is deregistered BEFORE the
+/// ref-count decrements -- the order the loom model
+/// `registry_is_empty_once_the_shutdown_decision_latches` checks (a slot must
+/// never survive the terminal shutdown decision).
+struct RelayAdmission<'a> {
+    /// Drops first: deregister from the revocation-sweep registry.
+    _slot: RegistrySlot<'a>,
+    /// Drops second: release the harness ref-count.
+    _harness: HarnessSlot<'a>,
+}
+
+/// One slot in the broker's pending-attach bound ([`MAX_PENDING_ATTACH`]),
+/// released on Drop. Owns an `Arc<Broker>` so it can move into the
+/// per-connection worker thread; the acquire and the release are one type, so
+/// a worker path that forgets the release is unrepresentable.
+struct PendingSlot {
+    broker: Arc<Broker>,
+}
+
+impl PendingSlot {
+    /// Claim a handshake-phase slot, or `None` (count already restored) when
+    /// [`MAX_PENDING_ATTACH`] connections are mid-handshake.
+    fn try_acquire(broker: &Arc<Broker>) -> Option<PendingSlot> {
+        let n = broker.pending.fetch_add(1, Ordering::SeqCst);
+        if n >= MAX_PENDING_ATTACH {
+            broker.pending.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(PendingSlot {
+            broker: Arc::clone(broker),
+        })
+    }
+}
+
+impl Drop for PendingSlot {
+    fn drop(&mut self) {
+        self.broker.pending.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// The outcome of the handshake + attach handshake for one connection.
-enum Admitted {
+enum Admitted<'a> {
     /// A browser native host, ready to join the session registry.
     Browser {
         label: String,
         reader: BufReader<BridgeStream>,
         writer: BufWriter<BridgeStream>,
     },
-    /// An admitted relay client; the broker's ref-count has been incremented
-    /// and the connection registered for revocation sweeps. Both must be
-    /// released when its serve loop ends.
+    /// An admitted relay client. Its ref-count slot and revocation-sweep
+    /// registry slot live in `admission`, released (in the load-bearing
+    /// order) when it drops after the serve loop ends.
     Client {
         reader: BufReader<BridgeStream>,
         writer: BufWriter<BridgeStream>,
         /// Per-request revocation-epoch guard (ADR-0025).
         guard: EpochGuard,
-        /// This connection's slot in the broker's [`ClientRegistry`].
-        registry_id: u64,
+        /// This connection's registry + ref-count occupancy (RAII).
+        admission: RelayAdmission<'a>,
     },
-    /// Rejected (refused, unavailable, or a failed handshake): nothing to do.
+    /// Rejected (refused, unavailable, or a failed handshake): nothing to do --
+    /// any partially acquired resources were released by their guards' Drop.
     Rejected,
 }
 
@@ -533,14 +628,26 @@ pub(crate) struct OwnHarness {
 /// harness, accept browser and relay attaches, and exit when the last harness
 /// detaches. Returns the process exit code.
 pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: OwnHarness) -> i32 {
-    // The broker's own stdio harness is the first client, so the count starts
-    // at one; it drops to zero only once this harness AND every relay is gone.
     let broker = Arc::new(Broker {
         session,
-        refcount: RefCount::new(1, MAX_HARNESS_CLIENTS),
+        refcount: RefCount::new(MAX_HARNESS_CLIENTS),
         pending: AtomicUsize::new(0),
         registry: ClientRegistry::new(),
     });
+
+    // The broker's own stdio harness is the first client; its slot is held
+    // until stdin EOF below, so the count drops to zero only once this harness
+    // AND every relay is gone. Acquiring from a fresh, non-terminal counter
+    // cannot fail, but the no-panic lint set forbids unwrap/expect: fail
+    // closed rather than serve uncounted.
+    let Some(own_slot) = broker.refcount.try_acquire() else {
+        log_error!(
+            "broker",
+            "could not reserve the own-harness ref-count slot; refusing to serve"
+        );
+        ipc::LockFile::remove_if_owned();
+        return 1;
+    };
 
     // Watch the revocation epoch so a revoke reaches IDLE relay connections
     // too (requests are guarded inline), and so a kill severs the browser leg
@@ -595,11 +702,11 @@ pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: O
         "the broker's own harness",
     );
 
-    // Own harness gone (stdin EOF). Drop our ref, then wait until every relay
-    // has also detached before tearing down the socket/lock. If relays are
-    // still attached, the broker keeps serving them; it exits only when the
-    // last one leaves.
-    broker.refcount.decr();
+    // Own harness gone (stdin EOF). Release our slot, then wait until every
+    // relay has also detached before tearing down the socket/lock. If relays
+    // are still attached, the broker keeps serving them; it exits only when
+    // the last one leaves.
+    drop(own_slot);
     broker.refcount.wait_zero();
     ipc::LockFile::remove_if_owned();
     0
@@ -612,18 +719,16 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
         match listener.accept() {
             Ok((stream, _addr)) => {
                 // Bound the number of connections simultaneously mid-handshake.
-                let n = broker.pending.fetch_add(1, Ordering::SeqCst);
-                if n >= MAX_PENDING_ATTACH {
-                    broker.pending.fetch_sub(1, Ordering::SeqCst);
+                let Some(pending_slot) = PendingSlot::try_acquire(broker) else {
                     log_warn!("broker", "too many pending attaches; dropping a connection");
                     continue;
-                }
+                };
                 let broker = Arc::clone(broker);
                 thread::spawn(move || {
                     let outcome = admit(&broker, stream);
                     // The handshake phase is over; free its slot before any
                     // long-lived serve so pending only bounds handshakes.
-                    broker.pending.fetch_sub(1, Ordering::SeqCst);
+                    drop(pending_slot);
                     match outcome {
                         Admitted::Browser {
                             label,
@@ -646,7 +751,7 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
                             mut reader,
                             mut writer,
                             mut guard,
-                            registry_id,
+                            admission,
                         } => {
                             let mut limiter = RateLimiter::new();
                             let _ = serve_jsonrpc(
@@ -657,8 +762,12 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
                                 &mut guard,
                                 "relay harness",
                             );
-                            broker.registry.deregister(registry_id);
-                            broker.refcount.decr();
+                            // Explicit, not left to scope end: the admission
+                            // guard deregisters BEFORE it decrements (its
+                            // field order), and dropping it here keeps that
+                            // release tied to the serve loop's end rather
+                            // than to whatever else this scope grows later.
+                            drop(admission);
                         }
                         Admitted::Rejected => {}
                     }
@@ -677,7 +786,7 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
 /// caps, send an [`AttachReply`], and return what to do with it. Every failure
 /// path is fail-closed: the connection is dropped and [`Admitted::Rejected`]
 /// returned.
-fn admit(broker: &Broker, stream: BridgeStream) -> Admitted {
+fn admit(broker: &Broker, stream: BridgeStream) -> Admitted<'_> {
     // Single chokepoint: reject any peer that is not this same user, before
     // authentication (as the accept loop did previously). Unix only.
     #[cfg(unix)]
@@ -789,7 +898,7 @@ fn admit_browser(
     label: Option<String>,
     reader: BufReader<BridgeStream>,
     mut writer: BufWriter<BridgeStream>,
-) -> Admitted {
+) -> Admitted<'static> {
     let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
     // The kill switch severs the browser leg entirely (ADR-0030): while it is
     // engaged -- or its state cannot be read -- no browser attach is accepted,
@@ -837,21 +946,19 @@ fn admit_browser(
     }
 }
 
-fn admit_client(
-    broker: &Broker,
+fn admit_client<'a>(
+    broker: &'a Broker,
     harness: Option<HarnessId>,
     reader: BufReader<BridgeStream>,
     mut writer: BufWriter<BridgeStream>,
-) -> Admitted {
-    let identity = harness.as_ref().map(|h| ipc::ClientIdentity {
-        hash: h.hash.clone(),
-        team_id: h.team_id.clone(),
-    });
+) -> Admitted<'a> {
+    let identity = harness.as_ref().map(ClientIdentity::from);
 
     // Register for revocation sweeps BEFORE deciding admission, so an epoch
     // bump can never land in a decide->register window where the sweep would
-    // miss this connection and then consider its epoch already handled. A
-    // rejected connection deregisters on every exit path below.
+    // miss this connection and then consider its epoch already handled. The
+    // returned slot deregisters on Drop, so every rejection path below
+    // releases it by construction.
     let sweep_handle = match writer.get_ref().try_clone() {
         Ok(s) => s,
         Err(e) => {
@@ -859,25 +966,22 @@ fn admit_client(
             return Admitted::Rejected;
         }
     };
-    let Some(registry_id) = broker.registry.register(identity.clone(), sweep_handle) else {
+    let Some(slot) = broker.registry.register(identity.clone(), sweep_handle) else {
         log_warn!(
             "broker",
             "revocation registry unavailable (poisoned); refusing relay"
         );
         return Admitted::Rejected;
     };
-    // Every rejection path below must release the registry slot it holds.
+    // Reply-and-log refusal helper; resource release is the guards' Drop.
     fn reject_relay(
-        registry: &ClientRegistry,
-        registry_id: u64,
         writer: &mut BufWriter<BridgeStream>,
         reason: &str,
         reply: Option<AttachReply>,
-    ) -> Admitted {
+    ) -> Admitted<'static> {
         if let Some(reply) = reply {
             let _ = bridge_write(writer, &reply);
         }
-        registry.deregister(registry_id);
         log_warn!("broker", "refused relay: {reason}");
         Admitted::Rejected
     }
@@ -890,8 +994,6 @@ fn admit_client(
         Ok(rev) => rev,
         Err(e) => {
             return reject_relay(
-                &broker.registry,
-                registry_id,
                 &mut writer,
                 &format!("cannot read the revocation record: {e}"),
                 Some(AttachReply::Refused {
@@ -904,8 +1006,6 @@ fn admit_client(
         Ok(l) => l,
         Err(e) => {
             return reject_relay(
-                &broker.registry,
-                registry_id,
                 &mut writer,
                 &format!("cannot read the allowlist: {e}"),
                 Some(AttachReply::Refused {
@@ -934,8 +1034,6 @@ fn admit_client(
                     .detail("not in the trusted-client allowlist"),
             );
             return reject_relay(
-                &broker.registry,
-                registry_id,
                 &mut writer,
                 &format!(
                     "harness (name {:?}) is not in the trusted-client allowlist",
@@ -975,20 +1073,23 @@ fn admit_client(
     // Capacity + terminal check. Refuse-as-unavailable (retryable) rather than
     // deny, so a relay that lost the race to a shutting-down or full broker
     // retries instead of failing the user's session.
-    if !broker.refcount.try_incr() {
+    let Some(harness_slot) = broker.refcount.try_acquire() else {
         return reject_relay(
-            &broker.registry,
-            registry_id,
             &mut writer,
             "broker at capacity or shutting down",
             Some(AttachReply::Unavailable {
                 reason: "broker at capacity or shutting down".into(),
             }),
         );
-    }
+    };
+    // Bundle the two slots BEFORE the accept write, so from here on every
+    // path -- including the write failure below -- releases them together
+    // and in the load-bearing deregister-before-decr order.
+    let admission = RelayAdmission {
+        _slot: slot,
+        _harness: harness_slot,
+    };
     if bridge_write(&mut writer, &AttachReply::Accepted {}).is_err() {
-        broker.registry.deregister(registry_id);
-        broker.refcount.decr();
         return Admitted::Rejected;
     }
     clear_read_timeout(&writer);
@@ -1002,7 +1103,7 @@ fn admit_client(
             // epoch fast path; the watcher covers a stuck epoch.
             backstopped: true,
         },
-        registry_id,
+        admission,
     }
 }
 
@@ -1377,7 +1478,7 @@ mod tests {
             // is deliverable.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), srv).unwrap();
+            let _slot = registry.register(Some(ident("keep")), srv).unwrap();
 
             let browsers = std::cell::Cell::new(0usize);
             let seen = watch_tick(
@@ -1429,8 +1530,8 @@ mod tests {
             let registry = ClientRegistry::new();
             let (a_srv, mut a_cli) = UnixStream::pair().unwrap();
             let (b_srv, mut b_cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), a_srv).unwrap();
-            registry.register(Some(ident("revoked")), b_srv).unwrap();
+            let _keep = registry.register(Some(ident("keep")), a_srv).unwrap();
+            let _revoked = registry.register(Some(ident("revoked")), b_srv).unwrap();
 
             // Same epoch as last_seen, yet "revoked" is no longer listed.
             let seen = watch_tick(
@@ -1469,8 +1570,8 @@ mod tests {
             let registry = ClientRegistry::new();
             let (a_srv, mut a_cli) = UnixStream::pair().unwrap();
             let (b_srv, mut b_cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), a_srv).unwrap();
-            registry.register(Some(ident("revoked")), b_srv).unwrap();
+            let _keep = registry.register(Some(ident("keep")), a_srv).unwrap();
+            let _revoked = registry.register(Some(ident("revoked")), b_srv).unwrap();
 
             // The fresh allowlist still lists "keep" but not "revoked".
             let seen = watch_tick(
@@ -1515,7 +1616,7 @@ mod tests {
             // and nothing is dropped.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("keep")), srv).unwrap();
+            let _slot = registry.register(Some(ident("keep")), srv).unwrap();
             let seen = watch_tick(
                 &registry,
                 7,
@@ -1537,7 +1638,7 @@ mod tests {
             // keeps failing closed, on the next tick).
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("h")), srv).unwrap();
+            let _slot = registry.register(Some(ident("h")), srv).unwrap();
             let browsers = std::cell::Cell::new(0usize);
             let seen = watch_tick(
                 &registry,
@@ -1562,7 +1663,7 @@ mod tests {
             // Unreadable allowlist after a bump: same posture.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            registry.register(Some(ident("h")), srv).unwrap();
+            let _slot = registry.register(Some(ident("h")), srv).unwrap();
             let seen = watch_tick(
                 &registry,
                 1,
@@ -1576,38 +1677,82 @@ mod tests {
         }
 
         #[test]
-        fn deregister_removes_the_slot_so_sweeps_skip_it() {
+        fn a_dropped_slot_deregisters_so_sweeps_skip_it() {
             let registry = ClientRegistry::new();
             let (srv, _cli) = UnixStream::pair().unwrap();
-            let id = registry.register(Some(ident("h")), srv).unwrap();
-            registry.deregister(id);
+            let slot = registry.register(Some(ident("h")), srv).unwrap();
+            drop(slot);
             assert_eq!(
                 registry.sweep(|_| true),
                 0,
-                "no slot may survive deregister"
+                "no slot may survive its guard's drop"
+            );
+        }
+
+        #[test]
+        fn an_early_return_path_cannot_leak_a_slot() {
+            // Models a rejection arm in admit_client: the slot goes out of
+            // scope without any explicit release call, and the registry must
+            // still be empty -- the invariant RAII moved out of comments.
+            let registry = ClientRegistry::new();
+            {
+                let (srv, _cli) = UnixStream::pair().unwrap();
+                let _slot = registry.register(Some(ident("h")), srv).unwrap();
+                // early return: nothing released by hand
+            }
+            assert_eq!(
+                registry.sweep(|_| true),
+                0,
+                "a slot dropped on an early-return path must deregister itself"
             );
         }
     }
 
     #[test]
-    fn refcount_incr_decr_and_capacity() {
-        let rc = RefCount::new(1, 3);
-        assert!(rc.try_incr()); // 2
-        assert!(rc.try_incr()); // 3
-        assert!(!rc.try_incr(), "at capacity");
-        rc.decr(); // 2
-        assert!(rc.try_incr(), "room again after a detach"); // 3
+    fn refcount_acquire_release_and_capacity() {
+        let rc = RefCount::new(3);
+        let a = rc.try_acquire().unwrap(); // 1
+        let b = rc.try_acquire().unwrap(); // 2
+        let c = rc.try_acquire().unwrap(); // 3
+        assert!(rc.try_acquire().is_none(), "at capacity");
+        drop(c); // 2
+        let d = rc.try_acquire();
+        assert!(d.is_some(), "room again after a detach"); // 3
+        drop((a, b, d));
     }
 
     #[test]
     fn refcount_wait_zero_returns_when_drained_and_latches_terminal() {
-        let rc = RefCount::new(1, 4);
-        rc.decr(); // own harness gone -> 0
+        let rc = RefCount::new(4);
+        let own = rc.try_acquire().unwrap();
+        drop(own); // own harness gone -> 0
         rc.wait_zero(); // returns immediately, latches terminal
         assert!(
-            !rc.try_incr(),
+            rc.try_acquire().is_none(),
             "no attach after the terminal shutdown decision"
         );
+    }
+
+    #[test]
+    fn pending_slot_bounds_the_handshake_phase_and_releases_on_drop() {
+        let broker = Arc::new(Broker {
+            session: Session::new(),
+            refcount: RefCount::new(MAX_HARNESS_CLIENTS),
+            pending: AtomicUsize::new(0),
+            registry: ClientRegistry::new(),
+        });
+        let mut held = Vec::new();
+        for _ in 0..MAX_PENDING_ATTACH {
+            held.push(PendingSlot::try_acquire(&broker).unwrap());
+        }
+        // Over the bound: refused, and the refusal restores its own probe.
+        assert!(PendingSlot::try_acquire(&broker).is_none());
+        assert_eq!(broker.pending.load(Ordering::SeqCst), MAX_PENDING_ATTACH);
+        // Dropping one slot frees exactly one place.
+        held.pop();
+        assert!(PendingSlot::try_acquire(&broker).is_some());
+        drop(held);
+        assert_eq!(broker.pending.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1719,30 +1864,34 @@ mod loom_model {
     fn shutdown_happens_exactly_at_zero_and_latches_terminal() {
         loom::model(|| {
             // The broker starts with its own stdio harness as client #1.
-            let rc = Arc::new(RefCount::new(1, 4));
+            let rc = Arc::new(RefCount::new(4));
+            let Some(own) = rc.try_acquire() else {
+                panic!("the own-harness slot must be acquirable at count 0");
+            };
 
-            // A relay races: it may attach (incrementing) and later detach, or
-            // lose the race and be refused. Whichever happens, the counts must
-            // stay balanced and the shutdown must fire exactly once at zero.
+            // A relay races: it may attach (acquiring a slot) and later detach
+            // (dropping it), or lose the race and be refused. Whichever
+            // happens, the counts must stay balanced and the shutdown must
+            // fire exactly once at zero.
             let relay = {
                 let rc = Arc::clone(&rc);
                 thread::spawn(move || {
-                    if rc.try_incr() {
-                        rc.decr();
+                    if let Some(slot) = rc.try_acquire() {
+                        drop(slot);
                     }
                 })
             };
 
             // The broker's own harness detaches (stdin EOF), then the broker
             // waits for every remaining client to leave before tearing down.
-            rc.decr();
+            drop(own);
             rc.wait_zero();
 
             // After the terminal decision no fresh attach may succeed: a relay
             // that dials now must be turned away (it will retry / become the
             // new broker) rather than attaching to a broker mid-teardown.
             assert!(
-                !rc.try_incr(),
+                rc.try_acquire().is_none(),
                 "a client attached after the broker committed to shutting down"
             );
 
@@ -1756,24 +1905,27 @@ mod loom_model {
             // Own harness (1) plus up to two relays contending. The internal
             // debug_assert in `decr` catches an underflow; loom explores every
             // interleaving, so a balance bug surfaces as a failed model.
-            let rc = Arc::new(RefCount::new(1, 4));
+            let rc = Arc::new(RefCount::new(4));
+            let Some(own) = rc.try_acquire() else {
+                panic!("the own-harness slot must be acquirable at count 0");
+            };
             let a = {
                 let rc = Arc::clone(&rc);
                 thread::spawn(move || {
-                    if rc.try_incr() {
-                        rc.decr();
+                    if let Some(slot) = rc.try_acquire() {
+                        drop(slot);
                     }
                 })
             };
             let b = {
                 let rc = Arc::clone(&rc);
                 thread::spawn(move || {
-                    if rc.try_incr() {
-                        rc.decr();
+                    if let Some(slot) = rc.try_acquire() {
+                        drop(slot);
                     }
                 })
             };
-            rc.decr();
+            drop(own);
             rc.wait_zero();
             a.join().unwrap();
             b.join().unwrap();
@@ -1782,32 +1934,37 @@ mod loom_model {
 
     /// ADR-0025: the revocation-sweep registry must be empty by the time the
     /// broker's teardown decision latches, so no relay stream outlives the
-    /// socket it hangs off. The code guarantees it by ordering: a relay worker
-    /// deregisters BEFORE it decrements the ref-count, and `wait_zero` only
-    /// returns at count zero. This model mirrors exactly that shape (a
-    /// loom-instrumented mutex around the slot map, the real `RefCount`), with
-    /// a concurrent sweeper reading the registry the way the epoch watcher
-    /// does. Loom exhausts the interleavings; the invariant is checked after
-    /// the terminal decision.
+    /// socket it hangs off. The code guarantees it by ordering: a relay's
+    /// [`RelayAdmission`](super::RelayAdmission) deregisters BEFORE it
+    /// decrements the ref-count (its field declaration order IS the drop
+    /// order), and `wait_zero` only returns at count zero. This model mirrors
+    /// exactly that shape (a loom-instrumented mutex around the slot map, the
+    /// real `RefCount`), with a concurrent sweeper reading the registry the
+    /// way the epoch watcher does. Loom exhausts the interleavings; the
+    /// invariant is checked after the terminal decision.
     #[test]
     fn registry_is_empty_once_the_shutdown_decision_latches() {
         use loom::sync::Mutex;
         use std::collections::HashMap;
 
         loom::model(|| {
-            let rc = Arc::new(RefCount::new(1, 4));
+            let rc = Arc::new(RefCount::new(4));
+            let Some(own) = rc.try_acquire() else {
+                panic!("the own-harness slot must be acquirable at count 0");
+            };
             let slots = Arc::new(Mutex::new(HashMap::new()));
 
-            // A relay: attach (incr + register), serve, detach
-            // (deregister BEFORE decr -- the load-bearing order).
+            // A relay: attach (acquire + register), serve, detach --
+            // deregister BEFORE the ref-count slot drops, the load-bearing
+            // order RelayAdmission's field order encodes.
             let relay = {
                 let rc = Arc::clone(&rc);
                 let slots = Arc::clone(&slots);
                 thread::spawn(move || {
-                    if rc.try_incr() {
+                    if let Some(slot) = rc.try_acquire() {
                         slots.lock().unwrap().insert(1u64, ());
                         slots.lock().unwrap().remove(&1u64);
-                        rc.decr();
+                        drop(slot);
                     }
                 })
             };
@@ -1825,7 +1982,7 @@ mod loom_model {
             };
 
             // Broker: own harness leaves, then wait for the relays.
-            rc.decr();
+            drop(own);
             rc.wait_zero();
 
             // Terminal: no slot may remain (a surviving slot would be a
