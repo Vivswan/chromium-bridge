@@ -43,13 +43,13 @@ jobs:
   typography:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: Vivswan/repo-platform/actions/check-typography@main
 
   commit-names:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - uses: Vivswan/repo-platform/actions/validate-commit-names@main
@@ -60,19 +60,19 @@ jobs:
   validate-template:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: Vivswan/repo-platform/actions/validate-template@main
 
   actionlint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: raven-actions/actionlint@v2
 
   yamllint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Install yamllint
         run: python3 -m pip install --quiet yamllint
       - name: Lint YAML
