@@ -52,13 +52,13 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::error::CallError;
-use crate::ipc;
+use crate::ipc::{self, BrowserLabel};
 use crate::protocol::{bridge_read, bridge_write, BridgeReq, BridgeResp};
 
-/// The label assigned to a connection whose handshake carried no label
-/// (single-browser installs, pre-label wrappers). Keeps one-browser setups
-/// working with zero configuration.
-pub const DEFAULT_LABEL: &str = "default";
+/// The label assigned to a connection whose handshake carried no label.
+/// Re-exported from the handshake module, where [`BrowserLabel`] owns the
+/// label domain.
+pub use crate::ipc::DEFAULT_LABEL;
 
 /// Maximum number of concurrent *distinct* browser labels the session holds, a
 /// DoS bound on the browser leg. A reconnect under an existing label replaces
@@ -214,10 +214,10 @@ fn resolve_target(available: &[&str], want: Option<&str>) -> Result<String, Call
 /// Shared session. Cheap to clone - everything is behind Arc.
 #[derive(Clone)]
 pub struct Session {
-    /// The currently-connected native hosts, keyed by browser label. Each
-    /// entry pairs the writer with its generation so the owning reader can
-    /// atomically decide whether to clear it (see module docs).
-    conns: Arc<Mutex<HashMap<String, Conn>>>,
+    /// The currently-connected native hosts, keyed by (validated) browser
+    /// label. Each entry pairs the writer with its generation so the owning
+    /// reader can atomically decide whether to clear it (see module docs).
+    conns: Arc<Mutex<HashMap<BrowserLabel, Conn>>>,
     /// Pending request callbacks keyed by BridgeReq.id, tagged by binding.
     pending: Pending,
     next_id: Arc<AtomicU64>,
@@ -265,7 +265,7 @@ impl Session {
     /// after the MAC verified.
     pub(crate) fn attach_browser(
         &self,
-        label: String,
+        label: BrowserLabel,
         reader: BufReader<ipc::BridgeStream>,
         writer: BufWriter<ipc::BridgeStream>,
     ) -> bool {
@@ -282,7 +282,7 @@ impl Session {
     /// a lock file or handshake.
     fn attach_authenticated(
         &self,
-        label: String,
+        label: BrowserLabel,
         mut reader: BufReader<ipc::BridgeStream>,
         writer: BufWriter<ipc::BridgeStream>,
         cap: Option<usize>,
@@ -482,7 +482,7 @@ impl Session {
         // A poisoned registry reads as empty: report nothing rather than
         // labels from state we cannot trust (callers then fail NotConnected).
         let mut labels: Vec<String> = match self.conns.lock() {
-            Ok(guard) => guard.keys().cloned().collect(),
+            Ok(guard) => guard.keys().map(|l| l.as_str().to_string()).collect(),
             Err(_) => {
                 log_error!(
                     "session",
@@ -568,9 +568,11 @@ impl Session {
     pub fn route_info(&self, browser: Option<&str>) -> Option<(String, u64)> {
         // A poisoned registry is unroutable (None), same as nothing connected.
         let conns = self.conns.lock().ok()?;
-        let labels: Vec<&str> = conns.keys().map(String::as_str).collect();
+        let labels: Vec<&str> = conns.keys().map(BrowserLabel::as_str).collect();
         let label = resolve_target(&labels, browser).ok()?;
-        let generation = conns.get(&label)?.generation;
+        // Borrow<str> lets the validated key be probed with the plain string
+        // resolve_target picked from this very key set.
+        let generation = conns.get(label.as_str())?.generation;
         Some((label, generation.get()))
     }
 
@@ -650,7 +652,7 @@ impl Session {
                 self.remove_pending(id);
                 return Err(CallError::Internal("browser registry lock poisoned".into()));
             };
-            let labels: Vec<&str> = guard.keys().map(String::as_str).collect();
+            let labels: Vec<&str> = guard.keys().map(BrowserLabel::as_str).collect();
             let label = match resolve_target(&labels, browser) {
                 Ok(l) => l,
                 Err(e) => {
@@ -659,7 +661,9 @@ impl Session {
                     return Err(e);
                 }
             };
-            let Some(conn) = guard.get_mut(&label) else {
+            // Borrow<str>: probe the validated key set with the plain string
+            // resolve_target picked from it.
+            let Some(conn) = guard.get_mut(label.as_str()) else {
                 // Unreachable in practice: resolve_target picked the label
                 // from this very map under the same lock. Refuse rather than
                 // panic if that invariant is ever broken.
@@ -939,7 +943,12 @@ mod tests {
             let writer = BufWriter::new(srv);
             // No cap in the registry tests (they exercise replace/coexist/guard
             // semantics, not the browser DoS cap).
-            assert!(session.attach_authenticated(label.to_string(), reader, writer, None));
+            assert!(session.attach_authenticated(
+                BrowserLabel::parse(label).unwrap(),
+                reader,
+                writer,
+                None
+            ));
             cli
         }
 
@@ -1194,17 +1203,18 @@ mod tests {
                     cli,
                 )
             };
+            let lbl = |s: &str| BrowserLabel::parse(s).unwrap();
             let (r1, w1, _c1) = mk();
-            assert!(session.attach_authenticated("a".into(), r1, w1, Some(max)));
+            assert!(session.attach_authenticated(lbl("a"), r1, w1, Some(max)));
             let (r2, w2, _c2) = mk();
-            assert!(session.attach_authenticated("b".into(), r2, w2, Some(max)));
+            assert!(session.attach_authenticated(lbl("b"), r2, w2, Some(max)));
             // A third DISTINCT label is refused at the cap.
             let (r3, w3, _c3) = mk();
-            assert!(!session.attach_authenticated("c".into(), r3, w3, Some(max)));
+            assert!(!session.attach_authenticated(lbl("c"), r3, w3, Some(max)));
             assert_eq!(session.labels(), vec!["a", "b"]);
             // A reconnect under an existing label replaces its slot even at cap.
             let (r2b, w2b, _c2b) = mk();
-            assert!(session.attach_authenticated("b".into(), r2b, w2b, Some(max)));
+            assert!(session.attach_authenticated(lbl("b"), r2b, w2b, Some(max)));
             assert_eq!(session.labels(), vec!["a", "b"]);
         }
     }

@@ -321,11 +321,12 @@ fn take_value<'a, I: Iterator<Item = &'a String>>(
 /// name this host announces in its bridge handshake, so one MCP server can
 /// tell several browsers apart. Returns `Ok(None)` when no label was given
 /// (the server files the connection under its default slot). A missing or
-/// flag-shaped value, a repeated `--label`, or a label that fails
-/// [`crate::ipc::validate_label`] is an error - the caller must refuse to
-/// start rather than run under a mangled identity.
-pub fn native_host_label(args: &[String]) -> Result<Option<String>, String> {
-    let mut found: Option<String> = None;
+/// flag-shaped value, a repeated `--label`, or a label that
+/// [`crate::ipc::BrowserLabel::parse`] rejects is an error - the caller must
+/// refuse to start rather than run under a mangled identity. The returned
+/// [`crate::ipc::BrowserLabel`] carries that validation to the handshake.
+pub fn native_host_label(args: &[String]) -> Result<Option<crate::ipc::BrowserLabel>, String> {
+    let mut found: Option<crate::ipc::BrowserLabel> = None;
     let mut it = args.iter().skip(1);
     while let Some(arg) = it.next() {
         if arg == "--label" {
@@ -338,12 +339,12 @@ pub fn native_host_label(args: &[String]) -> Result<Option<String>, String> {
                 // missing value, not a label; valid labels start alphanumeric.
                 .filter(|v| !v.starts_with('-'))
                 .ok_or_else(|| "--label requires a value".to_string())?;
-            if !crate::ipc::validate_label(value) {
+            let Some(label) = crate::ipc::BrowserLabel::parse(value) else {
                 return Err(format!(
                     "invalid --label {value:?}: want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric"
                 ));
-            }
-            found = Some(value.clone());
+            };
+            found = Some(label);
         }
     }
     Ok(found)
@@ -416,10 +417,11 @@ mod tests {
         };
         // No --label: None (server files the connection under its default).
         assert_eq!(native_host_label(&argv(&["--native-host"])), Ok(None));
-        // A well-formed label is returned.
+        // A well-formed label is returned, already validated (the
+        // BrowserLabel is the proof).
         assert_eq!(
             native_host_label(&argv(&["--native-host", "--label", "brave"])),
-            Ok(Some("brave".into()))
+            Ok(crate::ipc::BrowserLabel::parse("brave"))
         );
         // Missing value and malformed labels refuse to start (fail closed).
         assert!(native_host_label(&argv(&["--native-host", "--label"])).is_err());

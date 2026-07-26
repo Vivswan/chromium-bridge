@@ -79,7 +79,9 @@ pub use attest::attest_parent;
 pub use attest::{attest_peer, attest_pid, ensure_own_identity};
 #[cfg(feature = "fuzzing")]
 pub use handshake::fuzz_api as handshake_fuzz;
-pub use handshake::{client_handshake, server_handshake, validate_label};
+pub use handshake::{
+    client_handshake, server_handshake, validate_label, BrowserLabel, DEFAULT_LABEL,
+};
 pub use lockfile::{listen_and_publish, LockFile, PublishOutcome};
 #[cfg(unix)]
 pub use peercred::checked_pid;

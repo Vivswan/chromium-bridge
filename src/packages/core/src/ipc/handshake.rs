@@ -87,13 +87,72 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
+/// The label assigned to a connection whose handshake carried no label
+/// (single-browser installs, pre-label wrappers). Keeps one-browser setups
+/// working with zero configuration.
+pub const DEFAULT_LABEL: &str = "default";
+
+/// A browser label that HAS passed [`validate_label`] -- the only way to
+/// build one is the validating [`parse`](Self::parse) constructor (or
+/// [`default_label`](Self::default_label), whose fixed value satisfies the
+/// same rule; a unit test pins that). Downstream code -- the session's
+/// connection registry, the broker's attach path, audit records -- takes this
+/// type instead of a raw `String`, so "was this string ever validated?" is
+/// answered by the type, not by re-checking at every hop. The label domain
+/// only; harness/client names share the charset rule but are validated at
+/// their own trust boundaries per the zero-trust posture.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BrowserLabel(String);
+
+impl BrowserLabel {
+    /// Validate and wrap. `None` for anything [`validate_label`] rejects;
+    /// the caller fails closed (the handshake, the CLI parser).
+    pub fn parse(s: &str) -> Option<Self> {
+        validate_label(s).then(|| BrowserLabel(s.to_string()))
+    }
+
+    /// The label of a connection whose handshake carried none
+    /// ([`DEFAULT_LABEL`]).
+    pub fn default_label() -> Self {
+        BrowserLabel(DEFAULT_LABEL.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Unwrap for a wire field (`BridgeReq.browser`, the handshake
+    /// `Response.label`), where the protocol type is a plain string.
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Display for BrowserLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Lets a `HashMap<BrowserLabel, _>` be probed with a plain `&str` (the tool
+/// call's unvalidated `browser` argument is compared, never trusted). Sound
+/// because the derived `Hash`/`Eq` delegate to the inner `String`.
+impl std::borrow::Borrow<str> for BrowserLabel {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Whether `label` is an acceptable browser label: 1-32 characters, starting
 /// with an ASCII alphanumeric, the rest ASCII alphanumeric or `.`, `_`, `-`.
 /// The label arrives in the (signed) handshake response and ends up in log
 /// lines, audit records, and tool output, so it is bounded and restricted to
 /// a tame charset; the leading-alphanumeric rule also keeps a label from ever
 /// looking like a command-line flag. Anything else fails the handshake (fail
-/// closed) rather than being sanitized.
+/// closed) rather than being sanitized. Shared by the other self-asserted
+/// name domains (harness/client names), which validate at their own
+/// boundaries; the browser-label domain itself carries the proof in
+/// [`BrowserLabel`].
 pub fn validate_label(label: &str) -> bool {
     let bytes = label.as_bytes();
     (1..=32).contains(&bytes.len())
@@ -106,13 +165,13 @@ pub fn validate_label(label: &str) -> bool {
 /// Server side: run the challenge-response over a freshly-accepted connection,
 /// using the same buffered reader/writer the session will keep, so no bytes are
 /// consumed past the handshake. On success returns the browser label the
-/// client carried in its signed response (`None` when it sent none). The label
-/// is read only AFTER the MAC verifies, and only a validated label is
-/// returned; a malformed one fails the whole handshake.
+/// client carried in its signed response (`None` when it sent none), already
+/// validated -- the returned [`BrowserLabel`] is the proof. The label is read
+/// only AFTER the MAC verifies; a malformed one fails the whole handshake.
 pub fn server_handshake<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
-) -> io::Result<Option<String>> {
+) -> io::Result<Option<BrowserLabel>> {
     let secret = read_lock_or_err()?.secret;
     server_handshake_with_secret(reader, writer, &secret)
 }
@@ -121,7 +180,7 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
     secret: &str,
-) -> io::Result<Option<String>> {
+) -> io::Result<Option<BrowserLabel>> {
     let nonce = generate_secret()?;
     bridge_write(
         writer,
@@ -141,15 +200,16 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
                 &handshake_mac_message(&nonce, label.as_deref()),
                 &mac,
             )?;
-            if let Some(l) = &label {
-                if !validate_label(l) {
-                    return Err(io::Error::new(
+            match label {
+                Some(l) => match BrowserLabel::parse(&l) {
+                    Some(l) => Ok(Some(l)),
+                    None => Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "invalid browser label in handshake (want 1-32 chars of [A-Za-z0-9._-])",
-                    ));
-                }
+                    )),
+                },
+                None => Ok(None),
             }
-            Ok(label)
         }
         Some(Handshake::Challenge { .. }) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -164,18 +224,28 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
 
 /// Client side: read the server's challenge and answer it with
 /// HMAC(secret, nonce). `label` names the browser this host fronts; the server
-/// keys its connection registry by it (missing label = the default slot).
+/// keys its connection registry by it (missing label = the default slot). It
+/// is a [`BrowserLabel`], so an unvalidated string cannot even be offered.
 /// Reuses the pump's buffered reader/writer so the handshake never leaks into
 /// forwarded frames.
 pub fn client_handshake<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
-    label: Option<String>,
+    label: Option<BrowserLabel>,
 ) -> io::Result<()> {
     let secret = read_lock_or_err()?.secret;
-    client_handshake_with_secret(reader, writer, &secret, label)
+    client_handshake_with_secret(
+        reader,
+        writer,
+        &secret,
+        label.map(BrowserLabel::into_string),
+    )
 }
 
+/// The wire-level client half. `label` is a raw `Option<String>` on purpose:
+/// the server must reject a malformed label no matter what the peer runs
+/// (zero trust), and the tests exercise exactly that with strings the public
+/// [`client_handshake`] can no longer produce.
 fn client_handshake_with_secret<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -229,7 +299,7 @@ pub mod fuzz_api {
         reader: &mut R,
         writer: &mut W,
         secret: &str,
-    ) -> io::Result<Option<String>> {
+    ) -> io::Result<Option<super::BrowserLabel>> {
         super::server_handshake_with_secret(reader, writer, secret)
     }
 }
@@ -265,6 +335,22 @@ mod tests {
         }
         // The 32-char boundary itself is accepted.
         assert!(validate_label(&"x".repeat(32)));
+    }
+
+    #[test]
+    fn browser_label_is_only_constructible_through_validation() {
+        // parse is the single gate: what validate_label accepts wraps, what
+        // it rejects stays a None -- there is no other constructor.
+        let ok = BrowserLabel::parse("chrome").unwrap();
+        assert_eq!(ok.as_str(), "chrome");
+        assert_eq!(ok.to_string(), "chrome");
+        assert_eq!(ok.into_string(), "chrome");
+        assert!(BrowserLabel::parse("bad label").is_none());
+        assert!(BrowserLabel::parse("").is_none());
+        // The fixed default satisfies the same rule it bypasses parse for.
+        let default = BrowserLabel::default_label();
+        assert!(validate_label(default.as_str()));
+        assert_eq!(default.as_str(), DEFAULT_LABEL);
     }
 
     #[test]
@@ -394,7 +480,7 @@ mod tests {
         let mut r = BufReader::new(srv.try_clone().unwrap());
         let mut w = BufWriter::new(srv);
         let label = server_handshake_with_secret(&mut r, &mut w, secret).unwrap();
-        assert_eq!(label.as_deref(), Some("brave"));
+        assert_eq!(label, BrowserLabel::parse("brave"));
         assert!(client.join().unwrap().is_ok());
 
         // No label carried: the server reports None (the caller applies the
