@@ -1,0 +1,524 @@
+# Repo-owned CI checks, called by the managed ci.yml inside the all-green
+# gate: every job here must pass before all-green goes green. Generated once
+# by Vivswan/repo-platform and never overwritten by template sync, so edit
+# freely. Jobs added here are gated automatically (all-green sees this
+# workflow's aggregate result) - no needs-list maintenance.
+#
+# Two limits from running inside the `checks` caller: jobs here get no
+# secrets and are capped at the caller's permissions (contents: read), and
+# all-green only sees the aggregate result, so a job skipped by its own
+# `if:` does not fail the gate. A check that needs secrets, more
+# permissions, or must never be skippable, belongs in its own workflow wired
+# into the ruleset via .github/settings.yml.
+#
+# moon (moon.yml at the repo root) is the canonical command interface: jobs
+# whose steps are multi-step task definitions (extension, contract, e2e,
+# adversarial, chaos, desktop) run `moon run <task>` so the definition lives
+# in exactly one place, with proto (pinned by the setup-toolchain action)
+# providing moon + the tools from .prototools. Jobs that are a single thin
+# command (rust matrix, cargo-vet, tooling, cjk, web, browser,
+# linux-install, version-consistency) keep the raw invocation - the moon
+# task wraps the same command, so coverage is identical either way and those
+# jobs skip the proto install. Every gate task sets cache: false, and CI
+# runners start with no .moon/cache anyway: no gate step can be satisfied
+# from a cache.
+
+name: Checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      # Reads the pinned channel + components from rust-toolchain.toml.
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+
+  # The enclave/attestation code is cfg(target_os = "macos") and invisible to
+  # the ubuntu jobs; without this job it would only ever be compiled at
+  # release time. fmt is skipped (platform-independent, covered above).
+  rust-macos:
+    name: Rust (clippy, test) on macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  # Same platform-gap reasoning for the cfg(windows) loopback-TCP code.
+  rust-windows:
+    name: Rust (build, clippy, test) on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo build --all-targets
+      # Windows-only lints (e.g. an import dead under cfg(windows)) must fail
+      # CI here, matching the clippy gates on the other platforms.
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  # Supply-chain review: every dependency must be audited or explicitly
+  # exempted in supply-chain/. `cargo vet` fails on any crate that is neither,
+  # so a new or bumped dependency cannot land without a recorded decision.
+  cargo-vet:
+    name: cargo vet (supply chain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          # Pinned: this tool's verdict gates the build, so its version must
+          # not drift underneath us. Bump deliberately.
+          tool: cargo-vet@0.10.2
+      - run: cargo vet --locked
+
+  # Informational only: continue-on-error keeps a coverage-tooling failure
+  # from failing this workflow's aggregate result (the all-green gate), and
+  # there is no threshold, so it can never block a merge. It exists to make
+  # coverage visible in the run log; gating comes later, deliberately, if the
+  # numbers prove stable.
+  coverage:
+    name: Coverage (cargo-llvm-cov, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: rustup component add llvm-tools-preview
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --summary-only
+
+  extension:
+    name: Extension (typecheck, lint, format, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      # moon is the canonical command interface (single task definitions in
+      # moon.yml); this SHA-pinned vendor action installs proto + moon and
+      # caches ~/.proto. The versions are passed explicitly because the
+      # action cannot read the proto pin from .prototools itself;
+      # scripts/check-toolchain.ts (version-consistency job + the ci gate)
+      # fails if these inputs and the .prototools pins ever disagree. Other
+      # tools are then provisioned from .prototools via `proto install`.
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+        with:
+          proto-version: "0.58.2"
+          moon-version: "2.4.5"
+      - run: proto install bun
+      - run: bun install --frozen-lockfile
+      - name: Typecheck (extension, desktop UI, tests, scripts, src/packages/shared)
+        run: moon run typecheck
+      - name: Biome (lint + format)
+        run: moon run check-ts
+      - name: src/packages/shared tests (generated catalogue, boundary validators)
+        run: moon run shared:test
+      - run: moon run extension:test
+      - run: moon run extension:build
+      # With build/extension/ present, check-extension-id.ts also re-asserts
+      # the built manifest's security surface (key, permissions, host access);
+      # the version-consistency job runs it build-free and covers only the
+      # source-level identity parity.
+      - name: Built-manifest security surface
+        run: moon run check-extension-id
+
+  # The Rust core is the canonical cross-process contract (ADR-0028); this job
+  # holds the two checks that need BOTH toolchains: the generated TS -
+  # including the generated envelope wire validators -
+  # must be exactly what the Rust emitters produce today (regenerate + diff),
+  # and the hand-written asymmetry layer over those validators must stay
+  # within the pinned parser asymmetries (double-derivation diff via
+  # schemars, which stays behind a gen-only feature - the shipped binary
+  # graph is asserted clean).
+  contract:
+    name: Contract (gen idempotency, envelope asymmetry gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # Pinned versions must match .prototools (see the extension job).
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+        with:
+          proto-version: "0.58.2"
+          moon-version: "2.4.5"
+      - run: proto install bun
+      - run: bun install --frozen-lockfile
+      # check-gen regenerates the shared *.gen.ts modules (including the
+      # envelope wire validators), fails on a
+      # stale diff, and runs the envelope generator's fail-closed rules
+      # (G1-G5).
+      - name: Generated TS in sync with the Rust core (src/packages/shared *.gen.ts)
+        run: moon run check-gen
+      - name: Envelope asymmetry gate (schemars vs z.toJSONSchema)
+        run: moon run check-envelope
+      - name: Gen-only tooling (schemars, ts-rs) stays out of every shipped binary's graph
+        run: moon run check-gen-isolation
+
+  version-consistency:
+    name: Version and extension ID consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: bun scripts/check-version.ts
+      - run: bun scripts/check-extension-id.ts
+      # The duplicated toolchain pins (.prototools vs rust-toolchain.toml,
+      # package.json packageManager, and checks.yml's proto-version /
+      # moon-version inputs) must agree - the same-file drift this job
+      # already guards for versions.
+      - run: bun scripts/check-toolchain.ts
+      # No tracked file may match a .moon/workspace.yml hasher.ignorePattern
+      # (that would silently drop it from every moon task hash).
+      - run: bun scripts/check-moon-hasher.ts
+
+  tooling:
+    name: Tooling hygiene (typos, cargo-machete)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          # Pinned: these tools' verdicts gate the build. Bump deliberately.
+          tool: typos@1.48.0,cargo-machete@0.9.2
+      - run: typos
+      - run: cargo machete
+
+  linux-install:
+    name: Linux registration (doctor --fix / uninstall, isolated XDG directories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - run: cargo build --release
+      - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data"
+          bin="$PWD/target/release/chromium-bridge"
+          mkdir -p "$tmp/home"
+          "$bin" --help
+          # Fresh machine, no browsers: --fix refuses instead of guessing.
+          if "$bin" doctor --fix; then
+            echo "doctor --fix should have failed with no browser detected" >&2; exit 1
+          fi
+          # Fake a detected Chrome; --fix picks exactly it up (fresh-machine install).
+          mkdir -p "$tmp/config/google-chrome"
+          "$bin" doctor --list
+          "$bin" doctor --fix
+          manifest="$tmp/config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          test -f "$manifest"
+          grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$manifest"
+          grep -q '"com.vivswan.chromium_bridge.host"' "$manifest"
+          wrapper="$tmp/data/chromium-bridge/run-host-chrome.sh"
+          test -x "$wrapper"
+          grep -q -- '--native-host' "$wrapper"
+          grep -q -- "--label 'chrome'" "$wrapper"
+          # doctor --list reports the healthy registration.
+          "$bin" doctor --list | grep -E 'chrome\s+detected\s+ok'
+          # A wiped wrapper is diagnosed as stale, and --fix repairs it in place.
+          rm "$wrapper"
+          "$bin" doctor --list | grep -q 'stale'
+          "$bin" doctor --fix
+          test -x "$wrapper"
+          # Explicit selection and the escape hatch.
+          "$bin" doctor --fix --browser brave
+          test -f "$tmp/config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          "$bin" doctor --fix --manifest-dir "$tmp/custom/NativeMessagingHosts"
+          test -f "$tmp/custom/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          # A manifest we did not write is refused and left byte-identical:
+          # target it explicitly via --manifest-dir.
+          mkdir -p "$tmp/foreign/NativeMessagingHosts"
+          foreign="$tmp/foreign/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          echo '{"name":"com.other.host","description":"not ours"}' > "$foreign"
+          if "$bin" doctor --fix --manifest-dir "$tmp/foreign/NativeMessagingHosts"; then
+            echo "doctor --fix should have refused the foreign manifest" >&2; exit 1
+          fi
+          if "$bin" uninstall --manifest-dir "$tmp/foreign/NativeMessagingHosts"; then
+            echo "uninstall should have failed on the foreign manifest" >&2; exit 1
+          fi
+          test -f "$foreign"
+          grep -q 'com.other.host' "$foreign"
+          # Everything we wrote is gone despite the failure on the foreign file.
+          "$bin" uninstall --manifest-dir "$tmp/custom/NativeMessagingHosts"
+          test ! -e "$manifest"
+          test ! -e "$tmp/custom/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          test ! -e "$wrapper"
+          test ! -e "$tmp/config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          test ! -e "$tmp/data/chromium-bridge/run-host-brave.sh"
+      - name: Explicit multi-browser selection, --all, and full uninstall
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data"
+          bin="$PWD/target/release/chromium-bridge"
+          mkdir -p "$tmp/home"
+          # A comma-separated selection registers exactly those browsers,
+          # detected or not; the unselected rows stay untouched.
+          "$bin" doctor --fix --browser chrome,chromium,brave,edge
+          for d in google-chrome chromium BraveSoftware/Brave-Browser microsoft-edge; do
+            manifest="$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+            test -f "$manifest"
+            grep -q 'chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/' "$manifest"
+          done
+          for d in vivaldi opera; do
+            test ! -e "$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          done
+          # --all covers every known browser; uninstall reverses every row,
+          # wrappers included.
+          "$bin" doctor --fix --all
+          dirs="google-chrome chromium BraveSoftware/Brave-Browser microsoft-edge vivaldi opera"
+          for d in $dirs; do
+            test -f "$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          done
+          "$bin" uninstall
+          for d in $dirs; do
+            test ! -e "$tmp/config/$d/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+          done
+          for b in chrome chromium brave edge vivaldi opera; do
+            test ! -e "$tmp/data/chromium-bridge/run-host-$b.sh"
+          done
+
+  e2e:
+    name: Protocol e2e (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # Pinned versions must match .prototools (see the extension job).
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+        with:
+          proto-version: "0.58.2"
+          moon-version: "2.4.5"
+      # uv is pinned ONLY in .prototools (single authority); it then
+      # provisions the exact interpreter pinned in .python-version - the
+      # same one local runs get. Its resolution semantics decide which
+      # interpreter a gating suite runs under; bump deliberately.
+      - run: proto install uv
+      # test-e2e = check-uv + cargo build --release + the suite (moon.yml).
+      - run: moon run test-e2e
+
+  adversarial:
+    name: Adversarial break-in (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # Same pinned proto/uv setup as the e2e job (see the comments there).
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+        with:
+          proto-version: "0.58.2"
+          moon-version: "2.4.5"
+      - run: proto install uv
+      - run: moon run test-adversarial
+
+  chaos:
+    name: Fault-injection chaos (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # Same pinned proto/uv setup as the e2e job (see the comments there).
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+        with:
+          proto-version: "0.58.2"
+          moon-version: "2.4.5"
+      - run: proto install uv
+      - run: moon run test-chaos
+
+  browser:
+    name: DOM + smoke + security proofs (Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
+        id: chrome
+        with:
+          chrome-version: stable
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd src/apps/extension build
+      - name: Typecheck tests
+        run: bun run --cwd tests/browser typecheck
+      - name: DOM-layer tests
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          # In CI the suites must actually run: the isolation guard's local
+          # default (SKIP, exit 0, when CHROME_BIN is not an isolated Chrome
+          # for Testing) would turn this required job silently green. Strict
+          # mode makes a skip a failure; it can only tighten the guard.
+          BB_REQUIRE_BROWSER: "1"
+        run: bun tests/browser/dom_test.ts
+      - name: Extension smoke test
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          BB_REQUIRE_BROWSER: "1"
+        # The smoke test needs a non-headless browser (MV3 SW reliability), so
+        # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
+        run: xvfb-run -a bun tests/browser/ext_test.ts
+      - name: Browser security proofs (ADR-0027)
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          BB_REQUIRE_BROWSER: "1"
+        # Non-headless --load-extension like the smoke test, hence xvfb.
+        run: xvfb-run -a bun tests/browser/security_browser_test.ts
+
+  # The public web app (src/apps/web: the landing page plus Astro over the
+  # repo's markdown docs) must keep building. Build-only here: deployment to
+  # GitHub Pages happens in the managed pages.yml (root = latest release,
+  # /staging/ = main HEAD).
+  web:
+    name: web app builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd src/apps/web build
+
+  cjk:
+    name: CJK containment (zh text only in locale files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      # Dependency-free (node builtins only), so no bun install.
+      - run: bun scripts/check-cjk.ts
+      # The local typography mirror (scripts/check-typography.ts backs the
+      # moon-gate check; CI's authoritative typography job is the managed
+      # ci.yml's platform action). Running the mirror + its tests here keeps
+      # the local tooling from rotting unnoticed.
+      - name: Local typography mirror stays healthy
+        run: |
+          bun scripts/check-typography.ts
+          bun test scripts/check-typography.test.ts
+
+  # The security audits gate merges: a new advisory lands as a red PR check,
+  # not a silent scheduled failure. security.yml calls the same reusable
+  # workflow weekly for advisories disclosed between pushes. A job calling a
+  # reusable workflow fails if any called job fails, so this single job
+  # aggregates both audit jobs for all-green.
+  audits:
+    name: Security audits
+    uses: ./.github/workflows/audits.yml
+
+  # The desktop app (src/apps/desktop): UI build + unit tests, then the Rust
+  # crate's clippy + tests. macOS only: the crate is macOS-focused (the
+  # bundled-host/Enclave layout), and compiling Tauri elsewhere needs the
+  # platform GUI toolchains (WebKitGTK on Linux, WebView2 on Windows) that
+  # nothing ships yet - extending this matrix is the documented cost of
+  # supporting those platforms (ADR-0029). The UI dist must exist before the
+  # crate compiles (tauri's generate_context! embeds it).
+  desktop:
+    name: Desktop app (UI build+test, clippy, test) on macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # Pinned versions must match .prototools (see the extension job).
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+        with:
+          proto-version: "0.58.2"
+          moon-version: "2.4.5"
+      - run: proto install bun
+      - run: bun install --frozen-lockfile
+      - run: moon run desktop-ui:test
+      # check-app-rust covers the rest as one dependency chain (moon.yml):
+      # desktop-ui:build (tauri's generate_context! embeds the dist),
+      # gen-icons (tauri-build reads icons/icon.png at compile time; the
+      # rasters are generated from the committed SVGs, never checked in),
+      # check-gen-app (regenerate commands.gen.ts via the ts-export cargo
+      # test and fail on a stale diff - the file is deleted first and must
+      # be recreated, so a renamed or missing export test fails loudly),
+      # then clippy with --features ts-export (the gen-only derive code is
+      # linted too) and the crate's tests. Runs here, not in the ubuntu
+      # jobs: it compiles Tauri, which needs this job's macOS toolchain.
+      - name: Desktop crate gate (UI build, icons, commands.gen.ts, clippy, tests)
+        run: moon run check-app-rust

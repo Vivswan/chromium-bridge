@@ -1,24 +1,37 @@
-# Security Policy
+# Security policy
+
+## Supported versions
+
+Only the latest release is supported.
+
+## Reporting a vulnerability
+
+**Do not open a public issue for security problems.**
+
+Report vulnerabilities privately via
+[GitHub Security Advisories](https://github.com/vivswan/chromium-bridge/security/advisories/new)
+("Report a vulnerability"). A useful report includes:
+
+- what an attacker can do (impact), and where trust is broken,
+- reproduction steps or a proof of concept,
+- the affected version or commit.
+
+Expect an acknowledgement within a few days, and a fix in the next release
+once the report is confirmed. Please allow reasonable time for that fix
+before any public disclosure.
+
+Never include real credentials in a report; redact everything that looks like
+a key.
+
+<!-- Repository-specific security documentation (scope, threat model, review
+     expectations for security-relevant changes) goes below this line. It
+     survives template updates via three-way merge. -->
 
 chromium-bridge drives a **real, logged-in browser** on the user's machine.
 It can read page content, cookies (including httpOnly), and web storage, and
 can execute JavaScript in pages. This document covers how to report issues,
 the security model in summary, and the review bar for security-relevant
 changes.
-
-## Reporting a vulnerability
-
-**Please do not open a public issue for security problems.**
-
-Report privately via GitHub's **[Report a vulnerability](https://github.com/Vivswan/chromium-bridge/security/advisories/new)**
-(Security -> Advisories) on this repository. Include:
-
-- what an attacker can do (impact) and the trust boundary crossed,
-- reproduction steps or a proof of concept,
-- affected version / commit.
-
-Expect an acknowledgement within a few days. Because this is a small project,
-please allow reasonable time for a fix before any public disclosure.
 
 ## Scope
 
@@ -197,6 +210,21 @@ gh attestation verify chromium-bridge --repo Vivswan/chromium-bridge
 shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.binary.sha256
 ```
 
+### CI supply chain under the fleet template (ADR-0033)
+
+CI configuration is fleet-managed (Vivswan/repo-platform): the managed
+workflows reference the platform's actions and reusable workflows at
+`@main` and several third-party actions at floating major tags, unlike the
+SHA-pinned actions in this repository's own workflows. That is a real,
+accepted widening of the CI supply chain - a compromise of repo-platform or
+of those tags executes in this repository's CI, in jobs holding
+security-events, pages, id-token, contents, and pull-requests write. The
+acceptance rests on a trust assumption, not a technical boundary:
+repo-platform stays under the same owner's control. The planned tightening
+is the template's `latest` channel, which pins platform refs to release
+tags. Details and the rest of the accepted residuals live in
+[ADR-0033](./docs/adr/0033-adopt-repo-platform-fleet-template.md).
+
 Verifying the whole archive also covers the bundled `extension/dist`.
 Registration (`doctor --fix`, or the app) points browsers at the binary as
 it sits on disk; it downloads nothing and adds no verification step of its
@@ -317,8 +345,3 @@ Extra review care applies to the security-critical surfaces listed in
 `src/packages/core/src/ipc/`, `protocol.rs`, `broker.rs`, `allowlist.rs`,
 `revocation.rs`, `kill.rs`, `presence/`, `enclave/`, the extension's
 allowlist/eval/confirmation code, and `wxt.config.ts`.
-
-## Supported versions
-
-Pre-1.0: only the latest release is supported. Security fixes ship in a new
-patch/minor release.

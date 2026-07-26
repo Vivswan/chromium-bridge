@@ -18,8 +18,8 @@ main
 ```
 
 Branch prefixes use the Conventional Commits types
-(`feat|fix|docs|refactor|perf|test|ci|build|style|revert`); `chore` is not used
-(see [CONTRIBUTING.md](CONTRIBUTING.md)). No long-lived `develop`. Branches merge
+(`build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test`; see
+[CONTRIBUTING.md](CONTRIBUTING.md)). No long-lived `develop`. Branches merge
 via PR and are deleted after merge.
 
 `main` rules (enforced where possible via branch protection):

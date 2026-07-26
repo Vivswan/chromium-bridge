@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { die, repoRoot } from "./lib.ts";
 
 // Read hasher.ignorePatterns as real YAML (Bun.YAML, like the sibling
-// check-all-green.ts / check-toolchain.ts), and fail loudly on a missing,
+// check-toolchain.ts), and fail loudly on a missing,
 // empty, or malformed list - silently checking nothing is the failure mode
 // this script exists to prevent.
 const workspaceYml = readFileSync(join(repoRoot, ".moon/workspace.yml"), "utf8");

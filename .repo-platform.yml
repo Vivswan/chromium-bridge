@@ -1,4 +1,5 @@
-# Managed by Vivswan/repo-platform. Presence marks this repository as
-# participating in push sync; `modules` is this repo's module selection -
-# edit it and the next sync applies the change.
-modules: [agents, bun, release-please, issue-templates]
+# This file is managed by Vivswan/repo-platform. Its presence
+# marks this repository as participating in push sync. `modules` is this
+# repo's module selection - edit it and the next sync applies the change.
+
+modules: ["agents", "bun", "rust", "pages", "release-please", "issue-templates", "pr-title", "auto-assign"]

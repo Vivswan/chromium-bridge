@@ -6,18 +6,22 @@
 // vector (an invisible bidi override or a homoglyph in a security-relevant
 // string reads differently to a human than to a parser).
 //
-// Local replacement for the retired Vivswan/repo-platform check-typography
-// action, enforcing the same rules:
+// The local mirror of the Vivswan/repo-platform check-typography action:
+// the managed ci.yml runs the action, `moon run ci` runs this, both
+// enforcing the same rules:
 //   - every git-tracked path is scanned - content AND filename (a bidi mark
 //     can hide in a name as well as in a line);
 //   - the FORBIDDEN set below is banned everywhere;
 //   - the four CJK marks it deliberately omits (U+3001 U+3002 U+300C U+300D)
 //     stay usable in CJK prose - whole-script containment is check-cjk.ts's
 //     job, not this one's;
-//   - .typography-allow exempts exact repo-relative paths (one per line,
-//     # comments). Exact, not prefix: the original action's prefix matching
-//     could silently exempt a whole subtree from a one-file entry. The
-//     allowlist can exempt anything except itself.
+//   - .typography-allow (managed by template sync) and .typography-allow.local
+//     (repo-owned) exempt exact repo-relative paths (one per line,
+//     # comments). Exact, not prefix: the action's prefix matching
+//     could silently exempt a whole subtree from a one-file entry, so this
+//     mirror is deliberately the stricter side - what passes here also
+//     passes CI, never the reverse. The allowlists can exempt anything
+//     except themselves.
 //
 // Fail closed: the only silent skips are proven-binary content (a null byte
 // in the leading window) and a path git itself reports as deleted from the
@@ -206,22 +210,30 @@ if (import.meta.main) {
     }
   }
 
-  const allowFile = ".typography-allow";
-  let allowed = new Set<string>();
-  if (files.includes(allowFile) && !deleted.has(allowFile)) {
+  // Two exemption lists, matching the platform action's pair: the managed
+  // .typography-allow (template sync overwrites it) and the repo-owned
+  // .typography-allow.local. Entries here are EXACT paths (see the header) -
+  // deliberately stricter than the action's prefix matching, so anything
+  // this gate passes also passes CI, never the reverse.
+  const allowFiles = [".typography-allow", ".typography-allow.local"];
+  const allowed = new Set<string>();
+  for (const allowFile of allowFiles) {
+    if (!files.includes(allowFile) || deleted.has(allowFile)) continue;
+    let entries = new Set<string>();
     try {
-      allowed = loadAllowlist(resolve(root, allowFile));
+      entries = loadAllowlist(resolve(root, allowFile));
     } catch (err) {
       errors.push(`${allowFile}: not a scannable exemption list (${err})`);
     }
     // The gate's own configuration is never exempt from the gate.
-    allowed.delete(allowFile);
+    for (const self of allowFiles) entries.delete(self);
     // Allowlist rot: an entry naming an untracked path exempts nothing and
     // usually means a typo or a stale rename - surface it.
-    for (const entry of allowed) {
+    for (const entry of entries) {
       if (!files.includes(entry)) {
         errors.push(`${allowFile} lists "${entry}", which is not a tracked file`);
       }
+      allowed.add(entry);
     }
   }
 
@@ -256,7 +268,7 @@ if (import.meta.main) {
     console.error(
       `\ncheck-typography: ${hitCount} forbidden character(s), ${errors.length} error(s). ` +
         "Replace look-alike punctuation with ASCII; exempt a path only via an " +
-        "exact entry in .typography-allow with a reviewed reason.",
+        "exact entry in .typography-allow.local with a reviewed reason.",
     );
     process.exit(1);
   }

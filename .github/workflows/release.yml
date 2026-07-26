@@ -1,24 +1,31 @@
+# Repo-owned release pipeline, called by the managed ci.yml on top of the
+# all-green gate (never overwritten by template sync). The release-please
+# job runs the managed machinery: it accumulates conventional commits on
+# main into a release PR, and merging that PR tags and publishes the
+# release IN THIS SAME RUN - the packaging jobs below are gated on its
+# release_created output and attach the prebuilt artifacts (binary + built
+# extension tarballs, the macOS desktop .dmg) to that release, so users
+# don't need Rust/Node. Everything runs downstream of all-green, so a red
+# commit can never cut a release or ship an asset.
+
 name: Release
 
-# Tag a version to publish prebuilt tarballs (binary + built extension) so
-# users don't need Rust/Node:  git tag v0.1.0 && git push --tags
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to build (e.g. v0.1.0)"
-        required: true
-
-permissions:
-  contents: write # create the GitHub Release + upload assets
-  id-token: write # OIDC token to sign the SLSA build provenance
-  attestations: write # write the build-provenance attestation
+  workflow_call:
 
 jobs:
-  release:
+  release-please:
+    uses: ./.github/workflows/release-please.yml
+    secrets: inherit
+
+  binaries:
     name: ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write # upload assets to the GitHub Release
+      id-token: write # OIDC token to sign the SLSA build provenance
+      attestations: write # write the build-provenance attestation
     strategy:
       fail-fast: false
       matrix:
@@ -42,20 +49,17 @@ jobs:
     env:
       ARCH: ${{ matrix.arch }}
       PLATFORM: ${{ matrix.platform }}
-      # Pass the tag through the environment, never spliced into a run: script.
-      # A crafted workflow_dispatch `tag` input cannot break out of a shell
-      # command when it arrives as $RELEASE_TAG instead of being interpolated
-      # into the script text. The Verify step below also constrains its shape
-      # (this workflow has contents/id-token/attestations write).
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      # Pass the tag through the environment, never spliced into a run: script,
+      # so it cannot break out of a shell command. The Verify step below also
+      # constrains its shape (this workflow has contents/id-token/attestations
+      # write).
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Pin to the tag being released. On tag push github.ref_name IS the
-          # tag; on workflow_dispatch the run's ref is a branch (tags can't be
-          # picked in the UI), so without this we'd build main and mislabel it
-          # under inputs.tag. Mirror sbom.yml, which already pins its ref.
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          # Pin to the tag release-please just published: this run's own sha
+          # IS that commit today, but the tag is what users verify against.
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           cache: false
@@ -190,7 +194,7 @@ jobs:
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: |
             ${{ steps.pkg.outputs.archive }}
             ${{ steps.pkg.outputs.sha256file }}
@@ -198,7 +202,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           # any tag with a suffix (v0.1.0-dev, -rc.1, ...) is a prerelease
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.release-please.outputs.tag_name, '-') }}
 
       # The standalone extension zip rides its own macos-only upload (matching
       # the extzip step above) so fail_on_unmatched_files genuinely covers it:
@@ -207,12 +211,12 @@ jobs:
         if: matrix.platform == 'macos'
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: |
             ${{ steps.extzip.outputs.name }}.zip
             ${{ steps.extzip.outputs.name }}.zip.sha256
           fail_on_unmatched_files: true
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.release-please.outputs.tag_name, '-') }}
 
   # The secrets context is not available in a job-level `if`, so a tiny
   # gate job exports "are the desktop signing secrets configured" as an
@@ -220,6 +224,10 @@ jobs:
   # of failing it; the binary+extension release above is never blocked.
   desktop-signing-secrets:
     name: desktop signing secrets present?
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    # Only tests secrets for emptiness; the token needs no permissions.
+    permissions: {}
     runs-on: ubuntu-latest
     outputs:
       present: ${{ steps.check.outputs.present }}
@@ -243,14 +251,18 @@ jobs:
   # attest, and attach it to the same release. Signing material comes from
   # repository secrets (see docs/release.md "Desktop app secrets"); the
   # free-tier provisioning profile expires every 7 days, so the profile
-  # secret needs a refresh shortly before tagging a release.
+  # secret needs a refresh shortly before a release PR merges.
   desktop-app:
     name: macos desktop app (.dmg)
-    needs: desktop-signing-secrets
+    needs: [release-please, desktop-signing-secrets]
     if: needs.desktop-signing-secrets.outputs.present == 'true'
+    permissions:
+      contents: write # upload assets to the GitHub Release
+      id-token: write # OIDC token to sign the SLSA build provenance
+      attestations: write # write the build-provenance attestation
     runs-on: macos-14
     env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
       # Notarization is optional on top of signing: the free Apple
       # Development certificate cannot notarize, so these secrets exist only
       # once a paid Developer ID is in place.
@@ -258,7 +270,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           cache: false
@@ -366,13 +378,13 @@ jobs:
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: |
             ${{ steps.dmg.outputs.asset }}
             ${{ steps.dmg.outputs.asset }}.sha256
           fail_on_unmatched_files: true
           generate_release_notes: true
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.release-please.outputs.tag_name, '-') }}
 
       - name: Delete the ephemeral keychain
         if: always()
