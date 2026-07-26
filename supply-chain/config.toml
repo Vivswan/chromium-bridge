@@ -1220,6 +1220,11 @@ criteria = "safe-to-deploy"
 version = "2.0.118"
 criteria = "safe-to-deploy"
 
+[[exemptions.syn]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "Deliberate decision (2026-07-26, with the thiserror 2.0.19 bump): a brand-new syn major, exempted at the same trust level as syn 1/2 rather than audited - dtolnay's crate, first-party pin from thiserror-impl. Revisit if an advisory lands."
+
 [[exemptions.sync_wrapper]]
 version = "1.0.2"
 criteria = "safe-to-deploy"
