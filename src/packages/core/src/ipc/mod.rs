@@ -61,6 +61,18 @@ pub struct ClientIdentity {
     pub team_id: Option<String>,
 }
 
+impl From<&crate::protocol::HarnessId> for ClientIdentity {
+    /// The allowlist-input projection of an attested harness identity. Drops
+    /// `name` deliberately: it is a self-asserted log label, never an
+    /// authorization key (ADR-0024).
+    fn from(h: &crate::protocol::HarnessId) -> Self {
+        ClientIdentity {
+            hash: h.hash.clone(),
+            team_id: h.team_id.clone(),
+        }
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use attest::attest_parent;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

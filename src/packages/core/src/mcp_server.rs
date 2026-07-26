@@ -157,10 +157,7 @@ impl Harness {
     /// The measured identity in the allowlist's input shape, for the broker's
     /// own-harness revocation rechecks.
     fn client_identity(&self) -> Option<ipc::ClientIdentity> {
-        self.id.as_ref().map(|h| ipc::ClientIdentity {
-            hash: h.hash.clone(),
-            team_id: h.team_id.clone(),
-        })
+        self.id.as_ref().map(ipc::ClientIdentity::from)
     }
 }
 
