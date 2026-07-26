@@ -1,4 +1,14 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.thiserror]]
+who = "Vivswan Shah <58091053+Vivswan@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.18 -> 2.0.19"
+notes = "Reviewed the full published-source diff. CI/MSRV housekeeping (1.68 -> 1.71), a map_or(false, ..) -> is_some_and refactor in build.rs, one new test, and test-expectation string updates; no new unsafe, no behavioral change, no dependency change other than the pinned thiserror-impl = 2.0.19."
+
+[[audits.thiserror-impl]]
+who = "Vivswan Shah <58091053+Vivswan@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.18 -> 2.0.19"
+notes = "Reviewed the full published-source diff. Three is_some_and refactors (expand.rs/prop.rs/valid.rs) plus the syn 2 -> 3 dependency bump; no new unsafe, no new capabilities in the macro expansion. NOTE: adopting 2.0.19 pulls syn 3.0.0 into the graph, which needs its own vet decision."
