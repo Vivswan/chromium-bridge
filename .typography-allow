@@ -1,18 +1,7 @@
-# Exact repo-relative paths exempt from scripts/check-typography.ts
-# (one per line; exact match, never a prefix).
-#
-# EMPTY, and it should stay that way: every file in the repo - including the
-# zh locale bundles and translated docs - uses ASCII punctuation for
-# everything the checker bans (the CJK marks it always allows in CJK-context
-# files remain in use). Add a path only with an explicit, reviewed decision.
-#
-# Whole-script CJK containment (an untranslated Chinese label leaking into an
-# English surface) is policed separately by scripts/check-cjk.ts, not here.
-# Non-banned functional glyphs (U+2022 masking bullet, U+2192, U+26A0, U+2260)
-# are not look-alikes and need no exemption.
-#
-# Known gap, accepted for now: release-please's generated CHANGELOG.md quotes
-# two pre-policy commit subjects containing U+2014, so the release PR's
-# typography check fails until a changelog sanitizer lands in
-# Vivswan/repo-platform. After merging a release, ASCII-ify the frozen lines
-# on main to keep main green.
+# Managed by Vivswan/repo-platform. Path prefixes exempt from
+# the check-typography action, one per line, relative to the repository root.
+# Template sync overwrites this file; repository-specific exemptions belong
+# in .typography-allow.local (same format, repo-owned, read alongside it).
+# release-please writes CHANGELOG.md from commit and PR text, which is not
+# ASCII-guaranteed.
+CHANGELOG.md

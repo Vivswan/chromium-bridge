@@ -3,7 +3,7 @@
 // without a source edit:
 //   - default            -> project page at https://vivswan.github.io/chromium-bridge/
 //   - ASTRO_BASE=/chromium-bridge/staging/ -> the staging build under /staging/
-//   - CUSTOM_DOMAIN cutover (deploy-site.yml) -> ASTRO_SITE=https://<domain>
+//   - CUSTOM_DOMAIN cutover (pages.yml) -> ASTRO_SITE=https://<domain>
 //     ASTRO_BASE=/ and the site moves to the domain root.
 // Consumed only by astro.config.mjs; pages keep reading import.meta.env.BASE_URL.
 

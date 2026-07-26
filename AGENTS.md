@@ -10,38 +10,49 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 
 ## Toolchain
 
-- Bootstrap: [proto](https://moonrepo.dev/proto) provisions every pinned
-  tool from `.prototools` (bun, moon, rust pre-install, uv) - one
-  `proto install` in a fresh checkout. uv keeps owning python
-  (`.python-version`); cargo-nextest, typos, cargo-machete, and actionlint
-  are separate one-time installs (docs/development.md).
 - Runtime and package manager: bun (`bun install`, `bun test`, `bun run <script>`)
-- Task runner: [moon](https://moonrepo.dev) is the canonical command
-  interface. `moon run <task>` runs a task; `moon run help` (or
-  `moon query tasks`) lists them all. See `docs/development.md`.
+- See `package.json` scripts for the available commands.
+- Rust managed with cargo (`cargo build`, `cargo test`, `cargo clippy`)
+- See `Cargo.toml` for the workspace/crate layout and dependencies.
+- In THIS repository, moon wraps both toolchains as the canonical command
+  interface (`moon run <task>`) - see "Toolchain specifics" under
+  Repository-specific guidance below before reaching for raw commands.
 
 ## Conventions
 
 - PR titles and commit subjects must be Conventional Commits (`feat:`, `fix:`,
-  `feat!:`, `ci:`, ...; CONTRIBUTING.md lists the allowed types - `chore` is
-  not one of them). PRs are squash-merged, so the PR title becomes the commit
-  subject and drives release-please versioning. CI validates both inside the
-  all-green gate: the conventional-title and commit-names jobs, one shared
-  validator (`scripts/check-commit-names.ts`).
-- CI gates on a single required check named `all-green`, which `needs:` every
-  other job in `.github/workflows/ci.yml`. When adding a CI job, add it to
-  all-green's `needs` list.
-- Scripts used ONLY by GitHub Actions live in `.github/scripts/`. `scripts/`
-  holds local and dual-use tooling: everything moon tasks or developers run,
-  even if CI also calls it (e.g. `scripts/fuzz-smoke.ts`, run by both
-  `moon run fuzz-smoke` and the nightly fuzz job).
+  `feat!:`, `chore:`, ...). PRs are squash-merged, so the PR title becomes the
+  commit subject and drives release-please versioning. CI validates both
+  (the ci.yml pr-title job + validate-commit-names).
+- CI gates on a single required check named `all-green` in the managed
+  `.github/workflows/ci.yml`. This repository's own test/lint jobs belong in
+  `.github/workflows/checks.yml` (repo-owned, called inside the gate); do not
+  edit ci.yml, template sync overwrites it. The `release` job runs on top
+  of the gate (`needs: all-green`); the release pipeline is repo-owned in
+  `.github/workflows/release.yml` (pre/post-release jobs go there, around the
+  managed release-please machinery).
 - No typographic look-alike characters (curly quotes, em-dashes, invisible
-  unicode). CI enforces this with `scripts/check-typography.ts` (also run by
-  `moon run ci`); use plain ASCII punctuation.
-- Files marked "managed by Vivswan/repo-platform" keep their markers for a
-  planned re-adoption of the template, but are NOT currently synced (the
-  template-sync workflow was removed). Put repository-specific content in
-  `.gitignore`'s marked LOCAL section or below this line in this file.
+  unicode). CI enforces this with the check-typography action; use plain ASCII
+  punctuation.
+
+## Managed by repo-platform
+
+- Files whose header says "managed by Vivswan/repo-platform"
+  arrive via sync PRs pushed by that repository. Do not edit them here;
+  change them in Vivswan/repo-platform and let the next sync
+  PR deliver the update.
+- Repository settings (description, topics, labels, rulesets, merge policy)
+  are applied from Vivswan/repo-platform: by the
+  `settings/repos/` file named after this repository over there when one
+  exists, otherwise by this repository's own `.github/settings.yml`. Do not
+  change settings by hand in the GitHub UI; edit the settings file.
+- Repo-owned escape hatches stay local: `.github/workflows/checks.yml` and
+  `.github/workflows/release.yml`, `.gitignore`'s marked LOCAL section,
+  `.typography-allow.local` (typography exemptions; the managed
+  `.typography-allow` is overwritten by sync), and the repository-specific
+  section below.
+- Module selection is this repository's own: edit the `modules` list in
+  `.repo-platform.yml` and the next sync PR applies the change.
 
 ## Repository-specific guidance
 
@@ -55,12 +66,31 @@ security-sensitive software: it acts in a logged-in browser, so correctness
 and the safety model come first. Identifiers are OUR OWN (a deliberate
 divergence from upstream, ADR-0023): crate/binary `chromium-bridge`,
 native-messaging host id `com.vivswan.chromium_bridge.host`, enclave keychain
-label `com.vivswan.chromium-bridge.enclave.signing.v1`. Upstream fixes are
-manual ports now, not clean merges; `LICENSE` and git history keep the
-upstream name.
+label `com.vivswan.chromium-bridge.enclave.signing.v1`. No `upstream` remote
+is configured, and the rebrand ended the keep-mergeable-with-upstream policy:
+port upstream fixes manually and by judgment, never shape our changes around
+a clean `git merge`. `LICENSE` and git history keep the upstream name.
 
 **The full development process is [`CONTRIBUTING.md`](./CONTRIBUTING.md) - it
 is authoritative; this file only summarizes.**
+
+### Toolchain specifics
+
+- Bootstrap: [proto](https://moonrepo.dev/proto) provisions every pinned
+  tool from `.prototools` (bun, moon, rust pre-install, uv) - one
+  `proto install` in a fresh checkout. uv keeps owning python
+  (`.python-version`); cargo-nextest, typos, cargo-machete, and actionlint
+  are separate one-time installs (docs/development.md).
+- Task runner: [moon](https://moonrepo.dev) is the canonical command
+  interface. `moon run <task>` runs a task; `moon run help` (or
+  `moon query tasks`) lists them all. See `docs/development.md`.
+- Scripts used ONLY by GitHub Actions live in `.github/scripts/`. `scripts/`
+  holds local and dual-use tooling: everything moon tasks or developers run,
+  even if CI also calls it (e.g. `scripts/fuzz-smoke.ts`, run by both
+  `moon run fuzz-smoke` and the nightly fuzz job).
+  `scripts/check-typography.ts` is the local mirror of the platform's
+  check-typography action, run by `moon run ci` (its tests ride in
+  checks.yml's `cjk` job).
 
 ### Safety red lines (a past incident nearly crashed a machine)
 
@@ -97,8 +127,8 @@ Individually: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
 A lefthook pre-commit hook runs `moon run ci` automatically (`bun install`
 wires it; moon itself comes from `proto install`). Browser suites
 (`moon run test-browser`) need `CHROME_BIN` -> isolated Chrome and are
-**not** part of `moon run ci`; CI runs them in the required `browser` job
-against its own isolated Chrome.
+**not** part of `moon run ci`; CI runs them in checks.yml's `browser` job
+(inside the all-green gate) against its own isolated Chrome.
 
 ### Project map
 
@@ -129,7 +159,7 @@ against its own isolated Chrome.
   asymmetries, held to exactly that list by the asymmetry gate
   (`moon run check-envelope`). Adding a
   tool touches both sides - see `CONTRIBUTING.md`.
-- Never develop on `main`; work in a git worktree under `.worktree/` on a
+- Never develop on `main`; work in a git worktree under `.worktrees/` on a
   `type/branch-name` branch, rebase on `origin/main`, land via squash-merge
   PR. Security-critical surfaces (`src/packages/core/src/ipc/`,
   `src/packages/core/src/protocol.rs`, `broker.rs`, `allowlist.rs`,
@@ -137,9 +167,6 @@ against its own isolated Chrome.
   the extension's allowlist/eval/confirmation code,
   `src/apps/extension/wxt.config.ts`) deserve extra review care - see
   `SECURITY.md`.
-- `upstream` remote is `whg517/browser-bridge`. The rebrand (ADR-0023) ended
-  the keep-mergeable-with-upstream policy: port upstream fixes manually and
-  by judgment, do not shape our changes around a clean `git merge`.
 
 ### Security principle: zero trust (the browser is a critical asset)
 

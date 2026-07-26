@@ -18,14 +18,14 @@ happens on `main`. Every change lives on a branch in its own git worktree, and
 lands via a squash-merged PR whose gates are green.
 
 1. **Sync + branch in a worktree.** Each change gets its own git worktree under
-   `.worktree/` (gitignored), on a branch named `type/branch-name` - `type` is a
+   `.worktrees/` (gitignored), on a branch named `type/branch-name` - `type` is a
    commit type (see [Commit convention](#commit-convention)) and `branch-name`
    is kebab-case and descriptive (e.g. `feat/capability-handshake`,
    `fix/reconnect-writer-clobber`). Always branch from the latest `origin/main`:
    ```sh
    git fetch origin
-   git worktree add .worktree/feat/my-change -b feat/my-change origin/main
-   cd .worktree/feat/my-change
+   git worktree add .worktrees/feat/my-change -b feat/my-change origin/main
+   cd .worktrees/feat/my-change
    ```
 2. Make the change with a matching test where practical.
 3. **Stay synced.** Before committing, and again before merging, rebase onto the
@@ -45,9 +45,10 @@ lands via a squash-merged PR whose gates are green.
    (`moon run test-browser`) run **only** against an isolated Chrome for
    Testing via `CHROME_BIN`, never your daily Chrome (see Safety below and
    [tests/README.md](./tests/README.md)). They are not part of
-   `moon run ci`; CI runs them in its required `browser` job against an
-   isolated Chrome, and runtime-behavior changes (reconnect, handshake,
-   service worker) must still be verified there manually.
+   `moon run ci`; CI runs them in checks.yml's `browser` job (inside the
+   all-green gate) against an isolated Chrome, and runtime-behavior changes
+   (reconnect, handshake, service worker) must still be verified there
+   manually.
 5. **Open a PR and squash-merge.** Push the branch, open a PR against `main`,
    wait for **all required checks green**, then **squash-merge** (one change =
    one commit on `main`):
@@ -58,17 +59,19 @@ lands via a squash-merged PR whose gates are green.
    ```
    Humans review, approve, and merge - automation never self-approves or
    self-merges.
-6. Clean up: `git worktree remove .worktree/feat/my-change && git branch -d feat/my-change`.
+6. Clean up: `git worktree remove .worktrees/feat/my-change && git branch -d feat/my-change`.
 
 ## Commit convention
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org):
 `type(scope): subject`.
 
-- Allowed `type`: `feat` `fix` `docs` `refactor` `perf` `test` `ci` `build`
-  `style` `revert`. **`chore` is not allowed** - every change maps to a more
-  precise type (dependency bumps -> `build`/`ci`, misc scripts -> `build`,
-  documentation -> `docs`).
+- Allowed `type`: `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor`
+  `revert` `style` `test` - the fleet-wide list enforced in CI by
+  `Vivswan/repo-platform/actions/validate-commit-names` (every commit subject
+  in the push/PR range) and the managed ci.yml's `pr-title` job (the PR
+  title). Prefer the most precise type over `chore`: dependency bumps ->
+  `build`, workflow changes -> `ci`, documentation -> `docs`.
 - `scope` is optional (`session`, `tools`, `error`, `ci`, `ext`, ...).
 - `subject` is imperative, present tense, lower-case, no trailing period; explain
   the *why* in the body. One logical change per commit.
@@ -132,8 +135,10 @@ A new tool touches both sides (see architecture.md section 10):
 
 ## Versioning
 
-`Cargo.toml` is the source of truth. Bump it, run `moon run sync-version`, and update
-`CHANGELOG.md`. CI fails if the crate and extension versions drift.
+`Cargo.toml` is the source of truth. Release-please bumps it (and the
+extension `package.json`) in the rolling release PR and writes
+`CHANGELOG.md`; after a manual bump, run `moon run sync-version` to propagate
+it. CI fails if the crate and extension versions drift.
 
 ## License
 

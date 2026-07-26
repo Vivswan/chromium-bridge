@@ -371,7 +371,7 @@ via `/mcp` in Claude Code) and the extension's service-worker console at
 | [docs/desktop-app.md](./docs/desktop-app.md) | The desktop app: what it manages and how to verify it |
 | [docs/operations.md](./docs/operations.md) | The binary modes, logging/audit, the runtime directory, reconnect |
 | [docs/compatibility.md](./docs/compatibility.md) | Version discipline and the capability/protocol handshake |
-| [docs/release.md](./docs/release.md) | Tag-driven releases, prebuilt archives + checksums, SBOM |
+| [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM |
 | [docs/wsl.md](./docs/wsl.md) | The two WSL modes: Windows Chrome interop and WSLg |
 | [docs/adr/](./docs/adr/) | Architecture Decision Records: every "why was this chosen" |
 

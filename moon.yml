@@ -90,7 +90,6 @@ tasks:
       - '~:check-extension-id'
       - '~:check-cjk'
       - '~:check-typography'
-      - '~:check-all-green'
       - '~:check-gen'
       - '~:check-envelope'
       - '~:check-gen-isolation'
@@ -125,13 +124,13 @@ tasks:
       runDepsInParallel: false
 
   release:
-    description: 'Pre-release gate: versions consistent + full ci; prints the tag command on success'
+    description: 'Pre-release gate: versions consistent + full ci (release-please cuts the actual release)'
     deps:
       - '~:check-version'
       - '~:check-extension-id'
       - '~:ci'
     script: |
-      echo "Release checks passed. Now tag the release, e.g.: git tag v$(bun scripts/check-version.ts | awk '/Cargo.toml/{print $2}')"
+      echo "Release checks passed. Releases are cut by release-please: merge the rolling release PR (chore(main): release X.Y.Z) on a green main."
     toolchains: ['system']
     options:
       cache: false
@@ -691,16 +690,6 @@ tasks:
     options:
       cache: false # in the ci gate: gates are never cached
 
-  check-all-green:
-    description: 'Every ci.yml job must be required by the all-green merge gate (or exempted with a reason)'
-    script: |
-      set -e
-      bun scripts/check-all-green.ts
-      bun test scripts/check-all-green.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
-
   check-typography:
     description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
     script: |
@@ -712,7 +701,7 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   check-toolchain:
-    description: 'The duplicated toolchain pins (.prototools vs rust-toolchain.toml, package.json, ci.yml) must agree'
+    description: 'The duplicated toolchain pins (.prototools vs rust-toolchain.toml, package.json, checks.yml) must agree'
     command: 'bun scripts/check-toolchain.ts'
     toolchains: ['system']
     options:
@@ -726,10 +715,11 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   check-yaml:
-    # The yamllint version is pinned here and ONLY here: CI's yamllint job
-    # runs this same task, so local and CI verdicts cannot diverge. uvx
-    # comes with uv (proto-provisioned).
-    description: 'Lint every YAML file (yamllint, strict; the single place its version is pinned)'
+    # The local yamllint version is pinned here; the managed ci.yml's
+    # yamllint job installs its own (unpinned - a template-sync decision,
+    # ADR-0033), so bump this pin when CI surfaces a rule this version
+    # lacks. uvx comes with uv (proto-provisioned).
+    description: 'Lint every YAML file (yamllint, strict; the local version pin)'
     command: 'uvx yamllint@1.38.0 -s .'
     toolchains: ['system']
     options:
@@ -737,24 +727,11 @@ tasks:
 
   check-actions:
     # actionlint is a residual-gap tool like typos (no first-party proto
-    # plugin): `brew install actionlint` once (docs/development.md). CI pins
-    # its version in the actionlint job, so a local version skew can at
-    # worst surface a finding early, never hide one from CI.
+    # plugin): `brew install actionlint` once (docs/development.md). The
+    # managed ci.yml runs its own actionlint job, so a local version skew
+    # can at worst surface a finding early.
     description: 'Lint the GitHub Actions workflows (actionlint; install once with `brew install actionlint`)'
     command: 'actionlint'
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
-
-  check-commit-names:
-    # NOT part of the ci aggregate: the pre-commit hook runs `moon run ci`
-    # BEFORE the commit message exists, so there would be nothing to check.
-    # Run it before pushing; CI's commit-names job gates the real range.
-    description: 'Commit subjects on origin/main..HEAD are Conventional Commits (CONTRIBUTING.md types)'
-    script: |
-      set -e
-      bun scripts/check-commit-names.ts
-      bun test scripts/check-commit-names.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # a check task: gates are never cached

@@ -7,8 +7,8 @@ import { satteri } from "@astrojs/markdown-satteri";
 import { defineConfig } from "astro/config";
 import { mdLinksPlugin } from "./src/lib/satteri-md-links";
 // Origin + base come from ASTRO_SITE / ASTRO_BASE (defaults: the GitHub Pages
-// project page) so deploy-site.yml can build the staging path and the
-// custom-domain cutover without touching source. See site-identity.ts.
+// project page) so the Pages deploy (managed pages.yml) can build the staging
+// path and the custom-domain cutover without touching source. See site-identity.ts.
 import { SITE_BASE, SITE_ORIGIN } from "./src/lib/site-identity";
 
 export default defineConfig({

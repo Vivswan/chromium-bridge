@@ -9,21 +9,28 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
+    # Conventional PR titles so the commit-names/pr-title gates pass; action
+    # bumps are workflow changes, hence ci (toolchain fragments use build).
+    commit-message:
+      prefix: "ci"
+      include: "scope"
 
-  # Rust workspace (template's stack is bun-ts; cargo added for this repo)
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-    cooldown:
-      default-days: 7
-
-  # bun workspace (root bun.lock covers src/apps/extension, src/packages/*,
-  # tests/browser, scripts). Dependabot's bun ecosystem keeps both the
-  # manifests and bun.lock current.
   - package-ecosystem: "bun"
     directory: "/"
     schedule:
       interval: "monthly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "build"
+      include: "scope"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "build"
+      include: "scope"

@@ -10,7 +10,7 @@
 //           rust entry only pre-installs that toolchain and must match.
 //   bun   - package.json's packageManager field (read by setup-bun in the
 //           CI jobs that do not go through proto) must match.
-//   proto/moon - .github/workflows/ci.yml passes explicit proto-version /
+//   proto/moon - .github/workflows/checks.yml passes explicit proto-version /
 //           moon-version inputs to moonrepo/setup-toolchain (the action
 //           cannot read the proto pin from .prototools itself); every
 //           occurrence must match the .prototools pins.
@@ -74,19 +74,19 @@ if (!bunFromPkg) {
 }
 console.log(`bun    ${bunFromPkg ?? "<missing>"} (package.json packageManager)`);
 
-// proto + moon: EVERY moonrepo/setup-toolchain step in ci.yml must be
+// proto + moon: EVERY moonrepo/setup-toolchain step in checks.yml must be
 // SHA-pinned and carry both explicit version inputs in its `with:` block,
 // each matching the .prototools pin - checked per step (not "some match
 // exists somewhere") so a single drifting or de-pinned job cannot hide
 // behind the others. Parsed as real YAML (Bun.YAML), not regex-scraped, so
 // look-alike text in env blocks, comments, or multiline scalars cannot
 // stand in for an actual action input.
-const ciYml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const checksYml = readFileSync(join(repoRoot, ".github/workflows/checks.yml"), "utf8");
 interface WorkflowStep {
   uses?: string;
   with?: Record<string, unknown>;
 }
-const workflow = Bun.YAML.parse(ciYml) as {
+const workflow = Bun.YAML.parse(checksYml) as {
   jobs?: Record<string, { steps?: WorkflowStep[] }>;
 };
 let invocations = 0;
@@ -101,7 +101,7 @@ for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       continue;
     }
     invocations += 1;
-    const where = `ci.yml job '${jobName}' setup-toolchain step`;
+    const where = `checks.yml job '${jobName}' setup-toolchain step`;
     const ref = step.uses.slice(step.uses.indexOf("@") + 1);
     // Exactly a 40-hex commit SHA - a tag, branch, or sha-with-suffix ref
     // is mutable and must not pass.
@@ -120,10 +120,10 @@ for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
   }
 }
 if (invocations === 0) {
-  fail("ci.yml never uses moonrepo/setup-toolchain (expected the moon-running jobs to)");
+  fail("checks.yml never uses moonrepo/setup-toolchain (expected the moon-running jobs to)");
 }
 console.log(
-  `proto  ${pin("proto")} / moon ${pin("moon")} (${invocations} SHA-pinned ci.yml step(s))`,
+  `proto  ${pin("proto")} / moon ${pin("moon")} (${invocations} SHA-pinned checks.yml step(s))`,
 );
 
 // uv: pinned only in .prototools; just assert the pin exists.
