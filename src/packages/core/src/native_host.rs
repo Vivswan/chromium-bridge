@@ -1039,7 +1039,9 @@ pub fn run() -> i32 {
     log_info!(
         "native-host",
         "bridge handshake complete (label '{}')",
-        label.as_deref().unwrap_or("default")
+        label
+            .as_ref()
+            .map_or(ipc::DEFAULT_LABEL, ipc::BrowserLabel::as_str)
     );
 
     // Shutdown policy: the native host has no useful work to do if EITHER

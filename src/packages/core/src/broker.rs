@@ -51,13 +51,13 @@ use std::time::{Duration, Instant};
 
 use crate::allowlist::{self, Decision};
 use crate::audit;
-use crate::ipc::{self, BridgeStream, ClientIdentity};
+use crate::ipc::{self, BridgeStream, BrowserLabel, ClientIdentity};
 use crate::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, AttachReply, AttachRequest, HarnessId, JsonRpc,
     MCP_MAX_LINE,
 };
 use crate::revocation::Revocation;
-use crate::session::{Session, DEFAULT_LABEL};
+use crate::session::Session;
 
 // ---- DoS limits (generalizing the fail-closed-timeout posture) -------------
 
@@ -594,9 +594,10 @@ impl Drop for PendingSlot {
 
 /// The outcome of the handshake + attach handshake for one connection.
 enum Admitted<'a> {
-    /// A browser native host, ready to join the session registry.
+    /// A browser native host, ready to join the session registry. The label
+    /// is a [`BrowserLabel`]: validated in the handshake, by construction.
     Browser {
-        label: String,
+        label: BrowserLabel,
         reader: BufReader<BridgeStream>,
         writer: BufWriter<BridgeStream>,
     },
@@ -895,11 +896,11 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted<'_> {
 }
 
 fn admit_browser(
-    label: Option<String>,
+    label: Option<BrowserLabel>,
     reader: BufReader<BridgeStream>,
     mut writer: BufWriter<BridgeStream>,
 ) -> Admitted<'static> {
-    let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
+    let label = label.unwrap_or_else(BrowserLabel::default_label);
     // The kill switch severs the browser leg entirely (ADR-0030): while it is
     // engaged -- or its state cannot be read -- no browser attach is accepted,
     // so no path to a browser exists even if a dispatch check were bypassed.
@@ -916,7 +917,7 @@ fn admit_browser(
         audit::record(
             audit::AuditRecord::new(audit::AuditKind::BrowserRefuse)
                 .surface(audit::Surface::Broker)
-                .name(&label)
+                .name(label.as_str())
                 .outcome("refused")
                 .detail(e.code()),
         );
@@ -934,7 +935,7 @@ fn admit_browser(
     audit::record(
         audit::AuditRecord::new(audit::AuditKind::BrowserAttach)
             .surface(audit::Surface::Broker)
-            .name(&label)
+            .name(label.as_str())
             .outcome("ok"),
     );
     // Steady state: an idle browser connection is normal, so clear the timeout.
