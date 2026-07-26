@@ -456,13 +456,29 @@ fn spawn_revocation_watch(
 /// hardware prompts is a tap-phishing primitive, not a feature.
 static PRESENCE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-/// RAII reset for [`PRESENCE_IN_FLIGHT`]: clearing the flag in `Drop` makes the
-/// single-flight invariant structural. Even if the worker thread unwound
-/// (the no-panic-core lints forbid that in this crate, but a dependency could
-/// still abort/panic), the slot is released so the host never wedges into a
-/// permanent `busy`. The success path drops it after the reply is written; the
-/// spawn-failure path drops it explicitly.
-struct PresenceSlotGuard;
+/// RAII occupancy of the single presence-signing slot. The ONLY constructor is
+/// [`try_acquire`](Self::try_acquire) (the flag's compare-exchange), and the
+/// flag is cleared in `Drop`, so "guard exists" and "flag set" are one state:
+/// a guard for a slot that was never won, or a path that clears the flag
+/// without dropping the guard, is unrepresentable. Even if the worker thread
+/// unwound (the no-panic-core lints forbid that in this crate, but a
+/// dependency could still panic), the slot is released so the host never
+/// wedges into a permanent `busy`.
+struct PresenceSlotGuard {
+    /// Constructor gate: keeps `PresenceSlotGuard { .. }` unbuildable outside
+    /// [`try_acquire`](Self::try_acquire).
+    _priv: (),
+}
+
+impl PresenceSlotGuard {
+    /// Win the single in-flight slot, or `None` while another round holds it.
+    fn try_acquire() -> Option<Self> {
+        PRESENCE_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| PresenceSlotGuard { _priv: () })
+    }
+}
 
 impl Drop for PresenceSlotGuard {
     fn drop(&mut self) {
@@ -508,16 +524,13 @@ fn handle_presence_challenge(
         );
         return refuse(out, "bridge_killed");
     }
-    if PRESENCE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+    let Some(slot) = PresenceSlotGuard::try_acquire() else {
         log_warn!(
             "native-host",
             "refusing presence_challenge while another round is in flight"
         );
         return refuse(out, "busy");
-    }
+    };
     let worker_out = Arc::clone(out);
     let spawned = thread::Builder::new()
         .name("presence-sign".into())
@@ -525,7 +538,7 @@ fn handle_presence_challenge(
             // Held for the whole round; Drop clears PRESENCE_IN_FLIGHT even on
             // an unexpected unwind, so a wedged `busy` is structurally
             // impossible.
-            let _slot = PresenceSlotGuard;
+            let _slot = slot;
             let reply = crate::enclave::respond_to_presence_challenge(&nonce, context.as_deref());
             // Log-after-decide (ADR-0030): the sign already happened (or
             // refused); record which, host-side, so a hardware approval is
@@ -546,10 +559,9 @@ fn handle_presence_challenge(
             }
         });
     if spawned.is_err() {
-        // No thread, no prompt: release the slot and refuse, fail closed. The
-        // guard lives only inside the worker, so on a spawn failure the flag
-        // is cleared here.
-        PRESENCE_IN_FLIGHT.store(false, Ordering::Release);
+        // No thread, no prompt: refuse, fail closed. The guard moved into the
+        // never-run closure, which `spawn` dropped on failure -- releasing
+        // the slot through the same Drop path as every other exit.
         log_warn!("native-host", "could not spawn the presence-sign thread");
         return refuse(out, "signing_failed");
     }
@@ -1185,6 +1197,23 @@ mod tests {
     use super::*;
     use crate::protocol::BRIDGE_MAX_LINE;
     use std::io::Cursor;
+
+    #[test]
+    fn presence_slot_is_single_flight_and_released_on_drop() {
+        // The guard's constructor IS the acquire: while one guard exists the
+        // slot cannot be won again, and dropping it (any exit path, including
+        // a spawn failure dropping the never-run closure) releases it.
+        let first = PresenceSlotGuard::try_acquire().unwrap();
+        assert!(
+            PresenceSlotGuard::try_acquire().is_none(),
+            "the slot is single-flight while a guard exists"
+        );
+        drop(first);
+        assert!(
+            PresenceSlotGuard::try_acquire().is_some(),
+            "dropping the guard releases the slot"
+        );
+    }
 
     #[test]
     fn over_cap_line_on_receive_leg_is_rejected() {
