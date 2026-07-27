@@ -56,6 +56,7 @@ hasher:
     - '**/fuzz/artifacts/**'
     - '**/fuzz/corpus/**'
     - '**/fuzz/coverage/**'
+    - '**/fuzz/failures/**'
     - '**/target/**'
     - '**/tests/.chrome-for-testing/**'
     - '**/tests/chrome/**'

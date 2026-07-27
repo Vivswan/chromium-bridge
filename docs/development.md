@@ -162,7 +162,7 @@ The full task menu, by area:
 | Desktop app | `bundle-app`, `dmg-app`, `run-app`, `install-app`, `check-app-signing`, `check-app-rust`, `desktop-ui:test` |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `sync-version`, `check-version`, `check-extension-id` |
-| Repo hygiene | `check-cjk`, `check-typography`, `check-toolchain`, `check-hasher`, `check-yaml`, `check-actions` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-hasher`, `check-yaml`, `check-actions` |
 
 ## moon: the canonical command interface
 
@@ -303,38 +303,70 @@ compile it; the isolation argument is that no shipped binary enables the
 feature and the fuzz crate lives in a separate workspace, so feature
 unification cannot pull it into a real build.
 
-Three directories with different lifecycles:
+Three directories with different lifecycles, plus the failure reports:
 
 - `fuzz/seeds/<target>/`: committed, hand-curated starting inputs for the
   byte-input targets (a valid frame per shape, a valid DER signature plus
-  truncations, our real manifest plus near-misses). The structured targets
+  truncations, our real manifest plus near-misses). Crash inputs found by
+  the nightly job get pinned here too (the filed issue says how), so every
+  future run replays them first. The structured targets
   (`handshake_verify`, `enclave_challenge`) take `Arbitrary`-derived input
   whose encoding is unstable across `arbitrary` versions, so they get no
-  committed seeds.
+  committed seeds; their regressions get unit tests instead.
 - `fuzz/corpus/<target>/`: gitignored, fuzzer-generated. Nightly CI restores
   and saves it through `actions/cache`, so exploration accumulates across
   runs instead of restarting from zero every night.
 - `fuzz/dictionaries/`: token dictionaries handed to libFuzzer
   (`json_protocol.dict` for the JSON-shaped targets, `der.dict` for
   `enclave_der`).
+- `fuzz/failures/<target>/`: gitignored, cleared and rewritten by each
+  `fuzz-smoke.ts` run. One directory per crashed target holding a
+  `report.md` (replay command, seed, a base64 embed of small inputs, the
+  pinning instruction) plus a copy of the crash input, following
+  repo-platform's failure-report contract (docs/fuzzer.md there). The
+  nightly job's issue-filing action consumes these.
 
 Run it locally:
 
 ```sh
-moon run fuzz-smoke      # bun scripts/fuzz-smoke.ts: every target, bounded run
+moon run fuzz-smoke        # bun scripts/fuzz-smoke.ts: every target, bounded run
+moon run check-fuzz-smoke  # unit tests for the driver itself (in the ci gate)
 ```
 
 The smoke needs a nightly toolchain plus `cargo install cargo-fuzz` and
-skips with a message when either is missing. It discovers targets from
-`cargo +nightly fuzz list`, so the list cannot drift from `fuzz/Cargo.toml`.
-Locally each target gets 30 seconds; the nightly `fuzz` job runs the same
-script at 120 seconds per target and passes `--cmin`, which minimizes each
-corpus before the cache save (cmin bounds the size of each snapshot; the
-number of accumulated cache entries is bounded by GitHub's LRU cache
-eviction, not by cmin). On a crash the job uploads `fuzz/artifacts/` as a
-workflow artifact so the reproducing input outlives the runner. For a real
-campaign on one target, `cargo +nightly fuzz run <target>` from
-`src/packages/core` runs unbounded.
+skips with a message when either is missing (the nightly job passes
+`--require-toolchain`, which turns that skip into a failure: a skipped
+night must not read as green and auto-close the tracking issue). It
+discovers targets from `cargo +nightly fuzz list`, so the list cannot
+drift from `fuzz/Cargo.toml`.
+A crashing target no longer aborts the pass: the script writes the target's
+failure report, moves on, and exits 1 at the end when anything failed
+(earlier versions re-raised libFuzzer's signal; with several targets there
+is no single status worth propagating). `--seed=N` pins libFuzzer's PRNG for
+a best-effort deterministic re-run; the crash input file stays the real
+reproducer, since the persisted corpus differs from night to night.
+Locally each target gets 30 seconds; the nightly run gives 120 seconds per
+target and passes `--cmin`, which minimizes each passing target's corpus
+before the cache save (cmin bounds the size of each snapshot; the number of
+accumulated cache entries is bounded by GitHub's LRU cache eviction, not by
+cmin). For a real campaign on one target,
+`cargo +nightly fuzz run <target>` from `src/packages/core` runs unbounded.
+
+The nightly job lives in `.github/workflows/nightly-fuzz.yml` (browser and
+mutation testing stay in `nightly.yml`), this repository's instance of
+repo-platform's fuzzer-module starter. On a red night it uploads
+`fuzz/artifacts/` and `fuzz/failures/` as the `fuzz-failures-<attempt>`
+artifact, files or updates the `fuzz-nightly` tracking issue from the
+reports, and dispatches auto-assign at it; on a green night it closes the
+open issue. `workflow_dispatch` takes `seed` and `iterations`, so any
+night's configuration can be re-run on demand. When a crash is filed:
+
+1. Replay it with the command in the issue (download the artifact, or
+   decode the embedded base64).
+2. Fix the bug.
+3. Pin the input into `fuzz/seeds/<target>/` (or add a unit test for the
+   two structured targets) and commit it with the fix. The pin is what
+   makes the next green night's auto-close evidence rather than luck.
 
 Deliberately not fuzzed, and why:
 

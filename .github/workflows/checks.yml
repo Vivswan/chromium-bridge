@@ -474,6 +474,11 @@ jobs:
         run: |
           bun scripts/check-typography.ts
           bun test scripts/check-typography.test.ts
+      # Same rationale for the fuzz-smoke driver: its failure-report writer
+      # feeds the nightly fuzz job's issue filing, so its tests run in the
+      # gate even though the fuzzing itself is nightly-only.
+      - name: Fuzz-smoke driver tests
+        run: bun test scripts/fuzz-smoke.test.ts
 
   # The security audits gate merges: a new advisory lands as a red PR check,
   # not a silent scheduled failure. security.yml calls the same reusable
