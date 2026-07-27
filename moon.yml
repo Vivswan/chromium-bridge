@@ -90,6 +90,7 @@ tasks:
       - '~:check-extension-id'
       - '~:check-cjk'
       - '~:check-typography'
+      - '~:check-fuzz-smoke'
       - '~:check-gen'
       - '~:check-envelope'
       - '~:check-gen-isolation'
@@ -343,6 +344,13 @@ tasks:
     options:
       cache: false
       runInCI: false
+
+  check-fuzz-smoke:
+    description: 'Unit tests for the fuzz-smoke driver (flag parsing, failure-report contract)'
+    command: 'bun test scripts/fuzz-smoke.test.ts'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
 
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
 

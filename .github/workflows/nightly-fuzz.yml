@@ -1,0 +1,131 @@
+# Nightly fuzzing: a long bounded cargo-fuzz pass over every target, working
+# from a corpus persisted across nights. This is this repository's instance
+# of repo-platform's fuzzer-module starter (repo-owned, never overwritten by
+# template sync): the fuzz step is ours, and the issue filing, replay
+# inputs, and auto-close come from the shared contract - failure reports
+# land in src/packages/core/fuzz/failures/ per repo-platform's docs/fuzzer.md,
+# and the fuzz-issue action turns them into one label-deduplicated tracking
+# issue. Fuzzing lives here rather than in the PR gate because libFuzzer
+# needs a nightly toolchain and a real run is far too slow for every PR.
+
+name: Nightly Fuzz
+
+on:
+  schedule:
+    # Off-peak, distinct from nightly.yml's 05:17 slot.
+    - cron: "47 4 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: libFuzzer seed (blank for a random one; best-effort determinism)
+        required: false
+        default: ""
+      iterations:
+        description: libFuzzer runs per target
+        required: false
+        default: "200000"
+
+concurrency:
+  group: nightly-fuzz
+  cancel-in-progress: false
+
+# issues: write lets the fuzz-issue action file/close the tracking issue;
+# actions: write lets the failure path dispatch auto-assign at it.
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    # If the job hits this timeout it is CANCELLED, not failed, and the
+    # `if: failure()` reporting steps below never run. fuzz-smoke.ts bounds
+    # every target run at 120 seconds wall clock (10 targets + cmin + builds
+    # stay far inside 45 minutes), so a hang surfaces as a failure first.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # bun only runs the smoke driver script; it is self-contained, so no
+      # `bun install` is needed here.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: nightly
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2
+        with:
+          tool: cargo-fuzz
+      # The corpus persists across nightly runs via the actions cache: restore
+      # the newest fuzz-corpus-v1-* entry, fuzz on top of it, save a fresh
+      # entry (the run_id/run_attempt key is unique per run, so the save never
+      # collides). --cmin bounds each snapshot's SIZE; the COUNT of daily
+      # entries is bounded by GitHub's LRU cache eviction (10 GB per repo),
+      # not by anything here. Bump the v1 prefix to deliberately restart the
+      # corpus from scratch.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/packages/core/fuzz/corpus
+          key: fuzz-corpus-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fuzz-corpus-v1-
+      - name: Fuzz every target (bounded pass; crashes are collected, not fatal per target)
+        env:
+          SEED: ${{ inputs.seed }}
+          RUNS: ${{ inputs.iterations || '200000' }}
+        run: |
+          if [ -z "$SEED" ]; then
+            SEED="$RANDOM$RANDOM"
+          fi
+          echo "fuzzing with seed $SEED, $RUNS runs per target"
+          # --require-toolchain: a missing toolchain must fail here, not
+          # skip - an exit-0 skip would read as a green night and auto-close
+          # the tracking issue without having fuzzed anything.
+          bun scripts/fuzz-smoke.ts --runs="$RUNS" --max-total-time=120 --cmin --seed="$SEED" --require-toolchain
+      # Save even on failure: a crash night's corpus growth is coverage worth
+      # keeping, and crash inputs land in artifacts/, never in the corpus, so
+      # this cannot poison future restores.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always()
+        with:
+          path: src/packages/core/fuzz/corpus
+          key: fuzz-corpus-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      # A crashing input dies with the ephemeral runner unless uploaded. The
+      # run_attempt suffix keeps a failed rerun (same run_id) from colliding
+      # with the previous attempt's artifact.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: fuzz-failures-${{ github.run_attempt }}
+          path: |
+            src/packages/core/fuzz/artifacts/
+            src/packages/core/fuzz/failures/
+          if-no-files-found: ignore
+
+      - name: File or update the fuzz issue
+        id: file-issue
+        if: failure()
+        uses: Vivswan/repo-platform/actions/fuzz-issue@main
+        with:
+          mode: report
+          label: fuzz-nightly
+          artifacts-dir: src/packages/core/fuzz/failures
+          artifact-name: fuzz-failures-${{ github.run_attempt }}
+
+      # A GITHUB_TOKEN-created issue fires no triggers, so dispatch auto-assign.
+      - name: Trigger auto-assign for the filed issue
+        if: failure() && steps.file-issue.outputs.issue-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.file-issue.outputs.issue-number }}
+        run: gh workflow run auto-assign.yml -f "issue=$ISSUE_NUMBER" || echo "::warning::could not dispatch auto-assign.yml"
+
+      - name: Close the fuzz issue on a green night
+        if: success()
+        uses: Vivswan/repo-platform/actions/fuzz-issue@main
+        with:
+          mode: resolve
+          label: fuzz-nightly

@@ -55,6 +55,12 @@ labels:
   - name: "autorelease: tagged"
     color: "ededed"
     description: release-please release PR has been tagged
+  # The nightly-fuzz tracking label (nightly-fuzz.yml): the fuzz-issue action
+  # dedups on it, one open issue per label, so the settings sync must not
+  # strip it from the open issue. Values match what the action creates.
+  - name: fuzz-nightly
+    color: "B60205"
+    description: Automated nightly fuzz failure
 
 
 # Branch ruleset for the default branch. Admins (RepositoryRole id 5) are in

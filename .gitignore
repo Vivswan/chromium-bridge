@@ -9,6 +9,9 @@
 /src/packages/core/fuzz/corpus/
 /src/packages/core/fuzz/artifacts/
 /src/packages/core/fuzz/coverage/
+# fuzz-smoke.ts failure reports (cleared and rewritten per run, consumed by
+# the nightly job's issue filing)
+/src/packages/core/fuzz/failures/
 
 # Icon rasters rendered from the committed assets/icon/ SVGs by
 # scripts/gen-icons.ts (run by the extension and desktop builds) - build
