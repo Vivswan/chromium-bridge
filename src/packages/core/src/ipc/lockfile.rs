@@ -121,7 +121,13 @@ impl LockFile {
         runtime_dir().join("run.lock")
     }
 
-    pub fn write(&self) -> io::Result<()> {
+    /// Write the lock file. Module-private on purpose: the lock file is
+    /// mutated only inside this module's [`RuntimeMutex`] critical sections
+    /// ([`listen_and_publish`]), after ownership is established. A wider
+    /// visibility would let an outside caller write it lock-free, the exact
+    /// interleaving class behind the unconditional-remove incident fixed in
+    /// [`cleanup_stale_lock`].
+    fn write(&self) -> io::Result<()> {
         let bytes = serde_json::to_vec(self)?;
         write_private_atomic(&Self::path(), &bytes)
     }
@@ -136,7 +142,13 @@ impl LockFile {
         Ok(Some(lf))
     }
 
-    pub fn remove() {
+    /// Remove the lock file and (on Unix) the socket, unconditionally.
+    /// Module-private on purpose, like [`write`](Self::write): every caller
+    /// must first prove under the [`RuntimeMutex`] that the on-disk state is
+    /// its own to clear ([`remove_if_owned`](Self::remove_if_owned),
+    /// [`cleanup_stale_lock`], [`listen_and_publish`]); an unguarded remove
+    /// once deleted a live server's files.
+    fn remove() {
         #[cfg(unix)]
         let _ = fs::remove_file(super::socket::socket_path());
         let _ = fs::remove_file(Self::path());
@@ -172,6 +184,17 @@ impl LockFile {
 /// delete these files directly (the boundary against other users is the 0700
 /// directory).
 struct RuntimeMutex(#[allow(dead_code)] fs::File);
+
+/// Witness that the cross-process [`RuntimeMutex`] is held. Zero-sized and
+/// constructible only in this module: [`with_runtime_lock`] mints one while
+/// its guard is alive and lends it to the closure by reference. A function
+/// that mutates runtime-lock-guarded trust state (the `*_locked` family in
+/// `crate::revocation`, `Allowlist::write`) demands `&RuntimeLockToken`, so
+/// the "caller must hold the runtime lock" doc contract is a compile error
+/// to violate instead of a comment to remember. The higher-ranked closure
+/// signature keeps the borrow from escaping, so a token cannot outlive the
+/// lock hold it proves.
+pub struct RuntimeLockToken(());
 
 impl RuntimeMutex {
     fn acquire() -> io::Result<RuntimeMutex> {
@@ -248,11 +271,15 @@ pub fn listen_and_publish() -> io::Result<PublishOutcome> {
 /// Run `f` while holding the cross-process [`RuntimeMutex`], so a
 /// read-modify-write of shared runtime state (the lock file, the client
 /// allowlist) cannot interleave with another of our processes doing the same.
+/// `f` receives a [`RuntimeLockToken`] proving the hold, to pass on to the
+/// lock-requiring mutators it calls.
 /// Not a defense against a hostile same-user process (it can delete the files
 /// directly); the boundary against other users is the 0700 directory.
-pub(crate) fn with_runtime_lock<T>(f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+pub(crate) fn with_runtime_lock<T>(
+    f: impl FnOnce(&RuntimeLockToken) -> io::Result<T>,
+) -> io::Result<T> {
     let _guard = RuntimeMutex::acquire()?;
-    f()
+    f(&RuntimeLockToken(()))
 }
 
 /// Read a small file in full, bounded by `max` bytes. Returns `Ok(None)` when
@@ -357,6 +384,13 @@ mod tests {
     #[test]
     fn lock_path_has_expected_filename() {
         assert_eq!(LockFile::path().file_name().unwrap(), "run.lock");
+    }
+
+    #[test]
+    fn runtime_lock_token_is_zero_sized() {
+        // The token is a pure compile-time witness; holding or passing one
+        // must cost nothing at runtime.
+        assert_eq!(std::mem::size_of::<RuntimeLockToken>(), 0);
     }
 
     /// A scratch directory for filesystem tests, unique per test so parallel

@@ -300,7 +300,7 @@ impl EpochGuard {
         &mut self,
         who: &str,
         rev: io::Result<Revocation>,
-        load: impl FnOnce(bool) -> io::Result<Option<allowlist::Allowlist>>,
+        load: impl FnOnce(&Revocation) -> io::Result<Option<allowlist::Allowlist>>,
     ) -> io::Result<()> {
         let rev = rev.map_err(|e| {
             io::Error::new(
@@ -315,7 +315,7 @@ impl EpochGuard {
         if self.backstopped && rev.epoch == self.seen_epoch {
             return Ok(());
         }
-        let list = load(rev.clients_enrolled).map_err(|e| {
+        let list = load(&rev).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("allowlist unreadable after an epoch bump ({e}); failing closed"),
@@ -475,7 +475,7 @@ fn watch_tick(
     registry: &ClientRegistry,
     last_seen: u64,
     rev: io::Result<Revocation>,
-    load: impl FnOnce(bool) -> io::Result<Option<allowlist::Allowlist>>,
+    load: impl FnOnce(&Revocation) -> io::Result<Option<allowlist::Allowlist>>,
     drop_browsers: impl FnOnce() -> usize,
 ) -> Option<u64> {
     let rev = match rev {
@@ -507,7 +507,7 @@ fn watch_tick(
             );
         }
     }
-    match load(rev.clients_enrolled) {
+    match load(&rev) {
         Ok(list) => {
             let dropped = registry.sweep(|identity| {
                 matches!(allowlist::decide(list.as_ref(), identity), Decision::Refuse)
@@ -1003,7 +1003,7 @@ fn admit_client<'a>(
             );
         }
     };
-    let list = match allowlist::load_enforced(rev.clients_enrolled) {
+    let list = match allowlist::load_enforced(&rev) {
         Ok(l) => l,
         Err(e) => {
             return reject_relay(
@@ -1295,7 +1295,11 @@ fn pump_lines<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, cap: usize) 
     }
 }
 
-#[cfg(all(test, not(loom)))]
+// Two cfg attributes rather than cfg(all(test, not(loom))): the meaning is
+// identical, and the bare #[cfg(test)] is what lets clippy's
+// allow-unwrap-in-tests recognize the module's helper fns as test code.
+#[cfg(test)]
+#[cfg(not(loom))]
 mod tests {
     use super::*;
 
@@ -1329,12 +1333,21 @@ mod tests {
         }
     }
 
+    // Hash anchors are validated lowercase hex (allowlist::HashDigest), so
+    // the fixtures use hex stand-ins; the names say the role each plays.
+    const H_SELF: &str = "aa11";
+    const H_OTHER: &str = "bb22";
+    #[cfg(unix)]
+    const H_KEEP: &str = "cafe";
+    #[cfg(unix)]
+    const H_REVOKED: &str = "dead";
+
     fn list_with(hash: &str) -> allowlist::Allowlist {
         allowlist::Allowlist {
             version: 1,
             clients: vec![allowlist::ClientEntry {
                 name: "c".into(),
-                anchor: allowlist::Anchor::Hash(hash.into()),
+                anchor: allowlist::Anchor::Hash(hash.try_into().unwrap()),
                 added_unix: 0,
             }],
         }
@@ -1344,7 +1357,7 @@ mod tests {
     fn epoch_guard_is_a_noop_while_the_epoch_is_unchanged() {
         // A backstopped (relay) guard takes the epoch fast path.
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 3,
             backstopped: true,
         };
@@ -1363,33 +1376,33 @@ mod tests {
         // (epoch unchanged) must STILL drop it, closing the fail-open the
         // re-review found.
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 3,
             backstopped: false,
         };
         // Same epoch, but the allowlist no longer lists this identity.
         let err = g
-            .recheck_with("t", Ok(rev(3, true)), |_| Ok(Some(list_with("other"))))
+            .recheck_with("t", Ok(rev(3, true)), |_| Ok(Some(list_with(H_OTHER))))
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         // And it keeps serving when still listed, even on an unchanged epoch.
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 3,
             backstopped: false,
         };
-        g.recheck_with("t", Ok(rev(3, true)), |_| Ok(Some(list_with("h"))))
+        g.recheck_with("t", Ok(rev(3, true)), |_| Ok(Some(list_with(H_SELF))))
             .unwrap();
     }
 
     #[test]
     fn epoch_guard_readmits_a_still_listed_harness_and_advances() {
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 3,
             backstopped: true,
         };
-        g.recheck_with("t", Ok(rev(4, true)), |_| Ok(Some(list_with("h"))))
+        g.recheck_with("t", Ok(rev(4, true)), |_| Ok(Some(list_with(H_SELF))))
             .unwrap();
         assert_eq!(
             g.seen_epoch, 4,
@@ -1400,12 +1413,12 @@ mod tests {
     #[test]
     fn epoch_guard_drops_a_revoked_harness() {
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 3,
             backstopped: true,
         };
         let err = g
-            .recheck_with("t", Ok(rev(4, true)), |_| Ok(Some(list_with("other"))))
+            .recheck_with("t", Ok(rev(4, true)), |_| Ok(Some(list_with(H_OTHER))))
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
@@ -1414,7 +1427,7 @@ mod tests {
     fn epoch_guard_fails_closed_on_unreadable_state() {
         // Unreadable revocation record.
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 0,
             backstopped: true,
         };
@@ -1424,7 +1437,7 @@ mod tests {
         // Unreadable allowlist after a bump (includes the ADR-0025 tamper
         // case: deleted clients.json with the enrollment latch set).
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 0,
             backstopped: true,
         };
@@ -1439,12 +1452,12 @@ mod tests {
         // rolled back to an OLDER epoch by a tamperer still forces a
         // re-decide against the current allowlist.
         let mut g = EpochGuard {
-            identity: Some(ident("h")),
+            identity: Some(ident(H_SELF)),
             seen_epoch: 5,
             backstopped: true,
         };
         let err = g
-            .recheck_with("t", Ok(rev(2, true)), |_| Ok(Some(list_with("other"))))
+            .recheck_with("t", Ok(rev(2, true)), |_| Ok(Some(list_with(H_OTHER))))
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
@@ -1479,14 +1492,14 @@ mod tests {
             // is deliverable.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            let _slot = registry.register(Some(ident("keep")), srv).unwrap();
+            let _slot = registry.register(Some(ident(H_KEEP)), srv).unwrap();
 
             let browsers = std::cell::Cell::new(0usize);
             let seen = watch_tick(
                 &registry,
                 9,
                 Ok(killed_rev(9)),
-                |_| Ok(Some(list_with("keep"))),
+                |_| Ok(Some(list_with(H_KEEP))),
                 || {
                     browsers.set(browsers.get() + 1);
                     2
@@ -1516,7 +1529,7 @@ mod tests {
                 &registry,
                 4,
                 Ok(rev(4, true)),
-                |_| Ok(Some(list_with("keep"))),
+                |_| Ok(Some(list_with(H_KEEP))),
                 || panic!("browser sweep must not run while the switch is off"),
             );
             assert_eq!(seen, Some(4));
@@ -1531,15 +1544,15 @@ mod tests {
             let registry = ClientRegistry::new();
             let (a_srv, mut a_cli) = UnixStream::pair().unwrap();
             let (b_srv, mut b_cli) = UnixStream::pair().unwrap();
-            let _keep = registry.register(Some(ident("keep")), a_srv).unwrap();
-            let _revoked = registry.register(Some(ident("revoked")), b_srv).unwrap();
+            let _keep = registry.register(Some(ident(H_KEEP)), a_srv).unwrap();
+            let _revoked = registry.register(Some(ident(H_REVOKED)), b_srv).unwrap();
 
             // Same epoch as last_seen, yet "revoked" is no longer listed.
             let seen = watch_tick(
                 &registry,
                 5,
                 Ok(rev(5, true)),
-                |_| Ok(Some(list_with("keep"))),
+                |_| Ok(Some(list_with(H_KEEP))),
                 || 0,
             );
             assert_eq!(seen, Some(5));
@@ -1571,15 +1584,15 @@ mod tests {
             let registry = ClientRegistry::new();
             let (a_srv, mut a_cli) = UnixStream::pair().unwrap();
             let (b_srv, mut b_cli) = UnixStream::pair().unwrap();
-            let _keep = registry.register(Some(ident("keep")), a_srv).unwrap();
-            let _revoked = registry.register(Some(ident("revoked")), b_srv).unwrap();
+            let _keep = registry.register(Some(ident(H_KEEP)), a_srv).unwrap();
+            let _revoked = registry.register(Some(ident(H_REVOKED)), b_srv).unwrap();
 
             // The fresh allowlist still lists "keep" but not "revoked".
             let seen = watch_tick(
                 &registry,
                 1,
                 Ok(rev(2, true)),
-                |_| Ok(Some(list_with("keep"))),
+                |_| Ok(Some(list_with(H_KEEP))),
                 || 0,
             );
             assert_eq!(seen, Some(2));
@@ -1617,12 +1630,12 @@ mod tests {
             // and nothing is dropped.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            let _slot = registry.register(Some(ident("keep")), srv).unwrap();
+            let _slot = registry.register(Some(ident(H_KEEP)), srv).unwrap();
             let seen = watch_tick(
                 &registry,
                 7,
                 Ok(rev(7, true)),
-                |_| Ok(Some(list_with("keep"))),
+                |_| Ok(Some(list_with(H_KEEP))),
                 || 0,
             );
             assert_eq!(seen, Some(7));
@@ -1639,7 +1652,7 @@ mod tests {
             // keeps failing closed, on the next tick).
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            let _slot = registry.register(Some(ident("h")), srv).unwrap();
+            let _slot = registry.register(Some(ident(H_SELF)), srv).unwrap();
             let browsers = std::cell::Cell::new(0usize);
             let seen = watch_tick(
                 &registry,
@@ -1664,7 +1677,7 @@ mod tests {
             // Unreadable allowlist after a bump: same posture.
             let registry = ClientRegistry::new();
             let (srv, mut cli) = UnixStream::pair().unwrap();
-            let _slot = registry.register(Some(ident("h")), srv).unwrap();
+            let _slot = registry.register(Some(ident(H_SELF)), srv).unwrap();
             let seen = watch_tick(
                 &registry,
                 1,
@@ -1681,7 +1694,7 @@ mod tests {
         fn a_dropped_slot_deregisters_so_sweeps_skip_it() {
             let registry = ClientRegistry::new();
             let (srv, _cli) = UnixStream::pair().unwrap();
-            let slot = registry.register(Some(ident("h")), srv).unwrap();
+            let slot = registry.register(Some(ident(H_SELF)), srv).unwrap();
             drop(slot);
             assert_eq!(
                 registry.sweep(|_| true),
@@ -1698,7 +1711,7 @@ mod tests {
             let registry = ClientRegistry::new();
             {
                 let (srv, _cli) = UnixStream::pair().unwrap();
-                let _slot = registry.register(Some(ident("h")), srv).unwrap();
+                let _slot = registry.register(Some(ident(H_SELF)), srv).unwrap();
                 // early return: nothing released by hand
             }
             assert_eq!(
@@ -1802,9 +1815,9 @@ mod tests {
                 measured in any::<bool>(),
                 backstopped in any::<bool>(),
             ) {
-                let identity = if measured { Some(ident("h")) } else { None };
+                let identity = if measured { Some(ident(H_SELF)) } else { None };
                 let mut g = EpochGuard { identity, seen_epoch: seen, backstopped };
-                let anchor = if listed { "h" } else { "other" };
+                let anchor = if listed { H_SELF } else { H_OTHER };
                 let res = g.recheck_with(
                     "t",
                     Ok(rev(current, true)),
@@ -1832,14 +1845,14 @@ mod tests {
             #[test]
             fn guard_fails_closed_on_a_revocation_read_error(seen in any::<u64>()) {
                 let mut g = EpochGuard {
-                    identity: Some(ident("h")),
+                    identity: Some(ident(H_SELF)),
                     seen_epoch: seen,
                     backstopped: true,
                 };
                 let res = g.recheck_with(
                     "t",
                     Err(io::Error::other("unreadable")),
-                    |_| Ok(Some(list_with("h"))),
+                    |_| Ok(Some(list_with(H_SELF))),
                 );
                 prop_assert!(res.is_err());
             }
