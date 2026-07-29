@@ -9,13 +9,14 @@ read the per-run secret out of any diagnostic output.
 
 CENTRAL FACT (why this suite proves what it proves): the MCP server attests a
 peer's executable identity BEFORE the HMAC handshake and before forwarding any
-byte (src/mcp_server.rs accept loop: peer-UID -> attest_peer -> handshake). A
+byte (src/packages/core/src/broker.rs admit(), called from accept_loop:
+peer-UID -> attest_peer -> handshake). A
 foreign peer is therefore dropped at attestation with a clean EOF, before it
 can attempt replay/MAC/hex/capability tricks. So the black-box attacks here
 prove ATTESTATION robustly; the protocol-level parser/MAC defenses that sit
 BEHIND attestation are proven by the Rust unit/proptests referenced inline
-(src/ipc.rs, src/protocol.rs) rather than faked through a path an attacker can
-never reach.
+(src/packages/core/src/ipc/, src/packages/core/src/protocol.rs) rather than
+faked through a path an attacker can never reach.
 
 Attack matrix (live MUST-BLOCK vs annotated residual):
   A1  rogue python3 socket peer                 LIVE  dropped at attestation
@@ -101,14 +102,16 @@ def isolate():
     if sys.platform == "darwin":
         os.environ["HOME"] = rundir
     # The lock lives at <XDG_RUNTIME_DIR>/chromium-bridge/run.lock on every unix
-    # (src/ipc.rs runtime_dir). Recompute it and steer e2e's helpers at it.
+    # (src/packages/core/src/ipc/lockfile.rs runtime_dir). Recompute it and
+    # steer e2e's helpers at it.
     lock = os.path.join(rundir, "chromium-bridge", "run.lock")
     e2e.LOCK = lock
 
     # Hard precondition: refuse to run if isolation did not take. The
     # XDG_RUNTIME_DIR check is the load-bearing one -- runtime_dir() in
-    # src/ipc.rs prefers XDG_RUNTIME_DIR on both macOS and Linux, so pinning it
-    # to our fresh temp dir fully controls where the lock/socket land. The
+    # src/packages/core/src/ipc/lockfile.rs prefers XDG_RUNTIME_DIR on both
+    # macOS and Linux, so pinning it to our fresh temp dir fully controls
+    # where the lock/socket land. The
     # containment checks use resolved-path commonpath, not a lexical prefix, so
     # a symlinked temp root (/var -> /private/var on macOS) cannot fool them.
     if not (rundir and os.path.isdir(rundir) and _within(rundir, tempfile.gettempdir())):
@@ -624,17 +627,22 @@ def a12_secret_confidentiality():
 def annotated_matrix():
     print("\n[annotated] attacks whose real coverage lives elsewhere")
     note("A4 replay a captured HMAC response: unreachable black-box (dropped at "
-         "attestation, A1). MAC/nonce logic proven by src/ipc.rs "
+         "attestation, A1). MAC/nonce logic proven by "
+         "src/packages/core/src/ipc/handshake.rs "
          "verify_mac_accepts_correct_and_rejects_wrong + "
          "handshake_round_trip_over_socketpair.")
     note("A5 forged/garbage MAC: same attestation drop; MAC verification is "
-         "constant-time in src/ipc.rs verify_mac (Mac::verify_slice).")
+         "constant-time in src/packages/core/src/ipc/handshake.rs verify_mac "
+         "(Mac::verify_slice).")
     note("A6 hex-decoder abuse (odd length, non-hex, mid-codepoint UTF-8): "
-         "proven by src/ipc.rs hex_decode tests + hex_fuzz::never_panics proptest.")
-    note("A7 serde/parser abuse on arbitrary bytes: proven by src/protocol.rs "
+         "proven by src/packages/core/src/ipc/handshake.rs hex_decode tests + "
+         "hex_fuzz::never_panics proptest.")
+    note("A7 serde/parser abuse on arbitrary bytes: proven by "
+         "src/packages/core/src/protocol.rs "
          "proptests (nm_read/mcp_read/bridge_read never_panics + size guards).")
     note("A10 cross-uid connect: needs a second uid (root/manual). The 0700 "
-         "runtime dir + peer-UID accept check (src/mcp_server.rs) is the gate; "
+         "runtime dir + peer-UID accept check "
+         "(src/packages/core/src/broker.rs admit()) is the gate; "
          "not automatable single-user in CI.")
     note("A13 native-messaging manifest substitution: browser-gated and a "
          "DOCUMENTED RESIDUAL until the enrollment ceremony (task #13) lands. "

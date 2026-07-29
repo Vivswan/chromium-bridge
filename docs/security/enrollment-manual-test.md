@@ -6,7 +6,8 @@ keyboard. Everything else about enrollment is covered by automated tests
 (`cargo test` for the DER converter, challenge validation, and frame serde;
 `tests/protocol/e2e.py::test_enclave_control_frames` for the host's local handling of
 control frames). This script covers the rest. Run it on a Mac with Touch ID
-before any release that touches `src/enclave.rs`, the control-frame filter,
+before any release that touches `src/packages/core/src/enclave/`, the
+control-frame filter,
 or the keychain ACL.
 
 ## Prerequisites
