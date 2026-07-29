@@ -55,8 +55,10 @@ Users can take these actions themselves to **shrink the blast radius** before a 
 ready:
 
 - **Disable a single tool**: on the extension Options page, add the affected tool to
-  `disabledTools` (maps to `TOOL_DISABLED`, see
-  [`ERROR_SPECS` in error.rs](../../src/packages/core/src/error.rs)); a high-risk tool such as `page_eval`
+  `disabledTools`; the dispatch gate then refuses the op with a "tool disabled in
+  settings" error (surfaced today under `EXECUTION_FAILED`; the `TOOL_DISABLED` code in
+  [`ERROR_SPECS`](../../src/packages/core/src/error.rs) is reserved for structured
+  extension error reporting). A high-risk tool such as `page_eval`
   should be disabled first.
 - **Revoke the allowlist / turn off all-sites**: in Options / the popup, remove the
   authorization for the affected origins, and confirm `allowAllSites` is off (see

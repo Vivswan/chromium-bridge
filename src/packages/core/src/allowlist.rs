@@ -60,9 +60,9 @@ use crate::presence::{self, PresenceAttestation};
 /// misinterpreted by an older binary.
 const ALLOWLIST_VERSION: u32 = 1;
 
-/// Upper bound on the allowlist file when reading it back, matching the lock
-/// file's cap. A few dozen entries are a few KB; anything larger is not ours
-/// and is rejected rather than slurped into memory.
+/// Upper bound on the allowlist file when reading it back. A few dozen
+/// entries are a few KB; anything larger is not ours and is rejected rather
+/// than slurped into memory.
 const ALLOWLIST_MAX_BYTES: usize = 256 * 1024;
 
 /// The authorization key of an allowlist entry: the unforgeable thing a
