@@ -55,10 +55,9 @@ pub struct ClientsPayload {
 /// is an `Err` the UI must show as loudly as the CLI does - never an empty
 /// table.
 pub fn list() -> Result<ClientsPayload, String> {
-    let latched = Revocation::current()
-        .map_err(|e| format!("revocation record unreadable (failing closed): {e}"))?
-        .clients_enrolled;
-    let list = allowlist::load_enforced(latched).map_err(|e| e.to_string())?;
+    let rev = Revocation::current()
+        .map_err(|e| format!("revocation record unreadable (failing closed): {e}"))?;
+    let list = allowlist::load_enforced(&rev).map_err(|e| e.to_string())?;
     Ok(match list {
         None => ClientsPayload {
             posture: Posture::Unenrolled,
@@ -71,7 +70,7 @@ pub fn list() -> Result<ClientsPayload, String> {
                 .into_iter()
                 .map(|c| {
                     let (anchor_kind, anchor_value) = match c.anchor {
-                        Anchor::Hash(h) => (AnchorKind::Hash, h),
+                        Anchor::Hash(h) => (AnchorKind::Hash, h.into()),
                         Anchor::TeamId(t) => (AnchorKind::TeamId, t),
                     };
                     ClientRow {

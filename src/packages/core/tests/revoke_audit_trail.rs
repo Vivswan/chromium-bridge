@@ -32,7 +32,7 @@ fn revoke_always_writes_an_audit_trail_entry() {
         version: 1,
         clients: vec![ClientEntry {
             name: "codex".into(),
-            anchor: Anchor::Hash("ab".into()),
+            anchor: Anchor::Hash("ab".try_into().unwrap()),
             added_unix: 0,
         }],
     };

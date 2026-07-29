@@ -116,8 +116,8 @@ fn revoke_host_key() -> EnclaveControl {
 /// the tamper-evidence latch (an absent-but-latched list is an error, not
 /// "unenrolled").
 fn admin_client_list() -> AdminControl {
-    let latched = match Revocation::current() {
-        Ok(rev) => rev.clients_enrolled,
+    let rev = match Revocation::current() {
+        Ok(rev) => rev,
         Err(e) => {
             return AdminControl::ClientListResult {
                 ok: false,
@@ -127,7 +127,7 @@ fn admin_client_list() -> AdminControl {
             };
         }
     };
-    match crate::allowlist::load_enforced(latched) {
+    match crate::allowlist::load_enforced(&rev) {
         Ok(Some(list)) => AdminControl::ClientListResult {
             ok: true,
             enrolled: true,
