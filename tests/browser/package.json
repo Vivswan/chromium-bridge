@@ -12,6 +12,7 @@
     "test:security": "bun security_browser_test.ts"
   },
   "dependencies": {
+    "@chromium-bridge/shared": "workspace:*",
     "puppeteer-core": "^25.3.0"
   },
   "devDependencies": {

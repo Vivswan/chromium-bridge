@@ -462,9 +462,19 @@ against it. The canonical modules and their derived artifacts:
   `src/packages/shared/src/protocol.gen.ts`. `cargo test` enforces that every
   bridge-routed tool is covered by exactly one capability and each
   capability's permissions equal the union of its tools' permissions.
-- **Protocol version** (`BRIDGE_PROTOCOL_VERSION` in
-  `src/packages/core/src/protocol.rs`): the internal bridge protocol integer,
-  also emitted into `protocol.gen.ts`.
+- **Protocol versions** (`src/packages/core/src/protocol.rs`): the internal
+  bridge protocol integer (`BRIDGE_PROTOCOL_VERSION`) and the MCP JSON-RPC
+  revision the server pins (`MCP_PROTOCOL_VERSION`, returned from
+  `initialize` and asserted by the protocol e2e suites), both emitted into
+  `protocol.gen.ts`.
+- **Audit forwarding whitelist** (`EXTENSION_AUDIT_KINDS` in
+  `src/packages/core/src/audit.rs`): the extension-owned audit kinds the
+  host accepts over the `audit_event` control frame (`extension_kind`
+  derives from the same list), emitted into
+  `src/packages/shared/src/audit.gen.ts`. The extension's forwarding set
+  and the forwarded prefix of its audit-ring vocabulary build on the
+  generated constant, so the two sides of the forwarding boundary cannot
+  drift apart.
 - **Identity** (`src/packages/core/src/identity.rs`): the native-messaging host
   id and the pinned extension manifest key, emitted into
   `src/packages/shared/src/identity.gen.ts` (the extension imports
@@ -508,7 +518,11 @@ against it. The canonical modules and their derived artifacts:
   bare classification tag), extension->host frames are named as enforced
   by the Rust serde parser itself, the `{ zod }` plans are cross-checked
   against the generated frame list, and an added or renamed variant fails
-  until the plan says how it is covered. Each asymmetry and the
+  until the plan says how it is covered. The extension->host frames also
+  get generated WRITER schemas (types the constructor sites `satisfies`,
+  so a drifted field or typo'd tag is a compile error; no runtime
+  validation rides on the outbound path), cross-checked against the
+  "rust-parsed" plans the same way. Each asymmetry and the
   fail-closed behavior of the generated bases (unknown fields, missing
   required fields, type confusion, nested extras) are also exercised
   behaviorally in `src/packages/shared/tests/envelope-wire.gen.test.ts`.

@@ -5,9 +5,12 @@
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
 // .strict()), required fields required, no defaults (see the fail-closed
 // generation rules G1-G5 in scripts/gen-envelope.ts). The extension never
-// consumes these directly: envelope.ts and enclave.ts layer the deliberate
-// parser asymmetries on top - each pinned by scripts/check-envelope-parity.ts
-// (`moon run check-envelope`) and exercised in tests/envelope-wire.gen.test.ts.
+// runs the host->extension bases directly: envelope.ts and enclave.ts layer
+// the deliberate parser asymmetries on top - each pinned by
+// scripts/check-envelope-parity.ts (`moon run check-envelope`) and exercised
+// in tests/envelope-wire.gen.test.ts. The extension->host writer schemas
+// below exist for their inferred types only (constructor-site `satisfies`);
+// the enforcing reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 
@@ -104,4 +107,84 @@ export const KillStatusResultWireSchema = z
 export const GENERATED_WIRE_FRAMES = {
   enclave: ["enclave_proof", "enclave_error", "presence_proof", "presence_error"],
   admin: ["client_list_result", "client_revoke_result", "kill_status_result"],
+} as const;
+
+// The extension->host writer frames (the extension constructs these; the
+// enforcing reader is the Rust serde parser). Emitted for their inferred
+// types: constructor sites claim conformance with `satisfies`, so a
+// drifted field or tag is a compile error. Never used as runtime parsers.
+export const EnclaveChallengeWireSchema = z
+  .object({
+    "context": z.union([z.string(), z.null()]).optional(),
+    "nonce": z.string(),
+    "type": z.literal("enclave_challenge"),
+  })
+  .strict();
+
+export type EnclaveChallengeWire = z.infer<typeof EnclaveChallengeWireSchema>;
+
+export const EnclaveRevokeWireSchema = z.object({ "type": z.literal("enclave_revoke") }).strict();
+
+export type EnclaveRevokeWire = z.infer<typeof EnclaveRevokeWireSchema>;
+
+export const PresenceChallengeWireSchema = z
+  .object({
+    "context": z.union([z.string(), z.null()]).optional(),
+    "nonce": z.string(),
+    "type": z.literal("presence_challenge"),
+  })
+  .strict();
+
+export type PresenceChallengeWire = z.infer<typeof PresenceChallengeWireSchema>;
+
+export const ClientListWireSchema = z.object({ "type": z.literal("client_list") }).strict();
+
+export type ClientListWire = z.infer<typeof ClientListWireSchema>;
+
+export const ClientRevokeWireSchema = z
+  .object({ "name": z.string(), "type": z.literal("client_revoke") })
+  .strict();
+
+export type ClientRevokeWire = z.infer<typeof ClientRevokeWireSchema>;
+
+export const KillStatusWireSchema = z.object({ "type": z.literal("kill_status") }).strict();
+
+export type KillStatusWire = z.infer<typeof KillStatusWireSchema>;
+
+export const KillEngageWireSchema = z.object({ "type": z.literal("kill_engage") }).strict();
+
+export type KillEngageWire = z.infer<typeof KillEngageWireSchema>;
+
+export const KillReleaseWireSchema = z.object({ "type": z.literal("kill_release") }).strict();
+
+export type KillReleaseWire = z.infer<typeof KillReleaseWireSchema>;
+
+export const AuditEventWireSchema = z
+  .object({
+    "cid": z.union([z.string(), z.null()]).optional(),
+    "detail": z.union([z.string(), z.null()]).optional(),
+    "kind": z.string(),
+    "name": z.union([z.string(), z.null()]).optional(),
+    "outcome": z.union([z.string(), z.null()]).optional(),
+    "tool": z.union([z.string(), z.null()]).optional(),
+    "type": z.literal("audit_event"),
+  })
+  .strict();
+
+export type AuditEventWire = z.infer<typeof AuditEventWireSchema>;
+
+// Which extension->host frames have a generated writer schema above.
+// scripts/check-envelope-parity.ts cross-checks this against its
+// "rust-parsed" plans, so a writer frame cannot silently drop out of
+// generation either.
+export const GENERATED_WRITER_FRAMES = {
+  enclave: ["enclave_challenge", "enclave_revoke", "presence_challenge"],
+  admin: [
+    "client_list",
+    "client_revoke",
+    "kill_status",
+    "kill_engage",
+    "kill_release",
+    "audit_event",
+  ],
 } as const;

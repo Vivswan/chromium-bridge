@@ -18,7 +18,13 @@
 // toggles, which the host audits authoritatively when it HANDLES them) stay
 // in the ring for the panel and are not forwarded.
 
-import { type AuditEntry, AuditEntrySchema, type AuditEventKind } from "@chromium-bridge/shared";
+import {
+  AUDIT_FORWARDED_KINDS,
+  type AuditEntry,
+  AuditEntrySchema,
+  type AuditEventKind,
+  type AuditEventWire,
+} from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 
 const AUDIT_RING_KEY = "auditRing";
@@ -27,16 +33,11 @@ const AUDIT_RING_KEY = "auditRing";
  * storage; older entries fall off (the host file is the durable trail). */
 const AUDIT_RING_MAX = 200;
 
-/** The kinds forwarded to the host's on-disk trail. Must match the host's
- * `audit::extension_kind` whitelist; anything else is local-display only. */
-const FORWARDED_KINDS: ReadonlySet<AuditEventKind> = new Set([
-  "confirm_shown",
-  "confirm_allowed",
-  "confirm_denied",
-  "enroll_approved",
-  "enroll_rejected",
-  "enroll_revoked",
-]);
+/** The kinds forwarded to the host's on-disk trail: the GENERATED host
+ * whitelist (audit.gen.ts <- audit.rs, the `audit::extension_kind` set), so
+ * this set cannot drift from what the host accepts; anything else is
+ * local-display only. */
+const FORWARDED_KINDS: ReadonlySet<AuditEventKind> = new Set(AUDIT_FORWARDED_KINDS);
 
 // The port sender, registered by port.ts while a port is up (same shape as
 // clients.ts / kill.ts).
@@ -96,7 +97,20 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
       // Best-effort: with the port down the host file misses this event (the
       // ring still has it) - a named residual, not silently widened by
       // queueing unbounded frames.
-      postFrame?.({ type: "audit_event", kind, ...fields });
+      // Field by field, not `...fields`: spread properties bypass excess-
+      // property checking at a `satisfies`, so a renamed or removed wire
+      // field would compile and only fail at the host's parser. Named keys
+      // keep the pin two-way; an undefined value is dropped by the port's
+      // JSON serialization, exactly like an omitted key.
+      postFrame?.({
+        type: "audit_event",
+        kind,
+        outcome: fields.outcome,
+        tool: fields.tool,
+        name: fields.name,
+        detail: fields.detail,
+        cid: fields.cid,
+      } satisfies AuditEventWire);
     } catch (e) {
       console.warn("[bb] audit event forward failed", e);
     }

@@ -24,14 +24,23 @@ import {
 } from "../src/enclave";
 import { BridgeReqSchema, BridgeRespSchema } from "../src/envelope";
 import {
+  AuditEventWireSchema,
   BridgeReqWireSchema,
   BridgeRespWireSchema,
   ClientEntryWireSchema,
   ClientListResultWireSchema,
+  ClientListWireSchema,
   ClientRevokeResultWireSchema,
+  ClientRevokeWireSchema,
+  EnclaveChallengeWireSchema,
   EnclaveErrorWireSchema,
   EnclaveProofWireSchema,
+  EnclaveRevokeWireSchema,
+  KillEngageWireSchema,
+  KillReleaseWireSchema,
   KillStatusResultWireSchema,
+  KillStatusWireSchema,
+  PresenceChallengeWireSchema,
   PresenceErrorWireSchema,
   PresenceProofWireSchema,
 } from "../src/envelope-wire.gen";
@@ -406,4 +415,48 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
       expect(KillStatusResultSchema.safeParse(frame).success).toBe(false);
     }
   });
+});
+
+// The generated WRITER schemas (extension->host; the Rust serde parser is
+// the enforcing reader). The extension only uses their inferred types
+// (constructor-site `satisfies`), but the schemas are the faithful Rust
+// contract, so parsing the exact frames the extension constructs proves
+// those constructor shapes are frames the host actually admits - and that
+// the schemas kept deny_unknown_fields, so the `satisfies` claim is against
+// a strict shape, not a lax one.
+describe("generated writer schemas admit exactly the frames the extension constructs", () => {
+  const WRITER_CASES: ReadonlyArray<{ schema: z.ZodType; valid: Frame }> = [
+    {
+      schema: EnclaveChallengeWireSchema,
+      valid: { type: "enclave_challenge", nonce: "n", context: "ext:id:pair" },
+    },
+    { schema: EnclaveRevokeWireSchema, valid: { type: "enclave_revoke" } },
+    {
+      schema: PresenceChallengeWireSchema,
+      valid: { type: "presence_challenge", nonce: "n", context: "tool:eval" },
+    },
+    { schema: ClientListWireSchema, valid: { type: "client_list" } },
+    { schema: ClientRevokeWireSchema, valid: { type: "client_revoke", name: "codex" } },
+    { schema: KillStatusWireSchema, valid: { type: "kill_status" } },
+    { schema: KillEngageWireSchema, valid: { type: "kill_engage" } },
+    { schema: KillReleaseWireSchema, valid: { type: "kill_release" } },
+    {
+      schema: AuditEventWireSchema,
+      valid: { type: "audit_event", kind: "confirm_denied", tool: "page_eval", cid: "c-1" },
+    },
+  ];
+
+  for (const { schema, valid } of WRITER_CASES) {
+    describe(String(valid.type), () => {
+      test("accepts the constructed frame", () => {
+        expect(schema.safeParse(valid).success).toBe(true);
+      });
+      test("stays strict: an unknown field is refused (deny_unknown_fields kept)", () => {
+        expect(schema.safeParse({ ...valid, extra: 1 }).success).toBe(false);
+      });
+      test("the tag is load-bearing: a retagged frame is refused", () => {
+        expect(schema.safeParse({ ...valid, type: "evil" }).success).toBe(false);
+      });
+    });
+  }
 });
