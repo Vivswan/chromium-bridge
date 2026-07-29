@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
-// Propagate the crate version (Cargo.toml, the source of truth) into
-// src/apps/extension/package.json (the WXT-generated manifest reads its version from
-// there), then verify consistency.
+// Propagate the crate version (Cargo.toml, the source of truth) into every
+// JSON manifest that carries a copy of it (versionedJsonFiles in
+// scripts/lib.ts: the extension package.json the WXT-generated manifest reads
+// its version from, and the desktop UI package.json), then verify
+// consistency.
 //
 // Usage: bump the version in Cargo.toml, then run `moon run sync-version`
 // (or `bun scripts/sync-version.ts`) and commit the result.
@@ -9,7 +11,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cargoVersion, die, repoRoot } from "./lib.ts";
+import { cargoVersion, die, repoRoot, versionedJsonFiles } from "./lib.ts";
 
 const cargo = cargoVersion();
 console.log(`Cargo.toml version: ${cargo}`);
@@ -27,8 +29,9 @@ function setJsonVersion(relativePath: string) {
   console.log(`updated ${relativePath}`);
 }
 
-setJsonVersion("src/apps/extension/package.json");
-setJsonVersion("src/apps/desktop/ui/package.json");
+for (const relativePath of versionedJsonFiles) {
+  setJsonVersion(relativePath);
+}
 
 // Refresh bun.lock so the workspace lockfile records the new version.
 const install = spawnSync("bun", ["install"], { cwd: repoRoot, stdio: "inherit" });

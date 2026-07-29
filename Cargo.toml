@@ -55,8 +55,11 @@ schemars = "1"
 ts-rs = "12"
 # The version is stated alongside the path so the dependency is not a
 # version-less wildcard: `cargo deny check bans` (wildcards = "deny") treats
-# a bare path dependency as `*` and fails the supply-chain gate.
-chromium-bridge-core = { path = "src/packages/core", version = "0.1.0" }
+# a bare path dependency as `*` and fails the supply-chain gate. "0" (any
+# 0.x) rather than the exact version, so 0.x release bumps of
+# workspace.package.version do not have to touch this line; the 1.0 bump
+# must widen it.
+chromium-bridge-core = { path = "src/packages/core", version = "0" }
 # Tauri v2 desktop shell (src/apps/desktop only; never a dependency of the
 # security core or the host). Policy per ADR-0023: the GUI layer carries no
 # security weight, so the widely-audited framework is the right trust

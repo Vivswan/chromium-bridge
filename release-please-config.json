@@ -17,6 +17,11 @@
           "type": "json",
           "path": "src/apps/extension/package.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "src/apps/desktop/ui/package.json",
+          "jsonpath": "$.version"
         }
       ]
     }
