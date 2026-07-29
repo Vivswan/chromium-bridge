@@ -15,6 +15,16 @@ import { fileURLToPath } from "node:url";
 // Repo root, derived from this file's location (scripts/ is a direct child).
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+// The JSON manifests that carry a copy of the crate version (Cargo.toml is
+// the source of truth). scripts/sync-version.ts writes them,
+// scripts/check-version.ts verifies them and requires
+// release-please-config.json's extra-files to cover each one, so the release
+// PR bumps every copy. Add new version copies here, nowhere else.
+export const versionedJsonFiles = [
+  "src/apps/extension/package.json",
+  "src/apps/desktop/ui/package.json",
+] as const;
+
 // Print an error to stderr and exit.
 export function die(message: string, exitCode = 1): never {
   console.error(`error: ${message}`);
