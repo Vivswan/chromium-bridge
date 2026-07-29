@@ -23,6 +23,7 @@ fuzz_target!(|data: &[u8]| {
         | FrameDisposition::KillEngage
         | FrameDisposition::KillRelease
         | FrameDisposition::AuditEvent { .. }
+        | FrameDisposition::DropForeignAuditKind { .. }
         | FrameDisposition::Drop(_)
         | FrameDisposition::Malformed
         | FrameDisposition::MalformedPresence
