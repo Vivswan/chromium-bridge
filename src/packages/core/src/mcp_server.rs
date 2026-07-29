@@ -198,7 +198,7 @@ fn admit_own_harness() -> Option<Harness> {
             std::process::exit(1);
         }
     };
-    let list = match allowlist::load_enforced(rev.clients_enrolled) {
+    let list = match allowlist::load_enforced(&rev) {
         Ok(l) => l,
         Err(e) => {
             log_error!(
