@@ -7,7 +7,8 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./protocol.gen": "./src/protocol.gen.ts"
+    "./protocol.gen": "./src/protocol.gen.ts",
+    "./testing": "./src/enclave-fixture.gen.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

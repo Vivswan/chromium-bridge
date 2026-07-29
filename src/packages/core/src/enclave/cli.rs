@@ -194,6 +194,13 @@ pub fn run_status() -> i32 {
                 println!("key:        present ({KEY_LABEL})");
                 print_public_key(&public);
             }
+            // The deny-list (and any other invalidity found on export) is
+            // the same REJECTED state as a lookup-time KeyInvalid, not a
+            // generic read failure.
+            Err(e @ EnclaveError::KeyInvalid(_)) => println!(
+                "key:        REJECTED - {e}\n            treat it as untrusted; \
+                 run `chromium-bridge pair --reset` to replace it"
+            ),
             Err(e) => println!("key:        present, but public key unreadable: {e}"),
         },
         Ok(None) => println!("key:        none (run `chromium-bridge pair`)"),
@@ -284,6 +291,10 @@ pub fn run_status_json() -> i32 {
     let key = match EnrollmentKey::lookup() {
         Ok(Some(key)) => match key.public_key() {
             Ok(public) => KeyReport::Present(public),
+            // Same REJECTED state as a lookup-time KeyInvalid: the desktop
+            // UI branches on it (EnclaveKeyState), and the deny-list
+            // surfaces here, on export.
+            Err(e @ EnclaveError::KeyInvalid(_)) => KeyReport::Invalid(e.to_string()),
             Err(e) => KeyReport::Error(format!("public key unreadable: {e}")),
         },
         Ok(None) => KeyReport::None,

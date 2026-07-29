@@ -6,6 +6,11 @@ use sha2::{Digest, Sha256};
 use super::encoding::base64_encode;
 use super::EnclaveError;
 
+/// Byte length of the public key on the wire: the X9.63 uncompressed P-256
+/// point (`0x04 || X || Y`). Part of the cross-language contract - the
+/// extension's verifier rejects any other length (enclave.gen.ts).
+pub const PUBKEY_LEN: usize = 65;
+
 /// The enrollment key's public half, validated to be a 65-byte uncompressed
 /// X9.63 P-256 point (`0x04 || X || Y`) - exactly what WebCrypto's
 /// `importKey("raw", ...)` accepts for ECDSA P-256.
@@ -16,9 +21,9 @@ pub struct EnclavePublicKey {
 
 impl EnclavePublicKey {
     pub fn from_x963(bytes: Vec<u8>) -> Result<Self, EnclaveError> {
-        if bytes.len() != 65 {
+        if bytes.len() != PUBKEY_LEN {
             return Err(EnclaveError::Keychain(format!(
-                "public key is {} bytes, expected 65 (X9.63 uncompressed P-256)",
+                "public key is {} bytes, expected {PUBKEY_LEN} (X9.63 uncompressed P-256)",
                 bytes.len()
             )));
         }

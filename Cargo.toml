@@ -30,6 +30,11 @@ thiserror = "2.0.18"
 # (no `fork`/`timeout`/`regex-syntax` features) so it spawns no processes and
 # its dependency tree stays within the licenses allowed by `deny.toml`.
 proptest = { version = "1", default-features = false, features = ["std"] }
+# Software P-256 for the enclave golden-vector fixture (the emit_enclave_contract
+# example, `moon run gen`): RFC 6979 deterministic signing, so regenerating the
+# checked-in fixture is byte-identical. Dev-only - the shipped host signs with
+# the Secure Enclave via security-framework, never with a software key.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 # Secure Enclave enrollment key (src/packages/core/src/enclave.rs). The vetted
 # wrapper crate is used instead of hand-rolled Security.framework FFI;
 # OSX_10_15 is required for the data-protection keychain, the only keychain

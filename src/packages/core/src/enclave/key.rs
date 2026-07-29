@@ -56,10 +56,18 @@ impl EnrollmentKey {
         }
     }
 
+    /// Export the public half. Every consumer goes through here (the `pair`
+    /// and `status` CLIs and both challenge responders), including the
+    /// golden-fixture deny-list as defense in depth - on macOS `lookup()`
+    /// already refuses non-Secure-Enclave keys, and against a substituted
+    /// host the extension's deny-list is the one that holds (see
+    /// [`super::ensure_not_fixture_key`]).
     pub fn public_key(&self) -> Result<EnclavePublicKey, EnclaveError> {
         #[cfg(target_os = "macos")]
         {
-            super::macos::public_key(&self.key)
+            let public = super::macos::public_key(&self.key)?;
+            super::ensure_not_fixture_key(&public)?;
+            Ok(public)
         }
         #[cfg(not(target_os = "macos"))]
         {
