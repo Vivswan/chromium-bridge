@@ -26,7 +26,12 @@
 // actions here. Unsolicited results (the host's startup/transition pushes)
 // update the mirror; solicited ones additionally resolve the pending request.
 
-import { type KillMirror, KillMirrorSchema, type KillStatusResult } from "@chromium-bridge/shared";
+import {
+  type KillMirror,
+  KillMirrorSchema,
+  type KillStatusResult,
+  unreachable,
+} from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
 
@@ -106,14 +111,25 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
     [KILL_MIRROR_KEY]: { state, at: Date.now() } satisfies KillMirror,
   });
   // Local ring only: the host already audits its own transitions.
-  auditEvent("kill_status_changed", { outcome: state }, { forward: false });
+  auditEvent("kill_status_changed", { outcome: state });
 }
 
 // ---- port plumbing (mirrors clients.ts) --------------------------------------
 
-let postFrame: ((frame: object) => boolean) | null = null;
+/** The three host-directed kill control frames (ADR-0030), as a closed union.
+ * Everything this module posts is one of these, so a typo'd frame type is a
+ * compile error - not a real post the engage-arming switch below silently
+ * fails to recognize. The inbound direction is parsed separately: port.ts
+ * classifies kill_status_result frames with the Zod KillStatusResultSchema
+ * and anything malformed never reaches handleKillFrame. */
+export type KillControlFrame =
+  | { type: "kill_status" }
+  | { type: "kill_engage" }
+  | { type: "kill_release" };
 
-export function attachPort(post: (frame: object) => boolean): void {
+let postFrame: ((frame: KillControlFrame) => boolean) | null = null;
+
+export function attachPort(post: (frame: KillControlFrame) => boolean): void {
   postFrame = post;
   // At-least-once for the panic brake (ADR-0030): an engage that was handed
   // to a port that then died UNCONFIRMED (no authoritative killed frame ever
@@ -127,7 +143,7 @@ export function attachPort(post: (frame: object) => boolean): void {
   // SW lifetime - engage posted, host dead, THEN the SW dying too drops the
   // brake silently after the restart (nothing durable re-arms it).
   if (unconfirmedEngageSeq !== null) {
-    auditEvent("kill_engaged", { outcome: "requested" }, { forward: false });
+    auditEvent("kill_engaged", { outcome: "requested" });
     if (post({ type: "kill_engage" })) {
       unconfirmedEngageSeq = frameArrivals;
     }
@@ -183,10 +199,16 @@ async function mirrorView(ok: boolean, sent: boolean, error?: string): Promise<K
 
 /** One kill request (status query or transition) over the port. One request
  * outstanding at a time; the host replies in order on a single pipe. */
-function request(frame: object, timeoutMs: number = KILL_REQUEST_TIMEOUT_MS): Promise<KillView> {
+function request(
+  frame: KillControlFrame,
+  timeoutMs: number = KILL_REQUEST_TIMEOUT_MS,
+): Promise<KillView> {
   if (!postFrame) {
     return mirrorView(false, false, "native host not connected");
   }
+  // Captured so the closure below posts on the port proven live here (the
+  // module-level slot is mutable, so TS cannot carry the narrowing in).
+  const post = postFrame;
   if (pending) {
     return Promise.resolve({
       ok: false,
@@ -202,16 +224,28 @@ function request(frame: object, timeoutMs: number = KILL_REQUEST_TIMEOUT_MS): Pr
       void mirrorView(false, true, "no reply from the native host (timed out)").then(resolve);
     }, timeoutMs);
     pending = { resolve, timer };
-    if (!postFrame?.(frame)) {
+    if (!post(frame)) {
       clearTimeout(timer);
       pending = null;
       void mirrorView(false, false, "failed to send the request to the native host").then(resolve);
-    } else if ((frame as { type?: string }).type === "kill_engage") {
-      // Arm the at-least-once re-post (see attachPort) for EVERY engage that
-      // actually reached the pipe, whichever surface posted it. Armed only
-      // on success, in the same synchronous turn as the post, so the flag
-      // being set always means "a real engage is outstanding".
-      unconfirmedEngageSeq = frameArrivals;
+    } else {
+      // Exhaustive over the closed union: adding a fourth control frame
+      // forces a decision here about whether it arms the re-post.
+      switch (frame.type) {
+        case "kill_engage":
+          // Arm the at-least-once re-post (see attachPort) for EVERY engage
+          // that actually reached the pipe, whichever surface posted it.
+          // Armed only on success, in the same synchronous turn as the post,
+          // so the flag being set always means "a real engage is
+          // outstanding".
+          unconfirmedEngageSeq = frameArrivals;
+          break;
+        case "kill_status":
+        case "kill_release":
+          break;
+        default:
+          unreachable(frame);
+      }
     }
   });
 }
@@ -332,7 +366,7 @@ function advancePanicWaiter(state: KillMirror["state"], seq: number): void {
  * pages, so a page can NEVER reach this. */
 export function setKillSwitch(on: boolean): Promise<KillView> {
   // Local ring only: the host records the authoritative kill_engage/release.
-  auditEvent(on ? "kill_engaged" : "kill_released", { outcome: "requested" }, { forward: false });
+  auditEvent(on ? "kill_engaged" : "kill_released", { outcome: "requested" });
   return on
     ? request({ type: "kill_engage" })
     : request({ type: "kill_release" }, KILL_RELEASE_TIMEOUT_MS);
@@ -358,7 +392,7 @@ export function setKillSwitch(on: boolean): Promise<KillView> {
  * severed, never live. */
 export function engageKillSwitch(): Promise<KillView> {
   if (!pending) return setKillSwitch(true);
-  auditEvent("kill_engaged", { outcome: "requested" }, { forward: false });
+  auditEvent("kill_engaged", { outcome: "requested" });
   if (!postFrame) return mirrorView(false, false, "native host not connected");
   if (!postFrame({ type: "kill_engage" })) {
     return mirrorView(false, false, "failed to send the request to the native host");
