@@ -26,7 +26,8 @@ noted (browser-gated, needs an isolated Chrome):
 Honesty about C1: only another instance of THIS binary passes peer attestation
 (ADR-0020), so a black-box test cannot write literal half-a-line bridge bytes
 onto the socket from a foreign process - that path is unreachable to an
-attacker and is covered by the Rust parser proptests (src/protocol.rs
+attacker and is covered by the Rust parser proptests
+(src/packages/core/src/protocol.rs
 bridge_read_never_panics + the cap/blank-line unit tests). What C1 injects at
 the integration level is the observable-equivalent fault: an attested peer that
 drops the connection abruptly (SIGKILL) while the server has a request
@@ -122,7 +123,8 @@ def bounded(label, fn, secs=20):
 # Spawn helpers (isolation-guarded, reusing adversarial's precondition)
 # ---------------------------------------------------------------------------
 
-# Stderr markers the native host logs on its way up (src/native_host.rs). The
+# Stderr markers the native host logs on its way up
+# (src/packages/core/src/native_host.rs). The
 # "connected" marker fires after the socket connect (so the server has ACCEPTED
 # the connection) but before the handshake completes; "ready" fires once the
 # handshake completes.

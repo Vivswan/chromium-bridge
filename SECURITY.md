@@ -160,7 +160,7 @@ can still relax them, and doing so is an explicit, informed choice:
 | `confirmPageEval` | `true` | `false` = `page_eval` runs with no prompt | Arbitrary JS executes silently on approved origins |
 | `pageEvalEnabled` | `true` | `false` = `page_eval` refused entirely | (hardening, not a relaxation) |
 | `touchIdConfirm` | `true` | `false` = enrolled Macs fall back to the extension-window confirmation for `page_eval`/`page_upload` | The verdict is a window click the extension trusts, not a hardware tap |
-| `confirmHighRiskClick` | `true` | `false` = submit/link clicks, key presses, and selects run with no prompt | A prompt-injected model can act on approved origins silently |
+| `confirmHighRiskClick` | `true` | `false` = high-risk clicks (submit/link) run with no prompt; `page_press` and `page_select` still confirm on every call regardless | A prompt-injected model can click submit/links on approved origins silently |
 | `confirmTabClose` | `true` | `false` = `tab_close` runs with no prompt | Silent data loss in a closed tab |
 | `confirmGraceMs` | `60000` | Larger = longer click/submit silence window; `0` = every click reconfirms | A same-origin click/submit within the window is silent (never eval) |
 

@@ -2,7 +2,8 @@
 // (ADR-0021). Pure module: no chrome.* usage, so bun unit-tests it with
 // self-checking offline vectors.
 //
-// The wire contract is owned by the host (src/protocol.rs, EnclaveControl).
+// The wire contract is owned by the host
+// (src/packages/core/src/protocol.rs, EnclaveControl).
 // A proof's `sig` is base64 of the raw 64-byte IEEE P1363 r||s ECDSA
 // P-256/SHA-256 signature over
 //
@@ -17,8 +18,9 @@ export const CHALLENGE_DOMAIN = "chromium-bridge-enclave-v1";
 // domain, so an enrollment proof and a presence approval can never be
 // replayed as one another even if nonce handling ever regressed.
 export const PRESENCE_DOMAIN = "chromium-bridge-presence-v1";
-// Host-enforced bounds on challenge fields (src/enclave.rs); we stay inside
-// them and reject anything outside before touching the crypto.
+// Host-enforced bounds on challenge fields
+// (src/packages/core/src/enclave/challenge.rs); we stay inside them and
+// reject anything outside before touching the crypto.
 export const MAX_NONCE_BYTES = 256;
 export const MAX_CONTEXT_BYTES = 4096;
 

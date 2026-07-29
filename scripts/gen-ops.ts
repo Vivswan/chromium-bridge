@@ -271,9 +271,15 @@ const errorMeta = contract.errors
 const errorsOut = `// GENERATED from the Rust core (src/packages/core/src/error.rs ERROR_SPECS) by
 // scripts/gen-ops.ts - DO NOT EDIT. Edit the taxonomy, then run \`moon run gen\`.
 //
-// The stable cross-process error codes. The Rust server assigns them via
-// CallError::code(); the extension reports its own failures with the same
-// codes so neither side can invent one the other has never heard of.
+// The stable error codes of the cross-process taxonomy. Today only the Rust
+// server assigns them, and only a subset: CallError failures map to their
+// codes via CallError::code(). The extension reports its failures as
+// free-form strings (see port.ts sendResponse), which the host surfaces as
+// EXECUTION_FAILED. Of the unassigned codes, PROTOCOL_MISMATCH awaits the
+// version/capability handshake wiring (docs/compatibility.md); the others
+// would need structured error reporting from the extension in place of
+// those free-form strings. These constants exist for TS consumers of the
+// taxonomy and are currently unconsumed.
 
 export const ERROR_CODES = [
   ${errorCodes},

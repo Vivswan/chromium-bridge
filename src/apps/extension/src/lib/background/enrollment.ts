@@ -323,7 +323,8 @@ async function maybePeriodicReverify(pin: pinStore.EnclavePin): Promise<void> {
 
 // ---- inbound control frames ----------------------------------------------------
 
-/** Stable reason codes from the host (src/enclave.rs reason_code). */
+/** Stable reason codes from the host
+ * (src/packages/core/src/enclave/mod.rs, reason_code). */
 const KNOWN_REASONS = new Set([
   "unsupported_platform",
   "not_enrolled",

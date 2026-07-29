@@ -108,10 +108,11 @@ impl CallError {
 
     /// The stable, cross-process error code for this variant.
     ///
-    /// These strings are the contract between the Rust server and the
-    /// extension: they are the `code` values in [`ERROR_SPECS`] (the canonical
+    /// These strings are the `code` values in [`ERROR_SPECS`] (the canonical
     /// cross-process taxonomy) and are meant for programmatic handling by
-    /// clients, while `Display` stays human-facing.
+    /// clients, while `Display` stays human-facing. This mapping is currently
+    /// the only assigner of taxonomy codes, and it covers a subset of the
+    /// table; see the [`ERROR_SPECS`] doc for the status of the rest.
     pub fn code(&self) -> &'static str {
         self.spec().code
     }
@@ -179,11 +180,16 @@ macro_rules! error_taxonomy {
         }
 
         /// The canonical cross-process error taxonomy (ADR-0028): the single source
-        /// of the stable codes shared by the Rust server (via [`CallError::code`])
-        /// and the extension (via the generated `src/packages/shared/src/errors.gen.ts`).
-        /// Some codes are assigned only on the Rust side, some only by the extension;
-        /// they live in one table so neither side can invent a code the other has
-        /// never heard of.
+        /// of the stable codes, generated into the TS side as
+        /// `src/packages/shared/src/errors.gen.ts`. Today only the Rust server
+        /// assigns codes, via [`CallError::code`], and only to a subset of the
+        /// table; the extension reports its failures as free-form strings
+        /// (surfaced as `EXECUTION_FAILED`). Of the unassigned codes,
+        /// `PROTOCOL_MISMATCH` awaits the version/capability handshake wiring
+        /// (see docs/compatibility.md); the others would need structured error
+        /// reporting from the extension in place of those free-form strings.
+        /// One table keeps every defined code in one place, so a side that
+        /// starts assigning a code cannot invent one the other has never heard of.
         pub const ERROR_SPECS: &[ErrorSpec] = &[$(specs::$name),*];
     };
 }
