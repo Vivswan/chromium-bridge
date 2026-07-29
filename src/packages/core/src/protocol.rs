@@ -687,6 +687,101 @@ pub enum AdminControl {
     },
 }
 
+/// Ties every control-frame variant to its serde `type` tag, once. Expands to
+/// a tag-set constant and a `wire_tag` method whose match is EXHAUSTIVE over
+/// the enum - no wildcard arm - so adding a variant fails to compile right
+/// here until its tag joins the list, and the new tag then flows into
+/// [`classify_nm_frame`] and [`host_control_type`] automatically (both consume
+/// the constant). The `every_control_variant_tag_is_derived_and_recognized`
+/// test asserts each listed tag is the tag serde actually emits, so the list
+/// cannot drift from the `#[serde(tag = "type")]` attributes either.
+macro_rules! control_wire_tags {
+    ($Enum:ident, $TAGS:ident, { $($Variant:ident => $tag:literal),+ $(,)? }) => {
+        /// The serde `type` tag of every variant, in declaration order.
+        /// Emitted by `control_wire_tags!` from the same list as `wire_tag`.
+        pub const $TAGS: &[&str] = &[$($tag),+];
+
+        impl $Enum {
+            /// The serde `type` tag this frame serializes under. The match is
+            /// exhaustive on purpose: a new variant fails to compile until it
+            /// is added to the `control_wire_tags!` list, which is what keeps
+            /// the classifiers' tag set complete.
+            pub fn wire_tag(&self) -> &'static str {
+                match self {
+                    $($Enum::$Variant { .. } => $tag,)+
+                }
+            }
+        }
+    };
+}
+
+control_wire_tags!(EnclaveControl, ENCLAVE_CONTROL_TAGS, {
+    EnclaveChallenge => "enclave_challenge",
+    EnclaveProof => "enclave_proof",
+    EnclaveError => "enclave_error",
+    EnclaveRevoke => "enclave_revoke",
+    EnclaveRevoked => "enclave_revoked",
+    PresenceChallenge => "presence_challenge",
+    PresenceProof => "presence_proof",
+    PresenceError => "presence_error",
+});
+
+control_wire_tags!(AdminControl, ADMIN_CONTROL_TAGS, {
+    ClientList => "client_list",
+    ClientListResult => "client_list_result",
+    ClientRevoke => "client_revoke",
+    ClientRevokeResult => "client_revoke_result",
+    KillStatus => "kill_status",
+    KillEngage => "kill_engage",
+    KillRelease => "kill_release",
+    KillStatusResult => "kill_status_result",
+    AuditEvent => "audit_event",
+});
+
+/// The host-directed admin REQUEST kinds: the [`AdminControl`] frames the
+/// extension sends and the host must answer. Carried by
+/// [`FrameDisposition::MalformedAdmin`] so the malformed-reply builder matches
+/// exhaustively - the reply frame type provably corresponds to the request
+/// type, with no string catch-all for a new kind to ride into the wrong reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdminKind {
+    ClientList,
+    ClientRevoke,
+    KillStatus,
+    KillEngage,
+    KillRelease,
+}
+
+impl AdminKind {
+    /// The wire `type` tag of the request this kind names (for logs and the
+    /// error text in the `ok: false` reply).
+    pub fn wire_tag(self) -> &'static str {
+        match self {
+            AdminKind::ClientList => "client_list",
+            AdminKind::ClientRevoke => "client_revoke",
+            AdminKind::KillStatus => "kill_status",
+            AdminKind::KillEngage => "kill_engage",
+            AdminKind::KillRelease => "kill_release",
+        }
+    }
+}
+
+/// The fields of one accepted `audit_event` frame (ADR-0030), traveling by
+/// name from [`classify_nm_frame`] to the audit sink. `kind` is already the
+/// typed, extension-owned [`crate::audit::AuditKind`]: classification maps the
+/// wire string through [`crate::audit::extension_kind`], so a frame claiming a
+/// host-owned kind (an admission, a kill) can never be represented as
+/// recordable past this boundary.
+#[derive(Debug)]
+pub struct AuditEventFields {
+    pub kind: crate::audit::AuditKind,
+    pub outcome: Option<String>,
+    pub tool: Option<String>,
+    pub name: Option<String>,
+    pub detail: Option<String>,
+    pub cid: Option<String>,
+}
+
 /// How the native host's stdin->socket pump must treat one inbound frame.
 #[derive(Debug)]
 pub enum FrameDisposition {
@@ -717,16 +812,15 @@ pub enum FrameDisposition {
     KillEngage,
     /// A well-formed `kill_release` (ADR-0030): release the kill switch.
     KillRelease,
-    /// A well-formed `audit_event` (ADR-0030): record one extension-side
-    /// decision in the audit trail. Fire-and-forget, no reply.
-    AuditEvent {
-        kind: String,
-        outcome: Option<String>,
-        tool: Option<String>,
-        name: Option<String>,
-        detail: Option<String>,
-        cid: Option<String>,
-    },
+    /// A well-formed `audit_event` (ADR-0030) carrying an extension-owned
+    /// kind: record one extension-side decision in the audit trail.
+    /// Fire-and-forget, no reply.
+    AuditEvent(AuditEventFields),
+    /// A well-formed `audit_event` whose `kind` is not extension-owned
+    /// ([`crate::audit::extension_kind`]): the browser leg must not forge
+    /// host-side events (admissions, kills) into the trail. Dropped at
+    /// classification; the offending kind rides along for the forensic log.
+    DropForeignAuditKind { kind: String },
     /// A control-frame `type` that is not addressed to the host (a stray
     /// proof/error/revoked/result, or a malformed host-directed frame with no
     /// defined error reply) - drop it, never forward it.
@@ -738,60 +832,83 @@ pub enum FrameDisposition {
     /// frame: reply `presence_error { reason: "invalid_challenge" }`, do not
     /// forward.
     MalformedPresence,
-    /// Carries a `client_*` request type but does not parse as that frame:
-    /// reply the matching `*_result { ok: false }`, do not forward.
-    MalformedAdmin(&'static str),
+    /// Carries a `client_*`/`kill_*` request type but does not parse as that
+    /// frame: reply the matching `*_result { ok: false }`, do not forward.
+    MalformedAdmin(AdminKind),
+}
+
+/// Resolve `tag` to its `'static` copy in the derived host-control tag set
+/// ([`ENCLAVE_CONTROL_TAGS`] + [`ADMIN_CONTROL_TAGS`]), or `None` for anything
+/// that is not a host-handled control tag. Both classifiers key on this one
+/// set, so a variant added to either control enum (which the exhaustive
+/// `wire_tag` matches force into the set) is recognized by both from the
+/// moment it compiles.
+fn host_control_tag(tag: &str) -> Option<&'static str> {
+    ENCLAVE_CONTROL_TAGS
+        .iter()
+        .chain(ADMIN_CONTROL_TAGS)
+        .copied()
+        .find(|t| *t == tag)
 }
 
 /// Classify one native-messaging frame for the pump. Pure, so the
 /// handled-vs-forwarded decision is unit-testable without a socket. Keyed on
-/// the exact `type` tags of [`EnclaveControl`] and [`AdminControl`]: bridge
-/// requests carry `op` (no `type`), and the socket handshake frames
-/// (`challenge`/`response`) never traverse the pump, so nothing legitimate
-/// collides.
+/// the exact `type` tags of [`EnclaveControl`] and [`AdminControl`] via the
+/// derived tag set: bridge requests carry `op` (no `type`), and the socket
+/// handshake frames (`challenge`/`response`) never traverse the pump, so
+/// nothing legitimate collides.
 pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
-    let tag = frame.get("type").and_then(Value::as_str);
+    // Resolve against the derived tag set first: anything outside it forwards,
+    // and anything inside it can never fall through to Forward below - the
+    // final arm only ever sees control tags, and drops them.
+    let Some(tag) = frame
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(host_control_tag)
+    else {
+        return FrameDisposition::Forward;
+    };
     match tag {
-        Some("enclave_challenge") => match serde_json::from_value(frame.clone()) {
+        "enclave_challenge" => match serde_json::from_value(frame.clone()) {
             Ok(EnclaveControl::EnclaveChallenge { nonce, context }) => {
                 FrameDisposition::Challenge { nonce, context }
             }
             _ => FrameDisposition::Malformed,
         },
-        Some("enclave_revoke") => match serde_json::from_value(frame.clone()) {
+        "enclave_revoke" => match serde_json::from_value(frame.clone()) {
             Ok(EnclaveControl::EnclaveRevoke {}) => FrameDisposition::RevokeHostKey,
             // No error-reply contract exists for a malformed revoke (the
             // genuine extension sends the exact empty shape); dropping it
             // fails closed without inventing a misleading reason code.
             _ => FrameDisposition::Drop("malformed enclave_revoke"),
         },
-        Some("presence_challenge") => match serde_json::from_value(frame.clone()) {
+        "presence_challenge" => match serde_json::from_value(frame.clone()) {
             Ok(EnclaveControl::PresenceChallenge { nonce, context }) => {
                 FrameDisposition::PresenceChallenge { nonce, context }
             }
             _ => FrameDisposition::MalformedPresence,
         },
-        Some("client_list") => match serde_json::from_value(frame.clone()) {
+        "client_list" => match serde_json::from_value(frame.clone()) {
             Ok(AdminControl::ClientList {}) => FrameDisposition::ClientList,
-            _ => FrameDisposition::MalformedAdmin("client_list"),
+            _ => FrameDisposition::MalformedAdmin(AdminKind::ClientList),
         },
-        Some("client_revoke") => match serde_json::from_value(frame.clone()) {
+        "client_revoke" => match serde_json::from_value(frame.clone()) {
             Ok(AdminControl::ClientRevoke { name }) => FrameDisposition::ClientRevoke { name },
-            _ => FrameDisposition::MalformedAdmin("client_revoke"),
+            _ => FrameDisposition::MalformedAdmin(AdminKind::ClientRevoke),
         },
-        Some("kill_status") => match serde_json::from_value(frame.clone()) {
+        "kill_status" => match serde_json::from_value(frame.clone()) {
             Ok(AdminControl::KillStatus {}) => FrameDisposition::KillStatus,
-            _ => FrameDisposition::MalformedAdmin("kill_status"),
+            _ => FrameDisposition::MalformedAdmin(AdminKind::KillStatus),
         },
-        Some("kill_engage") => match serde_json::from_value(frame.clone()) {
+        "kill_engage" => match serde_json::from_value(frame.clone()) {
             Ok(AdminControl::KillEngage {}) => FrameDisposition::KillEngage,
-            _ => FrameDisposition::MalformedAdmin("kill_engage"),
+            _ => FrameDisposition::MalformedAdmin(AdminKind::KillEngage),
         },
-        Some("kill_release") => match serde_json::from_value(frame.clone()) {
+        "kill_release" => match serde_json::from_value(frame.clone()) {
             Ok(AdminControl::KillRelease {}) => FrameDisposition::KillRelease,
-            _ => FrameDisposition::MalformedAdmin("kill_release"),
+            _ => FrameDisposition::MalformedAdmin(AdminKind::KillRelease),
         },
-        Some("audit_event") => match serde_json::from_value(frame.clone()) {
+        "audit_event" => match serde_json::from_value(frame.clone()) {
             Ok(AdminControl::AuditEvent {
                 kind,
                 outcome,
@@ -799,27 +916,31 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
                 name,
                 detail,
                 cid,
-            }) => FrameDisposition::AuditEvent {
-                kind,
-                outcome,
-                tool,
-                name,
-                detail,
-                cid,
+            }) => match crate::audit::extension_kind(&kind) {
+                Some(kind) => FrameDisposition::AuditEvent(AuditEventFields {
+                    kind,
+                    outcome,
+                    tool,
+                    name,
+                    detail,
+                    cid,
+                }),
+                // A host-owned kind from the browser leg is a forgery attempt
+                // (or a confused extension); refuse it HERE so no disposition
+                // ever carries a recordable host-side kind. The offending
+                // value travels with the drop for the forensic log.
+                None => FrameDisposition::DropForeignAuditKind { kind },
             },
             // Fire-and-forget has no reply contract; a malformed event is
             // dropped (and logged), never recorded as if it were valid.
             _ => FrameDisposition::Drop("malformed audit_event"),
         },
-        Some("enclave_proof") => FrameDisposition::Drop("enclave_proof"),
-        Some("enclave_error") => FrameDisposition::Drop("enclave_error"),
-        Some("enclave_revoked") => FrameDisposition::Drop("enclave_revoked"),
-        Some("presence_proof") => FrameDisposition::Drop("presence_proof"),
-        Some("presence_error") => FrameDisposition::Drop("presence_error"),
-        Some("client_list_result") => FrameDisposition::Drop("client_list_result"),
-        Some("client_revoke_result") => FrameDisposition::Drop("client_revoke_result"),
-        Some("kill_status_result") => FrameDisposition::Drop("kill_status_result"),
-        _ => FrameDisposition::Forward,
+        // Every remaining control tag names a frame the browser leg never
+        // legitimately originates (proofs, errors, results, the revoked push)
+        // - and any control variant added in the future lands here too until
+        // it is given a handler arm above: dropped, never forwarded. Fail
+        // closed by construction.
+        other => FrameDisposition::Drop(other),
     }
 }
 
@@ -833,29 +954,11 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
 /// `enclave_error` that burns the extension's outstanding nonce, an
 /// `enclave_revoked` that provokes a false fail-closed "compromised" mark, or
 /// a forged `client_list_result` (ADR-0021/0025).
-pub fn host_control_type(frame: &Value) -> Option<&str> {
-    match frame.get("type").and_then(Value::as_str) {
-        tag @ Some(
-            "enclave_challenge"
-            | "enclave_proof"
-            | "enclave_error"
-            | "enclave_revoke"
-            | "enclave_revoked"
-            | "presence_challenge"
-            | "presence_proof"
-            | "presence_error"
-            | "client_list"
-            | "client_list_result"
-            | "client_revoke"
-            | "client_revoke_result"
-            | "kill_status"
-            | "kill_engage"
-            | "kill_release"
-            | "kill_status_result"
-            | "audit_event",
-        ) => tag,
-        _ => None,
-    }
+pub fn host_control_type(frame: &Value) -> Option<&'static str> {
+    frame
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(host_control_tag)
 }
 
 // ----------------------------------------------------------------------------
@@ -1582,14 +1685,16 @@ mod tests {
             FrameDisposition::ClientRevoke { name } => assert_eq!(name, "codex"),
             other => panic!("expected ClientRevoke, got {other:?}"),
         }
-        // ...malformed admin requests get the matching {ok:false} reply...
+        // ...malformed admin requests get the matching {ok:false} reply,
+        // carried as the typed AdminKind so the reply builder cannot
+        // misroute one...
         assert!(matches!(
             classify_nm_frame(&json!({ "type": "client_list", "extra": 1 })),
-            FrameDisposition::MalformedAdmin("client_list")
+            FrameDisposition::MalformedAdmin(AdminKind::ClientList)
         ));
         assert!(matches!(
             classify_nm_frame(&json!({ "type": "client_revoke" })),
-            FrameDisposition::MalformedAdmin("client_revoke")
+            FrameDisposition::MalformedAdmin(AdminKind::ClientRevoke)
         ));
         // ...and stray result frames from the browser side are dropped.
         assert!(matches!(
@@ -1656,10 +1761,14 @@ mod tests {
             FrameDisposition::KillRelease
         ));
         // ...malformed variants get the matching ok:false reply path...
-        for tag in ["kill_status", "kill_engage", "kill_release"] {
+        for (tag, kind) in [
+            ("kill_status", AdminKind::KillStatus),
+            ("kill_engage", AdminKind::KillEngage),
+            ("kill_release", AdminKind::KillRelease),
+        ] {
             assert!(matches!(
                 classify_nm_frame(&json!({ "type": tag, "extra": 1 })),
-                FrameDisposition::MalformedAdmin(k) if k == tag
+                FrameDisposition::MalformedAdmin(k) if k == kind
             ));
         }
         // ...a result frame never legitimately arrives inbound...
@@ -1667,18 +1776,17 @@ mod tests {
             classify_nm_frame(&json!({ "type": "kill_status_result", "ok": true })),
             FrameDisposition::Drop(_)
         ));
-        // ...an audit event carries its fields to the handler...
+        // ...an audit event carries its fields BY NAME to the handler, with
+        // the kind already typed as extension-owned...
         match classify_nm_frame(&json!({
             "type": "audit_event", "kind": "confirm_denied", "tool": "eval", "cid": "c-42"
         })) {
-            FrameDisposition::AuditEvent {
-                kind, tool, cid, ..
-            } => {
-                assert_eq!(kind, "confirm_denied");
-                assert_eq!(tool.as_deref(), Some("eval"));
+            FrameDisposition::AuditEvent(fields) => {
+                assert_eq!(fields.kind, crate::audit::AuditKind::ConfirmDenied);
+                assert_eq!(fields.tool.as_deref(), Some("eval"));
                 // The per-confirmation correlation id survives parsing so the
                 // host writes it into the audit record for the panel to join on.
-                assert_eq!(cid.as_deref(), Some("c-42"));
+                assert_eq!(fields.cid.as_deref(), Some("c-42"));
             }
             other => panic!("expected AuditEvent, got {other:?}"),
         }
@@ -1695,29 +1803,148 @@ mod tests {
     }
 
     #[test]
-    fn host_control_type_matches_exactly_the_control_tags() {
-        // Every host-handled control tag is recognized (the socket->stdout
-        // pump drops all of them when the server leg tries to inject one)...
-        for tag in [
-            "enclave_challenge",
-            "enclave_proof",
-            "enclave_error",
-            "enclave_revoke",
-            "enclave_revoked",
-            "client_list",
-            "client_list_result",
-            "client_revoke",
-            "client_revoke_result",
-            "kill_status",
+    fn audit_events_with_host_owned_kinds_are_dropped_at_classification() {
+        // The forgery gate lives IN classification: a frame claiming a
+        // host-owned kind (an admission, a kill, a presence sign) never
+        // becomes an AuditEvent disposition at all, so no downstream consumer
+        // can record it. The offending value rides the drop for the log.
+        for kind in [
             "kill_engage",
-            "kill_release",
-            "kill_status_result",
-            "audit_event",
+            "harness_admit",
+            "tool_call",
+            "presence_sign",
+            "admission",
+            "",
         ] {
+            match classify_nm_frame(&json!({ "type": "audit_event", "kind": kind })) {
+                FrameDisposition::DropForeignAuditKind { kind: k } => assert_eq!(k, kind),
+                other => panic!("expected DropForeignAuditKind for {kind:?}, got {other:?}"),
+            }
+        }
+        // Positive control: an extension-owned kind still classifies to a
+        // typed, recordable AuditEvent.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "audit_event", "kind": "confirm_shown" })),
+            FrameDisposition::AuditEvent(AuditEventFields {
+                kind: crate::audit::AuditKind::ConfirmShown,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn every_control_variant_tag_is_derived_and_recognized() {
+        use std::collections::BTreeSet;
+
+        // One sample of EVERY variant of both control enums. Completeness of
+        // this list is enforced below (its tag set must equal the derived tag
+        // set), and the derived set itself cannot miss a variant: wire_tag's
+        // match has no wildcard arm, so a new variant fails to compile until
+        // its tag joins the control_wire_tags! list feeding both.
+        let enclave: Vec<EnclaveControl> = vec![
+            EnclaveControl::EnclaveChallenge {
+                nonce: "n".into(),
+                context: None,
+            },
+            EnclaveControl::EnclaveProof {
+                sig: "s".into(),
+                key_id: "k".into(),
+                pubkey: "p".into(),
+            },
+            EnclaveControl::EnclaveError { reason: "r".into() },
+            EnclaveControl::EnclaveRevoke {},
+            EnclaveControl::EnclaveRevoked {},
+            EnclaveControl::PresenceChallenge {
+                nonce: "n".into(),
+                context: None,
+            },
+            EnclaveControl::PresenceProof {
+                sig: "s".into(),
+                key_id: "k".into(),
+                pubkey: "p".into(),
+            },
+            EnclaveControl::PresenceError { reason: "r".into() },
+        ];
+        let admin: Vec<AdminControl> = vec![
+            AdminControl::ClientList {},
+            AdminControl::ClientListResult {
+                ok: true,
+                enrolled: false,
+                clients: Vec::new(),
+                error: None,
+            },
+            AdminControl::ClientRevoke { name: "x".into() },
+            AdminControl::ClientRevokeResult {
+                ok: true,
+                error: None,
+            },
+            AdminControl::KillStatus {},
+            AdminControl::KillEngage {},
+            AdminControl::KillRelease {},
+            AdminControl::KillStatusResult {
+                ok: true,
+                killed: Some(false),
+                error: None,
+            },
+            AdminControl::AuditEvent {
+                kind: "confirm_shown".into(),
+                outcome: None,
+                tool: None,
+                name: None,
+                detail: None,
+                cid: None,
+            },
+        ];
+
+        // Serde round-trip per variant: the tag serde actually emits is the
+        // tag the derived set claims, in both directions.
+        let mut seen: BTreeSet<&'static str> = BTreeSet::new();
+        for frame in &enclave {
+            let v = serde_json::to_value(frame).unwrap();
+            let tag = v.get("type").and_then(Value::as_str).unwrap();
+            assert_eq!(tag, frame.wire_tag(), "serde tag drifted for {frame:?}");
+            let back: EnclaveControl = serde_json::from_value(v).unwrap();
+            assert_eq!(back.wire_tag(), frame.wire_tag());
+            seen.insert(frame.wire_tag());
+        }
+        for frame in &admin {
+            let v = serde_json::to_value(frame).unwrap();
+            let tag = v.get("type").and_then(Value::as_str).unwrap();
+            assert_eq!(tag, frame.wire_tag(), "serde tag drifted for {frame:?}");
+            let back: AdminControl = serde_json::from_value(v).unwrap();
+            assert_eq!(back.wire_tag(), frame.wire_tag());
+            seen.insert(frame.wire_tag());
+        }
+        let derived: BTreeSet<&'static str> = ENCLAVE_CONTROL_TAGS
+            .iter()
+            .chain(ADMIN_CONTROL_TAGS)
+            .copied()
+            .collect();
+        assert_eq!(
+            seen, derived,
+            "the sample lists above must cover every control variant"
+        );
+        assert_eq!(
+            derived.len(),
+            ENCLAVE_CONTROL_TAGS.len() + ADMIN_CONTROL_TAGS.len(),
+            "a tag is duplicated across the control enums"
+        );
+
+        // Every derived tag is recognized by BOTH pumps' classifiers: the
+        // socket->stdout pump drops a server-injected one, and the
+        // stdin->socket pump never forwards one to the MCP server.
+        for tag in &derived {
             assert_eq!(
                 host_control_type(&json!({ "type": tag })),
-                Some(tag),
+                Some(*tag),
                 "tag {tag} must be recognized as host control"
+            );
+            assert!(
+                !matches!(
+                    classify_nm_frame(&json!({ "type": tag })),
+                    FrameDisposition::Forward
+                ),
+                "tag {tag} must never classify as Forward"
             );
         }
         // ...while bridge traffic and near-misses pass through untouched.
