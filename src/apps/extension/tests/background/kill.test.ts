@@ -16,8 +16,11 @@ import { fakeBrowser } from "wxt/testing";
 import { auditEvent, readRing, resetAuditForTests } from "@/lib/background/audit-log";
 import {
   attachPort,
+  detachPort,
   getKillMirror,
   handleKillFrame,
+  isKillStatusFrame,
+  type KillControlFrame,
   killGate,
   killGateFromStored,
   requestKillStatus,
@@ -156,6 +159,51 @@ describe("kill mirror updates from host frames only", () => {
     expect(r.error).toContain("mirror");
     // And the mirror itself was never half-updated.
     expect(await getKillMirror()).toBeNull();
+  });
+});
+
+describe("kill frame boundaries", () => {
+  test("malformed or non-result frames are refused at the receive boundary", () => {
+    // port.ts classifies inbound frames with this predicate; anything it
+    // rejects never reaches handleKillFrame, so an adversarial frame cannot
+    // touch the mirror or settle a pending exchange.
+    for (const bad of [
+      null,
+      "kill_status_result",
+      { type: "kill_status" }, // an outbound control frame, not a result
+      { type: "kill_engage" },
+      { type: "kill_status_result" }, // missing ok
+      { type: "kill_status_result", ok: "yes" }, // non-boolean ok
+      { type: "kill_status_result", ok: true, killed: "no" }, // non-boolean killed
+      { type: "KILL_STATUS_RESULT", ok: true }, // case-mangled tag
+    ]) {
+      expect(isKillStatusFrame(bad), JSON.stringify(bad)).toBe(false);
+    }
+    expect(isKillStatusFrame({ type: "kill_status_result", ok: true, killed: false })).toBe(true);
+  });
+
+  test("outbound control frames are a closed union", () => {
+    const post = (frame: KillControlFrame): KillControlFrame => frame;
+    expect(post({ type: "kill_engage" }).type).toBe("kill_engage");
+    // @ts-expect-error - a typo'd control frame must not compile; the old
+    // string-sniffed cast would have posted it for real without ever arming
+    // the panic-brake re-post
+    post({ type: "kill_engag" });
+  });
+
+  test("a status request never arms the engage re-post", async () => {
+    attachPort(() => true);
+    const view = requestKillStatus();
+    detachPort(); // fails the pending exchange; the frame was already posted
+    const frames: KillControlFrame[] = [];
+    attachPort((frame) => {
+      frames.push(frame);
+      return true;
+    });
+    // Only an unconfirmed kill_engage re-posts on reconnect (pinned in
+    // deny-kill.test.ts); a status query must not masquerade as one.
+    expect(frames).toEqual([]);
+    await view;
   });
 });
 

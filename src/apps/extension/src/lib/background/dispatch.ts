@@ -70,14 +70,26 @@ function isSwReq(req: BridgeReq): req is SwReq {
  *   untouched - parseBridgeReq refuses them at the port boundary before
  *   dispatch is ever reached.
  * - A known, disabled tool throws `tool disabled in settings: <op>` - the same
- *   message the old inline check produced (`decision.reason` is
- *   "tool disabled in settings").
+ *   message the old inline check produced.
+ *
+ * The switch is on the typed refusal cause, exhaustively: a new cause added
+ * to policy.ts fails to compile here instead of silently passing through,
+ * and rewording a display `reason` cannot change what this gate does.
  */
 export function assertNotDisabled(op: string | undefined, disabledTools: string[]): void {
   if (!op || !isOpName(op)) return;
   const decision = decide(op, { disabledTools });
-  if (!decision.allowed && decision.reason === "tool disabled in settings") {
-    throw new Error(`${decision.reason}: ${op}`);
+  if (decision.allowed) return;
+  switch (decision.cause) {
+    case "disabled-in-settings":
+      throw new Error(`tool disabled in settings: ${op}`);
+    case "unknown-tool":
+      // Unreachable in practice: the isOpName guard above means decide()
+      // found catalogue metadata. Kept as passthrough (never a throw) so the
+      // gate's contract for unknown ops stays with the port boundary.
+      return;
+    default:
+      unreachable(decision.cause);
   }
 }
 
