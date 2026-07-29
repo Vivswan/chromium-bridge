@@ -5,7 +5,7 @@
 // extension - or a home that quietly stops matching the catalogue - fails
 // here instead of surfacing as a runtime "unknown op".
 
-import { OP_NAMES, TOOL_META } from "@chromium-bridge/shared";
+import { ContentMsgSchema, OP_NAMES, TOOL_META } from "@chromium-bridge/shared";
 import { describe, expect, test } from "vitest";
 import { SW_OPS } from "@/lib/background/dispatch";
 import { MANIFEST_PERMISSIONS } from "@/lib/shared/manifest-permissions";
@@ -27,6 +27,41 @@ describe("op rosters partition the catalogue", () => {
       expect(SW_OPS).not.toContain(op);
       expect(PAGE_OPS).not.toContain(op);
     }
+  });
+});
+
+describe("the content-message contract covers the page roster", () => {
+  // The SW <-> content-script schema (ContentMsgSchema) must stay in lockstep
+  // with PAGE_OPS: every page op except page_screenshot (captured in the SW)
+  // is accepted ONLY with a guard. An op added to PAGE_OPS without a schema
+  // branch would fail closed at runtime - this test surfaces the drift here
+  // instead.
+  const CONTENT_OPS = PAGE_OPS.filter((op) => op !== "page_screenshot");
+
+  test("every content-reaching page op requires its guard", () => {
+    for (const op of CONTENT_OPS) {
+      const guardless = ContentMsgSchema.safeParse({ op, args: {} });
+      expect(guardless.success ? `guardless ${op} accepted` : op).toBe(op);
+      const guard =
+        op === "page_click"
+          ? {
+              expectOrigin: "https://example.com",
+              clickExpect: { tagName: "A", role: "link", type: "", hasHref: true, name: "x" },
+            }
+          : { expectOrigin: "https://example.com" };
+      const guarded = ContentMsgSchema.safeParse({ op, args: {}, guard });
+      expect(guarded.success ? op : `guarded ${op} refused`).toBe(op);
+    }
+  });
+
+  test("page_screenshot has no content-script branch (SW-captured)", () => {
+    expect(
+      ContentMsgSchema.safeParse({
+        op: "page_screenshot",
+        args: {},
+        guard: { expectOrigin: "https://example.com" },
+      }).success,
+    ).toBe(false);
   });
 });
 

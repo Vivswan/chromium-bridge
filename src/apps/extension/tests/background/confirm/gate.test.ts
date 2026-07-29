@@ -6,7 +6,7 @@ import type { ConfirmPayload } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
-import { preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
+import { bindOrigin, preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
 import { installConfirmationProvider, resolveConfirm } from "@/lib/background/confirm/service";
 import type { PageBackend } from "@/lib/background/page-backend";
 import type { ClickProbe } from "@/lib/dom/page-api";
@@ -156,5 +156,32 @@ describe("ungated ops", () => {
     const asked = autoProvider(false);
     await preflightPageOp("page_snapshot", {}, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(0);
+  });
+});
+
+describe("the preflight -> guard split", () => {
+  test("page_click's preflight always carries the probe the decision ran on", async () => {
+    autoProvider(true);
+    const preflight = await preflightPageOp(
+      "page_click",
+      { selector: "#x" },
+      TAB,
+      fakeBackend(SUBMIT),
+    );
+    expect(preflight.clickExpect).toEqual(SUBMIT);
+  });
+
+  test("bindOrigin produces the guard the backends require", () => {
+    const guard = bindOrigin({ clickExpect: SUBMIT }, "https://example.com");
+    expect(guard).toEqual({ expectOrigin: "https://example.com", clickExpect: SUBMIT });
+    // No stray undefined clickExpect key for non-click ops (the wire schema
+    // is strict).
+    expect(bindOrigin({}, "https://example.com")).toEqual({
+      expectOrigin: "https://example.com",
+    });
+  });
+
+  test("bindOrigin refuses an empty origin - an unbound act cannot exist", () => {
+    expect(() => bindOrigin({}, "")).toThrow("no origin to bind");
   });
 });

@@ -24,8 +24,10 @@ import type { PageOpGuard } from "./confirm/gate";
 export interface PageBackend {
   /** DOM-read the click target so confirm/gate.ts can classify its risk. */
   probeClick(args: OpArgs, tab: Browser.tabs.Tab): Promise<ClickProbe>;
-  /** Act. `guard` carries what the preflight authorized (e.g. the approved
-   * click descriptor); the page API holds the act to it. */
+  /** Act. `guard` carries what the preflight authorized, bound to the origin
+   * the allowlist check and any confirmation ran against (gate.bindOrigin is
+   * the only producer, so an unbound act cannot be constructed); the page
+   * side enforces it atomically with the act. */
   run(op: PageOp, args: OpArgs, tab: Browser.tabs.Tab, guard: PageOpGuard): Promise<unknown>;
 }
 

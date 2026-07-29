@@ -5,7 +5,7 @@
 // would in the page.
 
 import { describe, expect, test } from "vitest";
-import { pageApiExpression } from "@/lib/background/backends/cdp";
+import { pageApiExpression, probeClickExpression } from "@/lib/background/backends/cdp";
 import { createPageApi, type PageApi, REF_ATTR } from "@/lib/dom/page-api";
 
 // Rebuild the factory the way the page receives it: source text only.
@@ -79,8 +79,23 @@ describe("probe + act", () => {
       name: "Pay",
     });
     expect(clicked).toBe(false);
-    api.click({ selector: "#s" });
+    api.click({ selector: "#s", expect: probe });
     expect(clicked).toBe(true);
+  });
+
+  test("click without the approved descriptor is refused, never performed", () => {
+    document.body.innerHTML = `<button id="s" type="submit">Pay</button>`;
+    let clicked = false;
+    document.getElementById("s")?.addEventListener("click", () => {
+      clicked = true;
+    });
+    const api = createPageApi(REF_ATTR);
+    // The typed surface requires `expect`; the runtime refusal is the
+    // backstop for the CDP serialization boundary (JSON drops undefined).
+    expect(() => api.click({ selector: "#s" } as Parameters<PageApi["click"]>[0])).toThrow(
+      "no approved target descriptor",
+    );
+    expect(clicked).toBe(false);
   });
 
   test("press dispatches keydown/keyup with parsed modifiers", () => {
@@ -147,15 +162,33 @@ describe("probe + act", () => {
 });
 
 describe("pageApiExpression", () => {
+  const ORIGIN = "https://example.com";
+
   test("embeds the factory source, the ref attribute, and JSON args", () => {
-    const expr = pageApiExpression("probeClick", [{ ref: "e1" }]);
+    const expr = pageApiExpression("snapshot", [], ORIGIN);
     expect(expr).toContain("createTreeWalker");
     expect(expr).toContain(JSON.stringify(REF_ATTR));
-    expect(expr).toContain('.probeClick({"ref":"e1"})');
+    expect(expr).toContain(".snapshot()");
   });
 
   test("args are JSON, never spliced code", () => {
-    const expr = pageApiExpression("click", [{ selector: 'x");alert(1);//' }]);
+    const expr = pageApiExpression("click", [{ selector: 'x");alert(1);//' }], ORIGIN);
     expect(expr).toContain(JSON.stringify({ selector: 'x");alert(1);//' }));
+  });
+
+  test("every expression asserts the bound origin atomically with the act", () => {
+    const expr = pageApiExpression("fill", [{ selector: "#a", value: "x" }], ORIGIN);
+    expect(expr).toContain(`if (location.origin !== ${JSON.stringify(ORIGIN)})`);
+    expect(expr).toContain("the page origin changed while the request was in flight");
+  });
+
+  test("an empty origin is refused, not silently skipped", () => {
+    expect(() => pageApiExpression("snapshot", [], "")).toThrow("no bound origin - refusing");
+  });
+
+  test("probeClickExpression is the one guard-less expression (pre-approval DOM read)", () => {
+    const expr = probeClickExpression({ ref: "e1" });
+    expect(expr).toContain('.probeClick({"ref":"e1"})');
+    expect(expr).not.toContain("location.origin");
   });
 });
