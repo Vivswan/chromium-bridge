@@ -37,7 +37,7 @@ use crate::enclave::{EnrollmentKey, HostConfig};
 use crate::ipc;
 use crate::protocol::{
     bridge_read, bridge_write, classify_nm_frame, host_control_type, nm_read_frame, nm_write_frame,
-    AdminControl, EnclaveControl, FrameDisposition,
+    AdminControl, AdminKind, AuditEventFields, EnclaveControl, FrameDisposition,
 };
 use crate::revocation::{self, Revocation};
 use serde::Serialize;
@@ -265,25 +265,21 @@ fn handle_kill_transition(engage: bool) -> AdminControl {
     }
 }
 
-/// Record one extension-side decision in the audit trail (ADR-0030). Only the
-/// extension-owned kinds are accepted ([`crate::audit::extension_kind`]) and
-/// the surface is stamped HERE, so the browser leg cannot forge host-side
-/// events (an admission, a kill) into the trail. Fire-and-forget: no reply.
-fn handle_audit_event(
-    kind: String,
-    outcome: Option<String>,
-    tool: Option<String>,
-    name: Option<String>,
-    detail: Option<String>,
-    cid: Option<String>,
-) {
-    let Some(kind) = crate::audit::extension_kind(&kind) else {
-        log_warn!(
-            "native-host",
-            "dropping audit_event with a non-extension kind {kind:?}"
-        );
-        return;
-    };
+/// Record one extension-side decision in the audit trail (ADR-0030). The
+/// fields arrive by name, and the kind is already the typed, extension-owned
+/// [`crate::audit::AuditKind`]: [`classify_nm_frame`] mapped it through
+/// [`crate::audit::extension_kind`] and the surface is stamped HERE, so the
+/// browser leg cannot forge host-side events (an admission, a kill) into the
+/// trail. Fire-and-forget: no reply.
+fn handle_audit_event(fields: AuditEventFields) {
+    let AuditEventFields {
+        kind,
+        outcome,
+        tool,
+        name,
+        detail,
+        cid,
+    } = fields;
     let mut rec = crate::audit::AuditRecord::new(kind).surface(crate::audit::Surface::Extension);
     rec.outcome = outcome;
     rec.tool = tool;
@@ -295,24 +291,27 @@ fn handle_audit_event(
 
 /// The reply for a malformed admin request frame: the matching result frame
 /// with `ok: false`, so the extension's pending request resolves instead of
-/// timing out.
-fn malformed_admin_reply(kind: &'static str) -> AdminControl {
+/// timing out. Exhaustive over [`AdminKind`] with no catch-all: the compiler
+/// holds every request kind to a reply of its own type.
+fn malformed_admin_reply(kind: AdminKind) -> AdminControl {
     match kind {
-        "client_list" => AdminControl::ClientListResult {
+        AdminKind::ClientList => AdminControl::ClientListResult {
             ok: false,
             enrolled: false,
             clients: Vec::new(),
             error: Some("malformed client_list frame".into()),
         },
-        "kill_status" | "kill_engage" | "kill_release" => AdminControl::KillStatusResult {
+        AdminKind::ClientRevoke => AdminControl::ClientRevokeResult {
             ok: false,
-            killed: None,
-            error: Some(format!("malformed {kind} frame")),
+            error: Some("malformed client_revoke frame".into()),
         },
-        _ => AdminControl::ClientRevokeResult {
-            ok: false,
-            error: Some(format!("malformed {kind} frame")),
-        },
+        AdminKind::KillStatus | AdminKind::KillEngage | AdminKind::KillRelease => {
+            AdminControl::KillStatusResult {
+                ok: false,
+                killed: None,
+                error: Some(format!("malformed {} frame", kind.wire_tag())),
+            }
+        }
     }
 }
 
@@ -353,6 +352,26 @@ fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
     }
 }
 
+/// The two revocation epochs the watch compares between polls, by name: a
+/// positional pair here would let a silent swap cross the kill-transition
+/// check with the revoked-key push, so each epoch travels under its own field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WatchedEpochs {
+    /// `Revocation::host_key_epoch` - bumps when the enrollment key is revoked.
+    host_key: u64,
+    /// `Revocation::kill_epoch` - bumps on every kill-switch transition.
+    kill: u64,
+}
+
+impl WatchedEpochs {
+    fn of(rev: &Revocation) -> Self {
+        WatchedEpochs {
+            host_key: rev.host_key_epoch,
+            kill: rev.kill_epoch,
+        }
+    }
+}
+
 /// Watch the revocation record while this host runs, and notify the extension
 /// of out-of-band transitions:
 ///
@@ -386,7 +405,7 @@ fn spawn_revocation_watch(
     thread::spawn(move || {
         // Startup posture: bad news is announced now (a key revoked or a kill
         // engaged while no host was running); a healthy state stays quiet.
-        let mut last: Option<(u64, u64)> = match Revocation::current() {
+        let mut last: Option<WatchedEpochs> = match Revocation::current() {
             Ok(rev) => {
                 if rev.host_key_epoch > 0 && enrollment_key_is_gone() {
                     push_revoked(&out);
@@ -394,7 +413,7 @@ fn spawn_revocation_watch(
                 if rev.killed {
                     push_kill_status(&out);
                 }
-                Some((rev.host_key_epoch, rev.kill_epoch))
+                Some(WatchedEpochs::of(&rev))
             }
             Err(e) => {
                 log_warn!("native-host", "revocation record unreadable: {e}");
@@ -406,15 +425,15 @@ fn spawn_revocation_watch(
             thread::sleep(REVOCATION_POLL);
             match Revocation::current() {
                 Ok(rev) => {
-                    let cur = (rev.host_key_epoch, rev.kill_epoch);
-                    if let Some((last_host_key, last_kill)) = last {
-                        if last_host_key != rev.host_key_epoch
+                    let cur = WatchedEpochs::of(&rev);
+                    if let Some(prev) = last {
+                        if prev.host_key != cur.host_key
                             && rev.host_key_epoch > 0
                             && enrollment_key_is_gone()
                         {
                             push_revoked(&out);
                         }
-                        if last_kill != rev.kill_epoch {
+                        if prev.kill != cur.kill {
                             push_kill_status(&out);
                             if !rev.killed {
                                 if let Some(flag) = &unkill_observed {
@@ -630,20 +649,26 @@ fn handle_control_frame(
             write_control_reply(out, &handle_kill_transition(false))?;
             Ok(Inbound::Handled)
         }
-        FrameDisposition::AuditEvent {
-            kind,
-            outcome,
-            tool,
-            name,
-            detail,
-            cid,
-        } => {
+        FrameDisposition::AuditEvent(fields) => {
             // Fire-and-forget by contract: no reply frame.
-            handle_audit_event(kind, outcome, tool, name, detail, cid);
+            handle_audit_event(fields);
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::DropForeignAuditKind { kind } => {
+            // Refused at classification (the kind is host-owned); the
+            // offending value is logged here for forensics, nothing recorded.
+            log_warn!(
+                "native-host",
+                "dropping audit_event with a non-extension kind {kind:?}"
+            );
             Ok(Inbound::Handled)
         }
         FrameDisposition::MalformedAdmin(kind) => {
-            log_warn!("native-host", "malformed {kind} frame from browser");
+            log_warn!(
+                "native-host",
+                "malformed {} frame from browser",
+                kind.wire_tag()
+            );
             write_control_reply(out, &malformed_admin_reply(kind))?;
             Ok(Inbound::Handled)
         }
@@ -1310,32 +1335,46 @@ mod tests {
     #[test]
     fn malformed_admin_frames_get_a_matching_ok_false_reply() {
         // The reply frame type must match the request so the extension's
-        // pending request resolves instead of timing out.
-        match malformed_admin_reply("client_list") {
-            AdminControl::ClientListResult {
-                ok: false,
-                error: Some(_),
-                ..
-            } => {}
-            other => panic!("expected a failed client_list_result, got {other:?}"),
-        }
-        match malformed_admin_reply("client_revoke") {
-            AdminControl::ClientRevokeResult {
-                ok: false,
-                error: Some(_),
-            } => {}
-            other => panic!("expected a failed client_revoke_result, got {other:?}"),
-        }
-        // The kill frames all resolve to a kill_status_result whose ok:false
-        // carries NO killed claim (unknown fails closed on the extension side).
-        for kind in ["kill_status", "kill_engage", "kill_release"] {
-            match malformed_admin_reply(kind) {
-                AdminControl::KillStatusResult {
-                    ok: false,
-                    killed: None,
-                    error: Some(_),
-                } => {}
-                other => panic!("expected a failed kill_status_result for {kind}, got {other:?}"),
+        // pending request resolves instead of timing out. Every AdminKind is
+        // exercised; the builder itself is exhaustive, so a new kind fails to
+        // compile until it gets a reply of its own type.
+        for kind in [
+            AdminKind::ClientList,
+            AdminKind::ClientRevoke,
+            AdminKind::KillStatus,
+            AdminKind::KillEngage,
+            AdminKind::KillRelease,
+        ] {
+            match (kind, malformed_admin_reply(kind)) {
+                (
+                    AdminKind::ClientList,
+                    AdminControl::ClientListResult {
+                        ok: false,
+                        error: Some(_),
+                        ..
+                    },
+                ) => {}
+                (
+                    AdminKind::ClientRevoke,
+                    AdminControl::ClientRevokeResult {
+                        ok: false,
+                        error: Some(_),
+                    },
+                ) => {}
+                // The kill frames all resolve to a kill_status_result whose
+                // ok:false carries NO killed claim (unknown fails closed on
+                // the extension side).
+                (
+                    AdminKind::KillStatus | AdminKind::KillEngage | AdminKind::KillRelease,
+                    AdminControl::KillStatusResult {
+                        ok: false,
+                        killed: None,
+                        error: Some(_),
+                    },
+                ) => {}
+                (kind, other) => {
+                    panic!("reply type does not match request kind {kind:?}: {other:?}")
+                }
             }
         }
     }
@@ -1365,11 +1404,20 @@ mod tests {
 
     #[test]
     fn audit_events_with_host_side_kinds_are_dropped() {
-        // handle_audit_event must refuse to stamp host-side kinds from the
-        // browser leg. Success here is the absence of a panic plus the
-        // whitelist test in audit.rs; this exercises the wiring.
-        handle_audit_event("kill_engage".into(), None, None, None, None, None);
-        handle_audit_event("harness_admit".into(), None, None, None, None, None);
+        // The forgery gate now lives in classification (protocol.rs pins the
+        // DropForeignAuditKind mapping); this exercises the host wiring: the
+        // frame is Handled (never forwarded), no reply is written, and
+        // nothing recordable is ever constructed - handle_audit_event only
+        // accepts the typed AuditEventFields classification can produce.
+        let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+        for kind in ["kill_engage", "harness_admit"] {
+            let verdict = handle_control_frame(
+                serde_json::json!({ "type": "audit_event", "kind": kind }),
+                &out,
+            )
+            .unwrap();
+            assert!(matches!(verdict, Inbound::Handled));
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
