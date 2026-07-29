@@ -2,6 +2,7 @@ import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { handle } from "@/lib/content/handle";
 import { maskErrorMessage } from "@/lib/shared/masking";
+import type { PageReply } from "@/lib/shared/types";
 
 declare global {
   interface Window {
@@ -12,8 +13,11 @@ declare global {
 // Injected into a page by the service worker (registration: "runtime" keeps
 // it out of the manifest; lib/background/tabs.ts injects it on demand once
 // the user has approved the origin). Receives { op, args } from the service
-// worker via runtime.onMessage and runs the DOM operation, replying with
-// JSON-serializable data or { __error }.
+// worker via runtime.onMessage and runs the DOM operation. Every outcome is
+// wrapped in ONE discriminated reply envelope at this single reply point:
+// { ok: true, data } on success, { ok: false, error } on refusal or failure.
+// Falsy results stay representable (a cancelled toast travels as
+// { cancelled: true } data, never as a bare `false` a default could swallow).
 export default defineContentScript({
   // Injected at RUNTIME only (lib/background/tabs.ts, after the user approves
   // the origin), never declared in the manifest. matches stays EMPTY so WXT
@@ -28,11 +32,13 @@ export default defineContentScript({
 
     browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       handle(msg)
-        .then((data) => sendResponse(data || {}))
+        .then((data) => sendResponse({ ok: true, data } satisfies PageReply))
         // An error message can carry page-derived data (a getter that throws,
         // a failed op echoing page state), so this egress is masked like any
         // other.
-        .catch((e: unknown) => sendResponse({ __error: maskErrorMessage(e) }));
+        .catch((e: unknown) =>
+          sendResponse({ ok: false, error: maskErrorMessage(e) } satisfies PageReply),
+        );
       return true; // keep the channel open for the async response
     });
   },

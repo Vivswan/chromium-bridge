@@ -6,7 +6,7 @@
 // applied in the page, so the two backends cannot drift. Allowlist,
 // confirmation, and masking policy run in dispatch.ts around this backend.
 
-import { unreachable } from "@chromium-bridge/shared";
+import { ClickProbeSchema, unreachable } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
 import type { ClickProbe, PageApi } from "../../dom/page-api";
 import { createPageApi, REF_ATTR } from "../../dom/page-api";
@@ -21,30 +21,53 @@ import type { PageBackend } from "../page-backend";
 // The factory is self-contained (enforced by test), so its source evaluates
 // cleanly outside module scope; args are JSON, never string-spliced user
 // code. The method name comes from the typed PageApi key set only.
-// `expectOrigin` (when set) is asserted against location.origin INSIDE the
-// same evaluation, atomically with the act: a navigation that raced the
-// SW-side checks makes the expression throw instead of acting.
+function pageApiCall(method: keyof PageApi, args: readonly unknown[]): string {
+  const argList = args.map((a) => JSON.stringify(a)).join(", ");
+  return `(${createPageApi.toString()})(${JSON.stringify(REF_ATTR)}).${method}(${argList})`;
+}
+
+// A page-acting expression: `expectOrigin` is REQUIRED and asserted against
+// location.origin INSIDE the same evaluation, atomically with the act - a
+// navigation that raced the SW-side checks makes the expression throw instead
+// of acting. An empty origin is refused here (fail closed), never silently
+// skipped.
 export function pageApiExpression(
   method: keyof PageApi,
   args: readonly unknown[],
-  expectOrigin?: string,
+  expectOrigin: string,
 ): string {
-  const argList = args.map((a) => JSON.stringify(a)).join(", ");
-  const call = `(${createPageApi.toString()})(${JSON.stringify(REF_ATTR)}).${method}(${argList})`;
-  if (expectOrigin === undefined) return call;
+  if (!expectOrigin) {
+    throw new Error("page expression has no bound origin - refusing");
+  }
   return (
     `(() => { if (location.origin !== ${JSON.stringify(expectOrigin)}) ` +
     `throw new Error("the page origin changed while the request was in flight - re-issue the call"); ` +
-    `return ${call}; })()`
+    `return ${pageApiCall(method, args)}; })()`
   );
+}
+
+// The click probe is the ONE deliberately guard-less page expression: a DOM
+// read that runs BEFORE any approval exists - its result is what the user is
+// asked to approve and what the eventual click is held to.
+export function probeClickExpression(args: { ref?: string; selector?: string }): string {
+  return pageApiCall("probeClick", [args]);
 }
 
 export class CdpBackend implements PageBackend {
   async probeClick(args: OpArgs, tab: Browser.tabs.Tab): Promise<ClickProbe> {
+    // The probe descriptor feeds the risk decision, the confirmation text,
+    // and the click binding, so parse it at this receive boundary rather
+    // than casting the MAIN-world eval result straight into authorization
+    // (fail closed on any drift).
     const session = await this.session(tab);
-    return (await session.evaluate(
-      pageApiExpression("probeClick", [{ ref: args.ref, selector: args.selector }]),
-    )) as ClickProbe;
+    const raw = await session.evaluate(
+      probeClickExpression({ ref: args.ref, selector: args.selector }),
+    );
+    const probe = ClickProbeSchema.safeParse(raw);
+    if (!probe.success) {
+      throw new Error("click probe reply is not a valid descriptor - refusing");
+    }
+    return probe.data;
   }
 
   private async session(tab: Browser.tabs.Tab): Promise<CdpSession> {
@@ -110,12 +133,18 @@ export class CdpBackend implements PageBackend {
         // RAW values here; dispatch masks them via egress.ts (always-on).
         return await session.evaluate(expr("readStorage", [{ type: args.type, key: args.key }]));
 
-      case "page_click":
+      case "page_click": {
         // guard.clickExpect binds the click to the descriptor the preflight
-        // authorized; the page API refuses if the target changed.
+        // authorized; the page API refuses if the target changed. A click
+        // without the approved descriptor is refused HERE, not clicked
+        // unchecked.
+        if (!guard.clickExpect) {
+          throw new Error("page_click has no approved click descriptor - refusing");
+        }
         return await session.evaluate(
           expr("click", [{ ref: args.ref, selector: args.selector, expect: guard.clickExpect }]),
         );
+      }
 
       case "page_fill":
         return await session.evaluate(
@@ -155,12 +184,15 @@ export class CdpBackend implements PageBackend {
       throw new Error("page_eval needs non-empty `code`");
     }
     // The origin assertion runs INSIDE the same evaluation, atomically with
-    // the eval itself: approved code can only ever run on the approved origin.
+    // the eval itself: approved code can only ever run on the approved
+    // origin. The guard type makes expectOrigin required; this runtime check
+    // is the fail-closed backstop for a caller that bypassed the types.
+    if (!guard.expectOrigin) {
+      throw new Error("page_eval has no bound origin - refusing");
+    }
     const originCheck =
-      guard.expectOrigin === undefined
-        ? ""
-        : `if (location.origin !== ${JSON.stringify(guard.expectOrigin)}) ` +
-          `throw new Error("the page origin changed while the request was in flight - re-issue the call");\n`;
+      `if (location.origin !== ${JSON.stringify(guard.expectOrigin)}) ` +
+      `throw new Error("the page origin changed while the request was in flight - re-issue the call");\n`;
     const expression = `(async () => {\n${originCheck}${code}\n})()`;
     const res: EvaluateResponse = await session.rawEvaluate(expression, { awaitPromise: true });
     return evalResponseToPayload(res);

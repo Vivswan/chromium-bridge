@@ -13,17 +13,41 @@ import type { PageBackend } from "../page-backend";
 import { describeAction, describeTarget, isHighRiskClick } from "./risk";
 import { confirmWithUser } from "./service";
 
-/** What the preflight authorized, for the backend to hold the act to. */
-export interface PageOpGuard {
-  /** The origin the allowlist check and any confirmation were based on.
-   * Enforced IN THE PAGE, atomically with the act (the SW-side recheck can
-   * always be raced by one more navigation; location.origin inside the page
-   * cannot). Set by dispatch for every page op. */
-  expectOrigin?: string;
+/** What the preflight authorized, BEFORE the origin is bound. This is not
+ * what backends act on - dispatch turns it into a PageOpGuard via bindOrigin
+ * after the post-confirmation tab recheck. */
+export interface PreflightResult {
   /** For page_click: the probe the risk decision (and the user, when a
    * confirmation was shown) was based on. The page API re-probes and refuses
-   * the click if the target no longer matches this descriptor. */
+   * the click if the target no longer matches this descriptor. Always set for
+   * page_click (the gate always probes). */
   clickExpect?: ClickProbe;
+}
+
+/** The guard a backend holds the act to. expectOrigin is REQUIRED: every
+ * page op must carry the origin its allowlist check and any confirmation
+ * were based on, enforced IN THE PAGE, atomically with the act (the SW-side
+ * recheck can always be raced by one more navigation; location.origin inside
+ * the page cannot). An unbound guard cannot be constructed - the only
+ * producer is bindOrigin, and it refuses an empty origin. */
+export interface PageOpGuard {
+  expectOrigin: string;
+  /** See PreflightResult.clickExpect; present exactly for page_click, and the
+   * wire schema (ContentMsgSchema) plus both backends refuse a click
+   * without it. */
+  clickExpect?: ClickProbe;
+}
+
+/** Bind the preflight result to the origin the checks were based on. Fails
+ * closed when there is no origin to bind - a page op must never run
+ * origin-unchecked. */
+export function bindOrigin(preflight: PreflightResult, expectOrigin: string): PageOpGuard {
+  if (!expectOrigin) {
+    throw new Error("page op has no origin to bind the act to - refusing");
+  }
+  return preflight.clickExpect
+    ? { expectOrigin, clickExpect: preflight.clickExpect }
+    : { expectOrigin };
 }
 
 // Same-origin, same-kind confirmation grace window for CLICKS only (ADR-0006
@@ -51,27 +75,28 @@ export function resetClickGraceWindow(): void {
  * Gate a page op before the backend acts. Throws to refuse:
  * - the user denied (or never answered) a confirmation;
  * - a settings gate is off (page_eval disabled).
- * Ops with no gate return an empty guard immediately.
+ * Ops with no gate return an empty preflight immediately. The returned value
+ * still has to pass through bindOrigin before any backend accepts it.
  */
 export async function preflightPageOp(
   op: PageOp,
   args: OpArgs,
   tab: Browser.tabs.Tab,
   backend: PageBackend,
-): Promise<PageOpGuard> {
+): Promise<PreflightResult> {
   switch (op) {
     case "page_click": {
       const probe = await backend.probeClick(args, tab);
-      const guard: PageOpGuard = { clickExpect: probe };
-      if (!isHighRiskClick(probe)) return guard;
+      const preflight: PreflightResult = { clickExpect: probe };
+      if (!isHighRiskClick(probe)) return preflight;
       // The confirmation gate can be disabled by the user in settings. This
       // is dangerous (ADR-0006) but offered as an explicit opt-in.
-      if ((await getSetting("confirmHighRiskClick")) === false) return guard;
+      if ((await getSetting("confirmHighRiskClick")) === false) return preflight;
       const actionDesc = describeAction(probe, "click");
       const key = `${tab.id}:${originOf(tab.url)}:${actionDesc}`;
       const graceMs = await getSetting("confirmGraceMs");
       if (graceMs > 0 && lastConfirmed.key === key && Date.now() < lastConfirmed.until) {
-        return guard; // within the grace window
+        return preflight; // within the grace window
       }
       const approved = await confirmWithUser({
         kind: "click",
@@ -82,7 +107,7 @@ export async function preflightPageOp(
       });
       if (!approved) throw new Error(`user denied: ${actionDesc}`);
       lastConfirmed = { key, until: Date.now() + graceMs };
-      return guard;
+      return preflight;
     }
 
     case "page_press": {

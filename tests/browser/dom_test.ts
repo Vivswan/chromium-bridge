@@ -283,11 +283,10 @@ async function loadContentJs(page: Page): Promise<void> {
   await page.evaluate(src);
 }
 
-/** Invoke a content.js op via the captured onMessage listener. Returns the
- * sendResponse payload (the op's result object). */
-async function invoke(page: Page, op: string, args: any = {}, timeoutMs = 8000): Promise<any> {
-  // Reset the response slot, then call the listener. The listener returns true
-  // (async) and eventually calls sendResponse with the result.
+/** Drive the captured onMessage listener with a message built from `msgExpr`
+ * (a JS expression evaluated IN THE PAGE, so it can reference location.origin)
+ * and return the raw reply envelope. */
+async function callListener(page: Page, msgExpr: string, timeoutMs = 8000): Promise<any> {
   await page.evaluate(`
     (function(){
       window.__bbLastResp = undefined;
@@ -299,7 +298,7 @@ async function invoke(page: Page, op: string, args: any = {}, timeoutMs = 8000):
       };
       var listener = window.__bbListeners[0];
       if (!listener) throw new Error("no content.js listener registered");
-      listener({ op: ${JSON.stringify(op)}, args: ${JSON.stringify(args)} }, {}, sendResponse);
+      listener(${msgExpr}, {}, sendResponse);
     })();
   `);
   // Poll for the response (handler is async).
@@ -309,7 +308,54 @@ async function invoke(page: Page, op: string, args: any = {}, timeoutMs = 8000):
     if (resp !== undefined && resp !== null) return resp;
     await new Promise((r) => setTimeout(r, 50));
   }
-  throw new Error(`invoke('${op}') timed out after ${timeoutMs}ms`);
+  throw new Error(`callListener timed out after ${timeoutMs}ms`);
+}
+
+const INTERNAL_OPS = new Set(["ping", "_info_toast", "_probe_click"]);
+
+/** Invoke a content.js op via the captured onMessage listener, speaking the
+ * SW's wire contract (shared/content-msg.ts): page-acting ops carry the
+ * required guard, bound in-page to location.origin exactly like
+ * dispatch.bindOrigin binds the checked tab origin; page_click additionally
+ * carries the probed descriptor (`clickExpect`). The reply envelope is
+ * unwrapped here the way the SW backend unwraps it: ok:true yields the op's
+ * payload, ok:false yields { __error } so the assertions below read naturally,
+ * and anything else is a hard failure. */
+async function invoke(
+  page: Page,
+  op: string,
+  args: any = {},
+  timeoutMs = 8000,
+  clickExpect?: any,
+): Promise<any> {
+  let msgExpr: string;
+  if (op === "ping") {
+    msgExpr = `{ op: "ping" }`;
+  } else if (INTERNAL_OPS.has(op)) {
+    msgExpr = `{ op: ${JSON.stringify(op)}, args: ${JSON.stringify(args)} }`;
+  } else {
+    const guardExpr = clickExpect
+      ? `{ expectOrigin: location.origin, clickExpect: ${JSON.stringify(clickExpect)} }`
+      : `{ expectOrigin: location.origin }`;
+    msgExpr = `{ op: ${JSON.stringify(op)}, args: ${JSON.stringify(args)}, guard: ${guardExpr} }`;
+  }
+  const envelope = await callListener(page, msgExpr, timeoutMs);
+  if (envelope && envelope.ok === true) return envelope.data;
+  if (envelope && envelope.ok === false && typeof envelope.error === "string") {
+    return { __error: envelope.error };
+  }
+  throw new Error(`invoke('${op}') got a non-envelope reply: ${JSON.stringify(envelope)}`);
+}
+
+/** page_click under the new contract, mirroring the SW pipeline: probe the
+ * target first (the descriptor the risk decision and any confirmation bind
+ * to), then send the click bound to that descriptor. A failed probe is
+ * returned as the error - exactly where the real pipeline refuses (preflight,
+ * before any click). */
+async function invokeClick(page: Page, args: any, timeoutMs = 8000): Promise<any> {
+  const probe = await invoke(page, "_probe_click", args, timeoutMs);
+  if (probe.__error) return probe;
+  return await invoke(page, "page_click", args, timeoutMs, probe);
 }
 
 /** Click a Toast button (Allow/Deny/Cancel) in the page - for testing the
@@ -353,6 +399,7 @@ async function runAllTests(page: Page): Promise<void> {
   await testWaitForNav(page);
   await testNoInPageToast(page);
   await testPing(page);
+  await testGuardEnforcement(page);
   await testShadowDom(page);
   await testIframe(page);
   await testDynamicReloadSnapshot(page);
@@ -436,20 +483,20 @@ async function testClick(page: Page): Promise<void> {
 
   // Click by ref - should actually trigger the page's onclick counter.
   const before = await page.evaluate("window.__plainClicks || 0");
-  const clickResp = await invoke(page, "page_click", { ref: plainBtn.ref });
+  const clickResp = await invokeClick(page, { ref: plainBtn.ref });
   check(!clickResp.__error, `click by ref succeeds: ${clickResp.__error || "ok"}`);
   const after = await page.evaluate("window.__plainClicks || 0");
   check(after === before + 1, `click triggered real onclick (before=${before} after=${after})`);
 
   // Click by selector fallback (no ref).
   const before2 = await page.evaluate("window.__plainClicks || 0");
-  const clickResp2 = await invoke(page, "page_click", { selector: "#plain-btn" });
+  const clickResp2 = await invokeClick(page, { selector: "#plain-btn" });
   check(!clickResp2.__error, "click by selector succeeds");
   const after2 = await page.evaluate("window.__plainClicks || 0");
   check(after2 === before2 + 1, "selector click triggered onclick");
 
-  // Non-existent ref → clear error.
-  const bad = await invoke(page, "page_click", { ref: "e999" });
+  // Non-existent ref → clear error (the probe refuses, like the preflight).
+  const bad = await invokeClick(page, { ref: "e999" });
   check(!!bad.__error, "click on stale ref returns error");
 }
 
@@ -609,7 +656,7 @@ async function testNoInPageToast(page: Page): Promise<void> {
   const go = snap.nodes.find((n: any) => n.selector?.includes("#go"));
   check(go?.role === "button", "#go is the submit button");
 
-  const resp = await invoke(page, "page_click", { ref: go.ref });
+  const resp = await invokeClick(page, { ref: go.ref });
   check(!resp.__error, `content click proceeds: ${resp.__error || "ok"}`);
   const count = await page.evaluate("window.__clickCount || 0");
   check(count >= 1, "content click triggered onclick");
@@ -632,6 +679,45 @@ async function testPing(page: Page): Promise<void> {
   await freshLoad(page);
   const resp = await invoke(page, "ping", {});
   check(resp.pong === true, "ping returns {pong:true}");
+}
+
+// ── test: the content boundary refuses guardless and misbound messages ─────
+// The confirm-to-act binding, proven against the REAL page: a page-acting
+// message without its guard, bound to a different origin, or a click without
+// the approved descriptor must come back as an ok:false refusal - never a
+// performed act. This is the runtime half of the fail-closed contract the
+// unit suites pin with fakes.
+async function testGuardEnforcement(page: Page): Promise<void> {
+  console.log("\n[test] content boundary - guardless and misbound ops are refused");
+  await freshLoad(page);
+
+  // Guardless page op → refused at the parse boundary.
+  const noGuard = await callListener(page, `{ op: "page_snapshot", args: {} }`);
+  check(
+    noGuard.ok === false && noGuard.error.includes("does not match the SW envelope"),
+    "guardless page_snapshot is refused",
+  );
+
+  // Guard bound to a DIFFERENT origin → refused by the in-page origin check.
+  const wrongOrigin = await callListener(
+    page,
+    `{ op: "page_snapshot", args: {}, guard: { expectOrigin: "https://elsewhere.example" } }`,
+  );
+  check(
+    wrongOrigin.ok === false && wrongOrigin.error.includes("origin changed"),
+    "wrong-origin guard is refused",
+  );
+
+  // page_click without the approved descriptor → refused, and the click must
+  // NOT fire.
+  const before = await page.evaluate("window.__plainClicks || 0");
+  const bareClick = await callListener(
+    page,
+    `{ op: "page_click", args: { selector: "#plain-btn" }, guard: { expectOrigin: location.origin } }`,
+  );
+  const after = await page.evaluate("window.__plainClicks || 0");
+  check(bareClick.ok === false, "descriptor-less page_click is refused");
+  check(after === before, "refused click did NOT fire the page's onclick");
 }
 
 // ── test: shadow DOM (content-script limitation) ──────────────────────────
@@ -660,7 +746,7 @@ async function testShadowDom(page: Page): Promise<void> {
   // Clicking the plain button via its ref still works (content.js otherwise
   // functional on the top frame).
   const plainNode = resp.nodes.find((n: any) => n.selector?.includes("#plain"));
-  const clickResp = await invoke(page, "page_click", { ref: plainNode.ref });
+  const clickResp = await invokeClick(page, { ref: plainNode.ref });
   check(!clickResp.__error, "click plain button via ref works");
 }
 
@@ -691,7 +777,7 @@ async function testIframe(page: Page): Promise<void> {
 
   // page_click targeting the iframe button via selector must fail (it's in a
   // different document; querySelector on the top document returns null).
-  const badClick = await invoke(page, "page_click", { selector: "#iframe-btn" });
+  const badClick = await invokeClick(page, { selector: "#iframe-btn" });
   check(!!badClick.__error, "click on iframe-resident selector fails as expected");
 }
 
@@ -734,13 +820,13 @@ async function testDynamicReloadSnapshot(page: Page): Promise<void> {
 
   // Both refs must still be clickable (refMap → DOM resolution).
   const before = await page.evaluate("window.__aClicks || 0");
-  const clickA = await invoke(page, "page_click", { ref: btnARef });
+  const clickA = await invokeClick(page, { ref: btnARef });
   check(!clickA.__error, "click #btn-a via its (stable) ref works");
   const after = await page.evaluate("window.__aClicks || 0");
   check(after === before + 1, `stable-ref click actually fired onclick (${before}→${after})`);
 
   const beforeDyn = await page.evaluate("window.__dynClicks || 0");
-  const clickDyn = await invoke(page, "page_click", { ref: dynBtn.ref });
+  const clickDyn = await invokeClick(page, { ref: dynBtn.ref });
   check(!clickDyn.__error, "click #dyn-btn via its new ref works");
   const afterDyn = await page.evaluate("window.__dynClicks || 0");
   check(afterDyn === beforeDyn + 1, "new-ref click actually fired onclick");

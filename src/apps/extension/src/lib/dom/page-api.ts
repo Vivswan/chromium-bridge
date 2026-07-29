@@ -35,11 +35,13 @@ export interface PageApi {
   }): Promise<unknown>;
   readStorage(args: { type?: string; key?: string }): StorageReadResult;
   probeClick(args: TargetArgs): ClickProbe;
-  /** When `expect` is set (the probe the user approved), the target is
-   * re-probed immediately before the click and the click is REFUSED if the
-   * descriptor changed - a page cannot swap the target behind an open
-   * confirmation. */
-  click(args: TargetArgs & { expect?: ClickProbe }): {
+  /** `expect` is the probe the user approved (or that risk classification
+   * ran on): the target is re-probed immediately before the click and the
+   * click is REFUSED if the descriptor changed - a page cannot swap the
+   * target behind an open confirmation. REQUIRED: every click is probed, and
+   * a call arriving without it (e.g. dropped across the CDP serialization
+   * boundary) is refused at runtime, never clicked unchecked. */
+  click(args: TargetArgs & { expect: ClickProbe }): {
     clicked: string | undefined;
     role: string;
   };
@@ -505,28 +507,33 @@ export function createPageApi(refAttr: string): PageApi {
     },
 
     click(args) {
+      // Runtime backstop for the required `expect`: the descriptor crosses a
+      // serialization boundary in CDP mode (JSON.stringify drops undefined),
+      // so a click that arrives without it must be refused, not performed
+      // unbound.
+      if (!args.expect || typeof args.expect !== "object") {
+        throw new Error("click has no approved target descriptor - refusing");
+      }
       const el = resolveTarget(args);
       el.scrollIntoView({ block: "center" });
       el.focus?.();
-      if (args.expect) {
-        // Bind the act to the approval: the user approved a specific
-        // descriptor (confirm/gate.ts); if the element no longer matches it,
-        // the page changed the target while the confirmation was open -
-        // refuse. Checked AFTER scroll/focus (whose handlers a hostile page
-        // controls and could use to mutate the target) so nothing scriptable
-        // runs between this comparison and the click itself.
-        const now = probeOf(el);
-        const same =
-          now.tagName === args.expect.tagName &&
-          now.role === args.expect.role &&
-          now.type === args.expect.type &&
-          now.hasHref === args.expect.hasHref &&
-          now.name === args.expect.name;
-        if (!same) {
-          throw new Error(
-            "click target changed while the confirmation was open - call page_snapshot again",
-          );
-        }
+      // Bind the act to the approval: the user approved a specific descriptor
+      // (confirm/gate.ts); if the element no longer matches it, the page
+      // changed the target while the confirmation was open - refuse. Checked
+      // AFTER scroll/focus (whose handlers a hostile page controls and could
+      // use to mutate the target) so nothing scriptable runs between this
+      // comparison and the click itself.
+      const now = probeOf(el);
+      const same =
+        now.tagName === args.expect.tagName &&
+        now.role === args.expect.role &&
+        now.type === args.expect.type &&
+        now.hasHref === args.expect.hasHref &&
+        now.name === args.expect.name;
+      if (!same) {
+        throw new Error(
+          "click target changed while the confirmation was open - call page_snapshot again",
+        );
       }
       el.click();
       return { clicked: args.ref || args.selector, role: roleOf(el) };

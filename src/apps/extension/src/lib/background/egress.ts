@@ -14,6 +14,7 @@
 // - everything else: passed through (page_text masks passwords/card numbers
 //   in the page walk itself; cookie_get masks in cookies.ts).
 
+import { StorageReadResultSchema } from "@chromium-bridge/shared";
 import { maskSensitive, maskString } from "../shared/masking";
 import type { PageOp } from "../shared/page-ops";
 import { getSetting } from "../shared/settings";
@@ -32,17 +33,23 @@ export async function maskOpResult(op: PageOp, result: unknown): Promise<unknown
 }
 
 function maskStorageResult(raw: unknown): unknown {
-  if (raw === null || typeof raw !== "object") return raw;
-  const rec = raw as Record<string, unknown>;
-  if ("entries" in rec && rec.entries && typeof rec.entries === "object") {
+  // Parse before masking (the ADR-0010 gate): a result outside the three
+  // known storage_get shapes is REFUSED, never passed through raw - a drifted
+  // shape must fail closed instead of carrying unmasked values to the host.
+  const parsed = StorageReadResultSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("storage_get result does not match a known shape - refusing to egress it");
+  }
+  const result = parsed.data;
+  if ("entries" in result) {
     const masked: Record<string, string> = {};
-    for (const [k, v] of Object.entries(rec.entries as Record<string, unknown>)) {
-      masked[k] = maskString(String(v));
+    for (const [k, v] of Object.entries(result.entries)) {
+      masked[k] = maskString(v);
     }
-    return { ...rec, entries: masked };
+    return { ...result, entries: masked };
   }
-  if (rec.found === true && typeof rec.value === "string") {
-    return { ...rec, value: maskString(rec.value) };
+  if (result.found) {
+    return { ...result, value: maskString(result.value) };
   }
-  return raw;
+  return result;
 }
