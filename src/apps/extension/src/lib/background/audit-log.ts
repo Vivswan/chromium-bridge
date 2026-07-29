@@ -65,14 +65,12 @@ export interface AuditFields {
   cid?: string;
 }
 
-/** Record one event. Never throws, never blocks the caller. `forward: false`
- * keeps an event out of the host file (used for events the host already
- * records authoritatively itself). */
-export function auditEvent(
-  kind: AuditEventKind,
-  fields: AuditFields = {},
-  opts: { forward?: boolean } = {},
-): void {
+/** Record one event. Never throws, never blocks the caller. Whether the
+ * event also goes to the host's on-disk trail is a property of its KIND
+ * (the FORWARDED_KINDS whitelist), never of the call site: the local-only
+ * kinds the host audits authoritatively itself are simply not in the set,
+ * so no caller can suppress forensic evidence for a forwarded kind. */
+export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void {
   // Validate at write time with the same schema reads use, so an oversized
   // or malformed field is dropped HERE (loudly) instead of being stored and
   // silently discarded by the strict read later.
@@ -93,7 +91,7 @@ export function auditEvent(
       // be re-litigated because its bookkeeping failed.
       console.warn("[bb] audit ring append failed; event dropped from the ring", e);
     });
-  if (opts.forward !== false && FORWARDED_KINDS.has(kind)) {
+  if (FORWARDED_KINDS.has(kind)) {
     try {
       // Best-effort: with the port down the host file misses this event (the
       // ring still has it) - a named residual, not silently widened by

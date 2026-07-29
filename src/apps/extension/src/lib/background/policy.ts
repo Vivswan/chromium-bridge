@@ -6,20 +6,31 @@
 // user's disabledTools list - no chrome.* calls, no I/O, no import-time side
 // effects - so it is trivially unit-testable and can be reused from anywhere.
 //
-// NOTE: this module is not yet wired into background/dispatch.ts. Wiring is a
-// separate, supervised step; for now this is scaffolding.
+// NOTE: only the disable gate (dispatch.assertNotDisabled) is wired into
+// background/dispatch.ts so far. Wiring the rest is a separate, supervised
+// step.
 
 import { type Confirmation, isOpName, type Risk, TOOL_META } from "@chromium-bridge/shared";
 
-export type ConfirmationChannel = "extension-ui" | "none";
+/** How a call must be confirmed, as one value: "required over no channel"
+ * (and its inverse) are unrepresentable. Since ADR-0027 every confirmation
+ * shows on the extension-owned surface, so that is the only channel. */
+export type PolicyConfirmation = { required: false } | { required: true; channel: "extension-ui" };
 
-export interface PolicyDecision {
-  allowed: boolean;
-  risk: Risk;
-  requiresConfirmation: boolean;
-  confirmationChannel: ConfirmationChannel;
-  reason: string;
-}
+/** Why a call was refused, as a closed union. Refusal behavior downstream
+ * keys on this, never on the display `reason` - rewording prose must not be
+ * able to change what a gate does. */
+export type RefusalCause = "unknown-tool" | "disabled-in-settings";
+
+export type PolicyDecision =
+  | { allowed: true; risk: Risk; confirmation: PolicyConfirmation; reason: string }
+  | {
+      allowed: false;
+      cause: RefusalCause;
+      risk: Risk;
+      confirmation: PolicyConfirmation;
+      reason: string;
+    };
 
 export interface PolicyContext {
   /** Op names the user has disabled in settings. */
@@ -31,30 +42,27 @@ export interface PolicyContext {
 const UNKNOWN_RISK: Risk = "critical";
 
 /**
- * Map a tool's `confirmation` field to whether a call must be confirmed and
- * via which channel. Since ADR-0027 every confirmation shows on the
- * extension-owned surface; "none" is the only other channel.
+ * Map a tool's `confirmation` field to how a call must be confirmed.
  *
  * - "none"      -> no confirmation
  * - everything else ("every-call", "high-risk", "warn", and any value added
  *   to the contract later) -> confirm via the extension UI (fail-safe).
  */
-function confirmationFor(confirmation: Confirmation): {
-  requiresConfirmation: boolean;
-  confirmationChannel: ConfirmationChannel;
-} {
+function confirmationFor(confirmation: Confirmation): PolicyConfirmation {
   switch (confirmation) {
     case "none":
-      return { requiresConfirmation: false, confirmationChannel: "none" };
+      return { required: false };
     default:
-      return { requiresConfirmation: true, confirmationChannel: "extension-ui" };
+      return { required: true, channel: "extension-ui" };
   }
 }
 
 /**
  * Decide whether `op` may run given the current settings context.
  *
- * Pure: depends only on its arguments and the static TOOL_META table.
+ * Pure: depends only on its arguments and the static TOOL_META table. The
+ * `reason` on every branch is derived display text; consumers act on
+ * `allowed`/`cause`/`confirmation`, never on the prose.
  */
 export function decide(op: string, ctx: PolicyContext): PolicyDecision {
   const meta = isOpName(op) ? TOOL_META[op] : undefined;
@@ -63,23 +71,23 @@ export function decide(op: string, ctx: PolicyContext): PolicyDecision {
   if (!meta) {
     return {
       allowed: false,
+      cause: "unknown-tool",
       risk: UNKNOWN_RISK,
-      requiresConfirmation: true,
-      confirmationChannel: "extension-ui",
+      confirmation: { required: true, channel: "extension-ui" },
       reason: "unknown tool",
     };
   }
 
-  const { requiresConfirmation, confirmationChannel } = confirmationFor(meta.confirmation);
+  const confirmation = confirmationFor(meta.confirmation);
 
   // Disabled by the user in settings: not allowed, but still report the tool's
   // real risk/confirmation shape for UI purposes.
   if (ctx.disabledTools.includes(op)) {
     return {
       allowed: false,
+      cause: "disabled-in-settings",
       risk: meta.risk,
-      requiresConfirmation,
-      confirmationChannel,
+      confirmation,
       reason: "tool disabled in settings",
     };
   }
@@ -87,8 +95,7 @@ export function decide(op: string, ctx: PolicyContext): PolicyDecision {
   return {
     allowed: true,
     risk: meta.risk,
-    requiresConfirmation,
-    confirmationChannel,
-    reason: requiresConfirmation ? "allowed; requires confirmation" : "allowed",
+    confirmation,
+    reason: confirmation.required ? "allowed; requires confirmation" : "allowed",
   };
 }
