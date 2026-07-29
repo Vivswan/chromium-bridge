@@ -11,7 +11,7 @@ import { isPageOp } from "../shared/page-ops";
 import { getSetting } from "../shared/settings";
 import type { BridgeReq } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { preflightPageOp } from "./confirm/gate";
+import { bindOrigin, preflightPageOp } from "./confirm/gate";
 import { consoleGet } from "./console";
 import { cookieGet } from "./cookies";
 import { handleDialog } from "./dialog";
@@ -123,16 +123,18 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
     await ensureAllowed(tab.url);
     const cdpMode = (await getSetting("cdpMode")) === true;
     const backend = selectBackend(cdpMode);
-    const guard = await preflightPageOp(req.op, req.args, tab, backend);
+    const preflight = await preflightPageOp(req.op, req.args, tab, backend);
     // A confirmation can hold the pipeline open for tens of seconds, during
     // which the tab may navigate ANYWHERE. Re-fetch the SAME tab (by id, so
     // an active-tab switch cannot substitute a different one) and fail
     // closed if its origin is no longer what was checked and confirmed.
     const current = await recheckTab(tab);
-    // Bind the act to the approved origin: the backends enforce this INSIDE
-    // the page, atomically with the act, closing the residual race between
-    // this recheck and the backend's evaluate/message.
-    guard.expectOrigin = originOf(tab.url);
+    // Bind the act to the approved origin. backend.run only accepts a bound
+    // guard (expectOrigin is required on PageOpGuard, and bindOrigin is its
+    // only producer), and the backends enforce it INSIDE the page, atomically
+    // with the act - closing the residual race between this recheck and the
+    // backend's evaluate/message.
+    const guard = bindOrigin(preflight, originOf(tab.url));
     const result = await backend.run(req.op, req.args, current, guard);
     return await maskOpResult(req.op, result);
   }

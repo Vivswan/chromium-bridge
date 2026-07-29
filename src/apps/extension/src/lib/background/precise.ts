@@ -5,10 +5,11 @@
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach. See ADR-0009.
 
+import { InfoToastResultSchema, PageReplySchema } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { initI18n, t } from "../i18n";
 import { getSetting } from "../shared/settings";
-import type { OpArgs, PageResponse } from "../shared/types";
+import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { cdpRegistry } from "./cdp/registry";
 // The browser.debugger primitives + the non-debuggable URL filter now live in
@@ -72,6 +73,29 @@ function axValue(v: AXValueLike | undefined): unknown {
   return v;
 }
 
+/** The three outcomes of the pre-attach info toast. Decoded from the reply
+ * envelope with a fail-closed parse: a reply that matches neither the
+ * envelope nor the structured toast result throws instead of being guessed
+ * at (a misread cancel would attach the debugger against the user's answer).
+ * Exported for tests. */
+export type ToastOutcome =
+  | { kind: "proceed" }
+  | { kind: "cancelled" }
+  | { kind: "unavailable"; reason: string };
+
+export function decodeToastReply(raw: unknown): ToastOutcome {
+  const envelope = PageReplySchema.safeParse(raw);
+  if (!envelope.success) {
+    throw new Error("info-toast reply does not match the reply envelope - refusing");
+  }
+  if (!envelope.data.ok) return { kind: "unavailable", reason: envelope.data.error };
+  const result = InfoToastResultSchema.safeParse(envelope.data.data);
+  if (!result.success) {
+    throw new Error("info-toast reply carries an unknown payload - refusing");
+  }
+  return result.data.cancelled ? { kind: "cancelled" } : { kind: "proceed" };
+}
+
 export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpArgs) {
   const tab = await resolveTargetTab(maybeTabId);
   await ensureAllowed(tab.url);
@@ -86,27 +110,38 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
   // they actively cancel within the timeout. Skippable via settings.
   const warnPrecise = await getSetting("warnPreciseSnapshot");
   await injectIfNeeded(tab.id!);
-  let proceed: boolean | PageResponse = true; // default: proceed (skip warning)
   if (warnPrecise) {
     // The toast strings resolve here (the SW has the user's locale); the
     // content script deliberately reads no extension storage (#32).
     await initI18n();
-    proceed = await browser.tabs
-      .sendMessage(tab.id!, {
+    let outcome: ToastOutcome = { kind: "proceed" };
+    let delivered = true;
+    let raw: unknown;
+    try {
+      raw = await browser.tabs.sendMessage(tab.id!, {
         op: "_info_toast",
         args: {
           message: t("content.precise_notice"),
           cancelLabel: t("common.cancel"),
         },
-      })
-      .catch(() => true /* content script missing → proceed anyway */);
-  }
-  if (proceed === false || (proceed && (proceed as PageResponse).__cancelled)) {
-    return { cancelled: true };
-  }
-  if (proceed && (proceed as PageResponse).__error) {
-    // Info toast failed (e.g. restricted page); proceed without warning.
-    console.warn("[bb] info toast failed:", (proceed as PageResponse).__error);
+      });
+    } catch {
+      // Content script unreachable (restricted page): the notice is a
+      // courtesy, not a gate, so proceed without it.
+      delivered = false;
+    }
+    if (delivered) outcome = decodeToastReply(raw);
+    switch (outcome.kind) {
+      case "cancelled":
+        // The user cancelled the notice: the debugger is NOT attached.
+        return { cancelled: true };
+      case "unavailable":
+        // Toast failed in-page (e.g. no DOM yet); proceed without warning.
+        console.warn("[bb] info toast failed:", outcome.reason);
+        break;
+      case "proceed":
+        break;
+    }
   }
 
   // In CDP mode (ADR-0017) the registry may already hold a persistent debugger

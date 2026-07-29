@@ -1,12 +1,15 @@
 // Egress masking audit: for BOTH page backends the masking happens once, in
 // the SW (egress.ts), so these tables cover every path a page-derived secret
-// could take out of the extension: storage_get values (always masked),
+// could take out of the extension: storage_get values (always masked, with
+// any result outside the known shapes REFUSED rather than passed through),
 // page_eval success values, and page_eval exceptions (a thrown secret must
 // not bypass the mask).
 
+import type { StorageReadResultWire } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing";
 import { maskOpResult } from "@/lib/background/egress";
+import type { StorageReadResult } from "@/lib/dom/page-api";
 
 // Shapes the masking catalogue promises to catch (it is best-effort by
 // design - see SECURITY.md - so only promised shapes are asserted).
@@ -56,12 +59,45 @@ describe("storage_get is ALWAYS masked", () => {
     expect(out.value).not.toContain(SECRETS.jwt);
   });
 
-  test("not-found and malformed results pass through unchanged", async () => {
+  test("a not-found result passes through unchanged (nothing to mask)", async () => {
     expect(await maskOpResult("storage_get", { key: "k", found: false })).toEqual({
       key: "k",
       found: false,
     });
-    expect(await maskOpResult("storage_get", null)).toBeNull();
+  });
+
+  test("a drifted shape is REFUSED, never passed through raw", async () => {
+    // The exact leak the shape-sniffing version had: `found` is truthy but not
+    // the literal true, so neither masking branch matched and the raw value
+    // (with the secret) fell through to the host.
+    await expect(
+      maskOpResult("storage_get", { key: "k", found: 1, value: SECRETS.jwt }),
+    ).rejects.toThrow("refusing to egress");
+    // Same for entries whose values are not strings...
+    await expect(
+      maskOpResult("storage_get", {
+        type: "local",
+        entries: { a: { nested: SECRETS.jwt } },
+        count: 1,
+        truncated: false,
+        totalKeys: 1,
+      }),
+    ).rejects.toThrow("refusing to egress");
+    // ...an unknown extra field on a known shape...
+    await expect(
+      maskOpResult("storage_get", { key: "k", found: true, value: "v", extra: SECRETS.jwt }),
+    ).rejects.toThrow("refusing to egress");
+    // ...and non-object results.
+    await expect(maskOpResult("storage_get", null)).rejects.toThrow("refusing to egress");
+    await expect(maskOpResult("storage_get", SECRETS.jwt)).rejects.toThrow("refusing to egress");
+  });
+
+  test("the wire schema stays in lockstep with the page API's result type", () => {
+    // Compile-time two-way parity; if either side drifts this stops building.
+    const single: StorageReadResult = { key: "k", found: true, value: "v" };
+    const wire: StorageReadResultWire = single;
+    const back: StorageReadResult = wire;
+    expect(back).toEqual(single);
   });
 });
 
