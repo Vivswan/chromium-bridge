@@ -413,16 +413,20 @@ BB_LOG=error chromium-bridge          # quiet
 ## Releasing
 
 Releases are cut by release-please: conventional commits on `main` accumulate
-into a rolling release PR that bumps the version (`Cargo.toml` and
-`src/apps/extension/package.json`, per release-please-config.json) and writes
-`CHANGELOG.md`; merging it tags the release, and the same CI run builds the
+into a rolling release PR that bumps the version and writes `CHANGELOG.md`;
+merging it tags the release, and the same CI run builds the
 macOS Apple Silicon, Linux x64, and Windows x64 archives (binary + built
 extension) and the desktop .dmg, and publishes them to GitHub Releases (see
-[docs/release.md](./release.md)).
+[docs/release.md](./release.md)). The bump covers `Cargo.toml` and every
+synced JSON manifest (`versionedJsonFiles` in `scripts/lib.ts`: the extension
+and desktop UI `package.json` files), per release-please-config.json's
+extra-files.
 
 `Cargo.toml` stays the single source of truth between releases: after a
 manual version change, `moon run sync-version` (`bun scripts/sync-version.ts`)
-propagates it to the extension manifest + package files, and CI enforces the
+propagates it to the synced JSON manifests (the extension `package.json`,
+which the WXT-built manifest reads its version from, and the desktop UI
+`package.json`), and CI enforces the
 consistency on every push (`moon run check-version`), so drift fails the
 build - including on the release PR itself. Each packaging job additionally
 refuses to run if the tag doesn't match the Cargo version.
