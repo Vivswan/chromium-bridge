@@ -87,6 +87,7 @@ tasks:
       - 'desktop-ui:test'
       - 'extension:build'
       - '~:test-e2e'
+      - '~:check-version'
       - '~:check-extension-id'
       - '~:check-cjk'
       - '~:check-typography'
@@ -670,7 +671,7 @@ tasks:
   # ----- version + repo hygiene checks ---------------------------------------
 
   sync-version:
-    description: 'Propagate the Cargo.toml version into the extension files'
+    description: 'Propagate the Cargo.toml version into the JS package manifests'
     command: 'bun scripts/sync-version.ts'
     toolchains: ['system']
     options:
@@ -678,11 +679,11 @@ tasks:
       runInCI: false # tree-mutating: never eligible for `moon ci` affected runs
 
   check-version:
-    description: 'Verify the crate and extension versions agree'
+    description: 'Verify the crate, JS package, and release-please versions agree'
     command: 'bun scripts/check-version.ts'
     toolchains: ['system']
     options:
-      cache: false # a check task: gates are never cached
+      cache: false # in the ci gate: gates are never cached
 
   check-extension-id:
     description: 'Verify the pinned key, extension ID, and built manifest agree'
