@@ -94,7 +94,7 @@ pub(crate) fn verdict(rev: io::Result<Revocation>) -> Result<(), CallError> {
 /// (engaging an already-killed bridge just re-bumps), and every explicit act
 /// is audited. Returns the new epoch.
 pub fn engage(surface: Surface) -> io::Result<u64> {
-    let epoch = ipc::with_runtime_lock(|| revocation::set_killed_locked(true))?;
+    let epoch = ipc::with_runtime_lock(|lock| revocation::set_killed_locked(lock, true))?;
     // Log-after-decide, outside the critical section.
     audit::record(
         AuditRecord::new(AuditKind::KillEngage)
@@ -118,7 +118,7 @@ pub fn engage(surface: Surface) -> io::Result<u64> {
 /// gets the `Err` - it only makes the attempt durably visible with the auth
 /// rung that vouched for it.
 pub fn release(surface: Surface, auth: PresenceAttestation) -> io::Result<u64> {
-    let result = ipc::with_runtime_lock(|| revocation::set_killed_locked(false));
+    let result = ipc::with_runtime_lock(|lock| revocation::set_killed_locked(lock, false));
     // Log-after-decide, outside the critical section, on BOTH arms.
     let auth_name = auth.path().wire_name();
     match &result {

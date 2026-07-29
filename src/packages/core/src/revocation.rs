@@ -152,10 +152,10 @@ impl Revocation {
         Ok(Self::load()?.unwrap_or_default())
     }
 
-    /// Write atomically, 0600. The caller must hold the runtime lock: a bump
-    /// races other writers by design, and the lock is what makes
-    /// read-increment-write monotonic across processes.
-    fn write_locked(&self) -> io::Result<()> {
+    /// Write atomically, 0600. Demands the [`ipc::RuntimeLockToken`] witness:
+    /// a bump races other writers by design, and the runtime lock the token
+    /// proves is what makes read-increment-write monotonic across processes.
+    fn write_locked(&self, _lock: &ipc::RuntimeLockToken) -> io::Result<()> {
         let bytes = serde_json::to_vec_pretty(self)?;
         ipc::write_private_atomic(&Self::path(), &bytes)
     }
@@ -173,18 +173,21 @@ pub enum Scope {
     HostKey,
 }
 
-/// Increment the epoch and stamp `scope`'s marker. MUST be called while the
-/// caller already holds the runtime lock (every caller performs the
+/// Increment the epoch and stamp `scope`'s marker. The
+/// [`ipc::RuntimeLockToken`] parameter is the runtime-lock precondition made
+/// structural: a token exists only inside [`ipc::with_runtime_lock`], so a
+/// lock-free call - a stale read-modify-write that could overwrite a
+/// concurrent `killed: true` - no longer compiles. Every caller performs the
 /// authoritative state change and the bump in ONE critical section, so no
 /// enforcement point can observe the new epoch with the old state or vice
-/// versa -- see `Allowlist::revoke`). Returns the new epoch.
+/// versa -- see `Allowlist::revoke`. Returns the new epoch.
 ///
 /// On an unreadable existing file this returns the error rather than
 /// rebuilding the file: silently replacing a corrupt security record would
 /// mask tampering. The revocation the caller performed is still effective --
 /// a corrupt revocation file makes every enforcement read fail closed, which
 /// is strictly tighter than any epoch bump.
-pub(crate) fn bump_locked(scope: Scope) -> io::Result<u64> {
+pub(crate) fn bump_locked(lock: &ipc::RuntimeLockToken, scope: Scope) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
     rev.epoch += 1;
@@ -192,20 +195,20 @@ pub(crate) fn bump_locked(scope: Scope) -> io::Result<u64> {
         Scope::Clients => rev.clients_epoch = rev.epoch,
         Scope::HostKey => rev.host_key_epoch = rev.epoch,
     }
-    rev.write_locked()?;
+    rev.write_locked(lock)?;
     Ok(rev.epoch)
 }
 
 /// Set the one-way enrollment latch (and bump the epoch so running enforcement
-/// points re-read the allowlist they now enforce). Same locking contract as
+/// points re-read the allowlist they now enforce). Same lock-token contract as
 /// [`bump_locked`]. Called by `Allowlist::pair` inside its critical section.
-pub(crate) fn latch_clients_enrolled_locked() -> io::Result<u64> {
+pub(crate) fn latch_clients_enrolled_locked(lock: &ipc::RuntimeLockToken) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
     rev.epoch += 1;
     rev.clients_epoch = rev.epoch;
     rev.clients_enrolled = true;
-    rev.write_locked()?;
+    rev.write_locked(lock)?;
     Ok(rev.epoch)
 }
 
@@ -213,14 +216,16 @@ pub(crate) fn latch_clients_enrolled_locked() -> io::Result<u64> {
 /// enclave-key revocation paths, whose authoritative state lives in the
 /// keychain rather than in a runtime-lock-guarded file).
 pub(crate) fn bump(scope: Scope) -> io::Result<u64> {
-    ipc::with_runtime_lock(|| bump_locked(scope))
+    ipc::with_runtime_lock(|lock| bump_locked(lock, scope))
 }
 
 /// Flip the kill switch (ADR-0030): set `killed`, stamp `kill_epoch`, and
-/// bump the global epoch, all in ONE atomic write under the caller-held
-/// runtime lock. One write is the load-bearing part: the kill and its epoch
-/// bump can never be observed separately, so an enforcement point that skips
-/// re-reading on an unchanged epoch cannot miss a kill.
+/// bump the global epoch, all in ONE atomic write. Same lock-token contract
+/// as [`bump_locked`]: the [`ipc::RuntimeLockToken`] makes a lock-free call
+/// (whose stale read-modify-write could resurrect a cleared or suppressed
+/// state) uncompilable. One write is the load-bearing part: the kill and its
+/// epoch bump can never be observed separately, so an enforcement point that
+/// skips re-reading on an unchanged epoch cannot miss a kill.
 ///
 /// Fails on an unreadable existing record, in BOTH directions, rather than
 /// rebuilding the file (rebuilding would mask tampering):
@@ -229,13 +234,13 @@ pub(crate) fn bump(scope: Scope) -> io::Result<u64> {
 ///   the kill's goal already holds;
 /// - releasing: an unkill from an unknown state would be a fail-open, so it
 ///   is refused; recovery is documented in docs/operations.md.
-pub(crate) fn set_killed_locked(killed: bool) -> io::Result<u64> {
+pub(crate) fn set_killed_locked(lock: &ipc::RuntimeLockToken, killed: bool) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
     rev.epoch += 1;
     rev.killed = killed;
     rev.kill_epoch = rev.epoch;
-    rev.write_locked()?;
+    rev.write_locked(lock)?;
     Ok(rev.epoch)
 }
 

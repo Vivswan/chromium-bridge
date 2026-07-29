@@ -94,5 +94,7 @@ pub use peercred::pid_is_alive;
 pub use platform::windows::windows_process;
 pub use socket::{connect, BridgeListener, BridgeStream};
 
-pub(crate) use lockfile::{read_capped, runtime_dir, with_runtime_lock, write_private_atomic};
+pub(crate) use lockfile::{
+    read_capped, runtime_dir, with_runtime_lock, write_private_atomic, RuntimeLockToken,
+};
 pub(crate) use rand::{generate_secret, hex_encode};

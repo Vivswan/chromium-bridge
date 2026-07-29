@@ -53,6 +53,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ipc::{self, ClientIdentity};
 use crate::presence::{self, PresenceAttestation};
+use crate::revocation::Revocation;
 
 /// The current on-disk allowlist schema version. Bumped only on a
 /// breaking-shape change; unknown-field parsing is fail-closed
@@ -64,6 +65,91 @@ const ALLOWLIST_VERSION: u32 = 1;
 /// entries are a few KB; anything larger is not ours and is rejected rather
 /// than slurped into memory.
 const ALLOWLIST_MAX_BYTES: usize = 256 * 1024;
+
+/// A validated image digest for [`Anchor::Hash`]: non-empty, lowercase ASCII
+/// hex - the canonical form every attested identity is measured in (both
+/// platforms hex-encode with lowercase digits, `ipc::rand::hex_encode`) and
+/// the form [`resolve_anchor`] has always normalized user input into.
+///
+/// Holding the invariant in the type keeps the plain-equality admission match
+/// sound: a digest that could never equal a measured identity (uppercase,
+/// empty, non-hex) cannot be constructed, so it is refused at the parse
+/// boundary instead of becoming a permanent, silent `Refuse`. An on-disk
+/// value that violates the form makes the whole `clients.json` fail to
+/// decode, which callers already treat as a corrupt allowlist and fail
+/// closed on - deliberately NOT silently normalized into a valid digest,
+/// which would mask tampering. Serializes as the plain inner string, so the
+/// on-disk and wire shapes of a valid anchor are unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct HashDigest(String);
+
+impl HashDigest {
+    /// The digest as its lowercase hex string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for HashDigest {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let canonical = !value.is_empty()
+            && value
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        if canonical {
+            Ok(HashDigest(value))
+        } else {
+            Err("hash anchor must be non-empty lowercase hex".to_string())
+        }
+    }
+}
+
+impl TryFrom<&str> for HashDigest {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        HashDigest::try_from(value.to_string())
+    }
+}
+
+impl From<HashDigest> for String {
+    fn from(digest: HashDigest) -> String {
+        digest.0
+    }
+}
+
+impl std::fmt::Display for HashDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Schema-identical to a plain string on purpose: the canonical-form rule is
+/// enforced by the Rust parser at the trust boundary (ADR-0028's single
+/// source), and the generated TS wire schema must stay exactly what it was
+/// when this field was a `String` - the extension only ever consumes these
+/// values read-only in `client_list_result`.
+#[cfg(feature = "envelope-schema")]
+impl schemars::JsonSchema for HashDigest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        <String as schemars::JsonSchema>::schema_name()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        <String as schemars::JsonSchema>::schema_id()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <String as schemars::JsonSchema>::json_schema(generator)
+    }
+
+    fn inline_schema() -> bool {
+        <String as schemars::JsonSchema>::inline_schema()
+    }
+}
 
 /// The authorization key of an allowlist entry: the unforgeable thing a
 /// harness's attested identity must match. Never the name.
@@ -80,7 +166,7 @@ pub enum Anchor {
     /// `/proc/<pid>/exe` SHA256). Precise, but a code re-sign changes the
     /// `cdhash`, so this anchor requires a re-pair after a renewal. It is the
     /// only anchor available for unsigned / ad-hoc dev builds.
-    Hash(String),
+    Hash(HashDigest),
     /// Pin the macOS signing Team ID. Stable across the weekly re-sign of a
     /// free Apple Development certificate, so it survives renewals without a
     /// re-pair. Only available when the client image is Team-ID signed.
@@ -168,7 +254,7 @@ impl Allowlist {
     /// measured Team ID. Comparisons are plain equality: these are not secrets.
     fn matched_name(&self, identity: &ClientIdentity) -> Option<String> {
         self.clients.iter().find_map(|c| match &c.anchor {
-            Anchor::Hash(h) if *h == identity.hash => Some(c.name.clone()),
+            Anchor::Hash(h) if h.as_str() == identity.hash => Some(c.name.clone()),
             Anchor::TeamId(t) if identity.team_id.as_deref() == Some(t.as_str()) => {
                 Some(c.name.clone())
             }
@@ -185,8 +271,7 @@ impl Allowlist {
     /// one is [`presence::require_presence`], which means no code path can
     /// enroll a client without the user-presence ladder having run - Touch ID
     /// where the machine has it, an explicit interactive confirmation where
-    /// it does not. Prefer [`pair_client_with_presence`], which runs the
-    /// ladder, audits both outcomes, and calls this.
+    /// it does not.
     ///
     /// The one-way enrollment latch (ADR-0025) is set BEFORE the allowlist is
     /// written, so a partial failure fails closed rather than open: if the
@@ -196,7 +281,15 @@ impl Allowlist {
     /// order would leave a usable allowlist with no deletion evidence, so a
     /// later `rm clients.json` would silently revert to open. The bump the
     /// latch carries also nudges running enforcement points to re-read.
-    pub fn pair(name: &str, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
+    ///
+    /// Module-private on purpose: the ONLY entry point is
+    /// [`pair_client_with_presence`], which runs the presence ladder and
+    /// audits every outcome (granted, refused, and write-failed) with the
+    /// rung that decided it. Keeping the audit in that single wrapper - and
+    /// making this function unreachable from outside the module - is what
+    /// makes the ADR-0030 "every allowlist mutation leaves a trail entry"
+    /// property un-bypassable without duplicating records.
+    fn pair(name: &str, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
         // The attestation is structural evidence, consumed here; the audit
         // record that names its path is written by the caller
         // (pair_client_with_presence), log-after-decide.
@@ -207,7 +300,7 @@ impl Allowlist {
                 "invalid client name (want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric)",
             ));
         }
-        ipc::with_runtime_lock(|| {
+        ipc::with_runtime_lock(|lock| {
             let mut list = Self::load()?.unwrap_or_default();
             list.version = ALLOWLIST_VERSION;
             list.clients.retain(|c| c.name != name);
@@ -217,8 +310,8 @@ impl Allowlist {
                 added_unix: now_unix(),
             });
             // Latch first (fail closed on a partial write), then the list.
-            crate::revocation::latch_clients_enrolled_locked()?;
-            list.write()
+            crate::revocation::latch_clients_enrolled_locked(lock)?;
+            list.write(lock)
         })
     }
 
@@ -250,7 +343,7 @@ impl Allowlist {
     /// which is why the list-first ordering and the unconditional watcher (not
     /// the lock) are what keep a concurrent reader safe.
     pub fn revoke(name: &str, surface: crate::audit::Surface) -> io::Result<bool> {
-        let removed = ipc::with_runtime_lock(|| {
+        let removed = ipc::with_runtime_lock(|lock| {
             let Some(mut list) = Self::load()? else {
                 return Ok(false);
             };
@@ -259,8 +352,10 @@ impl Allowlist {
             let removed = list.clients.len() != before;
             if removed {
                 list.version = ALLOWLIST_VERSION;
-                list.write()?;
-                if let Err(e) = crate::revocation::bump_locked(crate::revocation::Scope::Clients) {
+                list.write(lock)?;
+                if let Err(e) =
+                    crate::revocation::bump_locked(lock, crate::revocation::Scope::Clients)
+                {
                     log_error!(
                         "allowlist",
                         "client '{name}' revoked (removed from clients.json), but the \
@@ -285,8 +380,11 @@ impl Allowlist {
         Ok(removed)
     }
 
-    /// Write atomically, 0600, under the caller-held runtime lock.
-    fn write(&self) -> io::Result<()> {
+    /// Write atomically, 0600. The [`ipc::RuntimeLockToken`] proves the
+    /// caller holds the runtime lock (it is only minted inside
+    /// [`ipc::with_runtime_lock`]), so a lock-free rewrite of the allowlist
+    /// does not compile.
+    fn write(&self, _lock: &ipc::RuntimeLockToken) -> io::Result<()> {
         let bytes = serde_json::to_vec_pretty(self)?;
         ipc::write_private_atomic(&Self::path(), &bytes)
     }
@@ -307,23 +405,28 @@ pub fn decide(list: Option<&Allowlist>, identity: Option<&ClientIdentity>) -> De
 }
 
 /// Load the allowlist for an ADMISSION decision, honoring the tamper-evidence
-/// latch (ADR-0025). `latched` is `Revocation::clients_enrolled`: with the
-/// latch set, an ABSENT `clients.json` is no longer the bootstrap posture --
-/// a client allowlist existed on this machine, so its disappearance is a
-/// deletion, and deletion must fail closed instead of silently reverting to
-/// the open pre-enrollment posture (the ADR-0024 residual this closes for the
-/// single-file case). Every other outcome is [`Allowlist::load`] unchanged.
-pub fn load_enforced(latched: bool) -> io::Result<Option<Allowlist>> {
-    apply_latch(Allowlist::load()?, latched)
+/// latch (ADR-0025). Takes the whole [`Revocation`] record and reads its
+/// `clients_enrolled` latch itself, so a caller cannot hand-pick the wrong
+/// one of the record's adjacent flags to play the latch -- passing `killed`
+/// here on a latched machine would silently reopen the pre-enrollment
+/// fail-open ADR-0025 closed. With the latch set, an ABSENT
+/// `clients.json` is no longer the bootstrap posture -- a client allowlist
+/// existed on this machine, so its disappearance is a deletion, and deletion
+/// must fail closed instead of silently reverting to the open pre-enrollment
+/// posture (the ADR-0024 residual this closes for the single-file case).
+/// Every other outcome is [`Allowlist::load`] unchanged.
+pub fn load_enforced(rev: &Revocation) -> io::Result<Option<Allowlist>> {
+    apply_latch(Allowlist::load()?, rev)
 }
 
 /// The pure core of [`load_enforced`]: the latch turns "absent list" from
 /// bootstrap into tampering. Factored out so the fail-closed matrix is
-/// unit-testable without touching the runtime directory.
-fn apply_latch(list: Option<Allowlist>, latched: bool) -> io::Result<Option<Allowlist>> {
+/// unit-testable without touching the runtime directory. Reads the latch
+/// from the record for the same no-wrong-flag reason as [`load_enforced`].
+fn apply_latch(list: Option<Allowlist>, rev: &Revocation) -> io::Result<Option<Allowlist>> {
     match list {
         Some(list) => Ok(Some(list)),
-        None if latched => Err(io::Error::new(
+        None if rev.clients_enrolled => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "clients.json is missing but this machine has enrolled trusted clients \
              (the revocation record's enrollment latch is set); treating the deletion \
@@ -507,11 +610,12 @@ pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
     use crate::cli::AnchorSpec;
     match spec {
         AnchorSpec::Hash(h) => {
-            let h = h.to_ascii_lowercase();
-            if h.is_empty() || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err("--hash must be non-empty lowercase hex".into());
-            }
-            Ok(Anchor::Hash(h))
+            // Normalizing user INPUT to lowercase is the legitimate-entry
+            // convenience this path has always offered; only the persisted
+            // form is held strictly canonical (see [`HashDigest`]).
+            let digest = HashDigest::try_from(h.to_ascii_lowercase())
+                .map_err(|_| "--hash must be non-empty lowercase hex".to_string())?;
+            Ok(Anchor::Hash(digest))
         }
         AnchorSpec::TeamId(t) => {
             if t.is_empty() {
@@ -524,7 +628,12 @@ pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
             {
                 let id = ipc::attest_parent()
                     .map_err(|e| format!("could not attest the parent process: {e}"))?;
-                Ok(Anchor::Hash(id.hash))
+                // Both platforms hex-encode measurements in lowercase, so a
+                // failure here means the attested value is not a digest at
+                // all: refuse it rather than normalize it.
+                let digest = HashDigest::try_from(id.hash)
+                    .map_err(|e| format!("attested parent hash is not a canonical digest: {e}"))?;
+                Ok(Anchor::Hash(digest))
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             {
@@ -568,15 +677,15 @@ pub fn run_revoke_client(argv: &[String]) -> i32 {
 /// code. Consults the tamper-evidence latch (ADR-0025): an absent allowlist on
 /// a machine whose latch is set is reported as tampering, not as unenrolled.
 pub fn run_list_clients() -> i32 {
-    let latched = match crate::revocation::Revocation::current() {
-        Ok(rev) => rev.clients_enrolled,
+    let rev = match crate::revocation::Revocation::current() {
+        Ok(rev) => rev,
         Err(e) => {
             eprintln!("list-clients: could not read the revocation record: {e}");
             eprintln!("(treating the trust state as suspect; fail closed)");
             return 1;
         }
     };
-    match load_enforced(latched) {
+    match load_enforced(&rev) {
         Ok(None) => {
             println!(
                 "no trusted-client allowlist yet (UNENROLLED: harness admission not enforced)"
@@ -618,6 +727,20 @@ mod tests {
         }
     }
 
+    /// A test digest from a literal that is valid lowercase hex.
+    fn hd(hex: &str) -> HashDigest {
+        HashDigest::try_from(hex).unwrap()
+    }
+
+    /// A revocation record whose enrollment latch is `latched`, everything
+    /// else at the bootstrap default.
+    fn rev_with_latch(latched: bool) -> Revocation {
+        Revocation {
+            clients_enrolled: latched,
+            ..Revocation::default()
+        }
+    }
+
     fn list_of(entries: Vec<ClientEntry>) -> Allowlist {
         Allowlist {
             version: ALLOWLIST_VERSION,
@@ -641,7 +764,7 @@ mod tests {
         // Enrolled + cannot measure -> fail closed, never admit.
         let l = list_of(vec![ClientEntry {
             name: "claude-code".into(),
-            anchor: Anchor::Hash("abc".into()),
+            anchor: Anchor::Hash(hd("abc")),
             added_unix: 0,
         }]);
         assert_eq!(decide(Some(&l), None), Decision::Refuse);
@@ -651,7 +774,7 @@ mod tests {
     fn hash_anchor_matches_exact_hash_only() {
         let l = list_of(vec![ClientEntry {
             name: "codex".into(),
-            anchor: Anchor::Hash("deadbeef".into()),
+            anchor: Anchor::Hash(hd("deadbeef")),
             added_unix: 0,
         }]);
         assert_eq!(
@@ -716,7 +839,7 @@ mod tests {
         let l = list_of(vec![
             ClientEntry {
                 name: "claude-code".into(),
-                anchor: Anchor::Hash("h-claude".into()),
+                anchor: Anchor::Hash(hd("c1a0de")),
                 added_unix: 0,
             },
             ClientEntry {
@@ -726,12 +849,12 @@ mod tests {
             },
         ]);
         assert_eq!(
-            decide(Some(&l), Some(&id("h-imposter", None))),
+            decide(Some(&l), Some(&id("1a905e7", None))),
             Decision::Refuse
         );
         // The genuine hash for claude-code admits under its name.
         assert_eq!(
-            decide(Some(&l), Some(&id("h-claude", None))),
+            decide(Some(&l), Some(&id("c1a0de", None))),
             Decision::Admit {
                 name: "claude-code".into()
             }
@@ -742,7 +865,7 @@ mod tests {
     fn entry_serde_roundtrips_both_anchor_kinds() {
         let hash_entry = ClientEntry {
             name: "codex".into(),
-            anchor: Anchor::Hash("ab".repeat(32)),
+            anchor: Anchor::Hash(hd(&"ab".repeat(32))),
             added_unix: 42,
         };
         let team_entry = ClientEntry {
@@ -762,8 +885,8 @@ mod tests {
         // The on-disk shape is a tagged {kind, value} so a hash and a team id
         // can never be confused for one another.
         assert_eq!(
-            serde_json::to_value(Anchor::Hash("h".into())).unwrap(),
-            serde_json::json!({ "kind": "hash", "value": "h" })
+            serde_json::to_value(Anchor::Hash(hd("0a"))).unwrap(),
+            serde_json::json!({ "kind": "hash", "value": "0a" })
         );
         assert_eq!(
             serde_json::to_value(Anchor::TeamId("t".into())).unwrap(),
@@ -772,17 +895,115 @@ mod tests {
     }
 
     #[test]
+    fn hash_digest_accepts_only_non_empty_lowercase_hex() {
+        // The legitimate forms: lowercase hex of any (even) length -- a
+        // 20-byte macOS cdhash or a 32-byte Linux SHA256 both pass.
+        assert!(HashDigest::try_from("deadbeef").is_ok());
+        assert!(HashDigest::try_from("ab".repeat(32)).is_ok());
+        assert!(HashDigest::try_from("0123456789abcdef").is_ok());
+        // Everything that could never match a measured lowercase-hex identity
+        // is refused at the parse boundary instead of becoming a permanent,
+        // silent Refuse.
+        assert!(HashDigest::try_from("").is_err(), "empty");
+        assert!(HashDigest::try_from("DEADBEEF").is_err(), "uppercase");
+        assert!(HashDigest::try_from("aBc1").is_err(), "mixed case");
+        assert!(HashDigest::try_from("zz").is_err(), "non-hex");
+        assert!(HashDigest::try_from("dead beef").is_err(), "whitespace");
+        assert!(HashDigest::try_from("dead-beef").is_err(), "punctuation");
+    }
+
+    #[test]
+    fn a_valid_hash_anchor_round_trips_with_an_unchanged_serialized_form() {
+        // The newtype must be invisible on disk: a valid lowercase-hex anchor
+        // serializes to exactly the same JSON as when the field was a plain
+        // String, and parses back equal.
+        let anchor = Anchor::Hash(hd("deadbeef"));
+        let value = serde_json::to_value(&anchor).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "kind": "hash", "value": "deadbeef" })
+        );
+        let back: Anchor = serde_json::from_value(value).unwrap();
+        assert_eq!(back, anchor);
+    }
+
+    #[test]
+    fn a_malformed_on_disk_hash_anchor_is_rejected_fail_closed() {
+        // Pre-HashDigest, {"value": "DEADBEEF"} parsed fine and simply never
+        // matched the lowercase runtime measurement -- a permanent, silent
+        // Refuse. Now the decode itself fails, so the whole file reads as a
+        // corrupt allowlist and every caller fails closed LOUDLY, the same
+        // policy as any other damaged clients.json. Never silently
+        // normalized: an on-disk value in the wrong form is evidence of a
+        // foreign writer, not input to fix up.
+        for bad in ["DEADBEEF", "", "zz", "aBc1"] {
+            let anchor = serde_json::json!({ "kind": "hash", "value": bad });
+            assert!(
+                serde_json::from_value::<Anchor>(anchor.clone()).is_err(),
+                "anchor value {bad:?} must be refused"
+            );
+            // And through the full file shape: one bad entry poisons the
+            // whole list, exactly like any other decode failure.
+            let file = serde_json::json!({
+                "version": 1,
+                "clients": [
+                    { "name": "good", "anchor": { "kind": "team_id", "value": "T" }, "added_unix": 0 },
+                    { "name": "bad", "anchor": anchor, "added_unix": 0 },
+                ],
+            });
+            assert!(serde_json::from_value::<Allowlist>(file).is_err());
+        }
+    }
+
+    #[test]
+    fn resolve_anchor_normalizes_cli_input_but_refuses_non_hex() {
+        use crate::cli::AnchorSpec;
+        // User INPUT keeps its historical convenience: uppercase hex is
+        // normalized to the canonical lowercase form.
+        assert_eq!(
+            resolve_anchor(&AnchorSpec::Hash("DEADBEEF".into())).unwrap(),
+            Anchor::Hash(hd("deadbeef"))
+        );
+        // Non-hex and empty input are refused with the same message as ever.
+        for bad in ["", "not-hex", "dead beef"] {
+            let err = resolve_anchor(&AnchorSpec::Hash(bad.into())).unwrap_err();
+            assert_eq!(err, "--hash must be non-empty lowercase hex");
+        }
+    }
+
+    #[test]
     fn latch_turns_an_absent_list_into_tampering() {
         // Unlatched + absent: the legitimate bootstrap (fresh install).
-        assert!(apply_latch(None, false).unwrap().is_none());
+        assert!(apply_latch(None, &rev_with_latch(false)).unwrap().is_none());
         // Latched + absent: a client allowlist existed here, so its absence is
         // a deletion -> fail closed (the ADR-0024 silent-revert residual).
-        let err = apply_latch(None, true).unwrap_err();
+        let err = apply_latch(None, &rev_with_latch(true)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         // A present list passes through untouched regardless of the latch.
         let list = list_of(vec![]);
-        assert!(apply_latch(Some(list.clone()), false).unwrap().is_some());
-        assert!(apply_latch(Some(list), true).unwrap().is_some());
+        assert!(apply_latch(Some(list.clone()), &rev_with_latch(false))
+            .unwrap()
+            .is_some());
+        assert!(apply_latch(Some(list), &rev_with_latch(true))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn the_latch_is_the_enrollment_flag_not_an_adjacent_one() {
+        // The record's other booleans must not be able to play the latch:
+        // `killed: true` on an unenrolled machine keeps the bootstrap posture
+        // for an absent list (the kill switch has its own enforcement point)...
+        let mut killed_only = rev_with_latch(false);
+        killed_only.killed = true;
+        killed_only.epoch = 9;
+        killed_only.kill_epoch = 9;
+        assert!(apply_latch(None, &killed_only).unwrap().is_none());
+        // ...and `clients_enrolled: true` fails closed even with every other
+        // flag at its default. Taking the whole record makes picking the
+        // wrong field impossible at the call sites, and this pins WHICH field
+        // the function itself reads.
+        assert!(apply_latch(None, &rev_with_latch(true)).is_err());
     }
 
     #[test]
@@ -794,7 +1015,7 @@ mod tests {
         // not reach the hardware rung.
         let err = pair_client_with_presence(
             "bad name!",
-            Anchor::Hash("abc".into()),
+            Anchor::Hash(hd("abc")),
             crate::audit::Surface::Cli,
             presence::Floor::CliConfirm,
         )
