@@ -10,6 +10,7 @@
 // gate (scripts/check-envelope-parity.ts).
 
 export * from "./confirm";
+export * from "./content-msg";
 export * from "./enclave";
 export * from "./envelope";
 export * from "./errors.gen";
