@@ -39,7 +39,7 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN = os.path.join(REPO, "target", "release", "chromium-bridge" + (".exe" if os.name == "nt" else ""))
-# Mirror the binary's LockFile::path() (src/ipc.rs).
+# Mirror the binary's LockFile::path() (src/packages/core/src/ipc/lockfile.rs).
 _XDG = os.environ.get("XDG_RUNTIME_DIR")
 if os.name == "nt":
     _LOCAL = os.environ.get("LOCALAPPDATA", os.path.expanduser("~/AppData/Local"))

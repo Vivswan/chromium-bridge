@@ -454,8 +454,9 @@ against it. The canonical modules and their derived artifacts:
 - **Error taxonomy** (`ERROR_SPECS` in `src/packages/core/src/error.rs`): the
   stable cross-process `code`s with `category`, `retryable`, and the
   user/model-facing `message`. `CallError::code()` maps the Rust tool-call
-  errors into the table (`cargo test` enforces membership), and
-  `src/packages/shared/src/errors.gen.ts` gives the extension the same codes.
+  errors into a subset of the table (`cargo test` enforces membership), and
+  `src/packages/shared/src/errors.gen.ts` gives TS consumers the same code
+  constants (currently unconsumed; see section 11.1).
 - **Capabilities** (`src/packages/core/src/tools/capabilities.rs`): the
   negotiable groupings over the catalogue, emitted into
   `src/packages/shared/src/protocol.gen.ts`. `cargo test` enforces that every
@@ -531,12 +532,20 @@ against it. The canonical modules and their derived artifacts:
 
 At the tool-call boundary, Rust's typed error `CallError` maps to the stable
 `code`s in `ERROR_SPECS` (`src/packages/core/src/error.rs`); `cargo test`
-validates the mapping, and the extension normalizes its own failures to the
-same set (generated into `errors.gen.ts`). The `code` is for programmatic
-decisions (it carries `category` and `retryable`); what the model and the
-user see is the `message`. This way the connection-layer failures
+validates the mapping. Today the Rust server is the only assigner, and it
+covers a subset of the table: the extension reports its failures as
+free-form strings, which the host surfaces as `EXECUTION_FAILED`. Of the
+unassigned codes, `PROTOCOL_MISMATCH` awaits the version/capability
+handshake wiring (see [compatibility.md](./compatibility.md)); the others
+(`SITE_NOT_ALLOWED`, `USER_DENIED`, `TAB_NOT_FOUND`, ...) would need
+structured error reporting from the extension in place of those free-form
+strings. The TS constants generated
+into `errors.gen.ts` exist for future consumers. The `code` is for
+programmatic decisions (it carries `category` and `retryable`); what the
+model and the user see is the `message`. Defining every code in one table
+gives the connection-layer failures
 (`NOT_CONNECTED` / `EXTENSION_NOT_READY` / `CONNECTION_LOST`), the
-admission and revocation refusals, and `BRIDGE_KILLED` have one shared
+admission and revocation refusals, and `BRIDGE_KILLED` one shared
 meaning across every process instead of each telling its own story.
 
 ### 11.2 Capability / version handshake
