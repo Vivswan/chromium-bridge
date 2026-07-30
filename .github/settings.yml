@@ -1,15 +1,20 @@
 ---
-# Repository settings managed by the Probot "Settings" GitHub App
-# (https://github.com/apps/settings). This file is inert unless that app is
-# installed on the repo. The `rulesets` block below is an experimental upstream
-# feature (repository-settings/app) -- its schema may still change.
-# Baseline managed by Vivswan/repo-platform; repo-specific
-# additions survive template updates via three-way merge.
+# Repository settings, applied by Vivswan/repo-platform's
+# central settings-repos run (and, when this file changes, by the
+# settings-sync workflow if the repo carries its own REPO_PLATFORM_TOKEN;
+# without one it skips with a warning). Undeclared labels are deleted;
+# undeclared rulesets are left alone.
+# Rendered by the settings-sync module: template updates keep the
+# baseline current via three-way merge (repo additions survive), and sync
+# NEVER deletes this file - it stays even if the module is deselected. A
+# central settings/repos/<name>.yml in repo-platform wins over it.
 
 repository:
-  private: false
   description: "Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port"
-  topics: "mcp,browser-automation,native-messaging,chrome-extension,brave,rust"
+  topics: "brave,browser-automation,chrome-extension,mcp,native-messaging,rust"
+  # Declared so the heal run reverts an out-of-band flip to private (the
+  # template only emits this key for private repos).
+  private: false
   has_issues: true
   has_wiki: false
   has_projects: false
@@ -18,6 +23,11 @@ repository:
   allow_squash_merge: true
   allow_merge_commit: false
   allow_rebase_merge: false
+  # The squash subject must ALWAYS be the PR title (the pr-title check and
+  # release-please rely on it); GitHub only defaults to that for
+  # single-commit PRs.
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: PR_BODY
   allow_update_branch: true
   delete_branch_on_merge: true
   allow_auto_merge: true
@@ -28,12 +38,28 @@ labels:
   - name: dependencies
     color: "0366d6"
     description: Dependency updates
+  # Dependabot's default labels: the managed dependabot.yml sets no `labels:`
+  # override, so dependabot applies these and recreates them when missing.
+  # Undeclared they would loop forever: every settings apply deletes what
+  # dependabot re-adds on its next run. Values match what dependabot creates.
+  - name: github_actions
+    color: "000000"
+    description: Pull requests that update GitHub Actions code
+  - name: javascript
+    color: "168700"
+    description: Pull requests that update javascript code
+  - name: rust
+    color: "000000"
+    description: Pull requests that update rust code
   - name: bug
     color: "d73a4a"
     description: Something isn't working
   - name: enhancement
     color: "a2eeef"
     description: New feature or request
+  - name: fix-lint
+    color: "fbca04"
+    description: Lint / formatting fixes
   # The issue forms (.github/ISSUE_TEMPLATE/) apply these three.
   - name: "type:bug"
     color: "d73a4a"
@@ -44,9 +70,6 @@ labels:
   - name: "type:security"
     color: "5319e7"
     description: Change touching the security model
-  - name: fix-lint
-    color: "fbca04"
-    description: Lint / formatting fixes
   # release-please manages these two; listing them here keeps the settings
   # sync from deleting them (it removes any label not declared in this file).
   - name: "autorelease: pending"
@@ -55,17 +78,17 @@ labels:
   - name: "autorelease: tagged"
     color: "ededed"
     description: release-please release PR has been tagged
-  # The nightly-fuzz tracking label (nightly-fuzz.yml): the fuzz-issue action
-  # dedups on it, one open issue per label, so the settings sync must not
-  # strip it from the open issue. Values match what the action creates.
-  - name: fuzz-nightly
+  # The nightly-fuzz tracking label (fuzzer module): the fuzz-issue action
+  # keys its one-open-issue-per-label dedup on it, so it must survive the
+  # label sync. Values match what the action creates when the label is absent.
+  - name: "fuzz-nightly"
     color: "B60205"
     description: Automated nightly fuzz failure
 
 
 # Branch ruleset for the default branch. Admins (RepositoryRole id 5) are in
 # the bypass list, so direct pushes to main still work. The single required
-# status check is `all-green` (ci.yml), which `needs:` every CI job - the
+# status check is `all-green` (ci.yml), which `needs:` every gating CI job - the
 # list stays stable when jobs are added or renamed.
 rulesets:
   - name: main
@@ -114,3 +137,18 @@ rulesets:
       - actor_id: 5
         actor_type: RepositoryRole
         bypass_mode: always
+
+  # vX.Y.Z release tags are immutable: repo-platform's push sync pins
+  # against them and release artifacts reference them.
+  - name: release-tags
+    target: tag
+    enforcement: active
+    conditions:
+      ref_name:
+        include:
+          - v*
+        exclude: []
+    rules:
+      - type: deletion
+      - type: non_fast_forward
+      - type: update
