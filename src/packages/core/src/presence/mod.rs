@@ -24,10 +24,16 @@
 //! ## Preconditions run BEFORE the hardware prompt
 //!
 //! The CLI floor's surface requirement (stdin is a real terminal) is checked
-//! before any hardware prompt is raised, not merely inside the floor. A
-//! background script driving `chromium-bridge unkill` must not be able to
-//! put an unexplained Touch ID sheet in front of the user - a tap-phishing
-//! primitive - so a non-interactive invocation is refused outright, promptless.
+//! before any hardware prompt is raised - structurally: [`Floor::CliConfirm`]
+//! can only be constructed from a [`TerminalStdin`] witness, whose sole
+//! constructor is the check. A background script driving
+//! `chromium-bridge unkill` must not be able to put an unexplained Touch ID
+//! sheet in front of the user - a tap-phishing primitive - so a
+//! non-interactive invocation is refused outright, promptless, before
+//! [`require_presence`] can even be called with the CLI floor. The floor
+//! itself re-samples terminal-ness immediately before reading the phrase
+//! (see [`cli_confirm`]): the witness proves the ordering, not that fd 0
+//! stayed a terminal.
 //!
 //! ## The floors
 //!
@@ -128,13 +134,31 @@ impl PresencePath {
 /// means the only way to obtain one is through this module: an API that
 /// demands an attestation (like `kill::release`) structurally cannot be
 /// called with presence unchecked.
-#[derive(Debug, Clone, Copy)]
+///
+/// The witness is LINEAR - deliberately neither `Copy` nor `Clone` - so one
+/// attestation authorizes exactly one capability-restoring act: a Touch ID
+/// tap minted for "pair client X" cannot be replayed to also release the
+/// kill switch with both audit records claiming presence. The doctests
+/// below fail to compile if either impl ever comes back:
+///
+/// ```compile_fail
+/// fn takes_copy<T: Copy>() {}
+/// takes_copy::<chromium_bridge_core::presence::PresenceAttestation>();
+/// ```
+///
+/// ```compile_fail
+/// fn takes_clone<T: Clone>() {}
+/// takes_clone::<chromium_bridge_core::presence::PresenceAttestation>();
+/// ```
+#[derive(Debug)]
 pub struct PresenceAttestation {
     path: PresencePath,
 }
 
 impl PresenceAttestation {
-    pub fn path(self) -> PresencePath {
+    /// The rung that vouched. Reading it does not consume the witness - only
+    /// the capability-restoring act it is handed to does.
+    pub fn path(&self) -> PresencePath {
         self.path
     }
 }
@@ -178,6 +202,41 @@ impl fmt::Display for PresenceError {
     }
 }
 
+/// Proof that stdin was a real terminal when the CLI floor was selected -
+/// the anti-tap-phishing precondition made structural. The private field
+/// keeps [`require`](TerminalStdin::require) the only constructor, so a
+/// [`Floor::CliConfirm`] (which carries one) simply cannot exist for a piped
+/// or redirected stdin: `echo release | chromium-bridge unkill` is refused
+/// while building the floor, before [`require_presence`] - and therefore
+/// before any hardware prompt - can run at all.
+///
+/// What the witness encodes is that ORDERING, not a permanent fact:
+/// terminal-ness is a property of fd 0 at a moment, so [`cli_confirm`]
+/// re-samples it immediately before reading the phrase and refuses on a
+/// mismatch (an fd swapped to a pipe in the window between witness and
+/// floor never gets its input accepted).
+#[derive(Debug)]
+pub struct TerminalStdin(());
+
+impl TerminalStdin {
+    /// The one constructor: refuse unless stdin IS a terminal.
+    pub fn require() -> Result<TerminalStdin, PresenceError> {
+        if io::stdin().is_terminal() {
+            Ok(TerminalStdin(()))
+        } else {
+            Err(PresenceError::NotInteractive)
+        }
+    }
+
+    /// Test-only bypass so unit tests (whose stdin is never a terminal) can
+    /// exercise the CLI floor's read/verdict path. Compiled out of every
+    /// shipped binary, exactly like [`test_hook`].
+    #[cfg(test)]
+    pub(crate) fn assume_for_tests() -> TerminalStdin {
+        TerminalStdin(())
+    }
+}
+
 /// The interactive fallback a call site is entitled to when hardware is
 /// unavailable. Chosen by the surface, because each surface has exactly one
 /// honest option (see the module docs).
@@ -190,9 +249,11 @@ impl fmt::Display for PresenceError {
 /// confirmation first - may select the app floor. Selecting either from any
 /// other call site would be claiming a confirmation that never happened;
 /// treat adding such a caller as a security change (SECURITY.md).
-#[derive(Debug, Clone, Copy)]
+/// `CliConfirm` carries the [`TerminalStdin`] witness, so selecting it IS
+/// the interactivity precondition.
+#[derive(Debug)]
 pub enum Floor {
-    CliConfirm,
+    CliConfirm(TerminalStdin),
     ExtensionConfirm,
     AppConfirm,
 }
@@ -300,16 +361,14 @@ mod test_hook {
 /// Attest user presence for `reason`, hardware first, `floor` only when
 /// hardware is unavailable. See the module docs for the no-downgrade rule.
 ///
-/// The CLI floor's precondition (stdin is a terminal) runs BEFORE the
-/// hardware prompt: a script-driven invocation is refused promptless, so a
-/// background process cannot use this gate to put an unexplained Touch ID
-/// sheet in front of the user (tap phishing).
+/// The CLI floor's precondition (stdin is a terminal) has necessarily
+/// already run: [`Floor::CliConfirm`] cannot be constructed without the
+/// [`TerminalStdin`] witness, so a script-driven invocation was refused
+/// promptless before this function - and its hardware prompt - was
+/// reachable (tap phishing, see the module docs).
 pub fn require_presence(reason: &str, floor: Floor) -> Result<PresenceAttestation, PresenceError> {
-    if matches!(floor, Floor::CliConfirm) && !io::stdin().is_terminal() {
-        return Err(PresenceError::NotInteractive);
-    }
     ladder(hardware_authenticate(reason), floor, |floor| match floor {
-        Floor::CliConfirm => cli_confirm(reason),
+        Floor::CliConfirm(terminal) => cli_confirm(reason, terminal),
         Floor::ExtensionConfirm => Ok(PresenceAttestation {
             path: PresencePath::ExtensionConfirm,
         }),
@@ -344,34 +403,48 @@ fn ladder(
 /// context.
 pub const CLI_CONFIRM_PHRASE: &str = "release";
 
-/// The CLI floor: refuse a non-terminal stdin, then require the phrase.
+/// The CLI floor: require the phrase on the terminal the witness proved.
 /// Prompts go to stderr so they reach the user even with stdout redirected.
-fn cli_confirm(reason: &str) -> Result<PresenceAttestation, PresenceError> {
+///
+/// Two terminal checks exist on purpose, covering different things. The
+/// [`TerminalStdin`] witness consumed here orders the check BEFORE the
+/// hardware prompt, by construction (a piped invocation can never raise a
+/// Touch ID sheet). But terminal-ness is a property of a file descriptor at
+/// a moment, not of the past - fd 0 can be swapped for a pipe in the window
+/// between the witness and this floor - so it is re-sampled here,
+/// immediately before the read, and a mismatch refuses `NotInteractive`
+/// without reading rather than accepting a phrase from a non-terminal.
+fn cli_confirm(
+    reason: &str,
+    _terminal: TerminalStdin,
+) -> Result<PresenceAttestation, PresenceError> {
     let stdin = io::stdin();
-    let interactive = stdin.is_terminal();
-    // The prompt is written only on the interactive path; the verdict logic
+    let still_terminal = stdin.is_terminal();
+    // The prompt is written only when the re-check holds; the verdict logic
     // itself is pure and tested (`cli_confirm_verdict`).
-    if interactive {
+    if still_terminal {
         eprintln!("{reason}");
         eprint!("type '{CLI_CONFIRM_PHRASE}' to confirm: ");
         let _ = io::stderr().flush();
     }
     let mut lock = stdin.lock();
-    cli_confirm_verdict(interactive, || {
+    cli_confirm_verdict(still_terminal, || {
         let mut line = String::new();
         let n = lock.read_line(&mut line)?;
         Ok((n > 0).then_some(line))
     })
 }
 
-/// The pure fail-closed matrix of the CLI floor: not a terminal -> refuse
-/// without reading; EOF, a read error, or anything but the exact phrase ->
-/// refuse. Factored so the matrix is unit-testable without a terminal.
+/// The pure fail-closed matrix of the CLI floor: no longer a terminal at
+/// read time -> refuse without reading (the fd-swap re-check; the witness
+/// already ordered the FIRST check before the hardware prompt); EOF, a read
+/// error, or anything but the exact phrase -> refuse. Factored so the matrix
+/// is unit-testable without a terminal.
 fn cli_confirm_verdict(
-    interactive: bool,
+    still_terminal: bool,
     read_line: impl FnOnce() -> io::Result<Option<String>>,
 ) -> Result<PresenceAttestation, PresenceError> {
-    if !interactive {
+    if !still_terminal {
         return Err(PresenceError::NotInteractive);
     }
     match read_line() {
@@ -388,11 +461,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_non_terminal_stdin_refuses_without_reading() {
-        // The read closure must never run: a piped stdin is refused before
-        // any input could be consumed (or waited on).
-        let err = cli_confirm_verdict(false, || panic!("must not read a non-terminal stdin"))
-            .unwrap_err();
+    fn a_non_terminal_stdin_cannot_even_construct_the_cli_floor() {
+        // The anti-tap-phishing precondition, structural form: under a test
+        // harness stdin is never a terminal, so the witness - and with it
+        // `Floor::CliConfirm` - is unconstructible, and no CLI-floor presence
+        // request (or hardware prompt) can exist at all.
+        let err = TerminalStdin::require().unwrap_err();
         assert!(matches!(err, PresenceError::NotInteractive));
     }
 
@@ -421,6 +495,19 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_witness_cannot_reach_the_read_after_an_fd_swap() {
+        // The witness orders the terminal check before the hardware prompt,
+        // but it cannot freeze a dynamic fact: if fd 0 stops being a
+        // terminal in the window between witness construction and the floor,
+        // the re-check at read time refuses without consuming any input.
+        // The read closure panicking is the assertion that nothing is read
+        // from a non-terminal stdin.
+        let err = cli_confirm_verdict(false, || panic!("must not read a non-terminal stdin"))
+            .unwrap_err();
+        assert!(matches!(err, PresenceError::NotInteractive));
+    }
+
+    #[test]
     fn a_refused_hardware_check_never_reaches_the_floor() {
         // The no-downgrade rule: an attacker who can make Touch ID FAIL must
         // not thereby demote the gate to the softer interactive floor. The
@@ -436,21 +523,27 @@ mod tests {
 
     #[test]
     fn verified_hardware_attests_touch_id_without_the_floor() {
-        let att = ladder(HardwareOutcome::Verified, Floor::CliConfirm, |_| {
-            panic!("verified hardware needs no floor")
-        })
+        let att = ladder(
+            HardwareOutcome::Verified,
+            Floor::CliConfirm(TerminalStdin::assume_for_tests()),
+            |_| panic!("verified hardware needs no floor"),
+        )
         .unwrap();
         assert_eq!(att.path(), PresencePath::TouchId);
     }
 
     #[test]
     fn unavailable_hardware_uses_exactly_the_given_floor() {
-        let att = ladder(HardwareOutcome::Unavailable, Floor::CliConfirm, |floor| {
-            assert!(matches!(floor, Floor::CliConfirm));
-            Ok(PresenceAttestation {
-                path: PresencePath::CliConfirm,
-            })
-        })
+        let att = ladder(
+            HardwareOutcome::Unavailable,
+            Floor::CliConfirm(TerminalStdin::assume_for_tests()),
+            |floor| {
+                assert!(matches!(floor, Floor::CliConfirm(_)));
+                Ok(PresenceAttestation {
+                    path: PresencePath::CliConfirm,
+                })
+            },
+        )
         .unwrap();
         assert_eq!(att.path(), PresencePath::CliConfirm);
     }
@@ -467,7 +560,7 @@ mod tests {
             (Floor::AppConfirm, PresencePath::AppConfirm),
         ] {
             let att = ladder(HardwareOutcome::Unavailable, floor, |floor| match floor {
-                Floor::CliConfirm => panic!("wrong floor selected"),
+                Floor::CliConfirm(_) => panic!("wrong floor selected"),
                 Floor::ExtensionConfirm => Ok(PresenceAttestation {
                     path: PresencePath::ExtensionConfirm,
                 }),
@@ -482,10 +575,15 @@ mod tests {
 
     #[test]
     fn a_non_interactive_cli_invocation_is_refused_before_any_prompt() {
-        // The anti-tap-phishing precondition: under a test harness stdin is
-        // never a terminal, so the CLI floor refuses HERE, before
-        // hardware_authenticate could run at all.
-        let err = require_presence("test", Floor::CliConfirm).unwrap_err();
+        // The anti-tap-phishing precondition end to end, as a CLI surface
+        // performs it: build the witness first, only then the floor and the
+        // presence request. Under a test harness stdin is never a terminal,
+        // so the chain refuses at the witness - hardware_authenticate is
+        // structurally unreachable (there is no Floor to call it with).
+        let err = TerminalStdin::require()
+            .map(Floor::CliConfirm)
+            .and_then(|floor| require_presence("test", floor))
+            .unwrap_err();
         assert!(matches!(err, PresenceError::NotInteractive));
     }
 

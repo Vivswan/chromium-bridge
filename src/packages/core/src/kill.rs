@@ -182,10 +182,17 @@ pub fn run_kill() -> i32 {
 /// leaves the switch exactly as engaged as it was, audited as a refused
 /// release. Returns a process exit code.
 pub fn run_unkill() -> i32 {
-    let auth = match presence::require_presence(
-        "Releasing the kill switch lets MCP clients drive your browser again.",
-        Floor::CliConfirm,
-    ) {
+    // The terminal witness comes first, by construction: `Floor::CliConfirm`
+    // cannot exist without it, so a piped stdin is refused before
+    // require_presence - and any hardware prompt - is reachable.
+    let auth = match presence::TerminalStdin::require()
+        .map(Floor::CliConfirm)
+        .and_then(|floor| {
+            presence::require_presence(
+                "Releasing the kill switch lets MCP clients drive your browser again.",
+                floor,
+            )
+        }) {
         Ok(auth) => auth,
         Err(e) => {
             audit_refused_release(Surface::Cli, &e);
