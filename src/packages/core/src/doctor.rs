@@ -27,43 +27,63 @@ struct Report {
     os: &'static str,
     arch: &'static str,
     lock_path: PathBuf,
-    lock_present: bool,
-    /// `Some(err)` when the lock file exists but could not be parsed.
-    lock_error: Option<String>,
-    endpoint: Option<String>,
-    pid: Option<u32>,
-    secret_len: Option<usize>,
-    /// `None` when no probe was attempted (no lock file / no endpoint).
-    reachable: Option<bool>,
+    /// The lock file, classified once at gather time. Each state carries
+    /// exactly the facts it has - contradictory reports (an endpoint without
+    /// a lock file, a parse error beside a pid) cannot be constructed.
+    lock: LockState,
     /// Per known browser: detection and manifest registration, in
-    /// `Browser::ALL` order. Empty only when the environment could not be
-    /// resolved (see `manifest_error`).
-    manifests: Vec<ManifestStatus>,
-    /// Why the manifest check could not run (e.g. no HOME).
-    manifest_error: Option<String>,
+    /// `Browser::ALL` order - or the reason the check could not run at all
+    /// (e.g. no HOME).
+    manifests: Result<Vec<ManifestStatus>, String>,
     /// The global kill switch (ADR-0030). `Ok(bool)` from a readable
     /// revocation record; `Err(text)` when the record is unreadable (in which
     /// case every enforcement point is failing closed).
     kill: Result<bool, String>,
 }
 
+/// The lock file's classification: exactly absent, present-but-unreadable, or
+/// parsed (with the probe result the endpoint allowed). Mirrors the three-way
+/// result of `LockFile::read()`.
+#[derive(Debug, Clone)]
+enum LockState {
+    /// No lock file: server not running.
+    Absent,
+    /// The file exists but did not read/parse.
+    Unreadable(String),
+    /// Parsed; `reachable` is the passive connect probe against `endpoint`.
+    Running {
+        endpoint: String,
+        pid: u32,
+        secret_len: usize,
+        reachable: bool,
+    },
+}
+
 /// One browser's registration state, as diagnosed through the shared
-/// resolver and `registration::assess`.
+/// resolver and `registration::assess`. Stores the assessed [`RegState`]
+/// itself; the rendered wording and the health verdict are derived at use,
+/// so they cannot disagree with each other.
 #[derive(Debug, Clone)]
 struct ManifestStatus {
     key: &'static str,
     detected: bool,
-    /// `RegState::describe()` output: ok/missing/stale/... with the reason.
-    state: String,
-    healthy: bool,
+    state: RegState,
     location: String,
+}
+
+impl ManifestStatus {
+    fn healthy(&self) -> bool {
+        self.state == RegState::Ok
+    }
 }
 
 impl Report {
     /// Whether any browser this user actually has picks up a healthy
     /// registration.
     fn manifest_ok(&self) -> bool {
-        self.manifests.iter().any(|m| m.detected && m.healthy)
+        self.manifests
+            .as_ref()
+            .is_ok_and(|list| list.iter().any(|m| m.detected && m.healthy()))
     }
 }
 
@@ -86,68 +106,44 @@ pub fn probe(endpoint: &str) -> bool {
     }
 }
 
-/// Gather the per-browser manifest states (read-only).
-fn gather_manifests() -> (Vec<ManifestStatus>, Option<String>) {
-    let dirs = match BaseDirs::from_env() {
-        Ok(d) => d,
-        Err(e) => return (Vec::new(), Some(e)),
-    };
-    let statuses = browsers::resolve(Os::current(), &dirs)
+/// Gather the per-browser manifest states (read-only), or the reason the
+/// check could not run.
+fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
+    let dirs = BaseDirs::from_env()?;
+    Ok(browsers::resolve(Os::current(), &dirs)
         .iter()
-        .map(|entry| {
-            let state = registration::assess(&entry.registration);
-            ManifestStatus {
-                key: entry.browser.key(),
-                detected: entry.detected(),
-                healthy: state == RegState::Ok,
-                state: state.describe(),
-                location: entry.registration.location(),
-            }
+        .map(|entry| ManifestStatus {
+            key: entry.browser.key(),
+            detected: entry.detected(),
+            state: registration::assess(&entry.registration),
+            location: entry.registration.location(),
         })
-        .collect();
-    (statuses, None)
+        .collect())
 }
 
 /// Gather the report by reading (never mutating) local state.
 fn gather() -> Report {
-    let lock_path = LockFile::path();
-    let (manifests, manifest_error) = gather_manifests();
+    let lock = match LockFile::read() {
+        Ok(Some(lf)) => LockState::Running {
+            reachable: probe(&lf.endpoint),
+            secret_len: lf.secret.len(),
+            pid: lf.pid,
+            endpoint: lf.endpoint,
+        },
+        Ok(None) => LockState::Absent,
+        // File exists but did not read/parse. Present-but-broken.
+        Err(e) => LockState::Unreadable(e.to_string()),
+    };
 
-    let mut report = Report {
+    Report {
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
-        lock_path,
-        lock_present: false,
-        lock_error: None,
-        endpoint: None,
-        pid: None,
-        secret_len: None,
-        reachable: None,
-        manifests,
-        manifest_error,
+        lock_path: LockFile::path(),
+        lock,
+        manifests: gather_manifests(),
         kill: crate::kill::is_killed().map_err(|e| e.to_string()),
-    };
-
-    match LockFile::read() {
-        Ok(Some(lf)) => {
-            report.lock_present = true;
-            report.reachable = Some(probe(&lf.endpoint));
-            report.endpoint = Some(lf.endpoint);
-            report.pid = Some(lf.pid);
-            report.secret_len = Some(lf.secret.len());
-        }
-        Ok(None) => {
-            // No lock file: server not running. Leave defaults.
-        }
-        Err(e) => {
-            // File exists but did not read/parse. Treat as present-but-broken.
-            report.lock_present = true;
-            report.lock_error = Some(e.to_string());
-        }
     }
-
-    report
 }
 
 /// Pure rendering of a gathered report into the printed health text.
@@ -157,28 +153,35 @@ fn render(r: &Report) -> String {
     out.push_str(&format!("platform:        {}/{}\n", r.os, r.arch));
 
     out.push_str(&format!("lock file:       {}\n", r.lock_path.display()));
-    if let Some(err) = &r.lock_error {
-        out.push_str(&format!("  present but unreadable: {err}\n"));
-    } else if r.lock_present {
-        out.push_str("  present: yes\n");
-        if let Some(endpoint) = &r.endpoint {
+    match &r.lock {
+        LockState::Unreadable(err) => {
+            out.push_str(&format!("  present but unreadable: {err}\n"));
+        }
+        LockState::Running {
+            endpoint,
+            pid,
+            secret_len,
+            ..
+        } => {
+            out.push_str("  present: yes\n");
             out.push_str(&format!("  endpoint: {endpoint}\n"));
-        }
-        if let Some(pid) = r.pid {
             out.push_str(&format!("  pid:     {pid}\n"));
+            out.push_str(&format!("  secret:  <redacted, {secret_len} chars>\n"));
         }
-        if let Some(len) = r.secret_len {
-            out.push_str(&format!("  secret:  <redacted, {len} chars>\n"));
+        LockState::Absent => {
+            out.push_str("  present: no (MCP server not running?)\n");
         }
-    } else {
-        out.push_str("  present: no (MCP server not running?)\n");
     }
 
     out.push_str("mcp server:      ");
-    match r.reachable {
-        Some(true) => out.push_str("reachable (socket connect OK)\n"),
-        Some(false) => out.push_str("not reachable\n"),
-        None => out.push_str("not probed (no lock file)\n"),
+    match &r.lock {
+        LockState::Running {
+            reachable: true, ..
+        } => out.push_str("reachable (socket connect OK)\n"),
+        LockState::Running {
+            reachable: false, ..
+        } => out.push_str("not reachable\n"),
+        LockState::Absent | LockState::Unreadable(_) => out.push_str("not probed (no lock file)\n"),
     }
 
     out.push_str("kill switch:     ");
@@ -193,21 +196,23 @@ fn render(r: &Report) -> String {
     }
 
     out.push_str(&format!("native manifests: (host id {HOST_ID})\n"));
-    if let Some(err) = &r.manifest_error {
-        out.push_str(&format!("  could not check: {err}\n"));
-    }
-    for m in &r.manifests {
-        out.push_str(&format!(
-            "  {:<9} {:<13} manifest {:<8} {}\n",
-            m.key,
-            if m.detected {
-                "detected"
-            } else {
-                "not detected"
-            },
-            m.state,
-            m.location,
-        ));
+    match &r.manifests {
+        Err(err) => out.push_str(&format!("  could not check: {err}\n")),
+        Ok(list) => {
+            for m in list {
+                out.push_str(&format!(
+                    "  {:<9} {:<13} manifest {:<8} {}\n",
+                    m.key,
+                    if m.detected {
+                        "detected"
+                    } else {
+                        "not detected"
+                    },
+                    m.state.describe(),
+                    m.location,
+                ));
+            }
+        }
     }
 
     // These probes only cover the MCP-server/bridge side. doctor cannot observe
@@ -234,18 +239,20 @@ fn summary(r: &Report) -> &'static str {
     if r.kill.is_err() {
         return "kill state unreadable - failing closed; see docs/operations.md";
     }
-    if r.lock_error.is_some() {
-        return "lock file present but unreadable - try restarting your MCP client";
-    }
-    if !r.lock_present {
-        return "server not running - is your MCP client started?";
-    }
-    match r.reachable {
-        Some(true) if r.manifest_ok() => "OK",
-        Some(true) => {
+    match &r.lock {
+        LockState::Unreadable(_) => {
+            "lock file present but unreadable - try restarting your MCP client"
+        }
+        LockState::Absent => "server not running - is your MCP client started?",
+        LockState::Running {
+            reachable: true, ..
+        } if r.manifest_ok() => "OK",
+        LockState::Running {
+            reachable: true, ..
+        } => {
             "server reachable, but no detected browser has a healthy native-host registration - run `chromium-bridge doctor --fix`"
         }
-        _ => "server not reachable - is your MCP client running?",
+        LockState::Running { .. } => "server not reachable - is your MCP client running?",
     }
 }
 
@@ -285,22 +292,22 @@ fn run_list() -> i32 {
 /// Entry point for the `doctor` / `status` subcommand: report by default,
 /// `--list` for the short listing, `--fix` to repair/register.
 pub fn run(argv: &[String]) -> i32 {
-    let args = match crate::cli::doctor_args(argv) {
-        Ok(a) => a,
+    let cmd = match crate::cli::doctor_args(argv) {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("doctor: {e}");
             return 2;
         }
     };
-    if args.list {
-        return run_list();
+    match cmd {
+        crate::cli::DoctorCommand::List => run_list(),
+        crate::cli::DoctorCommand::Fix(targets) => registration::run_fix(&targets),
+        crate::cli::DoctorCommand::Report => {
+            let report = gather();
+            print!("{}", render(&report));
+            exit_code(&report)
+        }
     }
-    if args.fix {
-        return registration::run_fix(&args);
-    }
-    let report = gather();
-    print!("{}", render(&report));
-    exit_code(&report)
 }
 
 #[cfg(test)]
@@ -313,29 +320,26 @@ mod tests {
             os: "macos",
             arch: "aarch64",
             lock_path: PathBuf::from("/tmp/run.lock"),
-            lock_present: true,
-            lock_error: None,
-            endpoint: Some("/tmp/chromium-bridge/run.sock".into()),
-            pid: Some(4242),
-            secret_len: Some(32),
-            reachable: Some(true),
-            manifests: vec![
+            lock: LockState::Running {
+                endpoint: "/tmp/chromium-bridge/run.sock".into(),
+                pid: 4242,
+                secret_len: 32,
+                reachable: true,
+            },
+            manifests: Ok(vec![
                 ManifestStatus {
                     key: "chrome",
                     detected: true,
-                    state: "ok".into(),
-                    healthy: true,
+                    state: RegState::Ok,
                     location: "/tmp/com.vivswan.chromium_bridge.host.json".into(),
                 },
                 ManifestStatus {
                     key: "brave",
                     detected: false,
-                    state: "missing".into(),
-                    healthy: false,
+                    state: RegState::Missing,
                     location: "/tmp/brave/com.vivswan.chromium_bridge.host.json".into(),
                 },
-            ],
-            manifest_error: None,
+            ]),
             kill: Ok(false),
         }
     }
@@ -368,7 +372,7 @@ mod tests {
         // A manifest registered only for a browser this user does not have
         // will never be read; the summary must say so instead of "OK".
         let mut r = healthy_report();
-        r.manifests[0].detected = false;
+        r.manifests.as_mut().unwrap()[0].detected = false;
         let text = render(&r);
         assert!(text.contains("run `chromium-bridge doctor --fix`"));
         assert_eq!(exit_code(&r), 1);
@@ -381,22 +385,15 @@ mod tests {
             os: "linux",
             arch: "x86_64",
             lock_path: PathBuf::from("/run/user/1000/chromium-bridge.lock"),
-            lock_present: false,
-            lock_error: None,
-            endpoint: None,
-            pid: None,
-            secret_len: None,
-            reachable: None,
-            manifests: vec![ManifestStatus {
+            lock: LockState::Absent,
+            manifests: Ok(vec![ManifestStatus {
                 key: "chrome",
                 detected: true,
-                state: "missing".into(),
-                healthy: false,
+                state: RegState::Missing,
                 location:
                     "/home/u/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
                         .into(),
-            }],
-            manifest_error: None,
+            }]),
             kill: Ok(false),
         };
         let text = render(&r);
@@ -409,8 +406,7 @@ mod tests {
     #[test]
     fn unresolvable_environment_is_reported_not_hidden() {
         let mut r = healthy_report();
-        r.manifests = Vec::new();
-        r.manifest_error = Some("HOME (or USERPROFILE) is not set".into());
+        r.manifests = Err("HOME (or USERPROFILE) is not set".into());
         let text = render(&r);
         assert!(text.contains("could not check: HOME"));
         // No verified manifest means not healthy.

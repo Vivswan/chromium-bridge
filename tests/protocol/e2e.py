@@ -229,6 +229,11 @@ class McpClient:
         return json.loads(self.proc.stdout.readline())
 
     def initialize(self):
+        # "2025-06-18" is hard-coded on purpose: this suite is a deliberately
+        # independent black-box check of the served protocol. The canonical
+        # value is MCP_PROTOCOL_VERSION in src/packages/core/src/protocol.rs;
+        # a re-pin there must update these literals by hand (the assertions
+        # below fail until it does).
         self.send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                    "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                               "clientInfo": {"name": "e2e", "version": "0.1"}}})
@@ -362,6 +367,8 @@ def test_mcp_handshake_and_tools():
         check(lf is not None, "lock file written on startup")
         c = McpClient(mcp)
         init = c.initialize()
+        # Independent black-box pin of the served version; canonical value:
+        # MCP_PROTOCOL_VERSION in src/packages/core/src/protocol.rs.
         check(init.get("result", {}).get("protocolVersion") == "2025-06-18",
               "initialize returns protocolVersion 2025-06-18")
         check("tools" in init.get("result", {}).get("capabilities", {}),

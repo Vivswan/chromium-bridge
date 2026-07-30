@@ -9,17 +9,16 @@
 // PageReply envelope (anything else is refused, never shape-sniffed).
 
 import { ClickProbeSchema, ContentMsgSchema, PageReplySchema } from "@chromium-bridge/shared";
-import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
 import type { OpArgs } from "../../shared/types";
 import type { PageOpGuard } from "../confirm/gate";
 import type { PageBackend } from "../page-backend";
-import { injectIfNeeded } from "../tabs";
+import { injectIfNeeded, type ResolvedTab } from "../tabs";
 
 export class ContentScriptBackend implements PageBackend {
-  async probeClick(args: OpArgs, tab: Browser.tabs.Tab): Promise<ClickProbe> {
+  async probeClick(args: OpArgs, tab: ResolvedTab): Promise<ClickProbe> {
     // The one guard-less content message besides ping/_info_toast: a DOM read
     // that runs BEFORE any approval exists. Its result becomes the basis of
     // the risk decision, the confirmation text, AND the descriptor the click
@@ -33,7 +32,7 @@ export class ContentScriptBackend implements PageBackend {
     return probe.data;
   }
 
-  async run(op: PageOp, args: OpArgs, tab: Browser.tabs.Tab, guard: PageOpGuard): Promise<unknown> {
+  async run(op: PageOp, args: OpArgs, tab: ResolvedTab, guard: PageOpGuard): Promise<unknown> {
     if (op === "page_screenshot") {
       // Only the SW can capture, and captureVisibleTab can only capture the
       // ACTIVE tab of a window - so require the resolved tab to actually be
@@ -48,8 +47,7 @@ export class ContentScriptBackend implements PageBackend {
     return await this.send(tab, { op, args, tabId: tab.id, guard });
   }
 
-  private async send(tab: Browser.tabs.Tab, msg: Record<string, unknown>): Promise<unknown> {
-    if (tab.id == null) throw new Error("target tab has no id");
+  private async send(tab: ResolvedTab, msg: Record<string, unknown>): Promise<unknown> {
     // Parse the OUTBOUND message against the same schema the content script
     // enforces: a page-acting message missing its guard (or a page_click
     // missing the approved descriptor) fails HERE, in the SW, before anything

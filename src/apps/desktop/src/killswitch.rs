@@ -68,16 +68,32 @@ pub fn release() -> Result<ReleaseOutcome, String> {
 #[serde(untagged)]
 pub enum AuditLine {
     Record(Box<AuditRecord>),
-    Unrecognized { unrecognized: bool },
+    Unrecognized {
+        #[cfg_attr(feature = "ts-export", ts(type = "true"))]
+        unrecognized: UnrecognizedMarker,
+    },
+}
+
+/// Serializes as literal `true`: the untagged discriminant for a line that
+/// failed the strict parse. A unit struct rather than a bool, so a false
+/// marker (an "unrecognized line that is fine") cannot be constructed; the
+/// generated TS types the field as the literal `true` for the same reason.
+pub struct UnrecognizedMarker;
+
+impl Serialize for UnrecognizedMarker {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bool(true)
+    }
 }
 
 #[derive(Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AuditPage {
-    /// Oldest first, rotated file included, capped to `limit` newest.
+    /// Oldest first, rotated file included, capped to `limit` newest. The
+    /// unrecognized count is derived by the consumer from the marker lines,
+    /// never carried as a second copy that could disagree.
     pub lines: Vec<AuditLine>,
-    pub unrecognized: usize,
     pub path: String,
 }
 
@@ -99,20 +115,18 @@ pub fn read(limit: usize) -> Result<AuditPage, String> {
         }
     }
     let start = raw.len().saturating_sub(limit);
-    let mut lines = Vec::new();
-    let mut unrecognized = 0usize;
-    for line in raw.iter().skip(start) {
-        match parse_record(line) {
-            Some(rec) => lines.push(AuditLine::Record(Box::new(rec))),
-            None => {
-                unrecognized += 1;
-                lines.push(AuditLine::Unrecognized { unrecognized: true });
-            }
-        }
-    }
+    let lines = raw
+        .iter()
+        .skip(start)
+        .map(|line| match parse_record(line) {
+            Some(rec) => AuditLine::Record(Box::new(rec)),
+            None => AuditLine::Unrecognized {
+                unrecognized: UnrecognizedMarker,
+            },
+        })
+        .collect();
     Ok(AuditPage {
         lines,
-        unrecognized,
         path: live.display().to_string(),
     })
 }

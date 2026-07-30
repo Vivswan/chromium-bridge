@@ -13,6 +13,7 @@ import {
   approvePending,
   attachPort,
   detachPort,
+  type EnrollmentStatus,
   enrollmentGate,
   getEnrollmentStatus,
   handleEnclaveFrame,
@@ -24,6 +25,15 @@ import {
   verifyPinnedNow,
 } from "@/lib/background/enrollment";
 import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
+
+/** Assert the status is in `state` and narrow to that arm's fields. */
+function inState<S extends EnrollmentStatus["state"]>(
+  st: EnrollmentStatus,
+  state: S,
+): Extract<EnrollmentStatus, { state: S }> {
+  if (st.state !== state) throw new Error(`expected state ${state}, got ${st.state}`);
+  return st as Extract<EnrollmentStatus, { state: S }>;
+}
 
 // The ceremony state machine, driven end to end with a mocked chrome and a
 // WebCrypto key standing in for the host's Secure Enclave key. What CANNOT be
@@ -286,16 +296,14 @@ describe("ceremony state machine", () => {
     expect(context).toContain("test-ext-id");
 
     await handleEnclaveFrame(await proofFrame(key, nonce, context));
-    let st = await getEnrollmentStatus();
-    expect(st.state).toBe("pending");
-    expect(st.keyId).toBe(key.keyId);
+    const pendingSt = inState(await getEnrollmentStatus(), "pending");
+    expect(pendingSt.keyId).toBe(key.keyId);
     let gate = await enrollmentGate();
     expect(gate.allowed).toBe(false); // pending is still blocked
 
     expect((await approvePending()).ok).toBe(true);
-    st = await getEnrollmentStatus();
-    expect(st.state).toBe("pinned");
-    expect(st.keyId).toBe(key.keyId);
+    const pinnedSt = inState(await getEnrollmentStatus(), "pinned");
+    expect(pinnedSt.keyId).toBe(key.keyId);
     gate = await enrollmentGate();
     expect(gate.allowed).toBe(true);
   });
@@ -326,8 +334,7 @@ describe("ceremony state machine", () => {
     expect((await verifyPinnedNow()).ok).toBe(true);
     const { nonce, context } = lastChallenge();
     await handleEnclaveFrame(await proofFrame(key, nonce, context));
-    const st = await getEnrollmentStatus();
-    expect(st.state).toBe("pinned");
+    const st = inState(await getEnrollmentStatus(), "pinned");
     expect(typeof st.lastVerifiedAt).toBe("number");
     expect((await enrollmentGate()).allowed).toBe(true);
   });
@@ -557,8 +564,7 @@ describe("ceremony state machine", () => {
     before = posted.length;
     await onPortConnected();
     expect(posted.slice(before)).toEqual([]);
-    const st = await getEnrollmentStatus();
-    expect(st.state).toBe("pinned");
+    const st = inState(await getEnrollmentStatus(), "pinned");
     expect(st.keyId).toBe(newKey.keyId);
     expect(st.hostRevokePending).toBeUndefined();
     expect((await enrollmentGate()).allowed).toBe(true);
@@ -612,8 +618,7 @@ describe("ceremony state machine", () => {
     await pairAndPin(key);
     expect((await enrollmentGate()).allowed).toBe(true);
     await handleEnclaveFrame({ type: "enclave_revoked" });
-    const st = await getEnrollmentStatus();
-    expect(st.state).toBe("compromised");
+    const st = inState(await getEnrollmentStatus(), "compromised");
     expect(st.compromisedReason).toContain("revoked");
     expect((await enrollmentGate()).allowed).toBe(false);
   });
@@ -623,8 +628,10 @@ describe("ceremony state machine", () => {
     // fail closed, and the frame must not manufacture a compromised mark.
     await handleEnclaveFrame({ type: "enclave_revoked" });
     const st = await getEnrollmentStatus();
+    // "unpaired" carries no compromise fields by type - the state IS the
+    // proof no compromised mark was manufactured.
     expect(st.state).toBe("unpaired");
-    expect(st.compromisedReason).toBeUndefined();
+    expect("compromisedReason" in st).toBe(false);
   });
 
   test("startPairing refuses while a key is pinned", async () => {
@@ -883,8 +890,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
     const frame = posted[posted.length - 1];
     expect(frame?.type).toBe("enclave_challenge");
     await handleEnclaveFrame(await proofFrame(key, nonce, context));
-    const st = await getEnrollmentStatus();
-    expect(st.state).toBe("pinned");
+    const st = inState(await getEnrollmentStatus(), "pinned");
     expect(typeof st.lastVerifiedAt).toBe("number");
     expect((await enrollmentGate()).allowed).toBe(true);
     // The successful verification satisfies the interval: no new challenge.

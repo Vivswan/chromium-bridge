@@ -7,13 +7,18 @@ import { getSetting } from "../shared/settings";
 import { ensureAllowed } from "./allowlist-store";
 import { confirmWithUser } from "./confirm/service";
 
-export async function resolveTargetTab(maybeTabId: number | undefined): Promise<Browser.tabs.Tab> {
-  if (maybeTabId) {
-    return await browser.tabs.get(maybeTabId);
-  }
-  const [active] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!active) throw new Error("no active tab");
-  return active;
+/** A tab whose id is proven present. `resolveTargetTab` (and dispatch's
+ * recheck) return this, so downstream code never re-checks or `!`-asserts
+ * `tab.id` - the one throw lives here. */
+export type ResolvedTab = Browser.tabs.Tab & { id: number };
+
+export async function resolveTargetTab(maybeTabId: number | undefined): Promise<ResolvedTab> {
+  const tab = maybeTabId
+    ? await browser.tabs.get(maybeTabId)
+    : (await browser.tabs.query({ active: true, currentWindow: true }))[0];
+  if (!tab) throw new Error("no active tab");
+  if (tab.id == null) throw new Error("target tab has no id");
+  return tab as ResolvedTab;
 }
 
 export async function injectIfNeeded(tabId: number) {
@@ -68,14 +73,12 @@ export async function pageNavigate(url: string) {
   }
   await ensureAllowed(url);
   const tab = await resolveTargetTab(undefined);
-  if (tab.id == null) throw new Error("no active tab to navigate");
   await browser.tabs.update(tab.id, { url });
   return { navigated: tab.id, url };
 }
 
 export async function pageBack() {
   const tab = await resolveTargetTab(undefined);
-  if (tab.id == null) throw new Error("no active tab");
   await ensureAllowed(tab.url);
   await browser.tabs.goBack(tab.id);
   return { back: tab.id };
@@ -83,7 +86,6 @@ export async function pageBack() {
 
 export async function pageForward() {
   const tab = await resolveTargetTab(undefined);
-  if (tab.id == null) throw new Error("no active tab");
   await ensureAllowed(tab.url);
   await browser.tabs.goForward(tab.id);
   return { forward: tab.id };
@@ -91,7 +93,6 @@ export async function pageForward() {
 
 export async function pageReload() {
   const tab = await resolveTargetTab(undefined);
-  if (tab.id == null) throw new Error("no active tab");
   await ensureAllowed(tab.url);
   await browser.tabs.reload(tab.id);
   return { reloaded: tab.id };

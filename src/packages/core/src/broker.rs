@@ -56,7 +56,7 @@ use crate::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, AttachReply, AttachRequest, HarnessId, JsonRpc,
     MCP_MAX_LINE,
 };
-use crate::revocation::Revocation;
+use crate::revocation::{Revocation, REVOCATION_POLL};
 use crate::session::Session;
 
 // ---- DoS limits (generalizing the fail-closed-timeout posture) -------------
@@ -239,11 +239,11 @@ impl RateLimiter {
 
 // ---- Revocation-epoch enforcement (ADR-0025) --------------------------------
 
-/// How often the broker's watcher thread re-reads the revocation epoch, so a
-/// revocation reaches even an IDLE connection without waiting for its next
-/// request. Requests themselves are checked inline (immediately), so this
-/// interval only bounds the lifetime of an idle revoked connection.
-const REVOCATION_POLL: Duration = Duration::from_secs(1);
+// The broker's watcher thread re-reads the revocation epoch every
+// `revocation::REVOCATION_POLL`, so a revocation reaches even an IDLE
+// connection without waiting for its next request. Requests themselves are
+// checked inline (immediately), so that interval only bounds the lifetime of
+// an idle revoked connection.
 
 /// Per-connection revocation-epoch guard (ADR-0025). Each admitted harness
 /// (the broker's own stdio harness and every relay) carries the epoch it was

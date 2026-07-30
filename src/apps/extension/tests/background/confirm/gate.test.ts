@@ -4,14 +4,14 @@
 
 import type { ConfirmPayload } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
-import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
 import { bindOrigin, preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
 import { installConfirmationProvider, resolveConfirm } from "@/lib/background/confirm/service";
 import type { PageBackend } from "@/lib/background/page-backend";
+import type { ResolvedTab } from "@/lib/background/tabs";
 import type { ClickProbe } from "@/lib/dom/page-api";
 
-const TAB = { id: 7, url: "https://example.com/x", title: "Example" } as Browser.tabs.Tab;
+const TAB = { id: 7, url: "https://example.com/x", title: "Example" } as ResolvedTab;
 
 function fakeBackend(probe: ClickProbe): PageBackend {
   return {
@@ -75,7 +75,7 @@ describe("page_click", () => {
   test("the grace window does NOT cross tabs", async () => {
     const asked = autoProvider(true);
     await preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
-    const otherTab = { ...TAB, id: 8 } as Browser.tabs.Tab;
+    const otherTab = { ...TAB, id: 8 };
     await preflightPageOp("page_click", { selector: "#x" }, otherTab, fakeBackend(SUBMIT));
     expect(asked.length).toBe(2);
   });

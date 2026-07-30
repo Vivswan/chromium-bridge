@@ -54,6 +54,10 @@ pub const AUDIT_VERSION: u32 = 1;
 /// trail is bounded to roughly twice this figure plus one record.
 const AUDIT_MAX_BYTES: u64 = 256 * 1024;
 
+/// How many records `audit` prints when `--limit` is not given. Public so the
+/// `--help` text interpolates the same value the handler applies.
+pub const DEFAULT_AUDIT_LIMIT: usize = 200;
+
 /// Per-field length bound. Audit fields are labels, codes, and short reasons;
 /// anything longer is truncated at write time so one pathological value
 /// cannot burn the whole size budget.
@@ -531,8 +535,8 @@ fn render_line(rec: &AuditRecord) -> String {
     s
 }
 
-/// The `--limit <n>` of `audit` (default 200), parsed with the same
-/// strictness as the other subcommands.
+/// The `--limit <n>` of `audit` (default [`DEFAULT_AUDIT_LIMIT`]), parsed
+/// with the same strictness as the other subcommands.
 fn audit_args(argv: &[String]) -> Result<usize, String> {
     let mut limit: Option<usize> = None;
     let mut it = argv.iter().skip(2);
@@ -551,7 +555,7 @@ fn audit_args(argv: &[String]) -> Result<usize, String> {
             other => return Err(format!("unexpected argument {other:?}")),
         }
     }
-    Ok(limit.unwrap_or(200))
+    Ok(limit.unwrap_or(DEFAULT_AUDIT_LIMIT))
 }
 
 /// Format Unix milliseconds as `YYYY-MM-DD HH:MM:SS.mmm` UTC, without a date
@@ -758,7 +762,7 @@ mod tests {
                 .map(String::from)
                 .collect()
         };
-        assert_eq!(audit_args(&argv(&[])), Ok(200));
+        assert_eq!(audit_args(&argv(&[])), Ok(DEFAULT_AUDIT_LIMIT));
         assert_eq!(audit_args(&argv(&["--limit", "5"])), Ok(5));
         assert!(audit_args(&argv(&["--limit"])).is_err());
         assert!(audit_args(&argv(&["--limit", "x"])).is_err());

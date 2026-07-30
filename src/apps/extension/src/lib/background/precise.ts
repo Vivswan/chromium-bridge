@@ -109,7 +109,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
   // Warn the user via an informational toast in the page. Proceed unless
   // they actively cancel within the timeout. Skippable via settings.
   const warnPrecise = await getSetting("warnPreciseSnapshot");
-  await injectIfNeeded(tab.id!);
+  await injectIfNeeded(tab.id);
   if (warnPrecise) {
     // The toast strings resolve here (the SW has the user's locale); the
     // content script deliberately reads no extension storage (#32).
@@ -118,7 +118,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
     let delivered = true;
     let raw: unknown;
     try {
-      raw = await browser.tabs.sendMessage(tab.id!, {
+      raw = await browser.tabs.sendMessage(tab.id, {
         op: "_info_toast",
         args: {
           message: t("content.precise_notice"),
@@ -148,8 +148,8 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
   // attach on this tab; withCdpAttach rides it (a second attach would fail and
   // detaching it would tear down the persistent session). When CDP mode is off
   // it attaches transiently and detaches on every exit path.
-  return await withCdpAttach(tab.id!, "page_snapshot_precise", async () => {
-    const tree = await dbgSend<AXTreeResult>(tab.id!, "Accessibility.getFullAXTree", {});
+  return await withCdpAttach(tab.id, "page_snapshot_precise", async () => {
+    const tree = await dbgSend<AXTreeResult>(tab.id, "Accessibility.getFullAXTree", {});
     const nodes = tree.nodes ?? [];
 
     // Filter: only interactive, non-ignored nodes with a DOM handle.
@@ -173,13 +173,13 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
       const ref = `p${idx}`;
       let descriptor: NodeDescriptor;
       try {
-        const resolved = await dbgSend<ResolveNodeResult>(tab.id!, "DOM.resolveNode", {
+        const resolved = await dbgSend<ResolveNodeResult>(tab.id, "DOM.resolveNode", {
           backendNodeId: n.backendDOMNodeId,
         });
         const objectId = resolved.object?.objectId;
         if (!objectId) continue;
         // Tag the element AND read back a selector/id hint in one call.
-        const callRes = await dbgSend<CallFunctionResult>(tab.id!, "Runtime.callFunctionOn", {
+        const callRes = await dbgSend<CallFunctionResult>(tab.id, "Runtime.callFunctionOn", {
           objectId,
           functionDeclaration:
             "function(ref) {" +

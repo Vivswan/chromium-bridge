@@ -19,9 +19,9 @@ pub struct BridgeStatus {
     pub arch: &'static str,
     pub kill: KillState,
     pub server: ServerStatus,
-    /// The bundled host binary this app manages, when it resolves.
-    pub host_path: Option<String>,
-    pub host_error: Option<String>,
+    /// The bundled host binary this app manages: resolved to its path, or the
+    /// everywhere-it-looked error.
+    pub host: HostResolution,
 }
 
 /// The kill switch as the status view names it. An unreadable record is its
@@ -36,16 +36,34 @@ pub enum KillState {
     Unreadable { detail: String },
 }
 
+/// The MCP server, classified once from `LockFile::read()`'s three-way
+/// result: exactly stopped (no lock file), running (parsed, with the probe
+/// result), or lock-unreadable. A discriminated union on the wire, so the UI
+/// matches states instead of re-deriving them from correlated nullables.
 #[derive(Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub struct ServerStatus {
-    pub lock_present: bool,
-    pub lock_error: Option<String>,
-    pub endpoint: Option<String>,
-    pub pid: Option<u32>,
-    /// `None` when no probe was attempted (no lock file / no endpoint).
-    pub reachable: Option<bool>,
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ServerStatus {
+    /// No lock file: not running.
+    Stopped,
+    /// Lock file parsed; `reachable` is the passive connect probe.
+    Running {
+        endpoint: String,
+        pid: u32,
+        reachable: bool,
+    },
+    /// The lock file exists but could not be read/parsed.
+    Unreadable { detail: String },
+}
+
+/// Where the bundled host binary resolved to, mirroring the `Result` it
+/// flattens onto the webview wire: exactly one of a path or an error.
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HostResolution {
+    Resolved { path: String },
+    Unresolved { error: String },
 }
 
 pub fn gather() -> BridgeStatus {
@@ -58,32 +76,22 @@ pub fn gather() -> BridgeStatus {
     };
 
     let server = match LockFile::read() {
-        Ok(Some(lf)) => ServerStatus {
-            lock_present: true,
-            lock_error: None,
-            reachable: Some(doctor::probe(&lf.endpoint)),
-            endpoint: Some(lf.endpoint),
-            pid: Some(lf.pid),
+        Ok(Some(lf)) => ServerStatus::Running {
+            reachable: doctor::probe(&lf.endpoint),
+            endpoint: lf.endpoint,
+            pid: lf.pid,
         },
-        Ok(None) => ServerStatus {
-            lock_present: false,
-            lock_error: None,
-            endpoint: None,
-            pid: None,
-            reachable: None,
-        },
-        Err(e) => ServerStatus {
-            lock_present: true,
-            lock_error: Some(e.to_string()),
-            endpoint: None,
-            pid: None,
-            reachable: None,
+        Ok(None) => ServerStatus::Stopped,
+        Err(e) => ServerStatus::Unreadable {
+            detail: e.to_string(),
         },
     };
 
-    let (host_path, host_error) = match host::resolve_host() {
-        Ok(p) => (Some(p.display().to_string()), None),
-        Err(e) => (None, Some(e)),
+    let host = match host::resolve_host() {
+        Ok(p) => HostResolution::Resolved {
+            path: p.display().to_string(),
+        },
+        Err(e) => HostResolution::Unresolved { error: e },
     };
 
     BridgeStatus {
@@ -92,7 +100,6 @@ pub fn gather() -> BridgeStatus {
         arch: std::env::consts::ARCH,
         kill,
         server,
-        host_path,
-        host_error,
+        host,
     }
 }

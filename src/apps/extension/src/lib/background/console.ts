@@ -69,7 +69,7 @@ export async function consoleGet(maybeTabId: number | undefined, args: OpArgs): 
       `console_get cannot debug this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
     );
   }
-  const tabId = tab.id!;
+  const tabId = tab.id;
   const limit =
     typeof args.limit === "number" && args.limit > 0 ? Math.min(Math.floor(args.limit), 1000) : 100;
 

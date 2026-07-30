@@ -20,6 +20,8 @@
 //   - client-name env var                   src/packages/core/src/mcp_server.rs
 //   - bridge protocol version               src/packages/core/src/protocol.rs
 //   - BB_* env var names and value sets     src/packages/core/src/log.rs
+//   - audit --limit default                 src/packages/core/src/audit.rs
+//   - browser CLI keys                      src/packages/core/src/browsers.rs
 //
 // Two kinds of assertion, both fail-closed on a missing canonical value:
 //
@@ -94,6 +96,75 @@ export function logEnvVars(logSrc: string): string[] {
   );
   if (names.length === 0) throw new Error("cannot find any BB_* env var reads in log.rs");
   return [...new Set(names)] as string[];
+}
+
+/** Strip Rust comments, nesting-aware: a nested block comment leaves nothing
+ * exposed (unlike a lazy single-level regex, which stops at the first close
+ * delimiter), and `//` line comments are dropped too. Shared by the const
+ * extractors so a declaration buried in a nested block comment can never
+ * stand in for the canonical value. */
+export function stripRustComments(src: string): string {
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < src.length; i++) {
+    if (src.startsWith("/*", i)) {
+      depth++;
+      i++;
+      continue;
+    }
+    if (src.startsWith("*/", i) && depth > 0) {
+      depth--;
+      i++;
+      continue;
+    }
+    if (depth > 0) continue;
+    if (src.startsWith("//", i)) {
+      const nl = src.indexOf("\n", i);
+      if (nl === -1) break;
+      i = nl - 1;
+      continue;
+    }
+    out += src[i];
+  }
+  return out;
+}
+
+/** The `audit --limit` default from audit.rs's DEFAULT_AUDIT_LIMIT const -
+ * the single home the CLI `--help` interpolates; docs/cli.md restates it in
+ * prose and is held to it here. Comments are stripped (nesting-aware) and the
+ * match is line-anchored, so a commented-out declaration can never stand in
+ * for the canonical value. */
+export function auditDefaultLimit(auditSrc: string): string {
+  const m = stripRustComments(auditSrc).match(
+    /^\s*pub const DEFAULT_AUDIT_LIMIT: usize = ([0-9_]+);/m,
+  );
+  if (!m?.[1]) throw new Error("cannot find DEFAULT_AUDIT_LIMIT in audit.rs");
+  return m[1].replaceAll("_", "");
+}
+
+/** The browser CLI keys in Browser::ALL order, from `key()`'s match arms in
+ * browsers.rs - the same source `known_keys()` joins into `--help`;
+ * docs/cli.md restates the list and is held to it here. Fully fail-closed:
+ * EVERY arm line inside key()'s match must classify as a known
+ * `Browser::`/`Self::` variant mapping to a key literal, so a key written as
+ * `Self::Opera`, a renamed arm, or a `_` catch-all fails the gate instead of
+ * silently shrinking the pinned set. */
+export function browserKeys(browsersSrc: string): string[] {
+  const uncommented = stripRustComments(browsersSrc);
+  const block = uncommented.match(/fn key\(self\) -> &'static str \{\s*match self \{([\s\S]*?)\}/);
+  if (!block?.[1]) throw new Error("cannot find Browser::key() in browsers.rs");
+  const keys: string[] = [];
+  for (const raw of block[1].split("\n")) {
+    const line = raw.trim();
+    if (line === "") continue;
+    const m = line.match(/^(?:Browser|Self)::[A-Za-z0-9]+ => "([a-z0-9-]+)",?$/);
+    if (!m?.[1]) {
+      throw new Error(`unclassifiable Browser::key() arm in browsers.rs: ${line}`);
+    }
+    keys.push(m[1]);
+  }
+  if (keys.length === 0) throw new Error("no key arms parsed from Browser::key()");
+  return keys;
 }
 
 /** The accepted lowercase values of one env var, from its `match
@@ -197,6 +268,80 @@ export function presenceViolation(
   return { doc, line: 0, message: `must state the canonical ${label} "${literal}"` };
 }
 
+/** The bounded regex for a comma-joined list: matches the exact run and
+ * rejects a superset that kept a retired key (or grew an extra one) before or
+ * after the canonical run. Shared by the list checks. */
+function boundedListRegex(items: readonly string[]): RegExp {
+  const escaped = items.join(", ").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![a-z0-9-], )${escaped}(?!, [a-z0-9-])`, "g");
+}
+
+/** LIST-PRESENCE check: the doc must state the exact comma-joined list at
+ * least `occurrences` times (tolerating line wraps and `code` spans). The
+ * match is bounded: a doc copy that kept a retired key (or grew an extra one)
+ * before or after the canonical run does not count as current. Prefer
+ * [`listSectionViolations`] when the copies must live in specific paragraphs
+ * (a bare count lets an unrelated correct copy mask a drifted one). */
+export function listPresenceViolation(
+  doc: string,
+  text: string,
+  items: readonly string[],
+  label: string,
+  occurrences = 1,
+): Violation | null {
+  const normalized = text.replaceAll("`", "").replace(/\s+/g, " ");
+  const found = normalized.match(boundedListRegex(items))?.length ?? 0;
+  if (found >= occurrences) return null;
+  return {
+    doc,
+    line: 0,
+    message:
+      `must state the canonical ${label} "${items.join(", ")}" in all ${occurrences} ` +
+      `place(s) that list it; found ${found}`,
+  };
+}
+
+/** LIST-SECTION check: the list must appear (bounded, wrap/`code` tolerant)
+ * in the paragraph that begins at each `anchor` phrase. Anchoring to the
+ * intended paragraphs closes the residual in the bare-count check: a drift in
+ * one specific list fails even if a correct copy exists elsewhere in the doc,
+ * because each anchor's own window is checked in isolation. */
+export function listSectionViolations(
+  doc: string,
+  text: string,
+  items: readonly string[],
+  label: string,
+  anchors: readonly string[],
+): Violation[] {
+  const out: Violation[] = [];
+  const joined = items.join(", ");
+  for (const anchor of anchors) {
+    const idx = text.indexOf(anchor);
+    if (idx === -1) {
+      out.push({
+        doc,
+        line: 0,
+        message: `must contain the "${anchor}" section that lists the ${label}`,
+      });
+      continue;
+    }
+    // The paragraph the anchor starts: up to the next blank line, so a
+    // wrapped list is included and a copy in a different paragraph is not.
+    const rest = text.slice(idx);
+    const paraEnd = rest.search(/\n\s*\n/);
+    const window = paraEnd === -1 ? rest : rest.slice(0, paraEnd);
+    const normalized = window.replaceAll("`", "").replace(/\s+/g, " ");
+    if (!boundedListRegex(items).test(normalized)) {
+      out.push({
+        doc,
+        line: text.slice(0, idx).split("\n").length,
+        message: `the "${anchor}" section must state the canonical ${label} "${joined}"`,
+      });
+    }
+  }
+  return out;
+}
+
 /** ENV-TABLE check: within the doc's lines that mention the env var (as a
  * whole word - BB_LOG must not be satisfied by BB_LOG_FORMAT), every accepted
  * value must appear as a whole word (so "errors" cannot stand in for "error"
@@ -252,6 +397,8 @@ if (import.meta.main) {
   const envNames = logEnvVars(logRs);
   const logLevels = envValueSet(logRs, "BB_LOG");
   const logFormats = envValueSet(logRs, "BB_LOG_FORMAT");
+  const auditLimit = auditDefaultLimit(rust("audit.rs"));
+  const keys = browserKeys(rust("browsers.rs"));
   // The desktop app's bundle id, canonical in the Tauri config.
   const bundleId = (
     JSON.parse(readFileSync(resolve(root, "src/apps/desktop/tauri.conf.json"), "utf8")) as {
@@ -353,11 +500,24 @@ if (import.meta.main) {
     ["docs/security/threat-model.md", clientNameEnv, "client-name env var"],
     ["README.md", mcpVersion, "MCP protocol version"],
     ["docs/development.md", "BB_LOG", "log env var name"],
+    // Since --help interpolates these consts, docs/cli.md holds the only
+    // hand-written copies of the audit default and the browser key list.
+    ["docs/cli.md", `last ${auditLimit} records`, "audit --limit default"],
   ];
   for (const [doc, literal, label] of presences) {
     const v = presenceViolation(doc, readDoc(doc), literal, label);
     if (v) violations.push(v);
   }
+  // docs/cli.md lists the keys in two specific paragraphs: the doctor /
+  // status prose ("for each known browser (...)") and the "Known browser
+  // keys" reference. Each is pinned to its own paragraph, so a drift in
+  // either fails even if a correct copy exists elsewhere in the doc.
+  violations.push(
+    ...listSectionViolations("docs/cli.md", readDoc("docs/cli.md"), keys, "browser key list", [
+      "for each known browser",
+      "Known browser keys",
+    ]),
+  );
 
   // The env-var reference tables must enumerate the full accepted value sets.
   for (const doc of ["README.md", "docs/operations.md", "docs/cli.md"]) {
@@ -380,6 +540,7 @@ if (import.meta.main) {
   console.log(
     `check-docs-literals: ${docs.length} living docs agree with the canonical ` +
       `literals (host id, extension id, keychain label, ${lockName}, enclave domains, ` +
-      `MCP ${mcpVersion}, bridge v${bridgeVersion}, ${envNames.join("/")})`,
+      `MCP ${mcpVersion}, bridge v${bridgeVersion}, ${envNames.join("/")}, ` +
+      `audit --limit ${auditLimit}, browser keys ${keys.join(",")})`,
   );
 }

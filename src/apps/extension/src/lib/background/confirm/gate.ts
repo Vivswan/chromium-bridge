@@ -4,12 +4,13 @@
 // being hand-mirrored between the content-script and CDP backends. The only
 // backend involvement is the click probe (a DOM read).
 
-import type { Browser } from "wxt/browser";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
 import { getSetting } from "../../shared/settings";
+import { TOOL_GATES } from "../../shared/tool-gates";
 import type { OpArgs } from "../../shared/types";
 import type { PageBackend } from "../page-backend";
+import type { ResolvedTab } from "../tabs";
 import { describeAction, describeTarget, isHighRiskClick } from "./risk";
 import { confirmWithUser } from "./service";
 
@@ -81,7 +82,7 @@ export function resetClickGraceWindow(): void {
 export async function preflightPageOp(
   op: PageOp,
   args: OpArgs,
-  tab: Browser.tabs.Tab,
+  tab: ResolvedTab,
   backend: PageBackend,
 ): Promise<PreflightResult> {
   switch (op) {
@@ -145,8 +146,11 @@ export async function preflightPageOp(
       if (typeof code !== "string" || !code.trim()) {
         throw new Error("page_eval needs non-empty `code`");
       }
-      // Kill switch first: refuse before any confirmation prompt.
-      if ((await getSetting("pageEvalEnabled")) === false) {
+      // Kill switch first: refuse before any confirmation prompt. The gate
+      // setting comes from the shared TOOL_GATES map, the same entry the
+      // options grid renders, so enforcement and UI cannot name different
+      // settings.
+      if ((await getSetting(TOOL_GATES.page_eval)) === false) {
         throw new Error("page_eval disabled in settings");
       }
       // Confirm EVERY call, showing the full code, unless the user turned the

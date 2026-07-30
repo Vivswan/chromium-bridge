@@ -30,6 +30,16 @@ describe("runMigrationsForTests", () => {
     const out = runMigrationsForTests({}, 1, 2, migrations);
     expect(out).toEqual({ ran1: true, settingsVersion: 2 });
   });
+
+  test("a hole in the ladder throws instead of stamping unmigrated data", () => {
+    // A target version with no rung must fail loud: silently stamping would
+    // mark the store migrated when no transform ran, permanently. (With
+    // SETTINGS_VERSION derived from MIGRATIONS.length this is a backstop.)
+    const migrations: Migration[] = [() => ({})];
+    expect(() => runMigrationsForTests({}, 0, 2, migrations)).toThrow(
+      "settings migration v1 -> v2 is missing",
+    );
+  });
 });
 
 describe("migrateSettings", () => {

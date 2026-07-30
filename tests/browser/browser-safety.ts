@@ -17,9 +17,21 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const ISOLATED_VERSION = /Chrome for Testing|HeadlessShell/;
+
+/** The unpacked extension bundle the browser suites load: the built
+ * chrome-mv3 output by default, overridable with BB_EXT_DIR. One home for
+ * the env var name and the default path, so a custom BB_EXT_DIR (or a moved
+ * build output) applies to every suite at once instead of whichever files
+ * happened to keep their copy current. */
+export function extensionDir(): string {
+  return (
+    process.env.BB_EXT_DIR ||
+    join(resolve(import.meta.dir, "../.."), "build", "extension", "chrome-mv3")
+  );
+}
 
 /** Returns the isolated browser path, or null if CHROME_BIN is unset or does
  * not identify (by its own --version) as an isolated Chrome for Testing. */
