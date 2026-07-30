@@ -13,6 +13,7 @@ export * from "./audit.gen";
 export * from "./confirm";
 export * from "./content-msg";
 export * from "./enclave";
+export * from "./enclave.gen";
 export * from "./envelope";
 export * from "./errors.gen";
 export * from "./identity.gen";

@@ -39,7 +39,11 @@ async function read(key: string): Promise<unknown> {
 /** A stored key record counts only if it is cryptographically whole: the
  * pubkey decodes to a real 65-byte X9.63 point and its SHA-256 equals the
  * stored keyId. A corrupt or hand-edited record is treated as absent (which
- * fails closed at the gate), never as a pin. */
+ * fails closed at the gate), never as a pin. Paired with trustedKeyId in
+ * the shared schemas (enclave.ts), which deny-lists the golden-fixture
+ * keyId; this check is what stops the fixture PUBKEY planted under a
+ * different keyId, because the pin verifier trusts the stored fingerprint
+ * without re-deriving it. Neither check is redundant. */
 async function keyRecordIsWhole(rec: { keyId: string; pubkeyB64: string }): Promise<boolean> {
   try {
     const pub = parsePubkey(rec.pubkeyB64);

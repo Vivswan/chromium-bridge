@@ -156,7 +156,7 @@ export function handlePresenceFrame(msg: unknown): void {
 
 /** The context string a presence signature binds: the digest of exactly this
  * confirmation's kind/origin/detail, under this extension's id. NUL-free and
- * far under the host's 4096-byte context bound by construction. */
+ * far under the host's MAX_CONTEXT_BYTES bound by construction. */
 async function presenceContext(payload: ConfirmPayload): Promise<string> {
   const utf8 = new TextEncoder();
   // Length-prefixed fields make the encoding injective before hashing.

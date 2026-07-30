@@ -425,7 +425,7 @@ tasks:
       set -e
       bun scripts/gen-ops.ts
       bun scripts/gen-envelope.ts
-      bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/envelope-wire.gen.ts src/packages/shared/src/audit.gen.ts
+      bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/enclave.gen.ts src/packages/shared/src/enclave-fixture.gen.ts src/packages/shared/src/envelope-wire.gen.ts src/packages/shared/src/audit.gen.ts
     toolchains: ['system']
     options:
       cache: false # mutates the tree; check-gen diffs its output
@@ -520,16 +520,18 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   check-gen-isolation:
-    # Gen-only tooling (schemars, ts-rs) must never enter a shipped binary's
-    # graph. The desktop crate is checked for ts-rs only: Tauri's macro
-    # stack carries its own schemars 0.8 - Tauri's dependency, not our gen
-    # feature (schemars 1, off by default, asserted out of the host binary
-    # below).
-    description: 'Gen-only tooling (schemars, ts-rs) stays out of every shipped binary dependency graph'
+    # Gen-only tooling (schemars, ts-rs, p256) must never enter a shipped
+    # binary's graph. p256 signs the enclave golden fixture and is the most
+    # sensitive of the three: a software P-256 stack has no business inside
+    # a binary whose signing story is the Secure Enclave. The desktop crate
+    # is checked for ts-rs only: Tauri's macro stack carries its own
+    # schemars 0.8 - Tauri's dependency, not our gen feature (schemars 1,
+    # off by default, asserted out of the host binary below).
+    description: 'Gen-only tooling (schemars, ts-rs, p256) stays out of every shipped binary dependency graph'
     script: |
       set -eu
       tree="$(cargo tree -e normal -p chromium-bridge --locked)"
-      for crate in schemars ts-rs; do
+      for crate in schemars ts-rs p256; do
           if printf '%s\n' "$tree" | grep -q "$crate"; then
               echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
               exit 1

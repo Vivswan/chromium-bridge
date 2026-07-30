@@ -1,9 +1,9 @@
+import { CHALLENGE_DOMAIN, MAX_CONTEXT_BYTES, MAX_NONCE_BYTES } from "@chromium-bridge/shared";
 import { describe, expect, test } from "vitest";
 import {
   base64Decode,
   base64Encode,
   buildChallengeMessage,
-  CHALLENGE_DOMAIN,
   computeKeyId,
   fingerprintDisplay,
   generateNonce,
@@ -81,9 +81,9 @@ describe("buildChallengeMessage", () => {
   test("enforces the host's bounds before any crypto", () => {
     expect(() => buildChallengeMessage("")).toThrow("non-empty");
     expect(() => buildChallengeMessage("a\0b")).toThrow("NUL");
-    expect(() => buildChallengeMessage("a".repeat(257))).toThrow("too long");
+    expect(() => buildChallengeMessage("a".repeat(MAX_NONCE_BYTES + 1))).toThrow("too long");
     expect(() => buildChallengeMessage("n", "c\0")).toThrow("NUL");
-    expect(() => buildChallengeMessage("n", "c".repeat(4097))).toThrow("too long");
+    expect(() => buildChallengeMessage("n", "c".repeat(MAX_CONTEXT_BYTES + 1))).toThrow("too long");
   });
 });
 
