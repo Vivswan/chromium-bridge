@@ -25,3 +25,4 @@ pages_staging: true
 private: false
 project_name: Chromium Bridge
 project_slug: chromium-bridge
+topics: brave,browser-automation,chrome-extension,mcp,native-messaging,rust
