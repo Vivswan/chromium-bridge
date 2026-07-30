@@ -2,6 +2,11 @@
 
 use super::EnclaveError;
 
+/// Byte length of a signature on the wire: the raw IEEE P1363 `r || s` form
+/// (two 32-byte P-256 scalars). Part of the cross-language contract - the
+/// extension's verifier rejects any other length (enclave.gen.ts).
+pub const SIG_LEN: usize = 64;
+
 /// Convert a DER-encoded ECDSA P-256 signature (what `SecKeyCreateSignature`
 /// returns) to the fixed 64-byte `r || s` form WebCrypto's `verify` expects.
 ///
@@ -9,7 +14,7 @@ use super::EnclaveError;
 /// integers, no trailing bytes. The input always comes from Security.framework
 /// (which emits strict DER), so any deviation is treated as corruption and
 /// rejected rather than repaired.
-pub fn der_to_raw_signature(der: &[u8]) -> Result<[u8; 64], EnclaveError> {
+pub fn der_to_raw_signature(der: &[u8]) -> Result<[u8; SIG_LEN], EnclaveError> {
     let bad = EnclaveError::Signing;
 
     // SEQUENCE header. A P-256 ECDSA-Sig-Value body is at most 70 bytes

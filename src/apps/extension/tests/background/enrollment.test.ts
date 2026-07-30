@@ -1,7 +1,14 @@
+import { ENCLAVE_FIXTURE_KEY_ID } from "@chromium-bridge/shared";
+import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing";
 import * as pinStore from "@/lib/background/enclave-pin";
-import { base64Encode, buildChallengeMessage, computeKeyId } from "@/lib/background/enclave-verify";
+import {
+  base64Decode,
+  base64Encode,
+  buildChallengeMessage,
+  computeKeyId,
+} from "@/lib/background/enclave-verify";
 import {
   approvePending,
   attachPort,
@@ -99,6 +106,46 @@ async function proofFrame(key: TestKey, nonce: string, context?: string) {
   };
 }
 
+// The golden-fixture key, played as an attacker: its scalar (Rust's
+// FIXTURE_KEY_BYTES, 1..=32) is public repo data, so signing a fresh
+// challenge with it is a capability anyone has.
+const FIXTURE_SCALAR = new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1));
+
+function b64url(bytes: Uint8Array): string {
+  return base64Encode(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function fixtureProofFrame(nonce: string, context?: string) {
+  const pub = base64Decode(ENCLAVE_GOLDEN_FIXTURE.pubkeyB64);
+  const jwk: JsonWebKey = {
+    kty: "EC",
+    crv: "P-256",
+    d: b64url(FIXTURE_SCALAR),
+    x: b64url(pub.slice(1, 33)),
+    y: b64url(pub.slice(33, 65)),
+  };
+  const privateKey = await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      privateKey,
+      buildChallengeMessage(nonce, context) as BufferSource,
+    ),
+  );
+  return {
+    type: "enclave_proof" as const,
+    sig: base64Encode(sig),
+    key_id: ENCLAVE_GOLDEN_FIXTURE.keyIdHex,
+    pubkey: ENCLAVE_GOLDEN_FIXTURE.pubkeyB64,
+  };
+}
+
 // ---- harness ------------------------------------------------------------------
 
 let store: Record<string, unknown>;
@@ -173,6 +220,19 @@ describe("pin store", () => {
     store.enclavePin = { keyId: "a".repeat(64), pubkeyB64: "QUJD", pinnedAt: 1 };
     expect(await pinStore.getPin()).toBeNull();
     store.enclavePin = { keyId: "short", pubkeyB64: "QUJD", pinnedAt: 1 };
+    expect(await pinStore.getPin()).toBeNull();
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("a planted fixture-key pin is not a pin (deny-listed identity)", async () => {
+    // Self-consistent (keyId really is the pubkey's fingerprint), so only
+    // the deny-list stands between this planted record and a trusted pin
+    // whose private key is public repo data.
+    store.enclavePin = {
+      keyId: ENCLAVE_FIXTURE_KEY_ID,
+      pubkeyB64: ENCLAVE_GOLDEN_FIXTURE.pubkeyB64,
+      pinnedAt: 1,
+    };
     expect(await pinStore.getPin()).toBeNull();
     expect((await enrollmentGate()).allowed).toBe(false);
   });
@@ -392,6 +452,36 @@ describe("ceremony state machine", () => {
     expect((await verifyPinnedNow()).ok).toBe(true);
     await handleEnclaveFrame({ type: "enclave_error", reason: "not_enrolled" });
     expect((await getEnrollmentStatus()).state).toBe("compromised");
+    expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("an unknown reason string during verify does NOT latch compromised", async () => {
+    // The exact case the generated-union guard exists for: a schema-valid
+    // reason outside EnclaveReasonCode must degrade to the bounded unknown
+    // lastError - never match the compromise (or any known) branch.
+    const key = await genKey();
+    await pairAndPin(key);
+    expect((await verifyPinnedNow()).ok).toBe(true);
+    await handleEnclaveFrame({ type: "enclave_error", reason: "future_code" });
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("pinned");
+    expect(st.lastError).toContain("unknown_error");
+    expect(st.lastError).toContain('"future_code"');
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("a fixture-key proof never becomes a pending pairing (deny-listed identity)", async () => {
+    // The attacker's real capability: the fixture scalar is public repo
+    // data, so they can answer OUR fresh challenge with a cryptographically
+    // valid proof. The identity deny-list, not nonce freshness, is what
+    // refuses it.
+    await onPortConnected(); // issues the pair challenge
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await fixtureProofFrame(nonce, context));
+    const st = await getEnrollmentStatus();
+    expect(st.state).toBe("unpaired");
+    expect(await pinStore.getPending()).toBeNull();
+    expect(st.lastError).toContain("never enrollable");
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 

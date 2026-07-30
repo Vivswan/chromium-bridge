@@ -45,7 +45,16 @@ required-features = ["envelope-schema"]
 [[example]]
 name = "emit_contract"
 
+# Emits the enclave signing contract (domains, bounds, key/sig lengths, reason
+# codes) plus the golden-vector fixture for scripts/gen-ops.ts (`moon run
+# gen`). Signs with the software-P256 dev-dependency (RFC 6979 deterministic,
+# so regeneration is byte-identical); examples never ship, so the release
+# binary stays free of it.
+[[example]]
+name = "emit_enclave_contract"
+
 [dev-dependencies]
+p256.workspace = true
 proptest.workspace = true
 
 # `loom` model-checks the broker's ref-count concurrency (src/packages/core/src/broker.rs).
