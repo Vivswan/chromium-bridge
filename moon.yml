@@ -99,6 +99,8 @@ tasks:
       - '~:check-hasher'
       - '~:check-yaml'
       - '~:check-actions'
+      - '~:check-docs-literals'
+      - '~:check-docs-policy'
     toolchains: ['system']
     options:
       cache: false
@@ -741,6 +743,26 @@ tasks:
     # can at worst surface a finding early.
     description: 'Lint the GitHub Actions workflows (actionlint; install once with `brew install actionlint`)'
     command: 'actionlint'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-docs-literals:
+    description: 'Living docs state the canonical identifiers, paths, and protocol versions exactly (docs/adr excluded)'
+    script: |
+      set -e
+      bun scripts/check-docs-literals.ts
+      bun test scripts/check-docs-literals.test.ts
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-docs-policy:
+    description: 'Risk matrix, tool-count headlines, and settings-defaults docs match the catalogue and settings schema'
+    script: |
+      set -e
+      bun scripts/check-docs-policy.ts
+      bun test scripts/check-docs-policy.test.ts
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached

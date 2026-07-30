@@ -38,6 +38,12 @@ and then close your real browser session** (all tabs/windows) on cleanup. So:
   will not touch your daily Chrome.
 - The tests only ever terminate the browser instance they launched - never a
   broad/pattern process kill.
+- In CI that local skip must never turn the required browser job silently
+  green, so two variables harden it there (`browser-safety.ts`; unit tests in
+  `browser-safety.test.ts`): `BB_REQUIRE_BROWSER=1` makes the skip a hard
+  failure, and `BB_BROWSER_CANARY_DIR` makes every finished suite drop a RAN
+  marker that a final job step requires - a suite that skipped, or passed
+  zero checks, fails the job. Neither variable is needed locally.
 
 ```sh
 export CHROME_BIN="/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
