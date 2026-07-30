@@ -14,8 +14,8 @@ import { browser } from "wxt/browser";
 import { maskString } from "../shared/masking";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { cdpRegistry } from "./cdp/registry";
-import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
+import { withCdpAttach } from "./cdp/attach";
+import { dbgSend, isDebuggable } from "./cdp/session";
 import { resolveTargetTab } from "./tabs";
 
 // The subset of CDP payloads we read (not the full protocol).
@@ -99,45 +99,27 @@ export async function consoleGet(maybeTabId: number | undefined, args: OpArgs): 
     }
   };
 
-  // Reuse the persistent CDP-mode attach if present (a second attach would
-  // fail); only tear down what we set up ourselves.
-  const reusing = cdpRegistry.hasSession(tabId);
+  // withCdpAttach owns reuse-or-attach and the conditional detach; the
+  // listener bracket stays ours (it exists on both the reused and the
+  // transient path).
   browser.debugger.onEvent.addListener(onEvent);
   try {
-    if (reusing) {
-      // Await the registry's idempotent (de-duped) attach so we never issue CDP
-      // commands before a still-in-flight persistent attach has completed.
-      await cdpRegistry.get(tabId);
-    } else {
-      await dbgAttach(tabId);
-    }
-  } catch (e) {
-    browser.debugger.onEvent.removeListener(onEvent);
-    const msg = String((e as Error).message || e);
-    if (/another debugger/i.test(msg)) {
-      throw new Error(
-        "console_get cannot attach: DevTools is open on this tab. Close DevTools and retry.",
-        {
-          cause: e,
-        },
-      );
-    }
-    throw e;
-  }
-  try {
-    await dbgSend(tabId, "Runtime.enable", {});
-    await dbgSend(tabId, "Log.enable", {});
-    // Give the browser a brief window to replay buffered Log entries and to
-    // deliver any console.* calls / exceptions happening right now.
-    await new Promise((r) => setTimeout(r, 400));
+    await withCdpAttach(tabId, "console_get", async ({ reused }) => {
+      await dbgSend(tabId, "Runtime.enable", {});
+      await dbgSend(tabId, "Log.enable", {});
+      // Give the browser a brief window to replay buffered Log entries and to
+      // deliver any console.* calls / exceptions happening right now.
+      await new Promise((r) => setTimeout(r, 400));
+      // Best-effort cleanup before a transient detach: never throw. On the
+      // persistent CDP-mode session the domains stay enabled - disabling
+      // them could race other ops riding the same session.
+      if (!reused) {
+        await dbgSend(tabId, "Runtime.disable", {}).catch(() => {});
+        await dbgSend(tabId, "Log.disable", {}).catch(() => {});
+      }
+    });
   } finally {
     browser.debugger.onEvent.removeListener(onEvent);
-    if (!reusing) {
-      // Best-effort cleanup: never throw from teardown.
-      await dbgSend(tabId, "Runtime.disable", {}).catch(() => {});
-      await dbgSend(tabId, "Log.disable", {}).catch(() => {});
-      await dbgDetach(tabId);
-    }
   }
 
   const truncated = collected.length > limit;

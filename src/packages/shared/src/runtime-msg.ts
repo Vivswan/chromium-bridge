@@ -48,6 +48,12 @@ export const RuntimeMsgSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("set_kill"), on: z.boolean() }),
   // The ADR-0030 read-only audit panel: the SW's local audit ring.
   z.strictObject({ type: z.literal("get_audit") }),
+  // The popup found a pendingAllow record it cannot parse (an old-shape or
+  // corrupted ghost): ask the SW to re-derive the mirror through its one
+  // serialized store path. The popup never writes the record itself - an
+  // uncoordinated popup-side remove could race the SW minting a LIVE request
+  // and delete it out from under its resolver.
+  z.strictObject({ type: z.literal("sweep_pending") }),
   // The ADR-0021 pairing ceremony actions.
   z.strictObject({ type: z.literal("enroll_pair") }),
   z.strictObject({ type: z.literal("enroll_verify") }),

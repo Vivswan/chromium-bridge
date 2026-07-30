@@ -11,11 +11,11 @@ import { initI18n, t } from "../i18n";
 import { getSetting } from "../shared/settings";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { cdpRegistry } from "./cdp/registry";
+import { withCdpAttach } from "./cdp/attach";
 // The browser.debugger primitives + the non-debuggable URL filter now live in
 // the CdpSession facade (ADR-0017); precise.ts reuses them rather than keeping
 // its own private copies.
-import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
+import { dbgSend, isDebuggable } from "./cdp/session";
 import { injectIfNeeded, resolveTargetTab } from "./tabs";
 
 // The subset of the CDP payloads we actually read (not the full protocol).
@@ -145,32 +145,10 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
   }
 
   // In CDP mode (ADR-0017) the registry may already hold a persistent debugger
-  // attach on this tab. A second attach from the same extension would fail, so
-  // reuse the existing one and do NOT detach it here (that would tear down the
-  // persistent session). When CDP mode is off the registry is always empty, so
-  // this branch is never taken and the attach/detach path below is byte-for-byte
-  // the original behavior.
-  const reusingAttach = cdpRegistry.hasSession(tab.id!);
-
-  // Attach. On "another debugger attached" we surface a helpful error.
-  if (!reusingAttach) {
-    try {
-      await dbgAttach(tab.id!);
-    } catch (e) {
-      const msg = String((e as Error).message || e);
-      if (/another debugger/i.test(msg)) {
-        throw new Error(
-          "page_snapshot_precise cannot attach: DevTools is open on this tab. Close DevTools and retry.",
-          { cause: e },
-        );
-      }
-      throw e;
-    }
-  }
-
-  // From here on we MUST detach on every exit path (unless we're reusing the
-  // registry's persistent attach).
-  try {
+  // attach on this tab; withCdpAttach rides it (a second attach would fail and
+  // detaching it would tear down the persistent session). When CDP mode is off
+  // it attaches transiently and detaches on every exit path.
+  return await withCdpAttach(tab.id!, "page_snapshot_precise", async () => {
     const tree = await dbgSend<AXTreeResult>(tab.id!, "Accessibility.getFullAXTree", {});
     const nodes = tree.nodes ?? [];
 
@@ -236,9 +214,7 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
       title: tab.title,
       precise: true,
     };
-  } finally {
-    if (!reusingAttach) await dbgDetach(tab.id!);
-  }
+  });
 }
 
 function truncateUrl(u: string | undefined) {

@@ -39,36 +39,50 @@ import { platformCanEnroll } from "../enrollment";
 import type { ConfirmationProvider, Presentation } from "./service";
 
 type PostFrame = (frame: object) => boolean;
-let post: PostFrame | null = null;
-// Monotonic port-connection generation. Bumped on every attach AND detach, so
-// a round can tell whether the exact port it sent its challenge on is still
-// the live one at verdict time - a plain `post !== null` check would miss a
-// disconnect+reconnect that installs a NEW port before verification finishes.
-let portGeneration = 0;
 
-/** One outstanding presence round. Single-flight by construction: the
- * confirmation service shows one surface at a time, and the host refuses a
- * concurrent round with `busy` anyway. */
-interface PendingRound {
-  nonce: string;
-  context: string;
-  /** The port generation the challenge was sent on. If it no longer matches
-   * `portGeneration` at verdict time, the port dropped (or was replaced) and
-   * the round fails closed. */
-  generation: number;
-  settle: (approved: boolean) => void;
+/** One port attachment. A fresh object per attachPort, so "is the exact
+ * attachment this challenge was sent on still the live one?" is a reference
+ * identity check - a plain `post !== null` (or an equal-looking function)
+ * would miss a disconnect+reconnect that installs a NEW port before
+ * verification finishes. */
+interface PortAttachment {
+  post: PostFrame;
 }
+let port: PortAttachment | null = null;
+
+/** One outstanding presence round. Single-flight by construction: the slot
+ * is claimed SYNCHRONOUSLY (before any await), so a second same-tick round
+ * finds it occupied and is refused rather than overwriting the first -
+ * which would orphan its settle and risk a false compromise mark. The
+ * stages carry exactly the data that exists at each point: a round that has
+ * not sent its challenge yet has no context to verify against. */
+type PendingRound =
+  | {
+      stage: "preparing";
+      nonce: string;
+      /** The attachment this round will send on (identity-checked later). */
+      port: PortAttachment;
+      settle: (approved: boolean) => void;
+    }
+  | {
+      stage: "challenged";
+      nonce: string;
+      context: string;
+      /** The attachment the challenge went out on. If the live `port` is no
+       * longer this exact object at verdict time, the port dropped (or was
+       * replaced) and the round fails closed. */
+      port: PortAttachment;
+      settle: (approved: boolean) => void;
+    };
 let pending: PendingRound | null = null;
 
 export function attachPort(p: PostFrame): void {
-  post = p;
-  portGeneration += 1;
+  port = { post: p };
 }
 
 /** Port gone: the outstanding round can never complete - deny it. */
 export function detachPort(): void {
-  post = null;
-  portGeneration += 1;
+  port = null;
   cancelPending("native port disconnected");
 }
 
@@ -97,6 +111,14 @@ export function handlePresenceFrame(msg: unknown): void {
   }
   // Claim the round before any await: exactly one answer per round.
   pending = null;
+  if (round.stage === "preparing") {
+    // An answer arrived before this round's challenge was even sent: nothing
+    // can validly answer it, so deny. The setup still in flight notices its
+    // claim is gone and aborts without sending.
+    console.warn("[bb] presence frame preceded the challenge; denying");
+    round.settle(false);
+    return;
+  }
 
   const proof = PresenceProofFrameSchema.safeParse(msg);
   if (!proof.success) {
@@ -138,11 +160,11 @@ export function handlePresenceFrame(msg: unknown): void {
     // lookup and the crypto above are async, and the port can drop (or drop
     // and be replaced by a fresh one) while they run. detachPort cancels the
     // OUTSTANDING round, but this round was already claimed off `pending`, so
-    // the cancel could not reach it. The generation token is what closes both
-    // holes: if the live port is no longer the exact one this challenge was
-    // sent on, the op can no longer proceed on it, so a stale-but-valid
-    // approval must not stand.
-    if (portGeneration !== round.generation) {
+    // the cancel could not reach it. The attachment identity is what closes
+    // both holes: if the live port is no longer the exact object this
+    // challenge was sent on, the op can no longer proceed on it, so a
+    // stale-but-valid approval must not stand.
+    if (port !== round.port) {
       console.warn("[bb] native port changed before the presence verdict; denying");
       round.settle(false);
       return;
@@ -185,7 +207,11 @@ export async function presenceRoutingEnabled(): Promise<boolean> {
 }
 
 /** Run one hardware round: send the challenge, await the verified answer.
- * Every failure path resolves false (deny); nothing here ever "falls back". */
+ * Every failure path resolves false (deny); nothing here ever "falls back".
+ * The slot is claimed BEFORE any await (nonce generation is synchronous):
+ * two same-tick rounds used to both pass the guard, and the second's claim
+ * would overwrite the first - orphaning its settle and letting its answer
+ * verify against the wrong nonce. */
 function runRound(payload: ConfirmPayload): Promise<boolean> {
   if (pending) {
     // A second concurrent round should be impossible (the service
@@ -193,25 +219,57 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
     console.warn("[bb] refusing concurrent presence round");
     return Promise.resolve(false);
   }
-  if (!post) return Promise.resolve(false);
+  const p = port;
+  if (!p) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
+    const claim: PendingRound = {
+      stage: "preparing",
+      nonce: generateNonce(),
+      port: p,
+      settle: resolve,
+    };
+    pending = claim;
+    // The round object THIS setup currently owns - advanced at the
+    // preparing -> challenged transition, so the catch below can tell "my
+    // round is still outstanding" from "the slot now holds someone ELSE's
+    // round" (this setup rejecting late must never cancel a successor).
+    let mine: PendingRound = claim;
     void (async () => {
       if (!(await presenceCapable())) {
+        if (pending === mine) pending = null;
         resolve(false);
         return;
       }
-      const nonce = generateNonce();
       const context = await presenceContext(payload);
-      // Record the generation of the port we are about to send on, so the
-      // verdict can reject an answer if the port dropped or was replaced
-      // while the host was signing.
-      const generation = portGeneration;
-      pending = { nonce, context, generation, settle: resolve };
-      if (!post?.({ type: "presence_challenge", nonce, context } satisfies PresenceChallengeWire)) {
+      // The awaits above are a window where the claim can be settled out
+      // from under us (a detach, a premature frame): only its owner may
+      // advance it, and a settled claim must not send a challenge.
+      if (pending !== mine) return;
+      // Defense in depth beside the verdict-time identity check: if the port
+      // this round was minted on is no longer the live one, the challenge
+      // would go out on a stale attachment - cancel the round instead.
+      if (port !== p) {
+        cancelPending("native port changed before the challenge was sent");
+        return;
+      }
+      mine = { stage: "challenged", nonce: claim.nonce, context, port: p, settle: resolve };
+      pending = mine;
+      if (
+        !p.post({
+          type: "presence_challenge",
+          nonce: claim.nonce,
+          context,
+        } satisfies PresenceChallengeWire)
+      ) {
         cancelPending("challenge send failed");
       }
     })().catch((e) => {
+      // Cancel ONLY the round this setup still owns (preparing or
+      // challenged). If a teardown already settled it and a new round has
+      // since claimed the slot, a stale rejection landing here must leave
+      // that successor untouched; the resolve backstop is idempotent.
       console.error("[bb] presence round setup failed; denying", e);
+      if (pending === mine) cancelPending("presence round setup failed");
       resolve(false);
     });
   });
@@ -255,6 +313,6 @@ export class EnclavePresenceProvider implements ConfirmationProvider {
 
 /** Tests only: forget the port and any outstanding round. */
 export function resetPresenceForTests(): void {
-  post = null;
+  port = null;
   pending = null;
 }

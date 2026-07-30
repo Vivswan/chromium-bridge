@@ -15,13 +15,25 @@ const registerRouter = vi.fn();
 const installCdp = vi.fn();
 const installConfirm = vi.fn();
 const installPresence = vi.fn();
-const connect = vi.fn();
+// The startup order is load-bearing: the pending-approval sweep must COMPLETE
+// before the eager connect, or its badge clear could land after enrollment's
+// PAIR/! write (triggered by the connect) and hide it. Record completion vs
+// invocation explicitly.
+const order: string[] = [];
+const connect = vi.fn(() => {
+  order.push("connect");
+});
+const sweepPending = vi.fn(async () => {
+  await new Promise((r) => setTimeout(r, 0)); // a real async hop, like storage I/O
+  order.push("sweep-complete");
+});
 
 vi.mock("@/lib/background/trusted-storage", () => ({ hardenStorageAccess: harden }));
 vi.mock("@/lib/shared/settings-migration", () => ({ migrateSettings: migrate }));
 vi.mock("@/lib/background/id-check", () => ({ verifyExtensionId: verifyId }));
 vi.mock("@/lib/background/messages", () => ({ registerRuntimeMessageRouter: registerRouter }));
 vi.mock("@/lib/background/cdp/registry", () => ({ installCdpLifecycleListeners: installCdp }));
+vi.mock("@/lib/background/allowlist-store", () => ({ syncPendingMirror: sweepPending }));
 vi.mock("@/lib/background/confirm/service", () => ({
   installConfirmationProvider: installConfirm,
   installPresenceProvider: installPresence,
@@ -40,6 +52,7 @@ vi.mock("wxt/utils/define-background", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  order.length = 0;
 });
 
 describe("background entrypoint", () => {
@@ -54,11 +67,19 @@ describe("background entrypoint", () => {
     expect(migrate).toHaveBeenCalledTimes(1);
     expect(registerRouter).toHaveBeenCalledTimes(1);
     expect(installCdp).toHaveBeenCalledTimes(1);
+    // The startup pending-approval sweep clears a ghost record a prior worker
+    // life left behind (stuck badge / a popup Allow for an origin the SW
+    // would then refuse).
+    expect(sweepPending).toHaveBeenCalledTimes(1);
     expect(installConfirm).toHaveBeenCalledTimes(1);
     // The Enclave user-presence provider (ADR-0031) must be wired at startup
     // too, or eval/upload confirmations silently stay window-only.
     expect(installPresence).toHaveBeenCalledTimes(1);
     expect(verifyId).toHaveBeenCalledTimes(1);
-    expect(connect).toHaveBeenCalled();
+    // The connect happens only after the sweep COMPLETED (not merely began):
+    // a sweep badge-clear landing after the connect-triggered enrollment
+    // badge write would hide it.
+    await vi.waitFor(() => expect(connect).toHaveBeenCalled());
+    expect(order).toEqual(["sweep-complete", "connect"]);
   });
 });

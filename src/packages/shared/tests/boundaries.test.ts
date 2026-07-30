@@ -10,7 +10,7 @@ import {
   EnclaveProofFrameSchema,
 } from "../src/enclave";
 import { RuntimeMsgSchema } from "../src/runtime-msg";
-import { AllowlistSchema, PendingAllowSchema } from "../src/storage";
+import { AllowlistSchema, PendingApprovalsSchema } from "../src/storage";
 
 describe("RuntimeMsgSchema", () => {
   test("accepts every message the popup/options/content actually send", () => {
@@ -111,9 +111,16 @@ describe("storage record schemas", () => {
     expect(AllowlistSchema.safeParse("https://a.example/*").success).toBe(false);
   });
 
-  test("pendingAllow requires both id and glob", () => {
-    expect(PendingAllowSchema.safeParse({ id: "allow_1", glob: "https://a/*" }).success).toBe(true);
-    expect(PendingAllowSchema.safeParse({ id: "allow_1" }).success).toBe(false);
-    expect(PendingAllowSchema.safeParse({ id: "", glob: "https://a/*" }).success).toBe(false);
+  test("pending approvals require id, glob, and an expiry on every entry", () => {
+    const entry = { id: "allow_1", glob: "https://a/*", expiresAt: 123 };
+    expect(PendingApprovalsSchema.safeParse([entry]).success).toBe(true);
+    expect(PendingApprovalsSchema.safeParse([]).success).toBe(true);
+    // A single object (the pre-collection record shape) is not a collection.
+    expect(PendingApprovalsSchema.safeParse(entry).success).toBe(false);
+    expect(PendingApprovalsSchema.safeParse([{ id: "allow_1", glob: "https://a/*" }]).success).toBe(
+      false,
+    );
+    expect(PendingApprovalsSchema.safeParse([{ ...entry, id: "" }]).success).toBe(false);
+    expect(PendingApprovalsSchema.safeParse([entry, { id: "x" }]).success).toBe(false);
   });
 });

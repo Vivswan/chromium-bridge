@@ -16,7 +16,15 @@ class CdpSessionRegistry {
   async get(tabId: number): Promise<CdpSession> {
     let session = this.sessions.get(tabId);
     if (!session) {
-      session = new CdpSession(tabId);
+      // Wire the orphan-cleanup identity guard: a session may issue the
+      // tab-scoped cleanup detach only while it is still THIS tab's session
+      // (or the tab has none) - never when a newer session has replaced it,
+      // whose live attach the stale cleanup would otherwise rip down.
+      const created: CdpSession = new CdpSession(tabId, () => {
+        const current = this.sessions.get(tabId);
+        return current === undefined || current === created;
+      });
+      session = created;
       this.sessions.set(tabId, session);
     }
     try {

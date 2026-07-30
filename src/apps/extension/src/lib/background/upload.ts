@@ -17,8 +17,8 @@
 import { getSetting } from "../shared/settings";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { cdpRegistry } from "./cdp/registry";
-import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
+import { withCdpAttach } from "./cdp/attach";
+import { dbgSend, isDebuggable } from "./cdp/session";
 import { confirmWithUser } from "./confirm/service";
 import { resolveTargetTab } from "./tabs";
 
@@ -83,28 +83,7 @@ export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): 
     }
   }
 
-  const reusing = cdpRegistry.hasSession(tabId);
-  if (reusing) {
-    // Await the registry's idempotent (de-duped) attach so we never issue CDP
-    // commands before a still-in-flight persistent attach has completed.
-    await cdpRegistry.get(tabId);
-  } else {
-    try {
-      await dbgAttach(tabId);
-    } catch (e) {
-      const msg = String((e as Error).message || e);
-      if (/another debugger/i.test(msg)) {
-        throw new Error(
-          "page_upload cannot attach: DevTools is open on this tab. Close DevTools and retry.",
-          {
-            cause: e,
-          },
-        );
-      }
-      throw e;
-    }
-  }
-  try {
+  return await withCdpAttach(tabId, "page_upload", async () => {
     // Resolve the file input node, then set the file on it. The document URL
     // comes from the SAME DOM.getDocument the nodeId does, so this origin
     // check is bound to the exact document the file would be attached to: a
@@ -135,7 +114,5 @@ export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): 
     }
     await dbgSend(tabId, "DOM.setFileInputFiles", { files: [path], nodeId: node.nodeId });
     return { uploaded: selector, path };
-  } finally {
-    if (!reusing) await dbgDetach(tabId);
-  }
+  });
 }
