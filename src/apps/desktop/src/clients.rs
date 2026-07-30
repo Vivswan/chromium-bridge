@@ -111,8 +111,14 @@ pub fn pair(name: &str, anchor_kind: &str, anchor_value: &str) -> Result<&'stati
         other => return Err(format!("unknown anchor kind {other:?}")),
     };
     let anchor = allowlist::resolve_anchor(&spec)?;
-    let path =
-        allowlist::pair_client_with_presence(name, anchor, Surface::Core, presence_seam::APP_FLOOR)
-            .map_err(|e| e.to_string())?;
+    // The app floor has no precondition to fail (the confirm dialog is the
+    // caller's obligation), so it always constructs.
+    let path = allowlist::pair_client_with_presence(
+        name,
+        anchor,
+        Surface::Core,
+        Ok(presence_seam::APP_FLOOR),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(path.wire_name())
 }
