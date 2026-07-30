@@ -1,36 +1,36 @@
 // WebCrypto verification for the Secure Enclave enrollment ceremony
 // (ADR-0021). Pure module: no chrome.* usage, so bun unit-tests it with
-// self-checking offline vectors.
+// self-checking offline vectors, and the generated golden vectors
+// (enclave-fixture.gen.ts) replay Rust-signed proofs through it.
 //
 // The wire contract is owned by the host
 // (src/packages/core/src/protocol.rs, EnclaveControl).
-// A proof's `sig` is base64 of the raw 64-byte IEEE P1363 r||s ECDSA
+// A proof's `sig` is base64 of the raw SIG_LEN-byte IEEE P1363 r||s ECDSA
 // P-256/SHA-256 signature over
 //
-//   UTF8("chromium-bridge-enclave-v1") || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
+//   UTF8(CHALLENGE_DOMAIN) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
 //
-// `pubkey` is base64 of the 65-byte X9.63 uncompressed point (0x04||X||Y)
-// and `key_id` is the lowercase-hex SHA-256 of those 65 bytes (also the
-// fingerprint the user compares against `chromium-bridge pair` output).
+// `pubkey` is base64 of the PUBKEY_LEN-byte X9.63 uncompressed point
+// (0x04||X||Y) and `key_id` is the lowercase-hex SHA-256 of those bytes
+// (also the fingerprint the user compares against `chromium-bridge pair`
+// output). The domains, bounds, and lengths are the GENERATED constants
+// from the Rust enclave module (enclave.gen.ts, ADR-0028); this module owns
+// only the verification logic.
 
-export const CHALLENGE_DOMAIN = "chromium-bridge-enclave-v1";
-// ADR-0031: the per-action user-presence statements sign under their own
-// domain, so an enrollment proof and a presence approval can never be
-// replayed as one another even if nonce handling ever regressed.
-export const PRESENCE_DOMAIN = "chromium-bridge-presence-v1";
-// Host-enforced bounds on challenge fields
-// (src/packages/core/src/enclave/challenge.rs); we stay inside them and
-// reject anything outside before touching the crypto.
-export const MAX_NONCE_BYTES = 256;
-export const MAX_CONTEXT_BYTES = 4096;
-
-const PUBKEY_LEN = 65; // X9.63 uncompressed P-256 point
-const SIG_LEN = 64; // IEEE P1363 r||s
+import {
+  CHALLENGE_DOMAIN,
+  ENCLAVE_FIXTURE_KEY_ID,
+  MAX_CONTEXT_BYTES,
+  MAX_NONCE_BYTES,
+  PRESENCE_DOMAIN,
+  PUBKEY_LEN,
+  SIG_LEN,
+} from "@chromium-bridge/shared";
 
 const utf8 = new TextEncoder();
 
 /** A fresh single-use challenge nonce: 32 CSPRNG bytes as lowercase hex
- * (64 ASCII chars, NUL-free, well under the host's 256-byte bound). */
+ * (64 ASCII chars, NUL-free, well under the host's MAX_NONCE_BYTES bound). */
 export function generateNonce(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -93,8 +93,9 @@ function buildDomainMessage(domain: string, nonce: string, context?: string): Ui
   return msg;
 }
 
-/** Decode and validate a proof's `pubkey` field: exactly 65 bytes with the
- * 0x04 uncompressed-point prefix. Curve membership is enforced by importKey. */
+/** Decode and validate a proof's `pubkey` field: exactly PUBKEY_LEN bytes
+ * with the 0x04 uncompressed-point prefix. Curve membership is enforced by
+ * importKey. */
 export function parsePubkey(pubkeyB64: string): Uint8Array {
   const bytes = base64Decode(pubkeyB64);
   if (bytes.length !== PUBKEY_LEN) throw new Error(`pubkey must be ${PUBKEY_LEN} bytes`);
@@ -102,15 +103,16 @@ export function parsePubkey(pubkeyB64: string): Uint8Array {
   return bytes;
 }
 
-/** Decode and validate a proof's `sig` field: exactly the raw 64-byte P1363
- * form (the host converts Security.framework's DER output before sending). */
+/** Decode and validate a proof's `sig` field: exactly the raw SIG_LEN-byte
+ * P1363 form (the host converts Security.framework's DER output before
+ * sending). */
 export function parseSig(sigB64: string): Uint8Array {
   const bytes = base64Decode(sigB64);
   if (bytes.length !== SIG_LEN) throw new Error(`sig must be ${SIG_LEN} bytes`);
   return bytes;
 }
 
-/** key_id = lowercase-hex SHA-256 of the 65 raw pubkey bytes. */
+/** key_id = lowercase-hex SHA-256 of the raw pubkey bytes. */
 export async function computeKeyId(pubkey: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", pubkey as BufferSource);
   return hexEncode(new Uint8Array(digest));
@@ -175,6 +177,14 @@ export async function verifyPairingProof(
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
   const keyId = await computeKeyId(pubkey);
+  // Deny-listed identity, decided from the DERIVED fingerprint (the claimed
+  // key_id field is checked below): the golden-fixture key's private scalar
+  // is checked into the repo, so a fresh, cryptographically valid signature
+  // over this very challenge proves nothing about the host. Refuse before
+  // any signature check runs - never stage it for approval.
+  if (keyId === ENCLAVE_FIXTURE_KEY_ID) {
+    return { ok: false, reason: "the public golden-fixture key is never enrollable" };
+  }
   if (proof.key_id !== keyId) {
     return { ok: false, reason: "key_id does not match pubkey" };
   }

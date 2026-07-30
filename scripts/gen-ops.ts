@@ -18,6 +18,13 @@
 //     native-messaging host id.
 //   src/packages/shared/src/audit.gen.ts     - the extension-owned audit kinds
 //     the host forwards into its on-disk trail (the audit_event whitelist).
+//   src/packages/shared/src/enclave.gen.ts   - the enclave signing contract:
+//     domain-separation strings, challenge field bounds, key/signature byte
+//     lengths, and the enclave_error reason-code union.
+//   src/packages/shared/src/enclave-fixture.gen.ts - golden vectors for the
+//     signed-message encoding: Rust-built message bytes and deterministic
+//     software-P256 proofs the extension's test suite replays through its
+//     WebCrypto verifier.
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -463,3 +470,212 @@ export type AuditForwardedKind = (typeof AUDIT_FORWARDED_KINDS)[number];
 
 writeFileSync(join(root, "src/packages/shared/src/audit.gen.ts"), auditOut);
 console.log("generated src/packages/shared/src/audit.gen.ts from the Rust audit whitelist");
+// ---- enclave.gen.ts + enclave-fixture.gen.ts --------------------------------
+// Self-contained section: the enclave signing contract has its own Rust
+// emitter (examples/emit_enclave_contract.rs) so this block shares no state
+// with the emit_contract flow above.
+
+interface EnclaveVector {
+  domain: "challenge" | "presence";
+  nonce: string;
+  context: string | null;
+  messageHex: string;
+  sigB64: string;
+}
+
+interface EnclaveContract {
+  challengeDomain: string;
+  presenceDomain: string;
+  maxNonceLen: number;
+  maxContextLen: number;
+  pubkeyLen: number;
+  sigLen: number;
+  reasonCodes: string[];
+  fixture: {
+    pubkeyB64: string;
+    keyIdHex: string;
+    vectors: EnclaveVector[];
+  };
+}
+
+const enclaveEmitted = Bun.spawnSync(
+  ["cargo", "run", "-q", "-p", "chromium-bridge-core", "--example", "emit_enclave_contract"],
+  { cwd: root, stderr: "inherit" },
+);
+if (!enclaveEmitted.success) {
+  throw new Error(
+    `gen-ops: cargo emit_enclave_contract failed with status ${enclaveEmitted.exitCode}`,
+  );
+}
+const enclave = JSON.parse(enclaveEmitted.stdout.toString()) as EnclaveContract;
+
+// Structural sanity only - the values themselves are the Rust side's to
+// choose. Anything malformed here would generate a silently weaker verifier,
+// so fail generation instead.
+for (const domain of [enclave.challengeDomain, enclave.presenceDomain]) {
+  if (typeof domain !== "string" || domain.length === 0 || domain.includes("\0")) {
+    throw new Error(`gen-ops: malformed enclave domain string ${JSON.stringify(domain)}`);
+  }
+}
+if (enclave.challengeDomain === enclave.presenceDomain) {
+  throw new Error("gen-ops: the enclave challenge and presence domains must differ");
+}
+for (const bound of [
+  enclave.maxNonceLen,
+  enclave.maxContextLen,
+  enclave.pubkeyLen,
+  enclave.sigLen,
+]) {
+  if (!Number.isInteger(bound) || bound <= 0) {
+    throw new Error(`gen-ops: enclave bound ${JSON.stringify(bound)} is not a positive integer`);
+  }
+}
+if (
+  enclave.reasonCodes.length === 0 ||
+  new Set(enclave.reasonCodes).size !== enclave.reasonCodes.length
+) {
+  throw new Error("gen-ops: the enclave reason codes must be non-empty and distinct");
+}
+if (enclave.fixture.vectors.length === 0) {
+  throw new Error("gen-ops: the enclave golden fixture has no vectors");
+}
+for (const v of enclave.fixture.vectors) {
+  if (!/^([0-9a-f]{2})+$/.test(v.messageHex)) {
+    throw new Error(`gen-ops: fixture vector for nonce ${JSON.stringify(v.nonce)} has bad hex`);
+  }
+}
+if (!/^[0-9a-f]{64}$/.test(enclave.fixture.keyIdHex)) {
+  throw new Error("gen-ops: the fixture key id is not a lowercase-hex SHA-256");
+}
+
+// String emitter for every emitted enclave string: JSON.stringify plus \u
+// escapes for everything non-ASCII, so a non-ASCII value (deliberate in the
+// multi-byte UTF-8 vectors, accidental anywhere else) keeps the generated
+// file plain ASCII instead of tripping the typography gate downstream.
+const emitAsciiString = (s: string): string =>
+  JSON.stringify(s).replace(
+    /[\u0080-\uffff]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+
+const reasonCodes = enclave.reasonCodes.map((r) => emitAsciiString(r)).join(",\n  ");
+
+const enclaveOut = `// GENERATED from the Rust core (src/packages/core/src/enclave/challenge.rs,
+// pubkey.rs, der.rs, and mod.rs REASON_CODES) by scripts/gen-ops.ts - DO NOT
+// EDIT. Edit the enclave module, then run \`moon run gen\`.
+//
+// The enclave signing contract, TS side: the constants the extension's
+// WebCrypto verifier (background/enclave-verify.ts) and the enrollment state
+// machine (background/enrollment.ts) enforce. The signed-message ALGORITHM
+// (NUL-separated domain || nonce || context, ECDSA P-256/SHA-256) is pinned
+// separately by the golden vectors in enclave-fixture.gen.ts.
+
+// Domain-separation prefixes: enrollment challenge signatures (ADR-0021) and
+// per-action user-presence signatures (ADR-0031) sign under distinct domains,
+// so the two statement types can never be replayed as one another.
+export const CHALLENGE_DOMAIN = ${emitAsciiString(enclave.challengeDomain)};
+export const PRESENCE_DOMAIN = ${emitAsciiString(enclave.presenceDomain)};
+
+// Host-enforced bounds on challenge fields, in UTF-8 bytes (Rust's
+// MAX_NONCE_LEN / MAX_CONTEXT_LEN). The verifier rejects anything outside
+// them before touching the crypto.
+export const MAX_NONCE_BYTES = ${enclave.maxNonceLen};
+export const MAX_CONTEXT_BYTES = ${enclave.maxContextLen};
+
+// Wire byte lengths of the proof fields: the X9.63 uncompressed P-256 point
+// and the raw IEEE P1363 r||s signature.
+export const PUBKEY_LEN = ${enclave.pubkeyLen};
+export const SIG_LEN = ${enclave.sigLen};
+
+// The closed set of enclave_error.reason codes the host can emit
+// (reason_code in src/packages/core/src/enclave/mod.rs; append-only). The
+// enrollment state machine branches on these - its compromise latch fires on
+// a subset - so an unrecognized code must degrade to a refusal, never match.
+export const ENCLAVE_REASON_CODES = [
+  ${reasonCodes},
+] as const;
+
+export type EnclaveReasonCode = (typeof ENCLAVE_REASON_CODES)[number];
+
+const ENCLAVE_REASON_SET: ReadonlySet<string> = new Set(ENCLAVE_REASON_CODES);
+
+export function isEnclaveReasonCode(reason: string): reason is EnclaveReasonCode {
+  return ENCLAVE_REASON_SET.has(reason);
+}
+
+// Fingerprint of the PUBLIC golden-fixture signing key (FIXTURE_KEY_BYTES /
+// FIXTURE_KEY_ID in src/packages/core/src/enclave/mod.rs). Its private
+// scalar is checked into the repo, so anyone can sign fresh challenges with
+// it: it must never become an enrollment identity. The pairing verifier
+// (background/enclave-verify.ts) and the stored-pin validators (enclave.ts)
+// refuse it fail-closed; the host refuses it in EnrollmentKey::public_key.
+export const ENCLAVE_FIXTURE_KEY_ID =
+  ${JSON.stringify(enclave.fixture.keyIdHex)};
+`;
+
+writeFileSync(join(root, "src/packages/shared/src/enclave.gen.ts"), enclaveOut);
+console.log("generated src/packages/shared/src/enclave.gen.ts from the Rust enclave module");
+
+const vectorItems = enclave.fixture.vectors
+  .map(
+    (v) =>
+      `  {\n` +
+      `    domain: ${JSON.stringify(v.domain)},\n` +
+      `    nonce: ${emitAsciiString(v.nonce)},\n` +
+      `    context: ${v.context === null ? "null" : emitAsciiString(v.context)},\n` +
+      `    messageHex: ${JSON.stringify(v.messageHex)},\n` +
+      `    sigB64: ${JSON.stringify(v.sigB64)},\n` +
+      `  },`,
+  )
+  .join("\n");
+
+const fixtureOut = `// GENERATED from the Rust core (examples/emit_enclave_contract.rs, over
+// src/packages/core/src/enclave/) by scripts/gen-ops.ts - DO NOT EDIT.
+// Run \`moon run gen\`.
+//
+// Golden vectors pinning the cross-language enclave crypto contract: each
+// message is built by the Rust challenge_message/presence_message and each
+// signature is a deterministic (RFC 6979) software-P256 proof routed through
+// the host's DER -> P1363 converter, over the PUBLIC fixture key. The
+// extension test suite replays these through its WebCrypto verifier
+// (tests/background/enclave-golden.test.ts), so a Rust-side encoding change
+// regenerates this file (check-gen) and a lagging TS verifier fails the
+// replay. The key protects nothing and is deny-listed as an enrollment
+// identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
+//
+// Test-only data: import it via "@chromium-bridge/shared/testing", never
+// from the production barrel.
+
+export interface EnclaveGoldenVector {
+  /** Which domain-separation prefix the message was built under. */
+  domain: "challenge" | "presence";
+  nonce: string;
+  /** null = the Rust side signed with no context (None). */
+  context: string | null;
+  /** The exact bytes the signature covers, hex-encoded. */
+  messageHex: string;
+  /** Raw ${enclave.sigLen}-byte IEEE P1363 signature over messageHex, base64. */
+  sigB64: string;
+}
+
+export interface EnclaveGoldenFixture {
+  /** Base64 of the ${enclave.pubkeyLen}-byte X9.63 uncompressed public point. */
+  pubkeyB64: string;
+  /** Lowercase-hex SHA-256 of the raw pubkey bytes (the key_id). */
+  keyIdHex: string;
+  vectors: readonly EnclaveGoldenVector[];
+}
+
+export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
+  pubkeyB64: ${JSON.stringify(enclave.fixture.pubkeyB64)},
+  keyIdHex: ${JSON.stringify(enclave.fixture.keyIdHex)},
+  vectors: [
+${vectorItems}
+  ],
+};
+`;
+
+writeFileSync(join(root, "src/packages/shared/src/enclave-fixture.gen.ts"), fixtureOut);
+console.log(
+  "generated src/packages/shared/src/enclave-fixture.gen.ts from the Rust enclave module",
+);

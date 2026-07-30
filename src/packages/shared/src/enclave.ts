@@ -23,6 +23,7 @@
 
 import { z } from "zod";
 import { AUDIT_FORWARDED_KINDS } from "./audit.gen";
+import { ENCLAVE_FIXTURE_KEY_ID } from "./enclave.gen";
 import {
   ClientEntryWireSchema,
   ClientListResultWireSchema,
@@ -101,7 +102,8 @@ export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
 // and never classifies inbound). Distinct from the enrollment ceremony
 // frames on purpose: they are correlated by the confirmation provider, not
 // the enrollment state machine, and the signature they carry covers the
-// PRESENCE domain ("chromium-bridge-presence-v1"), never the enrollment one.
+// PRESENCE domain (PRESENCE_DOMAIN in enclave.gen.ts), never the enrollment
+// one.
 export const PRESENCE_FRAME_TYPES = ["presence_proof", "presence_error"] as const;
 
 export const PresenceInboundFrameSchema = z.looseObject({
@@ -252,10 +254,25 @@ export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
 const KEY_ID_HEX = /^[0-9a-f]{64}$/;
 
+// A key identity a trust record may carry: well-formed, and never the
+// deny-listed golden-fixture key (its private scalar is public, so a record
+// naming it is planted or corrupt; failing the parse makes the record read
+// as absent, which fails closed at the enrollment gate). Paired with
+// keyRecordIsWhole (background/enclave-pin.ts), which recomputes
+// SHA-256(pubkey) === keyId and is what stops the OTHER spelling of this
+// attack - the fixture pubkey stored under a different keyId (the pin
+// verifier never re-derives the fingerprint). Neither check is redundant.
+const trustedKeyId = z
+  .string()
+  .regex(KEY_ID_HEX)
+  .refine((id) => id !== ENCLAVE_FIXTURE_KEY_ID, {
+    message: "the public golden-fixture key is never enrollable",
+  });
+
 // The pinned enrollment key: the extension-side trust anchor.
 export const EnclavePinSchema = z.strictObject({
   // Lowercase-hex SHA-256 of the pubkey (the fingerprint).
-  keyId: z.string().regex(KEY_ID_HEX),
+  keyId: trustedKeyId,
   // Base64 of the 65-byte X9.63 point.
   pubkeyB64: z.string().min(1),
   pinnedAt: z.number(),
@@ -265,7 +282,7 @@ export type EnclavePin = z.infer<typeof EnclavePinSchema>;
 
 // A ceremony proof that verified but has not been user-approved yet.
 export const PendingPairingSchema = z.strictObject({
-  keyId: z.string().regex(KEY_ID_HEX),
+  keyId: trustedKeyId,
   pubkeyB64: z.string().min(1),
   at: z.number(),
 });

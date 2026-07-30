@@ -37,7 +37,9 @@ import {
   type EnclaveInboundFrame,
   EnclaveInboundFrameSchema,
   EnclaveProofFrameSchema,
+  type EnclaveReasonCode,
   type EnclaveRevokeWire,
+  isEnclaveReasonCode,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
@@ -325,16 +327,65 @@ async function maybePeriodicReverify(pin: pinStore.EnclavePin): Promise<void> {
 
 // ---- inbound control frames ----------------------------------------------------
 
-/** Stable reason codes from the host
- * (src/packages/core/src/enclave/mod.rs, reason_code). */
-const KNOWN_REASONS = new Set([
-  "unsupported_platform",
-  "not_enrolled",
-  "invalid_challenge",
-  "key_invalid",
-  "keychain_error",
-  "signing_failed",
-]);
+// The reason vocabulary is the GENERATED EnclaveReasonCode union
+// (enclave.gen.ts, from the host's reason_code in
+// src/packages/core/src/enclave/mod.rs). Both tables below are Records over
+// the full union, so a code added on the Rust side cannot compile here
+// without an explicit latch classification AND help text.
+
+type CeremonyMode = "pair" | "verify";
+
+/** Every reason code, classified. "compromise": answering a VERIFY challenge
+ * with this reason is evidence of host substitution rather than a transient
+ * failure - a key is pinned but the answering host can no longer prove it
+ * (the enrollment key was revoked or replaced, or the host now denies
+ * Enclave capability on a machine that demonstrably enrolled one - a
+ * downgrade claim from a suspect binary) - and it latches the compromised
+ * mark. "transient" only surfaces as lastError.
+ *
+ * Residual risk, named: a host that ADDS a compromise-worthy code ships to
+ * an extension that does not know it yet, and the unknown-reason path below
+ * does not latch. Bounded by single-archive releases (host and extension
+ * ship together), so the skew window is one un-updated install, not a
+ * protocol era. */
+const REASON_CLASS: Record<EnclaveReasonCode, "compromise" | "transient"> = {
+  unsupported_platform: "compromise",
+  not_enrolled: "compromise",
+  invalid_challenge: "transient",
+  key_invalid: "compromise",
+  keychain_error: "transient",
+  signing_failed: "transient",
+};
+
+const REASON_HELP: Record<EnclaveReasonCode, (mode: CeremonyMode) => string> = {
+  not_enrolled: () =>
+    "not_enrolled: no enrollment key exists on this machine. " +
+    "Run `chromium-bridge pair` in a terminal, then return here.",
+  unsupported_platform: () =>
+    "unsupported_platform: the host reports no Secure Enclave, but this browser is " +
+    "running on macOS. If this Mac genuinely lacks one (pre-T2 Intel), pairing is " +
+    'impossible and turning off "Require host pairing" is an explicit decision to run ' +
+    "without host verification. Otherwise treat the host binary as suspect (outdated " +
+    "or substituted) and leave the bridge blocked.",
+  invalid_challenge: () =>
+    "invalid_challenge: the host rejected our challenge frame (version mismatch?).",
+  key_invalid: () =>
+    "key_invalid: the key under the enrollment label is not a single Secure Enclave key. " +
+    "Run `chromium-bridge pair --reset` to delete it and mint a fresh one.",
+  keychain_error: () => "keychain_error: the host could not reach the keychain. Try again.",
+  signing_failed: (mode) =>
+    "signing_failed: no signature was produced (presence prompt declined or failed). " +
+    `The ${mode} attempt did not complete; try again. If this repeats without any ` +
+    "Touch ID prompt appearing, treat it as host substitution and re-pair.",
+};
+
+/** Help text for a reason outside the generated union (or a frame that
+ * failed the wire schema, raw = null). The raw value is attacker-influenced,
+ * so it is BOUNDED and JSON-escaped before it can reach the options UI. */
+function unknownReasonHelp(raw: string | null): string {
+  const display = raw === null ? "a malformed frame" : JSON.stringify(raw.slice(0, 64));
+  return `unknown_error: the host sent an unrecognized enclave_error reason (${display}). Update the extension and the host to matching versions.`;
+}
 
 export function handleEnclaveFrame(msg: EnclaveInboundFrame): Promise<void> {
   return serialized(async () => {
@@ -443,68 +494,30 @@ async function handleError(frame: EnclaveInboundFrame): Promise<void> {
   const current = outstanding;
   clearOutstanding();
   // Parse with the wire schema the envelope-parity gate declares for
-  // enclave_error (`reason` is required). A frame that fails it degrades to
-  // unknown_error - same as an unrecognized reason code - keeping the fail
-  // direction unchanged: an error frame only clears the outstanding
-  // challenge, it never grants anything.
+  // enclave_error (`reason` is required). A frame that fails it (raw = null)
+  // degrades exactly like a reason code outside the generated union
+  // (reason = null), keeping the fail direction unchanged: an error frame
+  // only clears the outstanding challenge, it never grants anything.
   const parsed = EnclaveErrorFrameSchema.safeParse(frame);
-  const reason =
-    parsed.success && KNOWN_REASONS.has(parsed.data.reason) ? parsed.data.reason : "unknown_error";
+  const raw = parsed.success ? parsed.data.reason : null;
+  const reason: EnclaveReasonCode | null = raw !== null && isEnclaveReasonCode(raw) ? raw : null;
   if (!current) {
-    console.warn("[bb] dropping unsolicited enclave_error:", reason);
+    console.warn("[bb] dropping unsolicited enclave_error:", reason ?? "unknown_error");
     return;
   }
-  if (
-    current.mode === "verify" &&
-    (reason === "not_enrolled" || reason === "key_invalid" || reason === "unsupported_platform")
-  ) {
-    // A key is pinned but the answering host can no longer prove it: the
-    // enrollment key was revoked or replaced, or the host now denies Enclave
-    // capability on a machine that demonstrably enrolled one (a downgrade
-    // claim from a suspect binary). Fail closed.
+  if (current.mode === "verify" && reason && REASON_CLASS[reason] === "compromise") {
+    // A key is pinned but the answering host can no longer prove it
+    // (REASON_CLASS above). Fail closed.
     await pinStore.setCompromised({
       reason: `host cannot prove the pinned key (${reason})`,
       at: Date.now(),
     });
   } else {
-    await pinStore.setLastError(errorHelp(reason, current.mode));
+    await pinStore.setLastError(
+      reason ? REASON_HELP[reason](current.mode) : unknownReasonHelp(raw),
+    );
   }
   await updateBadge();
-}
-
-function errorHelp(reason: string, mode: "pair" | "verify"): string {
-  switch (reason) {
-    case "not_enrolled":
-      return (
-        "not_enrolled: no enrollment key exists on this machine. " +
-        "Run `chromium-bridge pair` in a terminal, then return here."
-      );
-    case "unsupported_platform":
-      return (
-        "unsupported_platform: the host reports no Secure Enclave, but this browser is " +
-        "running on macOS. If this Mac genuinely lacks one (pre-T2 Intel), pairing is " +
-        'impossible and turning off "Require host pairing" is an explicit decision to run ' +
-        "without host verification. Otherwise treat the host binary as suspect (outdated " +
-        "or substituted) and leave the bridge blocked."
-      );
-    case "invalid_challenge":
-      return "invalid_challenge: the host rejected our challenge frame (version mismatch?).";
-    case "key_invalid":
-      return (
-        "key_invalid: the key under the enrollment label is not a single Secure Enclave key. " +
-        "Run `chromium-bridge pair --reset` to delete it and mint a fresh one."
-      );
-    case "keychain_error":
-      return "keychain_error: the host could not reach the keychain. Try again.";
-    case "signing_failed":
-      return (
-        "signing_failed: no signature was produced (presence prompt declined or failed). " +
-        `The ${mode} attempt did not complete; try again. If this repeats without any ` +
-        "Touch ID prompt appearing, treat it as host substitution and re-pair."
-      );
-    default:
-      return `unrecognized enclave_error reason from host: ${reason}`;
-  }
 }
 
 // ---- user actions (routed from messages.ts) -------------------------------------

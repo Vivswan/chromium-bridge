@@ -485,6 +485,20 @@ against it. The canonical modules and their derived artifacts:
   built manifest, and the single-definition-site rule against the same
   values; the registration engine consumes the constants directly, so no
   installer copy exists to drift.
+- **Enclave signing contract** (`src/packages/core/src/enclave/`:
+  `challenge.rs` for the domain strings and field bounds, `pubkey.rs`/`der.rs`
+  for the key and signature byte lengths, `mod.rs` for the `enclave_error`
+  reason codes): emitted by the core's `emit_enclave_contract` example into
+  `src/packages/shared/src/enclave.gen.ts` (constants plus the
+  `EnclaveReasonCode` union the extension's enrollment state machine
+  classifies exhaustively) and `enclave-fixture.gen.ts` (golden vectors:
+  Rust-built message bytes with deterministic software-P256 proofs, replayed
+  through the extension's WebCrypto verifier by
+  `tests/background/enclave-golden.test.ts`, so the signed-message encoding
+  itself is pinned across languages). The fixture's signing key is public
+  test data and deny-listed as an enrollment identity on both sides
+  (`ensure_not_fixture_key` in the core, `ENCLAVE_FIXTURE_KEY_ID` in the
+  extension's pairing verifier and stored-pin validators).
 - **Wire envelopes and control frames** (`BridgeReq` / `BridgeResp`,
   `EnclaveControl`, and `AdminControl` - the latter embedding
   `allowlist::ClientEntry` - in `src/packages/core/src/protocol.rs`): the
