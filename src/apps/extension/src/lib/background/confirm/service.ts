@@ -60,13 +60,14 @@ interface Active {
   settle: (approved: boolean) => void;
 }
 
-// One live confirmation at a time; the rest wait here (FIFO). `running` is
-// the SYNCHRONOUS occupancy flag: provider selection awaits (settings,
-// capability), so `active` alone would let two same-tick requests both start
-// before either registered.
-const queue: Array<() => void> = [];
+// One live confirmation at a time, FIFO: each request appends itself to
+// this promise chain (the audit-log idiom) and runs when its predecessor
+// has fully settled. Occupancy IS the chain - there is no separate flag to
+// desynchronize from it, and the chain's own catch keeps it alive, so a
+// presentation step that throws can deny its own request but never wedge
+// every confirmation behind a stuck boolean.
+let tail: Promise<void> = Promise.resolve();
 let active: Active | null = null;
-let running = false;
 
 // Installed by the background entrypoint at SW startup. No provider
 // installed = every confirmation denies (fail closed).
@@ -76,19 +77,24 @@ export function installConfirmationProvider(p: ConfirmationProvider): void {
   defaultProvider = p;
 }
 
-// The Enclave user-presence provider (ADR-0031) and its routing predicate,
-// both installed at SW startup. `enabled` is consulted per confirmation so a
-// settings change applies immediately; a predicate failure routes to the
-// window (still a real confirmation), never to "no confirmation".
-let presenceProvider: ConfirmationProvider | null = null;
-let presenceEnabled: (() => Promise<boolean>) | null = null;
+// The Enclave user-presence provider (ADR-0031) and its routing predicate:
+// one pair, installed and consulted atomically - a provider without its
+// predicate (or the reverse) is unrepresentable, so a half-installed pair
+// can never silently demote hardware kinds to the window path. `enabled` is
+// consulted per confirmation so a settings change applies immediately; a
+// predicate failure routes to the window (still a real confirmation), never
+// to "no confirmation".
+interface PresenceRouting {
+  provider: ConfirmationProvider;
+  enabled: () => Promise<boolean>;
+}
+let presence: PresenceRouting | null = null;
 
 export function installPresenceProvider(
   p: ConfirmationProvider,
   enabled: () => Promise<boolean>,
 ): void {
-  presenceProvider = p;
-  presenceEnabled = enabled;
+  presence = { provider: p, enabled };
 }
 
 /** The provider for a given kind. "eval" and "upload" go to the Enclave
@@ -99,12 +105,13 @@ export function installPresenceProvider(
 async function providerFor(
   kind: ConfirmKind,
 ): Promise<{ provider: ConfirmationProvider | null; hardware: boolean }> {
-  if ((kind === "eval" || kind === "upload") && presenceProvider && presenceEnabled) {
-    const routed = await presenceEnabled().catch((e: unknown) => {
+  const routing = presence;
+  if ((kind === "eval" || kind === "upload") && routing) {
+    const routed = await routing.enabled().catch((e: unknown) => {
       console.warn("[bb] presence routing probe failed; using the window", e);
       return false;
     });
-    if (routed) return { provider: presenceProvider, hardware: true };
+    if (routed) return { provider: routing.provider, hardware: true };
   }
   return { provider: defaultProvider, hardware: false };
 }
@@ -131,10 +138,10 @@ let panicDeny = false;
 let panicEpoch = 0;
 
 /** The confirm window hit the brake: deny the active confirmation and latch
- * everything behind it to auto-deny. Settling the active entry advances the
- * queue, whose entries all see the latch and drain synchronously. Returns
- * the panic's epoch, which is the ONLY token that can later lift this
- * latch (releasePanicDeny). */
+ * everything behind it to auto-deny. Settling the active entry lets the
+ * chain advance, and every request already queued on it sees the latch and
+ * denies without presenting. Returns the panic's epoch, which is the ONLY
+ * token that can later lift this latch (releasePanicDeny). */
 export function denyAllConfirmations(): number {
   panicDeny = true;
   panicEpoch += 1;
@@ -194,106 +201,123 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
       resolve(false);
       return;
     }
-    // Hand the surface to the next queued request, or go idle.
-    const advance = () => {
-      const next = queue.shift();
-      if (next) next();
-      else running = false;
-    };
-    const run = () => {
-      running = true;
-      if (panicDeny || panicEpoch !== epoch) {
-        // Denied unseen: the user already chose "kill everything" - showing
-        // more consent surfaces after that choice would invert it. Same
-        // attempt cid, but no surface was shown, so it resolves no row.
+    tail = tail
+      .then(() => presentOne(req, epoch, cid, resolve))
+      .catch((e: unknown) => {
+        // presentOne settles every path it knows about; this is the chain's
+        // backstop for anything it did not - deny THIS request and keep the
+        // serializer alive for the ones queued behind it. Audit the denial
+        // like every other deny path (ADR-0030): a shown attempt already
+        // emitted its own verdict via settle, so at worst this is a second
+        // confirm_denied under the same cid - never a missing trail.
+        console.error("[bb] confirmation step failed; denying", e);
         auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
         resolve(false);
-        advance();
-        return;
+      });
+  });
+}
+
+/** Run one confirmation at the front of the queue. The returned promise is
+ * what holds the next queued request back: it settles when this
+ * confirmation does. Every known failure path resolves the verdict false
+ * and returns; the chain's catch backstops the rest. */
+async function presentOne(
+  req: ConfirmRequest,
+  epoch: number,
+  cid: string,
+  resolve: (approved: boolean) => void,
+): Promise<void> {
+  if (panicDeny || panicEpoch !== epoch) {
+    // Denied unseen: the user already chose "kill everything" - showing
+    // more consent surfaces after that choice would invert it. Same
+    // attempt cid, but no surface was shown, so it resolves no row.
+    auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
+    resolve(false);
+    return;
+  }
+  const { provider, hardware } = await providerFor(req.kind);
+  if (panicDeny || panicEpoch !== epoch) {
+    // The panic landed DURING provider selection: `active` was not yet
+    // registered, so denyAllConfirmations could not settle this one -
+    // and the latch may even have lifted again already (kill confirmed
+    // fast), which is why the epoch is checked, not just the level.
+    // Same denial, before any surface exists - its cid matches no row.
+    auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
+    resolve(false);
+    return;
+  }
+  const payload: ConfirmPayload = {
+    // The attempt's id doubles as the surface routing handle
+    // (getPendingConfirm/resolveConfirm match on it). Same value the
+    // audit events above and below carry, so the shown row and its
+    // verdict join exactly.
+    id: cid,
+    kind: req.kind,
+    origin: req.origin,
+    tabTitle: req.tabTitle,
+    detail: req.detail,
+    deadline: Date.now() + req.timeoutMs,
+    ...(hardware ? { hardware: true } : {}),
+  };
+  if (!provider) {
+    console.error("[bb] no confirmation provider installed; denying", req.kind);
+    resolve(false);
+    return;
+  }
+
+  let presentation: Presentation;
+  try {
+    presentation = provider.present(payload);
+  } catch (e) {
+    console.error("[bb] confirmation provider threw; denying", e);
+    resolve(false);
+    return;
+  }
+
+  await new Promise<void>((advance) => {
+    let done = false;
+    const settle = (approved: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      active = null;
+      try {
+        presentation.dismiss();
+      } catch (e) {
+        // A provider that cannot tear down must not block the verdict or
+        // stall the queue.
+        console.warn("[bb] confirmation dismiss failed", e);
       }
-      void (async () => {
-        const { provider, hardware } = await providerFor(req.kind);
-        if (panicDeny || panicEpoch !== epoch) {
-          // The panic landed DURING provider selection: `active` was not yet
-          // registered, so denyAllConfirmations could not settle this one -
-          // and the latch may even have lifted again already (kill confirmed
-          // fast), which is why the epoch is checked, not just the level.
-          // Same denial, before any surface exists - its cid matches no row.
-          auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
-          resolve(false);
-          advance();
-          return;
-        }
-        const payload: ConfirmPayload = {
-          // The attempt's id doubles as the surface routing handle
-          // (getPendingConfirm/resolveConfirm match on it). Same value the
-          // audit events above and below carry, so the shown row and its
-          // verdict join exactly.
-          id: cid,
-          kind: req.kind,
-          origin: req.origin,
-          tabTitle: req.tabTitle,
-          detail: req.detail,
-          deadline: Date.now() + req.timeoutMs,
-          ...(hardware ? { hardware: true } : {}),
-        };
-        if (!provider) {
-          console.error("[bb] no confirmation provider installed; denying", req.kind);
-          resolve(false);
-          advance();
-          return;
-        }
-
-        let presentation: Presentation;
-        try {
-          presentation = provider.present(payload);
-        } catch (e) {
-          console.error("[bb] confirmation provider threw; denying", e);
-          resolve(false);
-          advance();
-          return;
-        }
-
-        let done = false;
-        const settle = (approved: boolean) => {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          active = null;
-          try {
-            presentation.dismiss();
-          } catch (e) {
-            // A provider that cannot tear down must not block the verdict or
-            // stall the queue.
-            console.warn("[bb] confirmation dismiss failed", e);
-          }
-          // Log-after-decide (ADR-0030): the verdict is already settled; the
-          // audit ring and the host's audit file record it, never gate it.
-          // `cid` ties this verdict to THIS attempt's confirm_shown row. Only a
-          // shown attempt reaches settle(), so this resolves exactly its own
-          // row; the pre-surface denials above carry the same-shaped cid but no
-          // shown row exists for them, so they resolve nothing.
-          auditEvent(approved ? "confirm_allowed" : "confirm_denied", {
-            tool: req.kind,
-            name: req.origin,
-            cid,
-          });
-          resolve(approved);
-          advance();
-        };
-        const timer = setTimeout(() => settle(false), req.timeoutMs);
-        active = { payload, settle };
-        // The surface is up in front of the user from here (ADR-0030 audit).
-        // Same cid as the verdict above, so the panel joins the pair exactly.
-        auditEvent("confirm_shown", { tool: req.kind, name: req.origin, cid });
-        presentation.verdict.then(settle, (e: unknown) => {
-          console.error("[bb] confirmation presentation failed; denying", e);
-          settle(false);
-        });
-      })();
+      // Log-after-decide (ADR-0030): the verdict is already settled; the
+      // audit ring and the host's audit file record it, never gate it.
+      // `cid` ties this verdict to THIS attempt's confirm_shown row. Only a
+      // shown attempt reaches settle(), so this resolves exactly its own
+      // row; the pre-surface denials above carry the same-shaped cid but no
+      // shown row exists for them, so they resolve nothing.
+      auditEvent(approved ? "confirm_allowed" : "confirm_denied", {
+        tool: req.kind,
+        name: req.origin,
+        cid,
+      });
+      resolve(approved);
+      advance();
     };
-    if (running) queue.push(run);
-    else run();
+    const timer = setTimeout(() => settle(false), req.timeoutMs);
+    active = { payload, settle };
+    // The surface is up in front of the user from here (ADR-0030 audit).
+    // Same cid as the verdict above, so the panel joins the pair exactly.
+    auditEvent("confirm_shown", { tool: req.kind, name: req.origin, cid });
+    try {
+      presentation.verdict.then(settle, (e: unknown) => {
+        console.error("[bb] confirmation presentation failed; denying", e);
+        settle(false);
+      });
+    } catch (e) {
+      // A presentation whose verdict cannot even be observed: deny THROUGH
+      // settle, so the timer, the active slot, and the queue all unwind.
+      console.error("[bb] confirmation verdict unobservable; denying", e);
+      settle(false);
+    }
   });
 }
 
