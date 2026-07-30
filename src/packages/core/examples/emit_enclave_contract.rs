@@ -44,7 +44,7 @@ fn hex(bytes: &[u8]) -> String {
 fn main() {
     let signing_key =
         SigningKey::from_slice(&FIXTURE_KEY_BYTES).expect("fixture scalar is a valid P-256 key");
-    let point = signing_key.verifying_key().to_encoded_point(false);
+    let point = signing_key.verifying_key().to_sec1_point(false);
     let pubkey = EnclavePublicKey::from_x963(point.as_bytes().to_vec())
         .expect("p256 emits the 65-byte X9.63 uncompressed point");
     // The deny-list constant is pinned to the scalar: generation refuses to

@@ -183,7 +183,7 @@ mod tests {
         // when nobody runs gen).
         let sk = SigningKey::from_slice(&FIXTURE_KEY_BYTES)
             .expect("the fixture scalar is a valid P-256 key");
-        let point = sk.verifying_key().to_encoded_point(false);
+        let point = sk.verifying_key().to_sec1_point(false);
         let public = EnclavePublicKey::from_x963(point.as_bytes().to_vec())
             .expect("p256 emits the X9.63 uncompressed point");
         assert_eq!(public.fingerprint_hex(), FIXTURE_KEY_ID);
@@ -199,7 +199,7 @@ mod tests {
         let other_public = EnclavePublicKey::from_x963(
             other
                 .verifying_key()
-                .to_encoded_point(false)
+                .to_sec1_point(false)
                 .as_bytes()
                 .to_vec(),
         )
