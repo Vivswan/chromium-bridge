@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.libc]]
+who = "Vivswan Shah <58091053+Vivswan@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.186 -> 0.2.189"
+notes = "Reviewed the full published-source diff (publisher still rust-lang-owner). Routine platform FFI-binding growth: new syscalls, structs, and constants across the per-OS modules, plus a new QNX (qnx) target. build.rs changes are cfg/env-var housekeeping only, migrating the RUST_LIBC_UNSTABLE_* env vars to CARGO_CFG_* cfg reads and adding a LIBC_BUILD_VERBOSE info macro; no network, no code generation, no process spawning. No new runtime dependencies (libc has none), no new unsafe logic beyond declarations, no ownership change. The new etc/libc-util.py is a maintainer dev helper, not referenced by build.rs or src and never run during the build."
+
 [[audits.thiserror]]
 who = "Vivswan Shah <58091053+Vivswan@users.noreply.github.com>"
 criteria = "safe-to-deploy"
