@@ -7,6 +7,12 @@ criteria = "safe-to-deploy"
 delta = "0.2.186 -> 0.2.189"
 notes = "Reviewed the full published-source diff (publisher still rust-lang-owner). Routine platform FFI-binding growth: new syscalls, structs, and constants across the per-OS modules, plus a new QNX (qnx) target. build.rs changes are cfg/env-var housekeeping only, migrating the RUST_LIBC_UNSTABLE_* env vars to CARGO_CFG_* cfg reads and adding a LIBC_BUILD_VERBOSE info macro; no network, no code generation, no process spawning. No new runtime dependencies (libc has none), no new unsafe logic beyond declarations, no ownership change. The new etc/libc-util.py is a maintainer dev helper, not referenced by build.rs or src and never run during the build."
 
+[[audits.serde_json]]
+who = "Vivswan Shah <58091053+Vivswan@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.150 -> 1.0.151"
+notes = "Reviewed the full published-source diff (publisher still dtolnay). The only shipped change is one new public API in src/raw.rs: `unsafe fn RawValue::from_string_unchecked`, the unchecked counterpart of the existing safe `from_string`. It performs no memory-unsafe operation; it wraps the existing safe internal `from_owned(json.into_boxed_str())`, and the `unsafe` marker only propagates the JSON-validity invariant to callers (analogous to `str::from_utf8_unchecked`), guarded by a `debug_assert!` re-parse in debug builds. The rest is a doc html_root_url bump, three new tests, and CI actions v6 -> v7. No runtime dependency change (serde_json's [dependencies] are unchanged; the Cargo.lock churn is the crate's own dev lockfile, which downstream ignores), no build script, no ownership change."
+
 [[audits.thiserror]]
 who = "Vivswan Shah <58091053+Vivswan@users.noreply.github.com>"
 criteria = "safe-to-deploy"
