@@ -45,6 +45,9 @@ import {
   installPresenceProvider,
   resolveConfirm,
 } from "@/lib/background/confirm/service";
+// The MOCKED capability probe (the factory above), so a test can park or
+// fail one round's setup on demand.
+import { platformCanEnroll } from "@/lib/background/enrollment";
 
 // ---- test key + proof helpers (WebCrypto plays the Secure Enclave) -----------
 
@@ -326,6 +329,151 @@ describe("EnclavePresenceProvider verdicts", () => {
       pubkey: key.pubkeyB64,
     });
     expect(await presentation.verdict).toBe(false);
+  });
+
+  test("two same-tick rounds: the second is refused and cannot corrupt the first", async () => {
+    // The slot is claimed synchronously, before any await. The old code
+    // claimed it only after two awaits, so two same-tick rounds BOTH passed
+    // the single-flight guard: two challenges went out, the second claim
+    // overwrote the first (orphaning its settle), and the first challenge's
+    // valid proof then verified against the wrong nonce - denying the tap
+    // the user just gave and marking the bridge compromised.
+    const key = await genKey();
+    await pinKey(key);
+    const sent: Array<{ nonce: string; context: string }> = [];
+    attachPort((frame) => {
+      sent.push(frame as { nonce: string; context: string });
+      return true;
+    });
+    const { provider } = displayStub();
+    const p = new EnclavePresenceProvider(provider);
+    const round1 = p.present(payload("eval", "one"));
+    const round2 = p.present(payload("eval", "two"));
+    // The second round is refused outright - its verdict denies without a
+    // challenge ever going out for it.
+    expect(await round2.verdict).toBe(false);
+    await vi.waitFor(() => expect(sent.length).toBe(1));
+    // Give the refused round's setup every chance to misbehave late.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent.length).toBe(1);
+    // The first round is intact: its own challenge's proof approves it.
+    handlePresenceFrame({
+      type: "presence_proof",
+      sig: await signB64(key, buildPresenceMessage(first(sent).nonce, first(sent).context)),
+      key_id: key.keyId,
+      pubkey: key.pubkeyB64,
+    });
+    expect(await round1.verdict).toBe(true);
+    expect(await getCompromised()).toBeNull();
+  });
+
+  test("an answer that precedes the challenge denies and the challenge is never sent", async () => {
+    // The round is claimed synchronously but its challenge goes out only
+    // after async setup. A frame landing in that gap answers nothing that
+    // was ever asked: deny the round, and the aborted setup must not send
+    // a challenge for a round that is already settled.
+    const key = await genKey();
+    await pinKey(key);
+    const sent: unknown[] = [];
+    attachPort((frame) => {
+      sent.push(frame);
+      return true;
+    });
+    const { provider } = displayStub();
+    const p = new EnclavePresenceProvider(provider);
+    const presentation = p.present(payload("eval", "x"));
+    // Same tick, before the setup's awaits complete.
+    handlePresenceFrame({ type: "presence_error", reason: "spurious" });
+    expect(await presentation.verdict).toBe(false);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent.length).toBe(0);
+  });
+
+  test("a stale setup rejecting late cannot cancel a successor round", async () => {
+    // Round A parks inside presenceCapable (platformCanEnroll gated); a
+    // teardown settles it fail-closed; round B claims the freed slot and
+    // sends its challenge. A's parked setup then REJECTS: the catch may
+    // cancel only a round it still owns - an unconditional cancelPending
+    // there would kill B, denying the tap the user is about to give.
+    const key = await genKey();
+    await pinKey(key);
+    let rejectA!: (e: unknown) => void;
+    vi.mocked(platformCanEnroll).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((_, rej) => {
+          rejectA = rej;
+        }),
+    );
+    attachPort(() => true);
+    const { provider } = displayStub();
+    const roundA = new EnclavePresenceProvider(provider).present(payload("eval", "a"));
+    detachPort(); // settles A; its setup is still parked in presenceCapable
+    expect(await roundA.verdict).toBe(false);
+
+    const sent: Array<{ nonce: string; context: string }> = [];
+    attachPort((frame) => {
+      sent.push(frame as { nonce: string; context: string });
+      return true;
+    });
+    const roundB = new EnclavePresenceProvider(provider).present(payload("eval", "b"));
+    await vi.waitFor(() => expect(sent.length).toBe(1));
+
+    rejectA(new Error("late setup failure")); // A's stale setup rejects now
+    await new Promise((r) => setTimeout(r, 20));
+
+    // B is unaffected: its own challenge's valid proof still approves it.
+    handlePresenceFrame({
+      type: "presence_proof",
+      sig: await signB64(key, buildPresenceMessage(first(sent).nonce, first(sent).context)),
+      key_id: key.keyId,
+      pubkey: key.pubkeyB64,
+    });
+    expect(await roundB.verdict).toBe(true);
+    expect(await getCompromised()).toBeNull();
+  });
+});
+
+// The codex-vs-Opus adjudication (stale port after a FAILED re-entrant
+// connect, where port.ts fires no local onDisconnect). teardownLink's
+// presence-facing action on the connected branch is exactly detachPort();
+// this exercises that action and lets the code decide who is right.
+//
+// Verdict: the round DENIES. detachPort cancels the outstanding round
+// synchronously at teardown, so a later cryptographically valid proof finds
+// nothing to approve. Pre-fix, teardownLink did NOT call detachPort, so
+// presence stayed in its happy-path state (module port still the old
+// attachment, round still pending) and the same valid proof APPROVED while
+// the link was down - codex's bug was real; the fix (detachPort in teardown,
+// plus the inbound identity gate in port.ts) is what closes it.
+describe("adjudication: a valid proof after teardown cannot approve", () => {
+  test("detachPort at teardown denies a subsequently delivered valid proof", async () => {
+    const key = await genKey();
+    await pinKey(key);
+    const sent: Array<{ nonce: string; context: string }> = [];
+    attachPort((frame) => {
+      sent.push(frame as { nonce: string; context: string });
+      return true;
+    });
+    const { provider } = displayStub();
+    const p = new EnclavePresenceProvider(provider);
+    const presentation = p.present(payload("eval", "steal"));
+    await vi.waitFor(() => expect(sent.length).toBe(1));
+    // Build the genuine tap's proof for THIS challenge.
+    const proof = {
+      type: "presence_proof",
+      sig: await signB64(key, buildPresenceMessage(first(sent).nonce, first(sent).context)),
+      key_id: key.keyId,
+      pubkey: key.pubkeyB64,
+    };
+    // The failed re-entrant connect: teardownLink's presence action, with no
+    // onDisconnect and no replacement attach.
+    detachPort();
+    // The round is already denied by the teardown; the late (valid) proof
+    // finds no round and cannot revive it.
+    handlePresenceFrame(proof);
+    expect(await presentation.verdict).toBe(false);
+    // A valid signature is not a compromise: no mark.
+    expect(await getCompromised()).toBeNull();
   });
 });
 

@@ -20,25 +20,61 @@ import {
 } from "./enrollment";
 import * as kill from "./kill";
 
-let port: Browser.runtime.Port | null = null;
-let portOk = false; // did the most recent connect succeed?
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+// The native link is in exactly one of these states. One value, not a
+// port/flag/timer trio: a nullable port beside a boolean could contradict
+// (a re-entrant connect that threw used to leave the OLD port assigned
+// while isNativeConnected() reported disconnected), and every transition
+// below consumes the previous state, so a replaced port can never linger
+// behind a state that reads down.
+type NativeLink =
+  | { state: "connected"; port: Browser.runtime.Port }
+  | { state: "reconnect-scheduled"; timer: ReturnType<typeof setTimeout> }
+  | { state: "down" };
+
+let link: NativeLink = { state: "down" };
 
 export function isNativeConnected(): boolean {
-  return portOk;
+  return link.state === "connected";
+}
+
+/** Consume the current link and leave it down: cancel a scheduled
+ * reconnect, or tear a held port down together with everything bound to it.
+ * The one place a link is torn down, so no path can orphan a live port - or
+ * a collaborator attachment that would still honor its frames - behind a
+ * state that reads down. */
+function teardownLink(): void {
+  const prev = link;
+  link = { state: "down" };
+  if (prev.state === "reconnect-scheduled") clearTimeout(prev.timer);
+  if (prev.state === "connected") {
+    // The collaborator attachments belong to the port being consumed:
+    // detach them in the same synchronous transition. Left attached, a
+    // frame Chrome already queued on the old port could still reach a
+    // surface that acts on it (a presence proof approving a confirmation
+    // while the link reads down).
+    detachPort();
+    clients.detachPort();
+    kill.detachPort();
+    auditLog.detachPort();
+    presence.detachPort();
+    try {
+      prev.port.disconnect();
+    } catch {
+      // Already gone; the goal (no live orphan) holds either way.
+    }
+  }
 }
 
 export function connectNative() {
-  // Tear down any previous handle first.
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
+  // Consume whatever the link was first: a re-entrant connect must not
+  // leave the previous port alive (its later onDisconnect would otherwise
+  // race the fresh one) or a reconnect timer armed.
+  teardownLink();
   try {
-    port = browser.runtime.connectNative(NATIVE_HOST_ID);
-    portOk = true;
+    const port = browser.runtime.connectNative(NATIVE_HOST_ID);
+    link = { state: "connected", port };
     console.log("[bb] native host connected");
-    port.onMessage.addListener(onNativeMessage);
+    port.onMessage.addListener((msg) => onNativeMessage(port, msg));
     port.onDisconnect.addListener(onNativeDisconnect);
     // Hand the enrollment ceremony (ADR-0021), the trusted-client admin
     // exchange (ADR-0025), the kill-switch/audit surfaces (ADR-0030), and
@@ -58,7 +94,7 @@ export function connectNative() {
     void kill.requestKillStatus();
     void onPortConnected();
   } catch (e) {
-    portOk = false;
+    teardownLink();
     console.error("[bb] connectNative threw", e);
     scheduleReconnect();
   }
@@ -66,9 +102,9 @@ export function connectNative() {
 
 // Raw frame sender for enclave control frames (they are not BridgeResps).
 function postFrame(frame: object): boolean {
-  if (!port) return false;
+  if (link.state !== "connected") return false;
   try {
-    port.postMessage(frame);
+    link.port.postMessage(frame);
     return true;
   } catch (e) {
     console.warn("[bb] postFrame failed", e);
@@ -76,14 +112,11 @@ function postFrame(frame: object): boolean {
   }
 }
 
-function onNativeDisconnect(_p: Browser.runtime.Port) {
-  portOk = false;
-  port = null;
-  detachPort();
-  clients.detachPort();
-  kill.detachPort();
-  auditLog.detachPort();
-  presence.detachPort();
+function onNativeDisconnect(p: Browser.runtime.Port) {
+  // Only the CURRENT port may take the link down: the disconnect of a port
+  // a re-entrant connect already replaced must not tear down the live one.
+  if (link.state !== "connected" || link.port !== p) return;
+  teardownLink();
   const err = browser.runtime.lastError;
   console.warn("[bb] native host disconnected:", err?.message || "unknown");
   // Chrome kills the host process when the Port drops. Reconnect so a fresh
@@ -93,14 +126,24 @@ function onNativeDisconnect(_p: Browser.runtime.Port) {
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer) return;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectNative();
-  }, 2000);
+  if (link.state !== "down") return;
+  link = {
+    state: "reconnect-scheduled",
+    timer: setTimeout(() => {
+      connectNative();
+    }, 2000),
+  };
 }
 
-function onNativeMessage(msg: unknown) {
+function onNativeMessage(p: Browser.runtime.Port, msg: unknown) {
+  // Same identity gate as the disconnect path: a frame from a port this
+  // link no longer holds (a re-entrant connect consumed it) is dropped
+  // before the demux, so nothing queued on a dead port can reach a surface
+  // that would act on it.
+  if (link.state !== "connected" || link.port !== p) {
+    console.warn("[bb] dropping frame from a stale native port");
+    return;
+  }
   // Enclave control frames (ADR-0021/0025) are ceremony traffic between the
   // extension and the host itself; they carry `type`, not `op`, and are never
   // dispatched as bridge ops.
@@ -161,9 +204,9 @@ function onNativeMessage(msg: unknown) {
 }
 
 function sendResponse(id: number | string, ok: boolean, data?: unknown, error?: string) {
-  if (!port) return; // host gone; nothing to do
+  if (link.state !== "connected") return; // host gone; nothing to do
   try {
-    port.postMessage({ id, ok, data, error: ok ? undefined : error });
+    link.port.postMessage({ id, ok, data, error: ok ? undefined : error });
   } catch (e) {
     // Port likely closed; the disconnect handler will reconnect.
     console.warn("[bb] postMessage failed", e);

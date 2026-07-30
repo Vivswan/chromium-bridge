@@ -18,8 +18,8 @@
 import { getSetting } from "../shared/settings";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
-import { cdpRegistry } from "./cdp/registry";
-import { dbgAttach, dbgDetach, dbgSend, isDebuggable } from "./cdp/session";
+import { withCdpAttach } from "./cdp/attach";
+import { dbgSend, isDebuggable } from "./cdp/session";
 import { resolveTargetTab } from "./tabs";
 
 export async function handleDialog(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
@@ -41,37 +41,16 @@ export async function handleDialog(maybeTabId: number | undefined, args: OpArgs)
   }
   const tabId = tab.id!;
 
-  const reusing = cdpRegistry.hasSession(tabId);
-  if (reusing) {
-    // Await the registry's idempotent (de-duped) attach so we never issue CDP
-    // commands before a still-in-flight persistent attach has completed.
-    await cdpRegistry.get(tabId);
-  } else {
-    try {
-      await dbgAttach(tabId);
-    } catch (e) {
-      const msg = String((e as Error).message || e);
-      if (/another debugger/i.test(msg)) {
-        throw new Error(
-          "page_handle_dialog cannot attach: DevTools is open on this tab. Close DevTools and retry.",
-          { cause: e },
-        );
-      }
-      throw e;
-    }
-  }
-  try {
+  return await withCdpAttach(tabId, "page_handle_dialog", async ({ reused }) => {
     // Page.enable is idempotent; needed so the CDP session owns dialog handling.
     await dbgSend(tabId, "Page.enable", {}).catch(() => {});
     const accept = action === "accept";
     const params: Record<string, unknown> = { accept };
     if (accept && typeof args.promptText === "string") params.promptText = args.promptText;
     await dbgSend(tabId, "Page.handleJavaScriptDialog", params);
+    // Best-effort domain cleanup before a transient detach; the persistent
+    // CDP-mode session keeps Page enabled (other ops may rely on it).
+    if (!reused) await dbgSend(tabId, "Page.disable", {}).catch(() => {});
     return { handled: action };
-  } finally {
-    if (!reusing) {
-      await dbgSend(tabId, "Page.disable", {}).catch(() => {});
-      await dbgDetach(tabId);
-    }
-  }
+  });
 }

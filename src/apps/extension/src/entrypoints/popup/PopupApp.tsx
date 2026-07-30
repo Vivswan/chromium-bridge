@@ -1,4 +1,4 @@
-import { PendingAllowSchema } from "@chromium-bridge/shared";
+import { PendingApprovalsSchema } from "@chromium-bridge/shared";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
@@ -105,8 +105,23 @@ export function PopupApp() {
     const al = await send<{ list?: string[] }>({ type: "get_allowlist" });
     setList(al?.list ?? []);
     const { pendingAllow } = await browser.storage.local.get("pendingAllow");
-    const parsed = PendingAllowSchema.safeParse(pendingAllow);
-    setPending(parsed.success ? parsed.data : null);
+    const parsed = PendingApprovalsSchema.safeParse(pendingAllow);
+    if (!parsed.success) {
+      // An unparsable record is an old-shape or corrupted ghost. Fail closed
+      // for display, and ask the SW to re-derive the mirror through its ONE
+      // serialized store path (sweep_pending). The popup never removes the
+      // record itself: between this read and an uncoordinated popup-side
+      // remove, the SW could mint a LIVE request - deleting it here would
+      // strand its resolver until the deadline.
+      if (pendingAllow !== undefined) void send({ type: "sweep_pending" });
+      setPending(null);
+    } else {
+      // Oldest unexpired request first; an expired record is a ghost a dead
+      // service worker left behind (its resolver died with the worker), so it
+      // must not be offered for approval.
+      const now = Date.now();
+      setPending(parsed.data.find((p) => p.expiresAt > now) ?? null);
+    }
     try {
       setKill((await send<KillView>({ type: "get_kill" })) ?? null);
     } catch {

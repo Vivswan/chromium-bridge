@@ -1,5 +1,6 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
+import { syncPendingMirror } from "@/lib/background/allowlist-store";
 import { installCdpLifecycleListeners } from "@/lib/background/cdp/registry";
 import { EnclavePresenceProvider, presenceRoutingEnabled } from "@/lib/background/confirm/presence";
 import {
@@ -60,10 +61,27 @@ export default defineBackground(() => {
   installConfirmationProvider(windowProvider);
   installPresenceProvider(new EnclavePresenceProvider(windowProvider), presenceRoutingEnabled);
 
-  browser.runtime.onStartup.addListener(connectNative);
-  browser.runtime.onInstalled.addListener(connectNative);
-  // Also connect eagerly when the SW wakes for any reason. connectNative is
-  // idempotent-ish: if a port already exists it creates a new one and the old
-  // is replaced.
-  connectNative();
+  // Every connect path first COMPLETES the pending-approval sweep, then
+  // connects. The sweep re-derives the popup mirror and badge from this
+  // worker's (empty) resolver map, clearing any ghost record a previous
+  // worker life left behind. Sequencing it strictly before connectNative is
+  // what makes the badge deterministic: enrollment writes its own badge
+  // after the port connects, so a sweep whose badge clear landed LATE would
+  // wipe a just-written PAIR/! marker. The listeners themselves are
+  // registered synchronously (an MV3 requirement); only the work inside is
+  // sequenced. A sweep REJECTION never blocks connecting (caught below) -
+  // the bridge matters more than a stale badge.
+  const startUp = () => {
+    void (async () => {
+      await syncPendingMirror().catch((e) => {
+        console.warn("[bb] pending-approval sweep failed", e);
+      });
+      // Connect eagerly whenever the SW wakes. connectNative consumes any
+      // previous link first, so repeated calls are safe.
+      connectNative();
+    })();
+  };
+  browser.runtime.onStartup.addListener(startUp);
+  browser.runtime.onInstalled.addListener(startUp);
+  startUp();
 });
