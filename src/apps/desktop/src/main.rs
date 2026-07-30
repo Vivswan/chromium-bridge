@@ -77,14 +77,17 @@ async fn enclave_status() -> Result<chromium_bridge_core::enclave::EnclaveStatus
 /// The enrollment ceremony (`pair` / `pair --reset`): raises the real Touch
 /// ID prompt from the signed host. The returned status carries the
 /// fingerprint for the user to compare against the extension's enrollment
-/// screen - the same one `pair` prints.
+/// screen - the same one `pair` prints. The argv comes from the core's
+/// `cli::argv` consts, the same spellings its parser matches, so a renamed
+/// subcommand is a compile-time break here rather than a runtime dead button.
 #[tauri::command]
 async fn enclave_pair(reset: bool) -> Result<EnclaveOutcome, String> {
+    use chromium_bridge_core::cli::argv;
     blocking(move || {
         run_enclave_op(if reset {
-            &["pair", "--reset"]
+            &[argv::PAIR, argv::RESET_FLAG]
         } else {
-            &["pair"]
+            &[argv::PAIR]
         })
     })
     .await
@@ -92,7 +95,7 @@ async fn enclave_pair(reset: bool) -> Result<EnclaveOutcome, String> {
 
 #[tauri::command]
 async fn enclave_revoke() -> Result<EnclaveOutcome, String> {
-    blocking(|| run_enclave_op(&["revoke"])).await
+    blocking(|| run_enclave_op(&[chromium_bridge_core::cli::argv::REVOKE])).await
 }
 
 // ---- native-messaging registration ---------------------------------------------
@@ -168,14 +171,15 @@ async fn client_revoke(name: String) -> Result<bool, String> {
 /// Presence-gated. The webview may only invoke this from the confirm
 /// handler of its explicit modal dialog - the dialog is what
 /// `Floor::AppConfirm` asserts. Returns the presence path that authorized
-/// the pairing.
+/// the pairing. `anchor_kind` deserializes into the typed [`clients::AnchorKind`],
+/// so an unknown kind is refused by serde before the handler runs.
 #[tauri::command]
 async fn client_pair(
     name: String,
-    anchor_kind: String,
+    anchor_kind: clients::AnchorKind,
     anchor_value: String,
 ) -> Result<&'static str, String> {
-    blocking(move || clients::pair(&name, &anchor_kind, &anchor_value)).await
+    blocking(move || clients::pair(&name, anchor_kind, &anchor_value)).await
 }
 
 // ---- CLI tool, MCP snippet, extension ------------------------------------------

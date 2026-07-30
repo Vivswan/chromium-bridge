@@ -127,7 +127,8 @@ pub fn run_host(args: &[&str]) -> Result<HostRun, String> {
 /// unexpected shape rather than coercing it.
 pub fn enclave_status_report() -> Result<chromium_bridge_core::enclave::EnclaveStatusReport, String>
 {
-    let run = run_host(&["enclave-status", "--json"])?;
+    use chromium_bridge_core::cli::argv;
+    let run = run_host(&[argv::ENCLAVE_STATUS, argv::JSON_FLAG])?;
     if !run.ok {
         return Err(format!("enclave-status failed: {}", run.transcript()));
     }

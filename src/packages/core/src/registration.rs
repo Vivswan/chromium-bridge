@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use crate::browsers::{
     self, BaseDirs, Browser, BrowserEntry, Os, Registration, HOST_ID, PINNED_EXTENSION_ID,
 };
-use crate::cli::{DoctorArgs, UninstallArgs};
+use crate::cli::{FixTargets, UninstallArgs};
 
 /// The `description` the legacy `install.sh` / `install.ps1` wrote, verbatim.
 const MANIFEST_DESCRIPTION_LEGACY: &str = "Chromium Bridge native messaging host";
@@ -119,7 +119,7 @@ pub enum Ownership {
 
 /// The diagnosed state of one registration, as reported by `doctor` and
 /// repaired by `--fix`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegState {
     /// No manifest file (and no registry key on Windows).
     Missing,
@@ -143,20 +143,6 @@ impl RegState {
             RegState::Stale(why) => format!("stale ({why})"),
             RegState::Foreign(why) => format!("NOT OURS ({why})"),
             RegState::Unreadable(why) => format!("unreadable ({why})"),
-        }
-    }
-
-    /// Stable machine code for the variant, for consumers (the desktop app's
-    /// webview) that must branch on the state without parsing `describe()`'s
-    /// human wording. Adding a variant means adding a code; consumers treat
-    /// an unknown code as "offer nothing".
-    pub fn code(&self) -> &'static str {
-        match self {
-            RegState::Missing => "missing",
-            RegState::Ok => "ok",
-            RegState::Stale(_) => "stale",
-            RegState::Foreign(_) => "foreign",
-            RegState::Unreadable(_) => "unreadable",
         }
     }
 }
@@ -551,13 +537,13 @@ pub fn run_uninstall_cli(argv: &[String]) -> i32 {
 /// `doctor --fix`: (re-)register the selected targets. Idempotent, so a
 /// fresh machine gets its first registration and a broken one gets repaired
 /// by the same code path. Returns the process exit code.
-pub fn run_fix(args: &DoctorArgs) -> i32 {
+pub fn run_fix(targets: &FixTargets) -> i32 {
     let (os, dirs) = match resolve_env() {
         Ok(v) => v,
         Err(code) => return code,
     };
     let entries = browsers::resolve(os, &dirs);
-    let targets = match select_targets(args, &entries) {
+    let targets = match select_targets(targets, &entries) {
         Ok(t) => t,
         Err(code) => return code,
     };
@@ -688,55 +674,53 @@ fn resolve_host_exe() -> std::io::Result<PathBuf> {
 /// Turn the parsed `--fix` targeting flags into concrete targets.
 /// Auto-detection finding no browser is an error with guidance, not a silent
 /// default.
-fn select_targets(args: &DoctorArgs, entries: &[BrowserEntry]) -> Result<Vec<Target>, i32> {
-    if !args.manifest_dirs.is_empty() {
-        return Ok(args
-            .manifest_dirs
+/// Resolve the typed `--fix` targeting mode into concrete targets. Unknown
+/// `--browser` keys were already refused at the CLI boundary
+/// ([`crate::cli::doctor_args`] parses them into [`Browser`]s), so the match
+/// here is exhaustive, with no priority chain to order wrongly.
+fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<Target>, i32> {
+    match targets {
+        FixTargets::ManifestDirs(dirs) => Ok(dirs
             .iter()
             .map(|d| Target::for_explicit_dir(Path::new(d)))
-            .collect());
-    }
-    if args.all {
-        return Ok(entries.iter().map(Target::for_browser).collect());
-    }
-    if let Some(keys) = &args.browsers {
-        let mut targets = Vec::new();
-        for key in keys {
-            let Some(browser) = Browser::from_key(key) else {
+            .collect()),
+        FixTargets::All => Ok(entries.iter().map(Target::for_browser).collect()),
+        FixTargets::Browsers(browsers) => {
+            let mut out = Vec::new();
+            for browser in browsers {
+                let Some(entry) = entries.iter().find(|e| e.browser == *browser) else {
+                    // resolve() enumerates every Browser variant, so this
+                    // cannot be reached; refuse with a typed exit rather than
+                    // panic if that invariant is ever broken.
+                    log_error!(
+                        "doctor",
+                        "browser {:?} missing from the resolved set",
+                        browser.key()
+                    );
+                    return Err(2);
+                };
+                out.push(Target::for_browser(entry));
+            }
+            Ok(out)
+        }
+        FixTargets::Detected => {
+            let detected: Vec<Target> = entries
+                .iter()
+                .filter(|e| e.detected())
+                .map(Target::for_browser)
+                .collect();
+            if detected.is_empty() {
                 log_error!(
                     "doctor",
-                    "unknown --browser key {key:?}; known: {}",
+                    "no Chromium-family browser detected for this user; pass --browser <keys> \
+                     (known: {}), --all, or --manifest-dir <dir>",
                     known_keys()
                 );
-                return Err(2);
-            };
-            let Some(entry) = entries.iter().find(|e| e.browser == browser) else {
-                // resolve() enumerates every Browser variant, so this cannot
-                // be reached; refuse with the same typed exit as a bad key
-                // rather than panic if that invariant is ever broken.
-                log_error!("doctor", "browser {key:?} missing from the resolved set");
-                return Err(2);
-            };
-            targets.push(Target::for_browser(entry));
+                return Err(1);
+            }
+            Ok(detected)
         }
-        return Ok(targets);
     }
-    // Default: every browser detected on this machine.
-    let detected: Vec<Target> = entries
-        .iter()
-        .filter(|e| e.detected())
-        .map(Target::for_browser)
-        .collect();
-    if detected.is_empty() {
-        log_error!(
-            "doctor",
-            "no Chromium-family browser detected for this user; pass --browser <keys> \
-             (known: {}), --all, or --manifest-dir <dir>",
-            known_keys()
-        );
-        return Err(1);
-    }
-    Ok(detected)
 }
 
 pub(crate) fn known_keys() -> String {
@@ -1272,11 +1256,7 @@ mod tests {
 
         // Default --fix: only the detected browser; the ghost gets no
         // manifest written into its leftover directory.
-        let args = crate::cli::DoctorArgs {
-            fix: true,
-            ..Default::default()
-        };
-        let targets = select_targets(&args, &entries).unwrap();
+        let targets = select_targets(&crate::cli::FixTargets::Detected, &entries).unwrap();
         assert_eq!(
             targets.iter().map(Target::describe).collect::<Vec<_>>(),
             vec!["chrome"]
@@ -1284,12 +1264,11 @@ mod tests {
 
         // Explicit --browser: the user's word overrides detection, so a
         // browser we cannot see (non-standard install) stays registrable.
-        let args = crate::cli::DoctorArgs {
-            fix: true,
-            browsers: Some(vec!["vivaldi".into(), "opera".into()]),
-            ..Default::default()
-        };
-        let targets = select_targets(&args, &entries).unwrap();
+        let targets = select_targets(
+            &crate::cli::FixTargets::Browsers(vec![Browser::Vivaldi, Browser::Opera]),
+            &entries,
+        )
+        .unwrap();
         assert_eq!(
             targets.iter().map(Target::describe).collect::<Vec<_>>(),
             vec!["vivaldi", "opera"]
@@ -1302,11 +1281,10 @@ mod tests {
             ..dirs
         };
         let entries = browsers::resolve(Os::MacOs, &empty_dirs);
-        let args = crate::cli::DoctorArgs {
-            fix: true,
-            ..Default::default()
-        };
-        assert_eq!(select_targets(&args, &entries).err(), Some(1));
+        assert_eq!(
+            select_targets(&crate::cli::FixTargets::Detected, &entries).err(),
+            Some(1)
+        );
     }
 
     #[cfg(unix)]

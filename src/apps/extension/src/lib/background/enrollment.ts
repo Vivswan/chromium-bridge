@@ -59,8 +59,10 @@ import { hardenStorageAccess } from "./trusted-storage";
 
 export type { EnclaveInboundFrame };
 
-/** True for the three ADR-0021 control frame tags. Bridge requests carry `op`
- * and never a top-level `type`, so nothing legitimate collides. */
+/** True for the five enclave control frame tags (ENCLAVE_FRAME_TYPES: the
+ * ADR-0021 ceremony trio - challenge/proof/error - plus the ADR-0025
+ * revoke/revoked pair). Bridge requests carry `op` and never a top-level
+ * `type`, so nothing legitimate collides. */
 export function isEnclaveFrame(msg: unknown): msg is EnclaveInboundFrame {
   return EnclaveInboundFrameSchema.safeParse(msg).success;
 }
@@ -630,26 +632,46 @@ export function revokePin(): Promise<{ ok: boolean }> {
 
 // ---- status for the popup/options UI ----------------------------------------------
 
-export interface EnrollmentStatus {
+/** The fields every state carries. */
+interface EnrollmentStatusBase {
   required: boolean;
   /** False on platforms without a Secure Enclave (non-mac): enrollment is
    * unavailable there and the gate never blocks, per the browser's own
    * platform probe (not the host's claim). */
   platformSupported: boolean;
-  state: "unpaired" | "pending" | "pinned" | "compromised";
   /** Bridge requests are currently refused by the gate. */
   blocked: boolean;
-  keyId?: string;
-  fingerprint?: string; // 4-char grouped display of keyId
-  pinnedAt?: number;
-  lastVerifiedAt?: number;
-  compromisedReason?: string;
   lastError?: string;
   paused?: boolean;
   /** ADR-0025: an unpair's host-key deletion has not been acknowledged yet
    * (it completes on the next host connection). */
   hostRevokePending?: boolean;
 }
+
+/** Discriminated on `state`, so which fields are present is determined by
+ * the state instead of eight independent optionals: a pending or pinned
+ * status always carries its key identity, a compromised one always carries
+ * its reason, and `{ state: "compromised" }` with no reason cannot be built.
+ * Mirrored (hand-written, UI side) as messages.ts EnrollmentStatusView. */
+export type EnrollmentStatus = EnrollmentStatusBase &
+  (
+    | { state: "unpaired" }
+    | { state: "pending"; keyId: string; fingerprint: string }
+    | {
+        state: "pinned";
+        keyId: string;
+        fingerprint: string;
+        pinnedAt: number;
+        lastVerifiedAt?: number;
+      }
+    | {
+        state: "compromised";
+        compromisedReason: string;
+        /** The pin the failure was measured against, when one survives. */
+        keyId?: string;
+        fingerprint?: string;
+      }
+  );
 
 export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
   const required = (await getSetting("requireEnrollment")) === true;

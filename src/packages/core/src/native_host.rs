@@ -39,14 +39,9 @@ use crate::protocol::{
     bridge_read, bridge_write, classify_nm_frame, host_control_type, nm_read_frame, nm_write_frame,
     AdminControl, AdminKind, AuditEventFields, EnclaveControl, FrameDisposition, KillStatus,
 };
-use crate::revocation::{self, Revocation};
+use crate::revocation::{self, Revocation, REVOCATION_POLL};
 use serde::Serialize;
 use serde_json::Value;
-
-/// How often the host re-reads the revocation record to notice an out-of-band
-/// host-key revocation while connected (the startup check covers revocations
-/// that happened while no host was running).
-const REVOCATION_POLL: Duration = Duration::from_secs(1);
 
 /// Serialize a host-handled control frame (enclave or admin) and write it to
 /// Chrome via the shared stdout writer. `nm_write_frame` flushes per frame, so
@@ -411,6 +406,9 @@ fn spawn_revocation_watch(
             }
         };
         loop {
+            // Re-read every `revocation::REVOCATION_POLL` to notice an
+            // out-of-band host-key revocation while connected (the startup
+            // check covers revocations from when no host was running).
             thread::sleep(REVOCATION_POLL);
             match Revocation::current() {
                 Ok(rev) => {

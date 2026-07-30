@@ -7,7 +7,6 @@
 // confirmation, and masking policy run in dispatch.ts around this backend.
 
 import { ClickProbeSchema, unreachable } from "@chromium-bridge/shared";
-import type { Browser } from "wxt/browser";
 import type { ClickProbe, PageApi } from "../../dom/page-api";
 import { createPageApi, REF_ATTR } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
@@ -16,6 +15,7 @@ import { cdpRegistry } from "../cdp/registry";
 import { type CdpSession, type EvaluateResponse, isDebuggable } from "../cdp/session";
 import type { PageOpGuard } from "../confirm/gate";
 import type { PageBackend } from "../page-backend";
+import type { ResolvedTab } from "../tabs";
 
 // `(createPageApi)(REF_ATTR).method(...args)` as a MAIN-world expression.
 // The factory is self-contained (enforced by test), so its source evaluates
@@ -54,7 +54,7 @@ export function probeClickExpression(args: { ref?: string; selector?: string }):
 }
 
 export class CdpBackend implements PageBackend {
-  async probeClick(args: OpArgs, tab: Browser.tabs.Tab): Promise<ClickProbe> {
+  async probeClick(args: OpArgs, tab: ResolvedTab): Promise<ClickProbe> {
     // The probe descriptor feeds the risk decision, the confirmation text,
     // and the click binding, so parse it at this receive boundary rather
     // than casting the MAIN-world eval result straight into authorization
@@ -70,17 +70,16 @@ export class CdpBackend implements PageBackend {
     return probe.data;
   }
 
-  private async session(tab: Browser.tabs.Tab): Promise<CdpSession> {
+  private async session(tab: ResolvedTab): Promise<CdpSession> {
     if (!isDebuggable(tab.url)) {
       throw new Error(
         `CDP mode cannot control this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
       );
     }
-    if (tab.id == null) throw new Error("target tab has no id");
     return await cdpRegistry.get(tab.id);
   }
 
-  async run(op: PageOp, args: OpArgs, tab: Browser.tabs.Tab, guard: PageOpGuard): Promise<unknown> {
+  async run(op: PageOp, args: OpArgs, tab: ResolvedTab, guard: PageOpGuard): Promise<unknown> {
     const session = await this.session(tab);
     const expr = (method: keyof PageApi, callArgs: readonly unknown[]) =>
       pageApiExpression(method, callArgs, guard.expectOrigin);

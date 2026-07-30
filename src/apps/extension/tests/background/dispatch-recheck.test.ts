@@ -4,9 +4,9 @@
 // object is what the backend acts on.
 
 import { beforeEach, describe, expect, test } from "vitest";
-import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
 import { recheckTab } from "@/lib/background/dispatch";
+import type { ResolvedTab } from "@/lib/background/tabs";
 
 beforeEach(() => {
   fakeBrowser.reset();
@@ -16,16 +16,16 @@ describe("recheckTab", () => {
   test("fails closed when the tab moved to another origin", async () => {
     const tab = (await fakeBrowser.tabs.create({
       url: "https://bank.example/home",
-    })) as Browser.tabs.Tab;
-    await fakeBrowser.tabs.update(tab.id!, { url: "https://evil.example/steal" });
+    })) as ResolvedTab;
+    await fakeBrowser.tabs.update(tab.id, { url: "https://evil.example/steal" });
     await expect(recheckTab(tab)).rejects.toThrow("navigated to a different origin");
   });
 
   test("same-origin navigation passes and returns the fresh tab", async () => {
     const tab = (await fakeBrowser.tabs.create({
       url: "https://bank.example/home",
-    })) as Browser.tabs.Tab;
-    await fakeBrowser.tabs.update(tab.id!, { url: "https://bank.example/transfer" });
+    })) as ResolvedTab;
+    await fakeBrowser.tabs.update(tab.id, { url: "https://bank.example/transfer" });
     const current = await recheckTab(tab);
     expect(current.url).toBe("https://bank.example/transfer");
   });

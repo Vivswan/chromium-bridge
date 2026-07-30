@@ -65,6 +65,9 @@ export function AuditView() {
 
   const lines = page.data?.lines ?? [];
   const resolved = resolvedShownRows(lines);
+  // Derived from the marker lines - the page carries no separate counter that
+  // could disagree with what is actually rendered below.
+  const unrecognized = lines.filter(isUnrecognized).length;
   const ledgerLabel = t("audit.table_label");
   // day headers group by the last SEEN day, skipping unrecognized lines, so
   // a corrupt record in the middle of a day cannot duplicate its header
@@ -112,9 +115,9 @@ export function AuditView() {
           <ErrorNote>{revealError}</ErrorNote>
         </div>
       )}
-      {page.data !== undefined && page.data.unrecognized > 0 && (
+      {page.data !== undefined && unrecognized > 0 && (
         <div className="mb-2.5">
-          <ErrorNote>{t("audit.unrecognized", [String(page.data.unrecognized)])}</ErrorNote>
+          <ErrorNote>{t("audit.unrecognized", [String(unrecognized)])}</ErrorNote>
         </div>
       )}
 

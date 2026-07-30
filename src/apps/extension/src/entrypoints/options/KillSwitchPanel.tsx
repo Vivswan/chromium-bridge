@@ -2,15 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
+// Type-only: the SW's own KillView declaration (lib/background/kill.ts), so
+// this panel cannot re-declare a drifted mirror of it.
+import type { KillView } from "@/lib/background/kill";
 import { send } from "@/lib/messages";
-
-/** The SW's answer to get_kill / set_kill (lib/background/kill.ts KillView). */
-interface KillView {
-  ok: boolean;
-  state?: "alive" | "killed" | "unknown";
-  at?: number;
-  error?: string;
-}
 
 // The ADR-0030 kill-switch panel: one prominent, explicit switch that halts
 // all bridge activity everywhere until it is just as explicitly released.

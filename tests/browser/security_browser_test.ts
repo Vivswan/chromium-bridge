@@ -48,10 +48,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import puppeteer, { type Browser, type Target } from "puppeteer-core";
-import { assertIsolatedBrowserOrSkip, finishSuite } from "./browser-safety";
+import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
-const EXTENSION_DIR = process.env.BB_EXT_DIR || path.join(REPO, "build", "extension", "chrome-mv3");
+// BB_EXT_DIR overrides; the env var name and default path live in
+// browser-safety.ts, shared by every suite.
+const EXTENSION_DIR = extensionDir();
 const HELPER_DIR = path.join(REPO, "tests", "fixtures", "access-level-probe");
 // The guard (assertIsolatedBrowserOrSkip) verifies CHROME_BIN by --version
 // before this is used; it is only ever an isolated Chrome for Testing here.

@@ -16,6 +16,7 @@
 // surface honestly.
 
 import { getSetting } from "../shared/settings";
+import { TOOL_GATES } from "../shared/tool-gates";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
@@ -23,7 +24,9 @@ import { dbgSend, isDebuggable } from "./cdp/session";
 import { resolveTargetTab } from "./tabs";
 
 export async function handleDialog(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
-  if ((await getSetting("handleDialogEnabled")) !== true) {
+  // The gate setting comes from the shared TOOL_GATES map, the same entry the
+  // options grid renders, so enforcement and UI cannot name different settings.
+  if ((await getSetting(TOOL_GATES.page_handle_dialog)) !== true) {
     throw new Error(
       "page_handle_dialog is disabled. Enable it in the extension settings first (it is off by default because a blocked dialog cannot show an in-page confirmation).",
     );
@@ -39,7 +42,7 @@ export async function handleDialog(maybeTabId: number | undefined, args: OpArgs)
       `page_handle_dialog cannot debug this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
     );
   }
-  const tabId = tab.id!;
+  const tabId = tab.id;
 
   return await withCdpAttach(tabId, "page_handle_dialog", async ({ reused }) => {
     // Page.enable is idempotent; needed so the CDP session owns dialog handling.

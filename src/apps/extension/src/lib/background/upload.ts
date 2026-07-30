@@ -15,6 +15,7 @@
 // exactly which local file would leave their disk.
 
 import { getSetting } from "../shared/settings";
+import { TOOL_GATES } from "../shared/tool-gates";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
@@ -30,7 +31,9 @@ interface QuerySelectorResult {
 }
 
 export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
-  if ((await getSetting("fileUploadEnabled")) !== true) {
+  // The gate setting comes from the shared TOOL_GATES map, the same entry the
+  // options grid renders, so enforcement and UI cannot name different settings.
+  if ((await getSetting(TOOL_GATES.page_upload)) !== true) {
     throw new Error(
       "page_upload is disabled. Enable it in the extension settings first (it is off by default because attaching a local file to a page can exfiltrate private files).",
     );
@@ -53,7 +56,7 @@ export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): 
       `page_upload cannot debug this page (URL scheme not allowed): ${(tab.url || "").slice(0, 80)}`,
     );
   }
-  const tabId = tab.id!;
+  const tabId = tab.id;
 
   // Confirm EVERY call, showing the exact path, BEFORE anything attaches.
   // The path is shown UNMASKED on purpose: the user must see exactly which

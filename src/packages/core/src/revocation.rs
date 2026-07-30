@@ -66,6 +66,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ipc;
 
+/// How often long-lived watchers (the native host's revocation watch and the
+/// broker's idle-connection watcher) re-read this module's record to notice
+/// an out-of-band change. One shared value so revocation propagation latency
+/// cannot silently drift apart across enforcement points.
+pub const REVOCATION_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Current on-disk schema version. Unknown versions are rejected (the caller
 /// fails closed) rather than guessed at; `deny_unknown_fields` rejects a newer
 /// shape even if the version were forged backwards.
