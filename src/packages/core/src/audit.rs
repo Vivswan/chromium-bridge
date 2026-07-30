@@ -402,16 +402,38 @@ fn serde_variant_name<T: Serialize>(v: &T) -> String {
 /// (ADR-0030). Everything else is host-side and must not be forgeable from
 /// the browser leg: the extension reports its own user-facing decisions, not
 /// admissions or revocations the host already records itself.
+///
+/// This list is the single source for both sides of the forwarding boundary:
+/// the host's [`extension_kind`] whitelist derives from it, and the contract
+/// emitter (`emit_contract`) carries its wire names into the generated TS
+/// (src/packages/shared/src/audit.gen.ts) that the extension's forwarding
+/// set and audit-ring vocabulary build on.
+pub const EXTENSION_AUDIT_KINDS: &[AuditKind] = &[
+    AuditKind::ConfirmShown,
+    AuditKind::ConfirmAllowed,
+    AuditKind::ConfirmDenied,
+    AuditKind::EnrollApproved,
+    AuditKind::EnrollRejected,
+    AuditKind::EnrollRevoked,
+];
+
+/// The serde wire names (`snake_case`) of [`EXTENSION_AUDIT_KINDS`], in list
+/// order, for the contract emitter.
+pub fn extension_kind_wire_names() -> Vec<String> {
+    EXTENSION_AUDIT_KINDS
+        .iter()
+        .map(serde_variant_name)
+        .collect()
+}
+
+/// Resolve `kind` against [`EXTENSION_AUDIT_KINDS`]. Matching goes through
+/// serde's own wire names, so the whitelist cannot drift from the
+/// `snake_case` renames on [`AuditKind`].
 pub(crate) fn extension_kind(kind: &str) -> Option<AuditKind> {
-    match kind {
-        "confirm_shown" => Some(AuditKind::ConfirmShown),
-        "confirm_allowed" => Some(AuditKind::ConfirmAllowed),
-        "confirm_denied" => Some(AuditKind::ConfirmDenied),
-        "enroll_approved" => Some(AuditKind::EnrollApproved),
-        "enroll_rejected" => Some(AuditKind::EnrollRejected),
-        "enroll_revoked" => Some(AuditKind::EnrollRevoked),
-        _ => None,
-    }
+    EXTENSION_AUDIT_KINDS
+        .iter()
+        .copied()
+        .find(|k| serde_variant_name(k) == kind)
 }
 
 fn now_ms() -> u64 {
@@ -695,13 +717,23 @@ mod tests {
 
     #[test]
     fn extension_kinds_admit_only_extension_decisions() {
+        // The full whitelist, wire name by wire name: extension_kind resolves
+        // each, and the emitted wire-name list (what emit_contract carries
+        // into audit.gen.ts) is exactly this set, in this order.
+        let expected = [
+            ("confirm_shown", AuditKind::ConfirmShown),
+            ("confirm_allowed", AuditKind::ConfirmAllowed),
+            ("confirm_denied", AuditKind::ConfirmDenied),
+            ("enroll_approved", AuditKind::EnrollApproved),
+            ("enroll_rejected", AuditKind::EnrollRejected),
+            ("enroll_revoked", AuditKind::EnrollRevoked),
+        ];
+        for (wire, kind) in expected {
+            assert_eq!(extension_kind(wire), Some(kind), "{wire}");
+        }
         assert_eq!(
-            extension_kind("confirm_shown"),
-            Some(AuditKind::ConfirmShown)
-        );
-        assert_eq!(
-            extension_kind("enroll_revoked"),
-            Some(AuditKind::EnrollRevoked)
+            extension_kind_wire_names(),
+            expected.map(|(wire, _)| wire.to_string())
         );
         // The forgeable-from-the-browser kinds are refused.
         for host_only in [

@@ -22,6 +22,7 @@
 // the enrollment gate.
 
 import { z } from "zod";
+import { AUDIT_FORWARDED_KINDS } from "./audit.gen";
 import {
   ClientEntryWireSchema,
   ClientListResultWireSchema,
@@ -31,6 +32,27 @@ import {
   KillStatusResultWireSchema,
   PresenceErrorWireSchema,
   PresenceProofWireSchema,
+} from "./envelope-wire.gen";
+
+// ---- extension->host writer frames (generated, compile-time only) ------------
+
+// The frames the extension CONSTRUCTS. The enforcing reader is the Rust
+// serde parser (deny_unknown_fields); these generated types give every
+// constructor site compile-time conformance (`satisfies`), so a drifted
+// field or a typo'd tag is a compile error, not a frame the host silently
+// refuses (or forwards to its death) at runtime. Types only - the outbound
+// path gains no runtime validation, so no new parser asymmetries; writer
+// coverage is pinned by scripts/check-envelope-parity.ts.
+export type {
+  AuditEventWire,
+  ClientListWire,
+  ClientRevokeWire,
+  EnclaveChallengeWire,
+  EnclaveRevokeWire,
+  KillEngageWire,
+  KillReleaseWire,
+  KillStatusWire,
+  PresenceChallengeWire,
 } from "./envelope-wire.gen";
 
 export const ENCLAVE_FRAME_TYPES = [
@@ -191,16 +213,14 @@ export type KillMirror = z.infer<typeof KillMirrorSchema>;
 
 // ---- ADR-0030: the extension-side audit ring ---------------------------------
 
-// The audit kinds the extension records locally (and forwards to the host's
-// on-disk trail via the audit_event control frame, which the host accepts
-// only for the extension-owned confirm_*/enroll_* kinds).
+// The audit kinds the extension records locally. The forwarded prefix is the
+// GENERATED host whitelist (audit.gen.ts <- audit.rs EXTENSION_AUDIT_KINDS):
+// those kinds also reach the host's on-disk trail via the audit_event control
+// frame. The rest are local-only - the host audits those events
+// authoritatively when it HANDLES them, so the ring keeps them for the panel
+// and background/audit-log.ts never forwards them.
 export const AUDIT_EVENT_KINDS = [
-  "confirm_shown",
-  "confirm_allowed",
-  "confirm_denied",
-  "enroll_approved",
-  "enroll_rejected",
-  "enroll_revoked",
+  ...AUDIT_FORWARDED_KINDS,
   "client_revoked",
   "kill_engaged",
   "kill_released",

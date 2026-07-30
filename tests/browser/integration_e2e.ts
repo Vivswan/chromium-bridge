@@ -28,6 +28,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// The narrow subpath (not the barrel): the barrel's extensionless
+// re-exports do not resolve under Node ESM, and this file documents Node as
+// a supported runner. protocol.gen.ts is a leaf module with no imports, so
+// Node's type stripping loads it as-is.
+import { MCP_PROTOCOL_VERSION } from "@chromium-bridge/shared/protocol.gen";
 import puppeteer from "puppeteer-core";
 import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
@@ -264,7 +269,7 @@ async function main(): Promise<void> {
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
-      params: { protocolVersion: "2025-06-18", capabilities: {} },
+      params: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {} },
     });
     await recv();
     send({ jsonrpc: "2.0", method: "notifications/initialized" });

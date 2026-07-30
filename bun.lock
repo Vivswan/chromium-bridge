@@ -113,6 +113,7 @@
       "name": "chromium-bridge-tests",
       "version": "0.0.0",
       "dependencies": {
+        "@chromium-bridge/shared": "workspace:*",
         "puppeteer-core": "^25.3.0",
       },
       "devDependencies": {
