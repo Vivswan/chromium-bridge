@@ -475,13 +475,21 @@ impl std::fmt::Display for PairClientError {
 
 /// Pair a trusted client behind the user-presence gate (ADR-0031): the one
 /// entry point every surface uses to GRANT harness capability. Runs the
-/// presence ladder (Touch ID first; `floor` only when hardware is genuinely
+/// presence ladder (Touch ID first; the floor only when hardware is genuinely
 /// unavailable), audits the outcome either way with the rung that decided it,
 /// and only then writes the allowlist. Returns the attesting path so the
 /// surface can tell the user which proof authorized the pairing.
 ///
-/// Surfaces: the CLI passes [`presence::Floor::CliConfirm`]; the desktop app
-/// passes [`presence::Floor::AppConfirm`] after showing its own modal
+/// `floor` is the interactive floor the surface is entitled to, or the
+/// precondition failure that kept the surface from constructing it (the CLI
+/// floor demands the [`presence::TerminalStdin`] witness, so a piped stdin
+/// arrives here as an `Err`). Either way the refusal is decided AFTER the
+/// name check - a malformed request never reaches the presence gate - and
+/// audited exactly like any other presence refusal, so the trail keeps one
+/// producer.
+///
+/// Surfaces: the CLI passes `TerminalStdin::require().map(Floor::CliConfirm)`;
+/// the desktop app passes `Ok(Floor::AppConfirm)` after showing its own modal
 /// confirmation (see the `Floor` docs for the obligation that carries).
 /// Revocation stays friction-free on purpose - removing capability never
 /// needs a human proof (the presence symmetry rule).
@@ -489,7 +497,7 @@ pub fn pair_client_with_presence(
     name: &str,
     anchor: Anchor,
     surface: crate::audit::Surface,
-    floor: presence::Floor,
+    floor: Result<presence::Floor, presence::PresenceError>,
 ) -> Result<presence::PresencePath, PairClientError> {
     use crate::audit::{self, AuditKind, AuditRecord};
     // Validate before prompting: a malformed request must not be able to put
@@ -501,7 +509,7 @@ pub fn pair_client_with_presence(
         "Pair '{name}' as a trusted client of chromium-bridge? A trusted \
          client can drive your browser through this bridge."
     );
-    let auth = match presence::require_presence(&reason, floor) {
+    let auth = match floor.and_then(|floor| presence::require_presence(&reason, floor)) {
         Ok(auth) => auth,
         Err(e) => {
             // Log-after-decide: the refusal has already happened; make the
@@ -516,6 +524,7 @@ pub fn pair_client_with_presence(
             return Err(PairClientError::Presence(e));
         }
     };
+    let auth_path = auth.path();
     let shown = match &anchor {
         Anchor::Hash(h) => format!("hash {h}"),
         Anchor::TeamId(t) => format!("Team ID {t}"),
@@ -529,9 +538,9 @@ pub fn pair_client_with_presence(
                     .surface(surface)
                     .name(name)
                     .outcome("ok")
-                    .detail(&format!("{shown}; auth={}", auth.path().wire_name())),
+                    .detail(&format!("{shown}; auth={}", auth_path.wire_name())),
             );
-            Ok(auth.path())
+            Ok(auth_path)
         }
         Err(e) => {
             audit::record(
@@ -541,7 +550,7 @@ pub fn pair_client_with_presence(
                     .outcome("error")
                     .detail(&format!(
                         "{shown}; auth={}; write refused: {e}",
-                        auth.path().wire_name()
+                        auth_path.wire_name()
                     )),
             );
             Err(PairClientError::Io(e))
@@ -578,7 +587,10 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
         &parsed.name,
         anchor,
         crate::audit::Surface::Cli,
-        presence::Floor::CliConfirm,
+        // The terminal witness comes first, by construction: a piped stdin
+        // arrives at the gate as the precondition failure, refused (and
+        // audited) after the name check, promptless.
+        presence::TerminalStdin::require().map(presence::Floor::CliConfirm),
     ) {
         Ok(path) => {
             println!(
@@ -1008,16 +1020,18 @@ mod tests {
 
     #[test]
     fn a_malformed_pair_request_is_refused_before_the_presence_prompt() {
-        // Order matters: the name check runs BEFORE require_presence, so a
+        // Order matters: the name check runs BEFORE the presence gate, so a
         // bad request can never raise a hardware sheet (and, under this test
         // harness, never reaches the audit sink either - the early return is
-        // the whole point). See presence's module docs for why tests must
-        // not reach the hardware rung.
+        // the whole point). The floor arrives as the CLI's precondition
+        // failure here; if the ordering ever broke, the result would be the
+        // Presence error instead of InvalidName. See presence's module docs
+        // for why tests must not reach the hardware rung.
         let err = pair_client_with_presence(
             "bad name!",
             Anchor::Hash(hd("abc")),
             crate::audit::Surface::Cli,
-            presence::Floor::CliConfirm,
+            Err(presence::PresenceError::NotInteractive),
         )
         .unwrap_err();
         assert!(matches!(err, PairClientError::InvalidName));

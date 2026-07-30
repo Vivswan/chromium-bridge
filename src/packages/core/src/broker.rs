@@ -278,6 +278,59 @@ struct EpochGuard {
     backstopped: bool,
 }
 
+/// One admitted peer of a serve loop, bundling the resources its role
+/// entitles it to. The role is a single admission-time choice: a relay is
+/// rate-limited AND carries a backstopped guard (the watcher sweeps it), the
+/// broker's own stdio harness is unlimited AND carries an un-backstopped
+/// guard (it re-decides every request). [`serve_jsonrpc`] takes one of these
+/// instead of independent limiter/guard/label parameters, so a serve loop
+/// with a relay's limiter but the own harness's guard - or any other
+/// crossing - is unrepresentable rather than kept coherent by its two call
+/// sites.
+enum ServedPeer {
+    /// The broker's own stdio harness.
+    OwnHarness { guard: EpochGuard },
+    /// An attached relay client.
+    Relay {
+        guard: EpochGuard,
+        limiter: RateLimiter,
+    },
+}
+
+impl ServedPeer {
+    /// The broker's own stdio harness: un-backstopped guard, no rate limit.
+    fn own_harness(own: OwnHarness) -> ServedPeer {
+        ServedPeer::OwnHarness {
+            guard: EpochGuard {
+                identity: own.identity,
+                seen_epoch: own.epoch,
+                backstopped: false,
+            },
+        }
+    }
+
+    /// An admitted relay: backstopped guard (the watcher sweeps its
+    /// registry slot) plus a fresh per-connection rate limiter.
+    fn relay(identity: Option<ClientIdentity>, admitted_epoch: u64) -> ServedPeer {
+        ServedPeer::Relay {
+            guard: EpochGuard {
+                identity,
+                seen_epoch: admitted_epoch,
+                backstopped: true,
+            },
+            limiter: RateLimiter::new(),
+        }
+    }
+
+    /// The role's name for logs and the guard's refusal text.
+    fn who(&self) -> &'static str {
+        match self {
+            ServedPeer::OwnHarness { .. } => "the broker's own harness",
+            ServedPeer::Relay { .. } => "relay harness",
+        }
+    }
+}
+
 impl EpochGuard {
     /// Enforce the epoch before serving one request. Reads the revocation
     /// record and (for a backstopped connection, only when the epoch moved)
@@ -607,8 +660,10 @@ enum Admitted<'a> {
     Client {
         reader: BufReader<BridgeStream>,
         writer: BufWriter<BridgeStream>,
-        /// Per-request revocation-epoch guard (ADR-0025).
-        guard: EpochGuard,
+        /// The relay role's serve-loop resources: per-request revocation
+        /// epoch guard (ADR-0025) plus its rate limiter, bundled by
+        /// [`ServedPeer::relay`] so the role cannot be re-assembled wrong.
+        peer: ServedPeer,
         /// This connection's registry + ref-count occupancy (RAII).
         admission: RelayAdmission<'a>,
     },
@@ -682,26 +737,14 @@ pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: O
     // Its epoch guard covers the broker's own harness: if it is revoked, the
     // serve loop ends (its harness sees EOF and a respawned instance is
     // refused at admission) while attached relays keep being served until
-    // they detach.
+    // they detach. The role - un-backstopped guard, no rate limit - is one
+    // constructor call, so it cannot be assembled crossed.
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
-    let mut guard = EpochGuard {
-        identity: own.identity,
-        seen_epoch: own.epoch,
-        // The own harness is not in the sweep registry, so it re-decides on
-        // every request (no watcher backstop covers it).
-        backstopped: false,
-    };
-    let _ = serve_jsonrpc(
-        &broker.session,
-        &mut reader,
-        &mut writer,
-        None,
-        &mut guard,
-        "the broker's own harness",
-    );
+    let mut peer = ServedPeer::own_harness(own);
+    let _ = serve_jsonrpc(&broker.session, &mut reader, &mut writer, &mut peer);
 
     // Own harness gone (stdin EOF). Release our slot, then wait until every
     // relay has also detached before tearing down the socket/lock. If relays
@@ -751,18 +794,11 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
                         Admitted::Client {
                             mut reader,
                             mut writer,
-                            mut guard,
+                            mut peer,
                             admission,
                         } => {
-                            let mut limiter = RateLimiter::new();
-                            let _ = serve_jsonrpc(
-                                &broker.session,
-                                &mut reader,
-                                &mut writer,
-                                Some(&mut limiter),
-                                &mut guard,
-                                "relay harness",
-                            );
+                            let _ =
+                                serve_jsonrpc(&broker.session, &mut reader, &mut writer, &mut peer);
                             // Explicit, not left to scope end: the admission
                             // guard deregisters BEFORE it decrements (its
                             // field order), and dropping it here keeps that
@@ -1097,13 +1133,9 @@ fn admit_client<'a>(
     Admitted::Client {
         reader,
         writer,
-        guard: EpochGuard {
-            identity,
-            seen_epoch: rev.epoch,
-            // Relays are in the sweep registry, so their guard may take the
-            // epoch fast path; the watcher covers a stuck epoch.
-            backstopped: true,
-        },
+        // The relay role in one constructor: backstopped guard (the watcher
+        // sweeps this connection's registry slot) plus its rate limiter.
+        peer: ServedPeer::relay(identity, rev.epoch),
         admission,
     }
 }
@@ -1118,20 +1150,20 @@ fn clear_read_timeout(writer: &BufWriter<BridgeStream>) {
 /// Serve a JSON-RPC stream (this instance's own stdin, or a relay's socket)
 /// against the shared session: read a message, dispatch it, write the response.
 /// Mirrors the pre-Phase-4 stdin loop (a parse error yields a `-32700` and the
-/// loop continues; EOF ends it). When a `limiter` is present (relay), a request
-/// over the per-relay rate limit drops the connection (fail closed). Before
-/// EVERY dispatched request, `guard` re-checks the revocation epoch
-/// (ADR-0025): a revoked harness -- or an unreadable revocation record or
-/// allowlist -- ends the loop, fail closed, so no request is ever served on
+/// loop continues; EOF ends it). `peer` bundles the role's resources
+/// ([`ServedPeer`]): a relay is rate-limited - a request over the per-relay
+/// limit drops the connection (fail closed) - and the own harness is not.
+/// Before EVERY dispatched request, the peer's guard re-checks the revocation
+/// epoch (ADR-0025): a revoked harness - or an unreadable revocation record or
+/// allowlist - ends the loop, fail closed, so no request is ever served on
 /// stale trust.
 fn serve_jsonrpc<R: BufRead, W: Write>(
     session: &Session,
     reader: &mut R,
     writer: &mut W,
-    mut limiter: Option<&mut RateLimiter>,
-    guard: &mut EpochGuard,
-    who: &str,
+    peer: &mut ServedPeer,
 ) -> io::Result<()> {
+    let who = peer.who();
     loop {
         let msg = match mcp_read(reader) {
             Ok(Some(m)) => m,
@@ -1149,17 +1181,24 @@ fn serve_jsonrpc<R: BufRead, W: Write>(
                 continue;
             }
         };
-        if let Some(l) = limiter.as_deref_mut() {
-            if !l.allow() {
-                log_warn!(
-                    "broker",
-                    "relay exceeded its request rate limit; dropping it"
-                );
-                return Err(io::Error::other("relay rate limit exceeded"));
+        // The rate limit is the relay role's resource, carried on its
+        // variant; the own harness structurally has none to consult. Checked
+        // before the (costlier) revocation re-decide.
+        let guard = match peer {
+            ServedPeer::OwnHarness { guard } => guard,
+            ServedPeer::Relay { guard, limiter } => {
+                if !limiter.allow() {
+                    log_warn!(
+                        "broker",
+                        "relay exceeded its request rate limit; dropping it"
+                    );
+                    return Err(io::Error::other("relay rate limit exceeded"));
+                }
+                guard
             }
-        }
-        // Revocation-epoch enforcement, after the (cheaper) rate limit and
-        // before any dispatch. Fail closed: drop the connection.
+        };
+        // Revocation-epoch enforcement, before any dispatch. Fail closed:
+        // drop the connection.
         if let Err(e) = guard.recheck(who) {
             log_error!("broker", "dropping {who}: {e}");
             return Err(e);
@@ -1475,6 +1514,43 @@ mod tests {
         g.recheck_with("t", Ok(rev(1, false)), |_| Ok(None))
             .unwrap();
         assert_eq!(g.seen_epoch, 1);
+    }
+
+    #[test]
+    fn served_peer_roles_bundle_exactly_their_resources() {
+        // The role is one admission-time choice (the guard for the old
+        // three-independent-parameters shape): a relay carries a BACKSTOPPED
+        // guard plus a rate limiter, the own harness an un-backstopped guard
+        // and, structurally, no limiter at all.
+        match ServedPeer::relay(Some(ident(H_SELF)), 7) {
+            ServedPeer::Relay { guard, .. } => {
+                assert!(guard.backstopped, "a relay's guard must be backstopped");
+                assert_eq!(guard.seen_epoch, 7);
+            }
+            ServedPeer::OwnHarness { .. } => panic!("relay constructed as the own harness"),
+        }
+        match ServedPeer::own_harness(OwnHarness {
+            identity: Some(ident(H_SELF)),
+            epoch: 3,
+        }) {
+            ServedPeer::OwnHarness { guard } => {
+                assert!(
+                    !guard.backstopped,
+                    "the own harness has no watcher backstop and must re-decide every request"
+                );
+                assert_eq!(guard.seen_epoch, 3);
+            }
+            ServedPeer::Relay { .. } => panic!("own harness constructed as a relay"),
+        }
+        assert_eq!(ServedPeer::relay(None, 0).who(), "relay harness");
+        assert_eq!(
+            ServedPeer::own_harness(OwnHarness {
+                identity: None,
+                epoch: 0
+            })
+            .who(),
+            "the broker's own harness"
+        );
     }
 
     #[cfg(unix)]

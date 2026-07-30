@@ -37,7 +37,7 @@ use crate::enclave::{EnrollmentKey, HostConfig};
 use crate::ipc;
 use crate::protocol::{
     bridge_read, bridge_write, classify_nm_frame, host_control_type, nm_read_frame, nm_write_frame,
-    AdminControl, AdminKind, AuditEventFields, EnclaveControl, FrameDisposition,
+    AdminControl, AdminKind, AuditEventFields, EnclaveControl, FrameDisposition, KillStatus,
 };
 use crate::revocation::{self, Revocation};
 use serde::Serialize;
@@ -182,23 +182,19 @@ fn admin_client_revoke(name: &str) -> AdminControl {
 
 // ---- ADR-0030: kill-switch control frames and the audit-event sink ----------
 
-/// The current kill state as a `kill_status_result` frame. `ok: false`
-/// carries no `killed` claim at all: the extension must treat an unreadable
-/// state as unknown and fail closed, and handing it a boolean would invite
-/// trusting it.
+/// The current kill state as a `kill_status_result` frame, via the typed
+/// [`KillStatus`]: unreadable state carries no `killed` claim at all - the
+/// extension must treat it as unknown and fail closed, and handing it a
+/// boolean would invite trusting it. The typed state makes the mixed shapes
+/// unconstructible; `into_frame` owns the wire flattening.
 fn kill_status_reply() -> AdminControl {
-    match crate::kill::is_killed() {
-        Ok(killed) => AdminControl::KillStatusResult {
-            ok: true,
-            killed: Some(killed),
-            error: None,
+    let status = match crate::kill::is_killed() {
+        Ok(killed) => KillStatus::Read { killed },
+        Err(e) => KillStatus::Unreadable {
+            error: format!("kill state unreadable: {e}"),
         },
-        Err(e) => AdminControl::KillStatusResult {
-            ok: false,
-            killed: None,
-            error: Some(format!("kill state unreadable: {e}")),
-        },
-    }
+    };
+    status.into_frame()
 }
 
 /// Handle `kill_engage` / `kill_release` from the extension (ADR-0030). The
@@ -230,39 +226,33 @@ fn handle_kill_transition(engage: bool) -> AdminControl {
                     "native-host",
                     "extension-requested release refused at the presence gate: {e}"
                 );
-                return AdminControl::KillStatusResult {
-                    ok: false,
-                    killed: None,
-                    error: Some(format!("release refused: {e}")),
-                };
+                return KillStatus::Unreadable {
+                    error: format!("release refused: {e}"),
+                }
+                .into_frame();
             }
         }
     };
-    match res {
+    let status = match res {
         Ok(epoch) => {
             log_info!(
                 "native-host",
                 "extension {} the kill switch (epoch {epoch})",
                 if engage { "ENGAGED" } else { "released" }
             );
-            AdminControl::KillStatusResult {
-                ok: true,
-                killed: Some(engage),
-                error: None,
-            }
+            KillStatus::Read { killed: engage }
         }
         Err(e) => {
             log_warn!(
                 "native-host",
                 "extension-requested kill transition failed: {e}"
             );
-            AdminControl::KillStatusResult {
-                ok: false,
-                killed: None,
-                error: Some(e.to_string()),
+            KillStatus::Unreadable {
+                error: e.to_string(),
             }
         }
-    }
+    };
+    status.into_frame()
 }
 
 /// Record one extension-side decision in the audit trail (ADR-0030). The
@@ -306,11 +296,10 @@ fn malformed_admin_reply(kind: AdminKind) -> AdminControl {
             error: Some("malformed client_revoke frame".into()),
         },
         AdminKind::KillStatus | AdminKind::KillEngage | AdminKind::KillRelease => {
-            AdminControl::KillStatusResult {
-                ok: false,
-                killed: None,
-                error: Some(format!("malformed {} frame", kind.wire_tag())),
+            KillStatus::Unreadable {
+                error: format!("malformed {} frame", kind.wire_tag()),
             }
+            .into_frame()
         }
     }
 }
