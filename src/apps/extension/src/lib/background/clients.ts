@@ -32,17 +32,13 @@ export type { TrustedClient };
  * see ADR-0021/0025). */
 const ADMIN_REQUEST_TIMEOUT_MS = 10_000;
 
-export interface ClientListView {
-  ok: boolean;
-  enrolled?: boolean;
-  clients?: TrustedClient[];
-  error?: string;
-}
+/** Success carries the list, failure carries the reason - never both, never
+ * neither. Mirrored (hand-written, UI side) in lib/messages.ts. */
+export type ClientListView =
+  | { ok: true; enrolled: boolean; clients: TrustedClient[] }
+  | { ok: false; error: string };
 
-export interface RevokeClientView {
-  ok: boolean;
-  error?: string;
-}
+export type RevokeClientView = { ok: true } | { ok: false; error: string };
 
 /** True for the two ADR-0025 admin result frame tags. */
 export function isAdminFrame(msg: unknown): msg is AdminInboundFrame {

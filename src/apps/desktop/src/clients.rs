@@ -3,7 +3,7 @@
 //! exactly like `list-clients`; writes go through the core entry points,
 //! which audit with `Surface::Core` so the trail names which surface acted.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use chromium_bridge_core::allowlist::{self, Allowlist, Anchor};
 use chromium_bridge_core::audit::Surface;
@@ -12,10 +12,13 @@ use chromium_bridge_core::revocation::Revocation;
 
 use crate::presence_seam;
 
-/// The anchor kind on the wire: the same `hash` / `team_id` names
-/// `AnchorSpec` parses back in [`pair`]. An enum rather than a string so the
-/// generated TS carries the literal union straight from the serde attribute.
-#[derive(Serialize, Clone, Copy)]
+/// The anchor kind on the wire, in both directions: [`list`] serializes it
+/// out, and the `client_pair` command deserializes it back in [`pair`]. An
+/// enum rather than a string so the generated TS carries the literal union
+/// straight from the serde attribute, and an unknown kind from the webview is
+/// refused by serde before `pair` runs. `AnchorSpec::ThisParent` has no
+/// variant here on purpose: it stays unreachable from the webview.
+#[derive(Serialize, Deserialize, Clone, Copy)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AnchorKind {
@@ -104,11 +107,14 @@ pub fn revoke(name: &str) -> Result<bool, String> {
 /// presence path that authorized the pairing, for the UI to show. The anchor
 /// is validated by the same core path as the CLI's flags, also before any
 /// prompt.
-pub fn pair(name: &str, anchor_kind: &str, anchor_value: &str) -> Result<&'static str, String> {
+pub fn pair(
+    name: &str,
+    anchor_kind: AnchorKind,
+    anchor_value: &str,
+) -> Result<&'static str, String> {
     let spec = match anchor_kind {
-        "hash" => AnchorSpec::Hash(anchor_value.to_string()),
-        "team_id" => AnchorSpec::TeamId(anchor_value.to_string()),
-        other => return Err(format!("unknown anchor kind {other:?}")),
+        AnchorKind::Hash => AnchorSpec::Hash(anchor_value.to_string()),
+        AnchorKind::TeamId => AnchorSpec::TeamId(anchor_value.to_string()),
     };
     let anchor = allowlist::resolve_anchor(&spec)?;
     // The app floor has no precondition to fail (the confirm dialog is the

@@ -5,6 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AnchorKind,
   AuditLine,
   AuditPage,
   BridgeStatus,
@@ -23,8 +24,14 @@ import type {
 // imports from.
 export type * from "./commands.gen";
 
-export function isUnrecognized(line: AuditLine): line is { unrecognized: boolean } {
+export function isUnrecognized(line: AuditLine): line is { unrecognized: true } {
   return "unrecognized" in line;
+}
+
+/** Healthy is derived, never carried beside the code: a registration is
+ * healthy exactly when its state code is "ok". */
+export function isHealthy(row: BrowserRow): boolean {
+  return row.code === "ok";
 }
 
 export const api = {
@@ -50,7 +57,7 @@ export const api = {
   clientRevoke: (name: string) => invoke<boolean>("client_revoke", { name }),
   /** Presence-gated: same dialog-first obligation as killRelease. Returns
    * the presence path that authorized the pairing. */
-  clientPair: (name: string, anchorKind: string, anchorValue: string) =>
+  clientPair: (name: string, anchorKind: AnchorKind, anchorValue: string) =>
     invoke<string>("client_pair", { name, anchorKind, anchorValue }),
   cliToolStatus: () => invoke<CliToolStatus>("cli_tool_status"),
   cliToolInstall: () => invoke<CliToolStatus>("cli_tool_install"),

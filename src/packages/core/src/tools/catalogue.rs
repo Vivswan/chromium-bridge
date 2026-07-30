@@ -638,6 +638,24 @@ mod tests {
     }
 
     #[test]
+    fn wait_for_advertises_the_applied_timeout_default() {
+        // Descriptions are &'static str, so the catalogue cannot interpolate
+        // the const the builder applies; this pin makes the served contract
+        // (the timeoutMs description every MCP client sees) fail loud when it
+        // drifts from handlers::DEFAULT_WAIT_TIMEOUT_MS.
+        let tools = all();
+        let tool = tools.iter().find(|t| t.name == "page_wait_for").unwrap();
+        let desc = tool.input_schema["properties"]["timeoutMs"]["description"]
+            .as_str()
+            .unwrap();
+        let advertised = format!("default {}", crate::tools::DEFAULT_WAIT_TIMEOUT_MS);
+        assert!(
+            desc.contains(&advertised),
+            "timeoutMs description {desc:?} must advertise {advertised:?}"
+        );
+    }
+
+    #[test]
     fn every_tool_has_object_schema() {
         for t in all() {
             assert_eq!(t.input_schema["type"], "object", "tool {}", t.name);

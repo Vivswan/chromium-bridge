@@ -6,13 +6,13 @@
 // is data, not a transport failure).
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
 import { ContentScriptBackend } from "@/lib/background/backends/content-script";
 import type { PageOpGuard } from "@/lib/background/confirm/gate";
+import type { ResolvedTab } from "@/lib/background/tabs";
 
-const TAB = { id: 7, url: "https://example.com/x", active: true } as Browser.tabs.Tab;
+const TAB = { id: 7, url: "https://example.com/x", active: true } as ResolvedTab;
 const GUARD: PageOpGuard = { expectOrigin: "https://example.com" };
 const PROBE = { tagName: "BUTTON", role: "button", type: "submit", hasHref: false, name: "Pay" };
 

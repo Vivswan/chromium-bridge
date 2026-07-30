@@ -1,10 +1,12 @@
-// Which action a browser row offers, from BrowserRow's machine fields
-// (RegState::code() on the Rust side). Kept out of the view so the
-// truth table is unit-testable.
+// Which action a browser row offers, from BrowserRow's machine fields (the
+// desktop crate's RegCode enum, carried into commands.gen.ts as a closed
+// union). Kept out of the view so the truth table is unit-testable.
+
+import type { RegCode } from "./commands.gen";
 
 export type BrowserAction = "connect" | "repair" | "none";
 
-export function browserAction(row: { detected: boolean; code: string }): BrowserAction {
+export function browserAction(row: { detected: boolean; code: RegCode }): BrowserAction {
   // A browser that is not installed for this user cannot be registered.
   if (!row.detected) return "none";
   switch (row.code) {
@@ -18,9 +20,12 @@ export function browserAction(row: { detected: boolean; code: string }): Browser
     case "foreign":
     case "unreadable":
       return "repair";
-    // "ok" (connected, nothing to repair) and any state code this UI does
-    // not know yet: offer nothing.
-    default:
+    // Connected, nothing to repair: offer nothing.
+    case "ok":
       return "none";
+    default:
+      // Exhaustiveness backstop: a new RegCode fails to compile here
+      // instead of silently offering nothing.
+      return row.code satisfies never;
   }
 }

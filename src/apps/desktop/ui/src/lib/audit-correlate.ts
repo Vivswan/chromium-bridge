@@ -9,7 +9,7 @@ import type { AuditLine, AuditRecord } from "./commands.gen";
 /** An audit line that failed strict parsing on the Rust side (order preserved,
  * shape replaced by this marker). Duplicated from the tauri facade so this
  * module stays free of the Tauri runtime import. */
-function isUnrecognized(line: AuditLine): line is { unrecognized: boolean } {
+function isUnrecognized(line: AuditLine): line is { unrecognized: true } {
   return "unrecognized" in line;
 }
 

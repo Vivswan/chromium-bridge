@@ -5,7 +5,7 @@ import { ChipMono, Consequence, Dot, ErrorNote, ViewShell } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { useAsync } from "@/hooks/useAsync";
 import { useI18n } from "@/hooks/useI18n";
-import { api, errorText } from "@/lib/tauri";
+import { api, errorText, isHealthy } from "@/lib/tauri";
 import { useAppStore } from "@/store";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -66,7 +66,7 @@ export function SetupView() {
     }
   };
 
-  const browserDone = (browsers.data ?? []).some((b) => b.healthy);
+  const browserDone = (browsers.data ?? []).some(isHealthy);
   const cli = cliTool.data;
   const mcpParts: { text: string; k?: boolean }[] | undefined =
     snippet.data === undefined

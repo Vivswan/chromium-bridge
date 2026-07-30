@@ -13,22 +13,22 @@
 // in dispatch.ts + confirm/gate.ts + egress.ts; a backend only probes and
 // acts.
 
-import type { Browser } from "wxt/browser";
 import type { ClickProbe } from "../dom/page-api";
 import type { PageOp } from "../shared/page-ops";
 import type { OpArgs } from "../shared/types";
 import { CdpBackend } from "./backends/cdp";
 import { ContentScriptBackend } from "./backends/content-script";
 import type { PageOpGuard } from "./confirm/gate";
+import type { ResolvedTab } from "./tabs";
 
 export interface PageBackend {
   /** DOM-read the click target so confirm/gate.ts can classify its risk. */
-  probeClick(args: OpArgs, tab: Browser.tabs.Tab): Promise<ClickProbe>;
+  probeClick(args: OpArgs, tab: ResolvedTab): Promise<ClickProbe>;
   /** Act. `guard` carries what the preflight authorized, bound to the origin
    * the allowlist check and any confirmation ran against (gate.bindOrigin is
    * the only producer, so an unbound act cannot be constructed); the page
    * side enforces it atomically with the act. */
-  run(op: PageOp, args: OpArgs, tab: Browser.tabs.Tab, guard: PageOpGuard): Promise<unknown>;
+  run(op: PageOp, args: OpArgs, tab: ResolvedTab, guard: PageOpGuard): Promise<unknown>;
 }
 
 const contentScriptBackend = new ContentScriptBackend();

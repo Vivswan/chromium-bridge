@@ -26,6 +26,7 @@ use crate::session::Session;
 
 pub use capabilities::{Capability, CAPABILITIES};
 pub use catalogue::{all, Confirmation, Permission, Risk, Scope, Tool};
+pub use handlers::DEFAULT_WAIT_TIMEOUT_MS;
 
 use handlers::{
     build_console_get, build_cookie_get, build_empty, build_page_click, build_page_eval,
@@ -342,7 +343,7 @@ mod tests {
         // page_wait_for defaults timeoutMs and passes selector through.
         assert_eq!(
             build("page_wait_for", json!({ "selector": "#x" })),
-            json!({ "selector": "#x", "timeoutMs": 30000 })
+            json!({ "selector": "#x", "timeoutMs": DEFAULT_WAIT_TIMEOUT_MS })
         );
         // tab_focus forwards the (typed, required) tabId.
         assert_eq!(

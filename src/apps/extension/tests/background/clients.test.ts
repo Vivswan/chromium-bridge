@@ -38,6 +38,12 @@ const listResult = {
   ],
 };
 
+/** Narrow a discriminated view to its failure arm (throws if it succeeded). */
+function failed(view: { ok: true } | { ok: false; error: string }): { ok: false; error: string } {
+  if (view.ok) throw new Error("expected a failure view");
+  return view;
+}
+
 describe("frame classification", () => {
   test("recognizes exactly the two admin result tags", () => {
     expect(isAdminFrame(listResult)).toBe(true);
@@ -58,9 +64,10 @@ describe("client list", () => {
     handleAdminFrame(listResult);
     const view = await p;
     expect(view.ok).toBe(true);
+    if (!view.ok) throw new Error("unreachable");
     expect(view.enrolled).toBe(true);
-    expect(view.clients?.[0]?.name).toBe("claude-code");
-    expect(view.clients?.[0]?.anchor.kind).toBe("team_id");
+    expect(view.clients[0]?.name).toBe("claude-code");
+    expect(view.clients[0]?.anchor.kind).toBe("team_id");
   });
 
   test("surfaces a host-side failure (tamper case) as ok:false", async () => {
@@ -73,8 +80,7 @@ describe("client list", () => {
       error: "clients.json is missing but this machine has enrolled trusted clients",
     });
     const view = await p;
-    expect(view.ok).toBe(false);
-    expect(view.error).toContain("missing");
+    expect(failed(view).error).toContain("missing");
   });
 
   test("fails closed without a port and on a malformed reply", async () => {
@@ -89,8 +95,7 @@ describe("client list", () => {
     // Missing the required booleans/array: refused, never guessed at.
     handleAdminFrame({ type: "client_list_result" } as never);
     const view = await p;
-    expect(view.ok).toBe(false);
-    expect(view.error).toContain("malformed");
+    expect(failed(view).error).toContain("malformed");
   });
 
   test("an unanswered request times out to a refusal (never hangs)", async () => {
@@ -98,16 +103,14 @@ describe("client list", () => {
     const p = requestClientList();
     vi.advanceTimersByTime(10_001);
     const view = await p;
-    expect(view.ok).toBe(false);
-    expect(view.error).toContain("timed out");
+    expect(failed(view).error).toContain("timed out");
   });
 
   test("port disconnect resolves the pending request as a refusal", async () => {
     const p = requestClientList();
     detachPort();
     const view = await p;
-    expect(view.ok).toBe(false);
-    expect(view.error).toContain("disconnected");
+    expect(failed(view).error).toContain("disconnected");
   });
 
   test("an unsolicited result is dropped without touching state", () => {
@@ -132,15 +135,13 @@ describe("client revoke", () => {
       error: "no trusted client named 'ghost'",
     });
     const r2 = await p2;
-    expect(r2.ok).toBe(false);
-    expect(r2.error).toContain("ghost");
+    expect(failed(r2).error).toContain("ghost");
   });
 
   test("only one revoke may be outstanding", async () => {
     const p = revokeTrustedClient("a");
     const second = await revokeTrustedClient("b");
-    expect(second.ok).toBe(false);
-    expect(second.error).toContain("in flight");
+    expect(failed(second).error).toContain("in flight");
     handleAdminFrame({ type: "client_revoke_result", ok: true });
     expect((await p).ok).toBe(true);
   });

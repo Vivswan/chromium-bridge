@@ -18,19 +18,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Subprocess, spawn } from "bun";
-import { assertIsolatedBrowserOrSkip, finishSuite } from "./browser-safety";
+import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
 // The built bundle (esbuild strips TS types from src/content.ts). Run
-// `bun run --cwd src/apps/extension build` first; `run_all.ts` / `moon run test-browser` do this.
-const CONTENT_JS = path.join(
-  REPO,
-  "build",
-  "extension",
-  "chrome-mv3",
-  "content-scripts",
-  "content.js",
-);
+// `bun run --cwd src/apps/extension build` first; `run_all.ts` / `moon run
+// test-browser` do this. BB_EXT_DIR overrides the bundle dir, same as the
+// --load-extension suites (the one home is browser-safety.ts).
+const CONTENT_JS = path.join(extensionDir(), "content-scripts", "content.js");
 const FIXTURES_DIR = path.join(REPO, "tests", "fixtures");
 // The guard (assertIsolatedBrowserOrSkip, called in main) verifies CHROME_BIN
 // by --version before use; it is only ever an isolated Chrome for Testing here.

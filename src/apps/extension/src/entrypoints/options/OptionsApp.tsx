@@ -7,28 +7,22 @@ import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/hooks/useI18n";
 import { useSettings } from "@/hooks/useSettings";
 import type { MessageKey, UiLanguage } from "@/lib/i18n";
+import { type GateSetting, toolGate } from "@/lib/shared/tool-gates";
 import { AuditPanel } from "./AuditPanel";
 import { EnrollmentPanel } from "./EnrollmentPanel";
 import { KillSwitchPanel } from "./KillSwitchPanel";
 import { SiteList } from "./SiteList";
 import { TrustedClientsPanel } from "./TrustedClientsPanel";
 
-// Master gates elsewhere on the page that veto a tool regardless of its own
-// switch (the background refuses these ops while the gate is off). The tools
-// grid must show the EFFECTIVE capability, never a green raw toggle behind a
-// closed gate.
-const TOOL_GATES: Partial<
-  Record<
-    string,
-    {
-      setting: "pageEvalEnabled" | "fileUploadEnabled" | "handleDialogEnabled";
-      titleKey: MessageKey;
-    }
-  >
-> = {
-  page_eval: { setting: "pageEvalEnabled", titleKey: "settings.page_eval_title" },
-  page_upload: { setting: "fileUploadEnabled", titleKey: "settings.file_upload_title" },
-  page_handle_dialog: { setting: "handleDialogEnabled", titleKey: "settings.handle_dialog_title" },
+// The tool -> master-gate map itself is shared with the background
+// enforcement (lib/shared/tool-gates.ts), so the grid can only ever consult
+// the same setting the background refuses on. This map adds the UI-only
+// half: the i18n title per gate setting, Record-typed over the full gate
+// union so a new TOOL_GATES entry cannot compile without a label here.
+const GATE_TITLES: Record<GateSetting, MessageKey> = {
+  pageEvalEnabled: "settings.page_eval_title",
+  fileUploadEnabled: "settings.file_upload_title",
+  handleDialogEnabled: "settings.handle_dialog_title",
 };
 
 // The options page: security toggles, host pairing, tabs, execution mode,
@@ -298,8 +292,8 @@ export function OptionsApp() {
             // Effective state, not the raw toggle: a tool whose master gate
             // (Security / Execution mode) is off is refused regardless of
             // this switch, so it must not render as enabled.
-            const gate = TOOL_GATES[op];
-            const gateOff = gate !== undefined && !settings[gate.setting];
+            const gate = toolGate(op);
+            const gateOff = gate !== undefined && !settings[gate];
             return (
               <div key={op} className="flex items-start gap-2.5 border-b border-edge py-2.5">
                 <Switch
@@ -324,7 +318,7 @@ export function OptionsApp() {
                   <div className="text-[11px] text-text-3">{t(`tools.${op}`)}</div>
                   {gateOff && gate && (
                     <div className="text-[11px] text-text-3">
-                      {t("settings.tool_gate_blocked", [t(gate.titleKey)])}
+                      {t("settings.tool_gate_blocked", [t(GATE_TITLES[gate])])}
                     </div>
                   )}
                 </div>

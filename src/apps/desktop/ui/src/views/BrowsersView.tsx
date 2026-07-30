@@ -17,7 +17,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { browserAction } from "@/lib/browser-action";
 import { browserDisplayName } from "@/lib/browser-names";
 import { formatFingerprint } from "@/lib/fingerprint";
-import { api, type BrowserRow, errorText } from "@/lib/tauri";
+import { api, type BrowserRow, errorText, isHealthy } from "@/lib/tauri";
 
 /** Break a filesystem path only after separators, so identity tokens (the
  * manifest filename) never fragment mid-string. */
@@ -79,7 +79,7 @@ export function BrowsersView() {
   };
 
   const rows = browsers.data ?? [];
-  const registered = rows.filter((b) => b.healthy).length;
+  const registered = rows.filter(isHealthy).length;
   const key = enclave.data?.key;
   const fingerprint = enclave.data?.fingerprint;
 
@@ -173,7 +173,7 @@ export function BrowsersView() {
                       </td>
                       <td>{pillFor(b)}</td>
                       <td>
-                        <div className={`mono path${b.healthy ? "" : " unwritten"}`}>
+                        <div className={`mono path${isHealthy(b) ? "" : " unwritten"}`}>
                           <PathBreaks path={b.location} />
                         </div>
                         <div className="path-note">
@@ -193,8 +193,8 @@ export function BrowsersView() {
                                 ? t("browsers.pairing_key_present")
                                 : t("browsers.pairing_no_key")}
                             </div>
-                            <div className={`health-line${b.healthy ? "" : " off"}`}>
-                              {b.healthy
+                            <div className={`health-line${isHealthy(b) ? "" : " off"}`}>
+                              {isHealthy(b)
                                 ? t("browsers.pairing_manifest_ok")
                                 : t("browsers.pairing_on_connect")}
                             </div>
@@ -223,7 +223,7 @@ export function BrowsersView() {
                             {busy === b.key ? t("common.working") : t("browsers.repair")}
                           </Button>
                         )}
-                        {action === "none" && b.healthy && (
+                        {action === "none" && isHealthy(b) && (
                           <Button
                             size="sm"
                             disabled={busy !== undefined}

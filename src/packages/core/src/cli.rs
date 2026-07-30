@@ -1,6 +1,25 @@
 //! Command-line entry helpers: argv-based mode selection and the `--help`
 //! text. Kept in the library so they are unit-testable and reusable.
 
+/// The subcommand and flag spellings that co-equal surfaces re-issue: the
+/// desktop app drives this binary as a subprocess (ADR-0029) and builds argv
+/// from these consts, so [`parse`] and the app's Enclave buttons cannot
+/// drift apart silently.
+pub mod argv {
+    /// `pair`: the enrollment ceremony (ADR-0021).
+    pub const PAIR: &str = "pair";
+    /// `pair --reset`: replace the enrollment key with a fresh one.
+    pub const RESET_FLAG: &str = "--reset";
+    /// `revoke`: delete the enrollment key (fails closed).
+    pub const REVOKE: &str = "revoke";
+    /// `enclave-status`: read-only enrollment state report.
+    pub const ENCLAVE_STATUS: &str = "enclave-status";
+    /// `enclave-status --json`: the machine-readable form the app parses.
+    pub const JSON_FLAG: &str = "--json";
+}
+
+use crate::browsers::Browser;
+
 /// Which mode/subcommand argv selects. Parsed once in `main` and dispatched.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -100,13 +119,17 @@ pub fn parse(args: &[String]) -> Command {
         // doctor takes flags (--fix/--list/...), parsed by doctor_args in
         // the handler.
         Some("doctor" | "status") => Command::Doctor,
-        Some("pair") if rest.len() == 1 => Command::Pair { reset: false },
-        Some("pair") if rest.len() == 2 && rest.get(1).is_some_and(|a| a == "--reset") => {
+        Some(argv::PAIR) if rest.len() == 1 => Command::Pair { reset: false },
+        Some(argv::PAIR)
+            if rest.len() == 2 && rest.get(1).is_some_and(|a| a == argv::RESET_FLAG) =>
+        {
             Command::Pair { reset: true }
         }
-        Some("revoke") if rest.len() == 1 => Command::Revoke,
-        Some("enclave-status") if rest.len() == 1 => Command::EnclaveStatus { json: false },
-        Some("enclave-status") if rest.len() == 2 && rest.get(1).is_some_and(|a| a == "--json") => {
+        Some(argv::REVOKE) if rest.len() == 1 => Command::Revoke,
+        Some(argv::ENCLAVE_STATUS) if rest.len() == 1 => Command::EnclaveStatus { json: false },
+        Some(argv::ENCLAVE_STATUS)
+            if rest.len() == 2 && rest.get(1).is_some_and(|a| a == argv::JSON_FLAG) =>
+        {
             Command::EnclaveStatus { json: true }
         }
         Some("presence-selftest") if rest.len() == 1 => Command::PresenceSelftest,
@@ -197,76 +220,109 @@ pub fn revoke_client_name(args: &[String]) -> Result<String, String> {
     name.ok_or_else(|| "revoke-client requires --name <label>".into())
 }
 
-/// The parsed arguments of `doctor` / `status`. Plain `doctor` (all fields
-/// off) is the read-only report. `--list` is a short resolver-only listing.
-/// `--fix` repairs/registers, with an exclusive targeting choice: explicit
-/// `--manifest-dir` dirs, `--all`, `--browser <keys>`, or (none of them)
-/// every detected browser.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct DoctorArgs {
+/// The parsed form of `doctor` / `status`: exactly one of the read-only
+/// report (the default), the resolver-only `--list`, or a `--fix` repair with
+/// one targeting mode. An enum rather than flat flags so a contradictory
+/// invocation cannot be represented past this boundary.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DoctorCommand {
+    /// Plain `doctor`: the read-only health report.
+    Report,
+    /// `--list`: print detection/registration state, change nothing.
+    List,
     /// `--fix`: (re-)register the targeted browsers. Idempotent, so this is
     /// also the fresh-machine registration path.
-    pub fix: bool,
-    /// `--list`: print detection/registration state, change nothing.
-    pub list: bool,
-    /// `--browser chrome,brave`: exactly these known browsers (needs --fix).
-    pub browsers: Option<Vec<String>>,
-    /// `--all`: every known browser, present or not (needs --fix).
-    pub all: bool,
-    /// `--manifest-dir PATH` (repeatable, needs --fix): exact
-    /// NativeMessagingHosts dirs, for Chromium browsers we do not know by
-    /// name. Absolute paths only.
-    pub manifest_dirs: Vec<String>,
+    Fix(FixTargets),
+}
+
+/// Which registrations `doctor --fix` repairs. Exactly one mode - the
+/// exclusivity that used to be a post-hoc check over flat flags is the shape
+/// of the type, and `--browser` keys are resolved to [`Browser`]s here at
+/// the CLI boundary, so an unknown key fails loud before anything runs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FixTargets {
+    /// No targeting flag: every browser detected for this user.
+    Detected,
+    /// `--all`: every known browser, present or not.
+    All,
+    /// `--browser chrome,brave`: exactly these known browsers.
+    Browsers(Vec<Browser>),
+    /// `--manifest-dir PATH` (repeatable): exact NativeMessagingHosts dirs,
+    /// for Chromium browsers we do not know by name. Absolute paths only.
+    ManifestDirs(Vec<String>),
 }
 
 /// Parse the flags of `doctor` / `status`. Same strictness as
 /// [`pair_client_args`]: conflicting or malformed selections are an error,
 /// never a guess.
-pub fn doctor_args(args: &[String]) -> Result<DoctorArgs, String> {
-    let mut parsed = DoctorArgs::default();
+pub fn doctor_args(args: &[String]) -> Result<DoctorCommand, String> {
+    let mut fix = false;
+    let mut list = false;
+    let mut browsers: Option<Vec<Browser>> = None;
+    let mut all = false;
+    let mut manifest_dirs: Vec<String> = Vec::new();
     let mut it = args.iter().skip(2);
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--fix" => parsed.fix = true,
-            "--list" => parsed.list = true,
+            "--fix" => fix = true,
+            "--list" => list = true,
             "--browser" => {
-                if parsed.browsers.is_some() {
+                if browsers.is_some() {
                     return Err("--browser given more than once".into());
                 }
                 let value = take_value(&mut it, "--browser")?;
-                let mut keys: Vec<String> = Vec::new();
+                let mut keys: Vec<Browser> = Vec::new();
                 for key in value.split(',').map(str::trim).filter(|k| !k.is_empty()) {
-                    if keys.iter().any(|k| k == key) {
+                    let Some(browser) = Browser::from_key(key) else {
+                        return Err(format!(
+                            "unknown --browser key {key:?}; known: {}",
+                            crate::registration::known_keys()
+                        ));
+                    };
+                    if keys.contains(&browser) {
                         return Err(format!("--browser lists {key:?} twice"));
                     }
-                    keys.push(key.to_string());
+                    keys.push(browser);
                 }
                 if keys.is_empty() {
                     return Err(format!("--browser selected no browser: {value:?}"));
                 }
-                parsed.browsers = Some(keys);
+                browsers = Some(keys);
             }
-            "--all" => parsed.all = true,
+            "--all" => all = true,
             "--manifest-dir" => {
-                parsed.manifest_dirs.push(manifest_dir_value(&mut it)?);
+                manifest_dirs.push(manifest_dir_value(&mut it)?);
             }
             other => return Err(format!("unexpected argument {other:?}")),
         }
     }
 
-    let selections = usize::from(parsed.all)
-        + usize::from(parsed.browsers.is_some())
-        + usize::from(!parsed.manifest_dirs.is_empty());
+    let selections =
+        usize::from(all) + usize::from(browsers.is_some()) + usize::from(!manifest_dirs.is_empty());
     if selections > 1 {
         return Err("--all, --browser, and --manifest-dir are mutually exclusive".into());
     }
-    if selections > 0 && !parsed.fix {
+    if selections > 0 && !fix {
         return Err("--browser/--all/--manifest-dir only target a repair; add --fix".into());
     }
-    if parsed.list && (parsed.fix || selections > 0) {
+    if list && (fix || selections > 0) {
         return Err("--list is a read-only report and takes no other flags".into());
     }
-    Ok(parsed)
+    if list {
+        return Ok(DoctorCommand::List);
+    }
+    if !fix {
+        return Ok(DoctorCommand::Report);
+    }
+    Ok(DoctorCommand::Fix(if all {
+        FixTargets::All
+    } else if let Some(browsers) = browsers {
+        FixTargets::Browsers(browsers)
+    } else if !manifest_dirs.is_empty() {
+        FixTargets::ManifestDirs(manifest_dirs)
+    } else {
+        FixTargets::Detected
+    }))
 }
 
 /// The parsed arguments of `uninstall`: only the `--manifest-dir` targets to
@@ -358,7 +414,7 @@ pub fn print_help() {
          chromium-bridge                Run as MCP server (for your MCP client)\n    \
          chromium-bridge doctor         Print a read-only health report (alias: status)\n    \
          chromium-bridge doctor --list  List known browsers + registration state (read-only)\n    \
-         chromium-bridge doctor --fix [--browser <keys> | --all | --manifest-dir <dir>]\n                                Repair (or first-register) the native-messaging\n                                manifests for your Chromium browsers. Default:\n                                every browser detected for this user; keys:\n                                chrome,chromium,brave,edge,vivaldi,opera\n    \
+         chromium-bridge doctor --fix [--browser <keys> | --all | --manifest-dir <dir>]\n                                Repair (or first-register) the native-messaging\n                                manifests for your Chromium browsers. Default:\n                                every browser detected for this user; keys:\n                                {browser_keys}\n    \
          chromium-bridge pair           Enroll: mint the Secure Enclave key (macOS)\n    \
          chromium-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
          chromium-bridge revoke         Delete the enrollment key (fails closed)\n    \
@@ -370,13 +426,15 @@ pub fn print_help() {
          chromium-bridge uninstall [--manifest-dir <dir>]\n                                Remove exactly the registrations this project wrote\n                                (re-pass any --manifest-dir you registered)\n    \
          chromium-bridge kill           ENGAGE the global kill switch: refuse all bridge\n                                activity, sever browser connections, survive restarts\n    \
          chromium-bridge unkill         Explicitly release the kill switch\n                                (interactive confirmation on the terminal)\n    \
-         chromium-bridge audit [--limit <n>]\n                                Print the audit trail (default: last 200 records)\n    \
+         chromium-bridge audit [--limit <n>]\n                                Print the audit trail (default: last {audit_limit} records)\n    \
          chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, ...) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
          --native-host via the host manifest. You normally never invoke either \
          mode by hand.",
-        version = env!("CARGO_PKG_VERSION")
+        version = env!("CARGO_PKG_VERSION"),
+        browser_keys = crate::registration::known_keys(),
+        audit_limit = crate::audit::DEFAULT_AUDIT_LIMIT,
     );
 }
 
@@ -504,15 +562,23 @@ mod tests {
 
     #[test]
     fn doctor_args_parse_fix_and_targeting() {
-        use super::doctor_args;
+        use super::{doctor_args, DoctorCommand, FixTargets};
+        use crate::browsers::Browser;
         let ok = |list: &[&str]| doctor_args(&args(list)).unwrap();
-        assert_eq!(ok(&["doctor"]), super::DoctorArgs::default());
-        assert!(ok(&["doctor", "--fix"]).fix);
-        assert!(ok(&["doctor", "--list"]).list);
-        assert!(ok(&["doctor", "--fix", "--all"]).all);
+        assert_eq!(ok(&["doctor"]), DoctorCommand::Report);
         assert_eq!(
-            ok(&["doctor", "--fix", "--browser", "chrome, brave"]).browsers,
-            Some(vec!["chrome".to_string(), "brave".to_string()])
+            ok(&["doctor", "--fix"]),
+            DoctorCommand::Fix(FixTargets::Detected)
+        );
+        assert_eq!(ok(&["doctor", "--list"]), DoctorCommand::List);
+        assert_eq!(
+            ok(&["doctor", "--fix", "--all"]),
+            DoctorCommand::Fix(FixTargets::All)
+        );
+        // Keys resolve to typed browsers at this boundary, never later.
+        assert_eq!(
+            ok(&["doctor", "--fix", "--browser", "chrome, brave"]),
+            DoctorCommand::Fix(FixTargets::Browsers(vec![Browser::Chrome, Browser::Brave]))
         );
         assert_eq!(
             ok(&[
@@ -522,9 +588,8 @@ mod tests {
                 &abs("a"),
                 "--manifest-dir",
                 &abs("b")
-            ])
-            .manifest_dirs,
-            vec![abs("a"), abs("b")]
+            ]),
+            DoctorCommand::Fix(FixTargets::ManifestDirs(vec![abs("a"), abs("b")]))
         );
     }
 
@@ -543,6 +608,9 @@ mod tests {
         assert!(err(&["doctor", "--fix", "--browser"]).contains("requires a value"));
         assert!(err(&["doctor", "--fix", "--browser", ","]).contains("no browser"));
         assert!(err(&["doctor", "--fix", "--browser", "chrome,chrome"]).contains("twice"));
+        // Unknown keys fail loud at the CLI boundary and name the known set.
+        assert!(err(&["doctor", "--fix", "--browser", "netscape"]).contains("unknown --browser"));
+        assert!(err(&["doctor", "--fix", "--browser", "netscape"]).contains("chrome,chromium"));
         assert!(err(&["doctor", "--fix", "--manifest-dir", "relative/dir"]).contains("absolute"));
         assert!(err(&["doctor", "--fix", "--manifest-dir", ""]).contains("absolute"));
         assert!(err(&["doctor", "--bogus"]).contains("unexpected argument"));
