@@ -290,7 +290,7 @@ pub(crate) fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
         "initialize" => Some(JsonRpc::ok(
             id,
             json!({
-                "protocolVersion": "2025-06-18",
+                "protocolVersion": crate::protocol::MCP_PROTOCOL_VERSION,
                 "capabilities": { "tools": {} },
                 "serverInfo": {
                     "name": "chromium-bridge",

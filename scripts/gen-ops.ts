@@ -16,6 +16,8 @@
 //     from the manifest key, Chrome's own id derivation), the manifest key
 //     itself (injected into the manifest by src/apps/extension/wxt.config.ts), and the
 //     native-messaging host id.
+//   src/packages/shared/src/audit.gen.ts     - the extension-owned audit kinds
+//     the host forwards into its on-disk trail (the audit_event whitelist).
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -51,6 +53,8 @@ interface ContractCapability {
 
 interface Contract {
   protocolVersion: number;
+  mcpProtocolVersion: string;
+  auditForwardedKinds: string[];
   identity: {
     nativeMessagingHostId: string;
     extensionManifestKey: string;
@@ -310,6 +314,14 @@ console.log("generated src/packages/shared/src/errors.gen.ts from the Rust taxon
 
 // ---- protocol.gen.ts --------------------------------------------------------
 
+// The MCP revision is a date string pinned by the spec; anything else means
+// the emitter and this generator disagree about the field.
+if (!/^\d{4}-\d{2}-\d{2}$/.test(contract.mcpProtocolVersion)) {
+  throw new Error(
+    `gen-ops: mcpProtocolVersion ${JSON.stringify(contract.mcpProtocolVersion)} is not a date string`,
+  );
+}
+
 const capabilityItems = contract.capabilities
   .map(
     (c) =>
@@ -329,6 +341,10 @@ const protocolOut = `// GENERATED from the Rust core (src/packages/core/src/prot
 // extension). Not the MCP JSON-RPC version and not the extension release
 // version; bumped only when the bridge wire contract changes incompatibly.
 export const BRIDGE_PROTOCOL_VERSION = ${contract.protocolVersion};
+
+// The MCP JSON-RPC protocol revision the Rust server pins and returns from
+// \`initialize\` (protocol.rs MCP_PROTOCOL_VERSION, per docs/adr/0007).
+export const MCP_PROTOCOL_VERSION = ${JSON.stringify(contract.mcpProtocolVersion)};
 
 // The capability groupings for connection-time negotiation: each capability
 // covers a set of tools sharing a Chrome permission. On connect the extension
@@ -407,3 +423,43 @@ export const NATIVE_HOST_ID = ${JSON.stringify(nativeMessagingHostId)};
 
 writeFileSync(join(root, "src/packages/shared/src/identity.gen.ts"), identityOut);
 console.log("generated src/packages/shared/src/identity.gen.ts from the Rust core");
+
+// ---- audit.gen.ts -------------------------------------------------------------
+// Self-contained: consumes only contract.auditForwardedKinds.
+
+const forwardedKinds = contract.auditForwardedKinds;
+if (!Array.isArray(forwardedKinds) || forwardedKinds.length === 0) {
+  throw new Error("gen-ops: the emitted contract has no auditForwardedKinds");
+}
+for (const kind of forwardedKinds) {
+  // The kinds are serde snake_case wire names; anything else means the
+  // emitter and this generator disagree about the field.
+  if (typeof kind !== "string" || !/^[a-z][a-z0-9_]*$/.test(kind)) {
+    throw new Error(
+      `gen-ops: auditForwardedKinds carries a non-snake_case kind ${JSON.stringify(kind)}`,
+    );
+  }
+}
+if (new Set(forwardedKinds).size !== forwardedKinds.length) {
+  throw new Error("gen-ops: auditForwardedKinds carries a duplicate kind");
+}
+
+const auditOut = `// GENERATED from the Rust core (src/packages/core/src/audit.rs
+// EXTENSION_AUDIT_KINDS) by scripts/gen-ops.ts - DO NOT EDIT. Edit the kind
+// list, then run \`moon run gen\`.
+//
+// The audit kinds the host accepts over the extension's audit_event control
+// frame (audit::extension_kind, ADR-0030). The extension's forwarding set
+// (background/audit-log.ts) and the forwarded prefix of its audit-ring
+// vocabulary (shared/enclave.ts AUDIT_EVENT_KINDS) build on this, so the two
+// sides of the forwarding boundary cannot drift apart.
+
+export const AUDIT_FORWARDED_KINDS = [
+  ${forwardedKinds.map((k) => JSON.stringify(k)).join(",\n  ")},
+] as const;
+
+export type AuditForwardedKind = (typeof AUDIT_FORWARDED_KINDS)[number];
+`;
+
+writeFileSync(join(root, "src/packages/shared/src/audit.gen.ts"), auditOut);
+console.log("generated src/packages/shared/src/audit.gen.ts from the Rust audit whitelist");

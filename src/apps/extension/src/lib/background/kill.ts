@@ -27,9 +27,12 @@
 // update the mirror; solicited ones additionally resolve the pending request.
 
 import {
+  type KillEngageWire,
   type KillMirror,
   KillMirrorSchema,
+  type KillReleaseWire,
   type KillStatusResult,
+  type KillStatusWire,
   unreachable,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
@@ -116,16 +119,15 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 
 // ---- port plumbing (mirrors clients.ts) --------------------------------------
 
-/** The three host-directed kill control frames (ADR-0030), as a closed union.
- * Everything this module posts is one of these, so a typo'd frame type is a
- * compile error - not a real post the engage-arming switch below silently
- * fails to recognize. The inbound direction is parsed separately: port.ts
+/** The three host-directed kill control frames (ADR-0030), as a closed union
+ * of the GENERATED wire types (envelope-wire.gen.ts <- protocol.rs), so the
+ * tags are compiler-pinned to the Rust contract: a typo'd frame type is a
+ * compile error - not a real post the host would forward to the MCP server
+ * as an unknown op while the engage-arming switch below silently fails to
+ * recognize it. The inbound direction is parsed separately: port.ts
  * classifies kill_status_result frames with the Zod KillStatusResultSchema
  * and anything malformed never reaches handleKillFrame. */
-export type KillControlFrame =
-  | { type: "kill_status" }
-  | { type: "kill_engage" }
-  | { type: "kill_release" };
+export type KillControlFrame = KillStatusWire | KillEngageWire | KillReleaseWire;
 
 let postFrame: ((frame: KillControlFrame) => boolean) | null = null;
 

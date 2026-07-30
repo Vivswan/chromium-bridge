@@ -9,6 +9,7 @@
 // short, documented list of parser asymmetries, pinned by the CI asymmetry
 // gate (scripts/check-envelope-parity.ts).
 
+export * from "./audit.gen";
 export * from "./confirm";
 export * from "./content-msg";
 export * from "./enclave";

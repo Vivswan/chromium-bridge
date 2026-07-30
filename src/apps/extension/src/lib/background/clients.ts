@@ -18,7 +18,9 @@ import {
   type AdminInboundFrame,
   AdminInboundFrameSchema,
   ClientListResultSchema,
+  type ClientListWire,
   ClientRevokeResultSchema,
+  type ClientRevokeWire,
   type TrustedClient,
 } from "@chromium-bridge/shared";
 
@@ -94,7 +96,7 @@ export function requestClientList(): Promise<ClientListView> {
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, ADMIN_REQUEST_TIMEOUT_MS);
     pendingList = { resolve, timer };
-    if (!postFrame?.({ type: "client_list" })) {
+    if (!postFrame?.({ type: "client_list" } satisfies ClientListWire)) {
       clearTimeout(timer);
       pendingList = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });
@@ -117,7 +119,7 @@ export function revokeTrustedClient(name: string): Promise<RevokeClientView> {
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, ADMIN_REQUEST_TIMEOUT_MS);
     pendingRevoke = { resolve, timer };
-    if (!postFrame?.({ type: "client_revoke", name })) {
+    if (!postFrame?.({ type: "client_revoke", name } satisfies ClientRevokeWire)) {
       clearTimeout(timer);
       pendingRevoke = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });

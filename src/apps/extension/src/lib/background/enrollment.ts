@@ -32,10 +32,12 @@
 // The challenge-on-connect policy lives entirely in onPortConnected below.
 
 import {
+  type EnclaveChallengeWire,
   EnclaveErrorFrameSchema,
   type EnclaveInboundFrame,
   EnclaveInboundFrameSchema,
   EnclaveProofFrameSchema,
+  type EnclaveRevokeWire,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
@@ -133,7 +135,7 @@ async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; e
       .then(updateBadge);
   }, CHALLENGE_TIMEOUT_MS);
   outstanding = { nonce, context, mode, timer };
-  if (!postFrame({ type: "enclave_challenge", nonce, context })) {
+  if (!postFrame({ type: "enclave_challenge", nonce, context } satisfies EnclaveChallengeWire)) {
     clearOutstanding();
     return { ok: false, error: "failed to send the challenge to the native host" };
   }
@@ -298,7 +300,7 @@ export function onPortConnected(): Promise<void> {
 async function maybeSendPendingHostRevoke(): Promise<void> {
   if (!postFrame) return;
   if (!(await pinStore.getHostRevokePending())) return;
-  if (postFrame({ type: "enclave_revoke" })) {
+  if (postFrame({ type: "enclave_revoke" } satisfies EnclaveRevokeWire)) {
     console.log("[bb] requested host enrollment-key deletion (pending ack)");
   }
 }

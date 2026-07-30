@@ -222,9 +222,17 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 // 3. Internal bridge envelope (MCP server <-> native host <-> extension)
 // ----------------------------------------------------------------------------
 
+/// The MCP JSON-RPC protocol revision this server implements: the value
+/// `initialize` returns as `protocolVersion` (mcp_server.rs) and the revision
+/// docs/compatibility.md documents. Pinned per docs/adr/0007. The protocol
+/// e2e and adversarial suites assert the served value, and the contract
+/// emitter carries it into the generated TS (protocol.gen.ts) so no TS
+/// consumer re-types the date.
+pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+
 /// The INTERNAL bridge protocol version (MCP server <-> native host <->
 /// extension). This is NOT the MCP JSON-RPC version (that is the date string
-/// "2025-06-18", see docs/adr/0007) and NOT the extension release version
+/// [`MCP_PROTOCOL_VERSION`], see docs/adr/0007) and NOT the extension release version
 /// (Cargo is the release version source). It is a small monotonically
 /// increasing integer, bumped only when the bridge wire contract
 /// ([`BridgeReq`]/[`BridgeResp`] shape, hello handshake, op/capability
@@ -752,19 +760,91 @@ pub enum AdminKind {
     KillRelease,
 }
 
-impl AdminKind {
-    /// The wire `type` tag of the request this kind names (for logs and the
-    /// error text in the `ok: false` reply).
-    pub fn wire_tag(self) -> &'static str {
-        match self {
-            AdminKind::ClientList => "client_list",
-            AdminKind::ClientRevoke => "client_revoke",
-            AdminKind::KillStatus => "kill_status",
-            AdminKind::KillEngage => "kill_engage",
-            AdminKind::KillRelease => "kill_release",
+/// Ties every [`AdminKind`] variant to its wire tag AND enumerates the full
+/// kind set, from one list - the `control_wire_tags!` idea, specialized to
+/// this unit-variant request-kind enum, where the same list can also
+/// CONSTRUCT the values. `wire_tag`'s match is exhaustive with no wildcard,
+/// so a new variant fails to compile until it joins the list, and joining
+/// the list is the same edit that grows [`AdminKind::ALL`] - the kind set
+/// cannot lag the enum.
+macro_rules! admin_request_kinds {
+    ($($Variant:ident => $tag:literal),+ $(,)?) => {
+        impl AdminKind {
+            /// Every request kind, in declaration order. Emitted by
+            /// `admin_request_kinds!` from the same list as `wire_tag`, so
+            /// it is exhaustive by construction.
+            pub const ALL: &'static [AdminKind] = &[$(AdminKind::$Variant),+];
+
+            /// The wire `type` tag of the request this kind names (for logs
+            /// and the error text in the `ok: false` reply). Exhaustive with
+            /// no wildcard on purpose (see the macro docs), and `const` so
+            /// the assertion below can tie every tag to the derived
+            /// [`ADMIN_CONTROL_TAGS`] at compile time.
+            pub const fn wire_tag(self) -> &'static str {
+                match self {
+                    $(AdminKind::$Variant => $tag,)+
+                }
+            }
         }
-    }
+    };
 }
+
+admin_request_kinds!(
+    ClientList => "client_list",
+    ClientRevoke => "client_revoke",
+    KillStatus => "kill_status",
+    KillEngage => "kill_engage",
+    KillRelease => "kill_release",
+);
+
+/// Compile-time: every [`AdminKind`] tag is one of the derived
+/// [`ADMIN_CONTROL_TAGS`] (the `control_wire_tags!` list the serde
+/// round-trip test pins), and no two kinds share a tag - so `wire_tag`'s
+/// literals cannot drift from the tag machinery. The exact kind<->tag
+/// pairing (which tag names which kind) is pinned at runtime by
+/// `admin_kind_tags_match_their_classification`.
+const _: () = {
+    const fn str_eq(a: &str, b: &str) -> bool {
+        let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        while let ([ha, rest_a @ ..], [hb, rest_b @ ..]) = (a, b) {
+            if *ha != *hb {
+                return false;
+            }
+            a = rest_a;
+            b = rest_b;
+        }
+        true
+    }
+    const fn is_admin_control_tag(tag: &str) -> bool {
+        let mut tags = ADMIN_CONTROL_TAGS;
+        while let [head, rest @ ..] = tags {
+            if str_eq(head, tag) {
+                return true;
+            }
+            tags = rest;
+        }
+        false
+    }
+    let mut kinds: &[AdminKind] = AdminKind::ALL;
+    while let [kind, rest @ ..] = kinds {
+        assert!(
+            is_admin_control_tag(kind.wire_tag()),
+            "an AdminKind wire_tag is not a derived AdminControl tag"
+        );
+        let mut later = rest;
+        while let [other, more @ ..] = later {
+            assert!(
+                !str_eq(kind.wire_tag(), other.wire_tag()),
+                "two AdminKind variants share a wire tag"
+            );
+            later = more;
+        }
+        kinds = rest;
+    }
+};
 
 /// The fields of one accepted `audit_event` frame (ADR-0030), traveling by
 /// name from [`classify_nm_frame`] to the audit sink. `kind` is already the
@@ -1830,6 +1910,22 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn admin_kind_tags_match_their_classification() {
+        // The kind<->tag pairing, end to end: a malformed frame carrying each
+        // kind's wire tag classifies to MalformedAdmin of exactly that kind,
+        // so wire_tag and classify_nm_frame agree on the mapping (the const
+        // assertion above only ties the tags to the derived SET).
+        for &kind in AdminKind::ALL {
+            match classify_nm_frame(&json!({ "type": kind.wire_tag(), "unexpected": 1 })) {
+                FrameDisposition::MalformedAdmin(k) => {
+                    assert_eq!(k, kind, "{}", kind.wire_tag());
+                }
+                other => panic!("expected MalformedAdmin({kind:?}), got {other:?}"),
+            }
+        }
     }
 
     #[test]

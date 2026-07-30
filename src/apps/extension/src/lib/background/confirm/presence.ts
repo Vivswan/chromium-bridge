@@ -26,6 +26,7 @@
 
 import type { ConfirmPayload } from "@chromium-bridge/shared";
 import {
+  type PresenceChallengeWire,
   PresenceErrorFrameSchema,
   PresenceInboundFrameSchema,
   PresenceProofFrameSchema,
@@ -206,7 +207,7 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
       // while the host was signing.
       const generation = portGeneration;
       pending = { nonce, context, generation, settle: resolve };
-      if (!post?.({ type: "presence_challenge", nonce, context })) {
+      if (!post?.({ type: "presence_challenge", nonce, context } satisfies PresenceChallengeWire)) {
         cancelPending("challenge send failed");
       }
     })().catch((e) => {
