@@ -18,7 +18,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Subprocess, spawn } from "bun";
-import { assertIsolatedBrowserOrSkip } from "./browser-safety";
+import { assertIsolatedBrowserOrSkip, finishSuite } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
 // The built bundle (esbuild strips TS types from src/content.ts). Run
@@ -383,8 +383,7 @@ async function main() {
   } finally {
     await chrome.stop();
   }
-  console.log(`\n${"=".repeat(40)}\n${Pass} passed, ${Fail} failed`);
-  process.exit(Fail > 0 ? 1 : 0);
+  finishSuite("dom_test", Pass, Fail);
 }
 
 async function runAllTests(page: Page): Promise<void> {
