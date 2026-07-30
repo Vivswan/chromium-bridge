@@ -16,6 +16,8 @@
 // or loading a profile.
 
 import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const ISOLATED_VERSION = /Chrome for Testing|HeadlessShell/;
 
@@ -58,4 +60,53 @@ export function assertIsolatedBrowserOrSkip(): string {
     process.exit(0);
   }
   return bin;
+}
+
+// ---------------------------------------------------------------------------
+// Suite-ran canary: a green browser step must mean the suite really asserted
+// something. The guard above can exit(0) as a local skip, and BB_REQUIRE_BROWSER
+// only hardens it while BOTH sides keep spelling that variable the same way -
+// if the names ever part, CI's browser job would go silently green on skips.
+// So every suite finishes through finishSuite(): it refuses a zero-pass run
+// (a suite that asserted nothing is a failure, not a pass) and, when CI sets
+// BB_BROWSER_CANARY_DIR, drops a per-suite RAN marker that a final job step
+// requires - a skip anywhere upstream leaves no marker and turns the job red
+// no matter which env var drifted.
+// ---------------------------------------------------------------------------
+
+/** The exit code a finished suite deserves: nonzero on any failed check AND
+ * on a vacuous run that passed zero checks. */
+export function suiteExitCode(pass: number, fail: number): number {
+  return fail > 0 || pass === 0 ? 1 : 0;
+}
+
+/** One-line marker body, also used as the printed summary. */
+export function ranMarkerBody(suite: string, pass: number, fail: number): string {
+  return `${suite}: ${pass} passed, ${fail} failed`;
+}
+
+/** Write the RAN marker for a suite when a canary dir is configured. Returns
+ * the marker path, or null when no dir is set (local runs). */
+export function writeRanMarker(
+  suite: string,
+  pass: number,
+  fail: number,
+  dir: string | undefined = process.env.BB_BROWSER_CANARY_DIR,
+): string | null {
+  if (!dir) return null;
+  mkdirSync(dir, { recursive: true });
+  const marker = join(dir, suite);
+  writeFileSync(marker, `${ranMarkerBody(suite, pass, fail)}\n`);
+  return marker;
+}
+
+/** Print the summary, drop the RAN marker, and exit with the suite's verdict.
+ * Every browser suite ends here instead of hand-rolling its exit. */
+export function finishSuite(suite: string, pass: number, fail: number): never {
+  console.log(`\n${"=".repeat(50)}\n${ranMarkerBody(suite, pass, fail)}`);
+  if (pass === 0 && fail === 0) {
+    console.error(`FAIL: ${suite} finished without running a single check (vacuous pass)`);
+  }
+  writeRanMarker(suite, pass, fail);
+  process.exit(suiteExitCode(pass, fail));
 }

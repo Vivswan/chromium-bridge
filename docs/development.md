@@ -69,7 +69,8 @@ tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
                          integration_e2e.ts, run_all.ts (bun workspace member; isolated Chrome only)
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
 scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
-                         check-extension-id.ts, build-repro.ts, fuzz-smoke.ts, lib.ts, ...
+                         check-extension-id.ts, check-docs-literals.ts, check-docs-policy.ts,
+                         build-repro.ts, fuzz-smoke.ts, lib.ts, ...
 src/apps/web/           bun workspace member: minimal Astro site rendering the
                          repo's markdown docs + translations (moon run web:build;
                          not part of `moon run ci`)
@@ -162,7 +163,7 @@ The full task menu, by area:
 | Desktop app | `bundle-app`, `dmg-app`, `run-app`, `install-app`, `check-app-signing`, `check-app-rust`, `desktop-ui:test` |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `sync-version`, `check-version`, `check-extension-id` |
-| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-hasher`, `check-yaml`, `check-actions` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-hasher`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
 
 ## moon: the canonical command interface
 

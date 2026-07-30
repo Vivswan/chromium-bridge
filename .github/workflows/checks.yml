@@ -414,6 +414,8 @@ jobs:
       - run: bun run --cwd src/apps/extension build
       - name: Typecheck tests
         run: bun run --cwd tests/browser typecheck
+      - name: Suite-ran canary unit tests (no browser needed)
+        run: bun test tests/browser/browser-safety.test.ts
       - name: DOM-layer tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
@@ -422,11 +424,17 @@ jobs:
           # for Testing) would turn this required job silently green. Strict
           # mode makes a skip a failure; it can only tighten the guard.
           BB_REQUIRE_BROWSER: "1"
+          # Every suite drops a RAN marker here on completion; the canary
+          # step below requires all three, so no drift (a renamed
+          # BB_REQUIRE_BROWSER, a future guard bug) can green this job on
+          # silent skips.
+          BB_BROWSER_CANARY_DIR: ${{ runner.temp }}/browser-canary
         run: bun tests/browser/dom_test.ts
       - name: Extension smoke test
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           BB_REQUIRE_BROWSER: "1"
+          BB_BROWSER_CANARY_DIR: ${{ runner.temp }}/browser-canary
         # The smoke test needs a non-headless browser (MV3 SW reliability), so
         # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
         run: xvfb-run -a bun tests/browser/ext_test.ts
@@ -434,8 +442,27 @@ jobs:
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           BB_REQUIRE_BROWSER: "1"
+          BB_BROWSER_CANARY_DIR: ${{ runner.temp }}/browser-canary
         # Non-headless --load-extension like the smoke test, hence xvfb.
         run: xvfb-run -a bun tests/browser/security_browser_test.ts
+      - name: Browser canary (every suite really ran)
+        run: |
+          status=0
+          for suite in dom_test ext_test security_browser_test; do
+            marker="${RUNNER_TEMP}/browser-canary/${suite}"
+            if [ ! -f "$marker" ]; then
+              echo "::error::${suite} left no RAN marker - it finished no real browser run (silent skip?)"
+              status=1
+            elif grep -q ': 0 passed' "$marker"; then
+              # finishSuite already exits 1 on a zero-pass run; this is the
+              # independent backstop should that in-suite verdict ever regress.
+              echo "::error::${suite} ran vacuously: $(cat "$marker")"
+              status=1
+            else
+              cat "$marker"
+            fi
+          done
+          exit "$status"
 
   # The public web app (src/apps/web: the landing page plus Astro over the
   # repo's markdown docs) must keep building. Build-only here: deployment to
@@ -527,3 +554,28 @@ jobs:
       # jobs: it compiles Tauri, which needs this job's macOS toolchain.
       - name: Desktop crate gate (UI build, icons, commands.gen.ts, clippy, tests)
         run: moon run check-app-rust
+
+  # Docs-parity gates (SSoT audit, ADR-0028 follow-up): the living docs'
+  # hand-stated identifiers, protocol versions, env vars, tool tables, and
+  # settings defaults are diffed against the canonical Rust/TS sources, so a
+  # rename or a policy change cannot leave AGENTS.md / SECURITY.md / README* /
+  # docs/ quietly wrong. Same steps as `moon run check-docs-literals` /
+  # `check-docs-policy` in the local ci gate; each script's own unit tests
+  # (the it-fails-on-a-synthetic-violation proofs) ride along.
+  docs-parity:
+    name: Docs parity (literals, tool tables, settings defaults)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      # check-docs-policy imports the settings schema (zod) and the generated
+      # catalogue metadata from the workspace, hence the install.
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/check-docs-literals.ts
+      - run: bun test scripts/check-docs-literals.test.ts
+      - run: bun scripts/check-docs-policy.ts
+      - run: bun test scripts/check-docs-policy.test.ts

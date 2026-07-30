@@ -1,12 +1,14 @@
 # Inherited task settings for every moon project.
 #
 # THE CONTRACT EDGE. The Rust core is the canonical cross-process contract
-# (ADR-0028): scripts/gen-ops.ts runs the core's emit_contract example
-# (`cargo run -p chromium-bridge-core --example emit_contract`) and writes the
-# checked-in src/packages/shared/src/*.gen.ts modules. Downstream TS tasks
-# (shared, extension) declare this group as an input so a change anywhere in
-# the core crate invalidates their caches. Deliberately over-broad - the whole
-# crate plus everything that decides what emit_contract compiles to - because
+# (ADR-0028): the gen-shared task runs the contract emitters
+# (scripts/gen-ops.ts drives the core's emit_contract example,
+# scripts/gen-envelope.ts the wire-schema emission) and writes the checked-in
+# src/packages/shared/src/*.gen.ts modules. Downstream TS tasks (shared,
+# extension) declare this group as an input so a change anywhere in the core
+# crate invalidates their caches. Deliberately over-broad - the whole crate,
+# every gen-*.ts script (a glob, so a new emitter can never be forgotten
+# here), and everything that decides what emit_contract compiles to - because
 # a stale cache hit on the contract path is the one failure mode this repo
 # cannot accept.
 $schema: 'https://moonrepo.dev/schemas/tasks.json'
@@ -14,7 +16,7 @@ $schema: 'https://moonrepo.dev/schemas/tasks.json'
 fileGroups:
   rust-contract:
     - '/src/packages/core/**/*'
-    - '/scripts/gen-ops.ts'
+    - '/scripts/gen-*.ts'
     - '/Cargo.toml'
     - '/Cargo.lock'
     - '/rust-toolchain.toml'
