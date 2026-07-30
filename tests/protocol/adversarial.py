@@ -424,6 +424,10 @@ def a8_blank_line_flood():
         srv.stdin.flush()
         c = e2e.McpClient(srv)
         done, init = _call_with_timeout(c.initialize, 15)
+        # "2025-06-18" is hard-coded here (and in A9 below) on purpose: this
+        # suite is a deliberately independent black-box check. The canonical
+        # value is MCP_PROTOCOL_VERSION in src/packages/core/src/protocol.rs;
+        # a re-pin there must update these literals by hand.
         check(done and init and init.get("result", {}).get("protocolVersion") == "2025-06-18",
               "A8 server still answers initialize after a 200k blank-line flood")
         check(srv.poll() is None, "A8 server process survived (not aborted)")

@@ -242,9 +242,13 @@ pub(super) fn build_page_scroll(args: &Value) -> Result<Value, CallError> {
     Ok(Value::Object(payload))
 }
 
-/// The one advertised default a builder applies (`page_wait_for.timeoutMs`);
-/// the catalogue description names the same value.
-const PAGE_WAIT_FOR_DEFAULT_TIMEOUT_MS: i64 = 30000;
+/// The `page_wait_for` timeout applied when the caller sends none - the one
+/// advertised default a builder applies. One home: the builder below applies
+/// it, and a catalogue test asserts the advertised description embeds this
+/// exact value, so the served contract cannot drift from the behavior. The
+/// extension's own fallback (src/apps/extension/src/lib/dom/page-api.ts
+/// waitFor) mirrors it and is pinned by a source-text test there.
+pub const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 
 #[derive(Deserialize)]
 struct PageWaitForArgs {
@@ -266,7 +270,7 @@ pub(super) fn build_page_wait_for(args: &Value) -> Result<Value, CallError> {
     insert_opt(&mut payload, "nav", a.nav);
     payload.insert(
         "timeoutMs".into(),
-        json!(a.timeout_ms.unwrap_or(PAGE_WAIT_FOR_DEFAULT_TIMEOUT_MS)),
+        json!(a.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS)),
     );
     Ok(Value::Object(payload))
 }

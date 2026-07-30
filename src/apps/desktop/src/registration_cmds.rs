@@ -25,14 +25,40 @@ pub struct BrowserRow {
     pub detected: bool,
     /// `RegState::describe()` output: human wording, display only.
     pub state: String,
-    /// `RegState::code()`: ok | missing | stale | foreign | unreadable. The
-    /// machine form the UI branches on; an unknown code offers no action.
-    /// Typed as plain `string`: the value set lives in core's RegState, not
-    /// in this crate.
-    pub code: &'static str,
-    pub healthy: bool,
+    /// The machine form the UI branches on, as the closed union the generated
+    /// TS carries. Healthy is `code === "ok"`, derived - not a sibling field
+    /// that could disagree.
+    pub code: RegCode,
     /// Where the registration lives (manifest path, or the HKCU key).
     pub location: String,
+}
+
+/// Core's [`RegState`] with its reasons stripped, mirrored as a serde enum
+/// (the same pattern as `clients::AnchorKind`) so the webview receives a
+/// closed literal union instead of a plain string. The `From` impl matches
+/// exhaustively: a new core state fails to compile here instead of reaching
+/// the UI as an unknown code that offers no action.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum RegCode {
+    Ok,
+    Missing,
+    Stale,
+    Foreign,
+    Unreadable,
+}
+
+impl From<&RegState> for RegCode {
+    fn from(state: &RegState) -> Self {
+        match state {
+            RegState::Ok => RegCode::Ok,
+            RegState::Missing => RegCode::Missing,
+            RegState::Stale(_) => RegCode::Stale,
+            RegState::Foreign(_) => RegCode::Foreign,
+            RegState::Unreadable(_) => RegCode::Unreadable,
+        }
+    }
 }
 
 /// Resolve the environment and build the registrar every mutating command
@@ -59,8 +85,7 @@ pub fn list() -> Result<Vec<BrowserRow>, String> {
             BrowserRow {
                 key: entry.browser.key(),
                 detected: entry.detected(),
-                healthy: state == RegState::Ok,
-                code: state.code(),
+                code: RegCode::from(&state),
                 state: state.describe(),
                 location: entry.registration.location(),
             }

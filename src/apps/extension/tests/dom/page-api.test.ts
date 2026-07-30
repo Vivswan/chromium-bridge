@@ -4,6 +4,8 @@
 // self-containment - a reference to module scope would throw here just as it
 // would in the page.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 import { pageApiExpression, probeClickExpression } from "@/lib/background/backends/cdp";
 import { createPageApi, type PageApi, REF_ATTR } from "@/lib/dom/page-api";
@@ -135,6 +137,126 @@ describe("probe + act", () => {
   test("press refuses an empty spec", () => {
     const api = createPageApi(REF_ATTR);
     expect(() => api.press({ keys: "  " })).toThrow("page_press needs `keys`");
+  });
+
+  test("interactive SVG stays visible and hoverable (Element-safe ops)", () => {
+    // An SVG <a href> is Element but not HTMLElement. It must keep appearing
+    // in snapshots (the model used to see it; removing it would be a silent
+    // regression) and Element-safe ops like hover must keep working on it.
+    document.body.innerHTML = `<svg><a id="svg-link" href="https://example.com">x</a></svg>`;
+    const api = createPageApi(REF_ATTR);
+    const snap = api.snapshot();
+    const link = snap.nodes.find((n) => n.role === "link");
+    expect(link).toBeDefined();
+    expect(link?.name).toBe("x");
+    expect(api.hover({ selector: "#svg-link" }).hovered).toBe("#svg-link");
+    // click() is an HTMLElement API, so SVG clicks were always broken (a raw
+    // "el.click is not a function"); the typed refusal replaces that raw
+    // TypeError without changing what could ever be clicked.
+    const probe = api.probeClick({ selector: "#svg-link" });
+    expect(() => api.click({ selector: "#svg-link", expect: probe })).toThrow(
+      "not an HTML element",
+    );
+  });
+
+  test("fill narrows to input/textarea/select and refuses everything else", () => {
+    document.body.innerHTML = `<div id="d">x</div><svg><a id="s" href="#">x</a></svg><input id="i" />`;
+    const api = createPageApi(REF_ATTR);
+    expect(() => api.fill({ selector: "#d", value: "v" })).toThrow(
+      "page_fill target is not an <input>",
+    );
+    // SVG has no native value setter either: the typed refusal, not an
+    // opaque "Illegal invocation".
+    expect(() => api.fill({ selector: "#s", value: "v" })).toThrow(
+      "page_fill target is not an <input>",
+    );
+    expect(api.fill({ selector: "#i", value: "v" })).toEqual({ filled: "#i" });
+    expect((document.getElementById("i") as HTMLInputElement).value).toBe("v");
+  });
+
+  test("an SVG-namespace element with an uppercase HTML tagName is refused", () => {
+    // createElementNS(SVG_NS, "INPUT"/"SELECT") preserves the uppercase
+    // tagName but is NOT an HTML input/select and lacks its APIs. tagName
+    // alone would admit it; the namespace requirement refuses it (the
+    // typed error, never a raw downstream failure).
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const svgInput = document.createElementNS(SVG_NS, "INPUT") as unknown as HTMLElement;
+    svgInput.id = "svgin";
+    const svgSelect = document.createElementNS(SVG_NS, "SELECT") as unknown as HTMLElement;
+    svgSelect.id = "svgsel";
+    document.body.innerHTML = "";
+    document.body.append(svgInput, svgSelect);
+    // The trap really has an uppercase tagName in the wrong namespace.
+    expect(svgInput.tagName).toBe("INPUT");
+    expect(svgInput.namespaceURI).toBe(SVG_NS);
+
+    const api = createPageApi(REF_ATTR);
+    expect(() => api.fill({ selector: "#svgin", value: "v" })).toThrow(
+      "page_fill target is not an <input>",
+    );
+    expect(() => api.select({ selector: "#svgsel", value: "v" })).toThrow(
+      "page_select target is not a <select>",
+    );
+  });
+
+  test("elements adopted from another realm still click/fill/select", () => {
+    // An element created in a same-origin iframe and adopted into the page
+    // keeps THAT realm's prototype chain: its native APIs all work, but
+    // `instanceof HTMLElement` against this realm's constructors is false.
+    // The narrowing must be realm-insensitive (tagName/namespace based), so
+    // these targets keep working; true non-HTML still refuses (SVG test
+    // above). Simulated by rebuilding the prototype chain from copies, so no
+    // top-realm constructor appears in it.
+    function foreignize(el: Element): void {
+      const chain: object[] = [];
+      for (let p = Object.getPrototypeOf(el); p; p = Object.getPrototypeOf(p)) chain.push(p);
+      let cloned: object | null = null;
+      for (const p of chain.reverse()) {
+        cloned = Object.create(cloned, Object.getOwnPropertyDescriptors(p));
+      }
+      Object.setPrototypeOf(el, cloned);
+    }
+    document.body.innerHTML =
+      `<input id="i" /><select id="s"><option value="v">V</option></select>` +
+      `<button id="b" type="button">Go</button>`;
+    for (const id of ["i", "s", "b"]) {
+      const el = document.getElementById(id);
+      expect(el).not.toBeNull();
+      if (el) foreignize(el);
+    }
+    // The simulation really broke same-realm instanceof.
+    expect(document.getElementById("i") instanceof HTMLInputElement).toBe(false);
+    expect(document.getElementById("b") instanceof HTMLElement).toBe(false);
+
+    const api = createPageApi(REF_ATTR);
+    expect(api.fill({ selector: "#i", value: "v" })).toEqual({ filled: "#i" });
+    // Assert the effect, not just the return: the native value setter ran on
+    // the adopted element.
+    expect((document.getElementById("i") as HTMLInputElement).value).toBe("v");
+    expect(api.select({ selector: "#s", value: "v" }).selected).toBe("v");
+    const probe = api.probeClick({ selector: "#b" });
+    expect(api.click({ selector: "#b", expect: probe }).role).toBe("button");
+  });
+
+  test("waitFor's fallback timeout matches the host's canonical default", () => {
+    // One linked pin across the whole chain: DEFAULT_WAIT_TIMEOUT_MS in the
+    // Rust core is the single source (a cargo test pins the served catalogue
+    // description to it); this test reads that const from the Rust source
+    // and holds the factory's literal fallback to it - the factory is
+    // self-contained (no imports), so the fallback cannot import the value.
+    // The numeric literal is parsed, not string-matched, because the test
+    // transform may rewrite 30000 as 3e4.
+    // Comment-stripped and line-anchored (the check scripts' discipline), so
+    // a commented-out old declaration can never satisfy the pin.
+    const handlersRs = readFileSync(
+      resolve(import.meta.dirname, "../../../../packages/core/src/tools/handlers.rs"),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    const canonical = handlersRs.match(/^\s*pub const DEFAULT_WAIT_TIMEOUT_MS: i64 = ([0-9_]+);/m);
+    expect(canonical).not.toBeNull();
+    const fallback = createPageApi.toString().match(/args\.timeoutMs \?\? ([0-9.e]+)/);
+    expect(fallback).not.toBeNull();
+    expect(Number(fallback?.[1])).toBe(Number(canonical?.[1]?.replaceAll("_", "")));
   });
 
   test("readStorage returns RAW values (masking is the SW's job)", () => {

@@ -197,8 +197,8 @@ pub fn mcp_snippet() -> Result<McpSnippet, String> {
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionInfo {
+    /// The loadable unpacked-extension directory, when one resolved.
     pub path: Option<String>,
-    pub exists: bool,
 }
 
 /// Where the unpacked extension lives: bundled under the app's Resources in
@@ -220,15 +220,8 @@ pub fn extension_dir() -> Option<PathBuf> {
 }
 
 pub fn extension_info() -> ExtensionInfo {
-    match extension_dir() {
-        Some(p) => ExtensionInfo {
-            path: Some(p.display().to_string()),
-            exists: true,
-        },
-        None => ExtensionInfo {
-            path: None,
-            exists: false,
-        },
+    ExtensionInfo {
+        path: extension_dir().map(|p| p.display().to_string()),
     }
 }
 

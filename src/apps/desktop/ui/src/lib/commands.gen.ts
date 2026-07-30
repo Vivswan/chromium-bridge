@@ -16,16 +16,24 @@ export type KillState =
   | { "state": "engaged" }
   | { "state": "unreadable"; detail: string };
 
-export type ServerStatus = {
-  lockPresent: boolean;
-  lockError: string | null;
-  endpoint: string | null;
-  pid: number | null;
-  /**
-   * `None` when no probe was attempted (no lock file / no endpoint).
-   */
-  reachable: boolean | null;
-};
+/**
+ * The MCP server, classified once from `LockFile::read()`'s three-way
+ * result: exactly stopped (no lock file), running (parsed, with the probe
+ * result), or lock-unreadable. A discriminated union on the wire, so the UI
+ * matches states instead of re-deriving them from correlated nullables.
+ */
+export type ServerStatus =
+  | { "state": "stopped" }
+  | { "state": "running"; endpoint: string; pid: number; reachable: boolean }
+  | { "state": "unreadable"; detail: string };
+
+/**
+ * Where the bundled host binary resolved to, mirroring the `Result` it
+ * flattens onto the webview wire: exactly one of a path or an error.
+ */
+export type HostResolution =
+  | { "state": "resolved"; path: string }
+  | { "state": "unresolved"; error: string };
 
 export type BridgeStatus = {
   version: string;
@@ -34,10 +42,10 @@ export type BridgeStatus = {
   kill: KillState;
   server: ServerStatus;
   /**
-   * The bundled host binary this app manages, when it resolves.
+   * The bundled host binary this app manages: resolved to its path, or the
+   * everywhere-it-looked error.
    */
-  hostPath: string | null;
-  hostError: string | null;
+  host: HostResolution;
 };
 
 /**
@@ -119,6 +127,15 @@ export type EnclaveOutcome = {
   status: EnclaveStatusReport | null;
 };
 
+/**
+ * Core's [`RegState`] with its reasons stripped, mirrored as a serde enum
+ * (the same pattern as `clients::AnchorKind`) so the webview receives a
+ * closed literal union instead of a plain string. The `From` impl matches
+ * exhaustively: a new core state fails to compile here instead of reaching
+ * the UI as an unknown code that offers no action.
+ */
+export type RegCode = "ok" | "missing" | "stale" | "foreign" | "unreadable";
+
 export type BrowserRow = {
   /**
    * Stable key (`chrome`, `brave`, ...), also the register/unregister handle.
@@ -130,13 +147,11 @@ export type BrowserRow = {
    */
   state: string;
   /**
-   * `RegState::code()`: ok | missing | stale | foreign | unreadable. The
-   * machine form the UI branches on; an unknown code offers no action.
-   * Typed as plain `string`: the value set lives in core's RegState, not
-   * in this crate.
+   * The machine form the UI branches on, as the closed union the generated
+   * TS carries. Healthy is `code === "ok"`, derived - not a sibling field
+   * that could disagree.
    */
-  code: string;
-  healthy: boolean;
+  code: RegCode;
   /**
    * Where the registration lives (manifest path, or the HKCU key).
    */
@@ -270,21 +285,25 @@ export type AuditRecord = {
  * One line of the audit panel: a strictly parsed record, or an explicit
  * unrecognized marker in its place (order preserved).
  */
-export type AuditLine = AuditRecord | { unrecognized: boolean };
+export type AuditLine = AuditRecord | { unrecognized: true };
 
 export type AuditPage = {
   /**
-   * Oldest first, rotated file included, capped to `limit` newest.
+   * Oldest first, rotated file included, capped to `limit` newest. The
+   * unrecognized count is derived by the consumer from the marker lines,
+   * never carried as a second copy that could disagree.
    */
   lines: Array<AuditLine>;
-  unrecognized: number;
   path: string;
 };
 
 /**
- * The anchor kind on the wire: the same `hash` / `team_id` names
- * `AnchorSpec` parses back in [`pair`]. An enum rather than a string so the
- * generated TS carries the literal union straight from the serde attribute.
+ * The anchor kind on the wire, in both directions: [`list`] serializes it
+ * out, and the `client_pair` command deserializes it back in [`pair`]. An
+ * enum rather than a string so the generated TS carries the literal union
+ * straight from the serde attribute, and an unknown kind from the webview is
+ * refused by serde before `pair` runs. `AnchorSpec::ThisParent` has no
+ * variant here on purpose: it stays unreachable from the webview.
  */
 export type AnchorKind = "hash" | "team_id";
 
@@ -336,4 +355,9 @@ export type McpSnippet = {
   command: string;
 };
 
-export type ExtensionInfo = { path: string | null; exists: boolean };
+export type ExtensionInfo = {
+  /**
+   * The loadable unpacked-extension directory, when one resolved.
+   */
+  path: string | null;
+};

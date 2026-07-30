@@ -4,11 +4,11 @@
 // into authorization.
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { Browser } from "wxt/browser";
 import { CdpBackend } from "@/lib/background/backends/cdp";
 import { cdpRegistry } from "@/lib/background/cdp/registry";
+import type { ResolvedTab } from "@/lib/background/tabs";
 
-const TAB = { id: 7, url: "https://example.com/x" } as Browser.tabs.Tab;
+const TAB = { id: 7, url: "https://example.com/x" } as ResolvedTab;
 const PROBE = { tagName: "BUTTON", role: "button", type: "submit", hasHref: false, name: "Pay" };
 
 function fakeSession(evalResult: unknown) {

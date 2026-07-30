@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+  auditDefaultLimit,
   bridgeProtocolVersion,
   bridgeVersionLineViolations,
+  browserKeys,
   envTableViolations,
   envValueSet,
   familyViolations,
+  listPresenceViolation,
+  listSectionViolations,
   lockFilename,
   logEnvVars,
   mcpLineViolations,
@@ -188,5 +192,141 @@ describe("presence and env tables", () => {
     const v = envTableViolations("d.md", "nothing", "BB_LOG", ["debug"]);
     expect(v).toHaveLength(1);
     expect(v[0]?.message).toContain("must document");
+  });
+
+  test("reads the audit --limit default from its const", () => {
+    expect(auditDefaultLimit("pub const DEFAULT_AUDIT_LIMIT: usize = 200;")).toBe("200");
+    expect(auditDefaultLimit("pub const DEFAULT_AUDIT_LIMIT: usize = 1_000;")).toBe("1000");
+    expect(() => auditDefaultLimit("nothing here")).toThrow("audit.rs");
+    // Commented-out declarations (either style) never stand in for the value.
+    expect(() => auditDefaultLimit("// pub const DEFAULT_AUDIT_LIMIT: usize = 999;")).toThrow(
+      "audit.rs",
+    );
+    expect(() => auditDefaultLimit("/*\npub const DEFAULT_AUDIT_LIMIT: usize = 999;\n*/")).toThrow(
+      "audit.rs",
+    );
+    // A declaration inside a NESTED block comment stays hidden (finding 3).
+    expect(() =>
+      auditDefaultLimit("/* outer /* pub const DEFAULT_AUDIT_LIMIT: usize = 999; */ still */"),
+    ).toThrow("audit.rs");
+  });
+
+  test("reads the browser CLI keys from Browser::key(), not the display maps", () => {
+    const src = `
+    pub fn key(self) -> &'static str {
+        match self {
+            Browser::Chrome => "chrome",
+            Browser::Brave2 => "brave-2",
+        }
+    }
+    fn mac_app(self) -> &'static str {
+        match self {
+            Browser::Chrome => "Google Chrome.app",
+            Browser::Brave2 => "Brave Browser.app",
+        }
+    }`;
+    // Digit/hyphen keys parse; order is the source's.
+    expect(browserKeys(src)).toEqual(["chrome", "brave-2"]);
+    expect(() => browserKeys("no key fn")).toThrow("browsers.rs");
+  });
+
+  test("a Self:: arm is counted, not silently skipped (finding 3)", () => {
+    // The pre-review extractor filtered to lines starting `Browser::`, so a
+    // key written `Self::Opera` vanished from the pinned set. It must be
+    // classified, not dropped.
+    const src = `
+    pub fn key(self) -> &'static str {
+        match self {
+            Browser::Chrome => "chrome",
+            Self::Opera => "opera",
+        }
+    }`;
+    expect(browserKeys(src)).toEqual(["chrome", "opera"]);
+  });
+
+  test("a `_` catch-all (or any unclassifiable arm) throws, never shrinks the list", () => {
+    const withCatchAll = `
+    pub fn key(self) -> &'static str {
+        match self {
+            Browser::Chrome => "chrome",
+            _ => "unknown",
+        }
+    }`;
+    expect(() => browserKeys(withCatchAll)).toThrow("unclassifiable");
+    const withCall = `
+    pub fn key(self) -> &'static str {
+        match self {
+            Browser::Chrome => "chrome",
+            Browser::Weird => key_for_weird(),
+        }
+    }`;
+    expect(() => browserKeys(withCall)).toThrow("unclassifiable");
+  });
+
+  test("a key hidden in a nested block comment is not exposed (finding 3)", () => {
+    // A nested block comment must strip fully; the declaration inside stays
+    // hidden, so the real match block below is the only one seen.
+    const src = `
+    /* disabled /* pub fn key(self) -> &'static str { match self { Browser::Ghost => "ghost", } } */ */
+    pub fn key(self) -> &'static str {
+        match self {
+            Browser::Chrome => "chrome",
+        }
+    }`;
+    expect(browserKeys(src)).toEqual(["chrome"]);
+  });
+
+  test("a doc lagging the browser key list is flagged; a wrapped list passes", () => {
+    const keys = ["chrome", "brave", "edge"];
+    // The doc wraps the list across lines: still the canonical list.
+    expect(
+      listPresenceViolation("d.md", "keys (chrome, brave,\n  edge)", keys, "browser key list"),
+    ).toBeNull();
+    // A retired or added key changes the joined string: flagged.
+    expect(
+      listPresenceViolation("d.md", "keys (chrome, brave)", keys, "browser key list"),
+    ).toMatchObject({
+      doc: "d.md",
+      message: expect.stringContaining("chrome, brave, edge"),
+    });
+  });
+
+  test("section anchoring pins each list to its own paragraph (finding 2)", () => {
+    const keys = ["chrome", "brave"];
+    const doc = [
+      "for each known browser (chrome, brave), whether it is present.",
+      "",
+      "Known browser keys: `chrome`, `brave`.",
+    ].join("\n");
+    expect(
+      listSectionViolations("d.md", doc, keys, "browser key list", [
+        "for each known browser",
+        "Known browser keys",
+      ]),
+    ).toEqual([]);
+
+    // The "Known browser keys" paragraph drifts (added a retired key) while a
+    // DECOY correct copy is appended elsewhere: a bare count would be
+    // restored to 2, but section anchoring still fails the drifted paragraph.
+    const drifted = [
+      "for each known browser (chrome, brave), whether it is present.",
+      "",
+      "Known browser keys: `chrome`, `brave`, `opera`.",
+      "",
+      "aside: chrome, brave.",
+    ].join("\n");
+    const v = listSectionViolations("d.md", drifted, keys, "browser key list", [
+      "for each known browser",
+      "Known browser keys",
+    ]);
+    expect(v).toHaveLength(1);
+    expect(v[0]?.message).toContain("Known browser keys");
+
+    // A missing anchor paragraph is its own violation.
+    expect(
+      listSectionViolations("d.md", "no such section here", keys, "browser key list", [
+        "Known browser keys",
+      ]),
+    ).toHaveLength(1);
   });
 });

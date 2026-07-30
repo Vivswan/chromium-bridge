@@ -16,6 +16,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extensionDir } from "./browser-safety";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -93,8 +94,8 @@ console.log("(4/4) DOM-layer + smoke tests");
 // --load-extension launch can capture and close your real session. We do NOT
 // default CHROME_BIN to the system Chrome; if it's unset, skip the browser suite.
 const chromeBin = process.env.CHROME_BIN;
-if (!existsSync(join(repo, "build/extension/chrome-mv3"))) {
-  console.log("  SKIP  build/extension/chrome-mv3 missing (build step above did not run)");
+if (!existsSync(extensionDir())) {
+  console.log(`  SKIP  ${extensionDir()} missing (build step above did not run)`);
 } else if (!chromeBin) {
   console.log("  SKIP  browser tests: set CHROME_BIN to an isolated Chrome for Testing /");
   console.log("        Chromium binary (NOT your daily Chrome). See tests/README.md -> Safety.");

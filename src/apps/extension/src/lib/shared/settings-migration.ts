@@ -12,19 +12,23 @@ import { browser } from "wxt/browser";
 
 const VERSION_KEY = "settingsVersion";
 
-// The current schema version. Bump when adding a migration below.
-export const SETTINGS_VERSION = 1;
-
 /** A one-way transform from the version before it to the one after. Receives
  * the raw storage bag and returns the keys to write (a partial patch); it must
  * be idempotent enough to survive a retry. Index i migrates vi -> v(i+1). */
 export type Migration = (bag: Record<string, unknown>) => Record<string, unknown>;
 
-// No migrations yet (v0 -> v1 is the initial stamp). Add here in order when a
-// setting is renamed or its representation changes; each entry advances the
-// version by one. Example (do not uncomment - illustrative):
-//   MIGRATIONS[1] = (bag) => ({ hostReverifyMs: bag.reverifyIntervalMs }); // v1 -> v2
-export const MIGRATIONS: Migration[] = [];
+// The ladder: MIGRATIONS[i] migrates vi -> v(i+1). Append when a setting is
+// renamed or its representation changes. Example (illustrative):
+//   (bag) => ({ hostReverifyMs: bag.reverifyIntervalMs }), // v1 -> v2
+export const MIGRATIONS: readonly Migration[] = [
+  // v0 -> v1: the initial stamp; no stored key changes shape.
+  () => ({}),
+];
+
+/** The current schema version, DERIVED from the ladder: bumping the version
+ * without writing its migration (or vice versa) cannot happen - the version
+ * IS the ladder's length. */
+export const SETTINGS_VERSION = MIGRATIONS.length;
 
 const LOCK = "chromium-bridge-settings-write";
 
@@ -39,16 +43,27 @@ export function migrateSettings(): Promise<void> {
 
     let current: Record<string, unknown> = { ...bag };
     while (from < SETTINGS_VERSION) {
-      const migration = MIGRATIONS[from];
-      if (migration) {
-        const patch = migration(current);
-        current = { ...current, ...patch };
-        await browser.storage.local.set(patch);
-      }
+      const patch = rung(from)(current);
+      current = { ...current, ...patch };
+      await browser.storage.local.set(patch);
       from += 1;
     }
     await browser.storage.local.set({ [VERSION_KEY]: SETTINGS_VERSION });
   });
+}
+
+/** The migration for vX -> v(X+1). Throws on a hole instead of skipping it:
+ * stamping data as migrated when no transform ran would be permanent, while
+ * the throw is recoverable - migrations are idempotent, so the next run
+ * retries from the same version. Unreachable while SETTINGS_VERSION is
+ * derived from the ladder; kept as the backstop for a sparse array or an
+ * out-of-range `from`. */
+function rung(v: number, migrations: readonly Migration[] = MIGRATIONS): Migration {
+  const migration = migrations[v];
+  if (!migration) {
+    throw new Error(`settings migration v${v} -> v${v + 1} is missing from the ladder`);
+  }
+  return migration;
 }
 
 /** Tests only: run the migration ladder over a plain bag, no storage. */
@@ -56,12 +71,11 @@ export function runMigrationsForTests(
   bag: Record<string, unknown>,
   from: number,
   to: number,
-  migrations = MIGRATIONS,
+  migrations: readonly Migration[] = MIGRATIONS,
 ): Record<string, unknown> {
   let current = { ...bag };
   for (let v = from; v < to; v++) {
-    const migration = migrations[v];
-    if (migration) current = { ...current, ...migration(current) };
+    current = { ...current, ...rung(v, migrations)(current) };
   }
   return { ...current, [VERSION_KEY]: to };
 }

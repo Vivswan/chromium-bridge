@@ -5,7 +5,6 @@
 // partition the catalogue exactly (enforced by the roster drift test).
 
 import { isOpName, type OpName, unreachable } from "@chromium-bridge/shared";
-import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { isPageOp } from "../shared/page-ops";
 import { getSetting } from "../shared/settings";
@@ -24,6 +23,7 @@ import {
   pageForward,
   pageNavigate,
   pageReload,
+  type ResolvedTab,
   resolveTargetTab,
   tabClose,
   tabFocus,
@@ -96,8 +96,7 @@ export function assertNotDisabled(op: string | undefined, disabledTools: string[
 /** Re-fetch a tab and require its origin to still match the one the
  * allowlist check and any confirmation were based on (fail closed on a
  * navigation raced against the pipeline). Exported for tests. */
-export async function recheckTab(tab: Browser.tabs.Tab): Promise<Browser.tabs.Tab> {
-  if (tab.id == null) throw new Error("target tab has no id");
+export async function recheckTab(tab: ResolvedTab): Promise<ResolvedTab> {
   const current = await browser.tabs.get(tab.id);
   if (originOf(current.url) !== originOf(tab.url)) {
     throw new Error(
@@ -105,7 +104,10 @@ export async function recheckTab(tab: Browser.tabs.Tab): Promise<Browser.tabs.Ta
         "confirmed; re-issue the call against the new page",
     );
   }
-  return current;
+  // Fetched by id, so the id is necessarily present; keep the fail-closed
+  // check rather than a cast.
+  if (current.id == null) throw new Error("target tab has no id");
+  return current as ResolvedTab;
 }
 
 function originOf(url: string | undefined): string {

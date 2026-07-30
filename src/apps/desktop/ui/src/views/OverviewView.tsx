@@ -19,7 +19,7 @@ import { isArmed } from "@/lib/armed";
 import { authLabel } from "@/lib/auth-label";
 import { browserDisplayName, formatBrowserList } from "@/lib/browser-names";
 import { formatFingerprint } from "@/lib/fingerprint";
-import { api, errorText } from "@/lib/tauri";
+import { api, errorText, isHealthy } from "@/lib/tauri";
 import { useAppStore } from "@/store";
 
 /* ------------------------------------------------------------------ */
@@ -290,7 +290,11 @@ export function OverviewView() {
   // "serving" is only claimed when the kill state is provably off AND the
   // server socket answered on a refresh that succeeded; loading, stale, or
   // unreadable never counts as off.
-  const serving = statusFresh && status?.server.reachable === true && killState === "off";
+  const serving =
+    statusFresh &&
+    status?.server.state === "running" &&
+    status.server.reachable &&
+    killState === "off";
   const keyPresent = enclave.data?.key === "present";
   // the ONE armed/attested predicate, shared with SecurityView
   const armed = isArmed(enclave, statusFresh);
@@ -299,14 +303,12 @@ export function OverviewView() {
   const clientRows = clients.data?.clients ?? [];
   // a registration that exists on disk stays visible even when its browser
   // is no longer detected - a leftover manifest is never a fresh install
-  const browserRows = (browsers.data ?? []).filter(
-    (b) => b.detected || b.healthy || b.code !== "missing",
-  );
-  const registeredRows = browserRows.filter((b) => b.healthy);
+  const browserRows = (browsers.data ?? []).filter((b) => b.detected || b.code !== "missing");
+  const registeredRows = browserRows.filter(isHealthy);
   // absent registration vs a present-but-wrong one (stale/foreign/unreadable):
   // the latter is never "fresh" and offers Repair, not Connect
-  const missingRows = browserRows.filter((b) => !b.healthy && b.code === "missing");
-  const brokenRows = browserRows.filter((b) => !b.healthy && b.code !== "missing");
+  const missingRows = browserRows.filter((b) => b.code === "missing");
+  const brokenRows = browserRows.filter((b) => !isHealthy(b) && b.code !== "missing");
   const registered = registeredRows.length;
 
   // a settled error counts as loaded: the map then renders with the
@@ -380,7 +382,7 @@ export function OverviewView() {
             },
           ]
         : browserRows.map((b) => {
-            if (!b.healthy) {
+            if (!isHealthy(b)) {
               if (b.code !== "missing") {
                 // a manifest exists but is wrong: amber node, real state text
                 return {
@@ -893,13 +895,13 @@ export function OverviewView() {
               <StatusDot tone="idle">{t("overview.map_state_unknown")}</StatusDot>
             ) : status === undefined ? (
               t("common.loading")
-            ) : status.server.lockError !== null ? (
+            ) : status.server.state === "unreadable" ? (
               <StatusDot tone="pending">
-                {t("overview.server_lock_unreadable", [status.server.lockError])}
+                {t("overview.server_lock_unreadable", [status.server.detail])}
               </StatusDot>
-            ) : !status.server.lockPresent ? (
+            ) : status.server.state === "stopped" ? (
               <StatusDot tone="idle">{t("overview.server_not_running")}</StatusDot>
-            ) : status.server.reachable === true ? (
+            ) : status.server.reachable ? (
               <StatusDot tone="live">{t("overview.server_reachable")}</StatusDot>
             ) : (
               <StatusDot tone="pending">{t("overview.server_unreachable")}</StatusDot>
@@ -908,15 +910,18 @@ export function OverviewView() {
           <Consequence>{t("overview.server_consequence")}</Consequence>
         </div>
         <div className="row-side">
-          {status?.server.pid != null && (
+          {status?.server.state === "running" && (
             <span className="row-count">
               {t("overview.server_pid", [String(status.server.pid)])}
             </span>
           )}
-          {/* endpoint null covers both "not running" and "lock unreadable";
-              claim neither - the row-status line above says which it is */}
+          {/* only the running state has an endpoint to name; "not running"
+              and "lock unreadable" claim neither - the row-status line above
+              says which it is */}
           <ChipMono wrap>
-            {status?.server.endpoint ?? t("overview.server_endpoint_unknown")}
+            {status?.server.state === "running"
+              ? status.server.endpoint
+              : t("overview.server_endpoint_unknown")}
           </ChipMono>
         </div>
       </section>
@@ -981,7 +986,7 @@ export function OverviewView() {
                 <span
                   key={b.key}
                   className={`inline-flex items-center gap-1.5 ${
-                    b.healthy ? "text-text-2" : "text-text-3"
+                    isHealthy(b) ? "text-text-2" : "text-text-3"
                   }`}
                 >
                   {/* registration is configuration, never a live claim: the
@@ -990,7 +995,7 @@ export function OverviewView() {
                   <Dot tone="idle" />
                   {browserDisplayName(b.key)}
                   <span className="text-[11px] text-text-3">
-                    {b.healthy
+                    {isHealthy(b)
                       ? t("overview.browser_registered")
                       : t("overview.browser_unregistered")}
                   </span>
@@ -1058,7 +1063,7 @@ export function OverviewView() {
     >
       <div className="flex flex-col gap-2.5">
         {statusError !== undefined && <ErrorNote>{statusError}</ErrorNote>}
-        {status?.hostError != null && <ErrorNote>{status.hostError}</ErrorNote>}
+        {status?.host.state === "unresolved" && <ErrorNote>{status.host.error}</ErrorNote>}
         {enclave.error !== undefined && <ErrorNote>{enclave.error}</ErrorNote>}
         {browsers.error !== undefined && <ErrorNote>{browsers.error}</ErrorNote>}
         {clients.error !== undefined && <ErrorNote>{clients.error}</ErrorNote>}

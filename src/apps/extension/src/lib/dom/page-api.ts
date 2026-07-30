@@ -273,6 +273,11 @@ export function createPageApi(refAttr: string): PageApi {
   }
 
   function resolveTarget(args: { ref?: string; selector?: string }): HTMLElement {
+    // The HTMLElement return type deliberately overclaims: a ref or selector
+    // can name an interactive SVG element, and the Element-safe ops (hover,
+    // the click probe - the helpers fall back from innerText/title to
+    // Element APIs) must keep working on it. Ops that genuinely need
+    // HTML-only APIs narrow at their own call sites (fill/select).
     if (args.ref) {
       // Prefer the live map from the most recent snapshot; fall back to a DOM
       // query by attribute (fresh instance, or SW recycle re-injection).
@@ -302,11 +307,33 @@ export function createPageApi(refAttr: string): PageApi {
     };
   }
 
-  function setNativeValue(el: HTMLElement, value: string): void {
+  /** The tags whose value the native prototype setter fills. The caller
+   * (`fill`) narrows before calling, so a non-form target is refused with a
+   * typed error rather than throwing "Illegal invocation" mid-fill. */
+  type Fillable = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
+  const XHTML_NS = "http://www.w3.org/1999/xhtml";
+
+  // Realm-insensitive narrowing, everywhere in this factory: an element
+  // adopted from a same-origin iframe keeps ITS realm's prototype chain, so
+  // `instanceof` against this realm's constructors would refuse a target
+  // whose native APIs all work. Namespace + tagName is the realm-safe test:
+  // tagName alone does NOT prove the HTML namespace
+  // (createElementNS(SVG_NS, "INPUT") reports an uppercase "INPUT"), so an
+  // HTML-only op must also require namespaceURI === XHTML_NS before touching
+  // HTMLInputElement/HTMLSelectElement APIs.
+
+  function isFillable(el: HTMLElement): el is Fillable {
+    if (el.namespaceURI !== XHTML_NS) return false;
+    return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
+  }
+
+  function setNativeValue(el: Fillable, value: string): void {
     // Setting el.value directly doesn't trigger React/Vue change detection;
-    // use the native setter from the prototype.
-    el.focus?.();
-    const field = el as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    // use the native setter from the prototype (tagName-selected: see the
+    // realm note above - the element may not be an instance of this realm's
+    // constructors, but the setter works on any HTML-namespace element).
+    el.focus();
     const proto =
       el.tagName === "TEXTAREA"
         ? HTMLTextAreaElement.prototype
@@ -317,7 +344,7 @@ export function createPageApi(refAttr: string): PageApi {
     if (setter) {
       setter.call(el, value);
     } else {
-      field.value = value;
+      el.value = value;
     }
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -358,12 +385,18 @@ export function createPageApi(refAttr: string): PageApi {
       refCounter = 0;
       refMap = new Map();
       const out: SnapshotNode[] = [];
+      // SHOW_ELEMENT guarantees an Element, not necessarily an HTMLElement:
+      // interactive SVG (links, role/onclick/tabindex carriers) is
+      // deliberately included so the model keeps seeing it. The cast is safe
+      // for the read-only helpers used here - they only touch Element APIs
+      // or fall back (innerText || textContent); HTML-only ops narrow at
+      // their own call sites (fill/select).
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
         acceptNode: (el) =>
           isInteractive(el as HTMLElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
       });
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const el = node as HTMLElement; // SHOW_ELEMENT guarantees an element
+        const el = node as HTMLElement;
         if (!isVisible(el)) continue;
         out.push({
           ref: assignRef(el),
@@ -414,6 +447,10 @@ export function createPageApi(refAttr: string): PageApi {
     },
 
     waitFor(args) {
+      // Mirrors the host's DEFAULT_WAIT_TIMEOUT_MS (the canonical copy in
+      // src/packages/core/src/tools/handlers.rs); the factory is
+      // self-contained, so this must stay a literal - a source-pin test
+      // holds the two together.
       const timeoutMs = args.timeoutMs ?? 30000;
       const start = Date.now();
       return new Promise((resolve, reject) => {
@@ -515,6 +552,16 @@ export function createPageApi(refAttr: string): PageApi {
         throw new Error("click has no approved target descriptor - refusing");
       }
       const el = resolveTarget(args);
+      // click() is an HTMLElement API: an SVG target was never clickable
+      // here (it used to die on a raw "el.click is not a function"), so this
+      // typed refusal is a strict improvement, not a behavior change.
+      // Element-safe ops (hover, the probe) keep accepting SVG. The check is
+      // realm-insensitive (namespace + capability, never instanceof): an
+      // element adopted from a same-origin iframe clicks fine and must not
+      // be refused for carrying another realm's prototype chain.
+      if (el.namespaceURI !== XHTML_NS || typeof el.click !== "function") {
+        throw new Error("page_click target is not an HTML element (SVG targets are not clickable)");
+      }
       el.scrollIntoView({ block: "center" });
       el.focus?.();
       // Bind the act to the approval: the user approved a specific descriptor
@@ -541,6 +588,11 @@ export function createPageApi(refAttr: string): PageApi {
 
     fill(args) {
       const el = resolveTarget(args);
+      // Typed refusal, mirroring select(): filling anything else would focus
+      // the wrong element and then throw an opaque "Illegal invocation".
+      if (!isFillable(el)) {
+        throw new Error("page_fill target is not an <input>, <textarea>, or <select>");
+      }
       setNativeValue(el, args.value ?? "");
       return { filled: args.ref || args.selector };
     },
@@ -600,9 +652,14 @@ export function createPageApi(refAttr: string): PageApi {
 
     select(args) {
       const el = resolveTarget(args);
-      if (el.tagName !== "SELECT") throw new Error("page_select target is not a <select>");
-      const value = args.value ?? "";
+      // Namespace + tagName: realm-insensitive AND excludes an SVG element
+      // created as createElementNS(SVG_NS, "SELECT") (uppercase tagName, no
+      // HTMLSelectElement APIs) - see the note above isFillable.
+      if (el.namespaceURI !== XHTML_NS || el.tagName !== "SELECT") {
+        throw new Error("page_select target is not a <select>");
+      }
       const sel = el as HTMLSelectElement;
+      const value = args.value ?? "";
       const opts = Array.from(sel.options);
       let idx = opts.findIndex((o) => o.value === value);
       if (idx < 0) idx = opts.findIndex((o) => (o.textContent || "").trim() === value);

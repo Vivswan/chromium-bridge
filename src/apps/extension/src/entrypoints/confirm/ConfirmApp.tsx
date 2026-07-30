@@ -2,6 +2,7 @@ import {
   type ConfirmKind,
   type ConfirmPayload,
   ConfirmPayloadSchema,
+  type OpName,
 } from "@chromium-bridge/shared";
 import { useEffect, useRef, useState } from "react";
 import { browser } from "wxt/browser";
@@ -43,15 +44,17 @@ const WARNING_KEY: Record<ConfirmKind, MessageKey> = {
 
 // The meta chip speaks the catalogue's tool vocabulary (page_click, ...), the
 // same names the options grid and the audit trail use - never the internal
-// ConfirmKind spelling.
-const TOOL_NAME: Record<ConfirmKind, string> = {
+// ConfirmKind spelling. `satisfies` pins every value to the generated OpName
+// union, so a catalogue rename breaks this map at compile time instead of
+// leaving the security chip showing a stale name.
+const TOOL_NAME = {
   click: "page_click",
   press: "page_press",
   select: "page_select",
   eval: "page_eval",
   tab_close: "tab_close",
   upload: "page_upload",
-};
+} as const satisfies Record<ConfirmKind, OpName>;
 
 async function resolve(id: string, approved: boolean): Promise<void> {
   try {
