@@ -12,6 +12,9 @@
 repository:
   description: "Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port"
   topics: "brave,browser-automation,chrome-extension,mcp,native-messaging,rust"
+  # Declared so the heal run reverts an out-of-band flip to private (the
+  # template only emits this key for private repos).
+  private: false
   has_issues: true
   has_wiki: false
   has_projects: false
@@ -57,6 +60,16 @@ labels:
   - name: fix-lint
     color: "fbca04"
     description: Lint / formatting fixes
+  # The issue forms (.github/ISSUE_TEMPLATE/) apply these three.
+  - name: "type:bug"
+    color: "d73a4a"
+    description: Something isn't working
+  - name: "type:feature"
+    color: "1d76db"
+    description: New tool, capability, or change
+  - name: "type:security"
+    color: "5319e7"
+    description: Change touching the security model
   # release-please manages these two; listing them here keeps the settings
   # sync from deleting them (it removes any label not declared in this file).
   - name: "autorelease: pending"
