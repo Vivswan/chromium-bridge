@@ -600,6 +600,20 @@ def a12_secret_confidentiality():
         _reap(nh)
         srv.stdin.close()
         srv.wait(timeout=5)
+        if nh is not None:
+            # The leak hunt is only as strong as its verbosity: BB_LOG=debug is
+            # hand-typed above, and log.rs falls back SILENTLY to info on an
+            # unset or unknown var, so a renamed variable would quietly turn
+            # this into an info-level hunt. Demand observable debug output: the
+            # native host emits [DEBUG] lines on its clean shutdown. Poll
+            # BEFORE building `captured` below - the stderr drain thread may
+            # still be flushing after the process exits, and the secret hunt
+            # must see those late lines too.
+            deadline = time.time() + 3
+            while "[DEBUG] [" not in host_stderr(nh) and time.time() < deadline:
+                time.sleep(0.05)
+            check("[DEBUG] [" in host_stderr(nh),
+                  "A12 BB_LOG=debug is live: a [DEBUG] line appears in the captured stderr")
         captured = "".join([
             server_stderr(srv),
             host_stderr(nh) if nh is not None else "",
@@ -740,8 +754,10 @@ def a15_spoofed_client_name_is_not_authz():
         # Enroll a decoy under the name "trusted". The attacker then claims that
         # exact NAME via the env var. Authorization keys on the attested hash,
         # not the self-asserted name, so admission must still be refused.
+        # BB_LOG is pinned to info: the name assertion below reads the refusal
+        # audit line, which an ambient BB_LOG=warn/error would suppress.
         _pair_client("--name", "trusted", "--hash", "11" * 20)
-        env = dict(os.environ, CHROMIUM_BRIDGE_CLIENT_NAME="trusted")
+        env = dict(os.environ, CHROMIUM_BRIDGE_CLIENT_NAME="trusted", BB_LOG="info")
         srv = subprocess.Popen([e2e.BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
         srv.err_lines = []
@@ -753,6 +769,15 @@ def a15_spoofed_client_name_is_not_authz():
             check(lf is None, "A15 a matching NAME does not admit a non-matching hash")
             srv.wait(timeout=5)
             check(srv.returncode == 1, "A15 refused despite the spoofed name (fail closed)")
+            # The refusal must be a live name-spoof, not a vacuous one: the
+            # env var name is hand-typed above, and a renamed
+            # CLIENT_NAME_ENV (src/packages/core/src/mcp_server.rs) would leave this
+            # test green while no name ever reached the server. The refusal
+            # audit line carries the self-asserted name, so demand it.
+            err = server_stderr(srv)
+            check("name=trusted" in err or '"name":"trusted"' in err,
+                  "A15 the spoofed name reached the server via the env var "
+                  "(refusal audit line carries name=trusted)")
         finally:
             _reap(srv)
     finally:

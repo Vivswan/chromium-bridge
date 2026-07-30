@@ -48,7 +48,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import puppeteer, { type Browser, type Target } from "puppeteer-core";
-import { assertIsolatedBrowserOrSkip } from "./browser-safety";
+import { assertIsolatedBrowserOrSkip, finishSuite } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
 const EXTENSION_DIR = process.env.BB_EXT_DIR || path.join(REPO, "build", "extension", "chrome-mv3");
@@ -388,8 +388,7 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`\n${"=".repeat(50)}\n${Pass} passed, ${Fail} failed`);
-  process.exit(Fail > 0 ? 1 : 0);
+  finishSuite("security_browser_test", Pass, Fail);
 }
 
 main().catch((e) => {

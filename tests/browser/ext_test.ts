@@ -20,7 +20,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import puppeteer, { type Target } from "puppeteer-core";
-import { assertIsolatedBrowserOrSkip } from "./browser-safety";
+import { assertIsolatedBrowserOrSkip, finishSuite } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
 // The load-unpacked target is the built bundle. Run
@@ -302,8 +302,7 @@ async function main(): Promise<void> {
     } catch {}
   }
 
-  console.log(`\n${"=".repeat(50)}\n${Pass} passed, ${Fail} failed`);
-  process.exit(Fail > 0 ? 1 : 0);
+  finishSuite("ext_test", Pass, Fail);
 }
 
 main().catch((e) => {
