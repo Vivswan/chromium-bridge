@@ -82,35 +82,72 @@ export function evalExceptionMessage(details: ExceptionDetails): string {
   return details.text || "evaluation failed";
 }
 
+// A session is in exactly one of these states. One value, not an `attached`
+// boolean beside a nullable in-flight promise: that pair let a detach during
+// an in-flight attach no-op (both fields read "not attached"), leaving an
+// ownerless live debugger attach - a stuck banner cdpMode-off teardown could
+// never reach.
+type SessionState =
+  | { phase: "detached" }
+  | { phase: "attaching"; attach: Promise<void> }
+  | { phase: "attached" };
+
 export class CdpSession {
   readonly tabId: number;
-  private attached = false;
-  private attaching: Promise<void> | null = null;
+  private state: SessionState = { phase: "detached" };
+  /** Whether THIS session may issue the orphan-cleanup detach for its tab.
+   * browser.debugger.detach is TAB-scoped, not session-scoped: without this
+   * guard, a stale session's won-but-unowned attach settling late would rip
+   * down a NEWER session that has since attached to the same tab. The
+   * registry wires it to "the tab's current session is still me, or nobody's"
+   * (registry.ts). Required, not defaulted: a permissive default would hand
+   * any future direct construction the unguarded tab-scoped detach back. */
+  private readonly mayCleanupOrphan: () => boolean;
 
-  constructor(tabId: number) {
+  constructor(tabId: number, mayCleanupOrphan: () => boolean) {
     this.tabId = tabId;
+    this.mayCleanupOrphan = mayCleanupOrphan;
   }
 
   get isAttached(): boolean {
-    return this.attached;
+    return this.state.phase === "attached";
   }
 
   // Attach the debugger to this tab. Idempotent: a no-op if already attached.
   // The banner ("Started debugging this browser") stays up until detach - by
   // design in CDP mode (ADR-0017), the registry keeps sessions attached.
-  async attach(): Promise<void> {
-    if (this.attached) return;
-    // Dedupe concurrent attaches. Without this, two page ops racing on a fresh
-    // tab each issue browser.debugger.attach; the second fails ("another debugger
-    // is already attached"), and the caller's cleanup deletes the session the
-    // first successfully attached - orphaning the debugger (stuck banner, CDP
-    // broken for that tab). Share one in-flight attach instead.
-    if (!this.attaching) {
-      this.attaching = this.doAttach().finally(() => {
-        this.attaching = null;
-      });
-    }
-    return this.attaching;
+  //
+  // Concurrent attaches share the one in-flight promise. Without this, two
+  // page ops racing on a fresh tab each issue browser.debugger.attach; the
+  // second fails ("another debugger is already attached"), and the caller's
+  // cleanup deletes the session the first successfully attached - orphaning
+  // the debugger (stuck banner, CDP broken for that tab).
+  attach(): Promise<void> {
+    const s = this.state;
+    if (s.phase === "attached") return Promise.resolve();
+    if (s.phase === "attaching") return s.attach;
+    const attach = this.doAttach();
+    const next: SessionState = { phase: "attaching", attach };
+    this.state = next;
+    // The transition consumes exactly the attaching state it created. If a
+    // markDetached (Chrome pulled the session) or a detach replaced it while
+    // the attach was in flight, the settling attach must not resurrect it -
+    // and if it WON a real browser.debugger attach that nobody now holds, it
+    // gets cleaned up here so no debugger is left orphaned (the banner's
+    // stuck-on failure, in the opposite direction from detach-during-attach).
+    // The cleanup is identity-guarded (mayCleanupOrphan): dbgDetach is
+    // tab-scoped, so a stale session must never fire it while a NEWER
+    // session owns the tab.
+    attach.then(
+      () => {
+        if (this.state === next) this.state = { phase: "attached" };
+        else if (this.mayCleanupOrphan()) void dbgDetach(this.tabId);
+      },
+      () => {
+        if (this.state === next) this.state = { phase: "detached" };
+      },
+    );
+    return attach;
   }
 
   private async doAttach(): Promise<void> {
@@ -128,19 +165,27 @@ export class CdpSession {
       }
       throw e;
     }
-    this.attached = true;
   }
 
   async detach(): Promise<void> {
-    if (!this.attached) return;
-    this.attached = false;
+    const s = this.state;
+    if (s.phase === "detached") return;
+    if (s.phase === "attaching") {
+      // A detach must account for an in-flight attach winning the race:
+      // wait for it to settle, then tear down whatever it produced. The
+      // settled transition above runs first (registered at attach time), so
+      // the re-read below sees the post-attach state.
+      await s.attach.catch(() => {});
+    }
+    if (this.state.phase !== "attached") return;
+    this.state = { phase: "detached" };
     await dbgDetach(this.tabId);
   }
 
   // Mark the session as detached WITHOUT calling browser.debugger.detach - for
   // the case where Chrome already detached us (onDetach event).
   markDetached(): void {
-    this.attached = false;
+    this.state = { phase: "detached" };
   }
 
   send<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {

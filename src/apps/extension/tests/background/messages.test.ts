@@ -65,6 +65,9 @@ const GATED: RuntimeMsg[] = [
   // page, then confirm window specifically); this pins the first gate.
   { type: "confirm_deny_kill" },
   { type: "get_audit" },
+  // The pending-approval mirror sweep: display-state only, but it writes
+  // storage the popup renders, so it stays extension-page gated like the rest.
+  { type: "sweep_pending" },
   { type: "enroll_pair" },
   { type: "enroll_verify" },
   { type: "enroll_approve" },
@@ -142,5 +145,17 @@ describe("router sender gating (#32)", () => {
     // No pending confirmation, so payload is null - but NOT the refusal.
     const { resp } = call({ type: "confirm_ready", id: "x" }, confirmSender);
     expect(resp).toEqual({ payload: null });
+  });
+
+  test("sweep_pending re-derives the mirror through the SW (ghost record swept)", async () => {
+    // The popup found an unparsable pendingAllow record and asked the SW to
+    // sweep it. The SW's serialized mirror path removes it (no live requests
+    // in this worker); the popup itself never writes storage - a popup-side
+    // remove could race a freshly minted live request and strand its resolver.
+    await fakeBrowser.storage.local.set({ pendingAllow: { id: "old-shape", glob: "x" } });
+    const resp = await callAsync({ type: "sweep_pending" }, optionsSender);
+    expect(resp).toEqual({ ok: true });
+    const { pendingAllow } = await fakeBrowser.storage.local.get("pendingAllow");
+    expect(pendingAllow).toBeUndefined();
   });
 });

@@ -20,7 +20,13 @@
 import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
-import { addAllow, getAllowlist, removeAllow, resolvePendingAllow } from "./allowlist-store";
+import {
+  addAllow,
+  getAllowlist,
+  removeAllow,
+  resolvePendingAllow,
+  syncPendingMirror,
+} from "./allowlist-store";
 import { readRing } from "./audit-log";
 import { requestClientList, revokeTrustedClient } from "./clients";
 import {
@@ -145,6 +151,15 @@ export function route(
     case "get_audit":
       // ADR-0030: the read-only audit ring for the options panel.
       void readRing().then((entries) => sendResponse({ entries }));
+      return true;
+    case "sweep_pending":
+      // The popup saw an unparsable pendingAllow record: re-derive the
+      // mirror through the ONE serialized store path. If the SW holds live
+      // requests, this rewrites them (never deletes them); with none, it
+      // removes the ghost and clears the badge. The popup itself never
+      // writes the record - an uncoordinated popup-side remove could race a
+      // freshly minted request and orphan its resolver.
+      void syncPendingMirror().then(() => sendResponse({ ok: true }));
       return true;
     case "confirm_ready":
       // The confirmation window (ADR-0027) asking for its payload. Requires the
