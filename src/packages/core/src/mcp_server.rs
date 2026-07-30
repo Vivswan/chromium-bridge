@@ -324,12 +324,6 @@ pub(crate) fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             // structured audit event (tool, outcome, taxonomy code, duration).
             let req_id = next_request_id();
             let started = std::time::Instant::now();
-            // Capture where this call would be routed (browser label +
-            // connection generation), so the audit line can be correlated
-            // with a specific browser and native-host connection across
-            // reconnects. Best-effort diagnostics, not enforcement.
-            let browser_arg = args.get("browser").and_then(|v| v.as_str());
-            let route = session.route_info(browser_arg);
             // The global kill switch gates EVERY tool call, for every harness
             // (this dispatcher serves the broker's own stdio harness and all
             // relays), before any routing or bridge traffic (ADR-0030). Fail
@@ -338,21 +332,17 @@ pub(crate) fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             // Tool errors are returned as a *successful* RPC with isError=true
             // in the result (per MCP spec); only protocol errors use the
             // error field.
-            let out = match crate::kill::check() {
-                Ok(()) => tools::dispatch(session, name, &args),
-                Err(e) => tools::error_outcome(&e),
-            };
-            let route = route.or_else(|| session.route_info(browser_arg));
+            let (route, out) = route_and_dispatch(session, name, &args, crate::kill::check());
             let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::ToolCall);
             rec.req = Some(req_id);
             rec.conn = route.as_ref().map(|(_, g)| *g);
             rec.name = route.as_ref().map(|(l, _)| l.clone());
             rec.tool = Some(name.to_string());
-            rec.outcome = Some(if out.is_error { "error" } else { "ok" }.to_string());
-            rec.code = out.error_code.map(str::to_string);
+            rec.outcome = Some(if out.is_error() { "error" } else { "ok" }.to_string());
+            rec.code = out.error_code().map(str::to_string);
             rec.dur_ms = Some(started.elapsed().as_millis() as u64);
             crate::audit::record(rec);
-            let result = json!({ "content": out.content, "isError": out.is_error });
+            let result = json!({ "content": out.content(), "isError": out.is_error() });
             Some(JsonRpc::ok(id, result))
         }
         // Unknown method -> JSON-RPC method-not-found.
@@ -385,4 +375,108 @@ fn next_request_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Route and dispatch one tool call from a SINGLE parse of its `browser`
+/// argument. `tools::extract_browser` runs exactly once here; the audit route
+/// (browser label + connection generation, best-effort diagnostics) and the
+/// dispatch both consume that one result, so the trail can never record a
+/// default route for a call the strict parse refused. The route is captured
+/// before the dispatch and refreshed after it (a host may connect during the
+/// call's startup wait), and the kill verdict arrives injected so the
+/// fail-closed matrix is unit-testable without touching the runtime
+/// directory or the audit sink (both live in [`handle`]).
+fn route_and_dispatch(
+    session: &Session,
+    name: &str,
+    args: &Value,
+    kill: Result<(), crate::error::CallError>,
+) -> (Option<(String, u64)>, tools::Outcome) {
+    let browser = tools::extract_browser(args);
+    let route_now = || browser.as_ref().ok().and_then(|b| session.route_info(*b));
+    let route = route_now();
+    let out = match kill {
+        Ok(()) => match &browser {
+            Ok(b) => tools::dispatch(session, name, args, *b),
+            Err(e) => tools::error_outcome(e),
+        },
+        Err(e) => tools::error_outcome(&e),
+    };
+    let route = route.or_else(route_now);
+    (route, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_malformed_browser_arg_is_refused_with_the_typed_code() {
+        // `browser: 123` used to be re-read here with laxer rules than
+        // dispatch's (`as_str`, silently None); now the strict parse runs
+        // once and the refusal carries the stable INVALID_ARGUMENT code,
+        // with no routing attempted (a fresh session would otherwise block
+        // in the 12s startup wait - this test finishing quickly is itself
+        // the assertion).
+        let session = Session::new();
+        let (_route, out) =
+            route_and_dispatch(&session, "tab_list", &json!({ "browser": 123 }), Ok(()));
+        assert!(out.is_error());
+        assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_malformed_browser_arg_records_no_route_even_with_a_browser_connected() {
+        // The single-parse guard, non-vacuously: with a live connection, the
+        // lax pre-refactor read would have resolved the sole browser and
+        // stamped a route onto the audit line of a call dispatch then
+        // refused. The strict parse feeds routing and dispatch from ONE
+        // result, so the refused call records no route at all.
+        use std::io::{BufReader, BufWriter};
+        use std::os::unix::net::UnixStream;
+
+        let session = Session::new();
+        let (srv, _cli) = UnixStream::pair().unwrap();
+        let reader = BufReader::new(srv.try_clone().unwrap());
+        let writer = BufWriter::new(srv);
+        let label = crate::ipc::BrowserLabel::parse("chrome").unwrap();
+        assert!(session.attach_browser(label, reader, writer));
+
+        let (route, out) =
+            route_and_dispatch(&session, "tab_list", &json!({ "browser": 123 }), Ok(()));
+        assert_eq!(route, None, "a refused parse must not invent a route");
+        assert!(out.is_error());
+        assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
+
+        // Control: the same session does route a well-formed call (captured
+        // pre-dispatch from the same single parse).
+        let (route, _out) = route_and_dispatch(
+            &session,
+            "no_such_tool",
+            &json!({ "browser": "chrome" }),
+            Ok(()),
+        );
+        assert_eq!(route.map(|(l, _)| l), Some("chrome".to_string()));
+    }
+
+    #[test]
+    fn a_kill_refusal_is_typed_and_skips_dispatch() {
+        // While killed, dispatch never runs: with an empty session a
+        // dispatched tab_list would park in the 12s connect wait, so this
+        // test finishing quickly is the assertion that the kill verdict
+        // short-circuited it, and the refusal reaches the caller as the
+        // typed BRIDGE_KILLED outcome. No claim is made about the route -
+        // it is captured before the verdict on purpose (best-effort audit
+        // diagnostics, unchanged from before this refactor).
+        let session = Session::new();
+        let (_route, out) = route_and_dispatch(
+            &session,
+            "tab_list",
+            &json!({}),
+            Err(crate::error::CallError::Killed),
+        );
+        assert!(out.is_error());
+        assert_eq!(out.error_code(), Some("BRIDGE_KILLED"));
+    }
 }

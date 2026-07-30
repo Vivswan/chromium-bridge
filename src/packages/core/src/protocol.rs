@@ -420,6 +420,62 @@ impl BridgeResp {
     }
 }
 
+/// A [`BridgeResp`] parsed past its flat wire shape into the two states a
+/// response can actually be in: success with data, or failure with an error.
+/// The flat `{ ok, data?, error? }` triple stays the pinned wire contract
+/// (ADR-0028: the Zod validators and the envelope schema are derived from
+/// [`BridgeResp`]), but it can spell contradictions - `ok: true` with an
+/// `error`, `ok: false` with `data`, or a bare `ok: false` claiming failure
+/// with no error - and the attested-but-untrusted extension must not be able
+/// to hand the session a response it has to re-interpret. Parsing goes
+/// through [`TryFrom<BridgeResp>`] (wired into serde via `try_from`), so a
+/// contradictory frame is refused at the read boundary as `InvalidData` -
+/// the session drops the offending connection, fail closed - and everything
+/// downstream matches on `outcome` with no mixture left to misread.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "BridgeResp")]
+pub struct ParsedResp {
+    /// Correlation id echoed from the [`BridgeReq`].
+    pub id: u64,
+    /// Exactly success-with-data or failure-with-error. A success frame that
+    /// omitted `data` (legal on the wire for ops with nothing to return)
+    /// parses as `Ok(Value::Null)`, so the omission is resolved once, here.
+    pub outcome: Result<Value, String>,
+}
+
+impl TryFrom<BridgeResp> for ParsedResp {
+    type Error = String;
+
+    fn try_from(wire: BridgeResp) -> Result<Self, String> {
+        let outcome = match (wire.ok, wire.data, wire.error) {
+            (true, data, None) => Ok(data.unwrap_or(Value::Null)),
+            (false, None, Some(error)) => Err(error),
+            (true, _, Some(_)) => {
+                return Err(format!(
+                    "contradictory bridge response (id {}): ok with an error",
+                    wire.id
+                ));
+            }
+            (false, Some(_), _) => {
+                return Err(format!(
+                    "contradictory bridge response (id {}): failure carrying data",
+                    wire.id
+                ));
+            }
+            (false, None, None) => {
+                return Err(format!(
+                    "bridge response (id {}) claims failure with no error",
+                    wire.id
+                ));
+            }
+        };
+        Ok(ParsedResp {
+            id: wire.id,
+            outcome,
+        })
+    }
+}
+
 /// Read/write bridge messages as NDJSON lines over a TCP stream.
 ///
 /// The read is bounded to [`BRIDGE_MAX_LINE`] bytes per line (including the
@@ -693,6 +749,44 @@ pub enum AdminControl {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
+}
+
+/// The kill-switch state as the host reports it, before it is flattened onto
+/// the pinned wire triple: exactly readable-with-verdict or
+/// unreadable-with-error. The wire variant
+/// ([`AdminControl::KillStatusResult`]) stays `{ ok, killed?, error? }` for
+/// contract stability, but hand-assembling it at every reply site let the
+/// mixtures the extension must never see - `ok: true` with no `killed`
+/// claim, `ok: false` asserting one anyway - compile. Every producer builds
+/// one of these instead and lets [`into_frame`](KillStatus::into_frame) emit
+/// the only two flat shapes the contract means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KillStatus {
+    /// The revocation record was readable; `killed` is the definite verdict.
+    Read { killed: bool },
+    /// The state could not be read (or the transition was refused): no
+    /// `killed` claim travels at all, so the extension fails closed on
+    /// unknown rather than trusting a boolean nobody could vouch for.
+    Unreadable { error: String },
+}
+
+impl KillStatus {
+    /// The pinned `kill_status_result` wire frame for this state: `killed`
+    /// is present exactly when `ok`, `error` exactly when not.
+    pub fn into_frame(self) -> AdminControl {
+        match self {
+            KillStatus::Read { killed } => AdminControl::KillStatusResult {
+                ok: true,
+                killed: Some(killed),
+                error: None,
+            },
+            KillStatus::Unreadable { error } => AdminControl::KillStatusResult {
+                ok: false,
+                killed: None,
+                error: Some(error),
+            },
+        }
+    }
 }
 
 /// Ties every control-frame variant to its serde `type` tag, once. Expands to
@@ -1589,6 +1683,71 @@ mod tests {
     }
 
     #[test]
+    fn parsed_resp_admits_exactly_the_two_legal_response_states() {
+        // Success with data (and the legal data-omitted success, resolved to
+        // Null once, at the boundary).
+        let ok: ParsedResp =
+            serde_json::from_value(json!({ "id": 4, "ok": true, "data": { "n": 1 } })).unwrap();
+        assert_eq!(ok.id, 4);
+        assert_eq!(ok.outcome, Ok(json!({ "n": 1 })));
+        let bare_ok: ParsedResp = serde_json::from_value(json!({ "id": 5, "ok": true })).unwrap();
+        assert_eq!(bare_ok.outcome, Ok(Value::Null));
+
+        // Failure with an error.
+        let err: ParsedResp =
+            serde_json::from_value(json!({ "id": 6, "ok": false, "error": "boom" })).unwrap();
+        assert_eq!(err.outcome, Err("boom".to_string()));
+
+        // Every contradictory mixture the flat wire triple can spell is
+        // refused at the parse, fail closed - the guard for the loose shape
+        // ever returning: success claiming an error, failure carrying data,
+        // and a bare failure with nothing to report.
+        for bad in [
+            json!({ "id": 1, "ok": true, "error": "e" }),
+            json!({ "id": 1, "ok": true, "data": {}, "error": "e" }),
+            json!({ "id": 1, "ok": false, "data": {} }),
+            json!({ "id": 1, "ok": false, "data": {}, "error": "e" }),
+            json!({ "id": 1, "ok": false }),
+        ] {
+            assert!(
+                serde_json::from_value::<ParsedResp>(bad.clone()).is_err(),
+                "must refuse: {bad}"
+            );
+        }
+
+        // The refusal reaches the session's read boundary as InvalidData, the
+        // same class as a malformed frame, so the reader drops the connection.
+        let line = b"{\"id\":1,\"ok\":false,\"data\":{}}\n".to_vec();
+        let err = bridge_read::<_, ParsedResp>(&mut Cursor::new(line)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn kill_status_maps_onto_the_pinned_wire_shapes() {
+        // The typed state is the only producer shape; its wire mapping is
+        // pinned exactly, so `killed` travels iff `ok` and `error` iff not -
+        // the mixtures the flat triple admits are unconstructible upstream.
+        assert_eq!(
+            serde_json::to_value(KillStatus::Read { killed: true }.into_frame()).unwrap(),
+            json!({ "type": "kill_status_result", "ok": true, "killed": true })
+        );
+        assert_eq!(
+            serde_json::to_value(KillStatus::Read { killed: false }.into_frame()).unwrap(),
+            json!({ "type": "kill_status_result", "ok": true, "killed": false })
+        );
+        assert_eq!(
+            serde_json::to_value(
+                KillStatus::Unreadable {
+                    error: "corrupt".into()
+                }
+                .into_frame()
+            )
+            .unwrap(),
+            json!({ "type": "kill_status_result", "ok": false, "error": "corrupt" })
+        );
+    }
+
+    #[test]
     fn enclave_control_serde_roundtrip() {
         // Challenge with and without context; the tag is the snake_case name.
         let chal = EnclaveControl::EnclaveChallenge {
@@ -2195,6 +2354,34 @@ mod proptests {
                 serde_json::to_value(&got).unwrap(),
                 serde_json::to_value(&resp).unwrap(),
             );
+        }
+
+        /// The boundary parse admits exactly the two legal response states:
+        /// over the whole `{ ok, data?, error? }` space, `ParsedResp` accepts
+        /// success-without-error and failure-with-error-without-data, maps
+        /// them to the matching `outcome`, and refuses every other mixture.
+        #[test]
+        fn parsed_resp_matrix(
+            id in any::<u64>(),
+            ok in any::<bool>(),
+            data in prop::option::of(arb_json_non_null()),
+            error in prop::option::of(arb_string()),
+        ) {
+            let wire = BridgeResp { id, ok, data: data.clone(), error: error.clone() };
+            let parsed = ParsedResp::try_from(wire);
+            match (ok, data, error) {
+                (true, data, None) => {
+                    let parsed = parsed.unwrap();
+                    prop_assert_eq!(parsed.id, id);
+                    prop_assert_eq!(parsed.outcome, Ok(data.unwrap_or(Value::Null)));
+                }
+                (false, None, Some(e)) => {
+                    let parsed = parsed.unwrap();
+                    prop_assert_eq!(parsed.id, id);
+                    prop_assert_eq!(parsed.outcome, Err(e));
+                }
+                _ => prop_assert!(parsed.is_err(), "a contradictory shape must be refused"),
+            }
         }
 
         // --- 2. Never panics on arbitrary input (the fuzz property) ---------

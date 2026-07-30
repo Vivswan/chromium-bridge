@@ -32,6 +32,13 @@ pub enum CallError {
     #[error("unknown tool: {0}")]
     UnknownTool(String),
 
+    /// A tool argument was missing or of the wrong type. Raised by the
+    /// payload builders (`tools::handlers`), which parse each tool's args
+    /// into a typed shape instead of fabricating defaults for absent
+    /// required fields. Field 0 is the tool name plus the parse failure.
+    #[error("invalid tool arguments: {0}")]
+    InvalidArgument(String),
+
     /// The `browser` routing argument was present but not a string (e.g. a
     /// number or object). Rejected rather than treated as absent: with one
     /// browser connected, ignoring a malformed target would silently run the
@@ -96,6 +103,7 @@ impl CallError {
             CallError::Timeout(_) => &specs::RESPONSE_TIMEOUT,
             CallError::Disconnected => &specs::CONNECTION_LOST,
             CallError::UnknownTool(_) => &specs::INVALID_ARGUMENT,
+            CallError::InvalidArgument(_) => &specs::INVALID_ARGUMENT,
             CallError::InvalidBrowserArg(_) => &specs::INVALID_ARGUMENT,
             CallError::AmbiguousBrowser(_) => &specs::BROWSER_AMBIGUOUS,
             CallError::BrowserNotFound(..) => &specs::BROWSER_NOT_FOUND,
@@ -333,6 +341,7 @@ mod tests {
             CallError::Timeout(Duration::from_secs(1)),
             CallError::Disconnected,
             CallError::UnknownTool("t".into()),
+            CallError::InvalidArgument("tab_focus: missing field `tabId`".into()),
             CallError::InvalidBrowserArg("123".into()),
             CallError::AmbiguousBrowser("brave, chrome".into()),
             CallError::BrowserNotFound("edge".into(), "brave, chrome".into()),

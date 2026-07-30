@@ -55,10 +55,7 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientId
             (&pid as *const libc::pid_t).cast(),
         )
     };
-    if num.is_null() {
-        return Err(io::Error::other("CFNumberCreate for pid failed"));
-    }
-    let num = Cf(num);
+    let num = Cf::own(num, "CFNumberCreate for pid")?;
     guest_client_identity(GuestKey::Pid, &num)
 }
 
@@ -177,20 +174,52 @@ extern "C" {
     ) -> OSStatus;
 }
 
-/// Owns a +1 Core Foundation reference and releases it on drop, so every early
-/// return on the error paths below still balances its retain. Invariant: the
-/// wrapped pointer is a live CF object the caller owns (+1, null-checked at
-/// every construction site), which is what lets [`guest_cdhash`] and
-/// [`guest_client_identity`] accept `&Cf` from safe code.
-struct Cf(CFTypeRef);
+/// Ownership guard for +1 Core Foundation references, quarantined in its own
+/// module so the pointer field is private to it: [`cf::Cf::own`] is the ONLY
+/// constructor and rejects null once, which is what lets every later holder -
+/// the dictionary-building callers reading [`as_ptr`](cf::Cf::as_ptr), and
+/// `Drop` itself - rely on "live, non-null, owned (+1)" by construction
+/// instead of re-checking at each of the dozen creation sites.
+mod cf {
+    use std::io;
 
-impl Drop for Cf {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
+    use super::{CFRelease, CFTypeRef};
+
+    /// Owns a +1 Core Foundation reference and releases it on drop, so every
+    /// early return on the error paths still balances its retain.
+    #[derive(Debug)]
+    pub(super) struct Cf(CFTypeRef);
+
+    impl Cf {
+        /// Take ownership of a +1 reference, rejecting null - the single
+        /// null check for every CF creation site. `what` names the API that
+        /// produced the pointer, for the error text (a null from a
+        /// success-status Security call is still a refusal, fail closed).
+        pub(super) fn own(ptr: CFTypeRef, what: &str) -> io::Result<Cf> {
+            if ptr.is_null() {
+                return Err(io::Error::other(format!(
+                    "{what} returned a null reference"
+                )));
+            }
+            Ok(Cf(ptr))
+        }
+
+        /// The wrapped pointer: live and non-null by construction. Borrowing
+        /// through the guard keeps the object alive for the borrow.
+        pub(super) fn as_ptr(&self) -> CFTypeRef {
+            self.0
+        }
+    }
+
+    impl Drop for Cf {
+        fn drop(&mut self) {
+            // Non-null by construction (`own` is the only constructor).
             unsafe { CFRelease(self.0) };
         }
     }
 }
+
+use cf::Cf;
 
 enum GuestKey {
     Audit,
@@ -211,10 +240,7 @@ fn own_cdhash() -> io::Result<String> {
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopySelf", st));
     }
-    if me.is_null() {
-        return Err(io::Error::other("SecCodeCopySelf returned null on success"));
-    }
-    let _me = Cf(me as CFTypeRef);
+    let _me = Cf::own(me as CFTypeRef, "SecCodeCopySelf")?;
     validate_and_cdhash(me, "self")
 }
 
@@ -269,10 +295,7 @@ fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
         std::slice::from_raw_parts(token.as_ptr().cast::<u8>(), std::mem::size_of_val(token))
     };
     let data = unsafe { CFDataCreate(kCFAllocatorDefault, bytes.as_ptr(), bytes.len() as CFIndex) };
-    if data.is_null() {
-        return Err(io::Error::other("CFDataCreate for audit token failed"));
-    }
-    let data = Cf(data);
+    let data = Cf::own(data, "CFDataCreate for audit token")?;
     guest_cdhash(GuestKey::Audit, &data)
 }
 
@@ -291,10 +314,7 @@ fn pid_cdhash(pid: u32) -> io::Result<String> {
             (&pid as *const libc::pid_t).cast(),
         )
     };
-    if num.is_null() {
-        return Err(io::Error::other("CFNumberCreate for pid failed"));
-    }
-    let num = Cf(num);
+    let num = Cf::own(num, "CFNumberCreate for pid")?;
     guest_cdhash(GuestKey::Pid, &num)
 }
 
@@ -310,7 +330,7 @@ fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
         }
     };
     let keys: [*const c_void; 1] = [key_ref];
-    let values: [*const c_void; 1] = [value.0];
+    let values: [*const c_void; 1] = [value.as_ptr()];
     let attrs = unsafe {
         CFDictionaryCreate(
             kCFAllocatorDefault,
@@ -321,26 +341,21 @@ fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
             std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
         )
     };
-    if attrs.is_null() {
-        return Err(io::Error::other(
-            "CFDictionaryCreate for guest attributes failed",
-        ));
-    }
-    let _attrs = Cf(attrs);
+    let attrs = Cf::own(attrs, "CFDictionaryCreate for guest attributes")?;
 
     let mut guest: SecCodeRef = std::ptr::null_mut();
     let st = unsafe {
-        SecCodeCopyGuestWithAttributes(std::ptr::null_mut(), attrs, DEFAULT_FLAGS, &mut guest)
+        SecCodeCopyGuestWithAttributes(
+            std::ptr::null_mut(),
+            attrs.as_ptr(),
+            DEFAULT_FLAGS,
+            &mut guest,
+        )
     };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyGuestWithAttributes", st));
     }
-    if guest.is_null() {
-        return Err(io::Error::other(
-            "SecCodeCopyGuestWithAttributes returned null on success",
-        ));
-    }
-    let _guest = Cf(guest as CFTypeRef);
+    let _guest = Cf::own(guest as CFTypeRef, "SecCodeCopyGuestWithAttributes")?;
 
     validate_and_cdhash(guest, "peer")
 }
@@ -356,7 +371,7 @@ fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::
         }
     };
     let keys: [*const c_void; 1] = [key_ref];
-    let values: [*const c_void; 1] = [value.0];
+    let values: [*const c_void; 1] = [value.as_ptr()];
     let attrs = unsafe {
         CFDictionaryCreate(
             kCFAllocatorDefault,
@@ -367,26 +382,21 @@ fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::
             std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
         )
     };
-    if attrs.is_null() {
-        return Err(io::Error::other(
-            "CFDictionaryCreate for guest attributes failed",
-        ));
-    }
-    let _attrs = Cf(attrs);
+    let attrs = Cf::own(attrs, "CFDictionaryCreate for guest attributes")?;
 
     let mut guest: SecCodeRef = std::ptr::null_mut();
     let st = unsafe {
-        SecCodeCopyGuestWithAttributes(std::ptr::null_mut(), attrs, DEFAULT_FLAGS, &mut guest)
+        SecCodeCopyGuestWithAttributes(
+            std::ptr::null_mut(),
+            attrs.as_ptr(),
+            DEFAULT_FLAGS,
+            &mut guest,
+        )
     };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyGuestWithAttributes", st));
     }
-    if guest.is_null() {
-        return Err(io::Error::other(
-            "SecCodeCopyGuestWithAttributes returned null on success",
-        ));
-    }
-    let _guest = Cf(guest as CFTypeRef);
+    let _guest = Cf::own(guest as CFTypeRef, "SecCodeCopyGuestWithAttributes")?;
 
     let st = unsafe { SecCodeCheckValidity(guest, DEFAULT_FLAGS, std::ptr::null()) };
     if st != ERR_SEC_SUCCESS {
@@ -412,24 +422,14 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyStaticCode", st));
     }
-    if static_code.is_null() {
-        return Err(io::Error::other(
-            "SecCodeCopyStaticCode returned null on success",
-        ));
-    }
-    let _static = Cf(static_code as CFTypeRef);
+    let _static = Cf::own(static_code as CFTypeRef, "SecCodeCopyStaticCode")?;
 
     let mut info: CFDictionaryRef = std::ptr::null();
     let st = unsafe { SecCodeCopySigningInformation(static_code, DEFAULT_FLAGS, &mut info) };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopySigningInformation", st));
     }
-    if info.is_null() {
-        return Err(io::Error::other(
-            "SecCodeCopySigningInformation returned null on success",
-        ));
-    }
-    let _info = Cf(info);
+    let _info = Cf::own(info, "SecCodeCopySigningInformation")?;
 
     // Borrowed reference (Get-rule): do not release.
     let cdhash = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) } as CFDataRef;
@@ -465,12 +465,7 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyStaticCode", st));
     }
-    if static_code.is_null() {
-        return Err(io::Error::other(
-            "SecCodeCopyStaticCode returned null on success",
-        ));
-    }
-    let _static = Cf(static_code as CFTypeRef);
+    let _static = Cf::own(static_code as CFTypeRef, "SecCodeCopyStaticCode")?;
 
     let mut info: CFDictionaryRef = std::ptr::null();
     let st =
@@ -478,12 +473,7 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopySigningInformation", st));
     }
-    if info.is_null() {
-        return Err(io::Error::other(
-            "SecCodeCopySigningInformation returned null on success",
-        ));
-    }
-    let _info = Cf(info);
+    let _info = Cf::own(info, "SecCodeCopySigningInformation")?;
 
     // cdhash (borrowed Get-rule references; do not release).
     let cdhash = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) } as CFDataRef;
@@ -536,4 +526,33 @@ fn cfstring_to_string(s: CFStringRef) -> Option<String> {
     }
     let cstr = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
     cstr.to_str().ok().map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cf_own_rejects_null_naming_the_producing_api() {
+        // The single null check every CF creation site funnels through: a
+        // null pointer never becomes a guard (so Drop can rely on non-null),
+        // and the refusal names the API for the log.
+        let err = Cf::own(std::ptr::null(), "CFSomethingCreate").unwrap_err();
+        assert!(err.to_string().contains("CFSomethingCreate"), "{err}");
+    }
+
+    #[test]
+    fn cf_own_wraps_a_live_reference_and_releases_it_on_drop() {
+        // A real +1 CFData: own() accepts it, as_ptr exposes the same
+        // pointer for FFI, and Drop balances the retain when the guard
+        // leaves scope (an over- or under-release would crash the test
+        // process inside CoreFoundation).
+        let bytes = [1u8, 2, 3];
+        let data =
+            unsafe { CFDataCreate(kCFAllocatorDefault, bytes.as_ptr(), bytes.len() as CFIndex) };
+        let guard = Cf::own(data, "CFDataCreate").unwrap();
+        assert_eq!(guard.as_ptr(), data);
+        assert_eq!(unsafe { CFDataGetLength(guard.as_ptr()) }, 3);
+        drop(guard);
+    }
 }

@@ -36,11 +36,13 @@
 //! the race window, the old reader leaves the live connection untouched
 //! instead of clobbering it.
 //!
-//! Pending requests are likewise tagged with the generation they were sent
-//! under. When a reader for generation `G` exits, it drains (drops) every
-//! pending sender tagged `G`, so those callers fail fast with
-//! [`CallError::Disconnected`] instead of waiting the full 120s timeout.
-//! Pending entries belonging to other connections survive.
+//! Pending requests are tagged with the generation they were sent under -
+//! bound at insert, under the registry lock, immediately before the write, so
+//! an unbound in-flight entry is unrepresentable. When a reader for
+//! generation `G` exits, it drains (drops) every pending sender tagged `G`,
+//! so those callers fail fast with [`CallError::Disconnected`] instead of
+//! waiting the full 120s timeout. Pending entries belonging to other
+//! connections survive.
 
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter};
@@ -53,7 +55,7 @@ use serde_json::Value;
 
 use crate::error::CallError;
 use crate::ipc::{self, BrowserLabel};
-use crate::protocol::{bridge_read, bridge_write, BridgeReq, BridgeResp};
+use crate::protocol::{bridge_read, bridge_write, BridgeReq, ParsedResp};
 
 /// The label assigned to a connection whose handshake carried no label.
 /// Re-exported from the handshake module, where [`BrowserLabel`] owns the
@@ -67,10 +69,9 @@ pub use crate::ipc::DEFAULT_LABEL;
 /// (see [`Session::attach_browser`]).
 pub(crate) const MAX_BROWSERS: usize = 16;
 
-/// A connection generation. Non-zero by construction: the old "not sent yet"
-/// sentinel value 0 is now [`Binding::Unsent`], a separate variant, so a real
-/// generation colliding with the sentinel is unrepresentable rather than
-/// prevented by a comment on the counter's starting value.
+/// A connection generation. Non-zero by construction: minting refuses a
+/// wrapped-to-zero counter value ([`Session::attach_authenticated`]), so no
+/// sentinel can ever collide with a real generation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Generation(std::num::NonZeroU64);
 
@@ -88,17 +89,6 @@ impl std::fmt::Display for Generation {
     }
 }
 
-/// What a pending entry is bound to: registered but not yet written to any
-/// connection, or sent under one specific connection's generation. A drain
-/// for a real generation can never match `Unsent`, and the kill sweep's
-/// "every sent entry" filter is a variant match instead of a sentinel
-/// comparison.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Binding {
-    Unsent,
-    Sent(Generation),
-}
-
 /// A live, authenticated connection to one browser's native host, paired with
 /// the generation id that owns it. Storing the generation alongside the writer
 /// makes cleanup atomic under the registry mutex: a reader can compare its own
@@ -110,17 +100,20 @@ struct Conn {
 }
 
 /// Pending request callbacks keyed by `BridgeReq.id`. Each entry carries the
-/// binding it was sent under, so a disconnecting reader can drop exactly the
-/// callers that belonged to its (now-dead) connection.
-type Pending = Arc<Mutex<HashMap<u64, (Binding, mpsc::Sender<BridgeResp>)>>>;
+/// generation it was sent under - by construction: [`Session::try_call`]
+/// inserts the entry already bound, under the registry lock, immediately
+/// before the write, so there is no unsent state a drain or a delivery check
+/// could mishandle. A disconnecting reader drops exactly the callers that
+/// belonged to its (now-dead) connection.
+type Pending = Arc<Mutex<HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)>>>;
 
 /// A reader thread's verdict on one inbound response: deliver it to its
 /// waiting caller, refuse it because the pending entry belongs to a different
-/// connection ([`RoutedResp::Foreign`] carries the owning binding), or no
+/// connection ([`RoutedResp::Foreign`] carries the owning generation), or no
 /// caller is waiting on that id at all.
 enum RoutedResp {
-    Deliver(mpsc::Sender<BridgeResp>),
-    Foreign(Binding),
+    Deliver(mpsc::Sender<ParsedResp>),
+    Foreign(Generation),
     Unknown,
 }
 
@@ -133,19 +126,18 @@ fn should_clear_conn(current: Option<Generation>, my_gen: Generation) -> bool {
     current == Some(my_gen)
 }
 
-/// Remove and return every pending entry whose binding is `my_gen`.
+/// Remove and return every pending entry whose generation is `my_gen`.
 /// Dropping the returned senders wakes those callers immediately with a closed
 /// channel (surfaced as [`CallError::Disconnected`]). Entries bound to any
-/// other generation - including other still-live connections - and unsent
-/// entries are left in the map. Factored out so the drain policy is
-/// unit-testable without sockets.
+/// other generation - other still-live connections - are left in the map.
+/// Factored out so the drain policy is unit-testable without sockets.
 fn drain_pending_for_generation(
-    pending: &mut HashMap<u64, (Binding, mpsc::Sender<BridgeResp>)>,
+    pending: &mut HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)>,
     my_gen: Generation,
-) -> Vec<mpsc::Sender<BridgeResp>> {
+) -> Vec<mpsc::Sender<ParsedResp>> {
     let ids: Vec<u64> = pending
         .iter()
-        .filter(|(_, (binding, _))| *binding == Binding::Sent(my_gen))
+        .filter(|(_, (generation, _))| *generation == my_gen)
         .map(|(id, _)| *id)
         .collect();
     ids.into_iter()
@@ -153,27 +145,17 @@ fn drain_pending_for_generation(
         .collect()
 }
 
-/// Remove and return every pending entry that has been bound to ANY real
-/// connection generation, leaving only [`Binding::Unsent`] entries behind.
-/// The kill sweep uses this because a kill is global: an entry whose
-/// generation is no longer in the registry (its connection was replaced by a
-/// same-label reconnect, or its reader already cleaned up) must not survive
-/// either -- the replaced connection's reader may still be alive on a cloned
-/// fd and could otherwise deliver a late response after the sweep. UNSENT
-/// entries are kept: their request was never written to any connection, so
-/// nothing can answer them, and their caller is about to resolve against the
-/// now-empty registry and fail with [`CallError::NotConnected`] on its own.
-fn drain_pending_all_sent(
-    pending: &mut HashMap<u64, (Binding, mpsc::Sender<BridgeResp>)>,
-) -> Vec<mpsc::Sender<BridgeResp>> {
-    let ids: Vec<u64> = pending
-        .iter()
-        .filter(|(_, (binding, _))| matches!(binding, Binding::Sent(_)))
-        .map(|(id, _)| *id)
-        .collect();
-    ids.into_iter()
-        .filter_map(|id| pending.remove(&id).map(|(_, tx)| tx))
-        .collect()
+/// Remove and return every pending sender. The kill sweep uses this because a
+/// kill is global, and every entry is in flight by construction (inserted
+/// already bound, immediately before its write): that includes entries whose
+/// generation is no longer in the registry (their connection was replaced by
+/// a same-label reconnect, or their reader already cleaned up) - the replaced
+/// connection's reader may still be alive on a cloned fd and could otherwise
+/// deliver a late response after the sweep.
+fn drain_pending_all(
+    pending: &mut HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)>,
+) -> Vec<mpsc::Sender<ParsedResp>> {
+    pending.drain().map(|(_, (_, tx))| tx).collect()
 }
 
 /// Pick the connection a request should run over. `available` are the live
@@ -340,14 +322,17 @@ impl Session {
             "native host '{label}' connected and authenticated (generation {my_gen})"
         );
 
-        // Spawn the reader: each BridgeResp routes to its pending sender. The
+        // Spawn the reader: each response routes to its pending sender. The
         // reader is bound to `my_gen`; on disconnect it only tears down the
-        // connection it actually owns.
+        // connection it actually owns. Responses are read as [`ParsedResp`],
+        // so a frame the wire shape could spell but the contract cannot mean
+        // (ok-with-error, failure-with-data) is a read error here - the
+        // connection is dropped, fail closed, before any caller sees it.
         let pending = self.pending.clone();
         let conns = self.conns.clone();
         thread::spawn(move || {
             loop {
-                let resp: Option<BridgeResp> = match bridge_read(&mut reader) {
+                let resp: Option<ParsedResp> = match bridge_read(&mut reader) {
                     Ok(r) => r,
                     Err(e) => {
                         log_warn!(
@@ -373,9 +358,7 @@ impl Session {
                 // request sent to browser A. Deliver a response only when its
                 // pending entry was sent over THIS connection (generation
                 // match); anything else is a protocol violation and drops the
-                // offending connection (fail closed). An UNSENT entry cannot
-                // legally be answered either - its request has not been
-                // written to any connection yet. This path locks only the
+                // offending connection (fail closed). This path locks only the
                 // pending mutex, which is compatible with the conns→pending
                 // ordering used elsewhere.
                 let routed = {
@@ -392,7 +375,7 @@ impl Session {
                     };
                     match pending_guard.entry(resp.id) {
                         std::collections::hash_map::Entry::Occupied(entry)
-                            if entry.get().0 == Binding::Sent(my_gen) =>
+                            if entry.get().0 == my_gen =>
                         {
                             RoutedResp::Deliver(entry.remove().1)
                         }
@@ -407,14 +390,10 @@ impl Session {
                         let _ = tx.send(resp);
                     }
                     RoutedResp::Foreign(owner) => {
-                        let owner = match owner {
-                            Binding::Unsent => "an unsent request".to_string(),
-                            Binding::Sent(g) => format!("generation {g}"),
-                        };
                         log_warn!(
                             "session",
                             "connection '{label}' (generation {my_gen}) answered id {} \
-                             belonging to {owner}; dropping this connection",
+                             belonging to generation {owner}; dropping this connection",
                             resp.id
                         );
                         break;
@@ -507,13 +486,14 @@ impl Session {
     /// already gone (or re-occupied by a newer generation), so its own
     /// cleanup degrades to a no-op, and its pending drain finds nothing left.
     ///
-    /// The drain covers every SENT generation, not just the connections
-    /// severed by this call: a kill is global, and an entry left behind by an
-    /// already-replaced connection could otherwise still be answered by that
-    /// connection's lingering reader after the sweep (see
-    /// [`drain_pending_all_sent`]). A response a reader claimed before the
-    /// sweep (its entry already removed for delivery) is a call that
-    /// completed before the kill, not one that survived it.
+    /// The drain covers every pending entry, not just the connections severed
+    /// by this call: a kill is global, every entry is in flight by
+    /// construction, and an entry left behind by an already-replaced
+    /// connection could otherwise still be answered by that connection's
+    /// lingering reader after the sweep (see [`drain_pending_all`]). A
+    /// response a reader claimed before the sweep (its entry already removed
+    /// for delivery) is a call that completed before the kill, not one that
+    /// survived it.
     ///
     /// Idempotent: sweeping an already-empty registry signals nobody, and
     /// shutting down a socket twice is harmless, so the broker's watcher may
@@ -542,12 +522,12 @@ impl Session {
         // Bookkeeping under the same conns -> pending lock order the readers
         // and `try_call` use, so the three paths serialize instead of racing.
         let severed: Vec<Conn> = conns_guard.drain().map(|(_, conn)| conn).collect();
-        let drained: Vec<mpsc::Sender<BridgeResp>> = {
+        let drained: Vec<mpsc::Sender<ParsedResp>> = {
             let mut pending_guard = self
                 .pending
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            drain_pending_all_sent(&mut pending_guard)
+            drain_pending_all(&mut pending_guard)
         };
         drop(conns_guard);
         let count = severed.len();
@@ -628,62 +608,43 @@ impl Session {
         timeout: Duration,
     ) -> Result<Value, CallError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel::<ParsedResp>();
 
-        // Register the one-shot receiver BEFORE sending, to avoid a race where
-        // the response arrives before we're listening. The generation is not
-        // known yet, so the entry starts [`Binding::Unsent`]; it is rebound to
-        // the real generation under the conns lock just before the write. A
-        // reader draining a real generation can never match an unsent entry.
-        let (tx, rx) = mpsc::channel::<BridgeResp>();
-        let Ok(mut pending_guard) = self.pending.lock() else {
-            return Err(CallError::Internal("pending-call lock poisoned".into()));
-        };
-        pending_guard.insert(id, (Binding::Unsent, tx));
-        drop(pending_guard);
-
-        // Resolve the target and send, all under the registry lock so the
-        // chosen connection cannot be swapped between the decision and the
-        // write. Lock ordering is always conns mutex THEN pending mutex when
+        // Resolve the target, register the pending entry, and send, all under
+        // the registry lock so the chosen connection cannot be swapped between
+        // the decision and the write. The entry is inserted ALREADY BOUND to
+        // the resolved connection's generation, immediately before the write:
+        // an unbound in-flight request is unrepresentable (there is no unsent
+        // state to rebind later), and the response cannot beat the
+        // registration because the request is not on the wire until after the
+        // insert. Lock ordering is always conns mutex THEN pending mutex when
         // nesting, matching the reader-cleanup path, so the two can never
         // deadlock. A poisoned lock anywhere on this path refuses the call
         // with a typed internal error instead of acting on suspect state.
         {
             let Ok(mut guard) = self.conns.lock() else {
-                self.remove_pending(id);
                 return Err(CallError::Internal("browser registry lock poisoned".into()));
             };
             let labels: Vec<&str> = guard.keys().map(BrowserLabel::as_str).collect();
-            let label = match resolve_target(&labels, browser) {
-                Ok(l) => l,
-                Err(e) => {
-                    // Clean up the pending entry on failure.
-                    self.remove_pending(id);
-                    return Err(e);
-                }
-            };
+            let label = resolve_target(&labels, browser)?;
             // Borrow<str>: probe the validated key set with the plain string
             // resolve_target picked from it.
             let Some(conn) = guard.get_mut(label.as_str()) else {
                 // Unreachable in practice: resolve_target picked the label
                 // from this very map under the same lock. Refuse rather than
                 // panic if that invariant is ever broken.
-                self.remove_pending(id);
                 return Err(CallError::Internal(
                     "resolved browser label vanished from the registry".into(),
                 ));
             };
-            // Bind this pending entry to the live connection's generation so a
-            // subsequent disconnect of *this* connection drains it fast.
             let generation = conn.generation;
             match self.pending.lock() {
                 Ok(mut pending_guard) => {
-                    if let Some(entry) = pending_guard.get_mut(&id) {
-                        entry.0 = Binding::Sent(generation);
-                    }
+                    pending_guard.insert(id, (generation, tx));
                 }
                 Err(_) => {
                     // Do not send a request whose response could never be
-                    // routed back (the entry would stay unsent forever).
+                    // routed back (no entry would be waiting for it).
                     return Err(CallError::Internal("pending-call lock poisoned".into()));
                 }
             }
@@ -700,17 +661,11 @@ impl Session {
             }
         }
 
-        // Wait for the response.
+        // Wait for the response. The boundary parse already reduced it to
+        // exactly success-with-data or failure-with-error, so there is no
+        // flag-and-optionals mixture left to re-interpret here.
         match rx.recv_timeout(timeout) {
-            Ok(resp) => {
-                if resp.ok {
-                    Ok(resp.data.unwrap_or(Value::Null))
-                } else {
-                    Err(CallError::Extension(
-                        resp.error.unwrap_or_else(|| "unknown error".into()),
-                    ))
-                }
-            }
+            Ok(resp) => resp.outcome.map_err(CallError::Extension),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 self.remove_pending(id);
                 Err(CallError::Timeout(timeout))
@@ -758,7 +713,7 @@ mod tests {
     fn generations_are_monotonic_and_never_zero() {
         // Mirrors the `next_gen` counter: strictly increasing from 1, and the
         // mint refuses a zero value, so `Generation` is non-zero by
-        // construction (the old 0 sentinel lives in `Binding::Unsent`).
+        // construction.
         let next = AtomicU64::new(1);
         let mint =
             || std::num::NonZeroU64::new(next.fetch_add(1, Ordering::SeqCst)).map(Generation);
@@ -832,15 +787,15 @@ mod tests {
 
     #[test]
     fn drain_drops_only_my_generation_and_wakes_those_callers() {
-        let mut pending: HashMap<u64, (Binding, mpsc::Sender<BridgeResp>)> = HashMap::new();
+        let mut pending: HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)> = HashMap::new();
         // gen 1: two in-flight callers; gen 2: one in-flight caller on another
         // (still-live) connection.
-        let (tx1a, rx1a) = mpsc::channel::<BridgeResp>();
-        let (tx1b, rx1b) = mpsc::channel::<BridgeResp>();
-        let (tx2, rx2) = mpsc::channel::<BridgeResp>();
-        pending.insert(10, (Binding::Sent(gen(1)), tx1a));
-        pending.insert(11, (Binding::Sent(gen(1)), tx1b));
-        pending.insert(20, (Binding::Sent(gen(2)), tx2));
+        let (tx1a, rx1a) = mpsc::channel::<ParsedResp>();
+        let (tx1b, rx1b) = mpsc::channel::<ParsedResp>();
+        let (tx2, rx2) = mpsc::channel::<ParsedResp>();
+        pending.insert(10, (gen(1), tx1a));
+        pending.insert(11, (gen(1), tx1b));
+        pending.insert(20, (gen(2), tx2));
 
         let drained = drain_pending_for_generation(&mut pending, gen(1));
         assert_eq!(drained.len(), 2);
@@ -862,9 +817,9 @@ mod tests {
 
     #[test]
     fn drain_for_absent_generation_is_a_noop() {
-        let mut pending: HashMap<u64, (Binding, mpsc::Sender<BridgeResp>)> = HashMap::new();
-        let (tx, _rx) = mpsc::channel::<BridgeResp>();
-        pending.insert(1, (Binding::Sent(gen(5)), tx));
+        let mut pending: HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)> = HashMap::new();
+        let (tx, _rx) = mpsc::channel::<ParsedResp>();
+        pending.insert(1, (gen(5), tx));
 
         let drained = drain_pending_for_generation(&mut pending, gen(99));
         assert!(drained.is_empty());
@@ -873,54 +828,25 @@ mod tests {
     }
 
     #[test]
-    fn drain_all_sent_drops_every_real_generation_but_keeps_unsent() {
-        // The kill sweep's drain: every entry bound to ANY real generation is
-        // dropped -- including one whose connection already left the registry
-        // (replaced by a same-label reconnect) -- while unsent entries
-        // survive (nothing can ever answer them).
-        let mut pending: HashMap<u64, (Binding, mpsc::Sender<BridgeResp>)> = HashMap::new();
-        let (tx1, rx1) = mpsc::channel::<BridgeResp>();
-        let (tx2, rx2) = mpsc::channel::<BridgeResp>();
-        let (unsent_tx, unsent_rx) = mpsc::channel::<BridgeResp>();
-        pending.insert(10, (Binding::Sent(gen(1)), tx1)); // a replaced (no longer registered) gen
-        pending.insert(20, (Binding::Sent(gen(2)), tx2)); // a live gen
-        pending.insert(30, (Binding::Unsent, unsent_tx));
+    fn kill_drain_drops_every_entry_including_replaced_generations() {
+        // The kill sweep's drain: every entry goes, including one whose
+        // connection already left the registry (replaced by a same-label
+        // reconnect) -- its lingering reader could otherwise still answer it
+        // after the sweep. There is no unsent state left to special-case:
+        // every entry was bound to a generation at insert, by construction.
+        let mut pending: HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)> = HashMap::new();
+        let (tx1, rx1) = mpsc::channel::<ParsedResp>();
+        let (tx2, rx2) = mpsc::channel::<ParsedResp>();
+        pending.insert(10, (gen(1), tx1)); // a replaced (no longer registered) gen
+        pending.insert(20, (gen(2), tx2)); // a live gen
 
-        let drained = drain_pending_all_sent(&mut pending);
+        let drained = drain_pending_all(&mut pending);
         assert_eq!(drained.len(), 2);
-        assert!(!pending.contains_key(&10));
-        assert!(!pending.contains_key(&20));
-        assert!(pending.contains_key(&30));
+        assert!(pending.is_empty());
 
         drop(drained);
         assert!(matches!(rx1.recv(), Err(mpsc::RecvError)));
         assert!(matches!(rx2.recv(), Err(mpsc::RecvError)));
-        // The unsent caller is still connected (its sender is in the map).
-        assert!(matches!(
-            unsent_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn drain_never_touches_unsent_entries() {
-        // A pending entry that was registered but not yet sent is
-        // `Binding::Unsent` and must survive any real-generation drain -- by
-        // construction now: no `Generation` can equal the unsent variant.
-        let mut pending: HashMap<u64, (Binding, mpsc::Sender<BridgeResp>)> = HashMap::new();
-        let (unsent_tx, unsent_rx) = mpsc::channel::<BridgeResp>();
-        let (live_tx, _live_rx) = mpsc::channel::<BridgeResp>();
-        pending.insert(1, (Binding::Unsent, unsent_tx));
-        pending.insert(2, (Binding::Sent(gen(1)), live_tx));
-
-        let drained = drain_pending_for_generation(&mut pending, gen(1));
-        assert_eq!(drained.len(), 1);
-        assert!(pending.contains_key(&1));
-        // The unsent caller is still connected (sender retained in the map).
-        assert!(matches!(
-            unsent_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
     }
 
     // ---- registry semantics over real socketpairs (unix only) --------------
@@ -1186,6 +1112,60 @@ mod tests {
             chrome_w.flush().unwrap();
             let got = caller.join().unwrap().unwrap();
             assert_eq!(got, serde_json::json!("real"));
+        }
+
+        #[test]
+        fn a_contradictory_response_is_refused_and_drops_the_connection() {
+            use std::io::{BufRead, Write};
+
+            // The flat wire shape can spell `ok: true` alongside an `error`;
+            // the contract cannot mean it. The boundary parse (ParsedResp)
+            // refuses the frame inside bridge_read, so the reader treats it
+            // exactly like any malformed frame: the connection is dropped,
+            // fail closed, and the in-flight caller sees Disconnected -- the
+            // ambiguous payload never reaches anyone.
+            let session = Session::new();
+            let chrome = attach(&session, "chrome");
+            chrome
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+
+            let s2 = session.clone();
+            let caller = thread::spawn(move || {
+                s2.try_call(
+                    "tab_list",
+                    None,
+                    serde_json::json!({}),
+                    Some("chrome"),
+                    Duration::from_secs(10),
+                )
+            });
+            let mut chrome_reader = std::io::BufReader::new(chrome.try_clone().unwrap());
+            let mut line = String::new();
+            chrome_reader.read_line(&mut line).unwrap();
+            let req: BridgeReq = serde_json::from_str(&line).unwrap();
+
+            let mut w = chrome.try_clone().unwrap();
+            w.write_all(
+                format!(
+                    "{}\n",
+                    serde_json::json!({
+                        "id": req.id, "ok": true, "data": "payload", "error": "also failed?"
+                    })
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            w.flush().unwrap();
+
+            assert!(
+                wait_until(|| session.labels().is_empty()),
+                "a connection sending a contradictory response must be dropped"
+            );
+            assert!(matches!(
+                caller.join().unwrap(),
+                Err(CallError::Disconnected)
+            ));
         }
 
         #[test]
