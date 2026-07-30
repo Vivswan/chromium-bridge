@@ -2,7 +2,9 @@
 
 // Generate the extension's base wire validators from the Rust core's
 // schemars-derived JSON Schemas (ADR-0028): the BridgeReq/BridgeResp envelope
-// pair and every host->extension control frame the extension validates.
+// pair, every host->extension control frame the extension validates, and the
+// extension->host writer frames whose inferred types pin the constructor
+// sites (WRITER_FRAMES below).
 // Runs the core's `emit_envelope_schema` example (schemars behind the
 // gen-only `envelope-schema` cargo feature, absent from every binary),
 // reduces each schema to the supported subset below (prepare), emits Zod
@@ -357,11 +359,10 @@ export function convert(
 }
 
 // The host->extension frames the extension validates, and the export name of
-// each generated base schema. Extension->host frames have no extension-side
-// reader (the Rust serde parser is the enforcing reader), and
-// enclave_revoked is a bare classification tag with no per-frame validator;
-// both stay covered by scripts/check-envelope-parity.ts, which also
-// cross-checks this map against its FRAME_PLANS via GENERATED_WIRE_FRAMES.
+// each generated base schema. enclave_revoked is a bare classification tag
+// with no per-frame validator; it stays covered by
+// scripts/check-envelope-parity.ts, which also cross-checks this map against
+// its FRAME_PLANS via GENERATED_WIRE_FRAMES.
 const GENERATED_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, string>>> = {
   enclave: {
     enclave_proof: "EnclaveProofWireSchema",
@@ -373,6 +374,30 @@ const GENERATED_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, stri
     client_list_result: "ClientListResultWireSchema",
     client_revoke_result: "ClientRevokeResultWireSchema",
     kill_status_result: "KillStatusResultWireSchema",
+  },
+};
+
+// The extension->host frames the extension CONSTRUCTS (the writer side). The
+// enforcing reader is the Rust serde parser, so there is no Zod reader to run
+// - these schemas exist for their inferred types: every constructor site in
+// the extension claims conformance with `satisfies`, which makes a drifted
+// field or a typo'd tag a compile error instead of a frame the host silently
+// refuses at runtime. No runtime validation rides on them (no new parser
+// asymmetries). scripts/check-envelope-parity.ts cross-checks this map
+// against its "rust-parsed" plans via GENERATED_WRITER_FRAMES.
+const WRITER_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, string>>> = {
+  enclave: {
+    enclave_challenge: "EnclaveChallengeWireSchema",
+    enclave_revoke: "EnclaveRevokeWireSchema",
+    presence_challenge: "PresenceChallengeWireSchema",
+  },
+  admin: {
+    client_list: "ClientListWireSchema",
+    client_revoke: "ClientRevokeWireSchema",
+    kill_status: "KillStatusWireSchema",
+    kill_engage: "KillEngageWireSchema",
+    kill_release: "KillReleaseWireSchema",
+    audit_event: "AuditEventWireSchema",
   },
 };
 
@@ -472,6 +497,41 @@ function main(): void {
     `  enclave: [${manifest("enclave")}],`,
     `  admin: [${manifest("admin")}],`,
     "} as const;",
+    "",
+  );
+
+  pieces.push(
+    "// The extension->host writer frames (the extension constructs these; the",
+    "// enforcing reader is the Rust serde parser). Emitted for their inferred",
+    "// types: constructor sites claim conformance with `satisfies`, so a",
+    "// drifted field or tag is a compile error. Never used as runtime parsers.",
+  );
+  for (const group of ["enclave", "admin"] as const) {
+    for (const [tag, name] of Object.entries(WRITER_FRAMES[group])) {
+      const code = convert(preparedFrame(group, tag), name);
+      pieces.push(
+        `export const ${name} = ${code};`,
+        "",
+        `export type ${name.replace(/Schema$/, "")} = z.infer<typeof ${name}>;`,
+        "",
+      );
+    }
+  }
+
+  const writerManifest = (group: "enclave" | "admin") =>
+    Object.keys(WRITER_FRAMES[group])
+      .map((tag) => JSON.stringify(tag))
+      .join(", ");
+
+  pieces.push(
+    "// Which extension->host frames have a generated writer schema above.",
+    "// scripts/check-envelope-parity.ts cross-checks this against its",
+    '// "rust-parsed" plans, so a writer frame cannot silently drop out of',
+    "// generation either.",
+    "export const GENERATED_WRITER_FRAMES = {",
+    `  enclave: [${writerManifest("enclave")}],`,
+    `  admin: [${writerManifest("admin")}],`,
+    "} as const;",
   );
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs;
@@ -481,9 +541,12 @@ function main(): void {
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
 // .strict()), required fields required, no defaults (see the fail-closed
 // generation rules G1-G5 in scripts/gen-envelope.ts). The extension never
-// consumes these directly: envelope.ts and enclave.ts layer the deliberate
-// parser asymmetries on top - each pinned by scripts/check-envelope-parity.ts
-// (\`moon run check-envelope\`) and exercised in tests/envelope-wire.gen.test.ts.
+// runs the host->extension bases directly: envelope.ts and enclave.ts layer
+// the deliberate parser asymmetries on top - each pinned by
+// scripts/check-envelope-parity.ts (\`moon run check-envelope\`) and exercised
+// in tests/envelope-wire.gen.test.ts. The extension->host writer schemas
+// below exist for their inferred types only (constructor-site \`satisfies\`);
+// the enforcing reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 

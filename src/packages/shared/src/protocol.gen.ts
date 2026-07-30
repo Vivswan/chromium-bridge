@@ -7,6 +7,10 @@
 // version; bumped only when the bridge wire contract changes incompatibly.
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
+// The MCP JSON-RPC protocol revision the Rust server pins and returns from
+// `initialize` (protocol.rs MCP_PROTOCOL_VERSION, per docs/adr/0007).
+export const MCP_PROTOCOL_VERSION = "2025-06-18";
+
 // The capability groupings for connection-time negotiation: each capability
 // covers a set of tools sharing a Chrome permission. On connect the extension
 // advertises which capability ids are actually available; a tool is callable

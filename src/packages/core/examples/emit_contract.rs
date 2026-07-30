@@ -1,16 +1,18 @@
 //! Emit the canonical cross-process contract as one JSON document on stdout:
 //! the tool catalogue, the error taxonomy, the capability groupings, the
-//! identity constants, and the bridge protocol version. `scripts/gen-ops.ts`
-//! (run via `moon run gen`) consumes this to generate the TypeScript side
-//! (`src/packages/shared/src/*.gen.ts`); the emitted JSON itself is never checked
-//! in - the Rust sources are the contract (ADR-0028).
+//! identity constants, the protocol versions, and the extension-forwarded
+//! audit kinds. `scripts/gen-ops.ts` (run via `moon run gen`) consumes this
+//! to generate the TypeScript side (`src/packages/shared/src/*.gen.ts`); the
+//! emitted JSON itself is never checked in - the Rust sources are the
+//! contract (ADR-0028).
 //!
 //! Run:
 //!   cargo run -q -p chromium-bridge-core --example emit_contract
 
+use chromium_bridge_core::audit::extension_kind_wire_names;
 use chromium_bridge_core::error::ERROR_SPECS;
 use chromium_bridge_core::identity::{EXTENSION_MANIFEST_KEY, NATIVE_HOST_ID, PINNED_EXTENSION_ID};
-use chromium_bridge_core::protocol::BRIDGE_PROTOCOL_VERSION;
+use chromium_bridge_core::protocol::{BRIDGE_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION};
 use chromium_bridge_core::tools::{all, CAPABILITIES};
 use serde_json::{json, Value};
 
@@ -56,6 +58,8 @@ fn main() {
 
     let out = json!({
         "protocolVersion": BRIDGE_PROTOCOL_VERSION,
+        "mcpProtocolVersion": MCP_PROTOCOL_VERSION,
+        "auditForwardedKinds": extension_kind_wire_names(),
         "identity": {
             "nativeMessagingHostId": NATIVE_HOST_ID,
             "extensionManifestKey": EXTENSION_MANIFEST_KEY,

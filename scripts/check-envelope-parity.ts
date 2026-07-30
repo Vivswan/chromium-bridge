@@ -45,7 +45,10 @@ import {
   PresenceProofFrameSchema,
 } from "../src/packages/shared/src/enclave";
 import { BridgeReqSchema, BridgeRespSchema } from "../src/packages/shared/src/envelope";
-import { GENERATED_WIRE_FRAMES } from "../src/packages/shared/src/envelope-wire.gen";
+import {
+  GENERATED_WIRE_FRAMES,
+  GENERATED_WRITER_FRAMES,
+} from "../src/packages/shared/src/envelope-wire.gen";
 import {
   type ControlFrameKind,
   diffSchemas,
@@ -123,7 +126,11 @@ for (const [kind, name, rustSchema, zodSchema] of [
 //                 Rust serde parser itself, and there is no Zod reader to
 //                 diff. Still normalized rust-side, so the R5 strictness
 //                 walk fails the gate if the variant ever stops refusing
-//                 unknown fields (deny_unknown_fields lost anywhere).
+//                 unknown fields (deny_unknown_fields lost anywhere). The
+//                 WRITER side is generated (GENERATED_WRITER_FRAMES): the
+//                 extension's constructor sites `satisfies` the inferred
+//                 wire types, and the cross-check below holds the generated
+//                 set to exactly these plans.
 //
 // Both directions are checked against the emitted enum, so adding, renaming,
 // or removing a variant fails here until this plan says how it is covered;
@@ -183,6 +190,29 @@ for (const group of ["enclave", "admin"] as const) {
   }
 }
 
+// Writer coverage, same both-ways shape: the frames planned as "rust-parsed"
+// (extension->host; the extension constructs them, the Rust serde parser is
+// the enforcing reader) must be exactly the frames gen-envelope.ts emits a
+// writer schema for. A mismatch either way means a constructor site with no
+// generated type to `satisfies` (hand-typed frame shapes again) or a
+// generated writer schema no plan accounts for.
+for (const group of ["enclave", "admin"] as const) {
+  const generated = new Set<string>(GENERATED_WRITER_FRAMES[group]);
+  const planned = new Set(
+    Object.entries(FRAME_PLANS[group])
+      .filter(([, plan]) => plan === "rust-parsed")
+      .map(([tag]) => tag),
+  );
+  for (const tag of planned) {
+    if (!generated.has(tag))
+      fail(`${group}: ${tag} is planned as "rust-parsed" but has no generated writer schema`);
+  }
+  for (const tag of generated) {
+    if (!planned.has(tag))
+      fail(`${group}: ${tag} has a generated writer schema but no "rust-parsed" plan`);
+  }
+}
+
 const rustTags: Record<"enclave" | "admin", Set<string>> = { enclave: new Set(), admin: new Set() };
 
 for (const group of ["enclave", "admin"] as const) {
@@ -204,7 +234,8 @@ for (const group of ["enclave", "admin"] as const) {
     const rustNorm = normalizeEnvelopeSchema(variant, kind, "rust");
     if (plan === "rust-parsed") {
       // Normalizing rust-side already ran the R5 strictness walk (a variant
-      // that stops refusing unknown fields throws); nothing to diff.
+      // that stops refusing unknown fields throws); nothing to diff. The
+      // writer side is covered by the generated-writer cross-check above.
       console.log(`${name}: strict Rust parser (extension->host; no Zod reader to diff)`);
       continue;
     }
