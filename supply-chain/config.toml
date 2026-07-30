@@ -45,7 +45,7 @@ version = "1.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.base16ct]]
-version = "0.2.0"
+version = "1.0.0"
 criteria = "safe-to-run"
 
 [[exemptions.base64]]
@@ -173,7 +173,7 @@ version = "4.6.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.const-oid]]
-version = "0.9.6"
+version = "0.10.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.cookie]]
@@ -196,6 +196,10 @@ criteria = "safe-to-deploy"
 version = "0.2.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.cpubits]]
+version = "0.1.1"
+criteria = "safe-to-run"
+
 [[exemptions.cpufeatures]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
@@ -217,7 +221,7 @@ version = "0.8.22"
 criteria = "safe-to-deploy"
 
 [[exemptions.crypto-bigint]]
-version = "0.5.5"
+version = "0.7.5"
 criteria = "safe-to-run"
 
 [[exemptions.crypto-common]]
@@ -265,7 +269,7 @@ version = "0.9.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.der]]
-version = "0.7.10"
+version = "0.8.1"
 criteria = "safe-to-run"
 
 [[exemptions.deranged]]
@@ -345,11 +349,11 @@ version = "1.0.20"
 criteria = "safe-to-deploy"
 
 [[exemptions.ecdsa]]
-version = "0.16.9"
+version = "0.17.0"
 criteria = "safe-to-run"
 
 [[exemptions.elliptic-curve]]
-version = "0.13.8"
+version = "0.14.1"
 criteria = "safe-to-run"
 
 [[exemptions.embed-resource]]
@@ -377,7 +381,7 @@ version = "0.3.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.ff]]
-version = "0.13.1"
+version = "0.14.0"
 criteria = "safe-to-run"
 
 [[exemptions.field-offset]]
@@ -525,7 +529,7 @@ version = "0.18.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.group]]
-version = "0.13.0"
+version = "0.14.0"
 criteria = "safe-to-run"
 
 [[exemptions.gtk]]
@@ -559,10 +563,6 @@ criteria = "safe-to-deploy"
 [[exemptions.hex]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
-
-[[exemptions.hmac]]
-version = "0.12.1"
-criteria = "safe-to-run"
 
 [[exemptions.hmac]]
 version = "0.13.0"
@@ -897,7 +897,7 @@ version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.p256]]
-version = "0.13.2"
+version = "0.14.0"
 criteria = "safe-to-run"
 
 [[exemptions.pango]]
@@ -945,7 +945,7 @@ version = "0.2.17"
 criteria = "safe-to-deploy"
 
 [[exemptions.pkcs8]]
-version = "0.10.2"
+version = "0.11.0"
 criteria = "safe-to-run"
 
 [[exemptions.pkg-config]]
@@ -980,8 +980,12 @@ criteria = "safe-to-run"
 version = "0.1.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.primefield]]
+version = "0.14.0"
+criteria = "safe-to-run"
+
 [[exemptions.primeorder]]
-version = "0.13.6"
+version = "0.14.0"
 criteria = "safe-to-run"
 
 [[exemptions.proc-macro-crate]]
@@ -1037,12 +1041,12 @@ version = "0.9.0"
 criteria = "safe-to-run"
 
 [[exemptions.rand_core]]
-version = "0.6.4"
+version = "0.9.5"
 criteria = "safe-to-run"
 
 [[exemptions.rand_core]]
-version = "0.9.5"
-criteria = "safe-to-run"
+version = "0.10.1"
+criteria = "safe-to-deploy"
 
 [[exemptions.rand_xorshift]]
 version = "0.4.0"
@@ -1085,7 +1089,7 @@ version = "0.13.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rfc6979]]
-version = "0.4.0"
+version = "0.6.0"
 criteria = "safe-to-run"
 
 [[exemptions.rustc-hash]]
@@ -1133,7 +1137,7 @@ version = "1.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sec1]]
-version = "0.7.3"
+version = "0.8.1"
 criteria = "safe-to-run"
 
 [[exemptions.security-framework]]
@@ -1196,6 +1200,10 @@ criteria = "safe-to-deploy"
 version = "3.21.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.serdect]]
+version = "0.4.3"
+criteria = "safe-to-run"
+
 [[exemptions.serialize-to-javascript]]
 version = "0.1.2"
 criteria = "safe-to-deploy"
@@ -1225,7 +1233,7 @@ version = "2.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.signature]]
-version = "2.2.0"
+version = "3.0.0"
 criteria = "safe-to-run"
 
 [[exemptions.simd-adler32]]
@@ -1261,7 +1269,7 @@ version = "0.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.spki]]
-version = "0.7.3"
+version = "0.8.0"
 criteria = "safe-to-run"
 
 [[exemptions.stable_deref_trait]]
@@ -1843,6 +1851,10 @@ criteria = "safe-to-deploy"
 [[exemptions.wit-bindgen]]
 version = "0.57.1"
 criteria = "safe-to-deploy"
+
+[[exemptions.wnaf]]
+version = "0.14.0"
+criteria = "safe-to-run"
 
 [[exemptions.writeable]]
 version = "0.6.3"
