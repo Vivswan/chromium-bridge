@@ -94,7 +94,9 @@ pub(crate) fn peer_pid(fd: libc::c_int) -> io::Result<u32> {
 
 fn peer_ucred(fd: libc::c_int) -> io::Result<libc::ucred> {
     let mut cred = std::mem::MaybeUninit::<libc::ucred>::uninit();
-    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let expected_len = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "ucred size exceeds socklen_t"))?;
+    let mut len = expected_len;
     // SAFETY: cred/len are live stack locals sized and typed for SO_PEERCRED;
     // an invalid fd yields an error return (EBADF), never a wild write.
     let rc = unsafe {
@@ -109,14 +111,14 @@ fn peer_ucred(fd: libc::c_int) -> io::Result<libc::ucred> {
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
-    if len as usize != std::mem::size_of::<libc::ucred>() {
+    if len != expected_len {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "unexpected peer-credential size from SO_PEERCRED",
         ));
     }
-    // SAFETY: rc == 0 with the returned len equal to size_of::<ucred>()
-    // (checked above) proves the kernel wrote the full struct, which is what
+    // SAFETY: rc == 0 with the returned len still the full size of ucred
+    // (checked above) proves the kernel wrote the whole struct, which is what
     // licenses assume_init. Do not drop that length check as redundant.
     Ok(unsafe { cred.assume_init() })
 }

@@ -297,8 +297,10 @@ pub fn doctor_args(args: &[String]) -> Result<DoctorCommand, String> {
         }
     }
 
-    let selections =
-        usize::from(all) + usize::from(browsers.is_some()) + usize::from(!manifest_dirs.is_empty());
+    let selections = [all, browsers.is_some(), !manifest_dirs.is_empty()]
+        .into_iter()
+        .filter(|&picked| picked)
+        .count();
     if selections > 1 {
         return Err("--all, --browser, and --manifest-dir are mutually exclusive".into());
     }

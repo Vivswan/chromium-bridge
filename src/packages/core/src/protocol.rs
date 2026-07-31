@@ -33,7 +33,7 @@ pub fn nm_read_frame<R: Read>(r: &mut R) -> io::Result<Option<Value>> {
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(e) => return Err(e),
     }
-    let len = u32::from_le_bytes(header) as usize;
+    let len = u32::from_le_bytes(header);
     // Defensive bound: a corrupted prefix yielding a huge value would OOM us.
     // Inbound limit is 64 MB per the spec; clamp well above any legitimate use.
     if len > 64 * 1024 * 1024 {
@@ -42,6 +42,12 @@ pub fn nm_read_frame<R: Read>(r: &mut R) -> io::Result<Option<Value>> {
             format!("native-messaging frame too large: {len} bytes"),
         ));
     }
+    let len = usize::try_from(len).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native-messaging frame length exceeds addressable memory",
+        )
+    })?;
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
     let value = serde_json::from_slice(&buf)
@@ -63,8 +69,13 @@ pub fn nm_write_frame<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
             ),
         ));
     }
-    let len = (json.len() as u32).to_le_bytes();
-    w.write_all(&len)?;
+    let len = u32::try_from(json.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native-messaging frame length overflows the u32 prefix",
+        )
+    })?;
+    w.write_all(&len.to_le_bytes())?;
     w.write_all(&json)?;
     w.flush()?;
     Ok(())
@@ -172,18 +183,20 @@ pub fn mcp_read<R: io::BufRead>(r: &mut R) -> io::Result<Option<JsonRpc>> {
 }
 
 fn mcp_read_capped<R: io::BufRead>(r: &mut R, max_line: usize) -> io::Result<Option<JsonRpc>> {
+    // Take bounds how many bytes read_until will pull in. The +1 sentinel
+    // byte lets a full-but-legal line (exactly at the cap) be told apart
+    // from one that ran past it: only an overrun leaves line.len() above
+    // max_line.
+    let take_cap = u64::try_from(max_line)
+        .ok()
+        .and_then(|cap| cap.checked_add(1))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "mcp line cap out of range"))?;
     // Loop (not recurse) over skipped blank lines: a client flooding blank
     // lines must not grow the stack, which under panic=abort would abort the
     // process.
     loop {
         let mut line = Vec::new();
-        // Take bounds how many bytes read_until will pull in. The +1 sentinel
-        // byte lets a full-but-legal line (exactly at the cap) be told apart
-        // from one that ran past it: only an overrun leaves line.len() above
-        // max_line.
-        let n = (&mut *r)
-            .take(max_line as u64 + 1)
-            .read_until(b'\n', &mut line)?;
+        let n = (&mut *r).take(take_cap).read_until(b'\n', &mut line)?;
         if n == 0 {
             return Ok(None);
         }
@@ -496,18 +509,22 @@ fn bridge_read_capped<R: io::BufRead, T: for<'de> Deserialize<'de>>(
     r: &mut R,
     max_line: usize,
 ) -> io::Result<Option<T>> {
+    // Take bounds how many bytes read_until will pull in. The +1 sentinel
+    // byte lets a full-but-legal line (exactly at the cap) be told apart
+    // from one that ran past it: only an overrun leaves line.len() above
+    // max_line.
+    let take_cap = u64::try_from(max_line)
+        .ok()
+        .and_then(|cap| cap.checked_add(1))
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "bridge line cap out of range")
+        })?;
     // Loop (not recurse) over skipped blank lines: a peer that floods blank
     // lines must not grow the stack, which under panic=abort would abort the
     // process.
     loop {
         let mut line = Vec::new();
-        // Take bounds how many bytes read_until will pull in. The +1 sentinel
-        // byte lets a full-but-legal line (exactly at the cap) be told apart
-        // from one that ran past it: only an overrun leaves line.len() above
-        // max_line.
-        let n = (&mut *r)
-            .take(max_line as u64 + 1)
-            .read_until(b'\n', &mut line)?;
+        let n = (&mut *r).take(take_cap).read_until(b'\n', &mut line)?;
         if n == 0 {
             return Ok(None);
         }

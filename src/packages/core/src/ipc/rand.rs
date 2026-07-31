@@ -31,7 +31,7 @@ fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
 }
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
+    let mut s = String::with_capacity(bytes.len().saturating_mul(2));
     for b in bytes {
         s.push_str(&format!("{b:02x}"));
     }

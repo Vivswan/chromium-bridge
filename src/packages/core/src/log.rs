@@ -77,7 +77,7 @@ pub fn format() -> Format {
 /// put in audit fields (tool names, codes, numbers). Avoids pulling serde into
 /// the hot path for one line.
 fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+    let mut out = String::with_capacity(s.len().saturating_add(2));
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
@@ -85,7 +85,7 @@ fn json_escape(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
             c => out.push(c),
         }
     }

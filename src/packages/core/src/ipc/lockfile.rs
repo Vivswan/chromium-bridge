@@ -291,8 +291,14 @@ pub(crate) fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Opti
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
+    // Read up to max+1 bytes so an over-cap file is distinguishable from one
+    // of exactly max bytes. An unrepresentable limit fails closed.
+    let cap = u64::try_from(max)
+        .ok()
+        .and_then(|c| c.checked_add(1))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "size cap out of range"))?;
     let mut bytes = Vec::new();
-    f.take(max as u64 + 1).read_to_end(&mut bytes)?;
+    f.take(cap).read_to_end(&mut bytes)?;
     if bytes.len() > max {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
