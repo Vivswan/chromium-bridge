@@ -85,16 +85,7 @@ pub fn run() -> i32 {
     // takeover is gone (ADR-0024): a live, attested broker is coexisted with,
     // not SIGTERMed. Bounded retries cover the races -- a broker exiting as we
     // dial, or several instances starting at once.
-    let mut attempts = 0u32;
-    loop {
-        attempts += 1;
-        if attempts > 6 {
-            log_error!(
-                "mcp",
-                "could not become the broker or attach to one after several tries; giving up"
-            );
-            return 1;
-        }
+    for _ in 0..6 {
         match ipc::listen_and_publish() {
             Ok(ipc::PublishOutcome::Published(listener, lock)) => {
                 log_info!(
@@ -126,7 +117,6 @@ pub fn run() -> i32 {
                     RelayOutcome::Denied => return 1,
                     RelayOutcome::Retry => {
                         std::thread::sleep(std::time::Duration::from_millis(150));
-                        continue;
                     }
                 }
             }
@@ -136,6 +126,11 @@ pub fn run() -> i32 {
             }
         }
     }
+    log_error!(
+        "mcp",
+        "could not become the broker or attach to one after several tries; giving up"
+    );
+    1
 }
 
 /// The result of admitting our own spawning harness. `None` from
@@ -340,7 +335,9 @@ pub(crate) fn handle(session: &Session, msg: &JsonRpc) -> Option<JsonRpc> {
             rec.tool = Some(name.to_string());
             rec.outcome = Some(if out.is_error() { "error" } else { "ok" }.to_string());
             rec.code = out.error_code().map(str::to_string);
-            rec.dur_ms = Some(started.elapsed().as_millis() as u64);
+            // Saturating: a duration too long for u64 milliseconds (~584M
+            // years) clamps rather than fails the audit record.
+            rec.dur_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
             crate::audit::record(rec);
             let result = json!({ "content": out.content(), "isError": out.is_error() });
             Some(JsonRpc::ok(id, result))

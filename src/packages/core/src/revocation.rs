@@ -158,6 +158,16 @@ impl Revocation {
         Ok(Self::load()?.unwrap_or_default())
     }
 
+    /// The epoch after one bump. Refuses the u64 wrap rather than saturating
+    /// or wrapping: a repeated or rolled-back epoch reads as "unchanged" to an
+    /// enforcement point, which would suppress the re-check the bump exists to
+    /// force.
+    fn bumped_epoch(&self) -> io::Result<u64> {
+        self.epoch
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "revocation epoch overflow"))
+    }
+
     /// Write atomically, 0600. Demands the [`ipc::RuntimeLockToken`] witness:
     /// a bump races other writers by design, and the runtime lock the token
     /// proves is what makes read-increment-write monotonic across processes.
@@ -196,7 +206,7 @@ pub enum Scope {
 pub(crate) fn bump_locked(lock: &ipc::RuntimeLockToken, scope: Scope) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
-    rev.epoch += 1;
+    rev.epoch = rev.bumped_epoch()?;
     match scope {
         Scope::Clients => rev.clients_epoch = rev.epoch,
         Scope::HostKey => rev.host_key_epoch = rev.epoch,
@@ -211,7 +221,7 @@ pub(crate) fn bump_locked(lock: &ipc::RuntimeLockToken, scope: Scope) -> io::Res
 pub(crate) fn latch_clients_enrolled_locked(lock: &ipc::RuntimeLockToken) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
-    rev.epoch += 1;
+    rev.epoch = rev.bumped_epoch()?;
     rev.clients_epoch = rev.epoch;
     rev.clients_enrolled = true;
     rev.write_locked(lock)?;
@@ -243,7 +253,7 @@ pub(crate) fn bump(scope: Scope) -> io::Result<u64> {
 pub(crate) fn set_killed_locked(lock: &ipc::RuntimeLockToken, killed: bool) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
-    rev.epoch += 1;
+    rev.epoch = rev.bumped_epoch()?;
     rev.killed = killed;
     rev.kill_epoch = rev.epoch;
     rev.write_locked(lock)?;

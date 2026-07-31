@@ -36,7 +36,7 @@ pub fn der_to_raw_signature(der: &[u8]) -> Result<[u8; SIG_LEN], EnclaveError> {
             "long-form SEQUENCE length 0x{len_byte:02x} cannot occur in a P-256 signature"
         )));
     }
-    let (seq_len, body) = (len_byte as usize, rest);
+    let (seq_len, body) = (usize::from(len_byte), rest);
     if body.len() != seq_len {
         return Err(bad(format!(
             "SEQUENCE length {seq_len} does not match body length {}",
@@ -82,7 +82,7 @@ fn der_read_integer(input: &[u8]) -> Result<(&[u8], &[u8]), EnclaveError> {
     let (&len, rest) = rest
         .split_first()
         .ok_or_else(|| bad("truncated INTEGER length".into()))?;
-    let len = len as usize;
+    let len = usize::from(len);
     // 33 = 32 value bytes + one 0x00 sign pad. Anything longer cannot be a
     // P-256 scalar; the long length form (>= 0x80) is impossible below 34.
     if len == 0 || len > 33 {

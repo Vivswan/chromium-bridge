@@ -41,19 +41,31 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn main() {
-    let signing_key =
-        SigningKey::from_slice(&FIXTURE_KEY_BYTES).expect("fixture scalar is a valid P-256 key");
+#[derive(Clone, Copy)]
+enum Domain {
+    Challenge,
+    Presence,
+}
+
+impl Domain {
+    fn as_str(self) -> &'static str {
+        match self {
+            Domain::Challenge => "challenge",
+            Domain::Presence => "presence",
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let signing_key = SigningKey::from_slice(&FIXTURE_KEY_BYTES)
+        .map_err(|e| format!("fixture scalar is not a valid P-256 key: {e}"))?;
     let point = signing_key.verifying_key().to_sec1_point(false);
-    let pubkey = EnclavePublicKey::from_x963(point.as_bytes().to_vec())
-        .expect("p256 emits the 65-byte X9.63 uncompressed point");
+    let pubkey = EnclavePublicKey::from_x963(point.as_bytes().to_vec())?;
     // The deny-list constant is pinned to the scalar: generation refuses to
     // proceed if they ever name different keys.
-    assert_eq!(
-        pubkey.fingerprint_hex(),
-        FIXTURE_KEY_ID,
-        "FIXTURE_KEY_ID does not match the key FIXTURE_KEY_BYTES derives"
-    );
+    if pubkey.fingerprint_hex() != FIXTURE_KEY_ID {
+        return Err("FIXTURE_KEY_ID does not match the key FIXTURE_KEY_BYTES derives".into());
+    }
 
     // The vector matrix from the SSoT audit: both domains, None-vs-empty
     // context, realistic ceremony pairs (64-hex nonce, ext-shaped contexts),
@@ -61,7 +73,7 @@ fn main() {
     // Rust's str::len against JS TextEncoder), and both bounds at their
     // maximum. The extension ids in the contexts are FOREIGN on purpose (a
     // different id than ours), so no checked-in signature ever covers bytes
-    // our real ceremony can construct; the assert in the loop enforces it.
+    // our real ceremony can construct; the check in the loop enforces it.
     let max_nonce = "n".repeat(MAX_NONCE_LEN);
     let max_context = "c".repeat(MAX_CONTEXT_LEN);
     let hex_nonce = "9f".repeat(32); // shape of generateNonce(): 64 lowercase hex chars
@@ -69,65 +81,61 @@ fn main() {
         "ext:gijmanfkddbcbmkfmplnjcbmpnjmocpk:presence:eval:{}",
         "ab".repeat(32)
     );
-    let vectors: &[(&str, &str, Option<&str>)] = &[
-        ("challenge", "abc", Some("ctx")),
-        ("challenge", "abc", None),
-        ("challenge", "abc", Some("")),
-        ("presence", "abc", Some("ctx")),
+    let vectors: &[(Domain, &str, Option<&str>)] = &[
+        (Domain::Challenge, "abc", Some("ctx")),
+        (Domain::Challenge, "abc", None),
+        (Domain::Challenge, "abc", Some("")),
+        (Domain::Presence, "abc", Some("ctx")),
         (
-            "challenge",
+            Domain::Challenge,
             &hex_nonce,
             Some("ext:gijmanfkddbcbmkfmplnjcbmpnjmocpk:pair"),
         ),
         // The production presence context shape (confirm/presence.ts):
         // ext:<id>:presence:<kind>:<sha256hex>, kind in ConfirmPayload's
         // vocabulary ("eval" / "upload").
-        ("presence", &hex_nonce, Some(&presence_context)),
+        (Domain::Presence, &hex_nonce, Some(&presence_context)),
         // Multi-byte UTF-8 in both fields (2-, 3-, and 4-byte sequences).
         (
-            "challenge",
+            Domain::Challenge,
             "utf8-\u{e9}-nonce",
             Some("ctx-\u{4e2d}\u{6587}-\u{1f512}"),
         ),
-        ("challenge", &max_nonce, Some(&max_context)),
+        (Domain::Challenge, &max_nonce, Some(&max_context)),
     ];
 
-    let vectors: Vec<Value> = vectors
-        .iter()
-        .map(|&(domain, nonce, context)| {
-            if let Some(ctx) = context {
-                assert!(
-                    !ctx.contains(PINNED_EXTENSION_ID),
-                    "fixture contexts must never carry OUR extension id: a signature over \
-                     bytes the real ceremony can construct would weaken the fixture key's \
-                     never-enrollable margin"
+    let mut vector_values: Vec<Value> = Vec::with_capacity(vectors.len());
+    for &(domain, nonce, context) in vectors {
+        if let Some(ctx) = context {
+            if ctx.contains(PINNED_EXTENSION_ID) {
+                return Err(
+                    "fixture contexts must never carry OUR extension id: a signature \
+                            over bytes the real ceremony can construct would weaken the \
+                            fixture key's never-enrollable margin"
+                        .into(),
                 );
             }
-            let message = match domain {
-                "challenge" => challenge_message(nonce, context),
-                "presence" => presence_message(nonce, context),
-                other => unreachable!("unknown fixture domain {other}"),
-            }
-            .expect("fixture fields are within the contract bounds");
-            let sig: Signature = signing_key.sign(&message);
-            // Route the signature through the production DER -> P1363
-            // converter, exactly as the host converts Security.framework
-            // output, and cross-check it against p256's own raw form.
-            let raw = der_to_raw_signature(sig.to_der().as_bytes()).expect("p256 emits strict DER");
-            assert_eq!(
-                raw.as_slice(),
-                sig.to_bytes().as_slice(),
-                "der_to_raw_signature disagrees with p256's raw signature form"
-            );
-            json!({
-                "domain": domain,
-                "nonce": nonce,
-                "context": context,
-                "messageHex": hex(&message),
-                "sigB64": chromium_bridge_core::enclave::base64_encode(&raw),
-            })
-        })
-        .collect();
+        }
+        let message = match domain {
+            Domain::Challenge => challenge_message(nonce, context),
+            Domain::Presence => presence_message(nonce, context),
+        }?;
+        let sig: Signature = signing_key.sign(&message);
+        // Route the signature through the production DER -> P1363
+        // converter, exactly as the host converts Security.framework
+        // output, and cross-check it against p256's own raw form.
+        let raw = der_to_raw_signature(sig.to_der().as_bytes())?;
+        if raw.as_slice() != sig.to_bytes().as_slice() {
+            return Err("der_to_raw_signature disagrees with p256's raw signature form".into());
+        }
+        vector_values.push(json!({
+            "domain": domain.as_str(),
+            "nonce": nonce,
+            "context": context,
+            "messageHex": hex(&message),
+            "sigB64": chromium_bridge_core::enclave::base64_encode(&raw),
+        }));
+    }
 
     let out = json!({
         "challengeDomain": CHALLENGE_DOMAIN,
@@ -140,8 +148,9 @@ fn main() {
         "fixture": {
             "pubkeyB64": pubkey.to_base64(),
             "keyIdHex": pubkey.fingerprint_hex(),
-            "vectors": vectors,
+            "vectors": vector_values,
         },
     });
-    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
 }

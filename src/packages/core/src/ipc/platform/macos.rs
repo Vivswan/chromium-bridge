@@ -52,7 +52,7 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientId
         CFNumberCreate(
             kCFAllocatorDefault,
             KCF_NUMBER_SINT32,
-            (&pid as *const libc::pid_t).cast(),
+            std::ptr::from_ref(&pid).cast(),
         )
     };
     let num = Cf::own(num, "CFNumberCreate for pid")?;
@@ -64,20 +64,22 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientId
 /// process that opened the peer end.
 pub(crate) fn peer_pid(fd: libc::c_int) -> io::Result<u32> {
     let mut pid: libc::pid_t = 0;
-    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    let expected_len = libc::socklen_t::try_from(std::mem::size_of::<libc::pid_t>())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid_t size exceeds socklen_t"))?;
+    let mut len = expected_len;
     let rc = unsafe {
         libc::getsockopt(
             fd,
             libc::SOL_LOCAL,
             libc::LOCAL_PEERPID,
-            (&mut pid as *mut libc::pid_t).cast(),
+            std::ptr::from_mut(&mut pid).cast(),
             &mut len,
         )
     };
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
-    if len as usize != std::mem::size_of::<libc::pid_t>() {
+    if len != expected_len {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "unexpected peer-pid size from LOCAL_PEERPID",
@@ -240,7 +242,7 @@ fn own_cdhash() -> io::Result<String> {
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopySelf", st));
     }
-    let _me = Cf::own(me as CFTypeRef, "SecCodeCopySelf")?;
+    let _me = Cf::own(me.cast_const(), "SecCodeCopySelf")?;
     validate_and_cdhash(me, "self")
 }
 
@@ -268,7 +270,13 @@ fn peer_cdhash(stream: &BridgeStream) -> io::Result<String> {
 
 fn peer_audit_token(fd: libc::c_int) -> io::Result<[u32; AUDIT_TOKEN_LEN]> {
     let mut token = [0u32; AUDIT_TOKEN_LEN];
-    let mut len = std::mem::size_of_val(&token) as libc::socklen_t;
+    let expected_len = libc::socklen_t::try_from(std::mem::size_of_val(&token)).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "audit-token size exceeds socklen_t",
+        )
+    })?;
+    let mut len = expected_len;
     let rc = unsafe {
         libc::getsockopt(
             fd,
@@ -281,7 +289,7 @@ fn peer_audit_token(fd: libc::c_int) -> io::Result<[u32; AUDIT_TOKEN_LEN]> {
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
-    if len as usize != std::mem::size_of_val(&token) {
+    if len != expected_len {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "unexpected audit-token size from LOCAL_PEERTOKEN",
@@ -294,7 +302,13 @@ fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
     let bytes = unsafe {
         std::slice::from_raw_parts(token.as_ptr().cast::<u8>(), std::mem::size_of_val(token))
     };
-    let data = unsafe { CFDataCreate(kCFAllocatorDefault, bytes.as_ptr(), bytes.len() as CFIndex) };
+    let len = CFIndex::try_from(bytes.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "audit-token size exceeds CFIndex",
+        )
+    })?;
+    let data = unsafe { CFDataCreate(kCFAllocatorDefault, bytes.as_ptr(), len) };
     let data = Cf::own(data, "CFDataCreate for audit token")?;
     guest_cdhash(GuestKey::Audit, &data)
 }
@@ -311,7 +325,7 @@ fn pid_cdhash(pid: u32) -> io::Result<String> {
         CFNumberCreate(
             kCFAllocatorDefault,
             KCF_NUMBER_SINT32,
-            (&pid as *const libc::pid_t).cast(),
+            std::ptr::from_ref(&pid).cast(),
         )
     };
     let num = Cf::own(num, "CFNumberCreate for pid")?;
@@ -355,7 +369,7 @@ fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyGuestWithAttributes", st));
     }
-    let _guest = Cf::own(guest as CFTypeRef, "SecCodeCopyGuestWithAttributes")?;
+    let _guest = Cf::own(guest.cast_const(), "SecCodeCopyGuestWithAttributes")?;
 
     validate_and_cdhash(guest, "peer")
 }
@@ -396,7 +410,7 @@ fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyGuestWithAttributes", st));
     }
-    let _guest = Cf::own(guest as CFTypeRef, "SecCodeCopyGuestWithAttributes")?;
+    let _guest = Cf::own(guest.cast_const(), "SecCodeCopyGuestWithAttributes")?;
 
     let st = unsafe { SecCodeCheckValidity(guest, DEFAULT_FLAGS, std::ptr::null()) };
     if st != ERR_SEC_SUCCESS {
@@ -422,7 +436,7 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyStaticCode", st));
     }
-    let _static = Cf::own(static_code as CFTypeRef, "SecCodeCopyStaticCode")?;
+    let _static = Cf::own(static_code.cast_const(), "SecCodeCopyStaticCode")?;
 
     let mut info: CFDictionaryRef = std::ptr::null();
     let st = unsafe { SecCodeCopySigningInformation(static_code, DEFAULT_FLAGS, &mut info) };
@@ -432,25 +446,25 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
     let _info = Cf::own(info, "SecCodeCopySigningInformation")?;
 
     // Borrowed reference (Get-rule): do not release.
-    let cdhash = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) } as CFDataRef;
+    let cdhash: CFDataRef = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) };
     if cdhash.is_null() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "code has no cdhash (unsigned?)",
         ));
     }
-    let len = unsafe { CFDataGetLength(cdhash) };
+    let len = usize::try_from(unsafe { CFDataGetLength(cdhash) }).unwrap_or(0);
     let ptr = unsafe { CFDataGetBytePtr(cdhash) };
-    if len <= 0 || ptr.is_null() {
+    if len == 0 || ptr.is_null() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "code-directory hash is empty",
         ));
     }
     // SAFETY: ptr/len come from the CFData owned by the `_info` guard above,
-    // and were just checked non-null/positive; the borrow must not outlive
+    // and were just checked non-null/non-zero; the borrow must not outlive
     // `_info`, so the slice is hex-encoded before this function returns.
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
     Ok(super::super::rand::hex_encode(bytes))
 }
 
@@ -465,7 +479,7 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyStaticCode", st));
     }
-    let _static = Cf::own(static_code as CFTypeRef, "SecCodeCopyStaticCode")?;
+    let _static = Cf::own(static_code.cast_const(), "SecCodeCopyStaticCode")?;
 
     let mut info: CFDictionaryRef = std::ptr::null();
     let st =
@@ -476,29 +490,28 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     let _info = Cf::own(info, "SecCodeCopySigningInformation")?;
 
     // cdhash (borrowed Get-rule references; do not release).
-    let cdhash = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) } as CFDataRef;
+    let cdhash: CFDataRef = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) };
     if cdhash.is_null() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "code has no cdhash (unsigned?)",
         ));
     }
-    let len = unsafe { CFDataGetLength(cdhash) };
+    let len = usize::try_from(unsafe { CFDataGetLength(cdhash) }).unwrap_or(0);
     let ptr = unsafe { CFDataGetBytePtr(cdhash) };
-    if len <= 0 || ptr.is_null() {
+    if len == 0 || ptr.is_null() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "code-directory hash is empty",
         ));
     }
     // SAFETY: ptr/len come from the CFData owned by the `_info` guard above,
-    // and were just checked non-null/positive; the borrow must not outlive
+    // and were just checked non-null/non-zero; the borrow must not outlive
     // `_info`, so the slice is consumed by hex_encode within this expression.
-    let hash =
-        super::super::rand::hex_encode(unsafe { std::slice::from_raw_parts(ptr, len as usize) });
+    let hash = super::super::rand::hex_encode(unsafe { std::slice::from_raw_parts(ptr, len) });
 
     // Team ID is optional: ad-hoc / unsigned images simply lack it.
-    let team_ref = unsafe { CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier) } as CFStringRef;
+    let team_ref: CFStringRef = unsafe { CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier) };
     let team_id = cfstring_to_string(team_ref).filter(|s| !s.is_empty());
 
     Ok(super::super::ClientIdentity { hash, team_id })
@@ -513,14 +526,8 @@ fn cfstring_to_string(s: CFStringRef) -> Option<String> {
         return None;
     }
     let mut buf = [0i8; 256];
-    let ok = unsafe {
-        CFStringGetCString(
-            s,
-            buf.as_mut_ptr(),
-            buf.len() as CFIndex,
-            KCF_STRING_ENCODING_UTF8,
-        )
-    };
+    let buf_len = CFIndex::try_from(buf.len()).ok()?;
+    let ok = unsafe { CFStringGetCString(s, buf.as_mut_ptr(), buf_len, KCF_STRING_ENCODING_UTF8) };
     if ok == 0 {
         return None;
     }

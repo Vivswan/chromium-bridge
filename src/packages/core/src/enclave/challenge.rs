@@ -65,7 +65,13 @@ fn domain_message(
     if context.contains('\0') {
         return Err(EnclaveError::InvalidChallenge("context contains NUL"));
     }
-    let mut msg = Vec::with_capacity(domain.len() + nonce.len() + context.len() + 2);
+    let mut msg = Vec::with_capacity(
+        domain
+            .len()
+            .saturating_add(nonce.len())
+            .saturating_add(context.len())
+            .saturating_add(2),
+    );
     msg.extend_from_slice(domain.as_bytes());
     msg.push(0);
     msg.extend_from_slice(nonce.as_bytes());

@@ -18,7 +18,7 @@ use chromium_bridge_core::registration::{manifest_ownership, Ownership};
 #[test]
 fn every_seed_still_classifies_as_its_prefix_claims() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/seeds/registration_manifest");
-    let mut seen = 0;
+    let mut seen: u32 = 0;
     for entry in std::fs::read_dir(&dir).expect("fuzz/seeds/registration_manifest must exist") {
         let path = entry.expect("readable seed dir entry").path();
         let name = path
@@ -52,7 +52,7 @@ fn every_seed_still_classifies_as_its_prefix_claims() {
                  classification cannot be pinned; rename it to state its claim"
             );
         }
-        seen += 1;
+        seen = seen.saturating_add(1);
     }
     assert!(
         seen >= 6,
