@@ -24,7 +24,7 @@
 
 use chromium_bridge_core::protocol::{AdminControl, BridgeReq, BridgeResp, EnclaveControl};
 
-fn main() {
+fn main() -> Result<(), serde_json::Error> {
     let out = serde_json::json!({
         "request": schemars::schema_for!(BridgeReq),
         "response": schemars::schema_for!(BridgeResp),
@@ -36,5 +36,6 @@ fn main() {
         "enclave": schemars::schema_for!(EnclaveControl),
         "admin": schemars::schema_for!(AdminControl),
     });
-    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
 }

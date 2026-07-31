@@ -9,21 +9,14 @@
 //! This library exposes every module so the modules are reachable from the
 //! host binary, integration tests, and future consumers.
 
-// No-panic security core: this crate is the enforcement boundary (attestation,
-// handshake, allowlist, enclave, wire parsers), and a panic here is a
-// denial-of-service primitive plus an unaudited failure path. Every fallible
-// operation must fail closed through a typed error instead of unwinding.
-// Test code is exempt via clippy.toml's allow-*-in-tests switches; production
-// exceptions require a structural proof that the panic path cannot exist, not
-// an #[allow].
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing,
-    clippy::string_slice,
-    clippy::unreachable
-)]
+// No-panic security core: the panic-family and numeric-strictness lints are
+// denied workspace-wide in the root Cargo.toml. clippy.toml's
+// allow-*-in-tests switches exempt test code from the panic family;
+// arithmetic_side_effects and as_conversions have no such config, so the
+// test-harness build is exempted here (the non-test lib target still
+// enforces both on production code). Production exceptions require a
+// structural proof that the panic path cannot exist, not an #[allow].
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects, clippy::as_conversions))]
 
 #[macro_use]
 pub mod log;

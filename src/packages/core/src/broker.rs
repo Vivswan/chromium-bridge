@@ -163,7 +163,10 @@ impl RefCount {
         if g.terminal || g.live >= self.max {
             return None;
         }
-        g.live += 1;
+        // Unreachable overflow (live < max), but refuse rather than wrap:
+        // an attach refusal is retryable, a wrapped count is not.
+        let live = g.live.checked_add(1)?;
+        g.live = live;
         Some(HarnessSlot { refcount: self })
     }
 
@@ -463,7 +466,10 @@ impl ClientRegistry {
             return None;
         };
         let id = inner.next_id;
-        inner.next_id += 1;
+        // A wrapped id could collide with a live slot and let deregister
+        // remove the wrong client; refuse the attach instead (fail closed).
+        let next_id = id.checked_add(1)?;
+        inner.next_id = next_id;
         inner
             .clients
             .insert(id, RegisteredClient { identity, stream });
@@ -490,11 +496,14 @@ impl ClientRegistry {
             .slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut dropped = 0;
+        // Explicit loop: the shutdown is enforcement and must not hide as an
+        // iterator-adapter side effect. The count only feeds a log line, so
+        // clamping on (unreachable) overflow is fine.
+        let mut dropped: usize = 0;
         for client in inner.clients.values() {
             if refuse(client.identity.as_ref()) {
                 let _ = client.stream.shutdown(std::net::Shutdown::Both);
-                dropped += 1;
+                dropped = dropped.saturating_add(1);
             }
         }
         dropped
@@ -1006,7 +1015,7 @@ fn admit_client<'a>(
     let Some(slot) = broker.registry.register(identity.clone(), sweep_handle) else {
         log_warn!(
             "broker",
-            "revocation registry unavailable (poisoned); refusing relay"
+            "revocation registry unavailable (poisoned or ids exhausted); refusing relay"
         );
         return Admitted::Rejected;
     };
@@ -1316,10 +1325,15 @@ pub(crate) fn run_relay(harness: Option<HarnessId>) -> RelayOutcome {
 /// JSON, so no field is dropped in transit (the broker is the single JSON-RPC
 /// brain). Returns on EOF.
 fn pump_lines<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, cap: usize) -> io::Result<()> {
+    // Read up to cap+1 bytes so an over-cap line is distinguishable from one
+    // of exactly cap bytes. An unrepresentable limit fails closed.
+    let limit = u64::try_from(cap)
+        .ok()
+        .and_then(|c| c.checked_add(1))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "line cap out of range"))?;
     loop {
         let mut line = Vec::new();
-        let n =
-            std::io::Read::take(reader.by_ref(), cap as u64 + 1).read_until(b'\n', &mut line)?;
+        let n = std::io::Read::take(reader.by_ref(), limit).read_until(b'\n', &mut line)?;
         if n == 0 {
             return Ok(());
         }

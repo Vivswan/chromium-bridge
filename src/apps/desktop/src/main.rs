@@ -232,7 +232,7 @@ async fn audit_reveal() -> Result<(), String> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let outcome = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             bridge_status,
             enclave_status,
@@ -258,6 +258,9 @@ fn main() {
             extension_reveal,
             audit_reveal,
         ])
-        .run(tauri::generate_context!())
-        .expect("tauri app failed to start");
+        .run(tauri::generate_context!());
+    if let Err(e) = outcome {
+        eprintln!("chromium-bridge-desktop failed to start: {e}");
+        std::process::exit(1);
+    }
 }

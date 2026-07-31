@@ -243,11 +243,12 @@ impl AuditRecord {
         ] {
             if let Some(s) = f.as_mut() {
                 if s.len() > AUDIT_MAX_FIELD {
-                    // Truncate on a char boundary so the value stays UTF-8.
-                    let mut cut = AUDIT_MAX_FIELD;
-                    while !s.is_char_boundary(cut) {
-                        cut -= 1;
-                    }
+                    // Truncate on a char boundary so the value stays UTF-8;
+                    // index 0 is always a boundary, so the search cannot miss.
+                    let cut = (0..=AUDIT_MAX_FIELD)
+                        .rev()
+                        .find(|&i| s.is_char_boundary(i))
+                        .unwrap_or(0);
                     s.truncate(cut);
                 }
             }
@@ -292,7 +293,7 @@ pub fn record(mut rec: AuditRecord) {
     });
     if !matches!(outcome, Ok(Ok(()))) {
         // Re-arm the count we optimistically claimed, plus this record.
-        DROPPED.fetch_add(dropped + 1, Ordering::Relaxed);
+        DROPPED.fetch_add(dropped.saturating_add(1), Ordering::Relaxed);
         log_warn!(
             "audit",
             "audit file write failed; the event was recorded on stderr only \
@@ -314,8 +315,8 @@ pub fn record(mut rec: AuditRecord) {
 /// the cap. The lock is its own file, deliberately separate from the runtime
 /// lock (see the module docs).
 fn append_at(path: &Path, line: &[u8], max: u64) -> io::Result<()> {
-    if needs_rotation(path, line.len() as u64, max) {
-        rotate_locked(path, line.len() as u64, max);
+    if needs_rotation(path, line.len(), max) {
+        rotate_locked(path, line.len(), max);
     }
     // fsguard refuses a pre-planted symlink at the audit path (the trail must
     // not be redirectable to, or chmod, another file) and re-asserts 0600 so
@@ -328,14 +329,18 @@ fn append_at(path: &Path, line: &[u8], max: u64) -> io::Result<()> {
 
 /// Whether appending `add` bytes to `path` would exceed `max`. A missing or
 /// unreadable file needs no rotation.
-fn needs_rotation(path: &Path, add: u64, max: u64) -> bool {
-    fs::metadata(path).is_ok_and(|m| m.len() + add > max)
+fn needs_rotation(path: &Path, add: usize, max: u64) -> bool {
+    // A length that cannot even convert to u64 is certainly over the cap.
+    let Ok(add) = u64::try_from(add) else {
+        return true;
+    };
+    fs::metadata(path).is_ok_and(|m| m.len().saturating_add(add) > max)
 }
 
 /// Rotate `path` to its `.1` sibling, under the sidecar lock. Best-effort by
 /// audit's contract: losing the lock race, or any I/O failure here, only
 /// delays or skips a rotation, never the append.
-fn rotate_locked(path: &Path, add: u64, max: u64) {
+fn rotate_locked(path: &Path, add: usize, max: u64) {
     let mut lock_name = path.as_os_str().to_owned();
     lock_name.push(".lock");
     let Ok(lock) = crate::fsguard::open_private_rw(&PathBuf::from(lock_name)) else {
@@ -443,7 +448,8 @@ pub(crate) fn extension_kind(kind: &str) -> Option<AuditKind> {
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok())
         .unwrap_or(0)
 }
 
@@ -481,7 +487,7 @@ pub fn run_audit(argv: &[String]) -> i32 {
         match parse_record(line) {
             Some(rec) => println!("{}", render_line(&rec)),
             None => {
-                unrecognized += 1;
+                unrecognized = unrecognized.saturating_add(1);
                 println!(
                     "{:<24} UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)",
                     "-"
@@ -559,24 +565,52 @@ fn audit_args(argv: &[String]) -> Result<usize, String> {
 }
 
 /// Format Unix milliseconds as `YYYY-MM-DD HH:MM:SS.mmm` UTC, without a date
-/// dependency. Uses Howard Hinnant's civil-from-days algorithm.
+/// dependency.
 fn format_utc_ms(ts_ms: u64) -> String {
     let secs = ts_ms / 1000;
     let ms = ts_ms % 1000;
-    let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { y + 1 } else { y };
-    format!("{year:04}-{month:02}-{d:02} {h:02}:{m:02}:{s:02}.{ms:03}Z")
+    match civil_from_days(secs / 86_400) {
+        Some((year, month, day)) => {
+            format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}.{ms:03}Z")
+        }
+        None => format!("ts_ms={ts_ms}"),
+    }
+}
+
+/// Civil `(year, month, day)` for a day count since 1970-01-01, per Howard
+/// Hinnant's civil-from-days algorithm. Day counts derived from u64
+/// milliseconds are non-negative and small enough that every intermediate
+/// fits u64, so no overflow is reachable; the checked ops are defense in
+/// depth, turning any future slip into a `None` (rendered as raw `ts_ms`)
+/// instead of a panic.
+fn civil_from_days(days: u64) -> Option<(u64, u64, u64)> {
+    let z = days.checked_add(719_468)?;
+    let era = z / 146_097;
+    let doe = z % 146_097;
+    let yoe = doe
+        .checked_sub(doe / 1460)?
+        .checked_add(doe / 36_524)?
+        .checked_sub(doe / 146_096)?
+        / 365;
+    let y = era.checked_mul(400)?.checked_add(yoe)?;
+    let doy = doe.checked_sub(
+        yoe.checked_mul(365)?
+            .checked_add(yoe / 4)?
+            .checked_sub(yoe / 100)?,
+    )?;
+    let mp = doy.checked_mul(5)?.checked_add(2)? / 153;
+    let day = doy
+        .checked_sub(mp.checked_mul(153)?.checked_add(2)? / 5)?
+        .checked_add(1)?;
+    let month = if mp < 10 {
+        mp.checked_add(3)?
+    } else {
+        mp.checked_sub(9)?
+    };
+    let year = if month <= 2 { y.checked_add(1)? } else { y };
+    Some((year, month, day))
 }
 
 #[cfg(test)]
