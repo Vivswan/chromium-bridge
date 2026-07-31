@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(checked_pid(u32::MAX), None);
         assert_eq!(
             checked_pid(std::process::id()),
-            Some(std::process::id() as libc::pid_t)
+            Some(libc::pid_t::try_from(std::process::id()).expect("own pid fits in pid_t"))
         );
     }
 
