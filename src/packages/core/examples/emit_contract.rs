@@ -16,7 +16,7 @@ use chromium_bridge_core::protocol::{BRIDGE_PROTOCOL_VERSION, MCP_PROTOCOL_VERSI
 use chromium_bridge_core::tools::{all, CAPABILITIES};
 use serde_json::{json, Value};
 
-fn main() {
+fn main() -> Result<(), serde_json::Error> {
     let tools: Vec<Value> = all()
         .iter()
         .map(|t| {
@@ -69,5 +69,6 @@ fn main() {
         "errors": errors,
         "capabilities": capabilities,
     });
-    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
 }

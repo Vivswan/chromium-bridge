@@ -80,9 +80,9 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 /// "+f" as 0x0f), is rejected here: the handshake MAC is strict two-digit hex.
 fn hex_nibble(b: u8) -> Option<u8> {
     match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
+        b'0'..=b'9' => b.checked_sub(b'0'),
+        b'a'..=b'f' => b.checked_sub(b'a').and_then(|v| v.checked_add(10)),
+        b'A'..=b'F' => b.checked_sub(b'A').and_then(|v| v.checked_add(10)),
         _ => None,
     }
 }

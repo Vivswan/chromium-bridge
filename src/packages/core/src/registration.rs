@@ -453,7 +453,7 @@ fn wrapper_is_ours(contents: &str) -> bool {
     if lines.next() != Some(WRAPPER_SHEBANG) {
         return false;
     }
-    let mut exec_lines = 0usize;
+    let mut seen_trampoline = false;
     for line in lines {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -472,13 +472,12 @@ fn wrapper_is_ours(contents: &str) -> bool {
             }
             _ => false,
         };
-        if is_trampoline {
-            exec_lines += 1;
-        } else {
+        if !is_trampoline || seen_trampoline {
             return false;
         }
+        seen_trampoline = true;
     }
-    exec_lines == 1
+    seen_trampoline
 }
 
 /// Remove the wrapper scripts this engine writes (exact, project-unique names
@@ -563,7 +562,10 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
 
     println!("chromium-bridge doctor --fix (host id {HOST_ID})");
     println!("host binary: {}", host_exe.display());
-    let mut failures = 0;
+    // Explicit loop: registering is the command's real work and must not
+    // hide as a filter side effect. The failure count only feeds the exit
+    // message, so clamping on (unreachable) overflow is fine.
+    let mut failures: usize = 0;
     for target in &targets {
         match registrar.register(target) {
             Ok(lines) => {
@@ -573,7 +575,7 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
             }
             Err(e) => {
                 log_error!("doctor", "{}: {e}", target.describe());
-                failures += 1;
+                failures = failures.saturating_add(1);
             }
         }
     }
@@ -608,13 +610,13 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
     }
 
     println!("chromium-bridge uninstall (host id {HOST_ID})");
-    let mut failures = 0;
+    let mut failed = false;
     for target in &targets {
         match Registrar::uninstall(target) {
             Ok(line) => println!("{line}"),
             Err(e) => {
                 log_error!("uninstall", "{}: {e}", target.describe());
-                failures += 1;
+                failed = true;
             }
         }
     }
@@ -622,15 +624,15 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
     for line in removed {
         println!("{line}");
     }
-    for e in errors {
+    for e in &errors {
         log_error!("uninstall", "{e}");
-        failures += 1;
     }
+    failed = failed || !errors.is_empty();
     println!(
         "left untouched: this binary, your browsers, and the loaded extension\n\
          (remove the unpacked extension yourself via chrome://extensions)."
     );
-    if failures > 0 {
+    if failed {
         1
     } else {
         0

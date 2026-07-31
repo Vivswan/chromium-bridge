@@ -579,12 +579,17 @@ impl Session {
         // then surfaces the failure as a typed error.
         let registry_empty = || self.conns.lock().is_ok_and(|g| g.is_empty());
         if registry_empty() {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
-            while std::time::Instant::now() < deadline {
-                if !registry_empty() {
-                    break;
+            // checked_add: an unrepresentable deadline (Instant near its
+            // upper bound) skips the wait rather than panicking.
+            if let Some(deadline) =
+                std::time::Instant::now().checked_add(std::time::Duration::from_secs(12))
+            {
+                while std::time::Instant::now() < deadline {
+                    if !registry_empty() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(150));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(150));
             }
         }
 
