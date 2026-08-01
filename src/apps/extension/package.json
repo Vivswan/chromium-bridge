@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.2.2",
-    "happy-dom": "^20.11.0",
+    "happy-dom": "^20.11.1",
     "vitest": "^4.0.18",
     "wxt": "^0.20.13",
     "@tailwindcss/vite": "^4.2.4",
