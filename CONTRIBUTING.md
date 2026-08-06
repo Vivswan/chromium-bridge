@@ -1,15 +1,58 @@
 # Contributing to chromium-bridge
 
-Thanks for your interest. This is a small, security-sensitive project (it drives
-a real logged-in browser), so changes are held to a high bar for correctness and
-for preserving the safety model.
+Thanks for contributing! This document covers the conventions every change
+in this repository goes through.
+
+CI, settings, and standards files here (including this document above the
+marker at the bottom) are managed by
+[Vivswan/repo-platform](https://github.com/vivswan/repo-platform);
+local edits to managed files are replaced on the next template sync.
+
+## Pull requests
+
+- Changes land through pull requests and are squash-merged; the PR title
+  becomes the commit subject on the default branch.
+- The PR title and every pushed commit subject must be a
+  [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/),
+  for example `feat: add X` or `fix(parser): handle Y`. Releases are
+  versioned from these subjects.
+
+## CI
+
+- CI gates on a single status check, `all-green`, which needs every
+  gating CI job (the convention is documented in
+  [repo-platform's all-green guide](https://github.com/vivswan/repo-platform/blob/main/docs/all-green.md)).
+- Repository-specific checks live in `.github/workflows/checks.yml`; run
+  the commands it lists locally before pushing.
+- A typography gate enforces plain ASCII punctuation: no curly quotes,
+  em-dashes, or invisible unicode.
+
+## Security
+
+Never report vulnerabilities in issues or pull requests - see
+[SECURITY.md](SECURITY.md) for the private reporting route.
+
+## Code of conduct
+
+Participation in this project is governed by the
+[code of conduct](CODE_OF_CONDUCT.md).
+
+<!-- Repository-specific contributing documentation (dev setup, build and
+     test commands, review expectations) goes below this line. It survives
+     template updates via three-way merge. -->
 
 ## Before you start
+
+This is a small, security-sensitive project (it drives a real logged-in
+browser), so changes are held to a high bar for correctness and for preserving
+the safety model.
 
 - Read [docs/development.md](./docs/development.md) for the dev loop and
   [docs/architecture.md](./docs/architecture.md) for the design.
 - Behavioral or security-model changes should reference (or add) an
   [ADR](./docs/adr/). Don't quietly weaken a confirmation/allowlist boundary.
+- The local gate is `moon run ci` (see [Workflow](#workflow)) - run it, not
+  individual commands, before pushing.
 
 ## Workflow
 
