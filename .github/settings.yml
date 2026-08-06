@@ -11,9 +11,11 @@
 
 repository:
   description: "Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port"
+  # homepage, topics, and private are always declared, even when empty or
+  # public: the apply manages only declared keys, so this keeps it healing
+  # out-of-band edits (an empty value declares-and-clears).
+  homepage: ""
   topics: "brave,browser-automation,chrome-extension,mcp,native-messaging,rust"
-  # Declared so the heal run reverts an out-of-band flip to private (the
-  # template only emits this key for private repos).
   private: false
   has_issues: true
   has_wiki: false
@@ -33,6 +35,13 @@ repository:
   allow_auto_merge: true
   enable_vulnerability_alerts: true
   enable_automated_security_fixes: true
+  # Declared so the apply heals out-of-band disables. Public only: without
+  # Advanced Security, private repositories reject this block (422).
+  security_and_analysis:
+    secret_scanning:
+      status: enabled
+    secret_scanning_push_protection:
+      status: enabled
 
 labels:
   - name: dependencies
