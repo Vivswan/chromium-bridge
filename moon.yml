@@ -819,12 +819,15 @@ tasks:
     # Real harness CLIs (claude, codex) connect to our stdio MCP server via
     # isolated config dirs; frames are captured to build/harness-captures/
     # and each harness's opening method is logged - the ADR-0034 canary for
-    # deleting the temporary legacy-initialize shim. Not in the ci gate:
+    # deleting the temporary legacy-initialize shim. The *-live-fakellm
+    # registry entries also drive a full model-driven tool call per CLI
+    # against a local fake LLM backend (zero credentials, zero model
+    # spend). Not in the ci gate:
     # needs harness CLIs on PATH. The nightly harness-smoke.yml workflow
     # installs them and invokes the driver DIRECTLY (moon does not resolve
     # runInCI:false tasks when CI=true). Extra flags pass through, e.g.
     # `moon run harness-smoke -- --mint-seeds`.
-    description: 'Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server (logs the ADR-0034 opening-method canary)'
+    description: 'Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server and run a fake-LLM live tool call (logs the ADR-0034 opening-method canary)'
     deps: ['~:build-release']
     command: 'bun tests/harness/run.ts'
     toolchains: ['system']

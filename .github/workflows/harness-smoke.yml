@@ -5,7 +5,10 @@
 # locally), and log which OPENING method each harness used. That
 # opening-method line is the ADR-0034 canary: when every harness opens with
 # the modern 2026-07-28 `server/discover` instead of the legacy
-# `initialize`, the temporary legacy shim can be deleted.
+# `initialize`, the temporary legacy shim can be deleted. The registry's
+# *-live-fakellm entries additionally drive a full model-driven tool call
+# per CLI against a local fake LLM backend (tests/harness/fake-llm.ts) -
+# registry-driven, so they ride this same invocation with no secrets.
 #
 # Informational by PLACEMENT, not by continue-on-error: this workflow is not
 # part of the all-green gate (it never touches ci.yml or checks.yml), so a

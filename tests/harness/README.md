@@ -2,7 +2,9 @@
 
 Proves REAL agent-harness CLIs (Claude Code, Codex) can connect to the
 bridge's stdio MCP server, and captures the exact JSON-RPC frames each
-harness sends.
+harness sends. The live fake-LLM entries go further: a full model-driven
+MCP tool call through each CLI, with the model played by a local fake
+backend - zero credentials, zero model spend, deterministic.
 
 ## Run
 
@@ -53,16 +55,53 @@ sent:
   unauthenticated today; a claude release that starts requiring login for
   it would read as a red night rather than a server regression.)
 - Codex: `codex mcp list --json` only verifies registration (reported as
-  "configured"). The live probe runs a REAL codex agent session
-  (read-only sandbox), so it requires `OPENAI_API_KEY` plus the explicit
-  `BB_HARNESS_CODEX_LIVE=1` opt-in - an ambient key alone never launches
-  an agent.
+  "configured"). The real-backend live probe runs a REAL codex agent
+  session (read-only sandbox), so it requires `OPENAI_API_KEY` plus the
+  explicit `BB_HARNESS_CODEX_LIVE=1` opt-in - an ambient key alone never
+  launches an agent. (The fake-LLM probe below needs neither.)
 - After registering, the driver asserts the entry landed in the ISOLATED
   config file and refuses to probe otherwise (a harness that ignored the
   isolation env var may have written the real user config - fail closed).
 - `--require-any` (used by the nightly workflow) fails the run unless at
   least one harness completed a live MCP connection, so an install failure
   or a config-entry-only run cannot read as green.
+
+## Live tool-call probes (fake LLM backend)
+
+The `claude-live-fakellm` and `codex-live-fakellm` entries run whenever the
+CLI is installed - no API key, no opt-in, because no credential and no real
+model is involved. `tests/harness/fake-llm.ts` plays the model on an
+ephemeral 127.0.0.1 port (Anthropic Messages API for `claude -p` via
+`ANTHROPIC_BASE_URL` + a dummy key; OpenAI Responses API for `codex exec`
+via `model_providers` base_url overrides - codex 0.146+ refuses
+`wire_api = "chat"`), so a REAL harness run performs a full
+prompt -> tool call -> tool result -> final text loop deterministically.
+
+The canned scenario is content-addressed, not turn-counted: a request
+carrying a tool result gets final text; a request advertising the bridge's
+`tab_list` gets a call to it (under whatever name the harness advertised:
+`mcp__chromium-bridge__tab_list` for claude, the `mcp__chromium_bridge`
+namespace for codex); anything else (title generation, token counting)
+gets a trivial reply. `GET /_test/requests` serves everything the backend
+saw for the driver's assertions.
+
+Each probe asserts three points and fails closed on any of them:
+
+1. the fake backend saw the bridge's `tab_list` advertised among the
+   request's tools and told the harness to call it;
+2. the tee shim captured the resulting `tools/call` frame, in the same
+   protocol era as the harness's opening method;
+3. the tool result fed back to the model echoed the scenario's invocation
+   id and carried the bridge's typed `Error [NOT_CONNECTED]` text - no
+   browser is attached, so that IS the expected outcome (the 12s
+   connect-wait makes this the slow step).
+
+The fake backend binds 127.0.0.1 only. Two artifacts land next to the
+captures for red-night forensics: `<entry>.fake-llm.log` (the backend's
+stderr/stdout) and `<entry>.fake-llm-requests.json` (every request body the
+backend saw, so a harness release that changes shape explains itself). A
+side effect worth knowing: `--mint-seeds` now mints real `tools/call`
+frames into the fuzz corpus, which the health-check probes never produced.
 
 ## Adding a harness
 
