@@ -1,12 +1,27 @@
 # Repo-owned release pipeline, called by the managed ci.yml on top of the
 # all-green gate (never overwritten by template sync). The release-please
 # job runs the managed machinery: it accumulates conventional commits on
-# main into a release PR, and merging that PR tags and publishes the
-# release IN THIS SAME RUN - the packaging jobs below are gated on its
-# release_created output and attach the prebuilt artifacts (binary + built
-# extension tarballs, the macOS desktop .dmg) to that release, so users
-# don't need Rust/Node. Everything runs downstream of all-green, so a red
-# commit can never cut a release or ship an asset.
+# main into a release PR, and merging that PR cuts the release IN THIS
+# SAME RUN.
+#
+# GitHub releases are immutable once published: the tag and assets freeze,
+# and a post-publication `gh release upload` gets HTTP 422. Every release
+# therefore moves through the same three steps, always draft-first:
+#   1. release-please cuts the release as a DRAFT with its tag already
+#      forced (`draft` + `force-tag-creation` in release-please-config.json).
+#   2. the packaging jobs mutate the draft: the binary + built extension
+#      tarballs and the macOS desktop .dmg are built from the tag and
+#      attached, so users don't need Rust/Node.
+#   3. publish-release flips the draft live. It stays the last job: every
+#      job that mutates the release is listed in its `needs`.
+# If the pipeline dies after the draft exists, a rerun cannot recreate it
+# (release-please sees the forced tag); finish by hand:
+#   gh release upload <tag> <assets> --clobber
+#   gh release edit <tag> --draft=false
+# Everything runs downstream of all-green in one workflow run, so a red
+# commit can never cut a release or ship an asset, and the asset uploads
+# work with the default GITHUB_TOKEN too, which cannot trigger
+# `on: release` workflows.
 
 name: Release
 
@@ -191,32 +206,25 @@ jobs:
         with:
           subject-path: ${{ steps.extzip.outputs.name }}.zip
 
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: |
-            ${{ steps.pkg.outputs.archive }}
-            ${{ steps.pkg.outputs.sha256file }}
-            ${{ steps.pkg.outputs.binsha256file }}
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-          # any tag with a suffix (v0.1.0-dev, -rc.1, ...) is a prerelease
-          prerelease: ${{ contains(needs.release-please.outputs.tag_name, '-') }}
+      - name: Attach release archive to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE: ${{ steps.pkg.outputs.archive }}
+          SHA256FILE: ${{ steps.pkg.outputs.sha256file }}
+          BINSHA256FILE: ${{ steps.pkg.outputs.binsha256file }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" "$ARCHIVE" "$SHA256FILE" "$BINSHA256FILE" --clobber
 
       # The standalone extension zip rides its own macos-only upload (matching
-      # the extzip step above) so fail_on_unmatched_files genuinely covers it:
-      # each asset here is named explicitly and must exist on this leg.
-      - name: Publish extension zip to GitHub Release
+      # the extzip step above): each asset is named explicitly and must exist
+      # on this leg, so `gh release upload` fails loudly on a missing file.
+      - name: Attach extension zip to the draft release
         if: matrix.platform == 'macos'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: |
-            ${{ steps.extzip.outputs.name }}.zip
-            ${{ steps.extzip.outputs.name }}.zip.sha256
-          fail_on_unmatched_files: true
-          prerelease: ${{ contains(needs.release-please.outputs.tag_name, '-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXTZIP: ${{ steps.extzip.outputs.name }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" "$EXTZIP.zip" "$EXTZIP.zip.sha256" --clobber
 
   # The secrets context is not available in a job-level `if`, so a tiny
   # gate job exports "are the desktop signing secrets configured" as an
@@ -375,16 +383,12 @@ jobs:
         with:
           subject-path: ${{ steps.dmg.outputs.asset }}
 
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: |
-            ${{ steps.dmg.outputs.asset }}
-            ${{ steps.dmg.outputs.asset }}.sha256
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-          prerelease: ${{ contains(needs.release-please.outputs.tag_name, '-') }}
+      - name: Attach dmg to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DMG: ${{ steps.dmg.outputs.asset }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" "$DMG" "$DMG.sha256" --clobber
 
       - name: Delete the ephemeral keychain
         if: always()
@@ -392,3 +396,92 @@ jobs:
           if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -f "$SIGNING_KEYCHAIN" ]; then
             security delete-keychain "$SIGNING_KEYCHAIN"
           fi
+
+  # CycloneDX SBOM from the committed lockfiles (Cargo.lock + bun.lock),
+  # scanning declared dependencies rather than an installed tree (a fresh
+  # checkout has no node_modules/target). It attaches to the DRAFT: the
+  # release is immutable once published, so a decoupled `release: published`
+  # workflow could never attach it. publish-release waits for this job but
+  # tolerates its failure, so an SBOM-tooling failure still cannot block
+  # shipping the binaries - the release just goes out without an SBOM (and
+  # the red job flags it).
+  sbom:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # attach the SBOM asset to the draft release
+    env:
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Build the SBOM from the exact released code.
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Verify tag matches Cargo version
+        shell: bash
+        run: |
+          TAG="$RELEASE_TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "refusing malformed release tag: $TAG"
+            exit 1
+          fi
+          VER="${TAG#v}"
+          CORE="${VER%%-*}"
+          CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
+          [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: chromium-bridge.cdx.json
+          # Keep a CI artifact too; the release attach is the explicit step
+          # below so the target tag is deterministic.
+          upload-artifact: true
+          upload-release-assets: false
+
+      - name: Attach SBOM to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" chromium-bridge.cdx.json --clobber
+
+  # Step 3: freeze the release. This job stays last: every job that mutates
+  # the release is in its `needs`. desktop-app may be skipped, but only for
+  # the one intended reason (signing secrets absent), so a broken dmg build
+  # can never publish a half-shipped release; sbom may fail (see its
+  # header) but not be cancelled.
+  publish-release:
+    needs: [release-please, binaries, desktop-signing-secrets, desktop-app, sbom]
+    if: >-
+      ${{ !cancelled()
+          && needs.release-please.outputs.release_created == 'true'
+          && needs.binaries.result == 'success'
+          && needs.desktop-signing-secrets.result == 'success'
+          && (needs.desktop-app.result == 'success'
+              || (needs.desktop-app.result == 'skipped'
+                  && needs.desktop-signing-secrets.outputs.present == 'false'))
+          && needs.sbom.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the GitHub release
+        env:
+          # Publishing with the default GITHUB_TOKEN cannot trigger the
+          # `on: release` pages production deploy; a repo-scoped
+          # REPO_PLATFORM_TOKEN secret lifts that (without one, dispatch
+          # pages.yml by hand after a release).
+          GH_TOKEN: ${{ secrets.REPO_PLATFORM_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          # any tag with a suffix (v0.1.0-dev, -rc.1, ...) is a prerelease
+          case "$TAG" in
+            *-*) gh release edit "$TAG" --prerelease --draft=false ;;
+            *) gh release edit "$TAG" --draft=false ;;
+          esac

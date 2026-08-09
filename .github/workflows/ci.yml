@@ -43,13 +43,13 @@ jobs:
   typography:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: Vivswan/repo-platform/actions/check-typography@main
 
   commit-names:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: Vivswan/repo-platform/actions/validate-commit-names@main
@@ -60,13 +60,13 @@ jobs:
   validate-template:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: Vivswan/repo-platform/actions/validate-template@main
 
   actionlint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: raven-actions/actionlint@v2
 
   # Secret scanning: a committed credential fails the gate. The action
@@ -99,7 +99,7 @@ jobs:
   yamllint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - name: Install yamllint
         run: python3 -m pip install --quiet yamllint
       - name: Lint YAML
@@ -116,12 +116,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
-      - uses: actions/dependency-review-action@v5
+      # The severity threshold and the upstream pin live in the wrapper.
+      - uses: Vivswan/repo-platform/actions/dependency-review@main
         if: github.event_name == 'pull_request'
-        with:
-          # Deliberate strictest threshold (also the action's default,
-          # pinned so a default change cannot loosen the gate silently).
-          fail-on-severity: low
 
   # CodeQL analysis runs inside the gate (one job per language), so a failed
   # scan blocks merges. Each job grants the scan permissions - a caller
