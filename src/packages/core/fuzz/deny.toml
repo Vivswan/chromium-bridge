@@ -1,6 +1,6 @@
 # cargo-deny config for the fuzz workspace ONLY.
 # Run: cargo deny --manifest-path src/packages/core/fuzz/Cargo.toml --config
-#      src/packages/core/fuzz/deny.toml check   (CI: .github/workflows/security.yml)
+#      src/packages/core/fuzz/deny.toml check   (CI: audits.yml, via ci.yml's gate and security.yml's weekly run)
 #
 # Deliberately separate from the root deny.toml so the two relaxations this
 # never-shipped, nightly-only crate needs (NCSA license, wildcard path dep)
@@ -17,6 +17,11 @@ yanked = "deny"
 
 [licenses]
 version = 2
+# Both our crates here are publish = false (chromium-bridge-fuzz directly,
+# chromium-bridge-core via root workspace inheritance) and source-available
+# (LICENSE, no SPDX id); skip them - this gate is about dependency licenses.
+private = { ignore = true }
+
 # Same permissive set as the root gate, plus NCSA. NCSA (permissive UIUC) is
 # carried only by libfuzzer-sys's bundled LLVM libFuzzer code, which exists
 # in this workspace alone and never links into a shipped binary. Keep this
@@ -24,7 +29,6 @@ version = 2
 allow = [
   "Apache-2.0",
   "MIT",
-  "BSD-2-Clause",
   "Unicode-3.0",
   "Apache-2.0 WITH LLVM-exception",
   "BSD-3-Clause",
