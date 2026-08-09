@@ -1,6 +1,6 @@
 # ADR-0007: Pin the MCP protocol version to 2025-06-18
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR-0034](0034-mcp-2026-07-28-stateless.md)
 - **Date**: 2026-07-07
 
 ## Context
