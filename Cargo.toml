@@ -22,10 +22,23 @@ license = "Apache-2.0"
 [workspace.dependencies]
 hmac = "0.13"
 libc = "0.2.186"
+# The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,
+# per-request version gate, wire model) per ADR-0034 - a many-eyes library
+# replacing our hand-rolled JSON-RPC dispatch, exactly the trade ADR-0023
+# prescribes. `server` only: no HTTP stack, no client, no auth tree.
+rmcp = { version = "3.1.2", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = { version = "0.11", default-features = false }
 thiserror = "2.0.18"
+# rmcp's async runtime. The security core itself stays synchronous; tokio
+# only runs the per-connection MCP services (src/packages/core/src/mcp/) on a
+# small shared runtime, so only the runtime + channel + blocking-pool
+# features are enabled - no net, no fs, no process drivers.
+tokio = { version = "1.53", default-features = false, features = ["rt-multi-thread", "sync", "time"] }
+# Sink/Stream traits + channels + a runtime-free block_on, bridging the
+# synchronous broker serve loop to the rmcp services. Already in rmcp's tree.
+futures = "0.3"
 # Property-based testing for the protocol parsing boundary. Kept lean
 # (no `fork`/`timeout`/`regex-syntax` features) so it spawns no processes and
 # its dependency tree stays within the licenses allowed by `deny.toml`.
@@ -50,8 +63,10 @@ security-framework-sys = "2"
 winreg = "0.56"
 # Schema derivation for the wire envelopes (ADR-0028): the emit_envelope_schema
 # example (behind the core's `envelope-schema` feature) feeds the CI
-# double-derivation diff against the extension's Zod validators. Excluded from
-# default and release builds - the shipped binary never compiles schemars.
+# double-derivation diff against the extension's Zod validators. OUR gen
+# feature stays out of default and release builds; note that rmcp compiles
+# its own schemars dependency into the shipped binary for its runtime tool
+# schemas (ADR-0034) - check-gen-isolation pins that rmcp is the only path.
 schemars = "1"
 # TypeScript type generation for the desktop app's Tauri command DTOs (the
 # `moon run gen` -> commands.gen.ts flow). Like schemars, this is gen-only

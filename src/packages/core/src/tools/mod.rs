@@ -202,7 +202,7 @@ impl Outcome {
 /// and the isError flag. Errors are tool-level (isError=true), not RPC-level.
 ///
 /// `browser` is the tool call's already-parsed routing argument: the caller
-/// ([`crate::mcp_server::handle`]) extracts it once via [`extract_browser`]
+/// (the MCP tool executor in [`crate::mcp::handler`]) extracts it once via [`extract_browser`]
 /// and feeds routing, auditing, and this dispatch from that single parse, so
 /// no layer re-reads the raw value under different rules. It is consumed here
 /// (routing) and never forwarded in the op's own args. `list_browsers` is
@@ -264,7 +264,7 @@ pub(crate) fn error_outcome(e: &CallError) -> Outcome {
 /// clients serialize an unset optional) both mean "unaddressed"; any other
 /// non-string shape is rejected, because with a single browser connected a
 /// silently-dropped malformed target would still route the call somewhere.
-/// The ONE parse of this value: `mcp_server::handle` calls it once and both
+/// The ONE parse of this value: the MCP tool executor calls it once and both
 /// the audit route and [`dispatch`] consume the same result.
 pub(crate) fn extract_browser(args: &Value) -> Result<Option<&str>, CallError> {
     match args.get("browser") {
