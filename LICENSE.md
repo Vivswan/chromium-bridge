@@ -1,6 +1,6 @@
 # Individual and Small Organization License 1.0.0
 
-<https://github.com/Vivswan/repo-platform/blob/main/LICENSE>
+<https://github.com/Vivswan/repo-platform/blob/main/LICENSE.md>
 
 Required Notice: Copyright Vivswan Shah (https://github.com/Vivswan)
 

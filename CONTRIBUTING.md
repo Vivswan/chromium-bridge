@@ -18,7 +18,7 @@ local edits to managed files are replaced on the next template sync.
   versioned from these subjects.
 - By opening a pull request, or offering code in an issue or review for
   inclusion, you agree to the Contributions section of the
-  [LICENSE](LICENSE), which licenses that code to the licensor -
+  [LICENSE](LICENSE.md), which licenses that code to the licensor -
   including for relicensing under any terms - unless you conspicuously
   say otherwise when you submit it.
 
@@ -193,4 +193,4 @@ it. CI fails if the crate and extension versions drift.
 
 By contributing you agree your contributions are licensed under
 the
-[Individual and Small Organization License 1.0.0](./LICENSE).
+[Individual and Small Organization License 1.0.0](./LICENSE.md).

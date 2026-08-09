@@ -90,7 +90,7 @@ know why it is there:
   crate root; no CLI override is set), `deny.toml` (`cargo deny check` is invoked
   bare, so it uses the default root path), `.editorconfig` / `.gitignore` /
   `.gitattributes` (walked up from the working tree).
-- **Convention / GitHub-surfaced (keep at root):** `README.md`, `LICENSE`,
+- **Convention / GitHub-surfaced (keep at root):** `README.md`, `LICENSE.md`,
   `SECURITY.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `CHANGELOG.md`, `AGENTS.md`.
 - **Referenced by path (moving requires editing every reference):**
   the root `moon.yml` (with `.moon/` + the per-project `moon.yml` files) is the canonical task entrypoint.
