@@ -24,6 +24,13 @@ the interpreter, not to open the door to packages), and it runs with
 `uv run --no-project --isolated`, staying a plain script that no stray
 project or virtualenv can leak into.
 
+The protocol suites and the integration test's MCP leg track the MCP
+2026-07-28 migration: modern-era cases speak the stateless protocol
+(per-request `_meta` protocol-version + client-capabilities keys,
+`server/discover` discovery), while bare requests on initialize-opened
+connections still exercise the temporary legacy era (pinned at the
+`2025-06-18` shapes) until it is removed.
+
 ## ⚠ Safety - never point browser tests at your daily Chrome
 
 The smoke and integration tests launch a **non-headless Chrome with

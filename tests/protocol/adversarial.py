@@ -29,6 +29,9 @@ Attack matrix (live MUST-BLOCK vs annotated residual):
   A14 enrolled + non-allowlisted harness        LIVE  refused, fail closed
   A15 enrolled + spoofed client NAME            LIVE  name is not authz; refused
   A16 enrolled + genuinely paired harness       LIVE  admitted; drives the bridge
+  A23 junk _meta protocolVersion values         LIVE  -32022 strings, -32602 malformed
+  A24 bare server/discover opener + flood       LIVE  bare opener dropped; valid flood served
+  A25 1 MB protocolVersion string               LIVE  -32022, echo not amplified, no crash
   A4/A5 replay / forged-MAC                      REF  subsumed by attestation (+unit)
   A6/A7 hex / serde parser abuse                 REF  Rust hex_fuzz + serde proptests
   A10 cross-uid connect                          NOTE root/manual; 0700 dir is gate
@@ -425,9 +428,12 @@ def a8_blank_line_flood():
         c = e2e.McpClient(srv)
         done, init = _call_with_timeout(c.initialize, 15)
         # "2025-06-18" is hard-coded here (and in A9 below) on purpose: this
-        # suite is a deliberately independent black-box check. The canonical
-        # value is MCP_PROTOCOL_VERSION in src/packages/core/src/protocol.rs;
-        # a re-pin there must update these literals by hand.
+        # suite is a deliberately independent black-box check. c.initialize
+        # sends no _meta protocolVersion key, so it exercises the TEMPORARY
+        # legacy shim, which must keep answering "2025-06-18" verbatim. The
+        # canonical modern version is "2026-07-28" (MCP_PROTOCOL_VERSION in
+        # src/packages/core/src/protocol.rs), pinned live by A23-A25 below;
+        # a re-pin there must update all of these literals by hand.
         check(done and init and init.get("result", {}).get("protocolVersion") == "2025-06-18",
               "A8 server still answers initialize after a 200k blank-line flood")
         check(srv.poll() is None, "A8 server process survived (not aborted)")
@@ -1300,6 +1306,308 @@ def a22_unkill_requires_interactive_user_presence():
         e2e.unkill_interactive(check=False)
 
 
+# ---------------------------------------------------------------------------
+# A23/A24/A25 - stateless MCP 2026-07-28 version negotiation abuse
+# ---------------------------------------------------------------------------
+# The modern protocol carries its version AND the client capabilities
+# per-request in params._meta; a connection OPENS with either a legacy
+# initialize or a well-formed stateless request (anything else is dropped
+# fail-closed - the rmcp opener rule). Post-open: an unsupported STRING
+# version is -32022, malformed/incomplete metadata is -32602, and bare
+# requests are served (legacy shapes) only on initialize-opened
+# connections. As everywhere in this suite, the version strings and the
+# error codes are hard-coded on purpose (independent black-box check;
+# canonical values live in src/packages/core/src/protocol.rs).
+
+_META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+_META_CAPS_KEY = "io.modelcontextprotocol/clientCapabilities"
+# rmcp's full supported set (ADR-0034 keeps the SDK default): discover's
+# supportedVersions and every -32022 error's data.supported.
+_SUPPORTED_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18",
+                       "2025-11-25", "2026-07-28"]
+
+
+def _meta_tools_list(c, _id, version_value):
+    """Send a tools/list whose params._meta carries `version_value` verbatim
+    (plus the required clientCapabilities, so the value under test hits the
+    VERSION gate rather than the metadata-completeness gate)."""
+    c.send({"jsonrpc": "2.0", "id": _id, "method": "tools/list",
+            "params": {"_meta": {_META_VERSION_KEY: version_value,
+                                 _META_CAPS_KEY: {}}}})
+
+
+def _recv_checked(c, _id, seconds, label):
+    """One guarded read: the reply for `_id`, or None after a FAILed check.
+    A timed-out _call_with_timeout leaves its daemon thread parked on the
+    shared stdout readline, where it will steal a later reply and silently
+    desync every read after it - so on timeout (or a mismatched id) the caller
+    must BAIL OUT of the case, not keep reading. A successful read returns
+    silently (no PASS line, deliberately asymmetric with check): A24 makes 80
+    of these, and the aggregate checks after its loop are the signal."""
+    done, r = _call_with_timeout(c.recv, seconds)
+    if not (done and isinstance(r, dict) and r.get("id") == _id):
+        check(False, label)
+        return None
+    return r
+
+
+def a23_junk_meta_protocol_version():
+    print("\n[A23] junk _meta protocolVersion values "
+          "(LIVE: -32022 strings, -32602 malformed; connection stays usable)")
+    _rm_lock()
+    srv = start_server()
+    try:
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A23 server up")
+        c = e2e.McpClient(srv)
+        # UNSUPPORTED STRING versions: a PER-REQUEST -32022 whose data
+        # echoes the full supported list and the raw requested value; none
+        # may wedge or kill the connection. The first one doubles as the
+        # connection's opener - rmcp answers the version error itself and
+        # keeps the connection (pinned here: junk-version openers do not
+        # drop, unlike malformed-metadata openers).
+        for i, bad in enumerate(["", "1999-01-01", "2026-07-28-rc1"]):
+            _id = 100 + i
+            _meta_tools_list(c, _id, bad)
+            r = _recv_checked(c, _id, 10,
+                              f"A23 wrong string {bad!r}: a well-formed reply arrived")
+            if r is None:
+                return  # stream desynced; nothing below would be meaningful
+            err = r.get("error")
+            err = err if isinstance(err, dict) else {}
+            check(err.get("code") == -32022,
+                  f"A23 _meta version {bad!r} -> JSON-RPC error -32022")
+            data = err.get("data")
+            data = data if isinstance(data, dict) else {}
+            check(data.get("supported") == _SUPPORTED_VERSIONS
+                  and "requested" in data and data["requested"] == bad,
+                  f"A23 {bad!r}: error data carries the supported list and the "
+                  "raw requested value")
+        # NON-STRING versions cannot be read as a version claim at all:
+        # malformed stateless metadata, refused -32602 (invalid params)
+        # naming the field - never -32022, never a silent legacy routing.
+        junk = [(7, "number"), (True, "boolean"), (None, "null"),
+                ({"v": "2026-07-28"}, "object"), (["2026-07-28"], "array")]
+        for i, (bad, kind) in enumerate(junk):
+            _id = 110 + i
+            _meta_tools_list(c, _id, bad)
+            r = _recv_checked(c, _id, 10, f"A23 {kind}: a well-formed reply arrived")
+            if r is None:
+                return
+            err = r.get("error")
+            err = err if isinstance(err, dict) else {}
+            check(err.get("code") == -32602
+                  and _META_VERSION_KEY in str(err.get("message", "")),
+                  f"A23 _meta version as {kind} -> -32602 naming the field")
+        # The LEGACY version string IN _meta is not junk: rmcp serves every
+        # revision it implements, so this is a legitimate per-request era
+        # selection answered in the legacy result shape - a changed contract
+        # from the original design, which planned to refuse it (ADR-0034
+        # records the deviation).
+        _meta_tools_list(c, 130, "2025-06-18")
+        r = _recv_checked(c, 130, 10,
+                          "A23 legacy version in _meta: a well-formed reply arrived")
+        if r is None:
+            return
+        res = r.get("result")
+        res = res if isinstance(res, dict) else {}
+        check("error" not in r and isinstance(res.get("tools"), list)
+              and all(k not in res for k in ("resultType", "ttlMs",
+                                             "cacheScope", "_meta")),
+              "A23 '2025-06-18' in _meta is served the legacy result shape "
+              "(per-request era selection)")
+        # Era-boundary probe: _meta PRESENT but empty. Modern-era metadata
+        # with both required fields missing -> -32602, never a silent legacy
+        # routing (this connection was opened statelessly).
+        c.send({"jsonrpc": "2.0", "id": 140, "method": "tools/list",
+                "params": {"_meta": {}}})
+        r = _recv_checked(c, 140, 10, "A23 empty _meta object: a well-formed reply arrived")
+        if r is None:
+            return
+        err = r.get("error")
+        err = err if isinstance(err, dict) else {}
+        check(err.get("code") == -32602,
+              "A23 empty _meta -> -32602 (not served, not legacy-routed)")
+        # Positive control on the SAME connection: the correct version IS
+        # served - proving the rejections above are per-request verdicts,
+        # not a blanket refusal of any request carrying _meta - and the
+        # modern tools/list result has the stateless envelope fields (no
+        # serverInfo _meta: that rides only the discover result).
+        _meta_tools_list(c, 150, "2026-07-28")
+        r = _recv_checked(c, 150, 10, "A23 correct version: a well-formed reply arrived")
+        if r is None:
+            return
+        res = r.get("result")
+        res = res if isinstance(res, dict) else {}
+        check("error" not in r and isinstance(res.get("tools"), list),
+              "A23 the correct version is served on the same connection (positive control)")
+        check(res.get("resultType") == "complete" and "ttlMs" in res
+              and "cacheScope" in res and "_meta" not in res,
+              "A23 modern tools/list result carries resultType/ttlMs/cacheScope, no _meta")
+        # And the errors were per-request: a legacy initialize still serves.
+        done, init = _call_with_timeout(c.initialize, 10)
+        check(done and init is not None
+              and init.get("result", {}).get("protocolVersion") == "2025-06-18",
+              "A23 a subsequent legacy initialize on the same connection still works")
+        check(srv.poll() is None, "A23 server process survived the junk versions")
+    finally:
+        _reap(srv)
+
+
+def a24_discover_flood_statelessness():
+    print("\n[A24] bare server/discover opener + hostile flood "
+          "(LIVE: bare opener dropped fail-closed; valid flood served, never era-wedged)")
+    # Part 1: server/discover has NO bare-request form (ADR-0034 cut the
+    # planned leniency; rmcp wins). As a connection's FIRST request a bare
+    # probe cannot open either era, so the connection is dropped without a
+    # reply and the stdio server exits: fail closed, never guess a peer's
+    # era. A probing client learns the supported set from a well-formed
+    # discover or from any -32022's data.supported instead.
+    _rm_lock()
+    srv = start_server()
+    try:
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A24 server up (bare-opener probe)")
+        c = e2e.McpClient(srv)
+        c.send({"jsonrpc": "2.0", "id": 1, "method": "server/discover"})
+        done, line = _call_with_timeout(srv.stdout.readline, 10)
+        check(done and line == "",
+              "A24 a bare server/discover opener gets no reply (connection dropped)")
+        try:
+            srv.wait(timeout=5)
+            exited = True
+        except subprocess.TimeoutExpired:
+            exited = False
+        check(exited, "A24 the server exited with the dropped connection (fail closed)")
+    finally:
+        _reap(srv)
+    # Part 2: a hostile mix on one properly opened connection - 40 rounds of
+    # well-formed discovers interleaved with junk-version requests - must
+    # never wedge the connection into either era: every discover carries the
+    # full documented shape, every junk gets its own -32022, and afterwards
+    # bare requests are still refused (the modern opener grants no legacy
+    # leniency) while a legacy initialize still serves.
+    _rm_lock()
+    srv = start_server()
+    try:
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A24 server up (flood)")
+        c = e2e.McpClient(srv)
+        rounds = 40
+        ok_discover = 0
+        ok_junk = 0
+        for i in range(rounds):
+            _id = 200 + 2 * i
+            c.send({"jsonrpc": "2.0", "id": _id, "method": "server/discover",
+                    "params": {"_meta": {_META_VERSION_KEY: "2026-07-28",
+                                         _META_CAPS_KEY: {}}}})
+            r = _recv_checked(c, _id, 10, f"A24 discover #{i}: a well-formed reply arrived")
+            if r is None:
+                return
+            res = r.get("result")
+            res = res if isinstance(res, dict) else {}
+            caps = res.get("capabilities")
+            meta = res.get("_meta")
+            if (res.get("resultType") == "complete"
+                    and res.get("supportedVersions") == _SUPPORTED_VERSIONS
+                    and res.get("ttlMs") == 3600000
+                    and res.get("cacheScope") == "private"
+                    and isinstance(caps, dict) and isinstance(caps.get("tools"), dict)
+                    and isinstance(meta, dict)
+                    and "io.modelcontextprotocol/serverInfo" in meta):
+                ok_discover += 1
+            _meta_tools_list(c, _id + 1, f"1999-01-{(i % 28) + 1:02d}")
+            r = _recv_checked(c, _id + 1, 10, f"A24 junk #{i}: a well-formed reply arrived")
+            if r is None:
+                return
+            if (r.get("error") or {}).get("code") == -32022:
+                ok_junk += 1
+        check(ok_discover == rounds,
+              f"A24 all {rounds} well-formed discover results carry the full shape "
+              "(complete, supported set, ttlMs, cacheScope, tools capability, serverInfo)")
+        check(ok_junk == rounds,
+              f"A24 all {rounds} interleaved junk versions answered -32022 (per-request)")
+        # The flood latched nothing modern-ward either: a bare request on
+        # this statelessly opened connection is refused, not legacy-served.
+        c.send({"jsonrpc": "2.0", "id": 290, "method": "ping"})
+        r = _recv_checked(c, 290, 10, "A24 bare ping: a well-formed reply arrived")
+        if r is None:
+            return
+        check((r.get("error") or {}).get("code") == -32602,
+              "A24 a bare ping after a modern opener is -32602 (no legacy leniency)")
+        # ...and an unknown method in the modern era is -32601, as in the legacy era.
+        c.send({"jsonrpc": "2.0", "id": 291, "method": "no/such_method",
+                "params": {"_meta": {_META_VERSION_KEY: "2026-07-28",
+                                     _META_CAPS_KEY: {}}}})
+        r = _recv_checked(c, 291, 10, "A24 modern unknown method: a well-formed reply arrived")
+        if r is None:
+            return
+        err = r.get("error")
+        check(isinstance(err, dict) and err.get("code") == -32601,
+              "A24 an unknown method in the modern era is -32601")
+        # ping itself is legacy vocabulary: carried WITH modern _meta it is
+        # method-not-found (measured; the legacy era keeps answering it).
+        c.send({"jsonrpc": "2.0", "id": 292, "method": "ping",
+                "params": {"_meta": {_META_VERSION_KEY: "2026-07-28",
+                                     _META_CAPS_KEY: {}}}})
+        r = _recv_checked(c, 292, 10, "A24 modern ping: a well-formed reply arrived")
+        if r is None:
+            return
+        check((r.get("error") or {}).get("code") == -32601,
+              "A24 a modern-_meta ping is -32601 (ping is legacy vocabulary)")
+        # The flood latched nothing: a legacy initialize is still served.
+        done, init = _call_with_timeout(c.initialize, 10)
+        check(done and init is not None
+              and init.get("result", {}).get("protocolVersion") == "2025-06-18",
+              "A24 legacy initialize still served after the discover flood")
+        check(srv.poll() is None, "A24 server process survived the flood")
+    finally:
+        _reap(srv)
+
+
+def a25_oversized_version_string():
+    print("\n[A25] 1 MB protocolVersion string (LIVE: -32022, echo not amplified, no crash)")
+    _rm_lock()
+    srv = start_server()
+    try:
+        lf = e2e.wait_lock(srv)
+        check(lf is not None, "A25 server up")
+        c = e2e.McpClient(srv)
+        # A well-formed request whose version value is a 1 MB string: far
+        # under the 64 MB line cap (that clamp is A9's job), so the reader
+        # accepts the line and the VERSION CHECK must reject it - a
+        # per-request -32022 echoing the raw value, never an allocation
+        # blowup or abort.
+        big = "9" * (1024 * 1024)
+        _meta_tools_list(c, 300, big)
+        r = _recv_checked(c, 300, 20, "A25 oversized version: a well-formed reply arrived")
+        if r is None:
+            return
+        err = r.get("error")
+        err = err if isinstance(err, dict) else {}
+        check(err.get("code") == -32022,
+              "A25 the 1 MB version string is refused with -32022")
+        data = err.get("data")
+        data = data if isinstance(data, dict) else {}
+        check(data.get("supported") == _SUPPORTED_VERSIONS,
+              "A25 error data names the supported list")
+        # data.requested is the VERBATIM value (rmcp bounds nothing but the
+        # 64 MB line cap; a recorded 1:1 reflection residual in ADR-0034 and
+        # the core's connection tests). What this pins is that the echo
+        # never AMPLIFIES the input - if rmcp starts truncating, this still
+        # passes and the residual note can be retired.
+        req = data.get("requested")
+        check(isinstance(req, str) and len(req) <= len(big),
+              "A25 data.requested is the verbatim value or a bounded truncation (never amplified)")
+        done, init = _call_with_timeout(c.initialize, 10)
+        check(done and init is not None
+              and init.get("result", {}).get("protocolVersion") == "2025-06-18",
+              "A25 the connection still serves a legacy initialize afterwards")
+        check(srv.poll() is None, "A25 server process survived (no crash, no OOM)")
+    finally:
+        _reap(srv)
+
+
 def a13_manifest_substitution_xfail():
     print("\n[A13] native-messaging manifest substitution (XFAIL until enrollment #13)")
     # A malicious install could point the NM manifest at a different host binary,
@@ -1343,6 +1651,9 @@ def main():
         a20_kill_reaches_every_enforcement_point()
         a21_corrupt_kill_marker_fails_closed()
         a22_unkill_requires_interactive_user_presence()
+        a23_junk_meta_protocol_version()
+        a24_discover_flood_statelessness()
+        a25_oversized_version_string()
         annotated_matrix()
         a13_manifest_substitution_xfail()
     finally:
