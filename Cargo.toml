@@ -17,7 +17,7 @@ exclude = ["src/packages/core/fuzz"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
+license-file = "LICENSE"
 
 [workspace.dependencies]
 hmac = "0.13"

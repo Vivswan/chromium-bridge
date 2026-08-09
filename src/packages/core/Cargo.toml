@@ -3,7 +3,7 @@ name = "chromium-bridge-core"
 version.workspace = true
 edition.workspace = true
 description = "Chromium Bridge library: IPC, protocols, session, tools, enclave"
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 futures.workspace = true
