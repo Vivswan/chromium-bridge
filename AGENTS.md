@@ -46,11 +46,12 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
   `settings/repos/` file named after this repository over there when one
   exists, otherwise by this repository's own `.github/settings.yml`. Do not
   change settings by hand in the GitHub UI; edit the settings file.
-- Repo-owned escape hatches stay local: `.github/workflows/checks.yml` and
-  `.github/workflows/release.yml`, `.gitignore`'s marked LOCAL section,
-  `.typography-allow.local` (typography exemptions; the managed
-  `.typography-allow` is overwritten by sync), and the repository-specific
-  section below.
+- Repo-owned escape hatches stay local:
+  `.github/workflows/checks.yml`,
+  `.github/workflows/release.yml`, `.gitleaks.toml`,
+  `.gitignore`'s marked LOCAL section, `.typography-allow.local`
+  (typography exemptions; the managed `.typography-allow` is overwritten
+  by sync), and the repository-specific section below.
 - Module selection is this repository's own: edit the `modules` list in
   `.repo-platform.yml` and the next sync PR applies the change.
 
@@ -70,7 +71,7 @@ native-messaging host id `com.vivswan.chromium_bridge.host`, enclave keychain
 label `com.vivswan.chromium-bridge.enclave.signing.v1`. No `upstream` remote
 is configured, and the rebrand ended the keep-mergeable-with-upstream policy:
 port upstream fixes manually and by judgment, never shape our changes around
-a clean `git merge`. `LICENSE` is the Individual and Small Organization
+a clean `git merge`. `LICENSE.md` is the Individual and Small Organization
 License 1.0.0; the upstream Apache-2.0 attribution lives in `LICENSE-APACHE`
 and `NOTICE`, and the pre-fork commits remain in history.
 

@@ -30,7 +30,7 @@ ignore = [
 
 [licenses]
 version = 2
-# Our own crates are source-available (LICENSE, no SPDX id) and publish =
+# Our own crates are source-available (LICENSE.md, no SPDX id) and publish =
 # false; skip them here - this gate is about DEPENDENCY licenses. Note
 # private.ignore keys off `publish = false` on ANY crate in the graph, not
 # workspace membership, so a vendored path dep marked publish = false would
