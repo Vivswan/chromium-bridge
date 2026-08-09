@@ -11,6 +11,7 @@ TypeScript suites (bun workspace members), with shared pages in
 | **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `build/extension/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
 | **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
 | **SDK interop** | `interop/sdk-client.test.ts` | `bun test` (`moon run test-interop`) | Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2, pinned to the modern era (no legacy fallback): proves a real third-party 2026-07-28 client negotiates, lists, and calls against the served protocol. No browser: the empty-bridge `tools/call` asserts the typed in-result error. |
+| **Harness smoke** | `harness/run.ts` | `bun` + harness CLIs (`moon run harness-smoke`) | Real agent-harness CLIs (Claude Code, Codex) connect to the stdio MCP server via ISOLATED config dirs, with every frame captured; prints the ADR-0034 opening-method canary that decides when legacy-era support can be deleted. Nightly workflow: `harness-smoke.yml`. |
 
 The two browser suites are TypeScript run under bun (matching the
 extension). The protocol suite stays Python on purpose - rewriting it in

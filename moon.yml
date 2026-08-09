@@ -295,6 +295,7 @@ tasks:
       bunx tsc -p src/apps/desktop/ui
       bunx tsc -p tests/browser
       bunx tsc -p tests/interop
+      bunx tsc -p tests/harness
       bunx tsc -p scripts
       bunx tsc -p src/packages/shared
     toolchains: ['system']
@@ -810,3 +811,22 @@ tasks:
     options:
       cache: false # a check suite: never cached
       runInCI: false # non-gating until the 2026-07-28 protocol lands
+
+  # ----- agent-harness interop smoke (nightly workflow; not in the ci gate) --
+
+  harness-smoke:
+    # Real harness CLIs (claude, codex) connect to our stdio MCP server via
+    # isolated config dirs; frames are captured to build/harness-captures/
+    # and each harness's opening method is logged - the ADR-0034 canary for
+    # deleting the temporary legacy-initialize shim. Not in the ci gate:
+    # needs harness CLIs on PATH. The nightly harness-smoke.yml workflow
+    # installs them and invokes the driver DIRECTLY (moon does not resolve
+    # runInCI:false tasks when CI=true). Extra flags pass through, e.g.
+    # `moon run harness-smoke -- --mint-seeds`.
+    description: 'Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server (logs the ADR-0034 opening-method canary)'
+    deps: ['~:build-release']
+    command: 'bun tests/harness/run.ts'
+    toolchains: ['system']
+    options:
+      cache: false # a gating suite for the nightly workflow: never cached
+      runInCI: false # needs harness CLIs; harness-smoke.yml provides them
