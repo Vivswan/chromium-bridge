@@ -1,0 +1,17 @@
+{
+  "name": "chromium-bridge-interop",
+  "version": "0.0.0",
+  "description": "Third-party MCP client interop suite: drives the release binary with the official TypeScript SDK v2 over stdio.",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test sdk-client.test.ts"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/core": "^2.0.0",
+    "@types/bun": "^1.3.14"
+  }
+}

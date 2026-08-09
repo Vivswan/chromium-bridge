@@ -1,7 +1,7 @@
 # Tests
 
-Three suites across two languages, in two directories: `protocol/` (python)
-and `browser/` (TypeScript, a bun workspace member), with shared pages in
+The test suites span two languages: `protocol/` (python) and the
+TypeScript suites (bun workspace members), with shared pages in
 `fixtures/`. The language split is deliberate, not historical accident:
 
 | Suite | File | Runtime | Why this language |
@@ -10,6 +10,7 @@ and `browser/` (TypeScript, a bun workspace member), with shared pages in
 | **DOM** | `browser/dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `build/extension/chrome-mv3` content script into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
 | **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `build/extension/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
 | **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
+| **SDK interop** | `interop/sdk-client.test.ts` | `bun test` (`moon run test-interop`) | Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2, pinned to the modern era (no legacy fallback): proves a real third-party 2026-07-28 client negotiates, lists, and calls against the served protocol. No browser: the empty-bridge `tools/call` asserts the typed in-result error. |
 
 The two browser suites are TypeScript run under bun (matching the
 extension). The protocol suite stays Python on purpose - rewriting it in
