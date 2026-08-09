@@ -26,6 +26,7 @@ a key.
 <!-- Repository-specific security documentation (scope, threat model, review
      expectations for security-relevant changes) goes below this line. It
      survives template updates via three-way merge. -->
+<!-- repo-platform:local-section -->
 
 chromium-bridge drives a **real, logged-in browser** on the user's machine.
 It can read page content, cookies (including httpOnly), and web storage, and

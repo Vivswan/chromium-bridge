@@ -53,7 +53,10 @@ auto-assign]`. Concretely:
   covers rebuilds within retention. Publishing requires the
   `REPO_PLATFORM_TOKEN` repository secret (a PAT): GITHUB_TOKEN-created
   releases fire no `on: release` workflows, which would silently skip the
-  SBOM and the Pages production deploy.
+  SBOM and the Pages production deploy. (Since superseded by the
+  draft-first flow: the SBOM now attaches to the draft inside release.yml,
+  so only the Pages production deploy still rides `on: release` - see
+  [release.md](../release.md).)
 - **Pages moves to the platform module.** The managed pages.yml (root =
   latest release, /staging/ = main HEAD) replaces deploy-site.yml. This
   gives up the old "staging deploys only the CI-tested sha" guarantee:

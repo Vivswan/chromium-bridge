@@ -1,8 +1,9 @@
 # Releasing: the release-please pipeline
 
 > This doc explains how chromium-bridge is released: merging the release PR
-> cuts a release and, in the same CI run, builds prebuilt artifacts,
-> checksums, and provenance attestations, plus a decoupled SBOM workflow.
+> cuts a draft release and, in the same CI run, builds prebuilt artifacts,
+> checksums, provenance attestations, and an SBOM onto the draft, then
+> publishes it.
 > Version discipline is in [compatibility.md](./compatibility.md); on-disk
 > registration paths are in
 > [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
@@ -11,19 +12,37 @@
 
 Releases are driven by **release-please**. Conventional commits on `main`
 accumulate into a rolling release PR (`chore(main): release X.Y.Z`); merging
-it tags and publishes the release. The machinery is the managed
-`.github/workflows/release-please.yml`, called from the repo-owned
-`.github/workflows/release.yml` pipeline, which the managed ci.yml runs
-downstream of the all-green gate - so a release can only ever be cut from a
-green `main`, and the packaging jobs below run in that same CI run, gated on
-release-please's `release_created` output. The release PR must be created with
-the `REPO_PLATFORM_TOKEN` repository secret (a PAT): a PAT-created release
-triggers `on: release` workflows (sbom.yml, the Pages production deploy),
-and the release PR gets CI runs. Without the secret, release-please falls
-back to `GITHUB_TOKEN`, whose events fire no workflows - the release PR
-needs a close/reopen to run its checks, and a published release silently
-skips the SBOM and the Pages root rebuild. Configure the secret before the
-first release.
+it cuts the release. GitHub releases are immutable once published (the tag
+and assets freeze), so every release moves through the same three steps,
+always draft-first, all in one CI run:
+
+1. release-please creates the release as a **draft** with its tag already
+   forced at the merge SHA (`draft` + `force-tag-creation` in
+   `release-please-config.json`). The release body is release-please's
+   changelog entry; GitHub's auto-generated notes are not added.
+2. The packaging jobs below mutate the draft: they build from the tag and
+   attach their assets with `gh release upload`.
+3. The final `publish-release` job flips the draft live (and marks tags
+   with a suffix as prereleases). It stays the last job: every job that
+   mutates the release is listed in its `needs`.
+
+If the pipeline dies after the draft exists, a rerun cannot recreate it
+(release-please sees the forced tag); finish by hand with
+`gh release upload <tag> <assets> --clobber` and
+`gh release edit <tag> --draft=false`.
+
+The machinery is the managed `.github/workflows/release-please.yml`, called
+from the repo-owned `.github/workflows/release.yml` pipeline, which the
+managed ci.yml runs downstream of the all-green gate - so a release can only
+ever be cut from a green `main`, and the packaging jobs run in that same CI
+run, gated on release-please's `release_created` output. The
+`REPO_PLATFORM_TOKEN` repository secret (a PAT) matters twice: release-please
+creates the release PR with it so that PR gets CI runs (with only
+`GITHUB_TOKEN` the release PR needs a close/reopen to run its checks), and
+`publish-release` publishes with it so the `release: published` event fires
+the Pages production deploy (events from `GITHUB_TOKEN` trigger no
+workflows - without the secret, dispatch pages.yml by hand after a release).
+Configure the secret before the first release.
 
 Each packaging job's first step is a **version consistency check**: after stripping the leading
 `v` and any `-dev`/`-rc` prerelease suffix from the tag, its core version must equal the
@@ -44,8 +63,8 @@ scarce, and Linux uses an older glibc baseline to widen compatibility). For each
    `README.md`.
 4. A `.sha256` for the archive and a separate `.binary.sha256` for the binary inside it
    are generated, and a build-provenance attestation covers both.
-5. `softprops/action-gh-release` creates the GitHub Release with the assets attached and
-   auto-generates release notes.
+5. `gh release upload` attaches the assets to the draft release; the final
+   `publish-release` job publishes it once every packaging job is done.
 
 Users therefore **do not need a Rust/bun toolchain** to install: registration is the
 binary's own `chromium-bridge doctor --fix` (or the desktop app), see
@@ -65,8 +84,11 @@ the mounted image by `scripts/check-desktop-signing.ts`.
 The job needs signing material that forks and secretless checkouts do not
 have, so it is gated: a small `desktop-signing-secrets` job checks whether the
 secrets are configured and the `desktop-app` job skips cleanly (it does not
-fail) when they are absent. The binary and extension release is never blocked
-by the desktop job.
+fail) when they are absent. That intended skip never blocks the binary and
+extension release: `publish-release` publishes without the dmg. A desktop
+job that *fails*, though, deliberately holds publication - the release stays
+an unpublished draft rather than shipping half of its assets (finish by hand
+per the recovery commands above, or rerun).
 
 Required repository secrets:
 
@@ -114,19 +136,23 @@ dev-signed, not notarized, and Gatekeeper will warn on other Macs. Stapling
 runs before the checksum and attestation steps so the published digest matches
 the exact bytes users download.
 
-## SBOM: a decoupled CycloneDX workflow
+## SBOM: CycloneDX onto the draft
 
-`.github/workflows/sbom.yml` is independent of release.yml and triggers on
-`release: published` (that is, **after** the release has been created):
+The `sbom` job in release.yml runs alongside the packaging jobs (it used to
+be a decoupled `release: published` workflow, but a published release is
+immutable, so the SBOM has to land on the draft):
 
 - It uses `anchore/sbom-action` to generate CycloneDX JSON
   (`chromium-bridge.cdx.json`) from the **committed lock files** (`Cargo.lock` +
   `bun.lock`), scanning declared dependencies rather than an installed
   tree (a fresh checkout has no `node_modules`/`target`).
-- It attaches the SBOM as an asset to the Release for the corresponding tag.
+- It attaches the SBOM to the draft release for the tag.
 
-The decoupling is deliberate: an SBOM tooling failure can **never block** a binary
-release.
+An SBOM tooling failure still **never blocks** a binary release:
+`publish-release` waits for the job but tolerates its failure, so the
+release goes out without an SBOM and the red job flags it. The loss is
+permanent for that tag - the published release is immutable, so the SBOM
+cannot be attached afterwards; the next release carries one again.
 
 ## SemVer rules
 

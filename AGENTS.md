@@ -58,6 +58,7 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 
 <!-- Add project-specific instructions below. This section survives template
      updates via three-way merge. -->
+<!-- repo-platform:local-section -->
 
 Chromium Bridge (adopted from `whg517/browser-bridge`, Apache-2.0) is a Rust
 MCP server + native-messaging host + MV3 extension that lets an MCP client
