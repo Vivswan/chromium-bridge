@@ -10,6 +10,7 @@
     "src/apps/desktop/ui",
     "src/packages/*",
     "tests/browser",
+    "tests/interop",
     "scripts",
     "src/apps/web"
   ],

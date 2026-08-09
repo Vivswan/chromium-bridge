@@ -294,6 +294,7 @@ tasks:
       bunx tsc -p src/apps/extension
       bunx tsc -p src/apps/desktop/ui
       bunx tsc -p tests/browser
+      bunx tsc -p tests/interop
       bunx tsc -p scripts
       bunx tsc -p src/packages/shared
     toolchains: ['system']
@@ -791,3 +792,21 @@ tasks:
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
+
+  # ----- interop suites (non-gating; not part of `moon run ci` yet) ----------
+
+  test-interop:
+    # Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2
+    # (@modelcontextprotocol/client, spec 2026-07-28) over stdio - the one
+    # real third-party modern client. Ships non-gating first: not in the ci
+    # aggregate (and runInCI: false keeps affected-only `moon ci` runs from
+    # tripping on it) until the modern protocol lands and stabilizes; wire it
+    # into checks.yml or the nightly at that point.
+    description: 'MCP client SDK v2 interop suite (official @modelcontextprotocol/client over stdio; non-gating)'
+    deps:
+      - '~:build-release'
+    command: 'bun test tests/interop/sdk-client.test.ts'
+    toolchains: ['system']
+    options:
+      cache: false # a check suite: never cached
+      runInCI: false # non-gating until the 2026-07-28 protocol lands
