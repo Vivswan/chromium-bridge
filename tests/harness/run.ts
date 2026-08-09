@@ -24,10 +24,20 @@
 // state.
 //
 // Harnesses whose CLI is not on PATH are skipped with a message. A probe
-// that cannot avoid a model/API call (Codex has no offline health check)
-// runs only behind an explicit opt-in (BB_HARNESS_CODEX_LIVE=1 plus the API
-// key) and is otherwise reported as "configured" - registration verified,
-// live connection not exercised.
+// that cannot avoid a model/API call against a REAL backend (codex has no
+// offline health check) runs only behind an explicit opt-in
+// (BB_HARNESS_CODEX_LIVE=1 plus the API key) and is otherwise reported as
+// "configured" - registration verified, live connection not exercised.
+//
+// The *-live-fakellm entries close that gap without credentials: the model
+// is played by tests/harness/fake-llm.ts on 127.0.0.1, so a real
+// `claude -p` / `codex exec` run performs a full model-driven MCP tool call
+// (tab_list) with zero credentials and zero model spend, deterministically.
+// Those probes run whenever the CLI is installed, and assert three points,
+// all fail-closed: the backend saw the bridge's tools advertised, the tee
+// shim captured the tools/call frame (in the right protocol era), and the
+// tool result fed back to the model carried the typed NOT_CONNECTED error
+// (no browser is attached - that IS the expected outcome).
 //
 // Deliberately self-contained (node builtins only, no scripts/lib.ts
 // import) so it runs without a `bun install`.
@@ -45,15 +55,17 @@
 //                  a broken harness install (or a run that only verified
 //                  config entries) cannot read as a green night
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   accessSync,
   chmodSync,
+  closeSync,
   existsSync,
   constants as fsConstants,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -62,15 +74,41 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// fake-llm.ts is builtins-only like this file, and its main() is guarded by
+// import.meta.main, so this value import keeps the suite zero-install.
+import {
+  ANTHROPIC_TOOL_USE_ID,
+  MAX_LIFETIME_MS as FAKE_LLM_MAX_LIFETIME_MS,
+  OPENAI_CALL_ID,
+  type RecordedRequest,
+} from "./fake-llm";
 
 const usage = "usage: bun tests/harness/run.ts [--mint-seeds] [--require-any]";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BIN = resolve(REPO, "target", "release", "chromium-bridge");
+const FAKE_LLM = resolve(REPO, "tests", "harness", "fake-llm.ts");
 const CAPTURE_DIR = resolve(REPO, "build", "harness-captures");
 const SEEDS_DIR = resolve(REPO, "src", "packages", "core", "fuzz", "seeds", "mcp_jsonrpc");
 // The name the bridge is registered under in each harness's isolated config.
 const SERVER_NAME = "chromium-bridge";
+// The bridge-side tool the live fake-LLM probes drive end to end.
+const LIVE_TOOL = "tab_list";
+// Wire literals pinned in src/packages/core/src/protocol.rs
+// (MCP_META_PROTOCOL_VERSION / MCP_PROTOCOL_VERSION); spelled here because
+// this driver is deliberately import-free beyond its own directory.
+const META_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
+const MODERN_PROTOCOL_VERSION = "2026-07-28";
+// Proxy overrides could route even 127.0.0.1 traffic off-machine; the live
+// probes delete them so the fake backend is the only reachable network.
+const PROXY_VARS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+];
 
 interface Options {
   mintSeeds: boolean;
@@ -123,6 +161,9 @@ function run(
 
 /** Everything the registry callbacks need for one harness run. */
 interface HarnessContext {
+  /** The registry entry's name; per-entry artifact file names derive from
+   * it so a rename cannot desync them from summary.json. */
+  name: string;
   /** Resolved path of the harness CLI (see resolveCli). */
   cliBin: string;
   /** The tee shim the harness launches as its stdio MCP server command. */
@@ -158,14 +199,20 @@ interface Harness {
   /** Register ctx.shim as a stdio MCP server in the isolated config. */
   configure(ctx: HarnessContext): ProbeOutcome | undefined;
   /** Assert the harness can reach the server, without a model call where
-   * the CLI supports that. */
-  probe(ctx: HarnessContext): ProbeOutcome;
+   * the CLI supports that. May be async (the live fake-LLM probes are). */
+  probe(ctx: HarnessContext): ProbeOutcome | Promise<ProbeOutcome>;
 }
 
 const CONFIGURE_TIMEOUT_MS = 60_000;
 // The health check spawns the shim + binary and runs a real MCP handshake;
 // a CI runner's cold start needs headroom.
 const PROBE_TIMEOUT_MS = 180_000;
+// The fake backend self-terminates as a leak guard; it must outlive any
+// single probe (plus the 15s portfile wait that precedes the probe timer)
+// or a slow run would read as a harness failure.
+if (FAKE_LLM_MAX_LIFETIME_MS <= PROBE_TIMEOUT_MS + 15_000) {
+  throw new Error("fake-llm MAX_LIFETIME_MS must exceed PROBE_TIMEOUT_MS plus startup slack");
+}
 
 function failure(step: string, r: RunResult): ProbeOutcome {
   const why = r.spawnError ?? (r.timedOut ? "timed out" : `exit ${r.status}`);
@@ -196,28 +243,288 @@ function resolveCli(cli: string): string | undefined {
   return candidates.find((candidate) => !candidate.includes("cmux-cli-shims")) ?? candidates[0];
 }
 
+// ---------------------------------------------------------------------------
+// Shared isolation + registration, used by both the health-check entry and
+// the live fake-LLM entry of each CLI.
+// ---------------------------------------------------------------------------
+
+// Claude Code: CLAUDE_CONFIG_DIR moves ALL config (including the user
+// scope's .claude.json) into scratch.
+function claudeIsolationEnv(scratch: string): NodeJS.ProcessEnv {
+  return { ...process.env, CLAUDE_CONFIG_DIR: join(scratch, "claude-config") };
+}
+
+function claudeConfigFile(scratch: string): string {
+  return join(scratch, "claude-config", ".claude.json");
+}
+
+function claudeConfigure(ctx: HarnessContext): ProbeOutcome | undefined {
+  const r = run([ctx.cliBin, "mcp", "add", "--scope", "user", SERVER_NAME, "--", ctx.shim], {
+    env: ctx.env,
+    cwd: ctx.scratch,
+    timeoutMs: CONFIGURE_TIMEOUT_MS,
+  });
+  return r.status === 0 ? undefined : failure("claude mcp add", r);
+}
+
+// Codex: CODEX_HOME moves config.toml (and auth) into scratch.
+function codexIsolationEnv(scratch: string): NodeJS.ProcessEnv {
+  // codex refuses a CODEX_HOME that does not exist yet.
+  const home = join(scratch, "codex-home");
+  mkdirSync(home, { recursive: true });
+  return { ...process.env, CODEX_HOME: home };
+}
+
+function codexConfigFile(scratch: string): string {
+  return join(scratch, "codex-home", "config.toml");
+}
+
+function codexConfigure(ctx: HarnessContext): ProbeOutcome | undefined {
+  const r = run([ctx.cliBin, "mcp", "add", SERVER_NAME, "--", ctx.shim], {
+    env: ctx.env,
+    cwd: ctx.scratch,
+    timeoutMs: CONFIGURE_TIMEOUT_MS,
+  });
+  return r.status === 0 ? undefined : failure("codex mcp add", r);
+}
+
+// ---------------------------------------------------------------------------
+// The local fake LLM backend (tests/harness/fake-llm.ts) behind the live
+// probes: spawned as a sibling process because the harness CLI itself runs
+// under spawnSync, which blocks this process's event loop.
+// ---------------------------------------------------------------------------
+
+/** The backend's introspection view: every recorded request plus how many
+ * were dropped past its recording bounds. */
+interface FakeLlmView {
+  requests: RecordedRequest[];
+  dropped: number;
+}
+
+interface FakeLlm {
+  port: number;
+  view(): Promise<FakeLlmView>;
+  stop(): void;
+}
+
+/** Spawn fake-llm.ts on an ephemeral 127.0.0.1 port (announced through a
+ * portfile) and expose its /_test/requests introspection. Throws with the
+ * log path on startup failure; stop() kills exactly the child this call
+ * spawned (and is safe to call twice). The log lands in CAPTURE_DIR so CI
+ * uploads it green or red. */
+async function startFakeLlm(logPath: string): Promise<FakeLlm> {
+  const dir = mkdtempSync(join(tmpdir(), "bbf-"));
+  const portfile = join(dir, "port");
+  const log = openSync(logPath, "a");
+  const child = spawn(process.execPath, [FAKE_LLM, "--portfile", portfile], {
+    stdio: ["ignore", log, log],
+  });
+  // A spawn-level failure (ENOMEM and friends) is an EventEmitter error
+  // event, which would throw uncaught without a listener; surface it
+  // through the poll loop instead.
+  let spawnFailure: Error | undefined;
+  child.on("error", (error) => {
+    spawnFailure = error;
+  });
+  let stopped = false;
+  const cleanup = (): void => {
+    if (stopped) return;
+    stopped = true;
+    child.kill();
+    closeSync(log);
+    rmSync(dir, { recursive: true, force: true });
+  };
+  try {
+    const deadline = Date.now() + 15_000;
+    while (!existsSync(portfile)) {
+      if (spawnFailure !== undefined) {
+        throw new Error(`fake-llm failed to spawn: ${spawnFailure.message}`);
+      }
+      if (child.exitCode !== null) {
+        throw new Error(`fake-llm exited before binding (code ${child.exitCode}); see ${logPath}`);
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`fake-llm did not announce its port within 15s; see ${logPath}`);
+      }
+      await new Promise((resolveSleep) => setTimeout(resolveSleep, 50));
+    }
+    const port = Number(readFileSync(portfile, "utf8").trim());
+    if (!Number.isInteger(port) || port <= 0) {
+      throw new Error(`fake-llm announced an invalid port; see ${logPath}`);
+    }
+    return {
+      port,
+      async view(): Promise<FakeLlmView> {
+        const reply = await fetch(`http://127.0.0.1:${port}/_test/requests`);
+        if (!reply.ok) throw new Error(`/_test/requests answered ${reply.status}`);
+        const parsed = (await reply.json()) as { requests?: unknown; dropped?: unknown };
+        if (!Array.isArray(parsed.requests)) {
+          throw new Error("/_test/requests answered without a requests array");
+        }
+        return {
+          requests: parsed.requests as RecordedRequest[],
+          dropped: typeof parsed.dropped === "number" ? parsed.dropped : 0,
+        };
+      },
+      stop: cleanup,
+    };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
+/**
+ * The live-probe epilogue: pull the backend's full view, persist it next to
+ * the captures (the recorded bodies are what explains a red assertion when
+ * a harness release changes shape), then run the three assertions.
+ */
+async function concludeLiveProbe(
+  fake: FakeLlm,
+  entry: string,
+  capture: string,
+): Promise<ProbeOutcome> {
+  let view: FakeLlmView;
+  try {
+    view = await fake.view();
+  } catch (error) {
+    return { kind: "failed", detail: `fake-llm introspection: ${(error as Error).message}` };
+  }
+  try {
+    writeFileSync(
+      join(CAPTURE_DIR, `${entry}.fake-llm-requests.json`),
+      `${JSON.stringify(view, null, 2)}\n`,
+    );
+  } catch (error) {
+    // Forensics only: losing the artifact must not abort the assertions.
+    console.error(`[harness-smoke] ${entry}: could not persist the backend view: ${error}`);
+  }
+  return assertLiveToolCall(view, capture);
+}
+
+/**
+ * The three fail-closed assertions of a live fake-LLM probe; every one must
+ * hold or the probe FAILED:
+ *
+ *  (a) the fake backend saw the bridge's tab_list advertised among the
+ *      request's tools and told the harness to call it;
+ *  (b) the tee shim captured the resulting tools/call frame, carried in the
+ *      same protocol era as the harness's opening method (legacy initialize
+ *      frames carry no params._meta revision; modern server/discover frames
+ *      must claim MODERN_PROTOCOL_VERSION);
+ *  (c) the harness fed the tool result back to the model, and it carried the
+ *      bridge's typed NOT_CONNECTED error - no browser is attached, so that
+ *      IS the expected outcome; anything else means the result was dropped,
+ *      rewritten, or a real browser was reachable.
+ */
+function assertLiveToolCall(view: FakeLlmView, capture: string): ProbeOutcome {
+  const { requests, dropped } = view;
+  // A truncated recording cannot prove an absence, so every failure names
+  // the truncation instead of reading as a clean miss.
+  const fail = (detail: string): ProbeOutcome => ({
+    kind: "failed",
+    detail: dropped > 0 ? `${detail} (backend recording truncated: ${dropped} dropped)` : detail,
+  });
+  const turn1 = requests.find(
+    (request): request is Extract<RecordedRequest, { kind: "turn1-tool-call" }> =>
+      request.kind === "turn1-tool-call",
+  );
+  if (turn1 === undefined) {
+    const seen = [...new Set(requests.flatMap((request) => request.toolNames))];
+    return fail(
+      `the fake backend never saw ${LIVE_TOOL} advertised ` +
+        `(tools seen: ${seen.join(", ") || "none"})`,
+    );
+  }
+
+  interface CallFrame {
+    method?: unknown;
+    params?: { name?: unknown; _meta?: Record<string, unknown> };
+  }
+  // One parse serves both the frame lookup and the era analysis: two reads
+  // could observe different states while the shim's tee is still flushing.
+  const frames = parseFrames(capture) as CallFrame[];
+  const methods: string[] = [];
+  for (const frame of frames) {
+    if (typeof frame.method === "string" && !methods.includes(frame.method)) {
+      methods.push(frame.method);
+    }
+  }
+  const opening = methods[0];
+  const call = frames.find(
+    (frame) => frame.method === "tools/call" && frame.params?.name === LIVE_TOOL,
+  );
+  if (call === undefined) {
+    return fail(
+      `the tee shim captured no tools/call frame for ${LIVE_TOOL} ` +
+        `(methods: ${methods.join(", ") || "none"})`,
+    );
+  }
+  const claimed = call.params?._meta?.[META_PROTOCOL_VERSION_KEY];
+  let era: string;
+  if (opening === "initialize") {
+    if (claimed !== undefined) {
+      return fail(
+        `mixed protocol eras: legacy initialize opening but tools/call claims ${String(claimed)}`,
+      );
+    }
+    era = "legacy initialize";
+  } else if (opening === "server/discover") {
+    if (claimed !== MODERN_PROTOCOL_VERSION) {
+      return fail(
+        `modern server/discover opening but tools/call claims ` +
+          `${claimed === undefined ? "no revision" : String(claimed)} ` +
+          `instead of ${MODERN_PROTOCOL_VERSION}`,
+      );
+    }
+    era = `modern ${MODERN_PROTOCOL_VERSION}`;
+  } else {
+    return fail(`unexpected opening method ${opening ?? "(none)"} - inspect the capture`);
+  }
+
+  // Turn 2 must be the SAME flow as turn 1: same wire route, echoing that
+  // route's invocation id - a result from a different API shape must not
+  // satisfy the assertion.
+  const expectedId = turn1.route === "/v1/messages" ? ANTHROPIC_TOOL_USE_ID : OPENAI_CALL_ID;
+  const finals = requests.filter(
+    (request): request is Extract<RecordedRequest, { kind: "turn2-final" }> =>
+      request.kind === "turn2-final" && request.route === turn1.route,
+  );
+  if (finals.length === 0) {
+    return fail(`the harness never fed the tool result back to the model on ${turn1.route}`);
+  }
+  const carried = finals.find((request) =>
+    request.toolResultText.includes("Error [NOT_CONNECTED]"),
+  );
+  if (carried === undefined) {
+    const texts = finals
+      .map((request) => JSON.stringify(request.toolResultText.slice(0, 160)))
+      .join("; ");
+    return fail(`tool result reached the model WITHOUT the typed NOT_CONNECTED error: ${texts}`);
+  }
+  if (carried.toolResultId !== expectedId) {
+    return fail(
+      `tool result carried the right text but echoes invocation id ` +
+        `${JSON.stringify(carried.toolResultId)} instead of ${expectedId}`,
+    );
+  }
+  return {
+    kind: "connected",
+    detail:
+      `live model-driven tool call round-tripped: ${turn1.invokedTool} -> ` +
+      `Error [NOT_CONNECTED] (${era} era; ${turn1.toolNames.length} tools advertised)`,
+  };
+}
+
 const HARNESSES: Harness[] = [
   {
-    // Claude Code: CLAUDE_CONFIG_DIR moves ALL config (including the user
-    // scope's .claude.json) into scratch, and `claude mcp list` runs a real
-    // MCP handshake against every approved server - a genuine connection
-    // probe with no model call.
+    // `claude mcp list` runs a real MCP handshake against every approved
+    // server - a genuine connection probe with no model call.
     name: "claude",
     cli: "claude",
-    isolationEnv(scratch: string): NodeJS.ProcessEnv {
-      return { ...process.env, CLAUDE_CONFIG_DIR: join(scratch, "claude-config") };
-    },
-    configFile(scratch: string): string {
-      return join(scratch, "claude-config", ".claude.json");
-    },
-    configure(ctx: HarnessContext): ProbeOutcome | undefined {
-      const r = run([ctx.cliBin, "mcp", "add", "--scope", "user", SERVER_NAME, "--", ctx.shim], {
-        env: ctx.env,
-        cwd: ctx.scratch,
-        timeoutMs: CONFIGURE_TIMEOUT_MS,
-      });
-      return r.status === 0 ? undefined : failure("claude mcp add", r);
-    },
+    isolationEnv: claudeIsolationEnv,
+    configFile: claudeConfigFile,
+    configure: claudeConfigure,
     probe(ctx: HarnessContext): ProbeOutcome {
       const r = run([ctx.cliBin, "mcp", "list"], {
         env: ctx.env,
@@ -236,30 +543,75 @@ const HARNESSES: Harness[] = [
     },
   },
   {
-    // Codex: CODEX_HOME moves config.toml (and auth) into scratch. There is
-    // no offline health check - `codex mcp list` only reads the config - so
-    // the live probe means running a REAL codex agent session, which is
-    // gated behind an explicit opt-in on top of the API key; without both,
-    // the outcome is "configured".
+    // Live fake-LLM probe: a REAL `claude -p` agent run whose model is the
+    // local fake backend (ANTHROPIC_BASE_URL + a dummy key - the documented
+    // LLM-gateway override), so the full prompt -> tool_use -> tools/call ->
+    // tool_result loop runs deterministically with zero credentials.
+    name: "claude-live-fakellm",
+    cli: "claude",
+    isolationEnv: claudeIsolationEnv,
+    configFile: claudeConfigFile,
+    configure: claudeConfigure,
+    async probe(ctx: HarnessContext): Promise<ProbeOutcome> {
+      let fake: FakeLlm;
+      try {
+        fake = await startFakeLlm(join(CAPTURE_DIR, `${ctx.name}.fake-llm.log`));
+      } catch (error) {
+        return { kind: "failed", detail: (error as Error).message };
+      }
+      try {
+        const env: NodeJS.ProcessEnv = {
+          ...ctx.env,
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${fake.port}`,
+          ANTHROPIC_API_KEY: "fakellm-dummy-key",
+          // No telemetry/update traffic: the fake backend must be the only
+          // network the run touches.
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        };
+        // Ambient real credentials, alternate-backend switches, and proxy
+        // overrides must not leak in: the probe's environment is
+        // constructed, not inherited, and running credential-free IS the
+        // property under test.
+        for (const leak of [
+          "ANTHROPIC_AUTH_TOKEN",
+          "CLAUDE_CODE_OAUTH_TOKEN",
+          "CLAUDE_CODE_USE_BEDROCK",
+          "CLAUDE_CODE_USE_VERTEX",
+          "CLAUDE_CODE_USE_FOUNDRY",
+          ...PROXY_VARS,
+        ]) {
+          delete env[leak];
+        }
+        const r = run(
+          [
+            ctx.cliBin,
+            "-p",
+            "list the browser tabs",
+            "--allowedTools",
+            `mcp__${SERVER_NAME}__${LIVE_TOOL}`,
+            "--max-turns",
+            "4",
+          ],
+          { env, cwd: ctx.scratch, timeoutMs: PROBE_TIMEOUT_MS },
+        );
+        if (r.spawnError || r.timedOut || r.status !== 0) return failure("claude -p (fake-llm)", r);
+        return await concludeLiveProbe(fake, ctx.name, ctx.capture);
+      } finally {
+        fake.stop();
+      }
+    },
+  },
+  {
+    // Codex: there is no offline health check - `codex mcp list` only reads
+    // the config - so the live probe against a REAL backend means running a
+    // real codex agent session, gated behind an explicit opt-in on top of
+    // the API key; without both, the outcome is "configured". (The
+    // codex-live-fakellm entry below exercises the full loop without either.)
     name: "codex",
     cli: "codex",
-    isolationEnv(scratch: string): NodeJS.ProcessEnv {
-      // codex refuses a CODEX_HOME that does not exist yet.
-      const home = join(scratch, "codex-home");
-      mkdirSync(home, { recursive: true });
-      return { ...process.env, CODEX_HOME: home };
-    },
-    configFile(scratch: string): string {
-      return join(scratch, "codex-home", "config.toml");
-    },
-    configure(ctx: HarnessContext): ProbeOutcome | undefined {
-      const r = run([ctx.cliBin, "mcp", "add", SERVER_NAME, "--", ctx.shim], {
-        env: ctx.env,
-        cwd: ctx.scratch,
-        timeoutMs: CONFIGURE_TIMEOUT_MS,
-      });
-      return r.status === 0 ? undefined : failure("codex mcp add", r);
-    },
+    isolationEnv: codexIsolationEnv,
+    configFile: codexConfigFile,
+    configure: codexConfigure,
     probe(ctx: HarnessContext): ProbeOutcome {
       const list = run([ctx.cliBin, "mcp", "list", "--json"], {
         env: ctx.env,
@@ -310,6 +662,67 @@ const HARNESSES: Harness[] = [
         kind: "connected",
         detail: "codex exec session launched the server and sent frames",
       };
+    },
+  },
+  {
+    // Live fake-LLM probe: a REAL `codex exec` session (read-only sandbox)
+    // whose model provider is the local fake backend via model_providers
+    // base_url overrides - codex 0.146+ only speaks the Responses wire API,
+    // and a provider without env_key needs no login, so this runs with zero
+    // credentials.
+    name: "codex-live-fakellm",
+    cli: "codex",
+    isolationEnv: codexIsolationEnv,
+    configFile: codexConfigFile,
+    configure: codexConfigure,
+    async probe(ctx: HarnessContext): Promise<ProbeOutcome> {
+      let fake: FakeLlm;
+      try {
+        fake = await startFakeLlm(join(CAPTURE_DIR, `${ctx.name}.fake-llm.log`));
+      } catch (error) {
+        return { kind: "failed", detail: (error as Error).message };
+      }
+      try {
+        const env: NodeJS.ProcessEnv = { ...ctx.env };
+        // Constructed environment, credential-free: see the claude entry.
+        for (const leak of ["OPENAI_API_KEY", "OPENAI_BASE_URL", ...PROXY_VARS]) {
+          delete env[leak];
+        }
+        const r = run(
+          [
+            ctx.cliBin,
+            "exec",
+            "--skip-git-repo-check",
+            "-c",
+            'sandbox_mode="read-only"',
+            "-c",
+            'approval_policy="never"',
+            "-c",
+            // Config-only MCP approval: without this, exec mode auto-cancels
+            // every MCP tool call ("user cancelled MCP tool call") no matter
+            // the approval_policy. Scoped to the bridge server alone.
+            `mcp_servers.${SERVER_NAME}.default_tools_approval_mode="approve"`,
+            "-c",
+            'model="fake-llm"',
+            "-c",
+            'model_provider="fakellm"',
+            "-c",
+            'model_providers.fakellm.name="fakellm"',
+            "-c",
+            `model_providers.fakellm.base_url="http://127.0.0.1:${fake.port}/v1"`,
+            "-c",
+            'model_providers.fakellm.wire_api="responses"',
+            "list the browser tabs",
+          ],
+          { env, cwd: ctx.scratch, timeoutMs: PROBE_TIMEOUT_MS },
+        );
+        if (r.spawnError || r.timedOut || r.status !== 0) {
+          return failure("codex exec (fake-llm)", r);
+        }
+        return await concludeLiveProbe(fake, ctx.name, ctx.capture);
+      } finally {
+        fake.stop();
+      }
     },
   },
 ];
@@ -405,7 +818,7 @@ function printCanary(name: string, analysis: CaptureAnalysis): void {
     console.log(`${prefix} initialize (LEGACY handshake; the ADR-0034 shim is still required)`);
   } else if (analysis.opening === "server/discover") {
     console.log(
-      `${prefix} server/discover (MODERN 2026-07-28 opening; once every harness reports this, delete the ADR-0034 legacy shim)`,
+      `${prefix} server/discover (MODERN ${MODERN_PROTOCOL_VERSION} opening; once every harness reports this, delete the ADR-0034 legacy shim)`,
     );
   } else {
     console.log(`${prefix} ${analysis.opening} (unexpected - inspect the capture)`);
@@ -487,7 +900,7 @@ interface HarnessReport {
   methods: string[];
 }
 
-function runHarness(harness: Harness): HarnessReport {
+async function runHarness(harness: Harness): Promise<HarnessReport> {
   const report = (outcome: HarnessReport["outcome"], detail: string): HarnessReport => ({
     name: harness.name,
     outcome,
@@ -511,6 +924,7 @@ function runHarness(harness: Harness): HarnessReport {
   const capture = join(CAPTURE_DIR, `${harness.name}.ndjson`);
   try {
     const ctx: HarnessContext = {
+      name: harness.name,
       cliBin,
       scratch,
       capture,
@@ -556,7 +970,7 @@ function runHarness(harness: Harness): HarnessReport {
             "real user config instead - check and clean it before rerunning",
         };
       } else {
-        outcome = harness.probe(ctx);
+        outcome = await harness.probe(ctx);
       }
     }
     const analysis = analyzeCapture(capture);
@@ -589,7 +1003,7 @@ function runHarness(harness: Harness): HarnessReport {
   }
 }
 
-function main(): number {
+async function main(): Promise<number> {
   const options = parseOptions(process.argv.slice(2));
   if (process.platform === "win32") {
     console.log("[harness-smoke] SKIP: the tee shim is POSIX sh; Windows is not covered");
@@ -599,7 +1013,10 @@ function main(): number {
   rmSync(CAPTURE_DIR, { recursive: true, force: true });
   mkdirSync(CAPTURE_DIR, { recursive: true });
 
-  const reports = HARNESSES.map(runHarness);
+  const reports: HarnessReport[] = [];
+  for (const harness of HARNESSES) {
+    reports.push(await runHarness(harness));
+  }
   writeFileSync(
     join(CAPTURE_DIR, "summary.json"),
     `${JSON.stringify({ generatedAt: new Date().toISOString(), reports }, null, 2)}\n`,
@@ -634,5 +1051,5 @@ function main(): number {
 }
 
 if (import.meta.main) {
-  process.exit(main());
+  process.exit(await main());
 }
