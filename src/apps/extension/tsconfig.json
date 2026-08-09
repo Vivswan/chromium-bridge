@@ -6,7 +6,13 @@
     "noUnusedLocals": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
-    "types": ["chrome", "vitest/globals", "@testing-library/jest-dom"]
+    // The generated .wxt/tsconfig.json sets noEmit, but the root typecheck
+    // task runs bare `tsc -p` and tsc keeps compiling after a missing
+    // extends target (TS5083); repeat noEmit here so that run cannot emit.
+    "noEmit": true,
+    // jest-dom v7's default types entry is jest-only (requires @types/jest);
+    // vitest needs the /vitest entry, matching tests/setup.ts.
+    "types": ["chrome", "vitest/globals", "@testing-library/jest-dom/vitest"]
   },
   "exclude": ["node_modules", "dist"]
 }
