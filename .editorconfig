@@ -11,3 +11,22 @@ trim_trailing_whitespace = false
 
 [Makefile]
 indent_style = tab
+
+# Rust: rustfmt uses 4-space indent
+[*.rs]
+indent_style = space
+indent_size = 4
+
+# JS/TS/JSON/HTML/CSS: 2-space (Prettier)
+[*.{js,mjs,ts,json,html,css}]
+indent_style = space
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# Shell scripts
+[*.sh]
+indent_style = space
+indent_size = 2
