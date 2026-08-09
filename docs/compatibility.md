@@ -12,7 +12,7 @@ Before talking about compatibility, separate the three levels (see [architecture
 
 | Version | Value | Single source | What a change means |
 |------|------|------|----------|
-| MCP JSON-RPC version | date string `2025-06-18` | [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md) | The external protocol between the MCP client and the MCP server; pinned, not changed casually |
+| MCP JSON-RPC version | date string `2026-07-28` | [ADR-0034](./adr/0034-mcp-2026-07-28-stateless.md) | The external protocol between the MCP client and the MCP server; stateless, gated per request, with temporary legacy-era support for harnesses on the previous revision (ADR-0007) |
 | Internal bridge protocol version | monotonic integer (currently `1`) | `BRIDGE_PROTOCOL_VERSION` in [`src/packages/core/src/protocol.rs`](../src/packages/core/src/protocol.rs) | The wire contract between the MCP server, native host, and extension |
 | Extension/binary release version | SemVer (such as `0.1.0`) | `Cargo.toml` (see [ADR-0013](./adr/0013-ci-and-toolchain.md)) | The version of release artifacts; release discipline is in [release.md](./release.md) |
 

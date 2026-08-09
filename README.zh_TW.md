@@ -211,8 +211,9 @@ CLI 與桌面應用程式地位對等: 應用程式能做的它都能做, 只依
 式和 CLI 管理同一份狀態。
 
 - **MCP 伺服器 (預設模式)**: 由你的 MCP 用戶端透過 stdio 啟動, 說
-  JSON-RPC 2.0 (MCP 協定 `2025-06-18`)。第一個實例持有通訊端並成為
-  broker (中樞); 後續實例作為中繼接入, 多個用戶端並行共享瀏覽器。
+  JSON-RPC 2.0 (MCP 協定 `2026-07-28`, 無狀態, 暫時相容舊版用戶端)。
+  第一個實例持有通訊端並成為 broker (中樞); 後續實例作為中繼接入,
+  多個用戶端並行共享瀏覽器。
 - **`--native-host`**: 由瀏覽器按主機資訊清單啟動, 是把 Chrome 原生訊息幀
   轉成通訊端上 NDJSON 的薄橋。每個安裝的瀏覽器用自己的標籤啟動自己的主機,
   一個 broker 可以按名字定址多個瀏覽器。
@@ -234,7 +235,7 @@ CLI 與桌面應用程式地位對等: 應用程式能做的它都能做, 只依
 | Linux | x64 預編譯; 任何 Chromium 系瀏覽器; 用 CLI 管理。 |
 | Windows | x64 預編譯 (原生, 無需管理員)。橋接安全性為盡力而為; 見 [SECURITY.md](./SECURITY.md#platform-support)。 |
 | 瀏覽器 | 任何 Chromium 系瀏覽器, Manifest V3 |
-| MCP 協定 | `2025-06-18` ([ADR-0007](./docs/adr/0007-mcp-protocol-version-2025-06-18.md)) |
+| MCP 協定 | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
 | 內部橋協定 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |
 
 已知瀏覽器 (`--browser` 鍵): `chrome`、`chromium`、`brave`、`edge`、

@@ -62,7 +62,7 @@ choices do not get an ADR.
 | [0004](./adr/0004-allowlist-with-optional-host-permissions.md) | Allowlist with on-demand optional host permissions | Accepted |
 | [0005](./adr/0005-page-eval-disabled-by-default.md) | page_eval disabled by default | Superseded by #0008 |
 | [0006](./adr/0006-toast-confirmation-for-high-risk.md) | In-page Toast for high-risk actions, with a short confirmation-free window | Accepted; surface superseded by #0027 |
-| [0007](./adr/0007-mcp-protocol-version-2025-06-18.md) | Pin the MCP protocol version to 2025-06-18 | Accepted |
+| [0007](./adr/0007-mcp-protocol-version-2025-06-18.md) | Pin the MCP protocol version to 2025-06-18 | Superseded by #0034 |
 | [0008](./adr/0008-page-eval-confirmation-channel.md) | page_eval high-risk confirmation channel | Accepted |
 | [0009](./adr/0009-page-snapshot-precise-debugger.md) | page_snapshot_precise takes the authoritative a11y tree via chrome.debugger | Accepted |
 | [0010](./adr/0010-cookie-storage-readonly.md) | Read-only Cookie/Storage access | Accepted |
@@ -89,6 +89,7 @@ choices do not get an ADR.
 | [0031](./adr/0031-touch-id-confirmations-and-presence-grants.md) | Touch ID confirmations and presence-gated grants | Accepted |
 | [0032](./adr/0032-host-owned-policy-settings.md) | Host-owned policy settings and paired language sync | Accepted |
 | [0033](./adr/0033-adopt-repo-platform-fleet-template.md) | Full adoption of the repo-platform fleet template | Accepted |
+| [0034](./adr/0034-mcp-2026-07-28-stateless.md) | MCP 2026-07-28 (stateless) on the official rmcp SDK | Accepted |
 
 ## ADR writing conventions
 

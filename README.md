@@ -295,9 +295,10 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
 ```
 
 - **MCP server (default mode)**: launched by your MCP client over stdio.
-  Speaks JSON-RPC 2.0 (MCP protocol `2025-06-18`). The first instance owns
-  the socket and becomes the broker; later instances attach as relays, so
-  several clients share the browsers concurrently.
+  Speaks JSON-RPC 2.0 (MCP protocol `2026-07-28`, stateless, with temporary
+  legacy compatibility for older harnesses). The first
+  instance owns the socket and becomes the broker; later instances attach as
+  relays, so several clients share the browsers concurrently.
 - **`--native-host`**: launched by the browser via the host manifest. A thin
   bridge translating Chrome's native-messaging frames to NDJSON on the
   socket. Each installed browser launches its own host with its own label,
@@ -321,7 +322,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md).
 | Linux | x64 prebuilt; any Chromium-based browser; CLI management surface. |
 | Windows | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./SECURITY.md#platform-support). |
 | Browser | Any Chromium-based browser, Manifest V3 |
-| MCP protocol | `2025-06-18` ([ADR-0007](./docs/adr/0007-mcp-protocol-version-2025-06-18.md)) |
+| MCP protocol | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
 | Internal bridge protocol | `1` (`BRIDGE_PROTOCOL_VERSION` in [src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs)) |
 
 Known browsers (`--browser` keys): `chrome`, `chromium`, `brave`, `edge`,

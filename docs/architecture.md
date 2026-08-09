@@ -106,15 +106,59 @@ Key traps (all handled in the implementation):
 ### 3.2 MCP JSON-RPC (MCP server <-> MCP client)
 
 Based on JSON-RPC 2.0 over NDJSON, defined at
-[modelcontextprotocol.io](https://modelcontextprotocol.io/specification/2025-06-18).
+[modelcontextprotocol.io](https://modelcontextprotocol.io/specification/2026-07-28).
 
 - Transport: stdin/stdout, NDJSON (one message per line, LF-terminated)
-- Protocol version pinned to `2025-06-18`; see [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md)
-- Three-step handshake: `initialize` -> `notifications/initialized` -> running
-- Tool errors use `isError: true` inside the result, not a JSON-RPC error,
-  so the model sees the error text and can react
-- Handled methods: `initialize`, `notifications/initialized`, `ping`,
-  `tools/list`, `tools/call`; unknown methods return `-32601`
+- Protocol version `2026-07-28`, the stateless revision; see
+  [ADR-0034](./adr/0034-mcp-2026-07-28-stateless.md)
+- The layer is built on the official Rust SDK
+  ([rmcp](https://github.com/modelcontextprotocol/rust-sdk); ADR-0034
+  records the trust-surface decision), with a small shared tokio runtime
+  confined to the MCP serve path. Our invariants wrap the SDK:
+  harness attestation and admission pass before serving begins, the kill
+  switch and audit trail run on every tool call, diagnostics stay on stderr
+  (stdout is protocol), and the broker/relay legs are unchanged
+- No handshake and no session state: a modern request carries the version
+  and the client capabilities in `params._meta`
+  (`io.modelcontextprotocol/protocolVersion` and
+  `.../clientCapabilities`; rmcp requires both, an empty capabilities
+  object suffices) and is gated per request: an unsupported version
+  string gets JSON-RPC error `-32022` (`UnsupportedProtocolVersionError`)
+  with `data.supported` (the full rmcp set) and `data.requested`;
+  incomplete or malformed metadata gets `-32602` naming the field(s). A
+  connection's FIRST request must be a legacy `initialize` or a
+  well-formed stateless request - anything else drops the connection
+  without a reply, fail closed (a bare `ping` is answered without opening
+  the connection). See ADR-0034 for the measured actuals
+- `server/discover` replaces the handshake. Its result declares
+  `supportedVersions` (rmcp's full supported set, newest pinned to
+  `2026-07-28` by a unit test) and `capabilities: {"tools": {}}`;
+  cacheable results (`server/discover`, `tools/list`) carry
+  `ttlMs: 3600000` / `cacheScope: "private"` for peers >= 2026-07-28 (the
+  catalogue is static per binary, so one hour bounds staleness across
+  upgrades; "private" is the conservative scope - a local single-user
+  server has no shared caches to feed). There is no bare-probe form: a
+  `server/discover` without its `_meta` is refused (or, as an opener,
+  dropped) - ADR-0034 cut the planned leniency to match the SDK
+- Results carry `resultType`; the serverInfo `_meta` rides only the
+  `server/discover` result; tool errors still use `isError: true` inside
+  the result, not a JSON-RPC error, so the model sees the error text and can
+  react
+- Handled methods: `server/discover`, `tools/list`, `tools/call`, plus
+  `ping` for legacy peers (answered `{}` pre-open and in initialize-opened
+  sessions; refused after a stateless opener); unknown
+  methods return `-32601` (`initialize` is served in every era as the
+  legacy negotiation - rmcp echoes a supported requested revision and
+  answers an unknown one with the newest)
+- **Temporary legacy era**: on a connection opened with `initialize`, a
+  request with no `_meta` version key is served the previous
+  revision's behavior (`initialize` /
+  `notifications/initialized` / `ping` and legacy-shaped tool results,
+  ADR-0007) through rmcp's built-in earlier-revision support while Claude
+  Code's 2026-07-28 support rolls out. Once the
+  harness interop smoke shows our harnesses opening with `server/discover`,
+  legacy support is disabled and a missing version key fails closed.
+  See [ADR-0034](./adr/0034-mcp-2026-07-28-stateless.md)
 - Before any tool call is served, the harness that spawned the server must
   pass admission against the trusted-client allowlist (section 6 and
   [trust-boundaries.md](./security/trust-boundaries.md))
@@ -265,7 +309,9 @@ The Secure Enclave enrollment key lives in the keychain under
 ```
 1. MCP client -> MCP server (stdin NDJSON):
    {"jsonrpc":"2.0","id":2,"method":"tools/call",
-    "params":{"name":"page_click","arguments":{"ref":"e3"}}}
+    "params":{"name":"page_click","arguments":{"ref":"e3"},
+     "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities":{}}}}
 
 2. dispatch checks: harness admitted, epoch fresh, kill switch clear
    -> session.call assigns BridgeReq.id=1, writes to the socket
@@ -404,7 +450,7 @@ in the SW, `storage_get` in content, both read-only and always masked. See
 | Desktop app | Tauri v2 (macOS) | Bundles the entitled host next to a webview UI; the UI carries no security weight. See [ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md), [ADR-0029](./adr/0029-desktop-app-management-surface.md) |
 | Contracts | The Rust core generates the TS side | One source of truth; CI fails on drift. See [ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md) and section 11 |
 | Engineering gates | moon + proto + GitHub Actions, bun workspace, Biome, cargo-nextest, typos/machete, cargo-vet | One `moon run ci` runs the local cross-platform gate; CI layers additional jobs on top (the repo's jobs live in `.github/workflows/checks.yml`, called inside the managed ci.yml's all-green gate). See [ADR-0013](./adr/0013-ci-and-toolchain.md), revised by ADR-0023 and the moon adoption |
-| MCP version | 2025-06-18 | The current stable version MCP clients implement. See [ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md) |
+| MCP version | 2026-07-28 (stateless) | The current spec revision, served on the official rmcp SDK: per-request version gate, `server/discover`; rmcp's built-in legacy-era support serves older harnesses during the rollout. See [ADR-0034](./adr/0034-mcp-2026-07-28-stateless.md) |
 
 ## 9. Known limitations
 
@@ -464,9 +510,9 @@ against it. The canonical modules and their derived artifacts:
   capability's permissions equal the union of its tools' permissions.
 - **Protocol versions** (`src/packages/core/src/protocol.rs`): the internal
   bridge protocol integer (`BRIDGE_PROTOCOL_VERSION`) and the MCP JSON-RPC
-  revision the server pins (`MCP_PROTOCOL_VERSION`, returned from
-  `initialize` and asserted by the protocol e2e suites), both emitted into
-  `protocol.gen.ts`.
+  revision the server speaks (`MCP_PROTOCOL_VERSION`, gated per request,
+  declared by `server/discover`, and asserted by the protocol e2e suites),
+  both emitted into `protocol.gen.ts`.
 - **Audit forwarding whitelist** (`EXTENSION_AUDIT_KINDS` in
   `src/packages/core/src/audit.rs`): the extension-owned audit kinds the
   host accepts over the `audit_event` control frame (`extension_kind`
@@ -553,8 +599,10 @@ against it. The canonical modules and their derived artifacts:
   regenerates and fails on a stale diff. Unlike the boundaries above, this
   seam is same-author IPC inside one signed app, so it gets static types
   only - no runtime validators - and `ui/src/lib/tauri.ts` wraps the
-  generated types in the typed `api` facade. Like schemars, ts-rs never
-  enters a shipped binary's dependency graph (`moon run check-gen-isolation`).
+  generated types in the typed `api` facade. ts-rs never enters a shipped
+  binary's dependency graph, and schemars may reach the host binary only
+  through rmcp - never through our own gen-only feature
+  (`moon run check-gen-isolation` pins both; ADR-0034).
 
 ### 11.1 Error taxonomy (ERROR_SPECS)
 
@@ -587,7 +635,7 @@ unknown op, and a tool whose capability is not advertised is rejected up
 front. The wiring status of this negotiation is tracked honestly in
 [compatibility.md](./compatibility.md).
 
-Note the three distinct "versions": the MCP JSON-RPC version `2025-06-18`
+Note the three distinct "versions": the MCP JSON-RPC version `2026-07-28`
 (section 3.2), the internal bridge protocol version (an integer), and the
 release version (Cargo-sourced). They are all different.
 
