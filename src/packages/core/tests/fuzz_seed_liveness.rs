@@ -72,3 +72,27 @@ fn json_protocol_dictionary_carries_the_current_host_id() {
          the fuzzer keeps synthesizing our-manifest inputs"
     );
 }
+
+#[test]
+fn json_protocol_dictionary_carries_the_current_mcp_literals() {
+    use chromium_bridge_core::protocol::{
+        MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION, MCP_META_SERVER_INFO,
+        MCP_PROTOCOL_VERSION,
+    };
+    let dict = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/dictionaries/json_protocol.dict");
+    let dict = std::fs::read_to_string(dict).expect("json_protocol.dict must be readable");
+    for literal in [
+        MCP_PROTOCOL_VERSION,
+        MCP_META_PROTOCOL_VERSION,
+        MCP_META_CLIENT_CAPABILITIES,
+        MCP_META_SERVER_INFO,
+    ] {
+        assert!(
+            // The dict escapes each JSON token's quotes: "\"literal\"".
+            dict.contains(&format!("\"\\\"{literal}\\\"\"")),
+            "fuzz/dictionaries/json_protocol.dict lost the MCP literal \
+             {literal:?}; a protocol re-pin must update the dictionary so the \
+             fuzzer keeps synthesizing modern-era frames"
+        );
+    }
+}
