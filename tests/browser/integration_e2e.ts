@@ -32,7 +32,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // re-exports do not resolve under Node ESM, and this file documents Node as
 // a supported runner. protocol.gen.ts is a leaf module with no imports, so
 // Node's type stripping loads it as-is.
-import { MCP_PROTOCOL_VERSION } from "@chromium-bridge/shared/protocol.gen";
+import {
+  MCP_META_CLIENT_CAPABILITIES,
+  MCP_META_PROTOCOL_VERSION,
+  MCP_PROTOCOL_VERSION,
+} from "@chromium-bridge/shared/protocol.gen";
 import puppeteer from "puppeteer-core";
 import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
@@ -265,14 +269,22 @@ async function main(): Promise<void> {
         }),
     );
 
-    send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {} },
-    });
-    await recv();
-    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    // Modern stateless MCP (2026-07-28): there is no initialize handshake.
+    // Every request - the opener included - carries the generated version
+    // and client-capabilities keys in params._meta (rmcp requires both; a
+    // bare probe has no served form and would drop the connection).
+    const meta = {
+      [MCP_META_PROTOCOL_VERSION]: MCP_PROTOCOL_VERSION,
+      [MCP_META_CLIENT_CAPABILITIES]: {},
+    };
+    send({ jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: meta } });
+    const discover = await recv();
+    check(
+      discover.result?.resultType === "complete" &&
+        Array.isArray(discover.result?.supportedVersions) &&
+        discover.result.supportedVersions.includes(MCP_PROTOCOL_VERSION),
+      "server/discover advertises the generated protocol version",
+    );
 
     for (let i = 0; i < 300; i++) {
       if (connected) break;
@@ -284,7 +296,11 @@ async function main(): Promise<void> {
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "tab_list", arguments: {} },
+      params: {
+        name: "tab_list",
+        arguments: {},
+        _meta: meta,
+      },
     });
     const r = await recv();
     if (r.result?.isError === true) {
@@ -299,6 +315,10 @@ async function main(): Promise<void> {
       "tab_list returned structured real chrome.tabs data (full round-trip works)",
     );
     check(r.result.isError === false, "tool call not an error");
+    check(
+      r.result.resultType === "complete" && r.result._meta === undefined,
+      "modern tool result carries resultType (serverInfo _meta rides only discover)",
+    );
 
     // Bonus hermeticity check: only holds when this launch is truly isolated.
     // If your normal Chrome is running, it captures --load-extension and the
