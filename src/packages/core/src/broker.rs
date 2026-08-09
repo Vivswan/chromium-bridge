@@ -1157,15 +1157,17 @@ fn clear_read_timeout(writer: &BufWriter<BridgeStream>) {
 }
 
 /// Serve a JSON-RPC stream (this instance's own stdin, or a relay's socket)
-/// against the shared session: read a message, dispatch it, write the response.
-/// Mirrors the pre-Phase-4 stdin loop (a parse error yields a `-32700` and the
-/// loop continues; EOF ends it). `peer` bundles the role's resources
-/// ([`ServedPeer`]): a relay is rate-limited - a request over the per-relay
-/// limit drops the connection (fail closed) - and the own harness is not.
-/// Before EVERY dispatched request, the peer's guard re-checks the revocation
-/// epoch (ADR-0025): a revoked harness - or an unreadable revocation record or
-/// allowlist - ends the loop, fail closed, so no request is ever served on
-/// stale trust.
+/// against the shared session: read a message, hand it to this connection's
+/// MCP engine ([`crate::mcp::Connection`], the rmcp service), write the
+/// reply. Mirrors the pre-Phase-4 stdin loop (a parse error yields a
+/// `-32700` and the loop continues; EOF ends it). `peer` bundles the role's
+/// resources ([`ServedPeer`]): a relay is rate-limited - a request over the
+/// per-relay limit drops the connection (fail closed) - and the own harness
+/// is not. Before EVERY dispatched request, the peer's guard re-checks the
+/// revocation epoch (ADR-0025): a revoked harness - or an unreadable
+/// revocation record or allowlist - ends the loop, fail closed, so no
+/// request is ever served on stale trust. The gates run HERE, before a
+/// message reaches the protocol engine, so adopting rmcp moved none of them.
 fn serve_jsonrpc<R: BufRead, W: Write>(
     session: &Session,
     reader: &mut R,
@@ -1173,6 +1175,7 @@ fn serve_jsonrpc<R: BufRead, W: Write>(
     peer: &mut ServedPeer,
 ) -> io::Result<()> {
     let who = peer.who();
+    let mut mcp = crate::mcp::Connection::open(session.clone())?;
     loop {
         let msg = match mcp_read(reader) {
             Ok(Some(m)) => m,
@@ -1212,7 +1215,7 @@ fn serve_jsonrpc<R: BufRead, W: Write>(
             log_error!("broker", "dropping {who}: {e}");
             return Err(e);
         }
-        if let Some(resp) = crate::mcp_server::handle(session, &msg) {
+        if let Some(resp) = mcp.handle(&msg)? {
             mcp_write(writer, &resp)?;
         }
     }

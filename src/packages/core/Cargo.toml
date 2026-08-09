@@ -6,21 +6,25 @@ description = "Chromium Bridge library: IPC, protocols, session, tools, enclave"
 license.workspace = true
 
 [dependencies]
+futures.workspace = true
 hmac.workspace = true
 libc.workspace = true
+rmcp.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 ts-rs = { workspace = true, optional = true }
 
 [features]
 # Contract-generation apparatus (ADR-0028): JSON Schema derivation for the
 # bridge envelopes, used only by the emit_envelope_schema example that feeds
 # the CI double-derivation diff (scripts/check-envelope-parity.ts). Off by
-# default and enabled by no binary, so default and release builds never
-# compile schemars (--all-features builds do).
+# default and enabled by no binary; the schemars instance in shipped builds
+# comes from rmcp (its runtime tool-schema model, ADR-0034), never from this
+# feature - check-gen-isolation enforces exactly that split.
 envelope-schema = ["dep:schemars"]
 # TypeScript derivation for the audit types the desktop app returns verbatim
 # (`moon run gen` -> src/apps/desktop/ui/src/lib/commands.gen.ts). Gen-only, same

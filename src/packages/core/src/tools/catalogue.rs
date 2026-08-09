@@ -97,7 +97,11 @@ pub struct Tool {
     /// The model-facing description. English is canonical; any localization
     /// happens in UI tiers, never here.
     pub description: &'static str,
-    pub input_schema: Value,
+    /// The JSON Schema of the tool's arguments. Typed as an object map (not
+    /// a bare `Value`) so "a tool whose schema is not an object" is
+    /// unrepresentable - consumers (the MCP layer, the contract emitter)
+    /// need no fallback for a shape the catalogue cannot produce.
+    pub input_schema: serde_json::Map<String, Value>,
 }
 
 pub fn all() -> Vec<Tool> {
@@ -581,7 +585,7 @@ pub fn all() -> Vec<Tool> {
 }
 
 /// Helper to build a minimal JSON-Schema object schema with required + props.
-fn schema(required: &[&str], props: &[(&str, &str, &str)]) -> Value {
+fn schema(required: &[&str], props: &[(&str, &str, &str)]) -> serde_json::Map<String, Value> {
     let properties: serde_json::Map<String, Value> = props
         .iter()
         .map(|(name, ty, desc)| {
@@ -591,11 +595,17 @@ fn schema(required: &[&str], props: &[(&str, &str, &str)]) -> Value {
             )
         })
         .collect();
-    json!({
-        "type": "object",
-        "properties": Value::Object(properties),
-        "required": required.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
-    })
+    let mut root = serde_json::Map::new();
+    root.insert("type".to_string(), json!("object"));
+    root.insert("properties".to_string(), Value::Object(properties));
+    root.insert(
+        "required".to_string(),
+        json!(required
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>()),
+    );
+    root
 }
 
 /// The optional `browser` routing argument every bridge-backed tool accepts
@@ -611,7 +621,10 @@ const BROWSER_PROP: (&str, &str, &str) = (
 /// Like [`schema`], with the shared [`BROWSER_PROP`] appended. Used by every
 /// tool whose call is routed over a bridge connection; `list_browsers` itself
 /// (answered by the server, no routing) keeps the plain [`schema`].
-fn bridge_schema(required: &[&str], props: &[(&str, &str, &str)]) -> Value {
+fn bridge_schema(
+    required: &[&str],
+    props: &[(&str, &str, &str)],
+) -> serde_json::Map<String, Value> {
     let mut with_browser = props.to_vec();
     with_browser.push(BROWSER_PROP);
     schema(required, &with_browser)

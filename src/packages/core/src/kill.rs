@@ -15,7 +15,7 @@
 //!
 //! ## Enforcement points
 //!
-//! - **Tool dispatch** ([`crate::mcp_server::handle`]): every `tools/call`
+//! - **Tool dispatch** ([`crate::mcp::handler`]): every `tools/call`
 //!   from every harness (the broker's own and every relay) passes [`check`]
 //!   first; while killed (or the state is unreadable) the call is answered
 //!   with the stable `BRIDGE_KILLED` taxonomy code, fail closed, and the

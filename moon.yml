@@ -523,20 +523,43 @@ tasks:
     # Gen-only tooling (schemars, ts-rs, p256) must never enter a shipped
     # binary's graph. p256 signs the enclave golden fixture and is the most
     # sensitive of the three: a software P-256 stack has no business inside
-    # a binary whose signing story is the Secure Enclave. The desktop crate
-    # is checked for ts-rs only: Tauri's macro stack carries its own
-    # schemars 0.8 - Tauri's dependency, not our gen feature (schemars 1,
-    # off by default, asserted out of the host binary below).
-    description: 'Gen-only tooling (schemars, ts-rs, p256) stays out of every shipped binary dependency graph'
+    # a binary whose signing story is the Secure Enclave. schemars is a
+    # special case since ADR-0034: rmcp (the MCP SDK) legitimately uses
+    # schemars 1 at runtime for its tool-schema model, so the host graph is
+    # allowed to reach schemars through rmcp and ONLY through rmcp - our own
+    # gen-only envelope-schema feature (also schemars 1) must stay out, and
+    # the inverse-tree check below pins exactly that. The desktop crate is
+    # checked for ts-rs only: Tauri's macro stack carries its own schemars
+    # 0.8 - Tauri's dependency, not our gen feature.
+    description: 'Gen-only tooling (schemars via non-rmcp paths, ts-rs, p256) stays out of every shipped binary dependency graph'
     script: |
       set -eu
       tree="$(cargo tree -e normal -p chromium-bridge --locked)"
-      for crate in schemars ts-rs p256; do
+      for crate in ts-rs p256; do
           if printf '%s\n' "$tree" | grep -q "$crate"; then
               echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
               exit 1
           fi
       done
+      # Every path from schemars up to the host binary must go through rmcp:
+      # the depth-1 entries of the inverse tree are schemars's direct
+      # dependents, and rmcp must be the only one. Fail closed: if schemars
+      # is in the graph, the inverse tree must resolve (an ambiguous spec -
+      # two schemars majors, exactly the leak this gate exists to catch -
+      # errors rather than passing silently).
+      if printf '%s\n' "$tree" | grep -q schemars; then
+          inverse="$(cargo tree -e normal -p chromium-bridge --locked -i schemars --prefix depth)"
+          if ! printf '%s\n' "$inverse" | grep -q '^0schemars '; then
+              echo "could not resolve the schemars inverse tree:" >&2
+              printf '%s\n' "$inverse" >&2
+              exit 1
+          fi
+          if printf '%s\n' "$inverse" | grep -E '^1[^0-9]' | grep -qv '^1rmcp '; then
+              echo "schemars reached the chromium-bridge binary graph outside rmcp:" >&2
+              printf '%s\n' "$inverse" >&2
+              exit 1
+          fi
+      fi
       tree="$(cargo tree -e normal -p chromium-bridge-desktop --locked)"
       if printf '%s\n' "$tree" | grep -q ts-rs; then
           echo "ts-rs leaked into the chromium-bridge-desktop binary dependency graph" >&2

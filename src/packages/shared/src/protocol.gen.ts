@@ -7,9 +7,19 @@
 // version; bumped only when the bridge wire contract changes incompatibly.
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
-// The MCP JSON-RPC protocol revision the Rust server pins and returns from
-// `initialize` (protocol.rs MCP_PROTOCOL_VERSION, per docs/adr/0007).
-export const MCP_PROTOCOL_VERSION = "2025-06-18";
+// The newest MCP JSON-RPC protocol revision the Rust server serves
+// (protocol.rs MCP_PROTOCOL_VERSION, per docs/adr/0034): advertised by
+// `server/discover` in `supportedVersions`.
+export const MCP_PROTOCOL_VERSION = "2026-07-28";
+
+// The `_meta` key strings of the stateless era (ADR-0034), single-sourced
+// from protocol.rs. Every stateless request's `params._meta` MUST carry
+// BOTH the protocol version and the client capabilities (an empty object
+// suffices); the server/discover result carries the server identity under
+// the serverInfo key.
+export const MCP_META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
+export const MCP_META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
+export const MCP_META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
 
 // The capability groupings for connection-time negotiation: each capability
 // covers a set of tools sharing a Chrome permission. On connect the extension

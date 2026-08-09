@@ -12,7 +12,10 @@
 use chromium_bridge_core::audit::extension_kind_wire_names;
 use chromium_bridge_core::error::ERROR_SPECS;
 use chromium_bridge_core::identity::{EXTENSION_MANIFEST_KEY, NATIVE_HOST_ID, PINNED_EXTENSION_ID};
-use chromium_bridge_core::protocol::{BRIDGE_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION};
+use chromium_bridge_core::protocol::{
+    BRIDGE_PROTOCOL_VERSION, MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION,
+    MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
+};
 use chromium_bridge_core::tools::{all, CAPABILITIES};
 use serde_json::{json, Value};
 
@@ -59,6 +62,11 @@ fn main() -> Result<(), serde_json::Error> {
     let out = json!({
         "protocolVersion": BRIDGE_PROTOCOL_VERSION,
         "mcpProtocolVersion": MCP_PROTOCOL_VERSION,
+        "mcpMetaKeys": {
+            "protocolVersion": MCP_META_PROTOCOL_VERSION,
+            "clientCapabilities": MCP_META_CLIENT_CAPABILITIES,
+            "serverInfo": MCP_META_SERVER_INFO,
+        },
         "auditForwardedKinds": extension_kind_wire_names(),
         "identity": {
             "nativeMessagingHostId": NATIVE_HOST_ID,

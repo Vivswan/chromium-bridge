@@ -32,6 +32,7 @@ pub(crate) mod fsguard;
 pub mod identity;
 pub mod ipc;
 pub mod kill;
+pub mod mcp;
 pub mod mcp_server;
 pub mod native_host;
 pub mod presence;

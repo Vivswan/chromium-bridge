@@ -61,6 +61,11 @@ interface ContractCapability {
 interface Contract {
   protocolVersion: number;
   mcpProtocolVersion: string;
+  mcpMetaKeys: {
+    protocolVersion: string;
+    clientCapabilities: string;
+    serverInfo: string;
+  };
   auditForwardedKinds: string[];
   identity: {
     nativeMessagingHostId: string;
@@ -349,9 +354,19 @@ const protocolOut = `// GENERATED from the Rust core (src/packages/core/src/prot
 // version; bumped only when the bridge wire contract changes incompatibly.
 export const BRIDGE_PROTOCOL_VERSION = ${contract.protocolVersion};
 
-// The MCP JSON-RPC protocol revision the Rust server pins and returns from
-// \`initialize\` (protocol.rs MCP_PROTOCOL_VERSION, per docs/adr/0007).
+// The newest MCP JSON-RPC protocol revision the Rust server serves
+// (protocol.rs MCP_PROTOCOL_VERSION, per docs/adr/0034): advertised by
+// \`server/discover\` in \`supportedVersions\`.
 export const MCP_PROTOCOL_VERSION = ${JSON.stringify(contract.mcpProtocolVersion)};
+
+// The \`_meta\` key strings of the stateless era (ADR-0034), single-sourced
+// from protocol.rs. Every stateless request's \`params._meta\` MUST carry
+// BOTH the protocol version and the client capabilities (an empty object
+// suffices); the server/discover result carries the server identity under
+// the serverInfo key.
+export const MCP_META_PROTOCOL_VERSION = ${JSON.stringify(contract.mcpMetaKeys.protocolVersion)};
+export const MCP_META_CLIENT_CAPABILITIES = ${JSON.stringify(contract.mcpMetaKeys.clientCapabilities)};
+export const MCP_META_SERVER_INFO = ${JSON.stringify(contract.mcpMetaKeys.serverInfo)};
 
 // The capability groupings for connection-time negotiation: each capability
 // covers a set of tools sharing a Chrome permission. On connect the extension

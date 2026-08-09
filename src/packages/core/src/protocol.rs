@@ -120,11 +120,6 @@ pub struct RpcError {
 }
 
 impl JsonRpc {
-    #[allow(dead_code)]
-    pub fn is_notification(&self) -> bool {
-        self.id.is_none()
-    }
-
     /// Build a successful response echoing the request id.
     pub fn ok(id: Value, result: Value) -> Self {
         JsonRpc {
@@ -150,19 +145,6 @@ impl JsonRpc {
                 message: message.into(),
                 data: None,
             }),
-        }
-    }
-
-    /// Build a notification (no id, no response expected).
-    #[allow(dead_code)]
-    pub fn notification(method: impl Into<String>, params: Value) -> Self {
-        JsonRpc {
-            jsonrpc: Some("2.0".into()),
-            id: None,
-            method: Some(method.into()),
-            params: Some(params),
-            result: None,
-            error: None,
         }
     }
 }
@@ -235,17 +217,42 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 // 3. Internal bridge envelope (MCP server <-> native host <-> extension)
 // ----------------------------------------------------------------------------
 
-/// The MCP JSON-RPC protocol revision this server implements: the value
-/// `initialize` returns as `protocolVersion` (mcp_server.rs) and the revision
-/// docs/compatibility.md documents. Pinned per docs/adr/0007. The protocol
-/// e2e and adversarial suites assert the served value, and the contract
-/// emitter carries it into the generated TS (protocol.gen.ts) so no TS
-/// consumer re-types the date.
-pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+/// The newest MCP JSON-RPC protocol revision this server implements:
+/// `2026-07-28`, the stateless era (ADR-0034, superseding ADR-0007's pinned
+/// `2025-06-18`). The protocol layer itself is the official `rmcp` SDK
+/// (see [`crate::mcp`]); this pin exists so the repository keeps one source
+/// of truth for the revision - the contract emitter carries it into the
+/// generated TS (protocol.gen.ts), docs literals are checked against it,
+/// and a unit test (mcp/handler.rs) asserts it equals the newest revision
+/// rmcp serves, so the pin can never drift from the wire.
+pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+
+/// How long (milliseconds) a client may cache the `server/discover` and
+/// `tools/list` results, stamped as `ttlMs` (MCP 2026-07-28). One hour: the
+/// catalogue and capabilities are static per binary, so the TTL only bounds
+/// how stale a client can be across an upgrade.
+pub const MCP_CACHE_TTL_MS: u64 = 3_600_000;
+
+/// The `params._meta` key carrying a request's claimed protocol revision
+/// (MCP 2026-07-28, ADR-0034). rmcp owns the enforcement; these key consts
+/// exist so the TS side (protocol.gen.ts, via the contract emitter) spells
+/// each wire literal exactly once, and a unit test (mcp/handler.rs) pins
+/// every const to the key rmcp actually reads and writes.
+pub const MCP_META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+
+/// The `params._meta` key carrying the client's declared capabilities.
+/// rmcp requires this on every stateless (2026-07-28) request, alongside
+/// [`MCP_META_PROTOCOL_VERSION`]; an empty object is sufficient.
+pub const MCP_META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+
+/// The `_meta` key on modern results carrying the server identity
+/// (`{name, version}`) - MCP 2026-07-28's replacement for the `initialize`
+/// result's `serverInfo` field.
+pub const MCP_META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 
 /// The INTERNAL bridge protocol version (MCP server <-> native host <->
 /// extension). This is NOT the MCP JSON-RPC version (that is the date string
-/// [`MCP_PROTOCOL_VERSION`], see docs/adr/0007) and NOT the extension release version
+/// [`MCP_PROTOCOL_VERSION`], see docs/adr/0034) and NOT the extension release version
 /// (Cargo is the release version source). It is a small monotonically
 /// increasing integer, bumped only when the bridge wire contract
 /// ([`BridgeReq`]/[`BridgeResp`] shape, hello handshake, op/capability
