@@ -1,0 +1,67 @@
+# Agent-harness interop smoke (repo-owned, like nightly-fuzz.yml): prove
+# real agent-harness CLIs (Claude Code, Codex) can connect to our stdio MCP
+# server, capture the exact JSON-RPC frames each harness sends (uploaded as
+# an artifact; `--mint-seeds` turns them into mcp_jsonrpc fuzz corpus
+# locally), and log which OPENING method each harness used. That
+# opening-method line is the ADR-0034 canary: when every harness opens with
+# the modern 2026-07-28 `server/discover` instead of the legacy
+# `initialize`, the temporary legacy shim can be deleted.
+#
+# Informational by PLACEMENT, not by continue-on-error: this workflow is not
+# part of the all-green gate (it never touches ci.yml or checks.yml), so a
+# red night blocks no merge - but a failure is still a real red run to read,
+# never swallowed.
+#
+# The driver is invoked directly (like nightly-fuzz.yml invokes
+# fuzz-smoke.ts): the harness-smoke moon task is runInCI:false, which moon
+# does not resolve at all when CI=true - the same reason checks.yml's
+# browser job calls its suites directly.
+
+name: Harness Smoke
+
+on:
+  schedule:
+    # Off-peak, distinct from nightly.yml (05:17) and nightly-fuzz.yml (04:47).
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: harness-smoke
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  harness-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The driver is self-contained (node builtins only), so no bun install.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo build --release
+      # Latest on purpose, not pinned: the whole point of this canary is to
+      # observe what CURRENT harness releases send. Best-effort: a harness
+      # whose install fails is skipped by the driver; --require-any below
+      # keeps an install-failed (or config-entry-only) run from reading green.
+      - name: Install harness CLIs (best-effort, deliberately unpinned)
+        run: |
+          npm install -g @anthropic-ai/claude-code || echo "::warning::@anthropic-ai/claude-code install failed"
+          npm install -g @openai/codex || echo "::warning::@openai/codex install failed"
+      - name: Harness smoke (fails unless a harness completes a live MCP connection)
+        run: bun tests/harness/run.ts --require-any
+      # The captures (frames + summary.json, including the canary data) are
+      # the run's real output; upload them green or red.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: harness-captures-${{ github.run_attempt }}
+          path: build/harness-captures/
+          if-no-files-found: warn

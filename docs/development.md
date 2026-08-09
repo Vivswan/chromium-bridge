@@ -160,7 +160,7 @@ The full task menu, by area:
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `desktop-ui:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared` + `gen-app-types`), `gen-icons`, `check-gen`, `check-gen-app`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
-| Interop suites | `test-interop` (official MCP SDK v2 client against the release binary) |
+| Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the ADR-0034 opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Desktop app | `bundle-app`, `dmg-app`, `run-app`, `install-app`, `check-app-signing`, `check-app-rust`, `desktop-ui:test` |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
