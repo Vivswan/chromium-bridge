@@ -46,6 +46,21 @@
 "\"code\""
 "\"message\""
 
+# MCP 2026-07-28 era negotiation (server/discover, _meta version marker)
+"\"io.modelcontextprotocol/protocolVersion\""
+"\"io.modelcontextprotocol/clientCapabilities\""
+"\"io.modelcontextprotocol/serverInfo\""
+"\"server/discover\""
+"\"tools/list\""
+"\"tools/call\""
+"\"2026-07-28\""
+"\"_meta\""
+"\"resultType\""
+"\"supportedVersions\""
+"\"ttlMs\""
+"\"cacheScope\""
+"\"initialize\""
+
 # Host-control frame tags (EnclaveControl / AdminControl)
 "\"enclave_challenge\""
 "\"enclave_proof\""
