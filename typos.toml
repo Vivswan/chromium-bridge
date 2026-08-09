@@ -2,9 +2,9 @@
 # Run via `moon run typos`; wired into `moon run ci` and the lefthook pre-commit hook.
 
 [files]
-# Generated release history and vendored supply-chain audits are not ours to
-# respell; localized docs will arrive with the translation phases.
-extend-exclude = ["CHANGELOG.md", "supply-chain/"]
+# The generated release history is not ours to respell; localized docs will
+# arrive with the translation phases.
+extend-exclude = ["CHANGELOG.md"]
 
 [default]
 extend-ignore-re = [

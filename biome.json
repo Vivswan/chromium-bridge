@@ -6,14 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": [
-      "**",
-      "!supply-chain",
-      "!tests/fixtures",
-      "!**/dist",
-      "!**/*.css",
-      "!src/apps/web/**/*.astro"
-    ]
+    "includes": ["**", "!tests/fixtures", "!**/dist", "!**/*.css", "!src/apps/web/**/*.astro"]
   },
   "formatter": {
     "enabled": true,

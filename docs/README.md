@@ -90,6 +90,7 @@ choices do not get an ADR.
 | [0032](./adr/0032-host-owned-policy-settings.md) | Host-owned policy settings and paired language sync | Accepted |
 | [0033](./adr/0033-adopt-repo-platform-fleet-template.md) | Full adoption of the repo-platform fleet template | Accepted |
 | [0034](./adr/0034-mcp-2026-07-28-stateless.md) | MCP 2026-07-28 (stateless) on the official rmcp SDK | Accepted |
+| [0035](./adr/0035-automated-supply-chain-review.md) | Automated supply-chain review replaces the cargo-vet gate | Accepted |
 
 ## ADR writing conventions
 

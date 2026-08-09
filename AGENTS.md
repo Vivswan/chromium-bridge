@@ -213,5 +213,7 @@ rebuild plan, ADR-0023):
   `serde`) has had more hostile review than anything we write ourselves.
   Bespoke code is reserved for what genuinely has no library - kernel-attested
   peer identity, our IPC and native-messaging protocol - and is compensated
-  with fuzzing and adversarial tests. `deny.toml` and supply-chain review gate
-  every new dependency; the bar is well-vetted, not few.
+  with fuzzing and adversarial tests. Automated gates - `deny.toml`
+  (cargo-deny), cargo-audit, the managed ci.yml's PR-time dependency
+  review job, and Dependabot (ADR-0035) - screen every new dependency; the
+  bar is well-vetted, not few.

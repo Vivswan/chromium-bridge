@@ -210,6 +210,33 @@ gh attestation verify chromium-bridge --repo Vivswan/chromium-bridge
 shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.binary.sha256
 ```
 
+### Dependency supply chain (ADR-0035)
+
+Dependency review is fully automated; there is no manual per-crate audit
+step ([ADR-0035](./docs/adr/0035-automated-supply-chain-review.md), which
+retired the cargo-vet gate). The stack:
+
+- **cargo-deny + cargo-audit** (RUSTSEC advisories, the license allow-list
+  and banned sources in `deny.toml`) run inside the all-green gate on every
+  PR and push, and again in the weekly security.yml sweep so advisories
+  disclosed between pushes still surface.
+- **GitHub's dependency-review action** runs on every PR through the
+  managed ci.yml's fleet-delivered job (Vivswan/repo-platform, updated by
+  sync PRs), failing the gate on dependencies with known advisories. It
+  only has a diff to review on pull_request events; direct pushes stay
+  covered by cargo-deny + cargo-audit in the same gate plus the weekly
+  sweep. License enforcement is cargo-deny's alone: mirroring the
+  allow-list into the action was evaluated and rejected because the
+  dependency graph misparses several Cargo.lock licenses (ADR-0035).
+- **Dependabot** watches cargo, bun, and GitHub Actions and raises alerts
+  and bump PRs.
+
+What this asserts is "no unwaived known advisory (the RUSTSEC exceptions
+reviewed into `deny.toml`'s ignore list stay waived) and an allowed
+license", not "a human audited this code"; the residual risk (a novel
+malicious crate or undiscovered flaw with no published advisory) is
+recorded in ADR-0035.
+
 ### CI supply chain under the fleet template (ADR-0033)
 
 CI configuration is fleet-managed (Vivswan/repo-platform): the managed
