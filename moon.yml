@@ -66,7 +66,7 @@ tasks:
     # the same list the old `just ci` ran: rust fmt/clippy/nextest+doctests,
     # typos/machete, TS typecheck/biome/tests/extension build, protocol e2e,
     # and the contract + hygiene checks. CI runs MORE on top: the
-    # macOS/Windows rust matrices, cargo-vet, linux-install, the
+    # macOS/Windows rust matrices, dependency review, linux-install, the
     # adversarial/chaos suites, the browser suites (isolated Chrome), the
     # web build, and the macOS-only desktop gate (check-app-rust needs the
     # Tauri GUI toolchain). Every dep here is uncached (see the header) and

@@ -86,15 +86,16 @@ self-contained on node builtins so they run without a `bun install`: the
 release workflow builds the binary before installing the workspace, and the
 nightly fuzz job never installs it at all.
 
-Rust dependencies are gated by supply-chain review (`cargo vet`, the
-`cargo-vet` CI job). Adding or bumping a crate fails CI until the new version
-has a recorded decision in `supply-chain/`: run `cargo vet` to see what is
-missing, then `cargo vet certify` if you actually reviewed the code, or
-`cargo vet add-exemption` to record a deliberate exemption. The initial
-baseline exempts the pre-existing tree; the point of the gate is that no new
-code enters the build without someone choosing to let it in. The fuzz
-workspace (`src/packages/core/fuzz/`) is the one deliberate exception to the
-vet gate; the [Fuzzing](#fuzzing) section records that scope decision.
+Rust dependencies are gated by automated supply-chain checks
+([ADR-0035](./adr/0035-automated-supply-chain-review.md)): `cargo deny`
+(license allow-list, banned sources, RUSTSEC advisories) and `cargo audit`
+run in every CI gate and in the weekly security sweep, PRs additionally get
+the GitHub dependency-review action (an advisory diff, via the
+platform-managed job in the managed ci.yml), and Dependabot watches cargo,
+bun, and GitHub Actions. Adding or bumping a crate fails CI on a known
+advisory or a license outside `deny.toml`'s allow list; there is no manual
+per-crate audit step. Run `moon run audit` to reproduce the
+cargo-deny/audit pass locally.
 
 ## Common tasks
 
@@ -126,8 +127,8 @@ after a cross-cutting change.
 `just ci` ran: rust fmt/clippy/nextest+doctests, typos/machete, TS
 typecheck/biome/tests/extension build, protocol e2e, and the contract +
 hygiene checks. CI runs more on top: the macOS/Windows rust matrices,
-cargo-vet, linux-install, the adversarial/chaos suites, the browser suites,
-the web build, and the macOS-only desktop gate.
+dependency review, linux-install, the adversarial/chaos suites, the browser
+suites, the web build, and the macOS-only desktop gate.
 
 The root `package.json` scripts are thin aliases that delegate to the
 corresponding moon task, so both entry points share one implementation. The
@@ -391,14 +392,13 @@ the exclusion, with its reason, to the list above. The exact rule, with its
 scoping, lives in
 [SECURITY.md](../SECURITY.md#security-relevant-changes-review-bar).
 
-Supply-chain scope: the fuzz workspace sits outside the `cargo vet` gate by
-design. It runs in nightly CI only, is never linked into a shipped binary,
-and its third-party direct dependencies are limited to `libfuzzer-sys`,
-`arbitrary`, and `serde_json` (alongside `chromium-bridge-core` itself, the
-crate under test); `derive_arbitrary` comes in transitively through
-`arbitrary`'s derive feature. A new fuzz dependency still goes through the
-`cargo deny` pass over `fuzz/Cargo.toml` in the security workflow, plus
-ordinary PR review.
+Supply-chain scope: the fuzz workspace runs in nightly CI only, is never
+linked into a shipped binary, and its third-party direct dependencies are
+limited to `libfuzzer-sys`, `arbitrary`, and `serde_json` (alongside
+`chromium-bridge-core` itself, the crate under test); `derive_arbitrary`
+comes in transitively through `arbitrary`'s derive feature. A new fuzz
+dependency still goes through the `cargo deny` pass over `fuzz/Cargo.toml`
+in the security workflow, plus ordinary PR review.
 
 ## Logging
 
