@@ -3,7 +3,7 @@ name = "chromium-bridge-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
-license = "Apache-2.0"
+license-file = "../../../../LICENSE"
 
 [package.metadata]
 cargo-fuzz = true

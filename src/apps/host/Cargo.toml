@@ -3,7 +3,7 @@ name = "chromium-bridge"
 version.workspace = true
 edition.workspace = true
 description = "Bridge an MCP client to your real Chromium browser via an extension + native messaging host"
-license.workspace = true
+license-file.workspace = true
 
 [[bin]]
 name = "chromium-bridge"

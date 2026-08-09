@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "description": "Browser-bridge test harnesses: DOM-layer (bun + Chrome CDP) and extension smoke (puppeteer).",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -69,7 +69,9 @@ native-messaging host id `com.vivswan.chromium_bridge.host`, enclave keychain
 label `com.vivswan.chromium-bridge.enclave.signing.v1`. No `upstream` remote
 is configured, and the rebrand ended the keep-mergeable-with-upstream policy:
 port upstream fixes manually and by judgment, never shape our changes around
-a clean `git merge`. `LICENSE` and git history keep the upstream name.
+a clean `git merge`. `LICENSE` is the Individual and Small Organization
+License 1.0.0; the upstream Apache-2.0 attribution lives in `LICENSE-APACHE`
+and `NOTICE`, and the pre-fork commits remain in history.
 
 **The full development process is [`CONTRIBUTING.md`](./CONTRIBUTING.md) - it
 is authoritative; this file only summarizes.**

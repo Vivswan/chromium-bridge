@@ -3,7 +3,7 @@ name = "chromium-bridge-desktop"
 version.workspace = true
 edition.workspace = true
 description = "Chromium Bridge control panel - Tauri v2 desktop app (ADR-0029)"
-license.workspace = true
+license-file.workspace = true
 
 [[bin]]
 name = "chromium-bridge-desktop"

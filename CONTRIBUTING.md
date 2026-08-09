@@ -186,4 +186,5 @@ it. CI fails if the crate and extension versions drift.
 ## License
 
 By contributing you agree your contributions are licensed under
-[Apache-2.0](./LICENSE).
+the
+[Individual and Small Organization License 1.0.0](./LICENSE).
