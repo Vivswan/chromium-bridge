@@ -49,7 +49,9 @@ sent:
 ## Probes without model calls
 
 - Claude Code: `claude mcp list` health-checks every approved server with a
-  real MCP handshake - a genuine connection probe, no model call.
+  real MCP handshake - a genuine connection probe, no model call. (It runs
+  unauthenticated today; a claude release that starts requiring login for
+  it would read as a red night rather than a server regression.)
 - Codex: `codex mcp list --json` only verifies registration (reported as
   "configured"). The live probe runs a REAL codex agent session
   (read-only sandbox), so it requires `OPENAI_API_KEY` plus the explicit

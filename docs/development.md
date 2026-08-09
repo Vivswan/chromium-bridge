@@ -315,7 +315,9 @@ Three directories with different lifecycles, plus the failure reports:
   future run replays them first. The structured targets
   (`handshake_verify`, `enclave_challenge`) take `Arbitrary`-derived input
   whose encoding is unstable across `arbitrary` versions, so they get no
-  committed seeds; their regressions get unit tests instead.
+  committed seeds; their regressions get unit tests instead. One seed dir
+  (`seeds/mcp_dispatch/`) is staged for a deferred in-process rmcp-service
+  target and is inert until that target exists (see its README).
 - `fuzz/corpus/<target>/`: gitignored, fuzzer-generated. Nightly CI restores
   and saves it through `actions/cache`, so exploration accumulates across
   runs instead of restarting from zero every night.
