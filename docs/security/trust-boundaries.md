@@ -11,6 +11,10 @@ MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)->
 
 ## Boundary 1: MCP client <-> Rust MCP server  (stdio, JSON-RPC 2.0)
 
+- **Protocol engine**: the JSON-RPC/MCP dialect on this boundary is served
+  by the official `rmcp` SDK behind the serve loop's own line caps and
+  parse gates ([ADR-0034](../adr/0034-mcp-2026-07-28-stateless.md) records
+  the trust-surface decision).
 - **Direction of trust**: the client harness is trusted only once it is
   *admitted*. This boundary carries both protocol correctness and, since
   [ADR-0024](../adr/0024-multi-client-attested-pairing-and-broker.md),

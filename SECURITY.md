@@ -370,5 +370,6 @@ about bespoke parsing or semantic-validation logic rather than `serde_json`.
 Extra review care applies to the security-critical surfaces listed in
 [AGENTS.md](AGENTS.md):
 `src/packages/core/src/ipc/`, `protocol.rs`, `broker.rs`, `allowlist.rs`,
-`revocation.rs`, `kill.rs`, `presence/`, `enclave/`, the extension's
+`revocation.rs`, `kill.rs`, `presence/`, `enclave/`, `registration.rs`,
+`src/packages/core/src/mcp/` (the rmcp seam, ADR-0034), the extension's
 allowlist/eval/confirmation code, and `wxt.config.ts`.

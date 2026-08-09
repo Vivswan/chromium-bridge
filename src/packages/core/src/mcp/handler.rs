@@ -22,8 +22,10 @@ use crate::protocol::MCP_CACHE_TTL_MS;
 use crate::session::Session;
 use crate::tools;
 
-/// The server implementation identity every reply advertises (the
-/// `initialize` result's `serverInfo` and the modern results' `_meta`).
+/// The server implementation identity advertised where the protocol carries
+/// it: the legacy `initialize` result's `serverInfo` and the modern
+/// `server/discover` result's `_meta` (discover-only; ADR-0034 records the
+/// SHOULD-gap on other results).
 fn implementation() -> Implementation {
     Implementation::new("chromium-bridge", env!("CARGO_PKG_VERSION"))
 }

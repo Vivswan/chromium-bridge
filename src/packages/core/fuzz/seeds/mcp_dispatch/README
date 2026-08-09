@@ -1,0 +1,6 @@
+These seeds are STAGED for a deferred fuzz target: the bespoke
+pure-dispatch surface the `mcp_dispatch` target was written against was
+replaced by rmcp before the target landed (deferral recorded in commit
+86b3aa0). No target consumes them today - `cargo fuzz list` drives
+fuzz-smoke, so they are inert. Consume or migrate them when an in-process
+rmcp-service fuzz target exists.

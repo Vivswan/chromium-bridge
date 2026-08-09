@@ -2,8 +2,9 @@
 //!
 //! MCP 2026-07-28 is stateless: there is no mandatory `initialize`
 //! handshake, every request may claim its protocol revision in
-//! `params._meta`, results carry `resultType` and the server identity in
-//! `_meta`, and clients (re)discover the server via `server/discover`.
+//! `params._meta`, results carry `resultType` (the `server/discover`
+//! result also carries the server identity in `_meta`), and clients
+//! (re)discover the server via `server/discover`.
 //! Rather than hand-rolling that dialect, this module delegates the whole
 //! protocol surface - lifecycle, per-request version validation, the
 //! `-32022` unsupported-version refusal, legacy `initialize` negotiation

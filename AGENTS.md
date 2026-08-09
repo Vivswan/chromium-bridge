@@ -164,6 +164,7 @@ wires it; moon itself comes from `proto install`). Browser suites
   PR. Security-critical surfaces (`src/packages/core/src/ipc/`,
   `src/packages/core/src/protocol.rs`, `broker.rs`, `allowlist.rs`,
   `revocation.rs`, `kill.rs`, `presence/`, `enclave/`, `registration.rs`,
+  `src/packages/core/src/mcp/`,
   the extension's allowlist/eval/confirmation code,
   `src/apps/extension/wxt.config.ts`) deserve extra review care - see
   `SECURITY.md`.
