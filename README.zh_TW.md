@@ -297,4 +297,6 @@ Worker 主控台 (找 `[bb]` 日誌)。完整手冊: [docs/cli.md](./docs/cli.md
 
 ## 授權
 
-[Apache-2.0](./LICENSE)。版權歸 browser-bridge 貢獻者所有。
+[Individual and Small Organization License 1.0.0](./LICENSE.md)。包含來自
+[browser-bridge](https://github.com/whg517/browser-bridge) 的 Apache-2.0 程式碼;
+參見 [LICENSE-APACHE](./LICENSE-APACHE) 與 [NOTICE](./NOTICE)。

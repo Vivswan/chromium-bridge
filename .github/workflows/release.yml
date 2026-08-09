@@ -120,7 +120,7 @@ jobs:
           NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
           mkdir -p "$NAME/extension"
           cp -r build/extension/chrome-mv3 "$NAME/extension/dist"
-          cp LICENSE README.md "$NAME/"
+          cp LICENSE.md README.md "$NAME/"
           # RELEASE.txt records which release this archive came from, so a
           # user can pick the matching published checksum / provenance
           # attestation when verifying by hand (SECURITY.md "Release artifact

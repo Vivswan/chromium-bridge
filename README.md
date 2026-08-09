@@ -412,6 +412,6 @@ end-to-end, adversarial, and chaos tests; the wire parsers are fuzzed. See
 
 ## License
 
-[Individual and Small Organization License 1.0.0](./LICENSE). Incorporates code
+[Individual and Small Organization License 1.0.0](./LICENSE.md). Incorporates code
 from [browser-bridge](https://github.com/whg517/browser-bridge) under
 Apache-2.0; see [LICENSE-APACHE](./LICENSE-APACHE) and [NOTICE](./NOTICE).

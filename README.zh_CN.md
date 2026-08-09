@@ -297,4 +297,6 @@ Code 里用 `/mcp` 重连) 和 `chrome://extensions` 里扩展的 Service Worker
 
 ## 许可证
 
-[Apache-2.0](./LICENSE)。版权归 browser-bridge 贡献者所有。
+[Individual and Small Organization License 1.0.0](./LICENSE.md)。包含来自
+[browser-bridge](https://github.com/whg517/browser-bridge) 的 Apache-2.0 代码;
+参见 [LICENSE-APACHE](./LICENSE-APACHE) 和 [NOTICE](./NOTICE)。

@@ -17,8 +17,8 @@ exclude = ["src/packages/core/fuzz"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license-file = "LICENSE"
-# Source-available (see LICENSE); the crates ship as release binaries, never
+license-file = "LICENSE.md"
+# Source-available (see LICENSE.md); the crates ship as release binaries, never
 # to crates.io. Also lets cargo-deny's license gate treat them as private.
 publish = false
 

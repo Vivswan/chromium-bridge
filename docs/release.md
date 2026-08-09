@@ -59,7 +59,7 @@ scarce, and Linux uses an older glibc baseline to widen compatibility). For each
 1. `bun scripts/build-repro.ts` produces the deterministic release binary.
 2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` produces the extension bundle.
 3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (`.zip` on
-   Windows), containing the binary, `extension/dist`, `RELEASE.txt`, `LICENSE`, and
+   Windows), containing the binary, `extension/dist`, `RELEASE.txt`, `LICENSE.md`, and
    `README.md`.
 4. A `.sha256` for the archive and a separate `.binary.sha256` for the binary inside it
    are generated, and a build-provenance attestation covers both.
