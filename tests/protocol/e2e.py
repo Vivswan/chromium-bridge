@@ -15,7 +15,11 @@ the same binary), and test_foreign_peer_is_rejected confirms that a non-binary
 peer connecting straight to the socket is refused.
 
 They cover the protocol layers (NM framing, MCP JSON-RPC, bridge socket) and
-the request/response correlation, including the new page_eval tool path.
+the request/response correlation, including the new page_eval tool path. The
+MCP layer is exercised in both eras: modern 2026-07-28 requests (stamped with
+the _meta protocol-version and client-capabilities keys) and the temporary
+legacy era for bare requests on initialize-opened connections (its tests are
+deleted when legacy-era support is dropped, ADR-0034).
 
 Run:
     python3 tests/protocol/e2e.py
@@ -28,6 +32,7 @@ test inside the crate cannot.
 """
 import json
 import os
+import re
 import shutil
 import socket
 import struct
@@ -215,8 +220,32 @@ def nm_read(p):
     return json.loads(p.stdout.read(n))
 
 
+# "2026-07-28" here (and "2025-06-18" in initialize below) are hard-coded on
+# purpose: this suite is a deliberately independent black-box check of the
+# served protocol. The canonical values live in
+# src/packages/core/src/protocol.rs; a re-pin there must update these
+# literals by hand (the assertions below fail until it does).
+MODERN_VERSION = "2026-07-28"
+META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+META_CAPS_KEY = "io.modelcontextprotocol/clientCapabilities"
+META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
+# The exact supported set the server advertises (discover's
+# supportedVersions and the -32022 error's data.supported). This is rmcp's
+# built-in list (ADR-0034 keeps the SDK default so legacy harnesses keep
+# negotiating); an rmcp upgrade that moves it fails here AND in the Rust
+# version-pin test, and both re-pin by hand.
+SUPPORTED_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18",
+                      "2025-11-25", "2026-07-28"]
+
+
 class McpClient:
-    """Minimal MCP JSON-RPC client over stdio to the server subprocess."""
+    """Minimal MCP JSON-RPC client over stdio to the server subprocess.
+
+    Speaks both eras: discover and the modern_* helpers stamp params with the
+    2026-07-28 _meta protocol-version AND client-capabilities keys (rmcp
+    requires both on every stateless request); the bare initialize / ping /
+    tools_list / call helpers send requests without _meta, which are served
+    the legacy era on a connection OPENED by initialize (ADR-0034)."""
 
     def __init__(self, proc):
         self.proc = proc
@@ -228,12 +257,41 @@ class McpClient:
     def recv(self):
         return json.loads(self.proc.stdout.readline())
 
+    def modern_params(self, params=None, version=MODERN_VERSION):
+        """Return `params` stamped with the modern-era _meta keys (version +
+        clientCapabilities; an empty capabilities object is sufficient).
+        `version` is overridable (including to non-string values) so the
+        version-mismatch tests can send exactly what a broken client would."""
+        p = dict(params or {})
+        p["_meta"] = {META_VERSION_KEY: version, META_CAPS_KEY: {}}
+        return p
+
+    def modern_send(self, method, params=None, _id=1, version=MODERN_VERSION):
+        self.send({"jsonrpc": "2.0", "id": _id, "method": method,
+                   "params": self.modern_params(params, version)})
+        return self.recv()
+
+    def discover(self, _id=1, meta=True, version=MODERN_VERSION):
+        """server/discover. meta=False sends the bare probe (no params at
+        all); rmcp has no bare-discover form, so the tests use it only to
+        pin the refusal/drop actuals (ADR-0034)."""
+        if not meta:
+            self.send({"jsonrpc": "2.0", "id": _id, "method": "server/discover"})
+            return self.recv()
+        return self.modern_send("server/discover", _id=_id, version=version)
+
+    def modern_tools_list(self, _id=2, version=MODERN_VERSION):
+        return self.modern_send("tools/list", _id=_id, version=version)
+
+    def modern_call(self, name, args, _id=3, version=MODERN_VERSION):
+        return self.modern_send("tools/call", {"name": name, "arguments": args},
+                                _id=_id, version=version)
+
     def initialize(self):
-        # "2025-06-18" is hard-coded on purpose: this suite is a deliberately
-        # independent black-box check of the served protocol. The canonical
-        # value is MCP_PROTOCOL_VERSION in src/packages/core/src/protocol.rs;
-        # a re-pin there must update these literals by hand (the assertions
-        # below fail until it does).
+        # Legacy-era handshake: no _meta version key, so it lands in the
+        # temporary legacy shim (ADR-0034). "2025-06-18" is hard-coded on
+        # purpose, like MODERN_VERSION above: an independent black-box pin of
+        # the shim's byte-identical behavior.
         self.send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                    "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                               "clientInfo": {"name": "e2e", "version": "0.1"}}})
@@ -255,6 +313,27 @@ class McpClient:
         self.send({"jsonrpc": "2.0", "id": _id, "method": "tools/call",
                    "params": {"name": name, "arguments": args}})
         return self.recv()
+
+
+def check_modern_shape(res, label, cache=False, server_meta=False):
+    """Assert the modern-era result envelope on `res` (a response's "result"):
+    resultType, plus - for the methods that carry them - the ttlMs/cacheScope
+    cache fields (server/discover, tools/list) and the serverInfo _meta
+    (server/discover ONLY: rmcp stamps the identity on the discover result
+    and nothing else, a recorded SHOULD-gap in ADR-0034)."""
+    check(res.get("resultType") == "complete", f"{label}: resultType is complete")
+    if server_meta:
+        si = (res.get("_meta") or {}).get(META_SERVER_INFO_KEY) or {}
+        check(si.get("name") == "chromium-bridge",
+              f"{label}: _meta serverInfo names chromium-bridge")
+        check(bool(re.match(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$",
+                            str(si.get("version") or ""))),
+              f"{label}: _meta serverInfo version is a semver")
+    else:
+        check("_meta" not in res, f"{label}: no serverInfo _meta (discover-only)")
+    if cache:
+        check(res.get("ttlMs") == 3600000, f"{label}: ttlMs is 3600000")
+        check(res.get("cacheScope") == "private", f"{label}: cacheScope is private")
 
 
 def connect_bridge(lf, timeout=5):
@@ -354,8 +433,8 @@ def serve_bridge_loop(nh, responder):
     return box
 
 
-def test_mcp_handshake_and_tools():
-    print("\n[test] MCP handshake + tools/list + ping")
+def test_modern_discover_and_tools():
+    print("\n[test] modern discover + tools/list catalogue")
     try:
         os.remove(LOCK)
     except FileNotFoundError:
@@ -366,35 +445,535 @@ def test_mcp_handshake_and_tools():
         lf = wait_lock(mcp)
         check(lf is not None, "lock file written on startup")
         c = McpClient(mcp)
-        init = c.initialize()
-        # Independent black-box pin of the served version; canonical value:
-        # MCP_PROTOCOL_VERSION in src/packages/core/src/protocol.rs.
-        check(init.get("result", {}).get("protocolVersion") == "2025-06-18",
-              "initialize returns protocolVersion 2025-06-18")
-        check("tools" in init.get("result", {}).get("capabilities", {}),
+        disc = c.discover(_id=1)
+        res = disc.get("result") or {}
+        # Independent black-box pin of the served versions; the canonical
+        # modern pin lives in src/packages/core/src/protocol.rs, the full
+        # set is rmcp's (ADR-0034).
+        check(res.get("supportedVersions") == SUPPORTED_VERSIONS,
+              "discover advertises exactly the rmcp supported set")
+        check(res.get("supportedVersions", [None])[-1] == MODERN_VERSION,
+              "the newest supported version is 2026-07-28")
+        check("tools" in (res.get("capabilities") or {}),
               "capabilities advertises tools")
-        c.initialized()
-        ping = c.ping()
-        check(ping.get("result") == {}, "ping returns empty result")
-        tools = c.tools_list()
-        names = [t["name"] for t in tools["result"]["tools"]]
+        check_modern_shape(res, "discover", cache=True, server_meta=True)
+        r = c.modern_tools_list(_id=2)
+        tres = r.get("result") or {}
+        check_modern_shape(tres, "tools/list", cache=True)
+        tools = tres.get("tools") or []
+        names = [t.get("name") for t in tools]
         check("tab_list" in names, "tools/list includes tab_list")
         check("page_eval" in names, "tools/list includes page_eval")
         check("page_snapshot_precise" in names, "tools/list includes page_snapshot_precise")
         # page_eval description must carry a HIGH RISK warning
-        ev = next(t for t in tools["result"]["tools"] if t["name"] == "page_eval")
+        ev = next((t for t in tools if t.get("name") == "page_eval"),
+                  {"description": "", "inputSchema": {}})
         check("HIGH RISK" in ev["description"], "page_eval description warns HIGH RISK")
-        check(ev["inputSchema"]["required"] == ["code"], "page_eval requires code arg")
+        check(ev["inputSchema"].get("required") == ["code"], "page_eval requires code arg")
         # precise snapshot description must warn about the debugger banner
-        ps = next(t for t in tools["result"]["tools"] if t["name"] == "page_snapshot_precise")
+        ps = next((t for t in tools if t.get("name") == "page_snapshot_precise"),
+                  {"description": ""})
         check("debugger" in ps["description"].lower(),
               "page_snapshot_precise description mentions debugger")
         check("cookie_get" in names, "tools/list includes cookie_get")
         check("storage_get" in names, "tools/list includes storage_get")
         # cookie_get description must mention httpOnly + read-only
-        ck = next(t for t in tools["result"]["tools"] if t["name"] == "cookie_get")
+        ck = next((t for t in tools if t.get("name") == "cookie_get"),
+                  {"description": ""})
         check("httpOnly" in ck["description"], "cookie_get description mentions httpOnly")
         check("masked" in ck["description"].lower(), "cookie_get description mentions masking")
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+def test_modern_discover_is_stateless():
+    """Statelessness pin: server/discover carrying its own _meta is served as
+    the FIRST request on a fresh connection - no initialize, no prior traffic
+    of any kind. The bare probe (no _meta at all) has no served form in rmcp:
+    post-open it is refused with -32602 (ADR-0034 cut the planned leniency)."""
+    print("\n[test] modern discover: stateless first request; no bare-probe form")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        r = c.discover(_id=1)
+        check(r.get("error") is None, "discover as the very first request is served")
+        res = r.get("result") or {}
+        check_modern_shape(res, "discover", cache=True, server_meta=True)
+        check(res.get("supportedVersions") == SUPPORTED_VERSIONS,
+              "supportedVersions is exactly the rmcp supported set")
+        check(isinstance((res.get("capabilities") or {}).get("tools"), dict),
+              "capabilities advertises tools as an object")
+        check(res != {} and "instructions" not in res,
+              "discover carries no instructions field")
+        check(set(res) >= {"resultType", "supportedVersions", "capabilities",
+                           "ttlMs", "cacheScope", "_meta"},
+              "discover result carries all the pinned keys")
+        # The bare probe is NOT served: a params-less request cannot satisfy
+        # the stateless metadata requirement, so it is refused as invalid
+        # params - never silently answered, never legacy-routed (the
+        # connection was opened statelessly).
+        bare = c.discover(_id=2, meta=False)
+        check((bare.get("error") or {}).get("code") == -32602,
+              "the bare probe (no _meta) is refused with -32602")
+        # A modern-era notification (no id) never gets a reply: the next
+        # frame on the wire belongs to the next request.
+        c.send({"jsonrpc": "2.0", "method": "notifications/initialized",
+                "params": c.modern_params()})
+        r3 = c.discover(_id=3)
+        check(r3.get("id") == 3 and r3.get("result") == res,
+              "a modern notification is swallowed; the next reply is the next request's")
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+def read_reply_or_eof(proc, timeout=10):
+    """One guarded readline on `proc`'s stdout: the line ("" on EOF), None on
+    timeout, or an error marker on a read exception - each distinct, so an
+    EOF assertion can never pass by accident. The drop tests must never hang
+    CI on a regression that leaves the connection open but silent; the
+    caller's cleanup kills the process, which also unblocks the parked
+    reader thread."""
+    box = {}
+
+    def _read():
+        try:
+            box["line"] = proc.stdout.readline()
+        except (ValueError, OSError) as e:
+            box["line"] = f"<readline error: {e!r}>"
+
+    t = threading.Thread(target=_read, daemon=True)
+    t.start()
+    t.join(timeout)
+    return box.get("line")
+
+
+def test_invalid_opener_drops_the_connection():
+    """The opener rule, pinned as the contract (ADR-0034): a connection's
+    FIRST request must be a legacy initialize or a well-formed stateless
+    request (_meta with a string protocolVersion AND clientCapabilities).
+    Anything else - a bare server/discover probe included - fails the rmcp
+    opener: the connection drops without a reply and the stdio server exits.
+    Fail closed, never serve a peer whose era cannot be established. (A bare
+    ping is the one pre-open exception: the spec allows ping at any time,
+    but answering it does NOT open the connection.)"""
+    print("\n[test] invalid opener: bare first request -> connection dropped")
+    for first, label in [
+        ({"jsonrpc": "2.0", "id": 1, "method": "server/discover"},
+         "bare server/discover"),
+        ({"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+         "bare tools/list"),
+        ({"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+          "params": {"_meta": {META_VERSION_KEY: MODERN_VERSION}}},
+         "_meta missing clientCapabilities"),
+    ]:
+        try:
+            os.remove(LOCK)
+        except FileNotFoundError:
+            pass
+        mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        try:
+            wait_lock(mcp)
+            c = McpClient(mcp)
+            c.send(first)
+            line = read_reply_or_eof(mcp)
+            check(line == "", f"{label} as the first request gets no reply (EOF)")
+            try:
+                mcp.wait(timeout=5)
+                exited = True
+            except subprocess.TimeoutExpired:
+                exited = False
+            check(exited, f"{label}: the server closed the connection (fail closed)")
+        finally:
+            if mcp.poll() is None:
+                mcp.kill()
+            try:
+                mcp.stdin.close()
+            except Exception:
+                pass
+            mcp.wait(timeout=3)
+    # The ping exception: answered pre-open, but NOT an opener - the next
+    # bare request still fails the opener and drops the connection.
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        r = c.ping(_id=1)
+        check(r.get("id") == 1 and r.get("result") == {},
+              "a bare ping before any opener is answered {}")
+        c.send({"jsonrpc": "2.0", "id": 2, "method": "server/discover"})
+        line = read_reply_or_eof(mcp)
+        check(line == "", "ping does not open the connection: the next bare "
+              "request still drops it")
+    finally:
+        if mcp.poll() is None:
+            mcp.kill()
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+def test_modern_tools_list_cache_and_order():
+    print("\n[test] modern tools/list: cache fields + deterministic order")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    mcp2 = None
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        r1 = c.modern_tools_list(_id=1)
+        r2 = c.modern_tools_list(_id=2)
+        res1 = r1.get("result") or {}
+        res2 = r2.get("result") or {}
+        check_modern_shape(res1, "tools/list", cache=True)
+        tools = res1.get("tools") or []
+        check(all(t.get("name") and t.get("description") and t.get("inputSchema")
+                  for t in tools) and bool(tools),
+              "every tool carries name/description/inputSchema")
+        names1 = [t.get("name") for t in tools]
+        names2 = [t.get("name") for t in res2.get("tools") or []]
+        check(bool(names1) and names1 == names2,
+              "tool order is identical across two consecutive calls")
+        # Determinism must hold across processes too, not just within one
+        # process's startup ordering: a fresh server lists the same order.
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=5)
+        try:
+            os.remove(LOCK)
+        except FileNotFoundError:
+            pass
+        mcp2 = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        wait_lock(mcp2)
+        r3 = McpClient(mcp2).modern_tools_list(_id=3)
+        names3 = [t.get("name") for t in (r3.get("result") or {}).get("tools") or []]
+        check(bool(names1) and names1 == names3,
+              "tool order is identical across a server restart")
+    finally:
+        for p in (mcp, mcp2):
+            if p is None:
+                continue
+            try:
+                p.stdin.close()
+            except Exception:
+                pass
+            try:
+                p.wait(timeout=3)
+            except Exception:
+                # A server that ignores stdin EOF is a regression, but the
+                # suite must not leak it past this test: reap it hard.
+                p.kill()
+                try:
+                    p.wait(timeout=3)
+                except Exception:
+                    pass
+
+
+def test_modern_version_mismatch_is_per_request():
+    """A wrong STRING _meta protocol version gets the typed -32022 error with
+    its data payload; a NON-STRING version is malformed metadata and gets
+    -32602 (invalid params) naming the field. Both are per-request: the SAME
+    connection serves a correct request right after."""
+    print("\n[test] modern era: version mismatch -> -32022/-32602, connection survives")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        r = c.modern_tools_list(_id=51, version="2099-01-01")
+        err = r.get("error") or {}
+        check(r.get("id") == 51 and err.get("code") == -32022,
+              "wrong version -> error -32022 on the request's own id")
+        check((err.get("data") or {}).get("supported") == SUPPORTED_VERSIONS,
+              "error data lists the full supported set")
+        check((err.get("data") or {}).get("requested") == "2099-01-01",
+              "error data echoes the requested version")
+        # A non-string version cannot be read as a version claim at all, so
+        # it is refused as malformed metadata (-32602 naming the field),
+        # not as an unsupported version.
+        r = c.modern_tools_list(_id=52, version=42)
+        err = r.get("error") or {}
+        check(r.get("id") == 52 and err.get("code") == -32602,
+              "non-string version -> error -32602 on the request's own id")
+        check(META_VERSION_KEY in str(err.get("message", "")),
+              "the -32602 message names the malformed _meta field")
+        # The mismatch rule is per-request and method-blind: server/discover
+        # with a WRONG version is a mismatch too.
+        r = c.discover(_id=53, version="2099-01-01")
+        check(r.get("id") == 53 and (r.get("error") or {}).get("code") == -32022,
+              "discover with a wrong version -> error -32022")
+        r = c.modern_tools_list(_id=54)
+        res = r.get("result") or {}
+        check(r.get("id") == 54 and res.get("resultType") == "complete"
+              and bool(res.get("tools")),
+              "the same connection still serves a correct modern request")
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+def test_initialize_is_served_in_every_era():
+    """rmcp serves initialize at ANY point, modern _meta or not: it is the
+    legacy negotiation, and the era is a per-request property. The original
+    design intended a modern-era initialize to be refused with an error
+    naming 2026-07-28; the SDK's actual (recorded in ADR-0034) is to answer
+    it as a negotiation, echoing a supported requested revision. This pin
+    keeps that deviation visible."""
+    print("\n[test] initialize is served in every era (rmcp negotiation)")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        r = c.modern_send("initialize",
+                          {"protocolVersion": MODERN_VERSION, "capabilities": {},
+                           "clientInfo": {"name": "e2e", "version": "0.1"}},
+                          _id=61)
+        res = r.get("result") or {}
+        check(r.get("id") == 61 and r.get("error") is None,
+              "initialize with modern _meta is served, not refused")
+        check(res.get("protocolVersion") == MODERN_VERSION,
+              "the negotiation echoes the supported requested revision")
+        check(all(k not in res for k in ("resultType", "ttlMs", "cacheScope")),
+              "the initialize result keeps the legacy shape")
+        # An initialize requesting an UNKNOWN revision is answered with the
+        # newest supported one instead of an error (rmcp's fallback).
+        c.send({"jsonrpc": "2.0", "id": 62, "method": "initialize",
+                "params": {"protocolVersion": "1999-01-01", "capabilities": {},
+                           "clientInfo": {"name": "e2e", "version": "0.1"}}})
+        r = c.recv()
+        check((r.get("result") or {}).get("protocolVersion") == MODERN_VERSION,
+              "an unknown requested revision falls back to the newest supported")
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+def test_modern_tools_call_round_trip():
+    print("\n[test] modern tools/call round-trip via real native host")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    nh = None
+    try:
+        lf = wait_lock(mcp)
+        check(lf is not None, "lock file written")
+
+        def responder(req):
+            assert req["op"] == "tab_list", f"unexpected op {req['op']}"
+            return {"id": req["id"], "ok": True,
+                    "data": [{"id": 7, "title": "Modern E2E Tab", "url": "https://x",
+                              "active": True}]}
+
+        nh = start_bridge_host()
+        c = McpClient(mcp)
+        wait_host_ready(nh)  # let the host connect, attest, and complete the handshake
+        # serve the single tab_list request the call below will trigger
+        served = []
+        t = threading.Thread(target=lambda: served.append(serve_bridge_req(nh, responder)))
+        t.start()
+
+        # The modern era has no handshake: the tools/call is the connection's
+        # first request.
+        r = c.modern_call("tab_list", {}, _id=5)
+        t.join(timeout=3)
+        check(bool(served), "native host received the modern tools/call BridgeReq")
+        res = r.get("result") or {}
+        text = (res.get("content") or [{}])[0].get("text")
+        try:
+            data = json.loads(text) if text else []
+        except ValueError:
+            data = []  # non-JSON content (e.g. an error string) -> FAIL below
+        check(r.get("id") == 5 and bool(data)
+              and data[0].get("title") == "Modern E2E Tab",
+              "modern tools/call result carries host data")
+        check(res.get("isError") is False, "modern tools/call isError=false")
+        check_modern_shape(res, "tools/call")
+        nh.kill()
+        nh.wait(timeout=3)
+        nh = None
+    finally:
+        if nh is not None and nh.poll() is None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+# --- shim-era tests: delete when legacy-era support is dropped (ADR-0034) ---
+# On a connection OPENED by initialize, requests without the _meta
+# protocol-version key are served in the legacy era, which must stay
+# byte-identical to the pre-migration protocol until that support is
+# removed. These tests pin that byte-identity. (The rest of the suite still
+# uses the bare initialize/call helpers as session plumbing; when legacy-era
+# support goes, that plumbing moves to the modern_* helpers in the same
+# change.)
+
+
+def test_legacy_shim_handshake():
+    print("\n[test] legacy shim: initialize + ping keep the exact legacy shapes")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        init = c.initialize()
+        res = init.get("result") or {}
+        check(res.get("protocolVersion") == "2025-06-18",
+              "legacy initialize returns protocolVersion 2025-06-18")
+        check("tools" in (res.get("capabilities") or {}),
+              "legacy capabilities advertises tools")
+        check("serverInfo" in res, "legacy initialize carries serverInfo")
+        check(all(k not in res for k in ("resultType", "ttlMs", "cacheScope", "_meta")),
+              "legacy initialize has none of the modern keys")
+        # notifications/initialized is swallowed: the next reply on the wire
+        # must be the ping's (matching id), not a stray notification response.
+        c.initialized()
+        ping = c.ping(_id=5)
+        check(ping.get("id") == 5 and ping.get("result") == {},
+              "initialized is swallowed; ping returns exactly {}")
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+def test_legacy_shim_tools_list_shape():
+    print("\n[test] legacy shim: tools/list has no modern cache/meta fields")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        c.initialize()
+        c.initialized()
+        r = c.tools_list()
+        res = r.get("result") or {}
+        check(bool(res.get("tools")), "legacy tools/list still lists tools")
+        for key in ("resultType", "ttlMs", "cacheScope", "_meta"):
+            check(key not in res, f"legacy tools/list has no {key}")
+        # The era discriminator is the version KEY, not _meta presence: a
+        # request whose _meta lacks the version key (e.g. only a
+        # progressToken) still lands in the shim.
+        c.send({"jsonrpc": "2.0", "id": 6, "method": "tools/list",
+                "params": {"_meta": {"io.modelcontextprotocol/progressToken": "t1"}}})
+        r = c.recv()
+        res = r.get("result") or {}
+        check(r.get("id") == 6 and bool(res.get("tools"))
+              and all(k not in res for k in ("resultType", "ttlMs", "cacheScope", "_meta")),
+              "_meta WITHOUT the version key still lands in the legacy shim")
+    finally:
+        try:
+            mcp.stdin.close()
+        except Exception:
+            pass
+        mcp.wait(timeout=3)
+
+
+def test_mixed_era_interleaving():
+    """The era is a per-request property (the _meta version key), never
+    connection state: one connection serves both eras request-by-request,
+    each response in its own era's exact shape."""
+    print("\n[test] mixed-era interleaving on one connection")
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass
+    mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        wait_lock(mcp)
+        c = McpClient(mcp)
+        init = c.initialize()
+        ires = init.get("result") or {}
+        check(ires.get("protocolVersion") == "2025-06-18",
+              "legacy initialize keeps the legacy version")
+        check(all(k not in ires for k in ("resultType", "_meta")),
+              "legacy initialize has no modern keys")
+        disc = c.discover(_id=42)
+        dres = disc.get("result") or {}
+        check(disc.get("id") == 42 and dres.get("supportedVersions") == SUPPORTED_VERSIONS,
+              "modern discover works after a legacy initialize")
+        check(dres.get("resultType") == "complete",
+              "modern discover keeps its modern shape")
+        ping = c.ping(_id=43)
+        check(ping.get("id") == 43 and ping.get("result") == {},
+              "legacy ping still returns exactly {} after modern traffic")
+        mt = c.modern_tools_list(_id=44)
+        mres = mt.get("result") or {}
+        check(mt.get("id") == 44 and mres.get("resultType") == "complete"
+              and mres.get("ttlMs") == 3600000
+              and mres.get("cacheScope") == "private"
+              and "_meta" not in mres,
+              "modern tools/list keeps its modern shape mid-interleave "
+              "(no serverInfo _meta: discover-only)")
+        lt = c.tools_list(_id=45)
+        lres = lt.get("result") or {}
+        check(lt.get("id") == 45 and bool(lres.get("tools")),
+              "legacy tools/list still lists tools")
+        check(all(k not in lres for k in ("resultType", "ttlMs", "cacheScope", "_meta")),
+              "legacy tools/list has none of the modern keys")
     finally:
         try:
             mcp.stdin.close()
@@ -1314,6 +1893,11 @@ def test_unknown_method_returns_32601():
         r = c.recv()
         check(r.get("error", {}).get("code") == -32601,
               "unknown method -> error code -32601")
+        # The same rule holds in the modern era (unknown method WITH the
+        # _meta version key).
+        r = c.modern_send("resources/list", _id=12)
+        check(r.get("id") == 12 and (r.get("error") or {}).get("code") == -32601,
+              "modern-era unknown method -> error code -32601")
     finally:
         try:
             mcp.stdin.close()
@@ -1550,7 +2134,17 @@ def main():
     isolate()
     print(f"binary: {BIN}")
     test_stale_lock_is_replaced()
-    test_mcp_handshake_and_tools()
+    test_modern_discover_and_tools()
+    test_modern_discover_is_stateless()
+    test_invalid_opener_drops_the_connection()
+    test_modern_tools_list_cache_and_order()
+    test_modern_version_mismatch_is_per_request()
+    test_initialize_is_served_in_every_era()
+    test_modern_tools_call_round_trip()
+    # shim-era tests: delete when legacy-era support is dropped (ADR-0034)
+    test_legacy_shim_handshake()
+    test_legacy_shim_tools_list_shape()
+    test_mixed_era_interleaving()
     test_tab_list_round_trip()
     test_page_eval_round_trip()
     test_page_snapshot_precise_round_trip()
