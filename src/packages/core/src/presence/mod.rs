@@ -193,7 +193,7 @@ impl fmt::Display for PresenceError {
                 f,
                 "stdin is not a terminal; this action restores or grants capability \
                  and requires an interactive confirmation (run it from a terminal, \
-                 or use the app or the extension's options page)"
+                 or use the desktop app)"
             ),
             PresenceError::Declined => {
                 write!(

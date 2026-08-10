@@ -222,22 +222,23 @@ MCP client from driving every connected browser, at once.
   you the refusal instead of dying silently.
 - The state is persisted (in `revocation.json`, next to the lock file) and
   survives restarts, reconnects, and reboots.
-- The extension's options page and the desktop app show the state and carry
-  the same switch; a web page cannot see or touch it.
+- The extension's options page and the desktop app show the state; engaging
+  the switch works from any surface, but releasing it does not (a web page
+  cannot see or touch any of it).
 
-Nothing releases the switch on its own. `chromium-bridge unkill` (or the
-options-page or app toggle) is the only way back, and releasing demands
-proof of user presence
+Nothing releases the switch on its own. `chromium-bridge unkill` is the only
+way back
+([ADR-0032](./adr/0032-host-owned-policy-settings.md) decision 6 retired the
+extension's release toggle; a release request from the extension is refused
+and audited), and releasing demands proof of user presence
 ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)): on
 an enrolled Mac this is a Secure Enclave Touch ID tap, and where no Enclave
 key exists `unkill` asks you to type an explicit confirmation on a real
 terminal, and refuses outright when its stdin is a pipe, so no script or
-background program can quietly reopen the bridge through the CLI. The
-options-page and app releases carry the same floor as their own confirm
-dialogs. Every release attempt is audited with the auth path that decided it
-(`auth=touch_id`, `auth=cli_confirm`, `auth=extension_confirm`,
-`auth=app_confirm`), whether it was granted, refused at the presence gate,
-or refused by an unwritable record after presence passed.
+background program can quietly reopen the bridge through the CLI. Every
+release attempt is audited with the auth path that decided it
+(`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at
+the presence gate, or refused by an unwritable record after presence passed.
 
 If either command reports that the revocation record is unreadable, see the
 recovery section in
@@ -280,7 +281,7 @@ Read the durable trail with the read-only subcommand:
 $ chromium-bridge audit --limit 20
 2026-07-17 19:04:11.201Z  kill_engage     surface=cli outcome=ok
 2026-07-17 19:04:12.480Z  tool_call       tool=tab_list outcome=error code=BRIDGE_KILLED dur_ms=0
-2026-07-17 19:05:02.913Z  kill_release    surface=extension outcome=ok
+2026-07-17 19:05:02.913Z  kill_release    surface=cli outcome=ok
 ```
 
 A record the reader cannot parse is shown as `UNRECOGNIZED RECORD` and

@@ -27,8 +27,9 @@
 //!   if a dispatch bug were found.
 //! - **The native host** runs a control-plane-only mode while killed
 //!   ([`crate::native_host`]): no bridge traffic, but the extension's
-//!   kill/unkill/status control frames keep working, which is what lets the
-//!   options page release the switch again.
+//!   kill/status control frames keep working, so its mirror tracks the state
+//!   (release requests are refused there - ADR-0032 decision 6 retired the
+//!   extension release surface).
 //! - **The extension** mirrors the state into its #32 SW-only trusted storage
 //!   and refuses ops locally while killed (defense in depth; the host side is
 //!   authoritative).
@@ -37,8 +38,8 @@
 //!
 //! Nothing in the bridge clears the latch on its own -- no timeout, no
 //! restart, no reconnect. Only [`release`], reached from the CLI
-//! (`chromium-bridge unkill`), the extension options page, or a future app
-//! through this same API -- and `release` demands a
+//! (`chromium-bridge unkill`; ADR-0032 decision 6 made it the ONLY release
+//! surface) -- and `release` demands a
 //! [`crate::presence::PresenceAttestation`], so no path can clear the latch
 //! without the user-presence ladder having run (Touch ID via a Secure Enclave
 //! signing op on an enrolled Mac; the per-surface interactive floors where no
