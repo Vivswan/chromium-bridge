@@ -269,6 +269,65 @@ pub enum HardwareOutcome {
     Unavailable,
 }
 
+/// Outcome of one policy-signing presence act ([`sign_policy_as_presence`],
+/// ADR-0032). Same seam discipline as [`HardwareOutcome`]: `Refused` is
+/// terminal (the no-downgrade rule - never a fallthrough to a floor), and
+/// `Unavailable` means there is no hardware rung here at all, leaving what
+/// happens next to the calling surface (the app's interactive floor; the
+/// CLI refuses outright, ADR-0032 decision 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicySignOutcome {
+    /// The presence-gated Enclave signing succeeded: the tap IS the grant
+    /// approval, and the signature is the artifact the extension verifies
+    /// against its pinned key (`key_id` / `pubkey_b64` are the key's public
+    /// info, host-side bookkeeping only).
+    Signed {
+        sig: [u8; 64],
+        key_id: String,
+        pubkey_b64: String,
+    },
+    /// The hardware rung exists and did not sign (the user cancelled,
+    /// biometry failed, or no prompt could be raised).
+    Refused(String),
+    /// No enrollment key on this machine (or not macOS) - genuine absence
+    /// only. A key that exists but fails lookup or public-half export is
+    /// ambiguity and maps to `Refused` (see the macOS provider's
+    /// `sign_policy`), because `Unavailable` is what entitles a floor to
+    /// write a persistent unsigned baseline.
+    Unavailable,
+}
+
+/// Sign `doc_bytes` under the POLICY signing domain as the presence act
+/// (ADR-0032): the user-presence-gated Enclave signing over the policy
+/// message is itself the Touch ID approval, so `policy::set_signed` never
+/// takes a pre-made attestation and can never double-prompt.
+///
+/// Deliberately policy-typed: it takes raw document bytes and builds the
+/// policy-domain message internally, so this primitive can never sign
+/// enrollment- or presence-domain bytes, whatever a caller passes. Do not
+/// widen it to "sign the caller's message".
+///
+/// On a capable Mac this RAISES A REAL SYSTEM PROMPT. Under `cfg(test)` it
+/// returns the injected [`policy_test_hook`] outcome (default `Unavailable`)
+/// and the real backend is not even compiled - the same structural
+/// no-real-prompts rule as [`hardware_authenticate`].
+pub fn sign_policy_as_presence(doc_bytes: &[u8]) -> PolicySignOutcome {
+    #[cfg(test)]
+    {
+        policy_test_hook::record_call(doc_bytes);
+        policy_test_hook::outcome()
+    }
+    #[cfg(all(not(test), target_os = "macos"))]
+    {
+        macos::sign_policy(doc_bytes)
+    }
+    #[cfg(all(not(test), not(target_os = "macos")))]
+    {
+        let _ = doc_bytes;
+        PolicySignOutcome::Unavailable
+    }
+}
+
 /// The hardware rung: a Secure Enclave signing operation gated on user
 /// presence (Touch ID / login password) on macOS; no provider exists on any
 /// other platform, so every call there reports `Unavailable` and
@@ -350,6 +409,79 @@ mod test_hook {
     /// module is uncompiled under cfg(test) - but a stale `Verified` could
     /// skew a later assertion.)
     pub(super) struct ResetOnDrop;
+
+    impl Drop for ResetOnDrop {
+        fn drop(&mut self) {
+            reset();
+        }
+    }
+}
+
+/// The `cfg(test)`-only mock for [`sign_policy_as_presence`]: an injectable
+/// [`PolicySignOutcome`] in place of the real Enclave signing, plus a
+/// panic-if-called mode for tests that must prove the primitive is never
+/// reached (a malformed document must refuse BEFORE any prompt could exist,
+/// the validate-before-prompt rule). Compiled out of every non-test build;
+/// per-thread state, so parallel tests do not interfere. `pub(crate)` so the
+/// policy module's own tests can drive it.
+#[cfg(test)]
+pub(crate) mod policy_test_hook {
+    use std::cell::RefCell;
+
+    use super::PolicySignOutcome;
+
+    pub(crate) enum Mock {
+        Return(PolicySignOutcome),
+        PanicIfCalled,
+    }
+
+    thread_local! {
+        // Default Unavailable: a test that does not opt in behaves as a
+        // machine with no hardware rung, so no test can accidentally assert
+        // a signed grant it did not set up.
+        static OUTCOME: RefCell<Mock> =
+            const { RefCell::new(Mock::Return(PolicySignOutcome::Unavailable)) };
+        // The bytes the last sign_policy_as_presence on this thread was
+        // called with, so a test can pin the signed bytes byte-identical to
+        // the stored ones.
+        static LAST_DOC_BYTES: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    }
+
+    /// Set what the next `sign_policy_as_presence` on THIS thread does.
+    pub(crate) fn set(mock: Mock) {
+        OUTCOME.with(|c| *c.borrow_mut() = mock);
+    }
+
+    /// Reset to the default (no hardware rung), clearing any recorded call.
+    pub(crate) fn reset() {
+        set(Mock::Return(PolicySignOutcome::Unavailable));
+        LAST_DOC_BYTES.with(|c| *c.borrow_mut() = None);
+    }
+
+    /// Record the bytes the primitive was called with; called by
+    /// `sign_policy_as_presence` itself before consulting the mock.
+    pub(super) fn record_call(doc_bytes: &[u8]) {
+        LAST_DOC_BYTES.with(|c| *c.borrow_mut() = Some(doc_bytes.to_vec()));
+    }
+
+    /// The bytes the last call on this thread passed to the primitive;
+    /// `None` when it was never reached (or after a reset).
+    pub(crate) fn last_doc_bytes() -> Option<Vec<u8>> {
+        LAST_DOC_BYTES.with(|c| c.borrow().clone())
+    }
+
+    pub(crate) fn outcome() -> PolicySignOutcome {
+        OUTCOME.with(|c| match &*c.borrow() {
+            Mock::Return(outcome) => outcome.clone(),
+            Mock::PanicIfCalled => {
+                panic!("sign_policy_as_presence must not be reached by this test")
+            }
+        })
+    }
+
+    /// RAII: restore the default on scope exit, same rationale as
+    /// [`super::test_hook::ResetOnDrop`].
+    pub(crate) struct ResetOnDrop;
 
     impl Drop for ResetOnDrop {
         fn drop(&mut self) {
@@ -631,5 +763,54 @@ mod tests {
             "extension_confirm"
         );
         assert_eq!(PresencePath::AppConfirm.wire_name(), "app_confirm");
+    }
+
+    #[test]
+    fn sign_policy_as_presence_defaults_to_unavailable() {
+        // Without opting in, the policy mock is Unavailable - the same
+        // no-hardware default posture as test_hook, so no test can
+        // accidentally observe a signed grant it did not inject.
+        assert_eq!(
+            sign_policy_as_presence(b"doc"),
+            PolicySignOutcome::Unavailable
+        );
+    }
+
+    #[test]
+    fn sign_policy_as_presence_returns_the_injected_outcome() {
+        let _reset = policy_test_hook::ResetOnDrop;
+
+        policy_test_hook::set(policy_test_hook::Mock::Return(PolicySignOutcome::Signed {
+            sig: [7; 64],
+            key_id: "kid".into(),
+            pubkey_b64: "pk".into(),
+        }));
+        assert_eq!(
+            sign_policy_as_presence(b"doc"),
+            PolicySignOutcome::Signed {
+                sig: [7; 64],
+                key_id: "kid".into(),
+                pubkey_b64: "pk".into(),
+            }
+        );
+
+        policy_test_hook::set(policy_test_hook::Mock::Return(PolicySignOutcome::Refused(
+            "injected test refusal".into(),
+        )));
+        assert_eq!(
+            sign_policy_as_presence(b"doc"),
+            PolicySignOutcome::Refused("injected test refusal".into())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "sign_policy_as_presence must not be reached")]
+    fn the_panic_if_called_mock_fires_when_the_primitive_is_reached() {
+        // The lever for validate-before-prompt tests: install PanicIfCalled,
+        // drive the code under test, and any path that reaches the signing
+        // primitive fails loudly.
+        let _reset = policy_test_hook::ResetOnDrop;
+        policy_test_hook::set(policy_test_hook::Mock::PanicIfCalled);
+        let _ = sign_policy_as_presence(b"doc");
     }
 }

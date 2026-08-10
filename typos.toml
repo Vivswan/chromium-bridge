@@ -3,8 +3,9 @@
 
 [files]
 # The generated release history is not ours to respell; localized docs will
-# arrive with the translation phases.
-extend-exclude = ["CHANGELOG.md"]
+# arrive with the translation phases. Fuzz seeds are corpus bytes (base64
+# blobs, deliberately truncated JSON), not prose.
+extend-exclude = ["CHANGELOG.md", "src/packages/core/fuzz/seeds/"]
 
 [default]
 extend-ignore-re = [

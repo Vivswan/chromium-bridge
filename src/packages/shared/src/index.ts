@@ -18,6 +18,7 @@ export * from "./envelope";
 export * from "./errors.gen";
 export * from "./identity.gen";
 export * from "./ops.gen";
+export * from "./policy.gen";
 export * from "./protocol.gen";
 export * from "./runtime-msg";
 export * from "./settings";

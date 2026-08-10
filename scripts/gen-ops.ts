@@ -25,6 +25,10 @@
 //     signed-message encoding: Rust-built message bytes and deterministic
 //     software-P256 proofs the extension's test suite replays through its
 //     WebCrypto verifier.
+//   src/packages/shared/src/policy.gen.ts    - the host-owned policy contract
+//     (ADR-0032): the signing domain, the field catalogue with per-field
+//     permissive directions, the strict document/values validators, the
+//     deny-baseline defaults, and the per-field salvage helper.
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -694,3 +698,312 @@ writeFileSync(join(root, "src/packages/shared/src/enclave-fixture.gen.ts"), fixt
 console.log(
   "generated src/packages/shared/src/enclave-fixture.gen.ts from the Rust enclave module",
 );
+
+// ---- policy.gen.ts -----------------------------------------------------------
+// Self-contained section (the enclave pattern): the policy contract has its
+// own Rust emitter (examples/emit_policy_contract.rs). The one deliberate
+// cross-reference is the domain-separation check against the enclave
+// contract parsed above: the policy signing domain must be a THIRD domain,
+// distinct from both enclave domains, or a policy signature could be
+// replayed as an enrollment or presence proof.
+
+const POLICY_DIRECTION_TAGS = [
+  "truePermissive",
+  "falsePermissive",
+  "growsPermissive",
+  "growsPermissiveZeroTop",
+  "shrinksPermissiveSet",
+] as const;
+
+type PolicyDirectionTag = (typeof POLICY_DIRECTION_TAGS)[number];
+
+interface PolicyContractField {
+  name: string;
+  direction: PolicyDirectionTag;
+}
+
+interface PolicyContract {
+  policyDomain: string;
+  docVersion: number;
+  revisionMax: number;
+  disabledToolsMaxEntries: number;
+  disabledToolNameMaxBytes: number;
+  fields: PolicyContractField[];
+  defaults: Record<string, unknown>;
+  docDefaults: { v: number; revision: number; touched: unknown[] };
+}
+
+const policyEmitted = Bun.spawnSync(
+  ["cargo", "run", "-q", "-p", "chromium-bridge-core", "--example", "emit_policy_contract"],
+  { cwd: root, stderr: "inherit" },
+);
+if (!policyEmitted.success) {
+  throw new Error(
+    `gen-ops: cargo emit_policy_contract failed with status ${policyEmitted.exitCode}`,
+  );
+}
+const policy = JSON.parse(policyEmitted.stdout.toString()) as PolicyContract;
+
+// Structural sanity only - the values themselves are the Rust side's to
+// choose. Anything malformed here would generate a silently weaker validator
+// or a mislabeled direction table, so fail generation instead.
+if (
+  typeof policy.policyDomain !== "string" ||
+  policy.policyDomain.length === 0 ||
+  policy.policyDomain.includes("\0") ||
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the NUL-free, ASCII-only domain check is the point
+  !/^[\x01-\x7f]+$/.test(policy.policyDomain)
+) {
+  throw new Error(`gen-ops: malformed policy domain string ${JSON.stringify(policy.policyDomain)}`);
+}
+if (
+  policy.policyDomain === enclave.challengeDomain ||
+  policy.policyDomain === enclave.presenceDomain
+) {
+  throw new Error("gen-ops: the policy domain must differ from both enclave domains");
+}
+if (!Number.isInteger(policy.docVersion) || policy.docVersion <= 0) {
+  throw new Error(
+    `gen-ops: policy docVersion ${JSON.stringify(policy.docVersion)} is not a positive integer`,
+  );
+}
+if (policy.revisionMax !== Number.MAX_SAFE_INTEGER) {
+  throw new Error(
+    `gen-ops: policy revisionMax ${JSON.stringify(policy.revisionMax)} is not Number.MAX_SAFE_INTEGER`,
+  );
+}
+if (
+  !Number.isInteger(policy.disabledToolsMaxEntries) ||
+  policy.disabledToolsMaxEntries <= 0 ||
+  !Number.isInteger(policy.disabledToolNameMaxBytes) ||
+  policy.disabledToolNameMaxBytes <= 0
+) {
+  throw new Error("gen-ops: the disabledTools bounds must be positive integers");
+}
+if (!Array.isArray(policy.fields) || policy.fields.length !== 15) {
+  throw new Error(`gen-ops: expected 15 policy fields, got ${policy.fields?.length}`);
+}
+for (const field of policy.fields) {
+  if (typeof field.name !== "string" || !/^[a-z][A-Za-z0-9]*$/.test(field.name)) {
+    throw new Error(`gen-ops: policy field name ${JSON.stringify(field.name)} is not camelCase`);
+  }
+  if (!(POLICY_DIRECTION_TAGS as readonly string[]).includes(field.direction)) {
+    throw new Error(
+      `gen-ops: policy field ${field.name} carries unknown direction ${JSON.stringify(field.direction)}`,
+    );
+  }
+}
+const policyFieldNames = policy.fields.map((f) => f.name);
+if (new Set(policyFieldNames).size !== policyFieldNames.length) {
+  throw new Error("gen-ops: the policy field names must be distinct");
+}
+if (
+  Object.keys(policy.defaults).length !== policyFieldNames.length ||
+  !policyFieldNames.every((name) => name in policy.defaults)
+) {
+  throw new Error("gen-ops: the policy defaults keys must be exactly the field names");
+}
+if (policy.docDefaults.v !== policy.docVersion) {
+  throw new Error("gen-ops: the default policy document disagrees with docVersion");
+}
+
+// The direction tag determines a field's value shape - a boolean pole is a
+// boolean field, a grow direction is a millisecond count, the shrink-set
+// direction is the tool list - and the emitted default must already inhabit
+// it. A mismatch means the Rust catalogue and this derivation disagree, so
+// fail generation rather than emit a validator that rejects the defaults.
+const policyZodType = (field: PolicyContractField): string => {
+  const dflt = policy.defaults[field.name];
+  switch (field.direction) {
+    case "truePermissive":
+    case "falsePermissive":
+      if (typeof dflt !== "boolean") {
+        throw new Error(`gen-ops: policy field ${field.name} has a non-boolean default`);
+      }
+      return "z.boolean()";
+    case "growsPermissive":
+    case "growsPermissiveZeroTop":
+      if (!Number.isInteger(dflt) || (dflt as number) < 0) {
+        throw new Error(`gen-ops: policy field ${field.name} has a non-integer default`);
+      }
+      return "z.int().nonnegative()";
+    case "shrinksPermissiveSet":
+      if (!Array.isArray(dflt) || !dflt.every((t) => typeof t === "string")) {
+        throw new Error(`gen-ops: policy field ${field.name} has a non-string-array default`);
+      }
+      return `z.array(z.string().min(1).max(${policy.disabledToolNameMaxBytes})).max(${policy.disabledToolsMaxEntries})`;
+  }
+};
+
+const policyDefaultsJson = JSON.stringify(policy.defaults);
+if (!/^[\x20-\x7e]*$/.test(policyDefaultsJson)) {
+  throw new Error("gen-ops: the policy defaults carry non-ASCII content");
+}
+
+const policyFieldNameItems = policyFieldNames.map((n) => JSON.stringify(n)).join(",\n  ");
+const policyDirectionItems = policy.fields
+  .map((f) => `  ${emitKey(f.name)}: ${JSON.stringify(f.direction)},`)
+  .join("\n");
+const policyValueFields = policy.fields
+  .map((f) => `  ${emitKey(f.name)}: ${policyZodType(f)},`)
+  .join("\n");
+const policyDefaultItems = policy.fields
+  .map((f) => `  ${emitKey(f.name)}: ${JSON.stringify(policy.defaults[f.name])},`)
+  .join("\n");
+
+const policyOut = `// GENERATED from the Rust core (src/packages/core/src/policy/mod.rs and the
+// POLICY_DOMAIN in src/packages/core/src/enclave/challenge.rs) by
+// scripts/gen-ops.ts - DO NOT EDIT. Edit the policy module, then run
+// \`moon run gen\`.
+//
+// The host-owned policy contract, TS side (ADR-0032): the signing domain,
+// the field catalogue with each field's declared permissive direction, the
+// strict Zod validators for the signed document and its detached values,
+// the deny-baseline defaults, the strict stored-policy parser, and the
+// import-bag salvage helper. The
+// extension recomputes every relax/restrict comparison from the direction
+// table itself - it never trusts a host's claim about which way a change
+// points - and verifies signed baselines under POLICY_DOMAIN against its
+// pinned key before strict-parsing the same bytes with PolicyDocSchema.
+
+import { z } from "zod";
+
+// Domain-separation prefix for policy signatures: the enrollment key signs
+// UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. A third domain, distinct from
+// the enclave challenge and presence domains (generation fails otherwise),
+// so a policy signature can never be replayed as an enrollment or
+// per-action presence proof, nor either of those as a policy.
+export const POLICY_DOMAIN = ${JSON.stringify(policy.policyDomain)};
+
+// The policy document schema version. PolicyDocSchema pins it as a literal:
+// a newer document is rejected rather than misinterpreted, the same
+// fail-closed posture as the Rust parser's deny_unknown_fields.
+export const POLICY_DOC_VERSION = ${policy.docVersion};
+
+// The JS-safe integer bound (2^53 - 1) on the document's revision counter
+// and (Rust-side, via the same JS_SAFE_INT_MAX) its millisecond fields, so
+// both sides' parsers read the same numbers.
+export const POLICY_REVISION_MAX = ${policy.revisionMax};
+
+// Bounds on disabledTools (Rust DISABLED_TOOLS_MAX_ENTRIES /
+// DISABLED_TOOL_NAME_MAX_BYTES), enforced by the schemas below so the two
+// sides' parsers stay equivalent and no list can outgrow the host store's
+// read cap. The Rust bound counts bytes, this one UTF-16 code units; tool
+// names are ASCII identifiers, where the two agree, and elsewhere the Rust
+// side is the stricter, fail-closed one.
+export const DISABLED_TOOLS_MAX_ENTRIES = ${policy.disabledToolsMaxEntries};
+export const DISABLED_TOOL_NAME_MAX_BYTES = ${policy.disabledToolNameMaxBytes};
+
+// The host-owned policy fields, in the catalogue's declaration order. An
+// unknown name never parses (touched entries ride z.enum over this list),
+// so a touched set cannot smuggle a field the catalogue does not own.
+export const POLICY_FIELDS = [
+  ${policyFieldNameItems},
+] as const;
+
+export type PolicyFieldName = (typeof POLICY_FIELDS)[number];
+
+const POLICY_FIELD_SET: ReadonlySet<string> = new Set(POLICY_FIELDS);
+
+export function isPolicyFieldName(field: string): field is PolicyFieldName {
+  return POLICY_FIELD_SET.has(field);
+}
+
+// A field's declared permissive pole (Rust Direction): the value direction
+// that grants capability. "truePermissive"/"falsePermissive" are the
+// boolean poles; "growsPermissive" millisecond windows grant as they grow;
+// "growsPermissiveZeroTop" is hostReverifyMs's custom order (0 = never
+// re-verify = MOST permissive, topping the scale); "shrinksPermissiveSet"
+// is disabledTools (dropping an entry re-enables a tool).
+export type PolicyDirection =
+  | "truePermissive"
+  | "falsePermissive"
+  | "growsPermissive"
+  | "growsPermissiveZeroTop"
+  | "shrinksPermissiveSet";
+
+export const POLICY_DIRECTIONS: Readonly<Record<PolicyFieldName, PolicyDirection>> = {
+${policyDirectionItems}
+};
+
+// The 15 field values, detached from the document's scoping fields (Rust
+// PolicyValues): the shape comparisons and the effective policy work in.
+export const PolicyValuesSchema = z.strictObject({
+${policyValueFields}
+});
+
+export type PolicyValues = z.infer<typeof PolicyValuesSchema>;
+
+// The signed policy document (Rust PolicyDoc): the exact bytes the enclave
+// signature covers, strict-parsed only AFTER the signature verifies.
+// \`touched\` is the set of fields the producing write explicitly edited,
+// inside the signed bytes so a fresh signature warrants relaxation on
+// exactly those fields, never on the document at large.
+export const PolicyDocSchema = z.strictObject({
+  v: z.literal(${policy.docVersion}),
+  revision: z.int().nonnegative().max(POLICY_REVISION_MAX),
+  touched: z.array(z.enum(POLICY_FIELDS)),
+${policyValueFields}
+});
+
+export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
+
+// Frozen (including the nested array): salvage hands these instances out as
+// fallbacks, so a caller mutating its "copy" must throw instead of quietly
+// rewriting the defaults for everyone after it.
+export const POLICY_DEFAULTS: Readonly<PolicyValues> = deepFreeze(
+  PolicyValuesSchema.parse({
+${policyDefaultItems}
+  }),
+);
+
+function deepFreeze<T>(value: T): T {
+  for (const inner of Object.values(value as object)) {
+    if (typeof inner === "object" && inner !== null) deepFreeze(inner);
+  }
+  return Object.freeze(value);
+}
+
+/**
+ * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032
+ * decision 8 / phase 4): the snapshotted chrome.storage bag rides
+ * \`legacy_settings\` to the app's first-run import screen, where a corrupt
+ * field falling back to its deny-baseline default is SHOWN to the user and
+ * signed under their tap - never silently enforced. A value that fails its
+ * own schema falls back to that field's default without discarding the
+ * healthy fields around it, and unknown keys are dropped.
+ *
+ * NEVER parse the stored effective policy with this. Per-field default
+ * fallback moves a corrupt field toward its permissive pole relative to a
+ * user-restricted policy - a relaxation lever made of garbage, exactly the
+ * "garbage in, defaults out" behavior ADR-0032 decision 4 forbids. The
+ * stored effective policy is read with parseStoredPolicyValues below.
+ */
+export function salvagePolicyValues(stored: unknown): PolicyValues {
+  const bag: Record<string, unknown> =
+    typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
+  return Object.fromEntries(
+    Object.entries(PolicyValuesSchema.shape).map(([key, schema]) => {
+      const parsed = schema.safeParse(bag[key]);
+      return [key, parsed.success ? parsed.data : POLICY_DEFAULTS[key as PolicyFieldName]];
+    }),
+  ) as PolicyValues;
+}
+
+/**
+ * Strict parse of the extension's stored effective policy - phase 3's
+ * ratchet anchor and every stored-effective read use THIS. Returns the
+ * exact values on a valid bag and \`null\` on ANY failure (a corrupt field,
+ * a non-object, an extra key). \`null\` means "no stored effective": the
+ * deny baseline applies and there is no ratchet state to anchor on
+ * (ADR-0032 decision 4) - never a salvage, which would hand a corrupted
+ * store a relaxation.
+ */
+export function parseStoredPolicyValues(stored: unknown): PolicyValues | null {
+  const parsed = PolicyValuesSchema.safeParse(stored);
+  return parsed.success ? parsed.data : null;
+}
+`;
+
+writeFileSync(join(root, "src/packages/shared/src/policy.gen.ts"), policyOut);
+console.log("generated src/packages/shared/src/policy.gen.ts from the Rust policy module");

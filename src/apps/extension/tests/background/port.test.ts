@@ -17,7 +17,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const enrollment = {
   attachPort: vi.fn(),
   detachPort: vi.fn(),
-  enrollmentGate: vi.fn(() => Promise.resolve({ allowed: true })),
+  // Mirrors the real gate on the allowed path: the dispatch kickoff runs
+  // inside the gate before it resolves.
+  enrollmentGate: vi.fn((onAllowed?: () => void) => {
+    onAllowed?.();
+    return Promise.resolve({ allowed: true });
+  }),
   handleEnclaveFrame: vi.fn(() => Promise.resolve()),
   isEnclaveFrame: vi.fn(() => false),
   onPortConnected: vi.fn(() => Promise.resolve()),
@@ -42,7 +47,7 @@ const presence = {
   isPresenceFrame: vi.fn(() => false),
   handlePresenceFrame: vi.fn(),
 };
-const dispatch = vi.fn(() => Promise.resolve({}));
+const dispatch = vi.fn((_req: unknown) => Promise.resolve({}));
 const runtime = {
   connectNative: vi.fn<() => FakePort>(),
   lastError: undefined as { message?: string } | undefined,
@@ -230,5 +235,30 @@ describe("native link lifecycle", () => {
     // The live port's frame IS routed.
     portB.emitMessage({ type: "presence_proof" });
     expect(presence.handlePresenceFrame).toHaveBeenCalledTimes(1);
+  });
+
+  test("an unrecognized policy_current push is dropped without touching the link", async () => {
+    // ADR-0032 decision 8 pins the old-extension assumption: this router,
+    // which knows nothing of policy frames, must ignore a policy_current
+    // push - nothing posted back, the port never torn down - and keep
+    // serving bridge requests on the same port. Without this, an old
+    // extension against a policy-capable host would break at every connect.
+    presence.isPresenceFrame.mockReturnValue(false);
+    const port = makePort();
+    runtime.connectNative.mockReturnValueOnce(port);
+    mod.connectNative();
+
+    port.emitMessage({ type: "policy_current", ok: true, baseline: "YmFzZQ==" });
+    expect(port.postMessage).not.toHaveBeenCalled();
+    expect(port.disconnect).not.toHaveBeenCalled();
+    expect(mod.isNativeConnected()).toBe(true);
+
+    // A well-formed BridgeReq on the same port still dispatches, and its
+    // response goes out on the still-connected link.
+    port.emitMessage({ id: 1, op: "tab_list", args: {} });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ id: 1, op: "tab_list" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 1, ok: true }));
   });
 });

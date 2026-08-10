@@ -103,6 +103,13 @@ pub enum AuditKind {
     /// kill switch, busy). Host-recorded only: the extension cannot forge it
     /// through the `audit_event` frame.
     PresenceSign,
+    /// Host: one policy write through `policy::set_signed` / `policy::restrict`
+    /// (ADR-0032) - `ok` names the presence rung that authorized a grant
+    /// (`auth=none` for a free restriction) and the touched fields; `refused`
+    /// is a signing refusal or a keyless signature-only surface. Host-recorded
+    /// only, NOT in [`EXTENSION_AUDIT_KINDS`]: the browser leg must not be
+    /// able to plant policy-transition records.
+    PolicyWrite,
     /// Extension: a confirmation surface was shown to the user.
     ConfirmShown,
     /// Extension: the user approved a confirmation.
@@ -781,6 +788,7 @@ mod tests {
             "revoke_client",
             "tool_call",
             "presence_sign",
+            "policy_write",
         ] {
             assert_eq!(extension_kind(host_only), None, "{host_only}");
         }

@@ -105,3 +105,10 @@ path = "fuzz_targets/registration_manifest.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "policy_doc"
+path = "fuzz_targets/policy_doc.rs"
+test = false
+doc = false
+bench = false

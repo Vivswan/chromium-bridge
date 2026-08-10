@@ -813,6 +813,65 @@ impl KillStatus {
     }
 }
 
+/// Policy and language control frames (ADR-0032), spoken over the
+/// native-messaging channel and host-handled exactly like [`EnclaveControl`]
+/// and [`AdminControl`]: never forwarded to the MCP server, and dropped when
+/// the server leg tries to inject one. In this phase they are classified and
+/// dropped only - neither pump carries them anywhere; the host answers them
+/// from phase 2 of ADR-0032, when the policy store lands.
+///
+/// - `policy_get {}` (extension -> host): on-demand refresh of the policy
+///   state. The extension sends it only on a connection where the host has
+///   already pushed a policy frame (the never-speak-first rule, ADR-0032
+///   decision 4: an old host would classify it as `Forward` and the MCP
+///   server's strict `BridgeResp` parse would tear the browser leg down).
+/// - `policy_current { ok, baseline?, sig?, overlay?, error? }` (host ->
+///   extension): the policy state, pushed at every connect and on every
+///   observed change, and the reply to `policy_get`. `baseline` is the exact
+///   signed document bytes (base64), `sig` its signature, `overlay` the
+///   unsigned restriction overlay; `ok: false` carries `error` instead
+///   (unreadable store, fail closed).
+/// - `legacy_settings { bag }` (extension -> host): the snapshotted legacy
+///   settings bag, recorded host-side as a pending import, never applied
+///   (ADR-0032 decision 8).
+/// - `lang_get {}` / `lang_set { value }` (extension -> host) and
+///   `lang_current { value, seq }` (host -> extension): the shared
+///   `uiLanguage` preference, echo-suppressed by `seq` (decision 7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PolicyControl {
+    /// Extension -> host: request the current policy. An empty struct
+    /// variant so `deny_unknown_fields` applies (unit variants of internally
+    /// tagged enums silently skip it).
+    PolicyGet {},
+    /// Host -> extension: the policy state (connect/change push, and the
+    /// reply to `policy_get`).
+    PolicyCurrent {
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        baseline: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sig: Option<String>,
+        /// The unsigned restriction overlay, strict-parsed at the frame
+        /// boundary: an overlay carrying a field this catalogue does not own
+        /// fails the whole frame parse, fail closed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        overlay: Option<crate::policy::PolicyOverlay>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Extension -> host: the snapshotted legacy settings bag for the
+    /// first-run import (recorded pending, never applied).
+    LegacySettings { bag: Value },
+    /// Extension -> host: request the current shared language.
+    LangGet {},
+    /// Extension -> host: a user-gesture language change.
+    LangSet { value: String },
+    /// Host -> extension: the shared language and its echo-suppression
+    /// sequence (the reply to both `lang_*` requests, and pushed on change).
+    LangCurrent { value: String, seq: u64 },
+}
+
 /// Ties every control-frame variant to its serde `type` tag, once. Expands to
 /// a tag-set constant and a `wire_tag` method whose match is EXHAUSTIVE over
 /// the enum - no wildcard arm - so adding a variant fails to compile right
@@ -862,6 +921,15 @@ control_wire_tags!(AdminControl, ADMIN_CONTROL_TAGS, {
     KillRelease => "kill_release",
     KillStatusResult => "kill_status_result",
     AuditEvent => "audit_event",
+});
+
+control_wire_tags!(PolicyControl, POLICY_CONTROL_TAGS, {
+    PolicyGet => "policy_get",
+    PolicyCurrent => "policy_current",
+    LegacySettings => "legacy_settings",
+    LangGet => "lang_get",
+    LangSet => "lang_set",
+    LangCurrent => "lang_current",
 });
 
 /// The host-directed admin REQUEST kinds: the [`AdminControl`] frames the
@@ -1036,25 +1104,27 @@ pub enum FrameDisposition {
 }
 
 /// Resolve `tag` to its `'static` copy in the derived host-control tag set
-/// ([`ENCLAVE_CONTROL_TAGS`] + [`ADMIN_CONTROL_TAGS`]), or `None` for anything
-/// that is not a host-handled control tag. Both classifiers key on this one
-/// set, so a variant added to either control enum (which the exhaustive
-/// `wire_tag` matches force into the set) is recognized by both from the
-/// moment it compiles.
+/// ([`ENCLAVE_CONTROL_TAGS`] + [`ADMIN_CONTROL_TAGS`] +
+/// [`POLICY_CONTROL_TAGS`]), or `None` for anything that is not a
+/// host-handled control tag. Both classifiers key on this one set, so a
+/// variant added to any control enum (which the exhaustive `wire_tag`
+/// matches force into the set) is recognized by both from the moment it
+/// compiles.
 fn host_control_tag(tag: &str) -> Option<&'static str> {
     ENCLAVE_CONTROL_TAGS
         .iter()
         .chain(ADMIN_CONTROL_TAGS)
+        .chain(POLICY_CONTROL_TAGS)
         .copied()
         .find(|t| *t == tag)
 }
 
 /// Classify one native-messaging frame for the pump. Pure, so the
 /// handled-vs-forwarded decision is unit-testable without a socket. Keyed on
-/// the exact `type` tags of [`EnclaveControl`] and [`AdminControl`] via the
-/// derived tag set: bridge requests carry `op` (no `type`), and the socket
-/// handshake frames (`challenge`/`response`) never traverse the pump, so
-/// nothing legitimate collides.
+/// the exact `type` tags of [`EnclaveControl`], [`AdminControl`], and
+/// [`PolicyControl`] via the derived tag set: bridge requests carry `op` (no
+/// `type`), and the socket handshake frames (`challenge`/`response`) never
+/// traverse the pump, so nothing legitimate collides.
 pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
     // Resolve against the derived tag set first: anything outside it forwards,
     // and anything inside it can never fall through to Forward below - the
@@ -1142,16 +1212,17 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
     }
 }
 
-/// The host-control `type` tag carried by `frame` - any [`EnclaveControl`] or
-/// [`AdminControl`] tag - or `None` for everything else. The native host's
-/// socket->stdout pump uses this to drop control frames arriving FROM the MCP
-/// server: the ceremony and the admin exchange run strictly between the
-/// extension and the host itself, so the server leg has no legitimate reason
-/// to ever carry one. Zero trust applies to our own server too - an
-/// attested-but-misbehaving server must not be able to inject an
-/// `enclave_error` that burns the extension's outstanding nonce, an
-/// `enclave_revoked` that provokes a false fail-closed "compromised" mark, or
-/// a forged `client_list_result` (ADR-0021/0025).
+/// The host-control `type` tag carried by `frame` - any [`EnclaveControl`],
+/// [`AdminControl`], or [`PolicyControl`] tag - or `None` for everything
+/// else. The native host's socket->stdout pump uses this to drop control
+/// frames arriving FROM the MCP server: the ceremony and the admin exchange
+/// run strictly between the extension and the host itself, so the server leg
+/// has no legitimate reason to ever carry one. Zero trust applies to our own
+/// server too - an attested-but-misbehaving server must not be able to
+/// inject an `enclave_error` that burns the extension's outstanding nonce,
+/// an `enclave_revoked` that provokes a false fail-closed "compromised"
+/// mark, a forged `client_list_result` (ADR-0021/0025), or a forged
+/// `policy_current` (ADR-0032).
 pub fn host_control_type(frame: &Value) -> Option<&'static str> {
     frame
         .get("type")
@@ -1652,6 +1723,57 @@ mod tests {
             );
             assert!(serde_json::from_value::<AdminControl>(good).is_ok());
         }
+
+        // Policy control frames (ADR-0032): every variant rejects an
+        // unexpected field, with positive controls.
+        for (bad, good) in [
+            (
+                json!({ "type": "policy_get", "extra": 1 }),
+                json!({ "type": "policy_get" }),
+            ),
+            (
+                json!({ "type": "policy_current", "ok": true, "baseline": "b", "sig": "s",
+                        "overlay": {}, "extra": 1 }),
+                json!({ "type": "policy_current", "ok": true, "baseline": "b", "sig": "s",
+                        "overlay": {} }),
+            ),
+            // The overlay is the typed crate::policy::PolicyOverlay: a field
+            // outside the policy catalogue fails the whole frame parse.
+            (
+                json!({ "type": "policy_current", "ok": true, "baseline": "b", "sig": "s",
+                        "overlay": { "requireEnrollment": false } }),
+                json!({ "type": "policy_current", "ok": true, "baseline": "b", "sig": "s",
+                        "overlay": { "pageEvalEnabled": false } }),
+            ),
+            (
+                json!({ "type": "legacy_settings", "bag": {}, "extra": 1 }),
+                json!({ "type": "legacy_settings", "bag": {} }),
+            ),
+            (
+                json!({ "type": "lang_get", "extra": 1 }),
+                json!({ "type": "lang_get" }),
+            ),
+            (
+                json!({ "type": "lang_set", "value": "en", "extra": 1 }),
+                json!({ "type": "lang_set", "value": "en" }),
+            ),
+            (
+                json!({ "type": "lang_current", "value": "en", "seq": 1, "extra": 1 }),
+                json!({ "type": "lang_current", "value": "en", "seq": 1 }),
+            ),
+        ] {
+            assert!(
+                serde_json::from_value::<PolicyControl>(bad.clone()).is_err(),
+                "should reject: {bad}"
+            );
+            assert!(serde_json::from_value::<PolicyControl>(good).is_ok());
+        }
+        // The optional policy_current fields default: the failure shape
+        // travels as ok:false with only an error.
+        assert!(serde_json::from_value::<PolicyControl>(
+            json!({ "type": "policy_current", "ok": false, "error": "unreadable store" })
+        )
+        .is_ok());
     }
 
     #[test]
@@ -2115,11 +2237,12 @@ mod tests {
     fn every_control_variant_tag_is_derived_and_recognized() {
         use std::collections::BTreeSet;
 
-        // One sample of EVERY variant of both control enums. Completeness of
-        // this list is enforced below (its tag set must equal the derived tag
-        // set), and the derived set itself cannot miss a variant: wire_tag's
-        // match has no wildcard arm, so a new variant fails to compile until
-        // its tag joins the control_wire_tags! list feeding both.
+        // One sample of EVERY variant of the three control enums.
+        // Completeness of this list is enforced below (its tag set must equal
+        // the derived tag set), and the derived set itself cannot miss a
+        // variant: wire_tag's match has no wildcard arm, so a new variant
+        // fails to compile until its tag joins the control_wire_tags! list
+        // feeding both.
         let enclave: Vec<EnclaveControl> = vec![
             EnclaveControl::EnclaveChallenge {
                 nonce: "n".into(),
@@ -2174,6 +2297,23 @@ mod tests {
                 cid: None,
             },
         ];
+        let policy: Vec<PolicyControl> = vec![
+            PolicyControl::PolicyGet {},
+            PolicyControl::PolicyCurrent {
+                ok: true,
+                baseline: Some("YmFzZQ==".into()),
+                sig: Some("c2ln".into()),
+                overlay: Some(crate::policy::PolicyOverlay::default()),
+                error: None,
+            },
+            PolicyControl::LegacySettings { bag: json!({}) },
+            PolicyControl::LangGet {},
+            PolicyControl::LangSet { value: "en".into() },
+            PolicyControl::LangCurrent {
+                value: "en".into(),
+                seq: 1,
+            },
+        ];
 
         // Serde round-trip per variant: the tag serde actually emits is the
         // tag the derived set claims, in both directions.
@@ -2194,9 +2334,18 @@ mod tests {
             assert_eq!(back.wire_tag(), frame.wire_tag());
             seen.insert(frame.wire_tag());
         }
+        for frame in &policy {
+            let v = serde_json::to_value(frame).unwrap();
+            let tag = v.get("type").and_then(Value::as_str).unwrap();
+            assert_eq!(tag, frame.wire_tag(), "serde tag drifted for {frame:?}");
+            let back: PolicyControl = serde_json::from_value(v).unwrap();
+            assert_eq!(back.wire_tag(), frame.wire_tag());
+            seen.insert(frame.wire_tag());
+        }
         let derived: BTreeSet<&'static str> = ENCLAVE_CONTROL_TAGS
             .iter()
             .chain(ADMIN_CONTROL_TAGS)
+            .chain(POLICY_CONTROL_TAGS)
             .copied()
             .collect();
         assert_eq!(
@@ -2205,7 +2354,7 @@ mod tests {
         );
         assert_eq!(
             derived.len(),
-            ENCLAVE_CONTROL_TAGS.len() + ADMIN_CONTROL_TAGS.len(),
+            ENCLAVE_CONTROL_TAGS.len() + ADMIN_CONTROL_TAGS.len() + POLICY_CONTROL_TAGS.len(),
             "a tag is duplicated across the control enums"
         );
 
@@ -2234,6 +2383,113 @@ mod tests {
         assert_eq!(host_control_type(&json!({ "type": "enclave_other" })), None);
         assert_eq!(host_control_type(&json!({ "type": 5 })), None);
         assert_eq!(host_control_type(&json!("enclave_error")), None);
+    }
+
+    #[test]
+    fn policy_frames_are_dropped_and_recognized_as_host_control() {
+        // ADR-0032 phase 1: the six policy/language tags are host-control
+        // tags with no handler arm yet, so the stdin->socket pump drops each
+        // one (never Forward - against an old-style forward, the MCP
+        // server's strict BridgeResp parse would tear the browser leg down),
+        // and the socket->stdout pump recognizes them all as host control.
+        // The host answers them from phase 2.
+        for tag in POLICY_CONTROL_TAGS {
+            let frame = json!({ "type": tag });
+            assert!(
+                matches!(classify_nm_frame(&frame), FrameDisposition::Drop(t) if t == *tag),
+                "tag {tag} must classify as Drop"
+            );
+            assert_eq!(
+                host_control_type(&frame),
+                Some(*tag),
+                "tag {tag} must be recognized as host control"
+            );
+        }
+        // Fully-formed frames drop the same way: classification keys on the
+        // tag, so well-formedness cannot smuggle one into Forward.
+        for frame in [
+            json!({ "type": "policy_get" }),
+            json!({ "type": "policy_current", "ok": true, "baseline": "YmFzZQ==",
+                    "sig": "c2ln", "overlay": {} }),
+            json!({ "type": "legacy_settings", "bag": { "groupTabs": true } }),
+            json!({ "type": "lang_get" }),
+            json!({ "type": "lang_set", "value": "en" }),
+            json!({ "type": "lang_current", "value": "en", "seq": 1 }),
+        ] {
+            assert!(
+                matches!(classify_nm_frame(&frame), FrameDisposition::Drop(_)),
+                "should drop: {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_current_serializes_exactly_its_pinned_key_set() {
+        // ADR-0032 decision 3: verification and the ratchet key on the
+        // extension's own pin and nothing else - a frame-supplied key id
+        // would hand a substituted host a ratchet-reset lever. Pin the
+        // fully-populated frame's serialized keys so no key-identity field
+        // (or anything else) can ever join it unnoticed.
+        let frame = PolicyControl::PolicyCurrent {
+            ok: true,
+            baseline: Some("YmFzZQ==".into()),
+            sig: Some("c2ln".into()),
+            overlay: Some(crate::policy::PolicyOverlay::default()),
+            error: Some("e".into()),
+        };
+        let value = serde_json::to_value(&frame).unwrap();
+        let keys: std::collections::BTreeSet<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected: std::collections::BTreeSet<&str> =
+            ["type", "ok", "baseline", "sig", "overlay", "error"]
+                .into_iter()
+                .collect();
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn envelope_schema_inputs_are_pinned_and_exclude_policy_tags() {
+        // emit_envelope_schema.rs - the input to the asymmetry gate
+        // (`moon run check-envelope`) - derives from exactly EnclaveControl
+        // and AdminControl. ADR-0032 keeps PolicyControl OUT of that
+        // emission in phase 1 (no schemars derive, no emitted enum), so the
+        // gate needs no change - which only holds while the emitted enums
+        // are what they were. Pin both tag lists literally, and the policy
+        // set disjoint from both, so a policy frame can never silently join
+        // the enums the gate derives.
+        let enclave: &[&str] = &[
+            "enclave_challenge",
+            "enclave_proof",
+            "enclave_error",
+            "enclave_revoke",
+            "enclave_revoked",
+            "presence_challenge",
+            "presence_proof",
+            "presence_error",
+        ];
+        assert_eq!(ENCLAVE_CONTROL_TAGS, enclave);
+        let admin: &[&str] = &[
+            "client_list",
+            "client_list_result",
+            "client_revoke",
+            "client_revoke_result",
+            "kill_status",
+            "kill_engage",
+            "kill_release",
+            "kill_status_result",
+            "audit_event",
+        ];
+        assert_eq!(ADMIN_CONTROL_TAGS, admin);
+        for tag in POLICY_CONTROL_TAGS {
+            assert!(
+                !ENCLAVE_CONTROL_TAGS.contains(tag) && !ADMIN_CONTROL_TAGS.contains(tag),
+                "policy tag {tag} must stay out of the emitted enums"
+            );
+        }
     }
 }
 

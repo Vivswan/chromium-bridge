@@ -3,7 +3,7 @@
 
 use crate::protocol::EnclaveControl;
 
-use super::challenge::{challenge_message, presence_message};
+use super::challenge::{challenge_message, policy_message, presence_message};
 use super::encoding::base64_encode;
 use super::pubkey::EnclavePublicKey;
 use super::{reason_code, EnclaveError};
@@ -94,6 +94,14 @@ impl EnrollmentKey {
         context: Option<&str>,
     ) -> Result<[u8; 64], EnclaveError> {
         self.sign_message(presence_message(nonce, context)?)
+    }
+
+    /// Sign a policy document (ADR-0032) under the policy domain (raises the
+    /// presence prompt - the Touch ID tap IS the grant approval) and return
+    /// the raw 64-byte P1363 signature. The exact stored bytes are signed;
+    /// there is no canonicalization step.
+    pub fn sign_policy(&self, doc_bytes: &[u8]) -> Result<[u8; 64], EnclaveError> {
+        self.sign_message(policy_message(doc_bytes))
     }
 
     fn sign_message(&self, message: Vec<u8>) -> Result<[u8; 64], EnclaveError> {

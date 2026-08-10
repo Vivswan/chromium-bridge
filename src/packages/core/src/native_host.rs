@@ -1320,6 +1320,58 @@ mod tests {
     }
 
     #[test]
+    fn server_injected_policy_frames_are_dropped_not_forwarded() {
+        // ADR-0032: the policy/language frames are host control, so a
+        // misbehaving or substituted MCP server cannot inject a
+        // `policy_current` down the server leg - the extension's ratchet
+        // would refuse a forged relaxation anyway, but the frame must not
+        // even reach it. Each one writes nothing to stdout and the pump
+        // keeps going, forwarding real traffic around them.
+        let input = concat!(
+            "{\"type\":\"policy_current\",\"ok\":true,\"baseline\":\"YmFzZQ==\",\"sig\":\"c2ln\"}\n",
+            "{\"type\":\"policy_get\"}\n",
+            "{\"type\":\"legacy_settings\",\"bag\":{}}\n",
+            "{\"type\":\"lang_get\"}\n",
+            "{\"type\":\"lang_set\",\"value\":\"en\"}\n",
+            "{\"type\":\"lang_current\",\"value\":\"en\",\"seq\":1}\n",
+            "{\"id\":9,\"op\":\"tab_list\"}\n",
+        );
+        let out = Mutex::new(Vec::new());
+        pump_socket_to_stdout(&mut Cursor::new(input.as_bytes().to_vec()), &out);
+
+        let mut cur = Cursor::new(out.into_inner().unwrap());
+        let frame = nm_read_frame(&mut cur).unwrap().unwrap();
+        assert_eq!(frame, serde_json::json!({ "id": 9, "op": "tab_list" }));
+        assert!(nm_read_frame(&mut cur).unwrap().is_none());
+    }
+
+    #[test]
+    fn policy_frames_from_the_browser_are_handled_without_a_reply() {
+        // ADR-0032 phase 1: a policy frame from the extension is Handled -
+        // never forwarded to the MCP server - through the reply-less Drop
+        // arm. The classification pin in protocol.rs holds every policy tag
+        // to FrameDisposition::Drop, and that arm is asserted here per frame
+        // so no reply bytes can be written; the host answers these frames
+        // from phase 2.
+        let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+        for frame in [
+            serde_json::json!({ "type": "policy_get" }),
+            serde_json::json!({ "type": "policy_current", "ok": true }),
+            serde_json::json!({ "type": "legacy_settings", "bag": {} }),
+            serde_json::json!({ "type": "lang_get" }),
+            serde_json::json!({ "type": "lang_set", "value": "en" }),
+            serde_json::json!({ "type": "lang_current", "value": "en", "seq": 1 }),
+        ] {
+            assert!(
+                matches!(classify_nm_frame(&frame), FrameDisposition::Drop(_)),
+                "must take the reply-less Drop arm: {frame}"
+            );
+            let verdict = handle_control_frame(frame, &out).unwrap();
+            assert!(matches!(verdict, Inbound::Handled));
+        }
+    }
+
+    #[test]
     fn malformed_admin_frames_get_a_matching_ok_false_reply() {
         // The reply frame type must match the request so the extension's
         // pending request resolves instead of timing out. Every AdminKind is

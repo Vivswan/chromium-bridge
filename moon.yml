@@ -427,7 +427,7 @@ tasks:
       set -e
       bun scripts/gen-ops.ts
       bun scripts/gen-envelope.ts
-      bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/enclave.gen.ts src/packages/shared/src/enclave-fixture.gen.ts src/packages/shared/src/envelope-wire.gen.ts src/packages/shared/src/audit.gen.ts
+      bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/enclave.gen.ts src/packages/shared/src/enclave-fixture.gen.ts src/packages/shared/src/envelope-wire.gen.ts src/packages/shared/src/audit.gen.ts src/packages/shared/src/policy.gen.ts
     toolchains: ['system']
     options:
       cache: false # mutates the tree; check-gen diffs its output

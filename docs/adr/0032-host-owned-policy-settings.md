@@ -751,7 +751,11 @@ reads, signing-message injectivity; proptests for the comparison lattice
 field-order independent) and revision monotonicity; the
 frame-classification and server-leg-drop units in protocol.rs and
 native_host.rs; the e2e frame-routing test proving the new frames are
-host-answered and never forwarded; a cargo test pinning that
+host-answered and never forwarded (amended at Phase 1 implementation: in
+Phase 1 the frames are classified-and-DROPPED, never answered - answering
+lands in Phase 2 when the store is wired, so the Phase 1 e2e pins the
+drop-and-never-forward property and is updated to assert replies in Phase
+2); a cargo test pinning that
 `check-envelope` inputs are unchanged; and, pinning the decision 8
 old-extension assumption before anything relies on it, a vitest unit that
 the pre-cutover extension frame router ignores an unrecognized push frame

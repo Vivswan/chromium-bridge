@@ -13,7 +13,8 @@
 //! - [`challenge`]: challenge message construction (shared contract with the
 //!   extension) and its bounds.
 //! - [`der`]: strict-DER ECDSA signature parsing to the raw P1363 form.
-//! - [`encoding`]: base64 (encode-only, for the proof frame).
+//! - [`encoding`]: base64 (encode for the proof frames, strict decode for
+//!   the signed policy baseline).
 //! - [`pubkey`]: the validated X9.63 public key + fingerprints.
 //! - [`config`]: the on-disk enrollment policy record (policy only, never key
 //!   material).
@@ -36,8 +37,8 @@ mod macos;
 mod pubkey;
 
 pub use challenge::{
-    challenge_message, presence_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN, MAX_NONCE_LEN,
-    PRESENCE_DOMAIN,
+    challenge_message, policy_message, presence_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN,
+    MAX_NONCE_LEN, POLICY_DOMAIN, PRESENCE_DOMAIN,
 };
 pub use cli::{
     run_pair, run_presence_selftest, run_revoke, run_status, run_status_json, EnclaveKeyState,
@@ -45,7 +46,7 @@ pub use cli::{
 };
 pub use config::HostConfig;
 pub use der::{der_to_raw_signature, SIG_LEN};
-pub use encoding::base64_encode;
+pub use encoding::{base64_decode, base64_encode, Base64DecodeError};
 pub use key::{respond_to_challenge, respond_to_presence_challenge, EnrollmentKey};
 pub use pubkey::{EnclavePublicKey, PUBKEY_LEN};
 

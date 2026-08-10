@@ -1470,6 +1470,113 @@ def test_admin_control_frames():
         shutil.rmtree(rundir, ignore_errors=True)
 
 
+def test_policy_control_frames():
+    """Phase 1 of ADR-0032: the six policy/language control frames
+    (policy_get, policy_current, legacy_settings, lang_get, lang_set,
+    lang_current) are CLASSIFIED AND DROPPED by the native host - never
+    forwarded over the bridge socket, and (unlike the enclave/admin frames)
+    never answered either. This test exercises the browser (extension) leg
+    end to end; the symmetric server-leg drop (a frame injected from the MCP
+    server side) is unit-pinned in native_host.rs
+    (server_injected_policy_frames_are_dropped_not_forwarded). Answering
+    starts in phase 2, when the policy store lands; this test is then
+    updated to assert the replies. Dropping (not forwarding) matters now
+    because of the never-speak-first rule (ADR-0032 decision 4): a host that
+    forwarded these frames would feed the MCP server's strict BridgeResp
+    parse and tear the browser leg down, which is exactly the failure mode
+    the rule exists to avoid. The proof of a drop is silence plus a live
+    pump: after the control traffic, a real tool round trip whose FIRST
+    extension-side frame is the tool op (a reply would have preceded it, and
+    a forwarded frame would desynchronize the bridge correlation and break
+    the round trip). Uses an isolated runtime dir; no pairing and no
+    presence-gated path is involved, so this runs even on an enrolled Mac."""
+    print("\n[test] policy control frames are classified and dropped (ADR-0032 phase 1)")
+    rundir = tempfile.mkdtemp(prefix="bb-policy-e2e-")
+    env = dict(os.environ, XDG_RUNTIME_DIR=rundir,
+               XDG_CONFIG_HOME=os.path.join(rundir, "config"))
+    if sys.platform == "darwin":
+        env["HOME"] = rundir
+    lock = os.path.join(rundir, "chromium-bridge", "run.lock")
+    global LOCK
+    saved_lock = LOCK
+    LOCK = lock
+    mcp = None
+    nh = None
+    try:
+        mcp = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                               env=env)
+        wait_lock(mcp)
+        nh = start_bridge_host(env=env)
+        wait_host_ready(nh)
+
+        # Extension -> host requests: in phase 1 the host neither answers nor
+        # forwards them. Send all four, then drive a real tool call: a reply
+        # to any of them would arrive on the host's stdout BEFORE the tool op,
+        # and a forwarded one would desynchronize the bridge correlation and
+        # fail the round trip below.
+        nm_write(nh, {"type": "policy_get"})
+        nm_write(nh, {"type": "legacy_settings", "bag": {}})
+        nm_write(nh, {"type": "lang_get"})
+        nm_write(nh, {"type": "lang_set", "value": "en"})
+        c = McpClient(mcp)
+        c.initialize()
+        c.initialized()
+        c.send({"jsonrpc": "2.0", "id": 91, "method": "tools/call",
+                "params": {"name": "tab_list", "arguments": {}}})
+        frame = nm_read(nh)
+        check(frame is not None and frame.get("op") == "tab_list",
+              "first frame after the policy requests is the tool op "
+              "(no reply, nothing forwarded)")
+        nm_write(nh, {"id": frame["id"], "ok": True,
+                      "data": [{"id": 1, "title": "After Policy", "url": "u",
+                                "active": True}]})
+        r = c.recv()
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "After Policy",
+              "round trip completes; extension-side policy frames were dropped")
+
+        # Host-direction frames arriving FROM the browser leg (a compromised
+        # extension bouncing policy/language state at the host) are dropped
+        # too, never forwarded to the MCP server: prove the pump still
+        # forwards ordinary traffic after them.
+        nm_write(nh, {"type": "policy_current", "ok": True,
+                      "baseline": "YmFzZQ==", "sig": "c2ln"})
+        nm_write(nh, {"type": "lang_current", "value": "en", "seq": 1})
+        c.send({"jsonrpc": "2.0", "id": 92, "method": "tools/call",
+                "params": {"name": "tab_list", "arguments": {}}})
+        frame = nm_read(nh)
+        check(frame is not None and frame.get("op") == "tab_list",
+              "pump still forwards ordinary frames after injected "
+              "host-direction policy frames")
+        nm_write(nh, {"id": frame["id"], "ok": True,
+                      "data": [{"id": 1, "title": "After Injected", "url": "u",
+                                "active": True}]})
+        r = c.recv()
+        content = json.loads(r["result"]["content"][0]["text"])
+        check(content[0]["title"] == "After Injected",
+              "round trip completes; injected policy_current/lang_current "
+              "were dropped, not forwarded")
+        nh.kill()
+        nh.wait(timeout=3)
+        nh = None
+    finally:
+        if nh is not None and nh.poll() is None:
+            nh.kill()
+            try:
+                nh.wait(timeout=3)
+            except Exception:
+                pass
+        if mcp is not None:
+            try:
+                mcp.stdin.close()
+            except Exception:
+                pass
+            mcp.wait(timeout=5)
+        LOCK = saved_lock
+        shutil.rmtree(rundir, ignore_errors=True)
+
+
 def test_kill_switch_round_trip():
     """ADR-0030: `kill` halts everything (typed BRIDGE_KILLED errors on a LIVE
     broker, severed browser leg, control-plane-only hosts), the extension
@@ -2153,6 +2260,7 @@ def main():
     test_native_host_mode()
     test_enclave_control_frames()
     test_admin_control_frames()
+    test_policy_control_frames()
     test_kill_switch_round_trip()
     test_two_browsers()
     test_foreign_peer_is_rejected()

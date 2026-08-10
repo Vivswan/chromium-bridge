@@ -201,6 +201,7 @@ export type AuditKind =
   | "kill_engage"
   | "kill_release"
   | "presence_sign"
+  | "policy_write"
   | "confirm_shown"
   | "confirm_allowed"
   | "confirm_denied"

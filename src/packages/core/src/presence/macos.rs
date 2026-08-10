@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::enclave::EnrollmentKey;
 
-use super::HardwareOutcome;
+use super::{HardwareOutcome, PolicySignOutcome};
 
 /// Domain-separated context for the LOCAL presence attestation (kill/pair),
 /// distinct from any per-action page context. The signature is discarded, so
@@ -85,6 +85,68 @@ pub(super) fn authenticate(_reason: &str) -> HardwareOutcome {
                 "hardware user-presence attestation refused: {e}"
             );
             HardwareOutcome::Refused(e.to_string())
+        }
+    }
+}
+
+/// One policy-signing presence act (ADR-0032): sign the document bytes under
+/// the POLICY domain with the enrollment key, whose user-presence ACL raises
+/// the Touch ID sheet - the tap is the grant approval and the signature,
+/// kept this time, is the artifact the extension verifies.
+///
+/// The ladder mapping deliberately DIVERGES from [`authenticate`] on lookup
+/// and export errors. There, ambiguity falls to the floor because the floor
+/// gates a one-shot act whose signature is discarded - itself a human check,
+/// minting nothing durable. Here, `Unavailable` is what entitles
+/// `set_signed` + `PolicyGrantFloor::AppConfirm` to write a PERSISTENT
+/// unsigned baseline in place of a signed one, so only genuine absence
+/// (`Ok(None)`: no enrollment key exists) may report it. A lookup `Err` (a
+/// suspect or planted key, a keychain failure) or a key whose public half
+/// will not export is ambiguity, and fail-closed-on-ambiguity plus the
+/// no-downgrade rule make that terminal: `Refused`, never a floor. Do not
+/// "consistency-fix" either mapping to match the other.
+///
+/// This module is compiled out under `cfg(test)`, so the mapping itself is
+/// exercised only by the `moon run touchid-gates` human runbook; its
+/// consequence - a `Refused` outcome never writes a baseline and never
+/// falls to a floor - is pinned at the seam by
+/// `policy::store_tests::a_refused_signature_never_falls_to_the_floor`.
+pub(super) fn sign_policy(doc_bytes: &[u8]) -> PolicySignOutcome {
+    let key = match EnrollmentKey::lookup() {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            log_info!("presence", "no enrollment key; policy signing unavailable");
+            return PolicySignOutcome::Unavailable;
+        }
+        Err(e) => {
+            log_warn!(
+                "presence",
+                "enrollment key lookup failed for policy signing ({e}); refusing"
+            );
+            return PolicySignOutcome::Refused(format!("enrollment key lookup failed: {e}"));
+        }
+    };
+    let public = match key.public_key() {
+        Ok(public) => public,
+        Err(e) => {
+            log_warn!(
+                "presence",
+                "enrollment key public half not exportable for policy signing ({e}); refusing"
+            );
+            return PolicySignOutcome::Refused(format!(
+                "enrollment key public half not exportable: {e}"
+            ));
+        }
+    };
+    match key.sign_policy(doc_bytes) {
+        Ok(sig) => PolicySignOutcome::Signed {
+            sig,
+            key_id: public.fingerprint_hex(),
+            pubkey_b64: public.to_base64(),
+        },
+        Err(e) => {
+            log_warn!("presence", "policy signing refused: {e}");
+            PolicySignOutcome::Refused(e.to_string())
         }
     }
 }
