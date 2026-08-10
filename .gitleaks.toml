@@ -17,6 +17,28 @@ useDefault = true
 description = "generated lockfiles"
 paths = ['''(^|/)(bun\.lock|bun\.lockb|Cargo\.lock)$''']
 
+# The extension's pinned manifest `key` is an RSA PUBLIC key: it ships in
+# every built manifest and the extension ID is derived from it. The regex is
+# the exact pinned key (see src/packages/core/src/identity.rs), anchored; if
+# the key is ever rotated, update it here too.
+[[allowlists]]
+description = "the pinned extension manifest public key (public by design)"
+targetRules = ["generic-api-key"]
+regexes = ['''^MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuE\+qrxaJ5pXhQu4k\+ecB0cvAXk1bKdCNjwV49Nepgj4j6aj4EGb6LS8rnnnkpPN3Ixh/tFFS4CU/vDa2ZBZS8pUOcLTOUjii6/MyIDNCCs4D6fg/746ko0ISBWEOynVGBFRaA9YYFm3F6K1Damnw3uZnr2nnTAvnDAoBvHyCVry1phyY7XCVFSQ6R7S2vZHUTBgJhd2dEGI7\+OqKbPXgnFLVwITbDk8A8Z4S3lZlbVQidwtUZuhe9cPt3Jgxj\+ytxcoftmR1zssj3QJ2NAhuk/NDmlyrJ4CL9tk1/ludMdJbd6pcPmHcV3EDm7btheksLERX6\+5/N\+vL\+46VOg4PLQIDAQAB$''']
+
+# Tests and fixtures exercise JWT masking with jwt.io-demo-style fake tokens
+# (payload {"sub":"1234567890"}, truncated or demo signatures). Each token is
+# pinned exactly and anchored; a new fixture token needs a new entry here (or
+# reuse one of these), so no real JWT is ever excused.
+[[allowlists]]
+description = "fake demo JWTs pinned by masking tests and fixtures"
+targetRules = ["jwt"]
+regexes = [
+  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.SflKxwRJSMeKKF2QT4fwpM$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.abcdefghij$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c$''',
+]
+
 # Add further false-positive allowlists here; for a one-off finding,
 # prefer an inline "gitleaks:allow" comment on the flagged line -
-# finding-level, so it never excuses future secrets in the same file.
+# line-scoped, so it only ever excuses the line it sits on.
