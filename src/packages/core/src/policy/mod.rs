@@ -27,8 +27,8 @@ mod store;
 pub mod gating;
 
 pub use cli::{
-    gather_policy_status, run_policy, PolicyHistoryEntryReport, PolicyHistoryReport,
-    PolicyStatusReport, PolicyStoreState,
+    gather_history_report, gather_policy_status, run_policy, PolicyErrorReport,
+    PolicyHistoryEntryReport, PolicyHistoryReport, PolicyStatusReport, PolicyStoreState,
 };
 pub use store::{
     clear_baseline_locked, load_history, restrict, set_signed, PolicyGrantFloor, PolicyHistory,
@@ -417,7 +417,12 @@ impl PolicyDoc {
 /// wire. The overlay travels free precisely because it may only restrict;
 /// that direction check is the consumer's business ([`relaxes`] against the
 /// effective policy), not this shape's.
+///
+/// `ts_rs`-exported under the gen-only feature: the desktop app's editor
+/// sends its per-field edits in exactly this shape, strict-parsed by serde
+/// at the Tauri boundary (`deny_unknown_fields`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(optional_fields))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]

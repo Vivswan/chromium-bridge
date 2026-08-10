@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { PolicyEditor } from "@/components/PolicyEditor";
 import {
   ChipMono,
   Consequence,
@@ -18,10 +19,10 @@ import { api } from "@/lib/tauri";
 import { useAppStore } from "@/store";
 
 // The Security screen shows policy as it is enforced TODAY. Client
-// admission and the presence gates are host-side facts; capability grants
-// and per-tool confirmation policy still live in the extension (they move
-// host-side in a later protocol phase), so that section carries a quiet
-// pointer instead of dead controls - a toggle that does nothing is a lie.
+// admission and the presence gates are host-side facts; the capability
+// grants and per-tool confirmation policy are the host-owned ADR-0032
+// document, edited below (PolicyEditor: restrictions land free, grants
+// sign via the bundled host behind the app's confirm dialog).
 export function SecurityView() {
   const { t } = useI18n();
   const status = useAppStore((s) => s.status);
@@ -168,14 +169,8 @@ export function SecurityView() {
           </div>
         </section>
 
-        {/* grants and per-tool confirmation policy are one honest pointer,
-            not two headed sections with the same body */}
-        <section className="zone" aria-label={t("security.managed_title")}>
-          <div className="zone-head">
-            <SpecLabel as="h2">{t("security.managed_title")}</SpecLabel>
-          </div>
-          <Consequence className="quiet">{t("security.managed_in_extension")}</Consequence>
-        </section>
+        {/* the host-owned policy document (ADR-0032): editor + history */}
+        <PolicyEditor />
       </div>
 
       <div className="kill-note" role="note">

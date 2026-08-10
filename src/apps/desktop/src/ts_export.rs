@@ -56,6 +56,17 @@ fn export_commands_gen_ts() {
     push::<chromium_bridge_core::enclave::EnclavePolicyReport>(&mut out, &cfg);
     push::<chromium_bridge_core::enclave::EnclaveStatusReport>(&mut out, &cfg);
     push::<crate::EnclaveOutcome>(&mut out, &cfg);
+    // Policy (ADR-0032): the report types come from the core, emitted by the
+    // host's `policy ... --json` and parsed back by this app; nested types
+    // precede the reports that embed them.
+    push::<chromium_bridge_core::policy::PolicyValues>(&mut out, &cfg);
+    push::<chromium_bridge_core::policy::PolicyStoreState>(&mut out, &cfg);
+    push::<chromium_bridge_core::policy::PolicyStatusReport>(&mut out, &cfg);
+    push::<chromium_bridge_core::policy::PolicyHistoryEntryReport>(&mut out, &cfg);
+    push::<chromium_bridge_core::policy::PolicyHistoryReport>(&mut out, &cfg);
+    push::<chromium_bridge_core::policy::PolicyOverlay>(&mut out, &cfg);
+    push::<crate::policy_cmds::PolicyPlan>(&mut out, &cfg);
+    push::<crate::policy_cmds::PolicyOutcome>(&mut out, &cfg);
     // Native-messaging registration.
     push::<crate::registration_cmds::RegCode>(&mut out, &cfg);
     push::<crate::registration_cmds::BrowserRow>(&mut out, &cfg);

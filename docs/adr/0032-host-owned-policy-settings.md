@@ -581,7 +581,19 @@ surface, named here rather than implied. An unenrolled Mac has the app
 but no Enclave key: grants go through the app's interactive floor
 (decision 3; the CLI refuses there, decision 5), the baseline is stored
 and pushed unsigned, and the
-extension's window lane is the approval surface. The first-run import
+extension's window lane is the approval surface. (Amended at Phase 2
+implementation: the app's policy editor routes every grant through the
+bundled signed CLI - the app binary carries no keychain entitlements
+(ADR-0026), so from inside the app process an enrolled Mac's key is
+indistinguishable from no key at all, and an in-process floor would
+store unsigned baselines on ENROLLED Macs, gutting the
+grants-cost-a-tap rule. Phase 2 therefore ships the STRICTER posture:
+an unenrolled Mac has no grant surface yet, and
+`PolicyGrantFloor::AppConfirm` is a designed seam with no production
+caller. The unenrolled-Mac floor lane lands with Phase 4's import
+screen, which must first prove genuine unenrollment through the signed
+CLI's status - not through the app's own blind key lookup - before
+offering the in-process floor.) The first-run import
 flow below reads on an enrolled Mac; on an unenrolled one the same
 screen ends in the app's floor confirmation instead of a tap and stores
 revision 1 unsigned, per decision 3. Non-macOS ships no grant

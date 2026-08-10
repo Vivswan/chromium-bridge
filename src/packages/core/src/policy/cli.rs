@@ -14,7 +14,11 @@
 //! serialized through `serde_json::Value` (sorted keys, a frozen wire
 //! contract), `deny_unknown_fields` and `ts_rs`-exported so the host that
 //! emits it and the app that parses it share one Rust definition. The doctor
-//! row renders from the same [`PolicyStatusReport`].
+//! row renders from the same [`PolicyStatusReport`]. The write lanes speak
+//! the same contract: `set --json` and `rollback --json` print the
+//! post-write [`PolicyStatusReport`] on success and the versioned
+//! [`PolicyErrorReport`] on refusal (exit codes unchanged), which is what
+//! the desktop app's subprocess grant lane parses back.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +27,7 @@ use super::{
     PolicyGrantFloor, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
 };
 use crate::audit::Surface;
-use crate::cli::{policy_args, PolicyCommand};
+use crate::cli::{argv, policy_args, PolicyCommand};
 use crate::enclave::{base64_decode, EnclaveError, EnrollmentKey};
 
 // ---- The reports (typed, versioned, ts_rs-exported) -------------------------
@@ -147,6 +151,23 @@ pub struct PolicyHistoryEntryReport {
     pub superseded_unix: u64,
 }
 
+/// The versioned failure object the WRITE subcommands print on stdout under
+/// `--json` (`policy set --json` / `policy rollback --json`): the same
+/// frozen-wire posture as [`PolicyStatusReport`] - a consumer refuses an
+/// unrecognized `v` before trusting `error`, and `deny_unknown_fields` makes
+/// an unexpected shape a loud refusal. Success prints the post-write
+/// [`PolicyStatusReport`] instead; the exit code (1) is unchanged from the
+/// prose path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyErrorReport {
+    /// Schema version. `1` today; refused first, like the status report's.
+    pub v: u32,
+    /// The refusal or failure, verbatim - the same words the prose path
+    /// prints to stderr.
+    pub error: String,
+}
+
 // ---- Gathering (I/O) and pure builders --------------------------------------
 
 /// The current policy status, read fail-closed from the store. Infallible: an
@@ -182,8 +203,10 @@ fn status_from_store(store: &PolicyStore) -> PolicyStatusReport {
 }
 
 /// The history report, read fail-closed. `Err` only when the ring itself is
-/// unreadable; an absent ring is the empty report.
-fn gather_history_report() -> Result<PolicyHistoryReport, String> {
+/// unreadable; an absent ring is the empty report. Public for the same
+/// reason as [`gather_policy_status`]: the desktop app's read surface is
+/// this exact read, in-process (no keychain, no subprocess).
+pub fn gather_history_report() -> Result<PolicyHistoryReport, String> {
     match load_history().map_err(|e| e.to_string())? {
         None => Ok(PolicyHistoryReport {
             v: 1,
@@ -372,10 +395,9 @@ fn grant_key_gate(key: GrantKey) -> Result<(), String> {
     match key {
         GrantKey::Present => Ok(()),
         GrantKey::Absent => Err(
-            "no enrollment key on this machine; the CLI's policy grant path is \
-             signature-only and refuses (ADR-0032 decision 5). Run `chromium-bridge pair` \
-             first, or grant through the desktop app (its interactive floor can store an \
-             unsigned baseline on an unenrolled Mac)."
+            "no enrollment key on this machine; policy grants are signature-only \
+             and refuse without one (ADR-0032 decision 5). Enroll first with \
+             `chromium-bridge pair`."
                 .to_string(),
         ),
         GrantKey::Unsupported => Err(
@@ -593,23 +615,78 @@ fn wire_names(fields: &[PolicyField]) -> String {
 
 // ---- The subcommand runners -------------------------------------------------
 
+/// Whether a raw `policy` argv names `--json`, decided WITHOUT the parser
+/// (argv[0] is the binary and argv[1] "policy", so the scan starts after
+/// them). [`run_policy`] consults this when [`policy_args`] itself refused,
+/// so the documented `--json` contract - a versioned report on stdout -
+/// holds even for an argv that never parsed.
+fn argv_wants_json(args: &[String]) -> bool {
+    args.iter().skip(2).any(|a| a == argv::JSON_FLAG)
+}
+
 /// Dispatch `chromium-bridge policy <sub>` (ADR-0032 decision 5). Parses via
-/// [`policy_args`] for a rich error, then runs the selected lane.
+/// [`policy_args`] for a rich error, then runs the selected lane. A parse
+/// error under `--json` still emits the versioned error object on stdout
+/// (exit code 2 unchanged), so a `--json` caller never has to fall back to
+/// scraping stderr prose.
 pub fn run_policy(args: &[String]) -> i32 {
     let cmd = match policy_args(args) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("policy: {e}");
+        Err(error) => {
+            if argv_wants_json(args) {
+                match serde_json::to_value(&PolicyErrorReport { v: 1, error }) {
+                    Ok(value) => println!("{value}"),
+                    Err(e) => {
+                        eprintln!("policy --json failed to serialize the error report: {e}");
+                    }
+                }
+            } else {
+                eprintln!("policy: {error}");
+            }
             return 2;
         }
     };
     match cmd {
         PolicyCommand::Show { json } => run_show(json),
         PolicyCommand::History { json } => run_history(json),
-        PolicyCommand::Set { overlay, touched } => run_set(overlay, touched),
+        PolicyCommand::Set {
+            overlay,
+            touched,
+            json,
+        } => run_set(overlay, touched, json),
         PolicyCommand::Restrict { overlay } => run_restrict(overlay),
-        PolicyCommand::Rollback { revision } => run_rollback(revision),
+        PolicyCommand::Rollback { revision, json } => run_rollback(revision, json),
     }
+}
+
+/// Success tail of a `--json` write: the post-write status report on stdout
+/// (exit 0), the exact object `policy show --json` prints.
+fn emit_status_json(sub: &str) -> i32 {
+    match serde_json::to_value(gather_policy_status()) {
+        Ok(value) => {
+            println!("{value}");
+            0
+        }
+        Err(e) => {
+            eprintln!("{sub} --json failed to serialize the report: {e}");
+            1
+        }
+    }
+}
+
+/// Failure tail of a write: the versioned error object on stdout under
+/// `--json`, the prose on stderr otherwise; exit 1 either way (the same
+/// code the prose path always used).
+fn refuse_write(sub: &str, json: bool, error: String) -> i32 {
+    if json {
+        match serde_json::to_value(&PolicyErrorReport { v: 1, error }) {
+            Ok(value) => println!("{value}"),
+            Err(e) => eprintln!("{sub} --json failed to serialize the error report: {e}"),
+        }
+    } else {
+        eprintln!("{sub}: {error}");
+    }
+    1
 }
 
 /// `policy show [--json]`: read-only. `--json` emits the typed report through
@@ -660,49 +737,52 @@ fn run_history(json: bool) -> i32 {
     }
 }
 
-/// `policy set <field flags>`: the GRANT lane. The keyless refusal runs UP
-/// FRONT (decision 5), before any prompt could appear and before a floor is
-/// ever constructed. Untouched fields carry the current BASELINE values
-/// (decision 3), so the edits fold over the baseline, never the effective
-/// policy.
-fn run_set(overlay: PolicyOverlay, touched: Vec<PolicyField>) -> i32 {
-    if let Err(msg) = require_grant_key() {
-        eprintln!("policy set: {msg}");
-        return 1;
-    }
-    let base = match PolicyStore::load() {
-        Ok(Some(store)) => match store.baseline_doc() {
-            Ok(doc) => doc.values(),
-            Err(e) => {
-                eprintln!("policy set: the current baseline is unreadable ({e}); refusing");
-                return 1;
+/// `policy set <field flags> [--json]`: the GRANT lane. The keyless refusal
+/// runs UP FRONT (decision 5), before any prompt could appear and before a
+/// floor is ever constructed. Untouched fields carry the current BASELINE
+/// values (decision 3), so the edits fold over the baseline, never the
+/// effective policy. Under `--json`, success prints the post-write status
+/// report and any refusal the versioned error object.
+fn run_set(overlay: PolicyOverlay, touched: Vec<PolicyField>, json: bool) -> i32 {
+    match do_set(overlay, touched) {
+        Ok(rung) => {
+            if json {
+                emit_status_json("policy set")
+            } else {
+                println!(
+                    "policy updated: a fresh signed baseline (authorized by {}).",
+                    rung.wire_name()
+                );
+                0
             }
-        },
-        Ok(None) => PolicyValues::default(),
-        Err(e) => {
-            eprintln!("policy set: the policy store is unreadable ({e}); refusing");
-            return 1;
         }
+        Err(error) => refuse_write("policy set", json, error),
+    }
+}
+
+/// The set lane's work, output-free so the prose and `--json` renderings
+/// share one path: gate, fold over the baseline, sign.
+fn do_set(
+    overlay: PolicyOverlay,
+    touched: Vec<PolicyField>,
+) -> Result<crate::presence::PresencePath, String> {
+    require_grant_key()?;
+    let base = match PolicyStore::load() {
+        Ok(Some(store)) => store
+            .baseline_doc()
+            .map_err(|e| format!("the current baseline is unreadable ({e}); refusing"))?
+            .values(),
+        Ok(None) => PolicyValues::default(),
+        Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
     };
     let values = fold(&base, &overlay);
-    match set_signed(
+    set_signed(
         values,
         touched,
         Surface::Cli,
         PolicyGrantFloor::SignatureOnly,
-    ) {
-        Ok(rung) => {
-            println!(
-                "policy updated: a fresh signed baseline (authorized by {}).",
-                rung.wire_name()
-            );
-            0
-        }
-        Err(e) => {
-            eprintln!("policy set failed: {e}");
-            1
-        }
-    }
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// `policy restrict <field flags>`: the FREE lane. Never prompts; the seam's
@@ -720,72 +800,49 @@ fn run_restrict(overlay: PolicyOverlay) -> i32 {
     }
 }
 
-/// `policy rollback --revision <n>`: re-derive revision `n`'s effective policy
-/// and re-apply it as a FRESH write - tighten-only rides `restrict` free, any
-/// relaxation is one `set_signed` tap. The old signed artifact is never
-/// written back: a lower revision must keep failing the extension's ratchet.
-fn run_rollback(revision: u64) -> i32 {
-    let history = match load_history() {
-        Ok(Some(h)) => h,
-        Ok(None) => {
-            eprintln!("policy rollback: there is no policy history on this machine.");
-            return 1;
-        }
-        Err(e) => {
-            eprintln!("policy rollback: the policy history is unreadable ({e}).");
-            return 1;
-        }
+/// `policy rollback --revision <n> [--json]`: re-derive revision `n`'s
+/// effective policy and re-apply it as a FRESH write - tighten-only rides
+/// `restrict` free, any relaxation is one `set_signed` tap. The old signed
+/// artifact is never written back: a lower revision must keep failing the
+/// extension's ratchet. Under `--json` the planning prose is suppressed
+/// (stdout is the report, nothing else): success - a no-op included -
+/// prints the post-write status report, any refusal the versioned error
+/// object.
+fn run_rollback(revision: u64, json: bool) -> i32 {
+    let inputs = match rollback_inputs(revision) {
+        Ok(inputs) => inputs,
+        Err(error) => return refuse_write("policy rollback", json, error),
     };
-    let target = match find_history_effective(&history, revision) {
-        Ok(v) => v,
-        Err(msg) => {
-            eprintln!("policy rollback: {msg}");
-            return 1;
-        }
-    };
-    let (current, baseline) = match PolicyStore::load() {
-        Ok(Some(store)) => match (store.effective(), store.baseline_doc()) {
-            (Ok(effective), Ok(doc)) => (effective, doc.values()),
-            (Err(e), _) | (_, Err(e)) => {
-                eprintln!("policy rollback: the current baseline is unreadable ({e}); refusing");
-                return 1;
-            }
-        },
-        Ok(None) => {
-            eprintln!(
-                "policy rollback: there is no current policy baseline to roll back from; \
-                 sign one first with `chromium-bridge policy set`."
-            );
-            return 1;
-        }
-        Err(e) => {
-            eprintln!("policy rollback: the policy store is unreadable ({e}); refusing");
-            return 1;
-        }
-    };
-    match plan_rollback(&target, &current, &baseline) {
+    match plan_rollback(&inputs.target, &inputs.current, &inputs.baseline) {
         RollbackPlan::NoChange => {
-            println!(
-                "policy already matches revision {revision}'s effective policy; nothing to do."
-            );
-            0
+            if json {
+                emit_status_json("policy rollback")
+            } else {
+                println!(
+                    "policy already matches revision {revision}'s effective policy; nothing to do."
+                );
+                0
+            }
         }
         RollbackPlan::Tighten { overlay, fields } => {
-            println!(
-                "rolling back to revision {revision}: tighten-only (free) - restricting {}",
-                wire_names(&fields)
-            );
+            if !json {
+                println!(
+                    "rolling back to revision {revision}: tighten-only (free) - restricting {}",
+                    wire_names(&fields)
+                );
+            }
             match restrict(overlay, Surface::Cli) {
                 Ok(()) => {
-                    println!(
-                        "done: a fresh restriction overlay (the old artifact is never replayed)."
-                    );
-                    0
+                    if json {
+                        emit_status_json("policy rollback")
+                    } else {
+                        println!(
+                            "done: a fresh restriction overlay (the old artifact is never replayed)."
+                        );
+                        0
+                    }
                 }
-                Err(e) => {
-                    eprintln!("policy rollback failed: {e}");
-                    1
-                }
+                Err(e) => refuse_write("policy rollback", json, e.to_string()),
             }
         }
         RollbackPlan::Relax {
@@ -793,15 +850,16 @@ fn run_rollback(revision: u64) -> i32 {
             touched,
             fields,
         } => {
-            println!(
-                "rolling back to revision {revision}: this relaxes the effective policy \
-                 ({}), so it mints a fresh signed revision (never a replay of the old \
-                 artifact) and requires one Touch ID tap.",
-                wire_names(&fields)
-            );
+            if !json {
+                println!(
+                    "rolling back to revision {revision}: this relaxes the effective policy \
+                     ({}), so it mints a fresh signed revision (never a replay of the old \
+                     artifact) and requires one Touch ID tap.",
+                    wire_names(&fields)
+                );
+            }
             if let Err(msg) = require_grant_key() {
-                eprintln!("policy rollback: {msg}");
-                return 1;
+                return refuse_write("policy rollback", json, msg);
             }
             match set_signed(
                 values,
@@ -810,19 +868,62 @@ fn run_rollback(revision: u64) -> i32 {
                 PolicyGrantFloor::SignatureOnly,
             ) {
                 Ok(rung) => {
-                    println!(
-                        "done: a fresh signed revision (authorized by {}).",
-                        rung.wire_name()
-                    );
-                    0
+                    if json {
+                        emit_status_json("policy rollback")
+                    } else {
+                        println!(
+                            "done: a fresh signed revision (authorized by {}).",
+                            rung.wire_name()
+                        );
+                        0
+                    }
                 }
-                Err(e) => {
-                    eprintln!("policy rollback failed: {e}");
-                    1
-                }
+                Err(e) => refuse_write("policy rollback", json, e.to_string()),
             }
         }
     }
+}
+
+/// The three effective/baseline states a rollback is planned over.
+struct RollbackInputs {
+    /// The target revision's effective policy, re-derived from the history.
+    target: PolicyValues,
+    /// The current effective policy.
+    current: PolicyValues,
+    /// The current baseline's values (what a relaxing plan folds over).
+    baseline: PolicyValues,
+}
+
+/// The disk reads behind a rollback, output-free so the prose and `--json`
+/// renderings share one path.
+fn rollback_inputs(revision: u64) -> Result<RollbackInputs, String> {
+    let history = match load_history() {
+        Ok(Some(h)) => h,
+        Ok(None) => return Err("there is no policy history on this machine.".to_string()),
+        Err(e) => return Err(format!("the policy history is unreadable ({e}).")),
+    };
+    let target = find_history_effective(&history, revision)?;
+    let (current, baseline) = match PolicyStore::load() {
+        Ok(Some(store)) => match (store.effective(), store.baseline_doc()) {
+            (Ok(effective), Ok(doc)) => (effective, doc.values()),
+            (Err(e), _) | (_, Err(e)) => {
+                return Err(format!(
+                    "the current baseline is unreadable ({e}); refusing"
+                ));
+            }
+        },
+        Ok(None) => {
+            return Err("there is no current policy baseline to roll back from; \
+                 sign one first with `chromium-bridge policy set`."
+                .to_string());
+        }
+        Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
+    };
+    Ok(RollbackInputs {
+        target,
+        current,
+        baseline,
+    })
 }
 
 /// The effective policy of the history entry at `revision`, folding that
@@ -969,6 +1070,21 @@ mod tests {
     }
 
     #[test]
+    fn error_report_round_trips_and_rejects_unknown_fields() {
+        // The write lanes' --json failure object: same frozen-wire posture
+        // as the status report (the desktop app v-gates then strict-parses).
+        let r = PolicyErrorReport {
+            v: 1,
+            error: "policy signing refused: user cancelled".into(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: PolicyErrorReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+        let bad = r#"{"v":1,"error":"x","surprise":1}"#;
+        assert!(serde_json::from_str::<PolicyErrorReport>(bad).is_err());
+    }
+
+    #[test]
     fn history_report_maps_entries_and_tolerates_a_damaged_one() {
         use super::super::{PolicyHistoryEntry, POLICY_HISTORY_VERSION};
         let good = PolicyDoc {
@@ -1021,6 +1137,24 @@ mod tests {
         assert!(grant_key_gate(GrantKey::Unusable("planted".into()))
             .unwrap_err()
             .contains("unusable"));
+    }
+
+    #[test]
+    fn an_unparsable_argv_still_counts_as_asking_for_json() {
+        let args = |list: &[&str]| list.iter().map(ToString::to_string).collect::<Vec<_>>();
+        // An empty `set` edit fails the parser, yet the raw argv names
+        // --json: run_policy must emit the versioned error object for it.
+        let bad = args(&["chromium-bridge", "policy", "set", "--json"]);
+        assert!(policy_args(&bad).is_err());
+        assert!(argv_wants_json(&bad));
+        // No --json anywhere: the prose path.
+        assert!(!argv_wants_json(&args(&[
+            "chromium-bridge",
+            "policy",
+            "bogus"
+        ])));
+        // argv[0] and argv[1] are outside the scan, whatever they contain.
+        assert!(!argv_wants_json(&args(&["--json", "--json"])));
     }
 
     #[test]

@@ -394,22 +394,26 @@ pub enum PolicyCommand {
     Show { json: bool },
     /// `policy history [--json]`: the superseded-revision ring.
     History { json: bool },
-    /// `policy set <field flags>`: the GRANT lane. `overlay` carries the
-    /// user's per-field edits and `touched` names exactly the fields they
-    /// set; the handler folds `overlay` over the current baseline and signs.
-    /// The parser guarantees `touched` is non-empty (an empty write is
-    /// refused at the CLI boundary, never handed to the seam).
+    /// `policy set <field flags> [--json]`: the GRANT lane. `overlay`
+    /// carries the user's per-field edits and `touched` names exactly the
+    /// fields they set; the handler folds `overlay` over the current
+    /// baseline and signs. The parser guarantees `touched` is non-empty (an
+    /// empty write is refused at the CLI boundary, never handed to the
+    /// seam). `--json` swaps the prose for the versioned status report on
+    /// success and the versioned error object on refusal (the desktop app's
+    /// parse surface).
     Set {
         overlay: PolicyOverlay,
         touched: Vec<PolicyField>,
+        json: bool,
     },
     /// `policy restrict <field flags>`: the FREE lane - the edits as an
     /// unsigned restriction overlay. Whether they actually restrict is the
     /// seam's direction check, not this parser's.
     Restrict { overlay: PolicyOverlay },
-    /// `policy rollback --revision <n>`: re-derive revision `n`'s effective
-    /// policy and re-apply it as a FRESH write.
-    Rollback { revision: u64 },
+    /// `policy rollback --revision <n> [--json]`: re-derive revision `n`'s
+    /// effective policy and re-apply it as a FRESH write.
+    Rollback { revision: u64, json: bool },
 }
 
 /// Parse `policy <sub> [flags]`. Same strictness as [`doctor_args`]: an
@@ -427,16 +431,22 @@ pub fn policy_args(args: &[String]) -> Result<PolicyCommand, String> {
             json: policy_json_flag(&mut it, argv::POLICY_HISTORY)?,
         }),
         Some(argv::POLICY_SET) => {
-            let (overlay, touched) = policy_field_edits(&mut it, argv::POLICY_SET)?;
-            Ok(PolicyCommand::Set { overlay, touched })
+            let (overlay, touched, json) = policy_field_edits(&mut it, argv::POLICY_SET, true)?;
+            Ok(PolicyCommand::Set {
+                overlay,
+                touched,
+                json,
+            })
         }
         Some(argv::POLICY_RESTRICT) => {
-            let (overlay, _touched) = policy_field_edits(&mut it, argv::POLICY_RESTRICT)?;
+            let (overlay, _touched, _json) =
+                policy_field_edits(&mut it, argv::POLICY_RESTRICT, false)?;
             Ok(PolicyCommand::Restrict { overlay })
         }
-        Some(argv::POLICY_ROLLBACK) => Ok(PolicyCommand::Rollback {
-            revision: policy_rollback_revision(&mut it)?,
-        }),
+        Some(argv::POLICY_ROLLBACK) => {
+            let (revision, json) = policy_rollback_revision(&mut it)?;
+            Ok(PolicyCommand::Rollback { revision, json })
+        }
         Some(other) => Err(format!(
             "unknown policy subcommand {other:?}; expected: show, set, restrict, history, rollback"
         )),
@@ -463,10 +473,13 @@ fn policy_json_flag<'a, I: Iterator<Item = &'a String>>(
     Ok(json)
 }
 
-/// The `--revision <n>` of `policy rollback`: required, exactly once, a
-/// non-negative integer.
-fn policy_rollback_revision<'a, I: Iterator<Item = &'a String>>(it: &mut I) -> Result<u64, String> {
+/// The `--revision <n> [--json]` of `policy rollback`: the revision is
+/// required, exactly once, a non-negative integer; `--json` at most once.
+fn policy_rollback_revision<'a, I: Iterator<Item = &'a String>>(
+    it: &mut I,
+) -> Result<(u64, bool), String> {
     let mut revision: Option<u64> = None;
+    let mut json = false;
     while let Some(arg) = it.next() {
         match arg.as_str() {
             argv::POLICY_REVISION_FLAG => {
@@ -478,25 +491,42 @@ fn policy_rollback_revision<'a, I: Iterator<Item = &'a String>>(it: &mut I) -> R
                     format!("--revision takes a non-negative revision number, got {value:?}")
                 })?);
             }
+            argv::JSON_FLAG if !json => json = true,
+            argv::JSON_FLAG => {
+                return Err("policy rollback: --json given more than once".into());
+            }
             other => return Err(format!("unexpected argument {other:?}")),
         }
     }
-    revision.ok_or_else(|| "policy rollback requires --revision <n>".into())
+    let revision =
+        revision.ok_or_else(|| String::from("policy rollback requires --revision <n>"))?;
+    Ok((revision, json))
 }
 
 /// Parse the per-field edit flags shared by `set` and `restrict` into an
 /// overlay plus the ordered set of fields the user named (the `touched` set a
-/// signed write embeds). A repeated field, an unknown flag, a missing value,
-/// or a malformed value is an error; an empty edit is refused here so the
-/// seam never sees a write that names no field.
+/// signed write embeds), plus `--json` where the subcommand accepts it
+/// (`set` does; `restrict` keeps refusing it). A repeated field, an unknown
+/// flag, a missing value, or a malformed value is an error; an empty edit is
+/// refused here so the seam never sees a write that names no field (`--json`
+/// alone is still an empty edit).
 fn policy_field_edits<'a, I: Iterator<Item = &'a String>>(
     it: &mut I,
     sub: &str,
-) -> Result<(PolicyOverlay, Vec<PolicyField>), String> {
+    accept_json: bool,
+) -> Result<(PolicyOverlay, Vec<PolicyField>, bool), String> {
     let mut overlay = PolicyOverlay::default();
     let mut touched: Vec<PolicyField> = Vec::new();
+    let mut json = false;
     while let Some(arg) = it.next() {
         let flag = arg.as_str();
+        if accept_json && flag == argv::JSON_FLAG {
+            if json {
+                return Err(format!("policy {sub}: --json given more than once"));
+            }
+            json = true;
+            continue;
+        }
         let field =
             policy_field_of_flag(flag).ok_or_else(|| format!("unexpected argument {flag:?}"))?;
         if touched.contains(&field) {
@@ -511,7 +541,7 @@ fn policy_field_edits<'a, I: Iterator<Item = &'a String>>(
             "policy {sub} needs at least one field flag (for example: --page-eval on)"
         ));
     }
-    Ok((overlay, touched))
+    Ok((overlay, touched, json))
 }
 
 /// Map an edit flag to its policy field. `None` for anything that is not a
@@ -717,10 +747,10 @@ pub fn print_help() {
          chromium-bridge unkill         Explicitly release the kill switch\n                                (interactive confirmation on the terminal)\n    \
          chromium-bridge audit [--limit <n>]\n                                Print the audit trail (default: last {audit_limit} records)\n    \
          chromium-bridge policy show [--json]\n                                Print the host-owned policy: store state, revision,\n                                signed?, overlay, and the effective values\n    \
-         chromium-bridge policy set <field flags>\n                                GRANT lane: mint a fresh SIGNED baseline (Touch ID).\n                                Signature-only: refuses where no enrollment key exists.\n                                Flags: --page-eval on|off, --file-upload on|off,\n                                --confirm-page-eval on|off, --host-reverify-ms <n>,\n                                --disabled-tools a,b, ... (one per policy field)\n    \
+         chromium-bridge policy set <field flags> [--json]\n                                GRANT lane: mint a fresh SIGNED baseline (Touch ID).\n                                Signature-only: refuses where no enrollment key exists.\n                                Flags: --page-eval on|off, --file-upload on|off,\n                                --confirm-page-eval on|off, --host-reverify-ms <n>,\n                                --disabled-tools a,b, ... (one per policy field)\n    \
          chromium-bridge policy restrict <field flags>\n                                FREE lane: apply an unsigned restriction overlay\n                                (no Touch ID; only ever removes capability)\n    \
          chromium-bridge policy history [--json]\n                                Print the superseded-revision ring\n    \
-         chromium-bridge policy rollback --revision <n>\n                                Re-apply revision <n>'s effective policy as a FRESH\n                                write (tighten-only rides restrict free; any\n                                relaxation is one signed tap; never a replay)\n    \
+         chromium-bridge policy rollback --revision <n> [--json]\n                                Re-apply revision <n>'s effective policy as a FRESH\n                                write (tighten-only rides restrict free; any\n                                relaxation is one signed tap; never a replay)\n    \
          chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, ...) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
@@ -956,10 +986,21 @@ mod tests {
         );
         assert_eq!(
             ok(&["policy", "rollback", "--revision", "7"]),
-            PolicyCommand::Rollback { revision: 7 }
+            PolicyCommand::Rollback {
+                revision: 7,
+                json: false
+            }
+        );
+        assert_eq!(
+            ok(&["policy", "rollback", "--json", "--revision", "7"]),
+            PolicyCommand::Rollback {
+                revision: 7,
+                json: true
+            }
         );
 
-        // set: the edits become an overlay AND a touched set, in flag order.
+        // set: the edits become an overlay AND a touched set, in flag order;
+        // --json is accepted anywhere among the flags.
         assert_eq!(
             ok(&[
                 "policy",
@@ -970,6 +1011,7 @@ mod tests {
                 "60000",
                 "--disabled-tools",
                 "page_upload, tab_close",
+                "--json",
             ]),
             PolicyCommand::Set {
                 overlay: PolicyOverlay {
@@ -983,6 +1025,7 @@ mod tests {
                     PolicyField::HostReverifyMs,
                     PolicyField::DisabledTools,
                 ],
+                json: true,
             }
         );
 
@@ -1005,12 +1048,24 @@ mod tests {
         // A missing subcommand and an unknown one both name the choices.
         assert!(err(&["policy"]).contains("needs a subcommand"));
         assert!(err(&["policy", "grant"]).contains("unknown policy subcommand"));
-        // set / restrict demand at least one field flag.
+        // set / restrict demand at least one field flag (--json alone is
+        // still an empty edit), and restrict does not take --json at all
+        // (the desktop app's restrict lane is in-process, not a parse
+        // surface).
         assert!(err(&["policy", "set"]).contains("at least one field flag"));
+        assert!(err(&["policy", "set", "--json"]).contains("at least one field flag"));
         assert!(err(&["policy", "restrict"]).contains("at least one field flag"));
-        // Repeated field, unknown flag, malformed values.
+        assert!(
+            err(&["policy", "restrict", "--confirm-page-eval", "on", "--json"])
+                .contains("unexpected argument")
+        );
+        // Repeated field, repeated --json, unknown flag, malformed values.
         assert!(
             err(&["policy", "set", "--page-eval", "on", "--page-eval", "off"])
+                .contains("given more than once")
+        );
+        assert!(
+            err(&["policy", "set", "--page-eval", "on", "--json", "--json"])
                 .contains("given more than once")
         );
         assert!(err(&["policy", "set", "--bogus", "on"]).contains("unexpected argument"));

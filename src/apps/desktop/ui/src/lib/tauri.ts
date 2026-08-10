@@ -17,6 +17,12 @@ import type {
   ExtensionInfo,
   FirstRunReport,
   McpSnippet,
+  PolicyHistoryReport,
+  PolicyOutcome,
+  PolicyOverlay,
+  PolicyPlan,
+  PolicyStatusReport,
+  PolicyValues,
   ReleaseOutcome,
 } from "./commands.gen";
 
@@ -39,6 +45,22 @@ export const api = {
   enclaveStatus: () => invoke<EnclaveStatusReport>("enclave_status"),
   enclavePair: (reset: boolean) => invoke<EnclaveOutcome>("enclave_pair", { reset }),
   enclaveRevoke: () => invoke<EnclaveOutcome>("enclave_revoke"),
+  policyStatus: () => invoke<PolicyStatusReport>("policy_status"),
+  policyHistory: () => invoke<PolicyHistoryReport>("policy_history"),
+  /** The core's canonical deny baseline; the editor's draft seed while no
+   * baseline exists (never hardcoded in the webview). */
+  policyDefaults: () => invoke<PolicyValues>("policy_defaults"),
+  /** Which edited fields relax and which tighten, decided in Rust from the
+   * core's direction table - the webview never classifies a direction. */
+  policyPlan: (overlay: PolicyOverlay) => invoke<PolicyPlan>("policy_plan", { overlay }),
+  policyRestrict: (overlay: PolicyOverlay) =>
+    invoke<PolicyStatusReport>("policy_restrict", { overlay }),
+  /** Signed grant lane (bundled host subprocess, Touch ID): call ONLY from
+   * the confirm handler of the explicit relax dialog. */
+  policySet: (overlay: PolicyOverlay) => invoke<PolicyOutcome>("policy_set", { overlay }),
+  /** May raise Touch ID (a relaxing rollback): same dialog-first obligation
+   * as policySet. */
+  policyRollback: (revision: number) => invoke<PolicyOutcome>("policy_rollback", { revision }),
   browsersList: () => invoke<BrowserRow[]>("browsers_list"),
   browserRegister: (key: string) => invoke<string[]>("browser_register", { key }),
   browserUnregister: (key: string) => invoke<string>("browser_unregister", { key }),

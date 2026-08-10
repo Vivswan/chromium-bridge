@@ -128,6 +128,196 @@ export type EnclaveOutcome = {
 };
 
 /**
+ * Just the 15 policy field values, detached from a document's version /
+ * revision / touched scoping: the shape the comparisons and the effective
+ * policy work in.
+ *
+ * Serializable in camelCase (the wire field names) so it can be the
+ * `effective` payload of [`crate::policy::PolicyStatusReport`] that the CLI
+ * emits and the desktop app parses back; `ts_rs`-exported under the gen-only
+ * feature, the same posture as the enclave report types. Strict on the way
+ * in: serde does NOT inherit a container attribute from an embedding type,
+ * so without its own `deny_unknown_fields` an unknown field inside a
+ * report's `effective` would parse silently.
+ */
+export type PolicyValues = {
+  cdpMode: boolean;
+  fileUploadEnabled: boolean;
+  handleDialogEnabled: boolean;
+  pageEvalEnabled: boolean;
+  confirmHighRiskClick: boolean;
+  confirmPageEval: boolean;
+  touchIdConfirm: boolean;
+  confirmTabClose: boolean;
+  warnPreciseSnapshot: boolean;
+  evalMask: boolean;
+  hostReverifyMs: number;
+  confirmGraceMs: number;
+  clickToastTimeoutMs: number;
+  evalToastTimeoutMs: number;
+  disabledTools: Array<string>;
+};
+
+/**
+ * The store state a status report distinguishes. `none` is the pre-cutover
+ * state and is HEALTHY - it is not an error (the extension enforces the deny
+ * baseline until a first policy signs). `error` is a present-but-unreadable
+ * store, which fails closed.
+ */
+export type PolicyStoreState = "none" | "present" | "error";
+
+/**
+ * The versioned, machine-readable policy status: the exact object
+ * `chromium-bridge policy show --json` prints (ADR-0032), the typed mirror
+ * the desktop app parses back, and the shape the doctor row renders from.
+ *
+ * The wire form is frozen: a consumer refuses an unrecognized `v` before it
+ * trusts any other field, so field names and `v` must not change without a
+ * version bump. `deny_unknown_fields` makes an unexpected shape a loud
+ * refusal on the parsing side. The fields below carry data only when the
+ * store is `present`; `detail` only when it is `error`.
+ */
+export type PolicyStatusReport = {
+  /**
+   * Schema version. `1` today; a newer value must be refused before any
+   * field below is read (fail closed).
+   */
+  v: number;
+  /**
+   * The store's state.
+   */
+  store: PolicyStoreState;
+  /**
+   * The signed baseline's monotonic revision; present only when
+   * `store == present`.
+   */
+  revision?: number;
+  /**
+   * Whether the stored baseline carries an enclave signature (`true`) or is
+   * an app-floor UNSIGNED baseline (`false`). Present only when
+   * `store == present`. Host-side this is only "a signature is stored" -
+   * the host never self-certifies; the extension verifies it against its
+   * pinned key.
+   */
+  signed?: boolean;
+  /**
+   * Whether an unsigned restriction overlay is active on top of the
+   * baseline. Present only when `store == present`.
+   */
+  overlay_active?: boolean;
+  /**
+   * The effective policy: the baseline with the overlay folded over it -
+   * what the bridge actually enforces. Present only when `store == present`.
+   */
+  effective?: PolicyValues;
+  /**
+   * Human detail for a `store == error` state.
+   */
+  detail?: string;
+};
+
+/**
+ * One superseded record, reduced to what a rollback surface needs.
+ */
+export type PolicyHistoryEntryReport = {
+  /**
+   * The record's baseline revision, or `null` if that historical baseline
+   * is unreadable (a damaged ring entry never blocks the report).
+   */
+  revision: number | null;
+  /**
+   * Whether the superseded baseline carried a signature.
+   */
+  signed: boolean;
+  /**
+   * Whether it carried a restriction overlay.
+   */
+  overlay_active: boolean;
+  /**
+   * Unix seconds when the record stopped being the current store.
+   */
+  superseded_unix: number;
+};
+
+/**
+ * The versioned policy-history report: the superseded-revision ring, oldest
+ * first, as `chromium-bridge policy history --json` prints it.
+ */
+export type PolicyHistoryReport = {
+  /**
+   * Schema version.
+   */
+  v: number;
+  entries: Array<PolicyHistoryEntryReport>;
+};
+
+/**
+ * The unsigned restriction overlay (ADR-0032 decision 3): per-field
+ * overrides on top of the signed baseline, `None` fields omitted from the
+ * wire. The overlay travels free precisely because it may only restrict;
+ * that direction check is the consumer's business ([`relaxes`] against the
+ * effective policy), not this shape's.
+ *
+ * `ts_rs`-exported under the gen-only feature: the desktop app's editor
+ * sends its per-field edits in exactly this shape, strict-parsed by serde
+ * at the Tauri boundary (`deny_unknown_fields`).
+ */
+export type PolicyOverlay = {
+  cdpMode?: boolean;
+  fileUploadEnabled?: boolean;
+  handleDialogEnabled?: boolean;
+  pageEvalEnabled?: boolean;
+  confirmHighRiskClick?: boolean;
+  confirmPageEval?: boolean;
+  touchIdConfirm?: boolean;
+  confirmTabClose?: boolean;
+  warnPreciseSnapshot?: boolean;
+  evalMask?: boolean;
+  hostReverifyMs?: number;
+  confirmGraceMs?: number;
+  clickToastTimeoutMs?: number;
+  evalToastTimeoutMs?: number;
+  disabledTools?: Array<string>;
+};
+
+/**
+ * How a draft overlay moves each edited field relative to the currently
+ * enforced policy, in catalogue order, by wire name. Computed in Rust from
+ * the core's direction table; the webview uses it only to pick the lane
+ * and to show the user exactly which fields relax before any prompt.
+ */
+export type PolicyPlan = {
+  /**
+   * Edited fields that move toward their permissive pole: applying them
+   * is a grant and takes the signed lane.
+   */
+  relaxes: Array<string>;
+  /**
+   * Edited fields that move toward their restrictive pole.
+   */
+  tightens: Array<string>;
+};
+
+/**
+ * One subprocess policy write, mirroring `EnclaveOutcome`: on success the
+ * post-write [`PolicyStatusReport`] the host printed under `--json`; on a
+ * refusal the host's own words verbatim (the versioned error object where
+ * it parses, the raw transcript where it does not - never smoothed over).
+ */
+export type PolicyOutcome = {
+  ok: boolean;
+  /**
+   * The refusal or diagnostics, verbatim; empty on a quiet success.
+   */
+  transcript: string;
+  /**
+   * The post-write status, parsed from the subprocess's `--json` stdout
+   * (version-gated). `None` on a refusal.
+   */
+  status: PolicyStatusReport | null;
+};
+
+/**
  * Core's [`RegState`] with its reasons stripped, mirrored as a serde enum
  * (the same pattern as `clients::AnchorKind`) so the webview receives a
  * closed literal union instead of a plain string. The `From` impl matches

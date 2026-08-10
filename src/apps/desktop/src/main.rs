@@ -18,6 +18,7 @@ mod cli_tool;
 mod clients;
 mod host;
 mod killswitch;
+mod policy_cmds;
 mod presence_seam;
 mod registration_cmds;
 mod status;
@@ -96,6 +97,62 @@ async fn enclave_pair(reset: bool) -> Result<EnclaveOutcome, String> {
 #[tauri::command]
 async fn enclave_revoke() -> Result<EnclaveOutcome, String> {
     blocking(|| run_enclave_op(&[chromium_bridge_core::cli::argv::REVOKE])).await
+}
+
+// ---- policy (ADR-0032 decision 5: the app editing surface) ----------------------
+
+#[tauri::command]
+async fn policy_status() -> Result<chromium_bridge_core::policy::PolicyStatusReport, String> {
+    blocking(|| Ok(chromium_bridge_core::policy::gather_policy_status())).await
+}
+
+#[tauri::command]
+async fn policy_history() -> Result<chromium_bridge_core::policy::PolicyHistoryReport, String> {
+    blocking(chromium_bridge_core::policy::gather_history_report).await
+}
+
+/// The deny baseline (the core's canonical defaults): what the editor seeds
+/// its draft from while no baseline exists yet, so the webview never
+/// hardcodes a policy value.
+#[tauri::command]
+async fn policy_defaults() -> Result<chromium_bridge_core::policy::PolicyValues, String> {
+    blocking(|| Ok(policy_cmds::defaults())).await
+}
+
+/// Read-only lane classification for the apply flow: which edited fields
+/// relax and which tighten, decided in Rust from the core's direction table.
+#[tauri::command]
+async fn policy_plan(
+    overlay: chromium_bridge_core::policy::PolicyOverlay,
+) -> Result<policy_cmds::PolicyPlan, String> {
+    blocking(move || policy_cmds::plan(overlay)).await
+}
+
+/// The FREE lane: restrictions carry no attestation, so this runs
+/// in-process. The seam's direction check refuses anything that would relax.
+#[tauri::command]
+async fn policy_restrict(
+    overlay: chromium_bridge_core::policy::PolicyOverlay,
+) -> Result<chromium_bridge_core::policy::PolicyStatusReport, String> {
+    blocking(move || policy_cmds::restrict(overlay)).await
+}
+
+/// The signed GRANT lane, via the bundled host subprocess (Touch ID
+/// attributes to the signed host, ADR-0026). Same dialog-first obligation
+/// as `kill_release`: only the app's explicit confirm handler may invoke
+/// this, after the user has seen exactly which fields relax.
+#[tauri::command]
+async fn policy_set(
+    overlay: chromium_bridge_core::policy::PolicyOverlay,
+) -> Result<policy_cmds::PolicyOutcome, String> {
+    blocking(move || policy_cmds::set(overlay)).await
+}
+
+/// Rollback via the bundled host subprocess: a relaxing rollback raises the
+/// host's Touch ID sheet, so the same dialog-first obligation applies.
+#[tauri::command]
+async fn policy_rollback(revision: u64) -> Result<policy_cmds::PolicyOutcome, String> {
+    blocking(move || policy_cmds::rollback(revision)).await
 }
 
 // ---- native-messaging registration ---------------------------------------------
@@ -238,6 +295,13 @@ fn main() {
             enclave_status,
             enclave_pair,
             enclave_revoke,
+            policy_status,
+            policy_history,
+            policy_defaults,
+            policy_plan,
+            policy_restrict,
+            policy_set,
+            policy_rollback,
             browsers_list,
             browser_register,
             browser_unregister,

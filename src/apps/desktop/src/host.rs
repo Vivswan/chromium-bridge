@@ -103,7 +103,7 @@ static HOST_OP: Mutex<()> = Mutex::new(());
 /// across the app. No timeout: the Enclave subcommands legitimately wait on
 /// a Touch ID prompt, and the system expires that prompt itself, so the
 /// subprocess always terminates.
-pub fn run_host(args: &[&str]) -> Result<HostRun, String> {
+pub fn run_host<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Result<HostRun, String> {
     let _serialized = HOST_OP
         .lock()
         .map_err(|_| "an earlier host operation panicked; restart the app".to_string())?;
