@@ -712,10 +712,9 @@ pub enum EnclaveControl {
 /// Trust: these frames arrive only from the extension Chrome connected to
 /// this host (`allowed_origins`). The list/revoke pair adds no capability
 /// beyond the CLI's (capability reduction); `kill_engage` is also reduction.
-/// `kill_release` RESTORES capability and is the one deliberate exception,
-/// accepted because the extension's options page is a trusted surface on par
-/// with the CLI (ADR-0030 records the decision and the page-can-never-reach-it
-/// gating that keeps it true).
+/// `kill_release` would RESTORE capability, so the host refuses it (ADR-0032
+/// decision 6 retired the extension release surface); the frame stays parsed
+/// so a shipped extension gets an audited refusal, never a silent drop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -813,12 +812,68 @@ impl KillStatus {
     }
 }
 
+/// The policy state the host reports, before it is flattened onto the pinned
+/// `policy_current` wire triple (ADR-0032 decision 4) - the [`KillStatus`]
+/// discipline applied to the policy push. The wire variant
+/// ([`PolicyControl::PolicyCurrent`]) stays `{ ok, baseline?, sig?, overlay?,
+/// error? }` for contract stability, but hand-assembling it let the mixtures
+/// the extension must never see compile: `ok: false` carrying a baseline, a
+/// `sig` with no baseline, an `ok: true` with an error. Every producer builds
+/// one of these instead and lets [`into_frame`](PolicyStatus::into_frame)
+/// emit the only two flat shapes the contract means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyStatus {
+    /// The store was readable: the EXACT signed baseline bytes (base64), the
+    /// optional signature (`None` is the app-floor unsigned baseline), and the
+    /// optional restriction overlay. A signature can never travel without the
+    /// baseline it covers, because both live inside this one variant.
+    Present {
+        baseline_b64: String,
+        sig_b64: Option<String>,
+        overlay: Option<crate::policy::PolicyOverlay>,
+    },
+    /// No usable policy: the store is absent, unreadable, or malformed. `ok:
+    /// false` with an error and NO baseline claim, so the extension fails
+    /// closed on its deny baseline rather than trusting bytes nobody vouched
+    /// for (decision 4/5).
+    Unavailable { error: String },
+}
+
+impl PolicyStatus {
+    /// The pinned `policy_current` wire frame for this state: `baseline` is
+    /// present exactly when the store was readable, `error` exactly when not,
+    /// and a `sig` never appears without its `baseline`.
+    pub fn into_frame(self) -> PolicyControl {
+        match self {
+            PolicyStatus::Present {
+                baseline_b64,
+                sig_b64,
+                overlay,
+            } => PolicyControl::PolicyCurrent {
+                ok: true,
+                baseline: Some(baseline_b64),
+                sig: sig_b64,
+                overlay,
+                error: None,
+            },
+            PolicyStatus::Unavailable { error } => PolicyControl::PolicyCurrent {
+                ok: false,
+                baseline: None,
+                sig: None,
+                overlay: None,
+                error: Some(error),
+            },
+        }
+    }
+}
+
 /// Policy and language control frames (ADR-0032), spoken over the
 /// native-messaging channel and host-handled exactly like [`EnclaveControl`]
 /// and [`AdminControl`]: never forwarded to the MCP server, and dropped when
-/// the server leg tries to inject one. In this phase they are classified and
-/// dropped only - neither pump carries them anywhere; the host answers them
-/// from phase 2 of ADR-0032, when the policy store lands.
+/// the server leg tries to inject one. The host answers the four
+/// extension-originated frames and pushes `policy_current` / `lang_current`
+/// unsolicited (which is why those two carry no request disposition: a result
+/// frame arriving inbound is an injection and is dropped).
 ///
 /// - `policy_get {}` (extension -> host): on-demand refresh of the policy
 ///   state. The extension sends it only on a connection where the host has
@@ -1032,6 +1087,96 @@ const _: () = {
     }
 };
 
+/// The host-directed policy/language REQUEST kinds (ADR-0032): the
+/// [`PolicyControl`] frames the extension sends and the host must answer with
+/// a reply of a matching type. Carried by [`FrameDisposition::MalformedPolicy`]
+/// so the malformed-reply builder matches exhaustively - the same discipline
+/// as [`AdminKind`]. `LegacySettings` is deliberately NOT here: it is
+/// fire-and-forget (recorded pending, never answered), so a malformed one is
+/// dropped with no reply, exactly like a malformed `audit_event`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyKind {
+    PolicyGet,
+    LangGet,
+    LangSet,
+}
+
+/// Ties every [`PolicyKind`] variant to its wire tag AND enumerates the full
+/// kind set from one list - the [`admin_request_kinds!`] idea for the
+/// policy/language request kinds. Exhaustive `wire_tag` with no wildcard, so a
+/// new variant fails to compile until it joins the list.
+macro_rules! policy_request_kinds {
+    ($($Variant:ident => $tag:literal),+ $(,)?) => {
+        impl PolicyKind {
+            /// Every request kind, in declaration order.
+            pub const ALL: &'static [PolicyKind] = &[$(PolicyKind::$Variant),+];
+
+            /// The wire `type` tag of the request this kind names (for logs
+            /// and the malformed reply). Exhaustive with no wildcard, and
+            /// `const` so the assertion below can tie every tag to the derived
+            /// [`POLICY_CONTROL_TAGS`] at compile time.
+            pub const fn wire_tag(self) -> &'static str {
+                match self {
+                    $(PolicyKind::$Variant => $tag,)+
+                }
+            }
+        }
+    };
+}
+
+policy_request_kinds!(
+    PolicyGet => "policy_get",
+    LangGet => "lang_get",
+    LangSet => "lang_set",
+);
+
+/// Compile-time: every [`PolicyKind`] tag is one of the derived
+/// [`POLICY_CONTROL_TAGS`], and no two kinds share a tag - so `wire_tag`'s
+/// literals cannot drift from the tag machinery (the [`AdminKind`] assertion,
+/// specialized to the policy request kinds).
+const _: () = {
+    const fn str_eq(a: &str, b: &str) -> bool {
+        let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        while let ([ha, rest_a @ ..], [hb, rest_b @ ..]) = (a, b) {
+            if *ha != *hb {
+                return false;
+            }
+            a = rest_a;
+            b = rest_b;
+        }
+        true
+    }
+    const fn is_policy_control_tag(tag: &str) -> bool {
+        let mut tags = POLICY_CONTROL_TAGS;
+        while let [head, rest @ ..] = tags {
+            if str_eq(head, tag) {
+                return true;
+            }
+            tags = rest;
+        }
+        false
+    }
+    let mut kinds: &[PolicyKind] = PolicyKind::ALL;
+    while let [kind, rest @ ..] = kinds {
+        assert!(
+            is_policy_control_tag(kind.wire_tag()),
+            "a PolicyKind wire_tag is not a derived PolicyControl tag"
+        );
+        let mut later = rest;
+        while let [other, more @ ..] = later {
+            assert!(
+                !str_eq(kind.wire_tag(), other.wire_tag()),
+                "two PolicyKind variants share a wire tag"
+            );
+            later = more;
+        }
+        kinds = rest;
+    }
+};
+
 /// The fields of one accepted `audit_event` frame (ADR-0030), traveling by
 /// name from [`classify_nm_frame`] to the audit sink. `kind` is already the
 /// typed, extension-owned [`crate::audit::AuditKind`]: classification maps the
@@ -1076,7 +1221,10 @@ pub enum FrameDisposition {
     KillStatus,
     /// A well-formed `kill_engage` (ADR-0030): engage the kill switch.
     KillEngage,
-    /// A well-formed `kill_release` (ADR-0030): release the kill switch.
+    /// A well-formed `kill_release` (ADR-0030): a request to release the kill
+    /// switch, which the host REFUSES with an audited `kill_status_result`
+    /// (ADR-0032 decision 6 retired the extension release surface; release is
+    /// `chromium-bridge unkill` only).
     KillRelease,
     /// A well-formed `audit_event` (ADR-0030) carrying an extension-owned
     /// kind: record one extension-side decision in the audit trail.
@@ -1101,6 +1249,27 @@ pub enum FrameDisposition {
     /// Carries a `client_*`/`kill_*` request type but does not parse as that
     /// frame: reply the matching `*_result { ok: false }`, do not forward.
     MalformedAdmin(AdminKind),
+    /// A well-formed `policy_get` (ADR-0032 decision 4): answer with
+    /// `policy_current` from the host store.
+    PolicyGet,
+    /// A well-formed `legacy_settings` (ADR-0032 decision 8): the snapshotted
+    /// legacy settings bag, recorded pending host-side and never applied.
+    /// Fire-and-forget, no reply. Phase 4 wires the pending-import store; this
+    /// lane only routes it off the forward path (an old host would have
+    /// classified it `Forward`, tearing the browser leg down).
+    LegacySettings { bag: Value },
+    /// A well-formed `lang_get` (ADR-0032 decision 7): answer with
+    /// `lang_current` from the language store.
+    LangGet,
+    /// A well-formed `lang_set` (ADR-0032 decision 7): apply the requested
+    /// language (bumping the sequence only if it changed), answer
+    /// `lang_current`.
+    LangSet { value: String },
+    /// Carries a `policy_get`/`lang_get`/`lang_set` type but does not parse as
+    /// that frame: reply the matching frame with the unchanged state (a
+    /// malformed `lang_set` replies `lang_current` with the value+seq that
+    /// stand, decision 7), do not forward.
+    MalformedPolicy(PolicyKind),
 }
 
 /// Resolve `tag` to its `'static` copy in the derived host-control tag set
@@ -1203,11 +1372,30 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
             // dropped (and logged), never recorded as if it were valid.
             _ => FrameDisposition::Drop("malformed audit_event"),
         },
+        "policy_get" => match serde_json::from_value(frame.clone()) {
+            Ok(PolicyControl::PolicyGet {}) => FrameDisposition::PolicyGet,
+            _ => FrameDisposition::MalformedPolicy(PolicyKind::PolicyGet),
+        },
+        "legacy_settings" => match serde_json::from_value(frame.clone()) {
+            Ok(PolicyControl::LegacySettings { bag }) => FrameDisposition::LegacySettings { bag },
+            // Fire-and-forget has no reply contract (Phase 4 owns the pending
+            // store); a malformed bag is dropped, never forwarded.
+            _ => FrameDisposition::Drop("malformed legacy_settings"),
+        },
+        "lang_get" => match serde_json::from_value(frame.clone()) {
+            Ok(PolicyControl::LangGet {}) => FrameDisposition::LangGet,
+            _ => FrameDisposition::MalformedPolicy(PolicyKind::LangGet),
+        },
+        "lang_set" => match serde_json::from_value(frame.clone()) {
+            Ok(PolicyControl::LangSet { value }) => FrameDisposition::LangSet { value },
+            _ => FrameDisposition::MalformedPolicy(PolicyKind::LangSet),
+        },
         // Every remaining control tag names a frame the browser leg never
-        // legitimately originates (proofs, errors, results, the revoked push)
-        // - and any control variant added in the future lands here too until
-        // it is given a handler arm above: dropped, never forwarded. Fail
-        // closed by construction.
+        // legitimately originates (proofs, errors, results, the revoked push,
+        // and the host->extension `policy_current`/`lang_current` pushes) -
+        // and any control variant added in the future lands here too until it
+        // is given a handler arm above: dropped, never forwarded. Fail closed
+        // by construction.
         other => FrameDisposition::Drop(other),
     }
 }
@@ -2386,41 +2574,73 @@ mod tests {
     }
 
     #[test]
-    fn policy_frames_are_dropped_and_recognized_as_host_control() {
-        // ADR-0032 phase 1: the six policy/language tags are host-control
-        // tags with no handler arm yet, so the stdin->socket pump drops each
-        // one (never Forward - against an old-style forward, the MCP
-        // server's strict BridgeResp parse would tear the browser leg down),
-        // and the socket->stdout pump recognizes them all as host control.
-        // The host answers them from phase 2.
+    fn policy_frames_are_answered_or_dropped_and_recognized_as_host_control() {
+        // ADR-0032 phase 2: the four extension-originated frames are ANSWERED
+        // by the host (policy_get, legacy_settings, lang_get, lang_set), so
+        // they classify to their own dispositions - never Drop, never Forward
+        // (an old-style forward would tear the browser leg down on the MCP
+        // server's strict BridgeResp parse). The two host->extension pushes
+        // (policy_current, lang_current) arriving FROM the browser stay
+        // DROPPED (host->extension only). Every one is still recognized as
+        // host control by both pumps' classifiers.
         for tag in POLICY_CONTROL_TAGS {
-            let frame = json!({ "type": tag });
-            assert!(
-                matches!(classify_nm_frame(&frame), FrameDisposition::Drop(t) if t == *tag),
-                "tag {tag} must classify as Drop"
-            );
             assert_eq!(
-                host_control_type(&frame),
+                host_control_type(&json!({ "type": tag })),
                 Some(*tag),
                 "tag {tag} must be recognized as host control"
             );
-        }
-        // Fully-formed frames drop the same way: classification keys on the
-        // tag, so well-formedness cannot smuggle one into Forward.
-        for frame in [
-            json!({ "type": "policy_get" }),
-            json!({ "type": "policy_current", "ok": true, "baseline": "YmFzZQ==",
-                    "sig": "c2ln", "overlay": {} }),
-            json!({ "type": "legacy_settings", "bag": { "groupTabs": true } }),
-            json!({ "type": "lang_get" }),
-            json!({ "type": "lang_set", "value": "en" }),
-            json!({ "type": "lang_current", "value": "en", "seq": 1 }),
-        ] {
             assert!(
-                matches!(classify_nm_frame(&frame), FrameDisposition::Drop(_)),
-                "should drop: {frame}"
+                !matches!(
+                    classify_nm_frame(&json!({ "type": tag })),
+                    FrameDisposition::Forward
+                ),
+                "tag {tag} must never classify as Forward"
             );
         }
+        // The four answered frames map to their own dispositions.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "policy_get" })),
+            FrameDisposition::PolicyGet
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "legacy_settings", "bag": { "groupTabs": true } })),
+            FrameDisposition::LegacySettings { .. }
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "lang_get" })),
+            FrameDisposition::LangGet
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "lang_set", "value": "en" })),
+            FrameDisposition::LangSet { .. }
+        ));
+        // The two host->extension pushes are dropped when they arrive from the
+        // browser: they are host-originated only.
+        for tag in ["policy_current", "lang_current"] {
+            assert!(
+                matches!(classify_nm_frame(&json!({ "type": tag })), FrameDisposition::Drop(t) if t == tag),
+                "tag {tag} must classify as Drop from the browser leg"
+            );
+        }
+        // Malformed extension-originated frames take their typed malformed arm
+        // (a reply is owed) rather than Forward - except legacy_settings,
+        // which is fire-and-forget and drops.
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "policy_get", "extra": 1 })),
+            FrameDisposition::MalformedPolicy(PolicyKind::PolicyGet)
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "lang_get", "extra": 1 })),
+            FrameDisposition::MalformedPolicy(PolicyKind::LangGet)
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "lang_set" })),
+            FrameDisposition::MalformedPolicy(PolicyKind::LangSet)
+        ));
+        assert!(matches!(
+            classify_nm_frame(&json!({ "type": "legacy_settings" })),
+            FrameDisposition::Drop(_)
+        ));
     }
 
     #[test]
@@ -2449,6 +2669,61 @@ mod tests {
                 .into_iter()
                 .collect();
         assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn policy_status_into_frame_forbids_illegal_mixtures() {
+        // The KillStatus discipline for policy_current (ADR-0032): the typed
+        // intermediate emits only the two flat shapes the contract means, so a
+        // sig without a baseline, a baseline on an ok:false, or an ok:true
+        // with an error is unconstructible past this point.
+        match (PolicyStatus::Present {
+            baseline_b64: "YmFzZQ==".into(),
+            sig_b64: Some("c2ln".into()),
+            overlay: None,
+        })
+        .into_frame()
+        {
+            PolicyControl::PolicyCurrent {
+                ok: true,
+                baseline: Some(_),
+                sig: Some(_),
+                error: None,
+                ..
+            } => {}
+            other => panic!("present must be ok:true with baseline and no error: {other:?}"),
+        }
+        // An unsigned (app-floor) baseline: still ok:true with a baseline, sig
+        // absent - never a sig without its baseline.
+        match (PolicyStatus::Present {
+            baseline_b64: "YmFzZQ==".into(),
+            sig_b64: None,
+            overlay: None,
+        })
+        .into_frame()
+        {
+            PolicyControl::PolicyCurrent {
+                ok: true,
+                baseline: Some(_),
+                sig: None,
+                ..
+            } => {}
+            other => panic!("unsigned present must carry the baseline and no sig: {other:?}"),
+        }
+        match (PolicyStatus::Unavailable {
+            error: "no policy baseline".into(),
+        })
+        .into_frame()
+        {
+            PolicyControl::PolicyCurrent {
+                ok: false,
+                baseline: None,
+                sig: None,
+                overlay: None,
+                error: Some(_),
+            } => {}
+            other => panic!("unavailable must be ok:false with no baseline claim: {other:?}"),
+        }
     }
 
     #[test]

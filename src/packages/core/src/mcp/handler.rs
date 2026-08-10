@@ -219,8 +219,19 @@ fn execute_tool_call(session: &Session, name: &str, args: &Value) -> tools::Outc
     // The global kill switch gates EVERY tool call, for every harness,
     // before any routing or bridge traffic (ADR-0030). Fail closed on an
     // engaged switch AND on an unreadable record; the harness connection
-    // stays up so the typed refusal is delivered.
-    let (route, out) = route_and_dispatch(session, name, args, crate::kill::check());
+    // stays up so the typed refusal is delivered. The host-side policy gate
+    // (ADR-0032 decision 4) runs alongside it, refusing a tool whose grant is
+    // off or that the effective policy disables - defense in depth for the
+    // honest-host path, an unreadable store denying all (decision 5). Both
+    // verdicts are computed here, before dispatch, and injected so the
+    // fail-closed matrix stays pure and unit-testable.
+    let (route, out) = route_and_dispatch(
+        session,
+        name,
+        args,
+        crate::kill::check(),
+        crate::policy::gating::check(name),
+    );
     let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::ToolCall);
     rec.req = Some(req_id);
     rec.conn = route.as_ref().map(|(_, g)| *g);
@@ -249,24 +260,28 @@ fn next_request_id() -> u64 {
 /// and the dispatch both consume that one result, so the trail can never
 /// record a default route for a call the strict parse refused. The route is
 /// captured before the dispatch and refreshed after it (a host may connect
-/// during the call's startup wait), and the kill verdict arrives injected
-/// so the fail-closed matrix is unit-testable without touching the runtime
-/// directory or the audit sink (both live in [`execute_tool_call`]).
+/// during the call's startup wait), and the pre-dispatch verdicts (the kill
+/// switch, ADR-0030; the host policy gate, ADR-0032) arrive injected so the
+/// fail-closed matrix is unit-testable without touching the runtime directory
+/// or the audit sink (both live in [`execute_tool_call`]). The kill switch is
+/// the global brake, so it is checked first; the policy gate is per-tool.
 fn route_and_dispatch(
     session: &Session,
     name: &str,
     args: &Value,
     kill: Result<(), crate::error::CallError>,
+    policy: Result<(), crate::error::CallError>,
 ) -> (Option<(String, u64)>, tools::Outcome) {
     let browser = tools::extract_browser(args);
     let route_now = || browser.as_ref().ok().and_then(|b| session.route_info(*b));
     let route = route_now();
-    let out = match kill {
-        Ok(()) => match &browser {
+    let out = match (kill, policy) {
+        (Ok(()), Ok(())) => match &browser {
             Ok(b) => tools::dispatch(session, name, args, *b),
             Err(e) => tools::error_outcome(e),
         },
-        Err(e) => tools::error_outcome(&e),
+        (Err(e), _) => tools::error_outcome(&e),
+        (Ok(()), Err(e)) => tools::error_outcome(&e),
     };
     let route = route.or_else(route_now);
     (route, out)
@@ -394,8 +409,13 @@ mod tests {
         // 12s startup wait - this test finishing quickly is itself the
         // assertion).
         let session = Session::new();
-        let (_route, out) =
-            route_and_dispatch(&session, "tab_list", &json!({ "browser": 123 }), Ok(()));
+        let (_route, out) = route_and_dispatch(
+            &session,
+            "tab_list",
+            &json!({ "browser": 123 }),
+            Ok(()),
+            Ok(()),
+        );
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
     }
@@ -418,8 +438,13 @@ mod tests {
         let label = crate::ipc::BrowserLabel::parse("chrome").unwrap();
         assert!(session.attach_browser(label, reader, writer));
 
-        let (route, out) =
-            route_and_dispatch(&session, "tab_list", &json!({ "browser": 123 }), Ok(()));
+        let (route, out) = route_and_dispatch(
+            &session,
+            "tab_list",
+            &json!({ "browser": 123 }),
+            Ok(()),
+            Ok(()),
+        );
         assert_eq!(route, None, "a refused parse must not invent a route");
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
@@ -430,6 +455,7 @@ mod tests {
             &session,
             "no_such_tool",
             &json!({ "browser": "chrome" }),
+            Ok(()),
             Ok(()),
         );
         assert_eq!(route.map(|(l, _)| l), Some("chrome".to_string()));
@@ -450,8 +476,33 @@ mod tests {
             "tab_list",
             &json!({}),
             Err(crate::error::CallError::Killed),
+            Ok(()),
         );
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("BRIDGE_KILLED"));
+    }
+
+    #[test]
+    fn a_policy_refusal_is_typed_and_skips_dispatch() {
+        // The host policy gate short-circuits dispatch exactly as the kill
+        // verdict does: with an empty session a dispatched tab_list would park
+        // in the 12s connect wait, so this test finishing quickly is the
+        // assertion that the injected policy refusal skipped it, and the
+        // refusal reaches the caller as the typed TOOL_DISABLED outcome. The
+        // gate verdict itself (which tools, which stores) is unit-tested in
+        // policy::gating; here only the injection seam is under test.
+        let session = Session::new();
+        let (_route, out) = route_and_dispatch(
+            &session,
+            "page_eval",
+            &json!({}),
+            Ok(()),
+            Err(crate::error::CallError::ToolDisabled {
+                tool: "page_eval".into(),
+                reason: crate::error::ToolDisabledReason::GrantOff("pageEvalEnabled"),
+            }),
+        );
+        assert!(out.is_error());
+        assert_eq!(out.error_code(), Some("TOOL_DISABLED"));
     }
 }

@@ -118,9 +118,26 @@ impl PolicyStore {
     /// The effective policy this store describes: the baseline with the
     /// stored restriction overlay folded over it (ADR-0032 decision 3's
     /// comparison anchor).
+    ///
+    /// The fold is direction-checked: every legitimate write leaves the
+    /// overlay restricting-or-holding the baseline ([`restrict`] only adds
+    /// entries at or under the effective policy, and [`set_signed`] carries
+    /// baseline values on untouched fields and drops the touched entries),
+    /// so a fold that relaxes the baseline anywhere is a tampered or
+    /// corrupted store and reads as an error - never as the relaxed values.
+    /// Enforcement (the dispatch gate, the `policy_current` push, status
+    /// surfaces) fails closed on it, same as an unparsable baseline; the
+    /// extension applies the same direction check independently.
     pub fn effective(&self) -> io::Result<PolicyValues> {
         let baseline = self.baseline_doc()?.values();
-        Ok(fold(&baseline, &self.overlay.clone().unwrap_or_default()))
+        let effective = fold(&baseline, &self.overlay.clone().unwrap_or_default());
+        if !restricts_or_equal(&effective, &baseline) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the stored overlay relaxes the signed baseline; refusing the store",
+            ));
+        }
+        Ok(effective)
     }
 
     /// Write atomically, 0600. The [`ipc::RuntimeLockToken`] proves the
@@ -407,25 +424,65 @@ pub fn set_signed(
     // so landing them over anything else (a restrict landing mid-prompt
     // included) would silently discard the concurrent write. The ADR is
     // silent on the interleave; failing closed is the only honest option.
-    let (observed, effective_anchor) = match PolicyStore::load().map_err(PolicyWriteError::Io)? {
-        Some(store) => {
-            let doc = store.baseline_doc().map_err(PolicyWriteError::Io)?;
-            let anchor = fold(&doc.values(), &store.overlay.clone().unwrap_or_default());
-            (
-                Some(StoreObservation {
-                    revision: doc.revision,
-                    overlay: store.overlay,
-                }),
-                anchor,
-            )
-        }
-        // With no store, the anchor for "what does this write relax" is the
-        // deny baseline: it is what the extension enforces in the
-        // no-stored-policy state (ADR-0032 decision 4), so a first write's
-        // grants are relaxations against it and must be named in `touched`.
-        None => (None, PolicyValues::default()),
+    //
+    // The host-key epoch is observed alongside (and re-checked in the same
+    // critical section) because the store observation alone cannot see a
+    // disposal that ran to completion during the prompt: dispose clears the
+    // baseline, so a first write observes None before AND after and the
+    // store guard passes - landing a baseline signed by the just-deleted
+    // key. A baseline must never outlive (or postdate) its key. Read before
+    // the prompt, fail-closed on an unreadable record (validate-before-
+    // prompt: no sheet is raised for a write that cannot land).
+    let host_key_epoch = crate::revocation::Revocation::current()
+        .map_err(PolicyWriteError::Io)?
+        .host_key_epoch;
+    let (store_observation, baseline_anchor, effective_anchor) =
+        match PolicyStore::load().map_err(PolicyWriteError::Io)? {
+            Some(store) => {
+                let doc = store.baseline_doc().map_err(PolicyWriteError::Io)?;
+                // effective() direction-checks the fold, so a tampered store
+                // (an overlay relaxing its baseline) refuses the write here
+                // rather than anchoring the relaxation checks on values
+                // nobody vouched for.
+                let anchor = store.effective().map_err(PolicyWriteError::Io)?;
+                (
+                    Some(StoreObservation {
+                        revision: doc.revision,
+                        overlay: store.overlay,
+                    }),
+                    doc.values(),
+                    anchor,
+                )
+            }
+            // With no store, the anchor for "what does this write relax" is
+            // the deny baseline: it is what the extension enforces in the
+            // no-stored-policy state (ADR-0032 decision 4), so a first
+            // write's grants are relaxations against it and must be named in
+            // `touched`.
+            None => (None, PolicyValues::default(), PolicyValues::default()),
+        };
+    let observed = PrePromptObservation {
+        store: store_observation,
+        host_key_epoch,
     };
-    let revision = next_revision(observed.as_ref().map(|o| o.revision))?;
+    let revision = next_revision(observed.store.as_ref().map(|o| o.revision))?;
+    // Decision 3: the signed document carries BASELINE values, not effective
+    // ones, on fields it does not touch. An untouched field departing from
+    // the current baseline (in either direction - a restrictive drift is
+    // still an unnamed edit) would break the invariant every retained
+    // overlay entry depends on: an entry written at-or-under the old
+    // baseline value stays at-or-under it only if untouched baseline values
+    // carry. Promptless, like every validity refusal here.
+    if PolicyField::ALL.iter().any(|f| {
+        !touched.contains(f)
+            && (field_relaxes(*f, &values, &baseline_anchor)
+                || field_relaxes(*f, &baseline_anchor, &values))
+    }) {
+        return Err(PolicyWriteError::Invalid(
+            "an untouched field departs from the current baseline (the signed document \
+             carries baseline values on fields it does not touch)",
+        ));
+    }
     // Every field this write relaxes must be named in `touched`, or the
     // signed set would under-state what the tap granted. The comparison
     // anchors on the post-write EFFECTIVE policy - the new values under the
@@ -440,6 +497,7 @@ pub fn set_signed(
         &values,
         &retained_overlay(
             observed
+                .store
                 .as_ref()
                 .and_then(|o| o.overlay.clone())
                 .unwrap_or_default(),
@@ -527,6 +585,20 @@ struct StoreObservation {
     overlay: Option<PolicyOverlay>,
 }
 
+/// Everything [`set_signed`] observed before its prompt: the store state
+/// (`None` when no store exists) plus the revocation record's host-key
+/// epoch. The epoch travels separately from the store observation because
+/// the guard it feeds must fire even when both sides of the store
+/// comparison are `None` - a disposal completing during the prompt clears
+/// the store, so on a first write only the epoch (bumped inside the
+/// disposal's critical section) betrays that the signing key died
+/// mid-prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrePromptObservation {
+    store: Option<StoreObservation>,
+    host_key_epoch: u64,
+}
+
 /// The revision a grant write mints: one past the observed baseline's (1
 /// for the first write), refused at the JS-safe bound rather than wrapped
 /// or saturated - a wrapped revision would re-arm the extension's ratchet
@@ -546,7 +618,7 @@ fn next_revision(observed: Option<u64>) -> Result<u64, PolicyWriteError> {
 /// section). `rung` is the presence rung that authorized the write - the
 /// hardware tap, or the app's interactive floor.
 fn commit_signed_baseline(
-    observed: Option<StoreObservation>,
+    observed: PrePromptObservation,
     doc_bytes: &[u8],
     sig_b64: Option<String>,
     key_id: Option<String>,
@@ -584,17 +656,30 @@ fn commit_signed_baseline(
 }
 
 /// The critical section of a grant write: re-check the observation guard
-/// (baseline revision and overlay both), retain the previous overlay minus
-/// the touched entries, push the superseded record to history, and write
-/// the store.
+/// (baseline revision, overlay, AND the host-key epoch), retain the previous
+/// overlay minus the touched entries, push the superseded record to history,
+/// and write the store.
+///
+/// The host-key epoch re-check is what makes "a baseline never survives its
+/// key" hold across the prompt gap: a disposal completing during the tap
+/// clears the store, so on a first write the store guard sees None on both
+/// sides and passes - only the epoch (bumped inside the disposal's own
+/// critical section) betrays that the signing key died mid-prompt. An
+/// unreadable revocation record refuses too (fail closed).
 fn write_baseline_locked(
     lock: &ipc::RuntimeLockToken,
-    observed: Option<StoreObservation>,
+    observed: PrePromptObservation,
     doc_bytes: &[u8],
     sig_b64: Option<String>,
     key_id: Option<String>,
     touched: &[PolicyField],
 ) -> Result<(), PolicyWriteError> {
+    let host_key_epoch = crate::revocation::Revocation::current()
+        .map_err(PolicyWriteError::Io)?
+        .host_key_epoch;
+    if host_key_epoch != observed.host_key_epoch {
+        return Err(PolicyWriteError::Conflict);
+    }
     let prev = PolicyStore::load().map_err(PolicyWriteError::Io)?;
     let current = match &prev {
         Some(store) => Some(StoreObservation {
@@ -603,7 +688,7 @@ fn write_baseline_locked(
         }),
         None => None,
     };
-    if current != observed {
+    if current != observed.store {
         return Err(PolicyWriteError::Conflict);
     }
     let overlay = retained_overlay(
@@ -620,6 +705,7 @@ fn write_baseline_locked(
         overlay: normalize_overlay(overlay),
     };
     next.write(lock).map_err(PolicyWriteError::Io)?;
+    bump_policy_epoch_locked(lock);
     if let Some(prev) = &prev {
         push_history_locked(lock, prev);
     }
@@ -683,7 +769,11 @@ fn restrict_locked(
     };
     let baseline = prev.baseline_doc().map_err(PolicyWriteError::Io)?.values();
     let stored = prev.overlay.clone().unwrap_or_default();
-    let effective_now = fold(&baseline, &stored);
+    // The validating read, not a raw fold: restricting on top of a tampered
+    // store (an overlay already relaxing its baseline) would quietly write a
+    // fresh record over evidence; refusing surfaces the tamper here, the
+    // same posture as set_signed's anchor read.
+    let effective_now = prev.effective().map_err(PolicyWriteError::Io)?;
     let merged = merge_overlay(&stored, overlay);
     if let Some(tools) = &merged.disabled_tools {
         validate_disabled_tools(tools).map_err(PolicyWriteError::Invalid)?;
@@ -696,8 +786,61 @@ fn restrict_locked(
         ..prev.clone()
     };
     next.write(lock).map_err(PolicyWriteError::Io)?;
+    bump_policy_epoch_locked(lock);
     push_history_locked(lock, &prev);
     Ok(())
+}
+
+/// Bump the revocation record's policy epoch inside the caller's runtime-lock
+/// hold (ADR-0032 decision 4), so the native host's watch pushes
+/// `policy_current` to a connected extension on the next tick. Best-effort by
+/// the same contract as the host-key bump: the epoch is a change notice, not
+/// authority (the signed baseline just written is the authority), so a failed
+/// bump loses only the proactive push - a connected extension still picks the
+/// change up on its next connect - and is logged, never fatal to the write it
+/// trails.
+fn bump_policy_epoch_locked(lock: &ipc::RuntimeLockToken) {
+    if let Err(e) = crate::revocation::bump_locked(lock, crate::revocation::Scope::Policy) {
+        log_warn!(
+            "policy",
+            "policy written but the policy epoch bump failed ({e}); a connected \
+             extension notices the change only at its next connect"
+        );
+    }
+}
+
+/// Clear the signed baseline (ADR-0032 decision 3's key disposal): a baseline
+/// signed by a now-deleted enrollment key is an artifact of a dead key, so it
+/// must not outlive the key. The superseded record - baseline bytes,
+/// signature, key id, AND the overlay - is first pushed onto the history ring,
+/// where the document content survives as an unsigned draft the app re-signs
+/// after re-pairing; then the live `policy.json` is removed. History is kept
+/// (this only appends to it); the overlay is preserved inside that history
+/// record rather than as a live orphan, because the store type binds an
+/// overlay to a baseline and an overlay with no baseline is not representable.
+///
+/// A no-op when there is no store. Runs under the caller's runtime lock (the
+/// [`ipc::RuntimeLockToken`] witness), which the shared enrollment-disposal
+/// seam holds across the key deletion, the baseline clear, and the host-key
+/// epoch bump, so no concurrent reader can observe the baseline outliving its
+/// key.
+pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
+    let Some(prev) = PolicyStore::load()? else {
+        return Ok(());
+    };
+    push_history_locked(lock, &prev);
+    match std::fs::remove_file(PolicyStore::path()) {
+        Ok(()) => {
+            // The clear is a policy change like any write: bump the policy
+            // epoch (best-effort, same contract as the write paths) so a
+            // connected host pushes the cleared state - the extension drops
+            // to its deny baseline now, not at its next connect.
+            bump_policy_epoch_locked(lock);
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 impl PolicyDoc {
@@ -1549,11 +1692,12 @@ mod store_tests {
         // The guard, staged directly at the locked write: a pre-prompt
         // observation that no longer matches the store refuses (the
         // concurrent write survives), a matching one lands.
-        let observation = |revision| {
-            Some(StoreObservation {
+        let observation = |revision| PrePromptObservation {
+            store: Some(StoreObservation {
                 revision,
                 overlay: None,
-            })
+            }),
+            host_key_epoch: 0,
         };
         let stale = ipc::with_runtime_lock(|lock| {
             Ok(write_baseline_locked(
@@ -1580,7 +1724,10 @@ mod store_tests {
         let stale_none = ipc::with_runtime_lock(|lock| {
             Ok(write_baseline_locked(
                 lock,
-                None,
+                PrePromptObservation {
+                    store: None,
+                    host_key_epoch: 0,
+                },
                 &bytes,
                 None,
                 None,
@@ -1624,9 +1771,12 @@ mod store_tests {
             None,
         );
         // The observation a prompt would cover: revision 2, no overlay.
-        let observed = StoreObservation {
-            revision: 2,
-            overlay: None,
+        let observed = PrePromptObservation {
+            store: Some(StoreObservation {
+                revision: 2,
+                overlay: None,
+            }),
+            host_key_epoch: 0,
         };
         // A restrict lands mid-prompt (staged through the internal fn, like
         // the revision test above): same revision, moved overlay.
@@ -1642,7 +1792,7 @@ mod store_tests {
         let stale = ipc::with_runtime_lock(|lock| {
             Ok(write_baseline_locked(
                 lock,
-                Some(observed),
+                observed,
                 &bytes,
                 None,
                 None,
@@ -1659,10 +1809,13 @@ mod store_tests {
         let fresh = ipc::with_runtime_lock(|lock| {
             Ok(write_baseline_locked(
                 lock,
-                Some(StoreObservation {
-                    revision: 2,
-                    overlay: Some(restriction),
-                }),
+                PrePromptObservation {
+                    store: Some(StoreObservation {
+                        revision: 2,
+                        overlay: Some(restriction),
+                    }),
+                    host_key_epoch: 0,
+                },
                 &bytes,
                 None,
                 None,
@@ -1671,6 +1824,93 @@ mod store_tests {
         })
         .unwrap();
         assert!(fresh.is_ok());
+    }
+
+    #[test]
+    fn a_disposal_during_the_prompt_conflicts_even_with_no_store_on_both_sides() {
+        let _dir = RuntimeDirGuard::new("dispose-guard");
+        // A first write's pre-prompt observation: no store, and the host-key
+        // epoch as it stood before the tap.
+        let doc = PolicyDoc::from_values(&PolicyValues::default(), 1, vec![PolicyField::CdpMode]);
+        let bytes = serde_json::to_vec(&doc).unwrap();
+        let observed_epoch = crate::revocation::Revocation::current()
+            .unwrap()
+            .host_key_epoch;
+        // The disposal seam runs to completion mid-prompt: key deleted,
+        // baseline cleared (a no-op here, no store exists), host-key epoch
+        // bumped inside its critical section.
+        ipc::with_runtime_lock(|lock| {
+            crate::revocation::bump_locked(lock, crate::revocation::Scope::HostKey)
+        })
+        .unwrap();
+        // The store guard alone cannot see it (no store observed, no store
+        // current); the epoch guard refuses, so a signature minted by the
+        // just-deleted key never lands as a baseline.
+        let stale = ipc::with_runtime_lock(|lock| {
+            Ok(write_baseline_locked(
+                lock,
+                PrePromptObservation {
+                    store: None,
+                    host_key_epoch: observed_epoch,
+                },
+                &bytes,
+                Some("c2ln".into()),
+                Some("key-id".into()),
+                &[PolicyField::CdpMode],
+            ))
+        })
+        .unwrap();
+        assert!(matches!(stale, Err(PolicyWriteError::Conflict)));
+        assert!(PolicyStore::load().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_tampered_overlay_that_relaxes_the_baseline_refuses_every_read() {
+        let _dir = RuntimeDirGuard::new("overlay-tamper");
+        // No legitimate write produces this state (restrict only tightens,
+        // set_signed carries baseline values on untouched fields), so a
+        // schema-valid overlay flipping a grant ON over a denying baseline
+        // is a hand-edited policy.json - and it reads as damage, never as
+        // the relaxed values.
+        seed_store(
+            3,
+            &PolicyValues::default(),
+            Some(PolicyOverlay {
+                page_eval_enabled: Some(true),
+                ..PolicyOverlay::default()
+            }),
+        );
+        let store = PolicyStore::load().unwrap().unwrap();
+        let err = store.effective().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("relaxes the signed baseline"));
+        // The baseline itself still parses: the refusal is the direction
+        // check, not collateral corruption.
+        assert_eq!(store.baseline_doc().unwrap().revision, 3);
+    }
+
+    #[test]
+    fn clearing_the_baseline_bumps_the_policy_epoch_once() {
+        let _dir = RuntimeDirGuard::new("clear-epoch");
+        seed_store(1, &PolicyValues::default(), None);
+        let before = crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch;
+        ipc::with_runtime_lock(clear_baseline_locked).unwrap();
+        assert!(PolicyStore::load().unwrap().is_none());
+        let after = crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch;
+        assert!(
+            after > before,
+            "a connected host only pushes the cleared state if the epoch moved"
+        );
+        // Clearing an already-absent store is a no-op: no epoch churn.
+        ipc::with_runtime_lock(clear_baseline_locked).unwrap();
+        let again = crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch;
+        assert_eq!(again, after);
     }
 
     #[test]
@@ -1735,7 +1975,7 @@ mod store_tests {
     }
 
     #[test]
-    fn a_pure_restriction_passes_with_an_unrelated_touched_field() {
+    fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
         let _dir = RuntimeDirGuard::new("touched-restriction");
         let _reset = policy_test_hook::ResetOnDrop;
         seed_store(
@@ -1746,12 +1986,24 @@ mod store_tests {
             },
             None,
         );
-        // Turning page_eval OFF is a restriction; the coverage check binds
-        // relaxations only, so an unrelated touched field is fine.
+        // Turning page_eval OFF is a restriction, but the signed document
+        // carries baseline values on fields it does not touch (decision 3):
+        // changing it under an unrelated touched field is an unnamed edit
+        // and refuses promptless, in EITHER direction.
+        policy_test_hook::set(Mock::PanicIfCalled);
+        let drift = set_signed(
+            PolicyValues::default(),
+            vec![PolicyField::ConfirmGraceMs],
+            Surface::Core,
+            PolicyGrantFloor::SignatureOnly,
+        );
+        assert!(matches!(drift, Err(PolicyWriteError::Invalid(_))));
+        // Named in touched, the same restriction lands (the coverage check
+        // binds relaxations only; restrictions just need naming).
         policy_test_hook::set(signed_mock());
         set_signed(
             PolicyValues::default(),
-            vec![PolicyField::ConfirmGraceMs],
+            vec![PolicyField::PageEvalEnabled],
             Surface::Core,
             PolicyGrantFloor::SignatureOnly,
         )
@@ -1825,6 +2077,96 @@ mod store_tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         // Nothing was persisted: load cannot be handed what it must refuse.
         assert!(PolicyStore::load().unwrap().is_none());
+    }
+
+    #[test]
+    fn clear_baseline_removes_the_store_and_keeps_history() {
+        let _dir = RuntimeDirGuard::new("clear-baseline");
+        // A signed baseline plus a surviving restriction overlay.
+        let seeded = seed_store(
+            3,
+            &PolicyValues {
+                page_eval_enabled: true,
+                ..PolicyValues::default()
+            },
+            Some(PolicyOverlay {
+                confirm_grace_ms: Some(0),
+                ..PolicyOverlay::default()
+            }),
+        );
+        ipc::with_runtime_lock(clear_baseline_locked).unwrap();
+        // The live store is gone (baseline/sig/key_id cleared): a baseline
+        // signed by a now-deleted key must not outlive it.
+        assert!(PolicyStore::load().unwrap().is_none());
+        // The disposed record - baseline, sig, key id, AND overlay - survives
+        // in the history ring as the re-signable draft.
+        let history = load_history().unwrap().unwrap();
+        assert_eq!(history.entries.len(), 1);
+        let entry = &history.entries[0];
+        assert_eq!(entry.baseline_b64, seeded.baseline_b64);
+        assert_eq!(entry.sig_b64, seeded.sig_b64);
+        assert_eq!(entry.key_id, seeded.key_id);
+        assert_eq!(entry.overlay, seeded.overlay);
+    }
+
+    #[test]
+    fn clear_baseline_is_a_noop_without_a_store() {
+        let _dir = RuntimeDirGuard::new("clear-baseline-empty");
+        ipc::with_runtime_lock(clear_baseline_locked).unwrap();
+        assert!(PolicyStore::load().unwrap().is_none());
+        assert!(load_history().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_signed_write_bumps_the_policy_epoch() {
+        let _dir = RuntimeDirGuard::new("policy-epoch-signed");
+        let _reset = policy_test_hook::ResetOnDrop;
+        let before = crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch;
+        policy_test_hook::set(signed_mock());
+        set_signed(
+            PolicyValues {
+                page_eval_enabled: true,
+                ..PolicyValues::default()
+            },
+            vec![PolicyField::PageEvalEnabled],
+            Surface::Core,
+            PolicyGrantFloor::SignatureOnly,
+        )
+        .unwrap();
+        let after = crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch;
+        assert!(after > before, "a signed write must bump the policy epoch");
+    }
+
+    #[test]
+    fn a_restriction_bumps_the_policy_epoch() {
+        let _dir = RuntimeDirGuard::new("policy-epoch-restrict");
+        seed_store(
+            1,
+            &PolicyValues {
+                page_eval_enabled: true,
+                ..PolicyValues::default()
+            },
+            None,
+        );
+        let before = crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch;
+        restrict(
+            PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..PolicyOverlay::default()
+            },
+            Surface::Cli,
+        )
+        .unwrap();
+        let after = crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch;
+        assert!(after > before, "a restriction must bump the policy epoch");
     }
 }
 

@@ -228,6 +228,8 @@ mod tests {
             epoch: 3,
             clients_epoch: 0,
             host_key_epoch: 0,
+            policy_epoch: 0,
+            lang_epoch: 0,
             clients_enrolled: false,
             killed,
             kill_epoch: if killed { 3 } else { 0 },

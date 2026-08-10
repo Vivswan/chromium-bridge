@@ -41,8 +41,9 @@ pub use challenge::{
     MAX_NONCE_LEN, POLICY_DOMAIN, PRESENCE_DOMAIN,
 };
 pub use cli::{
-    run_pair, run_presence_selftest, run_revoke, run_status, run_status_json, EnclaveKeyState,
-    EnclavePolicyReport, EnclaveStatusReport,
+    audit_host_key_revoke, dispose_enrollment_and_policy_baseline, run_pair, run_presence_selftest,
+    run_revoke, run_status, run_status_json, EnclaveKeyState, EnclavePolicyReport,
+    EnclaveStatusReport,
 };
 pub use config::HostConfig;
 pub use der::{der_to_raw_signature, SIG_LEN};

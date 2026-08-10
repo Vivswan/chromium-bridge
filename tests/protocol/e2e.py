@@ -212,12 +212,33 @@ def pair_client_interactive(*args, phrase="release", check=True, env=None):
                                  check=check, env=env)
 
 
-def nm_read(p):
+def nm_read_raw(p):
     hdr = p.stdout.read(4)
     if len(hdr) < 4:
         return None
     (n,) = struct.unpack("<I", hdr)
     return json.loads(p.stdout.read(n))
+
+
+# The host->extension pushes (ADR-0032 decision 4/7): a policy-capable host now
+# emits policy_current and lang_current UNSOLICITED at every connect, and again
+# on every policy/language change. A test reading the host's stdout for a reply
+# or a tool op must not desynchronize on them, exactly as the real extension
+# consumes them at its own gate. nm_read skips them by default; pass
+# skip_pushes=False to observe the pushes themselves (test_policy_control_frames
+# asserts on them directly).
+_HOST_PUSH_TYPES = ("policy_current", "lang_current")
+
+
+def nm_read(p, skip_pushes=True):
+    while True:
+        frame = nm_read_raw(p)
+        if frame is None:
+            return None
+        if (skip_pushes and isinstance(frame, dict)
+                and frame.get("type") in _HOST_PUSH_TYPES):
+            continue
+        return frame
 
 
 # "2026-07-28" here (and "2025-06-18" in initialize below) are hard-coded on
@@ -1471,26 +1492,17 @@ def test_admin_control_frames():
 
 
 def test_policy_control_frames():
-    """Phase 1 of ADR-0032: the six policy/language control frames
-    (policy_get, policy_current, legacy_settings, lang_get, lang_set,
-    lang_current) are CLASSIFIED AND DROPPED by the native host - never
-    forwarded over the bridge socket, and (unlike the enclave/admin frames)
-    never answered either. This test exercises the browser (extension) leg
-    end to end; the symmetric server-leg drop (a frame injected from the MCP
-    server side) is unit-pinned in native_host.rs
-    (server_injected_policy_frames_are_dropped_not_forwarded). Answering
-    starts in phase 2, when the policy store lands; this test is then
-    updated to assert the replies. Dropping (not forwarding) matters now
-    because of the never-speak-first rule (ADR-0032 decision 4): a host that
-    forwarded these frames would feed the MCP server's strict BridgeResp
-    parse and tear the browser leg down, which is exactly the failure mode
-    the rule exists to avoid. The proof of a drop is silence plus a live
-    pump: after the control traffic, a real tool round trip whose FIRST
-    extension-side frame is the tool op (a reply would have preceded it, and
-    a forwarded frame would desynchronize the bridge correlation and break
-    the round trip). Uses an isolated runtime dir; no pairing and no
-    presence-gated path is involved, so this runs even on an enrolled Mac."""
-    print("\n[test] policy control frames are classified and dropped (ADR-0032 phase 1)")
+    """Phase 2 of ADR-0032: the native host PUSHES policy_current and
+    lang_current unsolicited at connect (decision 4/7's never-speak-first
+    identification), ANSWERS the four extension-originated frames (policy_get
+    -> policy_current, lang_get/lang_set -> lang_current, legacy_settings ->
+    recorded pending, no reply), and still DROPS the host->extension pushes
+    when they arrive from the browser leg. Uses an isolated runtime dir; no
+    pairing and no presence-gated path is involved (policy_get answers ok:false
+    on the empty store, and the language lane never prompts), so this runs even
+    on an enrolled Mac. The symmetric server-leg drop is unit-pinned in
+    native_host.rs (server_injected_policy_frames_are_dropped_not_forwarded)."""
+    print("\n[test] policy/language frames: connect push + answer round-trip (ADR-0032 phase 2)")
     rundir = tempfile.mkdtemp(prefix="bb-policy-e2e-")
     env = dict(os.environ, XDG_RUNTIME_DIR=rundir,
                XDG_CONFIG_HOME=os.path.join(rundir, "config"))
@@ -1510,53 +1522,86 @@ def test_policy_control_frames():
         nh = start_bridge_host(env=env)
         wait_host_ready(nh)
 
-        # Extension -> host requests: in phase 1 the host neither answers nor
-        # forwards them. Send all four, then drive a real tool call: a reply
-        # to any of them would arrive on the host's stdout BEFORE the tool op,
-        # and a forwarded one would desynchronize the bridge correlation and
-        # fail the round trip below.
-        nm_write(nh, {"type": "policy_get"})
-        nm_write(nh, {"type": "legacy_settings", "bag": {}})
-        nm_write(nh, {"type": "lang_get"})
-        nm_write(nh, {"type": "lang_set", "value": "en"})
+        # Connect push (decision 4/7): the host identifies itself unsolicited
+        # with policy_current then lang_current, in that order. The store is
+        # empty in this isolated dir, so policy_current fails closed (ok:false,
+        # no baseline) and language reads its default (en, seq 0).
+        push = nm_read_raw(nh)
+        check(push is not None and push.get("type") == "policy_current"
+              and push.get("ok") is False and "baseline" not in push,
+              "the host pushes policy_current at connect (ok:false on an empty store)")
+        push = nm_read_raw(nh)
+        check(push is not None and push.get("type") == "lang_current"
+              and push.get("value") == "en" and push.get("seq") == 0,
+              "the host pushes lang_current at connect (the default en, seq 0)")
+
+        # legacy_settings is fire-and-forget (Phase 4 records the pending
+        # import): no reply. Prove it by driving a real tool op right after -
+        # the first non-push frame must be the tool op, never a stray reply.
+        nm_write(nh, {"type": "legacy_settings", "bag": {"groupTabs": True}})
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
         c.send({"jsonrpc": "2.0", "id": 91, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
-        frame = nm_read(nh)
+        frame = nm_read(nh)  # skips any connect/tick pushes
         check(frame is not None and frame.get("op") == "tab_list",
-              "first frame after the policy requests is the tool op "
-              "(no reply, nothing forwarded)")
+              "legacy_settings is answered with no reply (first frame is the tool op)")
         nm_write(nh, {"id": frame["id"], "ok": True,
                       "data": [{"id": 1, "title": "After Policy", "url": "u",
                                 "active": True}]})
         r = c.recv()
         content = json.loads(r["result"]["content"][0]["text"])
         check(content[0]["title"] == "After Policy",
-              "round trip completes; extension-side policy frames were dropped")
+              "round trip completes; legacy_settings was neither forwarded nor answered")
 
-        # Host-direction frames arriving FROM the browser leg (a compromised
-        # extension bouncing policy/language state at the host) are dropped
-        # too, never forwarded to the MCP server: prove the pump still
-        # forwards ordinary traffic after them.
+        # policy_get -> policy_current, answered by the host. ok:false on the
+        # empty store (fail closed), never a silent default.
+        nm_write(nh, {"type": "policy_get"})
+        reply = nm_read_raw(nh)
+        check(reply is not None and reply.get("type") == "policy_current"
+              and reply.get("ok") is False,
+              "policy_get is answered with policy_current (ok:false on the empty store)")
+
+        # lang_set applies the value and bumps the sequence; the reply is the
+        # new lang_current, and lang_get reflects it.
+        nm_write(nh, {"type": "lang_set", "value": "zh_CN"})
+        reply = nm_read_raw(nh)
+        # A change bumps the epoch too, so a duplicate lang_current push may
+        # trail on the watch tick; read for the reply among any pushes.
+        while reply is not None and not (reply.get("type") == "lang_current"):
+            reply = nm_read_raw(nh)
+        check(reply is not None and reply.get("value") == "zh_CN"
+              and reply.get("seq") == 1,
+              "lang_set applies the value and bumps the sequence to 1")
+        nm_write(nh, {"type": "lang_get"})
+        # Read lang_current replies until the value settles on zh_CN (a
+        # trailing epoch-bump push carries the same value+seq, so any is fine).
+        reply = nm_read_raw(nh)
+        while reply is not None and reply.get("type") != "lang_current":
+            reply = nm_read_raw(nh)
+        check(reply is not None and reply.get("value") == "zh_CN"
+              and reply.get("seq") == 1,
+              "lang_get reflects the applied language (zh_CN, seq 1)")
+
+        # Host-direction pushes arriving FROM the browser leg (a compromised
+        # extension bouncing state back) are DROPPED, never forwarded to the
+        # MCP server: the pump still forwards ordinary traffic after them.
         nm_write(nh, {"type": "policy_current", "ok": True,
                       "baseline": "YmFzZQ==", "sig": "c2ln"})
-        nm_write(nh, {"type": "lang_current", "value": "en", "seq": 1})
+        nm_write(nh, {"type": "lang_current", "value": "en", "seq": 99})
         c.send({"jsonrpc": "2.0", "id": 92, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
         frame = nm_read(nh)
         check(frame is not None and frame.get("op") == "tab_list",
-              "pump still forwards ordinary frames after injected "
-              "host-direction policy frames")
+              "pump still forwards ordinary frames after injected host-direction pushes")
         nm_write(nh, {"id": frame["id"], "ok": True,
                       "data": [{"id": 1, "title": "After Injected", "url": "u",
                                 "active": True}]})
         r = c.recv()
         content = json.loads(r["result"]["content"][0]["text"])
         check(content[0]["title"] == "After Injected",
-              "round trip completes; injected policy_current/lang_current "
-              "were dropped, not forwarded")
+              "round trip completes; injected policy_current/lang_current were dropped")
         nh.kill()
         nh.wait(timeout=3)
         nh = None
@@ -1578,17 +1623,19 @@ def test_policy_control_frames():
 
 
 def test_kill_switch_round_trip():
-    """ADR-0030: `kill` halts everything (typed BRIDGE_KILLED errors on a LIVE
-    broker, severed browser leg, control-plane-only hosts), the extension
-    surface can release it via a control frame, and the bridge fully recovers.
-    Also proves the audit trail: kill/unkill land in the 0600 audit file and
+    """ADR-0030/0032: `kill` halts everything (typed BRIDGE_KILLED errors on a
+    LIVE broker, severed browser leg, control-plane-only hosts); the extension's
+    `kill_release` frame is now REFUSED (ADR-0032 decision 6: release is app/CLI
+    only), release goes through `chromium-bridge unkill`, and the bridge fully
+    recovers. Also proves the audit trail: the kill, the refused extension
+    release, and the CLI release land in the 0600 audit file and
     `chromium-bridge audit` renders them."""
     print("\n[test] global kill switch: engage, refuse, release, recover (ADR-0030)")
     if enclave_key_present():
         note("kill-switch round-trip skipped: an Enclave key is enrolled, so "
-             "the extension `kill_release` would raise a real Touch ID prompt "
-             "this automated run cannot answer. The hardware unkill path is "
-             "covered by `just touchid-gates`.")
+             "the CLI `unkill` used to release here would raise a real Touch ID "
+             "prompt this automated run cannot answer. The hardware unkill path "
+             "is covered by `just touchid-gates`.")
         return
     try:
         os.remove(LOCK)
@@ -1643,8 +1690,8 @@ def test_kill_switch_round_trip():
 
         # A freshly spawned host must NOT bridge: it comes up control-plane
         # only, announces the killed state (startup push), answers a status
-        # query, and honors the extension's release frame (the options-page
-        # unkill path).
+        # query, and REFUSES the extension's retired release frame (ADR-0032
+        # decision 6: release is app/CLI only now).
         nh2 = start_bridge_host()
         frame = nm_read(nh2)
         check(frame is not None and frame.get("type") == "kill_status_result"
@@ -1656,15 +1703,25 @@ def test_kill_switch_round_trip():
         frame = nm_read(nh2)
         check(frame is not None and frame.get("type") == "kill_status_result"
               and frame.get("killed") is True, "kill_status is answered locally")
+        # The extension release path is retired: the host refuses it (ok:false,
+        # no killed claim) and the switch stays engaged.
         nm_write(nh2, {"type": "kill_release"})
         frame = nm_read(nh2)
         check(frame is not None and frame.get("type") == "kill_status_result"
-              and frame.get("ok") is True and frame.get("killed") is False,
-              "kill_release (the extension surface) releases the switch")
-        # On the released transition the control-plane host exits so the
-        # extension reconnects into a bridge-mode host. Drain any trailing
-        # transition push until EOF, bounded so a host that wrongly stays up
-        # fails the test instead of hanging the suite.
+              and frame.get("ok") is False and frame.get("killed") is None,
+              "the extension kill_release is refused (ADR-0032 decision 6)")
+        nm_write(nh2, {"type": "kill_status"})
+        frame = nm_read(nh2)
+        check(frame is not None and frame.get("killed") is True,
+              "the refused release left the switch engaged")
+
+        # Release now goes through the CLI (`chromium-bridge unkill`) behind the
+        # ADR-0031 presence gate - here the CLI floor on a pty. The
+        # control-plane host observes the release and exits so the extension
+        # reconnects into a bridge-mode host.
+        unkill_interactive()
+        # Drain any trailing transition push until EOF, bounded so a host that
+        # wrongly stays up fails the test instead of hanging the suite.
         drained = []
         drain = threading.Thread(target=lambda: [
             drained.append(f) for f in iter(lambda: nm_read(nh2), None)])
@@ -1711,17 +1768,23 @@ def test_kill_switch_round_trip():
         kinds = [rec.get("kind") for rec in records]
         check("kill_engage" in kinds, "the kill is in the audit file")
         check("kill_release" in kinds, "the release is in the audit file")
-        release = next(rec for rec in records if rec.get("kind") == "kill_release")
-        check(release.get("surface") == "extension",
-              "the release records its surface (extension control frame)")
-        # The release names the presence rung that authorized it (ADR-0031).
-        # On a machine WITHOUT a Secure Enclave key the extension floor is used
-        # (auth=extension_confirm); on an enrolled Mac the hardware rung runs
-        # and the release requires a real Touch ID tap (auth=touch_id). Both
-        # are valid; only a missing/blank rung is a bug.
-        detail = release.get("detail", "")
-        check("auth=extension_confirm" in detail or "auth=touch_id" in detail,
-              "the release names the presence rung that authorized it")
+        releases = [rec for rec in records if rec.get("kind") == "kill_release"]
+        # The extension's retired release attempt is audited as a refusal
+        # (ADR-0032 decision 6): surface=extension, outcome=refused, no auth.
+        check(any(r.get("surface") == "extension" and r.get("outcome") == "refused"
+                  for r in releases),
+              "the extension kill_release is audited as a refusal (ADR-0032 decision 6)")
+        # The CLI release names the presence rung that authorized it (ADR-0031).
+        # On a machine WITHOUT a Secure Enclave key the CLI floor is used
+        # (auth=cli_confirm); on an enrolled Mac the hardware rung runs and the
+        # release requires a real Touch ID tap (auth=touch_id) - but this test
+        # is skipped on an enrolled Mac above, so cli_confirm is the live path.
+        cli_release = next((r for r in releases if r.get("surface") == "cli"), None)
+        check(cli_release is not None and cli_release.get("outcome") == "ok",
+              "the CLI unkill release is audited (surface=cli, ok)")
+        detail = cli_release.get("detail", "") if cli_release else ""
+        check("auth=cli_confirm" in detail or "auth=touch_id" in detail,
+              "the CLI release names the presence rung that authorized it")
         killed_calls = [rec for rec in records
                         if rec.get("kind") == "tool_call"
                         and rec.get("code") == "BRIDGE_KILLED"]

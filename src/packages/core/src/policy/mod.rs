@@ -14,16 +14,26 @@
 //! in [`store`]: [`PolicyStore`] / [`PolicyHistory`] on the `Allowlist`
 //! template (fail-closed loads, atomic runtime-locked writes), and
 //! [`set_signed`] / [`restrict`], the only mutation paths every editing
-//! surface shares. Deliberately absent here, owned elsewhere: the signing
-//! domain and the sign-as-presence primitive
+//! surface shares. The host-side dispatch gate (decision 4) lives in
+//! [`gating`]: the tool-to-grant table and the pure verdict the MCP handler
+//! injects before any bridge traffic. Deliberately absent here, owned
+//! elsewhere: the signing domain and the sign-as-presence primitive
 //! ([`crate::presence::sign_policy_as_presence`]) and the control frames
 //! that carry the document (`crate::protocol`).
 
+mod cli;
 mod store;
 
+pub mod gating;
+
+pub use cli::{
+    gather_policy_status, run_policy, PolicyHistoryEntryReport, PolicyHistoryReport,
+    PolicyStatusReport, PolicyStoreState,
+};
 pub use store::{
-    load_history, restrict, set_signed, PolicyGrantFloor, PolicyHistory, PolicyHistoryEntry,
-    PolicyStore, PolicyWriteError, POLICY_HISTORY_VERSION, POLICY_STORE_VERSION,
+    clear_baseline_locked, load_history, restrict, set_signed, PolicyGrantFloor, PolicyHistory,
+    PolicyHistoryEntry, PolicyStore, PolicyWriteError, POLICY_HISTORY_VERSION,
+    POLICY_STORE_VERSION,
 };
 
 use serde::{Deserialize, Serialize};
@@ -254,7 +264,17 @@ fn de_js_safe_opt_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u
 /// Just the 15 policy field values, detached from a document's version /
 /// revision / touched scoping: the shape the comparisons and the effective
 /// policy work in.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable in camelCase (the wire field names) so it can be the
+/// `effective` payload of [`crate::policy::PolicyStatusReport`] that the CLI
+/// emits and the desktop app parses back; `ts_rs`-exported under the gen-only
+/// feature, the same posture as the enclave report types. Strict on the way
+/// in: serde does NOT inherit a container attribute from an embedding type,
+/// so without its own `deny_unknown_fields` an unknown field inside a
+/// report's `effective` would parse silently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PolicyValues {
     pub cdp_mode: bool,
     pub file_upload_enabled: bool,

@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use crate::browsers::{self, BaseDirs, Os, HOST_ID};
 use crate::ipc::LockFile;
+use crate::policy::{PolicyStatusReport, PolicyStoreState};
 use crate::registration::{self, RegState};
 
 /// Plain facts gathered for the report. Kept free of I/O so `render` is pure
@@ -39,6 +40,11 @@ struct Report {
     /// revocation record; `Err(text)` when the record is unreadable (in which
     /// case every enforcement point is failing closed).
     kill: Result<bool, String>,
+    /// The host-owned policy store (ADR-0032). The report's own `store` state
+    /// carries the fail-closed distinctions (`none` is healthy pre-cutover;
+    /// `error` is a present-but-unreadable store), so no outer `Result` is
+    /// needed - `gather_policy_status` never fails.
+    policy: PolicyStatusReport,
 }
 
 /// The lock file's classification: exactly absent, present-but-unreadable, or
@@ -143,6 +149,7 @@ fn gather() -> Report {
         lock,
         manifests: gather_manifests(),
         kill: crate::kill::is_killed().map_err(|e| e.to_string()),
+        policy: crate::policy::gather_policy_status(),
     }
 }
 
@@ -195,6 +202,35 @@ fn render(r: &Report) -> String {
         )),
     }
 
+    out.push_str("policy baseline: ");
+    match r.policy.store {
+        // No baseline yet is HEALTHY (pre-cutover): the extension enforces the
+        // deny baseline until a first policy signs. It must not read as broken.
+        PolicyStoreState::None => out.push_str(
+            "none yet (pre-cutover; deny baseline enforced until the app or\n  \
+             `chromium-bridge policy set` signs one)\n",
+        ),
+        PolicyStoreState::Present => {
+            let revision = r.policy.revision.unwrap_or(0);
+            // The host never self-certifies the signature; the extension
+            // verifies it against its pinned key. So report signed-ness, never
+            // "valid"/"invalid", and say verification is not done here.
+            let signed = match r.policy.signed {
+                Some(true) => "signed (the extension verifies it against its pinned key, not here)",
+                Some(false) => "unsigned (app-floor baseline)",
+                None => "signature state unknown",
+            };
+            out.push_str(&format!("revision {revision}, {signed}\n"));
+            if r.policy.overlay_active.unwrap_or(false) {
+                out.push_str("  restriction overlay: active\n");
+            }
+        }
+        PolicyStoreState::Error => out.push_str(&format!(
+            "present but UNREADABLE ({}) - failing closed; see docs/operations.md\n",
+            r.policy.detail.as_deref().unwrap_or("unknown"),
+        )),
+    }
+
     out.push_str(&format!("native manifests: (host id {HOST_ID})\n"));
     match &r.manifests {
         Err(err) => out.push_str(&format!("  could not check: {err}\n")),
@@ -238,6 +274,12 @@ fn summary(r: &Report) -> &'static str {
     }
     if r.kill.is_err() {
         return "kill state unreadable - failing closed; see docs/operations.md";
+    }
+    // A present-but-unreadable policy store fails closed like the kill record.
+    // A missing baseline (`none`) is the healthy pre-cutover state and must
+    // NOT flip the verdict.
+    if r.policy.store == PolicyStoreState::Error {
+        return "policy store present but unreadable - failing closed; see docs/operations.md";
     }
     match &r.lock {
         LockState::Unreadable(_) => {
@@ -341,7 +383,23 @@ mod tests {
                 },
             ]),
             kill: Ok(false),
+            policy: policy_report(PolicyStoreState::None),
         }
+    }
+
+    /// A `PolicyStatusReport` in a given store state, for the doctor row tests.
+    fn policy_report(store: PolicyStoreState) -> PolicyStatusReport {
+        let json = match store {
+            PolicyStoreState::None => r#"{"v":1,"store":"none"}"#.to_string(),
+            PolicyStoreState::Present => {
+                r#"{"v":1,"store":"present","revision":3,"signed":true,"overlay_active":false}"#
+                    .to_string()
+            }
+            PolicyStoreState::Error => {
+                r#"{"v":1,"store":"error","detail":"policy store decode: bad"}"#.to_string()
+            }
+        };
+        serde_json::from_str(&json).expect("policy report fixture parses")
     }
 
     #[test]
@@ -365,6 +423,42 @@ mod tests {
         assert!(text.contains("do NOT confirm the Chrome extension"));
         assert!(text.trim_end().ends_with("OK"));
         assert_eq!(exit_code(&r), 0);
+    }
+
+    #[test]
+    fn a_missing_policy_baseline_is_healthy_pre_cutover() {
+        // No baseline yet is the healthy pre-cutover state: it must render as
+        // "none yet" and must NOT flip the verdict away from OK.
+        let r = healthy_report();
+        let text = render(&r);
+        assert!(text.contains("policy baseline: none yet"));
+        assert!(text.trim_end().ends_with("OK"));
+        assert_eq!(exit_code(&r), 0);
+    }
+
+    #[test]
+    fn a_present_policy_baseline_renders_signed_without_claiming_verification() {
+        let mut r = healthy_report();
+        r.policy = policy_report(PolicyStoreState::Present);
+        let text = render(&r);
+        assert!(text.contains("revision 3"));
+        // Signed, but never self-certified here, and never "invalid".
+        assert!(text.contains("verifies it against its pinned key, not here"));
+        assert!(!text.contains("invalid"));
+        // A present, signed baseline does not by itself change the verdict.
+        assert_eq!(exit_code(&r), 0);
+    }
+
+    #[test]
+    fn a_corrupt_policy_store_fails_closed() {
+        // A present-but-unreadable store fails closed, flipping the exit code
+        // like the kill-record-unreadable case.
+        let mut r = healthy_report();
+        r.policy = policy_report(PolicyStoreState::Error);
+        let text = render(&r);
+        assert!(text.contains("present but UNREADABLE"));
+        assert!(text.contains("policy store present but unreadable - failing closed"));
+        assert_eq!(exit_code(&r), 1);
     }
 
     #[test]
@@ -395,6 +489,7 @@ mod tests {
                         .into(),
             }]),
             kill: Ok(false),
+            policy: policy_report(PolicyStoreState::None),
         };
         let text = render(&r);
         assert!(text.contains("manifest missing"));

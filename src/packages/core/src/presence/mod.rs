@@ -42,17 +42,19 @@
 //!   stdin is refused outright, so `echo release | chromium-bridge unkill`
 //!   in some background script cannot silently reopen the bridge - and the
 //!   user must type the exact phrase.
-//! - [`Floor::ExtensionConfirm`]: the extension options page's explicit
-//!   confirmation dialog. The native host cannot raise a text prompt of its
-//!   own (its stdin/stdout are the native-messaging protocol), so where
-//!   hardware is unavailable it accepts the surface's confirmation as the
-//!   floor: the `kill_release` frame only arrives from the extension Chrome
-//!   pinned via `allowed_origins`, and only the extension's own pages can
-//!   make the service worker send it (the #32 sender gate).
-//! - [`Floor::AppConfirm`]: the desktop app's explicit confirmation dialog,
-//!   same shape as the extension floor - the evidence lives in the calling
-//!   surface, which shows its own modal confirmation before asking. Only the
-//!   app's presence-gated actions may select it (see the variant docs).
+//! - [`Floor::AppConfirm`]: the desktop app's explicit confirmation dialog -
+//!   the evidence lives in the calling surface, which shows its own modal
+//!   confirmation before asking. Only the app's presence-gated actions may
+//!   select it (see the variant docs).
+//!
+//! There is deliberately no extension floor. ADR-0032 decision 6 retired the
+//! extension's `kill_release` path (release is now an app/CLI act), which was
+//! its only caller, so the constructible `Floor::ExtensionConfirm` was
+//! removed rather than left as a zero-caller "claim a confirmation that never
+//! happened" primitive. The [`PresencePath::ExtensionConfirm`] audit LABEL
+//! stays a stable wire value (older audit records and the desktop UI's
+//! auth-label mapping still name it); it simply has no host-side producer
+//! anymore.
 //!
 //! ## Residual, named
 //!
@@ -113,6 +115,8 @@ pub enum PresencePath {
     CliConfirm,
     /// The extension options page's confirmation dialog, attested by the
     /// native-messaging channel (`allowed_origins` + the #32 sender gate).
+    /// Retained as a stable audit LABEL only (ADR-0032 decision 6 retired the
+    /// extension floor that produced it); no host path emits it anymore.
     ExtensionConfirm,
     /// The desktop app's confirmation dialog, attested by the app surface
     /// that raised it.
@@ -241,20 +245,19 @@ impl TerminalStdin {
 /// unavailable. Chosen by the surface, because each surface has exactly one
 /// honest option (see the module docs).
 ///
-/// `ExtensionConfirm` and `AppConfirm` succeed without further checks here,
-/// because the evidence lives in the CALLING SURFACE, not in this process:
-/// only the native host's control path (a `kill_release` frame from the
-/// pinned extension) may select the extension floor, and only the desktop
-/// app's own presence-gated actions - which show their own modal
-/// confirmation first - may select the app floor. Selecting either from any
-/// other call site would be claiming a confirmation that never happened;
-/// treat adding such a caller as a security change (SECURITY.md).
-/// `CliConfirm` carries the [`TerminalStdin`] witness, so selecting it IS
-/// the interactivity precondition.
+/// `AppConfirm` succeeds without further checks here, because the evidence
+/// lives in the CALLING SURFACE, not in this process: only the desktop app's
+/// own presence-gated actions - which show their own modal confirmation
+/// first - may select it. Selecting it from any other call site would be
+/// claiming a confirmation that never happened; treat adding such a caller as
+/// a security change (SECURITY.md). `CliConfirm` carries the [`TerminalStdin`]
+/// witness, so selecting it IS the interactivity precondition. There is no
+/// extension floor: ADR-0032 decision 6 retired the extension's `kill_release`
+/// path (its only caller), so a zero-caller constructible floor was removed
+/// rather than left as a latent grant primitive.
 #[derive(Debug)]
 pub enum Floor {
     CliConfirm(TerminalStdin),
-    ExtensionConfirm,
     AppConfirm,
 }
 
@@ -501,9 +504,6 @@ pub(crate) mod policy_test_hook {
 pub fn require_presence(reason: &str, floor: Floor) -> Result<PresenceAttestation, PresenceError> {
     ladder(hardware_authenticate(reason), floor, |floor| match floor {
         Floor::CliConfirm(terminal) => cli_confirm(reason, terminal),
-        Floor::ExtensionConfirm => Ok(PresenceAttestation {
-            path: PresencePath::ExtensionConfirm,
-        }),
         Floor::AppConfirm => Ok(PresenceAttestation {
             path: PresencePath::AppConfirm,
         }),
@@ -646,7 +646,7 @@ mod tests {
         // floor closure panics if consulted.
         let err = ladder(
             HardwareOutcome::Refused("biometry mismatch".into()),
-            Floor::ExtensionConfirm,
+            Floor::AppConfirm,
             |_| panic!("a refused hardware check must never fall back to the floor"),
         )
         .unwrap_err();
@@ -681,28 +681,24 @@ mod tests {
     }
 
     #[test]
-    fn the_extension_and_app_floors_attest_their_own_paths() {
-        // With hardware unavailable, the surface floors succeed and name
-        // themselves, so the audit trail can never conflate them with
-        // hardware. Injected through the pure ladder here; the full
-        // require_presence path is covered separately, driven through the
-        // cfg(test) mock (never real hardware).
-        for (floor, path) in [
-            (Floor::ExtensionConfirm, PresencePath::ExtensionConfirm),
-            (Floor::AppConfirm, PresencePath::AppConfirm),
-        ] {
-            let att = ladder(HardwareOutcome::Unavailable, floor, |floor| match floor {
+    fn the_app_floor_attests_its_own_path() {
+        // With hardware unavailable, the app floor succeeds and names itself,
+        // so the audit trail can never conflate it with hardware. Injected
+        // through the pure ladder here; the full require_presence path is
+        // covered separately, driven through the cfg(test) mock (never real
+        // hardware). (The extension floor was retired, ADR-0032 decision 6.)
+        let att = ladder(
+            HardwareOutcome::Unavailable,
+            Floor::AppConfirm,
+            |floor| match floor {
                 Floor::CliConfirm(_) => panic!("wrong floor selected"),
-                Floor::ExtensionConfirm => Ok(PresenceAttestation {
-                    path: PresencePath::ExtensionConfirm,
-                }),
                 Floor::AppConfirm => Ok(PresenceAttestation {
                     path: PresencePath::AppConfirm,
                 }),
-            })
-            .unwrap();
-            assert_eq!(att.path(), path);
-        }
+            },
+        )
+        .unwrap();
+        assert_eq!(att.path(), PresencePath::AppConfirm);
     }
 
     #[test]
@@ -731,16 +727,16 @@ mod tests {
         let _reset = test_hook::ResetOnDrop;
 
         test_hook::set(test_hook::Mock::Verified);
-        let att = require_presence("test", Floor::ExtensionConfirm).unwrap();
+        let att = require_presence("test", Floor::AppConfirm).unwrap();
         assert_eq!(att.path(), PresencePath::TouchId);
 
         test_hook::set(test_hook::Mock::Refused);
-        let err = require_presence("test", Floor::ExtensionConfirm).unwrap_err();
+        let err = require_presence("test", Floor::AppConfirm).unwrap_err();
         assert!(matches!(err, PresenceError::HardwareRefused(_)));
 
         test_hook::set(test_hook::Mock::Unavailable);
-        let att = require_presence("test", Floor::ExtensionConfirm).unwrap();
-        assert_eq!(att.path(), PresencePath::ExtensionConfirm);
+        let att = require_presence("test", Floor::AppConfirm).unwrap();
+        assert_eq!(att.path(), PresencePath::AppConfirm);
     }
 
     #[test]

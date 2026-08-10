@@ -47,13 +47,13 @@ pub fn run_pair(reset: bool) -> i32 {
             );
             return 1;
         }
-        match EnrollmentKey::revoke() {
+        match dispose_enrollment_and_policy_baseline() {
             Ok(_) => {
-                // The old key is gone, so any recorded enrollment is void.
-                // Clear it now so a failure later in this run cannot leave a
-                // config claiming enrolled=true with no key behind it.
-                HostConfig::remove();
-                bump_host_key_epoch();
+                // The old key is gone, so any recorded enrollment and any
+                // baseline signed under it are void; the shared seam cleared
+                // them under one lock (ADR-0032 decision 3). Audit the
+                // revocation (the seam is surface-agnostic).
+                audit_host_key_revoke(crate::audit::Surface::Cli);
                 println!("removed the previous enrollment key.");
             }
             Err(e) => {
@@ -61,6 +61,20 @@ pub fn run_pair(reset: bool) -> i32 {
                 return 1;
             }
         }
+    }
+
+    // No key exists past this point, but a signed baseline still might: a
+    // best-effort clear inside an earlier disposal can fail, and the key can
+    // be deleted out-of-band. Minting over such a leftover would manufacture
+    // exactly the pin mismatch a genuine host must never produce (a baseline
+    // signed by a key that no longer exists, pushed as current), so it is
+    // cleared - history-preserving - before any mint, unconditionally.
+    let cleared = crate::ipc::with_runtime_lock(crate::policy::clear_baseline_locked);
+    if let Err(e) = cleared {
+        println!(
+            "warning: a leftover policy baseline could not be cleared ({e}); until a new \
+             policy write supersedes it, a paired extension will refuse it as unverifiable."
+        );
     }
 
     let key = match EnrollmentKey::mint() {
@@ -75,8 +89,7 @@ pub fn run_pair(reset: bool) -> i32 {
         Ok(p) => p,
         Err(e) => {
             println!("pair failed to export the public key: {e}");
-            let _ = EnrollmentKey::revoke();
-            HostConfig::remove();
+            rollback_fresh_mint();
             return 1;
         }
     };
@@ -89,15 +102,13 @@ pub fn run_pair(reset: bool) -> i32 {
         Ok(s) => format!("pair-selftest-{s}"),
         Err(e) => {
             println!("pair failed to generate a self-test nonce ({e}); rolling back.");
-            let _ = EnrollmentKey::revoke();
-            HostConfig::remove();
+            rollback_fresh_mint();
             return 1;
         }
     };
     if let Err(e) = key.sign_challenge(&selftest_nonce, None) {
         println!("pairing was not approved ({e}); rolling back.");
-        let _ = EnrollmentKey::revoke();
-        HostConfig::remove();
+        rollback_fresh_mint();
         return 1;
     }
 
@@ -107,7 +118,7 @@ pub fn run_pair(reset: bool) -> i32 {
     };
     if let Err(e) = cfg.write() {
         println!("pair failed to record the enrollment policy: {e}");
-        let _ = EnrollmentKey::revoke();
+        rollback_fresh_mint();
         return 1;
     }
 
@@ -129,21 +140,18 @@ pub fn run_pair(reset: bool) -> i32 {
 /// be produced, so a pinned extension refuses the bridge until the user
 /// re-pairs.
 pub fn run_revoke() -> i32 {
-    match EnrollmentKey::revoke() {
-        Ok(true) => {
-            HostConfig::remove();
-            bump_host_key_epoch();
-            println!("enrollment key revoked. re-run `chromium-bridge pair` to re-enroll.");
-            println!(
-                "a connected extension is notified and fails closed; \
-                 otherwise it notices on its next connect."
-            );
-            0
-        }
-        Ok(false) => {
-            HostConfig::remove();
-            bump_host_key_epoch();
-            println!("no enrollment key found; nothing to revoke.");
+    match dispose_enrollment_and_policy_baseline() {
+        Ok(existed) => {
+            audit_host_key_revoke(crate::audit::Surface::Cli);
+            if existed {
+                println!("enrollment key revoked. re-run `chromium-bridge pair` to re-enroll.");
+                println!(
+                    "a connected extension is notified and fails closed; \
+                     otherwise it notices on its next connect."
+                );
+            } else {
+                println!("no enrollment key found; nothing to revoke.");
+            }
             0
         }
         Err(e) => {
@@ -153,25 +161,82 @@ pub fn run_revoke() -> i32 {
     }
 }
 
-/// Bump the revocation epoch's host-key marker after a key deletion, and
-/// record the revocation in the audit trail (ADR-0030, log-after-decide: the
-/// keychain deletion has already happened). The deletion itself is the
-/// authoritative act (the keychain is the ground truth); a failed bump only
-/// loses the proactive push a connected host would otherwise send, so it is
-/// reported, not fatal. A pinned extension still fails closed on its next key
-/// verification (its stored pin outlives the key, and the missing key can no
-/// longer answer a challenge).
-fn bump_host_key_epoch() {
-    if let Err(e) = crate::revocation::bump(crate::revocation::Scope::HostKey) {
-        eprintln!(
-            "warning: the enrollment key is gone, but the revocation epoch could not be \
-             bumped ({e}); a connected extension will not get a proactive notice and will \
-             instead notice at its next pinned-key verification"
+/// Roll back a pairing ceremony that minted a key but did not complete:
+/// through the shared disposal seam, like every other key deletion, so a
+/// policy write that landed under the doomed key during the ceremony cannot
+/// leave a baseline behind it. Best-effort by nature (the ceremony already
+/// failed; there is nothing better to do with a second failure than log it
+/// inside the seam).
+fn rollback_fresh_mint() {
+    let _ = dispose_enrollment_and_policy_baseline();
+}
+
+/// The shared enrollment-disposal seam (ADR-0032 decision 3): every key
+/// deletion path - `chromium-bridge revoke`, `pair --reset`, and the
+/// extension-originated `enclave_revoke` - routes through here so a signed
+/// policy baseline can never survive the key that signed it. Under ONE
+/// runtime-lock hold it deletes the enrollment key, clears the signed baseline
+/// (the history-preserving [`crate::policy::clear_baseline_locked`], keeping
+/// the overlay-bearing record as a re-signable draft), removes the recorded
+/// enrollment config, and bumps the host-key revocation epoch, so no
+/// concurrent reader (a doctor run, a second browser's host) can observe the
+/// baseline outliving its key - the "artifact of a dead key" trap.
+///
+/// Returns whether an enrollment key existed. Key deletion is the
+/// authoritative act and runs FIRST: if it fails, the baseline is left in
+/// place (the key, and thus its valid signature, may still be present) and the
+/// enclave error bubbles. The baseline clear and the epoch bump are
+/// best-effort AFTER a successful deletion - a failure there loses only the
+/// cleanup or the proactive push, never the deletion, so it is logged, not
+/// fatal (a pinned extension still fails closed at its next key verification).
+pub fn dispose_enrollment_and_policy_baseline() -> Result<bool, EnclaveError> {
+    match crate::ipc::with_runtime_lock(dispose_locked) {
+        Ok(inner) => inner,
+        // The lock guards the whole disposal; if it cannot be taken, nothing
+        // was done. Fail closed with a stable enclave error.
+        Err(e) => Err(EnclaveError::Keychain(format!(
+            "runtime lock unavailable during enrollment disposal: {e}"
+        ))),
+    }
+}
+
+fn dispose_locked(
+    lock: &crate::ipc::RuntimeLockToken,
+) -> std::io::Result<Result<bool, EnclaveError>> {
+    let existed = match EnrollmentKey::revoke() {
+        Ok(existed) => existed,
+        // The key (and any signature it produced) may still be present, so the
+        // baseline is NOT an artifact of a dead key: leave it untouched.
+        Err(e) => return Ok(Err(e)),
+    };
+    HostConfig::remove();
+    if let Err(e) = crate::policy::clear_baseline_locked(lock) {
+        log_warn!(
+            "enclave",
+            "enrollment key deleted but the signed policy baseline could not be \
+             cleared ({e}); it survives as an artifact of the dead key until the \
+             next policy write"
         );
     }
+    if let Err(e) = crate::revocation::bump_locked(lock, crate::revocation::Scope::HostKey) {
+        log_warn!(
+            "enclave",
+            "enrollment key deleted but the host-key revocation epoch bump failed \
+             ({e}); other surfaces notice only at their next key verification"
+        );
+    }
+    Ok(Ok(existed))
+}
+
+/// Record a host-key revocation in the audit trail (ADR-0030,
+/// log-after-decide: the disposal has already happened). The surface is the
+/// caller's own (`Cli` for the CLI paths, `Extension` for the native host's
+/// `enclave_revoke`); the shared seam is surface-agnostic and does the
+/// mechanical bump, so each caller stamps its own surface here.
+pub fn audit_host_key_revoke(surface: crate::audit::Surface) {
     crate::audit::record(
         crate::audit::AuditRecord::new(crate::audit::AuditKind::HostKeyRevoke)
-            .surface(crate::audit::Surface::Cli)
+            .surface(surface)
             .outcome("ok"),
     );
 }

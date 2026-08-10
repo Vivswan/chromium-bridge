@@ -100,6 +100,16 @@ pub struct Revocation {
     /// Epoch of the last enclave host-key revocation (0 = never).
     #[serde(default)]
     pub host_key_epoch: u64,
+    /// Epoch of the last host-owned policy change (0 = never). The native host
+    /// watches it to know when to push `policy_current` to the extension
+    /// (ADR-0032 decision 4); it is a change notice, never authority (the
+    /// signed baseline in `policy.json` is the authority).
+    #[serde(default)]
+    pub policy_epoch: u64,
+    /// Epoch of the last shared-language change (0 = never). The native host
+    /// watches it to push `lang_current` (ADR-0032 decision 7).
+    #[serde(default)]
+    pub lang_epoch: u64,
     /// One-way latch: a client allowlist has existed on this machine. With the
     /// latch set, an absent `clients.json` is tampering, not bootstrap.
     #[serde(default)]
@@ -187,6 +197,13 @@ pub enum Scope {
     Clients,
     /// The enclave enrollment key was revoked/deleted.
     HostKey,
+    /// The host-owned policy changed (a signed baseline write or an unsigned
+    /// restriction, ADR-0032). A change notice for the native host's
+    /// `policy_current` push; the signed baseline stays the authority.
+    Policy,
+    /// The shared `uiLanguage` preference changed (ADR-0032 decision 7). A
+    /// change notice for the native host's `lang_current` push.
+    Lang,
 }
 
 /// Increment the epoch and stamp `scope`'s marker. The
@@ -210,6 +227,8 @@ pub(crate) fn bump_locked(lock: &ipc::RuntimeLockToken, scope: Scope) -> io::Res
     match scope {
         Scope::Clients => rev.clients_epoch = rev.epoch,
         Scope::HostKey => rev.host_key_epoch = rev.epoch,
+        Scope::Policy => rev.policy_epoch = rev.epoch,
+        Scope::Lang => rev.lang_epoch = rev.epoch,
     }
     rev.write_locked(lock)?;
     Ok(rev.epoch)
@@ -226,13 +245,6 @@ pub(crate) fn latch_clients_enrolled_locked(lock: &ipc::RuntimeLockToken) -> io:
     rev.clients_enrolled = true;
     rev.write_locked(lock)?;
     Ok(rev.epoch)
-}
-
-/// Bump under the runtime lock, for callers that do not already hold it (the
-/// enclave-key revocation paths, whose authoritative state lives in the
-/// keychain rather than in a runtime-lock-guarded file).
-pub(crate) fn bump(scope: Scope) -> io::Result<u64> {
-    ipc::with_runtime_lock(|lock| bump_locked(lock, scope))
 }
 
 /// Flip the kill switch (ADR-0030): set `killed`, stamp `kill_epoch`, and
@@ -270,6 +282,8 @@ mod tests {
         assert_eq!(rev.epoch, 0);
         assert_eq!(rev.clients_epoch, 0);
         assert_eq!(rev.host_key_epoch, 0);
+        assert_eq!(rev.policy_epoch, 0);
+        assert_eq!(rev.lang_epoch, 0);
         assert!(!rev.clients_enrolled);
         assert!(!rev.killed, "a fresh install is not killed");
         assert_eq!(rev.kill_epoch, 0);
@@ -296,6 +310,8 @@ mod tests {
             epoch: 8,
             clients_epoch: 6,
             host_key_epoch: 7,
+            policy_epoch: 5,
+            lang_epoch: 4,
             clients_enrolled: true,
             killed: true,
             kill_epoch: 8,
@@ -349,6 +365,8 @@ mod proptests {
         match scope {
             Scope::Clients => rev.clients_epoch = rev.epoch,
             Scope::HostKey => rev.host_key_epoch = rev.epoch,
+            Scope::Policy => rev.policy_epoch = rev.epoch,
+            Scope::Lang => rev.lang_epoch = rev.epoch,
         }
         rev
     }
@@ -372,7 +390,12 @@ mod proptests {
     }
 
     fn arb_scope() -> impl Strategy<Value = Scope> {
-        prop_oneof![Just(Scope::Clients), Just(Scope::HostKey)]
+        prop_oneof![
+            Just(Scope::Clients),
+            Just(Scope::HostKey),
+            Just(Scope::Policy),
+            Just(Scope::Lang),
+        ]
     }
 
     fn arb_mutation() -> impl Strategy<Value = Mutation> {
@@ -393,6 +416,7 @@ mod proptests {
             let mut rev = Revocation::default();
             let mut last_epoch = rev.epoch;
             let (mut last_clients, mut last_host) = (0u64, 0u64);
+            let (mut last_policy, mut last_lang) = (0u64, 0u64);
             for scope in scopes {
                 rev = bump_pure(rev, scope);
                 prop_assert!(rev.epoch > last_epoch, "epoch must strictly increase");
@@ -400,11 +424,17 @@ mod proptests {
                 match scope {
                     Scope::Clients => last_clients = rev.epoch,
                     Scope::HostKey => last_host = rev.epoch,
+                    Scope::Policy => last_policy = rev.epoch,
+                    Scope::Lang => last_lang = rev.epoch,
                 }
                 prop_assert_eq!(rev.clients_epoch, last_clients);
                 prop_assert_eq!(rev.host_key_epoch, last_host);
+                prop_assert_eq!(rev.policy_epoch, last_policy);
+                prop_assert_eq!(rev.lang_epoch, last_lang);
                 prop_assert!(rev.clients_epoch <= rev.epoch);
                 prop_assert!(rev.host_key_epoch <= rev.epoch);
+                prop_assert!(rev.policy_epoch <= rev.epoch);
+                prop_assert!(rev.lang_epoch <= rev.epoch);
             }
         }
 

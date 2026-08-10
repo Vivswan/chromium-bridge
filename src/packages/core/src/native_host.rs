@@ -33,13 +33,14 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::enclave::{EnrollmentKey, HostConfig};
+use crate::enclave::EnrollmentKey;
 use crate::ipc;
 use crate::protocol::{
     bridge_read, bridge_write, classify_nm_frame, host_control_type, nm_read_frame, nm_write_frame,
     AdminControl, AdminKind, AuditEventFields, EnclaveControl, FrameDisposition, KillStatus,
+    PolicyControl, PolicyKind, PolicyStatus,
 };
-use crate::revocation::{self, Revocation, REVOCATION_POLL};
+use crate::revocation::{Revocation, REVOCATION_POLL};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -61,41 +62,23 @@ fn write_control_reply<T: Serialize>(
 
 // ---- ADR-0025: revocation handlers and the host-originated push -------------
 
-/// Handle an `enclave_revoke` frame from the extension: delete the enrollment
-/// key, clear the recorded policy, and bump the revocation epoch so every
-/// other surface (a doctor run, a second browser's host) can observe the
-/// change. Replies `enclave_revoked` when the requested end state holds (the
-/// key is gone -- including when none existed), or a typed `enclave_error`.
+/// Handle an `enclave_revoke` frame from the extension: route through the
+/// shared enrollment-disposal seam (ADR-0032 decision 3) so the SAME critical
+/// section that deletes the key also clears the signed policy baseline and
+/// bumps the host-key epoch - the extension-originated path is the one most
+/// likely to leave a surviving baseline (the "artifact of a dead key" trap),
+/// so it must not hand-roll the deletion. Replies `enclave_revoked` when the
+/// requested end state holds (the key is gone -- including when none existed),
+/// or a typed `enclave_error`.
 fn revoke_host_key() -> EnclaveControl {
-    match EnrollmentKey::revoke() {
+    match crate::enclave::dispose_enrollment_and_policy_baseline() {
         Ok(existed) => {
-            HostConfig::remove();
-            if let Err(e) = revocation::bump(revocation::Scope::HostKey) {
-                // The key is gone (the authoritative act). This host still acks
-                // enclave_revoked below, so the requesting extension clears its
-                // own pin-pending regardless. What a failed bump loses is the
-                // host_key_epoch signal OTHER surfaces watch: a second browser's
-                // host will not push a proactive enclave_revoked, and those
-                // extensions instead notice only at their next pinned-key
-                // verification (an opt-in reverify, or the user's manual
-                // "verify now"). Logged, not fatal.
-                log_error!(
-                    "native-host",
-                    "enrollment key deleted but the revocation epoch bump failed ({e}); \
-                     other surfaces will not get a proactive revoked push, only detection \
-                     at their next key verification"
-                );
-            }
             log_info!(
                 "native-host",
                 "extension revoked the enrollment key (existed: {existed})"
             );
-            // Log-after-decide (ADR-0030): the key deletion is complete.
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::HostKeyRevoke)
-                    .surface(crate::audit::Surface::Extension)
-                    .outcome("ok"),
-            );
+            // Log-after-decide (ADR-0030): the disposal is complete.
+            crate::enclave::audit_host_key_revoke(crate::audit::Surface::Extension);
             EnclaveControl::EnclaveRevoked {}
         }
         Err(e) => {
@@ -192,62 +175,60 @@ fn kill_status_reply() -> AdminControl {
     status.into_frame()
 }
 
-/// Handle `kill_engage` / `kill_release` from the extension (ADR-0030). The
-/// core API performs the latch flip + epoch bump in one critical section and
-/// audits it with `surface: extension`. The reply reports the resulting
-/// state, which the extension's SW-only mirror adopts.
-///
-/// Releasing runs the user-presence ladder first ([`crate::presence`]) with
-/// the extension floor: this process cannot raise a text prompt of its own
-/// (stdin and stdout are the native-messaging protocol), so where no Enclave
-/// key exists the options page's explicit confirmation dialog IS the
-/// interactive floor, attested by the channel that delivered the frame
-/// (`allowed_origins` pins the extension; the #32 sender gate pins its
-/// pages). On an enrolled Mac the same call raises a Secure Enclave Touch ID
-/// prompt host-side, and a hardware refusal keeps the bridge killed
-/// (`ok: false`, audited).
-fn handle_kill_transition(engage: bool) -> AdminControl {
-    let res = if engage {
-        crate::kill::engage(crate::audit::Surface::Extension)
-    } else {
-        match crate::presence::require_presence(
-            "Releasing the kill switch lets MCP clients drive your browser again.",
-            crate::presence::Floor::ExtensionConfirm,
-        ) {
-            Ok(auth) => crate::kill::release(crate::audit::Surface::Extension, auth),
-            Err(e) => {
-                crate::kill::audit_refused_release(crate::audit::Surface::Extension, &e);
-                log_warn!(
-                    "native-host",
-                    "extension-requested release refused at the presence gate: {e}"
-                );
-                return KillStatus::Unreadable {
-                    error: format!("release refused: {e}"),
-                }
-                .into_frame();
-            }
-        }
-    };
-    let status = match res {
+/// Handle `kill_engage` from the extension (ADR-0030). The core API performs
+/// the latch flip + epoch bump in one critical section and audits it with
+/// `surface: extension`. The reply reports the resulting state, which the
+/// extension's SW-only mirror adopts. Engage only reduces capability (the
+/// brake stays one action away on every surface, ADR-0032 decision 1), so it
+/// needs no presence gate.
+fn handle_kill_engage() -> AdminControl {
+    let status = match crate::kill::engage(crate::audit::Surface::Extension) {
         Ok(epoch) => {
             log_info!(
                 "native-host",
-                "extension {} the kill switch (epoch {epoch})",
-                if engage { "ENGAGED" } else { "released" }
+                "extension ENGAGED the kill switch (epoch {epoch})"
             );
-            KillStatus::Read { killed: engage }
+            KillStatus::Read { killed: true }
         }
         Err(e) => {
-            log_warn!(
-                "native-host",
-                "extension-requested kill transition failed: {e}"
-            );
+            log_warn!("native-host", "extension-requested kill engage failed: {e}");
             KillStatus::Unreadable {
                 error: e.to_string(),
             }
         }
     };
     status.into_frame()
+}
+
+/// Handle `kill_release` from the extension: REFUSE it, audited (ADR-0032
+/// decision 6). Release wholesale-restores capability and now moves to the
+/// strongest gates - `chromium-bridge unkill` and the desktop app, both behind
+/// the ADR-0031 presence ladder - so the extension no longer holds a release
+/// surface at all (its UI drops the control, keeping engage). This host answers
+/// the retired frame with a refusal rather than silently dropping it, so a
+/// stale extension's pending request resolves and the trail records the
+/// attempt. The refusal is not a state read, so it carries no `killed` claim.
+fn handle_kill_release_refused() -> AdminControl {
+    // Log-after-decide (ADR-0030): the refusal is the decision.
+    crate::audit::record(
+        crate::audit::AuditRecord::new(crate::audit::AuditKind::KillRelease)
+            .surface(crate::audit::Surface::Extension)
+            .outcome("refused")
+            .detail(
+                "extension kill_release retired (ADR-0032 decision 6); release is app/CLI only",
+            ),
+    );
+    log_warn!(
+        "native-host",
+        "refusing extension-originated kill_release: retired (ADR-0032 decision 6); \
+         release via the desktop app or `chromium-bridge unkill`"
+    );
+    KillStatus::Unreadable {
+        error: "kill_release from the extension is retired (ADR-0032); release via the \
+                desktop app or `chromium-bridge unkill`"
+            .into(),
+    }
+    .into_frame()
 }
 
 /// Record one extension-side decision in the audit trail (ADR-0030). The
@@ -299,6 +280,123 @@ fn malformed_admin_reply(kind: AdminKind) -> AdminControl {
     }
 }
 
+// ---- ADR-0032: host-owned policy and shared-language control frames ----------
+
+/// The current policy state as a `policy_current` frame (ADR-0032 decision 4),
+/// built through the typed [`PolicyStatus`] so the illegal wire mixtures
+/// (`ok: false` carrying a baseline, a `sig` with no baseline) are
+/// unconstructible. The store is passed through byte-for-byte: the host does
+/// not re-parse or canonicalize the baseline (the extension verifies+parses
+/// the exact bytes against its own pin, ADR-0032 decision 3) - but it IS
+/// validated before the push (`effective()`: strict baseline parse plus the
+/// overlay direction check), so a store whose envelope reads but whose
+/// content is damaged or tampered pushes `ok: false`, matching the dispatch
+/// gate's deny-all reading of the same state. Fail closed on absence or an
+/// unreadable/malformed store: `ok: false`, so the extension keeps its deny
+/// baseline rather than trusting bytes nobody vouched for.
+fn policy_current_reply() -> PolicyControl {
+    let status = match crate::policy::PolicyStore::load() {
+        Ok(Some(store)) => match store.effective() {
+            Ok(_) => PolicyStatus::Present {
+                baseline_b64: store.baseline_b64,
+                sig_b64: store.sig_b64,
+                overlay: store.overlay,
+            },
+            Err(e) => PolicyStatus::Unavailable {
+                error: format!("policy store damaged: {e}"),
+            },
+        },
+        Ok(None) => PolicyStatus::Unavailable {
+            error: "no policy baseline on this host".into(),
+        },
+        Err(e) => PolicyStatus::Unavailable {
+            error: format!("policy store unreadable: {e}"),
+        },
+    };
+    status.into_frame()
+}
+
+/// The current shared language as a `lang_current` frame (ADR-0032 decision
+/// 7), or `None` when the store is unreadable (fail closed: skip the reply /
+/// push and log, rather than answer with a guessed value that could reset a
+/// receiver's sequence). An absent store reads as the default, which is a
+/// normal answer, not an error.
+fn lang_current_frame() -> Option<PolicyControl> {
+    match crate::lang::load_current() {
+        Ok((value, seq)) => Some(PolicyControl::LangCurrent { value, seq }),
+        Err(e) => {
+            log_warn!(
+                "native-host",
+                "language store unreadable ({e}); not answering lang_current"
+            );
+            None
+        }
+    }
+}
+
+/// Handle a `lang_set` (ADR-0032 decision 7): an out-of-enum value is refused
+/// and the previous value stands (reply the UNCHANGED `lang_current`); a valid
+/// value is applied, bumping the sequence only if it changed, and the
+/// resulting `lang_current` is the reply. `None` only when the store is
+/// unreadable (see [`lang_current_frame`]).
+fn handle_lang_set(value: String) -> Option<PolicyControl> {
+    if !crate::lang::is_valid_lang(&value) {
+        log_warn!(
+            "native-host",
+            "refusing out-of-enum lang_set {value:?}; the previous language stands"
+        );
+        return lang_current_frame();
+    }
+    match crate::lang::set(&value) {
+        Ok((value, seq)) => Some(PolicyControl::LangCurrent { value, seq }),
+        Err(e) => {
+            log_warn!(
+                "native-host",
+                "lang_set could not be applied ({e}); the previous language stands"
+            );
+            lang_current_frame()
+        }
+    }
+}
+
+/// The reply for a malformed policy/language REQUEST frame, mirroring
+/// [`malformed_admin_reply`]: exhaustive over [`PolicyKind`], so the reply
+/// type provably matches the request. A malformed `policy_get` answers
+/// `policy_current { ok: false }`; a malformed `lang_get`/`lang_set` answers
+/// `lang_current` with the UNCHANGED value+seq (decision 7). `None` only when
+/// the language store is unreadable.
+fn malformed_policy_reply(kind: PolicyKind) -> Option<PolicyControl> {
+    match kind {
+        PolicyKind::PolicyGet => Some(
+            PolicyStatus::Unavailable {
+                error: "malformed policy_get frame".into(),
+            }
+            .into_frame(),
+        ),
+        PolicyKind::LangGet | PolicyKind::LangSet => lang_current_frame(),
+    }
+}
+
+/// Push the current `policy_current` to the extension (ADR-0032 decision 4).
+/// Best-effort: a failed write only delays the state to the extension's own
+/// `policy_get`.
+fn push_policy_current(out: &Mutex<BufWriter<io::Stdout>>) {
+    if let Err(e) = write_control_reply(out, &policy_current_reply()) {
+        log_warn!("native-host", "could not push policy_current: {e}");
+    }
+}
+
+/// Push the current `lang_current` to the extension (ADR-0032 decision 7).
+/// Best-effort, and skipped entirely when the store is unreadable (already
+/// logged).
+fn push_lang_current(out: &Mutex<BufWriter<io::Stdout>>) {
+    if let Some(frame) = lang_current_frame() {
+        if let Err(e) = write_control_reply(out, &frame) {
+            log_warn!("native-host", "could not push lang_current: {e}");
+        }
+    }
+}
+
 /// Whether the enrollment key is verifiably ABSENT from the keychain. This is
 /// keychain truth, not file truth: the push below must never fire because a
 /// same-user process scribbled on the (writable) revocation file while the
@@ -325,26 +423,40 @@ fn push_revoked(out: &Mutex<BufWriter<io::Stdout>>) {
 /// Push the current kill state to the extension as an unsolicited
 /// `kill_status_result` (ADR-0030). Sent when the watch observes a transition,
 /// and at startup only when the news is bad (killed, or unreadable): a
-/// healthy startup pushes nothing, because the extension itself queries
+/// healthy startup pushes NO kill frame, because the extension itself queries
 /// `kill_status` on every port connect (which is what clears a stale killed
-/// mirror after a CLI unkill), and an unconditional push would put an
+/// mirror after a CLI unkill), and an unconditional kill push would put an
 /// unexpected frame in front of every fresh connection. Best-effort: a failed
 /// write only delays the mirror to the extension's own query.
+///
+/// This healthy-startup-quiet rule is specific to the KILL state. It is NOT
+/// contradicted by the policy and language pushes, which DO fire at every
+/// connect (ADR-0032 decision 4 deliberately reverses the asymmetry for a
+/// policy-capable host: the extension never speaks first on the new frames, so
+/// the host must identify itself by pushing `policy_current`/`lang_current`
+/// unsolicited, and the per-connection dispatch barrier depends on receiving
+/// that policy push).
 fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
     if let Err(e) = write_control_reply(out, &kill_status_reply()) {
         log_warn!("native-host", "could not push kill_status_result: {e}");
     }
 }
 
-/// The two revocation epochs the watch compares between polls, by name: a
-/// positional pair here would let a silent swap cross the kill-transition
-/// check with the revoked-key push, so each epoch travels under its own field.
+/// The revocation epochs the watch compares between polls, by name: a
+/// positional tuple here would let a silent swap cross one epoch's check with
+/// another's push, so each epoch travels under its own field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WatchedEpochs {
     /// `Revocation::host_key_epoch` - bumps when the enrollment key is revoked.
     host_key: u64,
     /// `Revocation::kill_epoch` - bumps on every kill-switch transition.
     kill: u64,
+    /// `Revocation::policy_epoch` - bumps on every host-owned policy change
+    /// (ADR-0032 decision 4), driving the `policy_current` push.
+    policy: u64,
+    /// `Revocation::lang_epoch` - bumps on every shared-language change
+    /// (ADR-0032 decision 7), driving the `lang_current` push.
+    lang: u64,
 }
 
 impl WatchedEpochs {
@@ -352,6 +464,8 @@ impl WatchedEpochs {
         WatchedEpochs {
             host_key: rev.host_key_epoch,
             kill: rev.kill_epoch,
+            policy: rev.policy_epoch,
+            lang: rev.lang_epoch,
         }
     }
 }
@@ -387,8 +501,17 @@ fn spawn_revocation_watch(
     unkill_observed: Option<Arc<AtomicBool>>,
 ) {
     thread::spawn(move || {
+        // ADR-0032 decision 4: a policy-capable host identifies itself at
+        // every connect by pushing the policy and language state unsolicited
+        // (the extension never speaks first on those frames, and the
+        // per-connection dispatch barrier depends on receiving the policy
+        // push). This reverses the kill state's healthy-startup-quiet rule,
+        // deliberately (see push_kill_status), so it runs unconditionally,
+        // before the revocation-record read below.
+        push_policy_current(&out);
+        push_lang_current(&out);
         // Startup posture: bad news is announced now (a key revoked or a kill
-        // engaged while no host was running); a healthy state stays quiet.
+        // engaged while no host was running); a healthy kill state stays quiet.
         let mut last: Option<WatchedEpochs> = match Revocation::current() {
             Ok(rev) => {
                 if rev.host_key_epoch > 0 && enrollment_key_is_gone() {
@@ -433,9 +556,29 @@ fn spawn_revocation_watch(
                                 }
                             }
                         }
+                        // ADR-0032: an out-of-band policy or language change
+                        // (a CLI/app edit, or a second browser's host) moves
+                        // its epoch; push the fresh state on the same tick.
+                        if prev.policy != cur.policy {
+                            push_policy_current(&out);
+                        }
+                        if prev.lang != cur.lang {
+                            push_lang_current(&out);
+                        }
                     } else {
-                        // Recovered from an unreadable record: re-announce.
+                        // Recovered from an unreadable record: re-run the
+                        // startup posture. Every watched state (host-key
+                        // revocation, kill, policy, language) was
+                        // unobservable across the gap, so a change made
+                        // during it would otherwise be silently absorbed
+                        // into the rebuilt baseline and stay unannounced
+                        // until the next connect.
+                        if rev.host_key_epoch > 0 && enrollment_key_is_gone() {
+                            push_revoked(&out);
+                        }
                         push_kill_status(&out);
+                        push_policy_current(&out);
+                        push_lang_current(&out);
                     }
                     last = Some(cur);
                 }
@@ -629,11 +772,52 @@ fn handle_control_frame(
             Ok(Inbound::Handled)
         }
         FrameDisposition::KillEngage => {
-            write_control_reply(out, &handle_kill_transition(true))?;
+            write_control_reply(out, &handle_kill_engage())?;
             Ok(Inbound::Handled)
         }
         FrameDisposition::KillRelease => {
-            write_control_reply(out, &handle_kill_transition(false))?;
+            // ADR-0032 decision 6: extension release is retired; refuse it,
+            // audited, rather than running the (now removed) extension floor.
+            write_control_reply(out, &handle_kill_release_refused())?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::PolicyGet => {
+            write_control_reply(out, &policy_current_reply())?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::LegacySettings { bag: _ } => {
+            // ADR-0032 decision 8: the snapshotted legacy bag is recorded as a
+            // pending import, never applied. Phase 4 wires the pending-import
+            // store; for THIS lane the frame is only routed off the forward
+            // path (an old host would have Forwarded it, tearing the browser
+            // leg down) - accepted, no reply, no store yet.
+            log_info!(
+                "native-host",
+                "received legacy_settings; Phase 4 records the pending import (dropped for now)"
+            );
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::LangGet => {
+            if let Some(reply) = lang_current_frame() {
+                write_control_reply(out, &reply)?;
+            }
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::LangSet { value } => {
+            if let Some(reply) = handle_lang_set(value) {
+                write_control_reply(out, &reply)?;
+            }
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::MalformedPolicy(kind) => {
+            log_warn!(
+                "native-host",
+                "malformed {} frame from browser",
+                kind.wire_tag()
+            );
+            if let Some(reply) = malformed_policy_reply(kind) {
+                write_control_reply(out, &reply)?;
+            }
             Ok(Inbound::Handled)
         }
         FrameDisposition::AuditEvent(fields) => {
@@ -1345,30 +1529,293 @@ mod tests {
         assert!(nm_read_frame(&mut cur).unwrap().is_none());
     }
 
+    /// A scratch runtime dir for the ADR-0032 frame-answer tests (the policy
+    /// and language stores, the revocation record, and the audit trail all
+    /// resolve their paths internally), the policy store's `RuntimeDirGuard`
+    /// pattern lifted here so no test reads or writes the user's real state.
+    #[cfg(unix)]
+    const RUNTIME_ENV: &str = "XDG_RUNTIME_DIR";
+    #[cfg(windows)]
+    const RUNTIME_ENV: &str = "LOCALAPPDATA";
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct RuntimeDirGuard {
+        _serial: std::sync::MutexGuard<'static, ()>,
+        dir: std::path::PathBuf,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl RuntimeDirGuard {
+        fn new(test: &str) -> Self {
+            let serial = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+            let dir = std::env::temp_dir().join(format!(
+                "chromium-bridge-native-host-test-{}-{test}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let prev = std::env::var_os(RUNTIME_ENV);
+            std::env::set_var(RUNTIME_ENV, &dir);
+            RuntimeDirGuard {
+                _serial: serial,
+                dir,
+                prev,
+            }
+        }
+    }
+
+    impl Drop for RuntimeDirGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(RUNTIME_ENV, v),
+                None => std::env::remove_var(RUNTIME_ENV),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn audit_text() -> String {
+        std::fs::read_to_string(crate::audit::audit_path()).unwrap_or_default()
+    }
+
     #[test]
-    fn policy_frames_from_the_browser_are_handled_without_a_reply() {
-        // ADR-0032 phase 1: a policy frame from the extension is Handled -
-        // never forwarded to the MCP server - through the reply-less Drop
-        // arm. The classification pin in protocol.rs holds every policy tag
-        // to FrameDisposition::Drop, and that arm is asserted here per frame
-        // so no reply bytes can be written; the host answers these frames
-        // from phase 2.
+    fn policy_frames_from_the_browser_are_answered_or_dropped() {
+        // ADR-0032 phase 2: the four extension-originated frames are ANSWERED
+        // by the host (policy_get, legacy_settings, lang_get, lang_set) - each
+        // classifies to its own disposition, never Drop, never Forward (an
+        // old-style forward would tear the browser leg down on the MCP
+        // server's strict BridgeResp parse). The two host->extension pushes
+        // (policy_current, lang_current) arriving FROM the browser stay
+        // DROPPED (host->extension only). All are Handled, never forwarded. A
+        // scratch runtime dir isolates the store reads/writes the answers do.
+        let _dir = RuntimeDirGuard::new("answered-or-dropped");
         let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
-        for frame in [
-            serde_json::json!({ "type": "policy_get" }),
-            serde_json::json!({ "type": "policy_current", "ok": true }),
-            serde_json::json!({ "type": "legacy_settings", "bag": {} }),
-            serde_json::json!({ "type": "lang_get" }),
-            serde_json::json!({ "type": "lang_set", "value": "en" }),
-            serde_json::json!({ "type": "lang_current", "value": "en", "seq": 1 }),
+        for (frame, is_drop) in [
+            (serde_json::json!({ "type": "policy_get" }), false),
+            (
+                serde_json::json!({ "type": "legacy_settings", "bag": {} }),
+                false,
+            ),
+            (serde_json::json!({ "type": "lang_get" }), false),
+            (
+                serde_json::json!({ "type": "lang_set", "value": "zh_CN" }),
+                false,
+            ),
+            (
+                serde_json::json!({ "type": "policy_current", "ok": true }),
+                true,
+            ),
+            (
+                serde_json::json!({ "type": "lang_current", "value": "en", "seq": 1 }),
+                true,
+            ),
         ] {
-            assert!(
-                matches!(classify_nm_frame(&frame), FrameDisposition::Drop(_)),
-                "must take the reply-less Drop arm: {frame}"
-            );
+            let disposition = classify_nm_frame(&frame);
+            if is_drop {
+                assert!(
+                    matches!(disposition, FrameDisposition::Drop(_)),
+                    "host->extension push must Drop from the browser leg: {frame}"
+                );
+            } else {
+                assert!(
+                    !matches!(
+                        disposition,
+                        FrameDisposition::Drop(_) | FrameDisposition::Forward
+                    ),
+                    "extension-originated frame must be answered, not dropped/forwarded: {frame}"
+                );
+            }
             let verdict = handle_control_frame(frame, &out).unwrap();
             assert!(matches!(verdict, Inbound::Handled));
         }
+    }
+
+    #[test]
+    fn policy_get_answers_ok_false_when_no_store_exists() {
+        // Fail closed (ADR-0032 decision 4/5): an absent store answers
+        // ok:false with an error and no baseline claim, so the extension keeps
+        // its deny baseline rather than trusting bytes nobody vouched for.
+        let _dir = RuntimeDirGuard::new("policy-get-absent");
+        match policy_current_reply() {
+            PolicyControl::PolicyCurrent {
+                ok: false,
+                baseline: None,
+                sig: None,
+                error: Some(_),
+                ..
+            } => {}
+            other => panic!("absent store must answer ok:false with no baseline: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn policy_get_answers_the_signed_baseline_from_the_store() {
+        let _dir = RuntimeDirGuard::new("policy-get-present");
+        let _reset = crate::presence::policy_test_hook::ResetOnDrop;
+        crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
+            crate::presence::PolicySignOutcome::Signed {
+                sig: [7; 64],
+                key_id: "kid".into(),
+                pubkey_b64: "pk".into(),
+            },
+        ));
+        crate::policy::set_signed(
+            crate::policy::PolicyValues {
+                page_eval_enabled: true,
+                ..Default::default()
+            },
+            vec![crate::policy::PolicyField::PageEvalEnabled],
+            crate::audit::Surface::Core,
+            crate::policy::PolicyGrantFloor::SignatureOnly,
+        )
+        .unwrap();
+        match policy_current_reply() {
+            PolicyControl::PolicyCurrent {
+                ok: true,
+                baseline: Some(baseline),
+                sig: Some(_),
+                error: None,
+                ..
+            } => assert!(!baseline.is_empty()),
+            other => panic!("a present store must answer ok:true with a baseline: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn policy_get_answers_ok_false_on_a_damaged_or_tampered_store() {
+        // ADR-0032 decision 5: an unreadable OR MALFORMED store answers
+        // ok:false - the push must agree with the dispatch gate's deny-all
+        // reading of the same state, never vouch ok:true for bytes the gate
+        // refuses.
+        let _dir = RuntimeDirGuard::new("policy-get-damaged");
+        // Envelope parses, baseline bytes are garbage.
+        let garbage = crate::policy::PolicyStore {
+            version: 1,
+            baseline_b64: crate::enclave::base64_encode(b"not a policy doc"),
+            sig_b64: None,
+            key_id: None,
+            overlay: None,
+        };
+        std::fs::write(
+            crate::policy::PolicyStore::path(),
+            serde_json::to_vec(&garbage).unwrap(),
+        )
+        .unwrap();
+        match policy_current_reply() {
+            PolicyControl::PolicyCurrent {
+                ok: false,
+                baseline: None,
+                sig: None,
+                error: Some(_),
+                ..
+            } => {}
+            other => panic!("a damaged baseline must answer ok:false: {other:?}"),
+        }
+        // Valid baseline, tampered overlay relaxing it (direction-invalid).
+        let doc = crate::policy::PolicyDoc::default();
+        let tampered = crate::policy::PolicyStore {
+            version: 1,
+            baseline_b64: crate::enclave::base64_encode(&serde_json::to_vec(&doc).unwrap()),
+            sig_b64: None,
+            key_id: None,
+            overlay: Some(crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(true),
+                ..Default::default()
+            }),
+        };
+        std::fs::write(
+            crate::policy::PolicyStore::path(),
+            serde_json::to_vec(&tampered).unwrap(),
+        )
+        .unwrap();
+        match policy_current_reply() {
+            PolicyControl::PolicyCurrent {
+                ok: false,
+                baseline: None,
+                sig: None,
+                error: Some(e),
+                ..
+            } => assert!(e.contains("damaged")),
+            other => panic!("a tampered overlay must answer ok:false: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lang_get_answers_the_current_language() {
+        let _dir = RuntimeDirGuard::new("lang-get");
+        crate::lang::set("zh_TW").unwrap();
+        match lang_current_frame().unwrap() {
+            PolicyControl::LangCurrent { value, seq } => {
+                assert_eq!(value, "zh_TW");
+                assert_eq!(seq, 1);
+            }
+            other => panic!("lang_get must answer lang_current: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lang_set_applies_a_valid_value_and_bumps_the_sequence() {
+        let _dir = RuntimeDirGuard::new("lang-set-valid");
+        match handle_lang_set("zh_CN".into()).unwrap() {
+            PolicyControl::LangCurrent { value, seq } => {
+                assert_eq!(value, "zh_CN");
+                assert_eq!(seq, 1);
+            }
+            other => panic!("lang_set must answer the applied lang_current: {other:?}"),
+        }
+        assert_eq!(
+            crate::lang::load_current().unwrap(),
+            ("zh_CN".to_string(), 1)
+        );
+    }
+
+    #[test]
+    fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
+        // ADR-0032 decision 7: a value outside the enum is refused and the
+        // previous value stands - the reply is lang_current with the
+        // UNCHANGED value+seq, and the store is untouched.
+        let _dir = RuntimeDirGuard::new("lang-set-invalid");
+        crate::lang::set("zh_CN").unwrap();
+        match handle_lang_set("fr".into()).unwrap() {
+            PolicyControl::LangCurrent { value, seq } => {
+                assert_eq!(value, "zh_CN");
+                assert_eq!(seq, 1);
+            }
+            other => panic!("a refused lang_set must reply the unchanged current: {other:?}"),
+        }
+        assert_eq!(
+            crate::lang::load_current().unwrap(),
+            ("zh_CN".to_string(), 1)
+        );
+    }
+
+    #[test]
+    fn extension_kill_release_is_refused_audited_and_does_not_release() {
+        // ADR-0032 decision 6: the extension's release path is retired. Engage
+        // the kill switch, then attempt release from the extension: the reply
+        // is a refusal (ok:false, no killed claim), the trail records it, and
+        // the bridge stays killed - the refusal never calls kill::release.
+        let _dir = RuntimeDirGuard::new("kill-release-refused");
+        crate::kill::engage(crate::audit::Surface::Cli).unwrap();
+        match handle_kill_release_refused() {
+            AdminControl::KillStatusResult {
+                ok: false,
+                killed: None,
+                error: Some(_),
+            } => {}
+            other => panic!("extension release must be refused with no killed claim: {other:?}"),
+        }
+        assert!(
+            crate::kill::is_killed().unwrap(),
+            "the refusal must NOT release the kill switch"
+        );
+        let trail = audit_text();
+        assert!(trail.contains("kill_release"), "{trail}");
+        assert!(trail.contains("\"outcome\":\"refused\""), "{trail}");
     }
 
     #[test]

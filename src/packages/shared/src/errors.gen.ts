@@ -86,7 +86,8 @@ export const ERROR_META: Readonly<Record<ErrorCode, ErrorMeta>> = {
   TOOL_DISABLED: {
     category: "permission",
     retryable: false,
-    message: "This tool is disabled in the extension settings.",
+    message:
+      "This tool is disabled by the host policy (a capability grant is off, the tool is in the disabled list, or the policy store is unreadable).",
   },
   USER_DENIED: {
     category: "user",

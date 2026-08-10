@@ -15,8 +15,55 @@ pub mod argv {
     /// `enclave-status`: read-only enrollment state report.
     pub const ENCLAVE_STATUS: &str = "enclave-status";
     /// `enclave-status --json`: the machine-readable form the app parses.
+    /// Shared by `policy show --json` / `policy history --json`.
     pub const JSON_FLAG: &str = "--json";
+
+    // ---- policy (ADR-0032 decision 5) ----------------------------------------
+    // The host-owned policy read/edit surface. The desktop app is a co-equal
+    // write surface that drives this binary as a subprocess, so it builds argv
+    // from these same literals; keeping them here is what stops the two
+    // surfaces from drifting apart.
+
+    /// `policy <sub>`: the host-owned policy read/edit surface.
+    pub const POLICY: &str = "policy";
+    /// `policy show [--json]`: the current effective policy + store state.
+    pub const POLICY_SHOW: &str = "show";
+    /// `policy set <field flags>`: the GRANT lane - mint a fresh signed
+    /// baseline (Touch ID), signature-only (refuses where no key exists).
+    pub const POLICY_SET: &str = "set";
+    /// `policy restrict <field flags>`: the FREE lane - apply an unsigned
+    /// restriction overlay (no Touch ID; only ever removes capability).
+    pub const POLICY_RESTRICT: &str = "restrict";
+    /// `policy history [--json]`: the superseded-revision ring.
+    pub const POLICY_HISTORY: &str = "history";
+    /// `policy rollback --revision <n>`: re-derive a past revision's effective
+    /// policy as a FRESH write (never a replay of the old signed artifact).
+    pub const POLICY_ROLLBACK: &str = "rollback";
+    /// `policy rollback --revision <n>`.
+    pub const POLICY_REVISION_FLAG: &str = "--revision";
+
+    // The per-field edit flags shared by `policy set` and `policy restrict`.
+    // Boolean flags take `on|off`; the four `*-ms` flags take a non-negative
+    // integer; `--disabled-tools` takes a comma-separated list. One flag per
+    // policy field, spelled in kebab-case of its camelCase wire name.
+    pub const POLICY_F_CDP_MODE: &str = "--cdp-mode";
+    pub const POLICY_F_FILE_UPLOAD: &str = "--file-upload";
+    pub const POLICY_F_HANDLE_DIALOG: &str = "--handle-dialog";
+    pub const POLICY_F_PAGE_EVAL: &str = "--page-eval";
+    pub const POLICY_F_CONFIRM_HIGH_RISK_CLICK: &str = "--confirm-high-risk-click";
+    pub const POLICY_F_CONFIRM_PAGE_EVAL: &str = "--confirm-page-eval";
+    pub const POLICY_F_TOUCH_ID_CONFIRM: &str = "--touch-id-confirm";
+    pub const POLICY_F_CONFIRM_TAB_CLOSE: &str = "--confirm-tab-close";
+    pub const POLICY_F_WARN_PRECISE_SNAPSHOT: &str = "--warn-precise-snapshot";
+    pub const POLICY_F_EVAL_MASK: &str = "--eval-mask";
+    pub const POLICY_F_HOST_REVERIFY_MS: &str = "--host-reverify-ms";
+    pub const POLICY_F_CONFIRM_GRACE_MS: &str = "--confirm-grace-ms";
+    pub const POLICY_F_CLICK_TOAST_TIMEOUT_MS: &str = "--click-toast-timeout-ms";
+    pub const POLICY_F_EVAL_TOAST_TIMEOUT_MS: &str = "--eval-toast-timeout-ms";
+    pub const POLICY_F_DISABLED_TOOLS: &str = "--disabled-tools";
 }
+
+use crate::policy::{PolicyField, PolicyOverlay};
 
 use crate::browsers::Browser;
 
@@ -62,6 +109,11 @@ pub enum Command {
     /// `audit [--limit <n>]`: print the on-disk audit trail (read-only).
     /// Flags are parsed by the handler for a rich error message.
     Audit,
+    /// `policy <sub> ...`: the host-owned policy read/edit surface (ADR-0032).
+    /// The subcommand and its flags are parsed by [`policy_args`] in the
+    /// handler, so a bad combination reports a clear error rather than a bare
+    /// help dump - the `pair-client` / `doctor` pattern.
+    Policy,
     /// `-h` / `--help`.
     Help,
     /// Anything unrecognized: print help, exit non-zero.
@@ -145,6 +197,9 @@ pub fn parse(args: &[String]) -> Command {
         // `audit` takes --limit, parsed by the handler (audit_args) so a bad
         // flag reports a clear error rather than a bare help dump.
         Some("audit") => Command::Audit,
+        // `policy` takes a subcommand + flags, parsed by the handler
+        // (policy_args) for a rich error - the pair-client pattern.
+        Some(argv::POLICY) => Command::Policy,
         Some(_) => Command::Unknown,
     }
 }
@@ -327,6 +382,238 @@ pub fn doctor_args(args: &[String]) -> Result<DoctorCommand, String> {
     }))
 }
 
+/// The parsed form of `policy <sub>` (ADR-0032 decision 5): exactly one of
+/// the read surfaces (`show`, `history`), the two write lanes (`set` = the
+/// signed GRANT lane, `restrict` = the free lane), or `rollback`. An enum
+/// rather than flat flags so a contradictory invocation cannot be represented
+/// past this boundary, and each variant carries exactly the data its lane
+/// needs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PolicyCommand {
+    /// `policy show [--json]`: the current effective policy and store state.
+    Show { json: bool },
+    /// `policy history [--json]`: the superseded-revision ring.
+    History { json: bool },
+    /// `policy set <field flags>`: the GRANT lane. `overlay` carries the
+    /// user's per-field edits and `touched` names exactly the fields they
+    /// set; the handler folds `overlay` over the current baseline and signs.
+    /// The parser guarantees `touched` is non-empty (an empty write is
+    /// refused at the CLI boundary, never handed to the seam).
+    Set {
+        overlay: PolicyOverlay,
+        touched: Vec<PolicyField>,
+    },
+    /// `policy restrict <field flags>`: the FREE lane - the edits as an
+    /// unsigned restriction overlay. Whether they actually restrict is the
+    /// seam's direction check, not this parser's.
+    Restrict { overlay: PolicyOverlay },
+    /// `policy rollback --revision <n>`: re-derive revision `n`'s effective
+    /// policy and re-apply it as a FRESH write.
+    Rollback { revision: u64 },
+}
+
+/// Parse `policy <sub> [flags]`. Same strictness as [`doctor_args`]: an
+/// unknown subcommand, a stray argument, a repeated flag, or a malformed
+/// value is an error the handler prints, never a guess. `set` / `restrict`
+/// demand at least one field flag; `rollback` demands `--revision`.
+pub fn policy_args(args: &[String]) -> Result<PolicyCommand, String> {
+    // Skip argv[0] (binary) and argv[1] ("policy").
+    let mut it = args.iter().skip(2);
+    match it.next().map(String::as_str) {
+        Some(argv::POLICY_SHOW) => Ok(PolicyCommand::Show {
+            json: policy_json_flag(&mut it, argv::POLICY_SHOW)?,
+        }),
+        Some(argv::POLICY_HISTORY) => Ok(PolicyCommand::History {
+            json: policy_json_flag(&mut it, argv::POLICY_HISTORY)?,
+        }),
+        Some(argv::POLICY_SET) => {
+            let (overlay, touched) = policy_field_edits(&mut it, argv::POLICY_SET)?;
+            Ok(PolicyCommand::Set { overlay, touched })
+        }
+        Some(argv::POLICY_RESTRICT) => {
+            let (overlay, _touched) = policy_field_edits(&mut it, argv::POLICY_RESTRICT)?;
+            Ok(PolicyCommand::Restrict { overlay })
+        }
+        Some(argv::POLICY_ROLLBACK) => Ok(PolicyCommand::Rollback {
+            revision: policy_rollback_revision(&mut it)?,
+        }),
+        Some(other) => Err(format!(
+            "unknown policy subcommand {other:?}; expected: show, set, restrict, history, rollback"
+        )),
+        None => {
+            Err("policy needs a subcommand: show, set, restrict, history, or rollback".to_string())
+        }
+    }
+}
+
+/// The `[--json]` tail of `policy show` / `policy history`: nothing else is
+/// accepted, and `--json` at most once.
+fn policy_json_flag<'a, I: Iterator<Item = &'a String>>(
+    it: &mut I,
+    sub: &str,
+) -> Result<bool, String> {
+    let mut json = false;
+    for arg in it {
+        match arg.as_str() {
+            argv::JSON_FLAG if !json => json = true,
+            argv::JSON_FLAG => return Err(format!("policy {sub}: --json given more than once")),
+            other => return Err(format!("unexpected argument {other:?}")),
+        }
+    }
+    Ok(json)
+}
+
+/// The `--revision <n>` of `policy rollback`: required, exactly once, a
+/// non-negative integer.
+fn policy_rollback_revision<'a, I: Iterator<Item = &'a String>>(it: &mut I) -> Result<u64, String> {
+    let mut revision: Option<u64> = None;
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            argv::POLICY_REVISION_FLAG => {
+                if revision.is_some() {
+                    return Err("--revision given more than once".into());
+                }
+                let value = take_value(it, argv::POLICY_REVISION_FLAG)?;
+                revision = Some(value.parse::<u64>().map_err(|_| {
+                    format!("--revision takes a non-negative revision number, got {value:?}")
+                })?);
+            }
+            other => return Err(format!("unexpected argument {other:?}")),
+        }
+    }
+    revision.ok_or_else(|| "policy rollback requires --revision <n>".into())
+}
+
+/// Parse the per-field edit flags shared by `set` and `restrict` into an
+/// overlay plus the ordered set of fields the user named (the `touched` set a
+/// signed write embeds). A repeated field, an unknown flag, a missing value,
+/// or a malformed value is an error; an empty edit is refused here so the
+/// seam never sees a write that names no field.
+fn policy_field_edits<'a, I: Iterator<Item = &'a String>>(
+    it: &mut I,
+    sub: &str,
+) -> Result<(PolicyOverlay, Vec<PolicyField>), String> {
+    let mut overlay = PolicyOverlay::default();
+    let mut touched: Vec<PolicyField> = Vec::new();
+    while let Some(arg) = it.next() {
+        let flag = arg.as_str();
+        let field =
+            policy_field_of_flag(flag).ok_or_else(|| format!("unexpected argument {flag:?}"))?;
+        if touched.contains(&field) {
+            return Err(format!("{flag} given more than once"));
+        }
+        let value = take_value(it, flag)?;
+        set_overlay_field(&mut overlay, field, flag, &value)?;
+        touched.push(field);
+    }
+    if touched.is_empty() {
+        return Err(format!(
+            "policy {sub} needs at least one field flag (for example: --page-eval on)"
+        ));
+    }
+    Ok((overlay, touched))
+}
+
+/// Map an edit flag to its policy field. `None` for anything that is not a
+/// field flag (the caller reports it as unexpected).
+fn policy_field_of_flag(flag: &str) -> Option<PolicyField> {
+    Some(match flag {
+        argv::POLICY_F_CDP_MODE => PolicyField::CdpMode,
+        argv::POLICY_F_FILE_UPLOAD => PolicyField::FileUploadEnabled,
+        argv::POLICY_F_HANDLE_DIALOG => PolicyField::HandleDialogEnabled,
+        argv::POLICY_F_PAGE_EVAL => PolicyField::PageEvalEnabled,
+        argv::POLICY_F_CONFIRM_HIGH_RISK_CLICK => PolicyField::ConfirmHighRiskClick,
+        argv::POLICY_F_CONFIRM_PAGE_EVAL => PolicyField::ConfirmPageEval,
+        argv::POLICY_F_TOUCH_ID_CONFIRM => PolicyField::TouchIdConfirm,
+        argv::POLICY_F_CONFIRM_TAB_CLOSE => PolicyField::ConfirmTabClose,
+        argv::POLICY_F_WARN_PRECISE_SNAPSHOT => PolicyField::WarnPreciseSnapshot,
+        argv::POLICY_F_EVAL_MASK => PolicyField::EvalMask,
+        argv::POLICY_F_HOST_REVERIFY_MS => PolicyField::HostReverifyMs,
+        argv::POLICY_F_CONFIRM_GRACE_MS => PolicyField::ConfirmGraceMs,
+        argv::POLICY_F_CLICK_TOAST_TIMEOUT_MS => PolicyField::ClickToastTimeoutMs,
+        argv::POLICY_F_EVAL_TOAST_TIMEOUT_MS => PolicyField::EvalToastTimeoutMs,
+        argv::POLICY_F_DISABLED_TOOLS => PolicyField::DisabledTools,
+        _ => return None,
+    })
+}
+
+/// Set the overlay entry for `field` from a flag value, parsing per the
+/// field's type. Exhaustive with no wildcard, like the direction table: a new
+/// policy field fails to compile here until it says how its CLI value parses.
+fn set_overlay_field(
+    overlay: &mut PolicyOverlay,
+    field: PolicyField,
+    flag: &str,
+    value: &str,
+) -> Result<(), String> {
+    match field {
+        PolicyField::CdpMode => overlay.cdp_mode = Some(parse_on_off(flag, value)?),
+        PolicyField::FileUploadEnabled => {
+            overlay.file_upload_enabled = Some(parse_on_off(flag, value)?)
+        }
+        PolicyField::HandleDialogEnabled => {
+            overlay.handle_dialog_enabled = Some(parse_on_off(flag, value)?)
+        }
+        PolicyField::PageEvalEnabled => {
+            overlay.page_eval_enabled = Some(parse_on_off(flag, value)?)
+        }
+        PolicyField::ConfirmHighRiskClick => {
+            overlay.confirm_high_risk_click = Some(parse_on_off(flag, value)?)
+        }
+        PolicyField::ConfirmPageEval => {
+            overlay.confirm_page_eval = Some(parse_on_off(flag, value)?)
+        }
+        PolicyField::TouchIdConfirm => overlay.touch_id_confirm = Some(parse_on_off(flag, value)?),
+        PolicyField::ConfirmTabClose => {
+            overlay.confirm_tab_close = Some(parse_on_off(flag, value)?)
+        }
+        PolicyField::WarnPreciseSnapshot => {
+            overlay.warn_precise_snapshot = Some(parse_on_off(flag, value)?)
+        }
+        PolicyField::EvalMask => overlay.eval_mask = Some(parse_on_off(flag, value)?),
+        PolicyField::HostReverifyMs => overlay.host_reverify_ms = Some(parse_ms(flag, value)?),
+        PolicyField::ConfirmGraceMs => overlay.confirm_grace_ms = Some(parse_ms(flag, value)?),
+        PolicyField::ClickToastTimeoutMs => {
+            overlay.click_toast_timeout_ms = Some(parse_ms(flag, value)?)
+        }
+        PolicyField::EvalToastTimeoutMs => {
+            overlay.eval_toast_timeout_ms = Some(parse_ms(flag, value)?)
+        }
+        PolicyField::DisabledTools => overlay.disabled_tools = Some(parse_tool_list(value)),
+    }
+    Ok(())
+}
+
+/// A boolean policy flag: exactly `on` or `off`, never a guess at `y`/`1`.
+fn parse_on_off(flag: &str, value: &str) -> Result<bool, String> {
+    match value {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        other => Err(format!("{flag} takes on|off, got {other:?}")),
+    }
+}
+
+/// A millisecond policy flag: a non-negative integer. The JS-safe bound is
+/// enforced by the write seam (`PolicyDoc::validate`), so a friendly parse
+/// error here covers only the non-numeric case.
+fn parse_ms(flag: &str, value: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("{flag} takes a non-negative integer (milliseconds), got {value:?}"))
+}
+
+/// The `--disabled-tools` value: a comma-separated list. Empty entries are
+/// dropped, so `--disabled-tools ""` is the empty set (a full clear on the
+/// `set` lane). The seam bounds the entry count and size.
+fn parse_tool_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 /// The parsed arguments of `uninstall`: only the `--manifest-dir` targets to
 /// clear beyond the known-browser table (re-pass what you passed to
 /// `doctor --fix`).
@@ -429,6 +716,11 @@ pub fn print_help() {
          chromium-bridge kill           ENGAGE the global kill switch: refuse all bridge\n                                activity, sever browser connections, survive restarts\n    \
          chromium-bridge unkill         Explicitly release the kill switch\n                                (interactive confirmation on the terminal)\n    \
          chromium-bridge audit [--limit <n>]\n                                Print the audit trail (default: last {audit_limit} records)\n    \
+         chromium-bridge policy show [--json]\n                                Print the host-owned policy: store state, revision,\n                                signed?, overlay, and the effective values\n    \
+         chromium-bridge policy set <field flags>\n                                GRANT lane: mint a fresh SIGNED baseline (Touch ID).\n                                Signature-only: refuses where no enrollment key exists.\n                                Flags: --page-eval on|off, --file-upload on|off,\n                                --confirm-page-eval on|off, --host-reverify-ms <n>,\n                                --disabled-tools a,b, ... (one per policy field)\n    \
+         chromium-bridge policy restrict <field flags>\n                                FREE lane: apply an unsigned restriction overlay\n                                (no Touch ID; only ever removes capability)\n    \
+         chromium-bridge policy history [--json]\n                                Print the superseded-revision ring\n    \
+         chromium-bridge policy rollback --revision <n>\n                                Re-apply revision <n>'s effective policy as a FRESH\n                                write (tighten-only rides restrict free; any\n                                relaxation is one signed tap; never a replay)\n    \
          chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, ...) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
@@ -636,5 +928,101 @@ mod tests {
         // arguments, so a typo can never half-engage or half-release it.
         assert_eq!(parse(&args(&["kill", "--force"])), Command::Unknown);
         assert_eq!(parse(&args(&["unkill", "now"])), Command::Unknown);
+    }
+
+    #[test]
+    fn policy_is_dispatched_to_the_handler_parser() {
+        // Like pair-client / doctor, `policy` parses to a bare Command and the
+        // handler (policy_args) reports rich errors; parse never guesses here.
+        assert_eq!(parse(&args(&["policy"])), Command::Policy);
+        assert_eq!(parse(&args(&["policy", "show"])), Command::Policy);
+        assert_eq!(parse(&args(&["policy", "bogus", "--x"])), Command::Policy);
+    }
+
+    #[test]
+    fn policy_args_parse_reads_and_writes() {
+        use super::{policy_args, PolicyCommand};
+        use crate::policy::{PolicyField, PolicyOverlay};
+        let ok = |list: &[&str]| policy_args(&args(list)).unwrap();
+
+        assert_eq!(ok(&["policy", "show"]), PolicyCommand::Show { json: false });
+        assert_eq!(
+            ok(&["policy", "show", "--json"]),
+            PolicyCommand::Show { json: true }
+        );
+        assert_eq!(
+            ok(&["policy", "history", "--json"]),
+            PolicyCommand::History { json: true }
+        );
+        assert_eq!(
+            ok(&["policy", "rollback", "--revision", "7"]),
+            PolicyCommand::Rollback { revision: 7 }
+        );
+
+        // set: the edits become an overlay AND a touched set, in flag order.
+        assert_eq!(
+            ok(&[
+                "policy",
+                "set",
+                "--page-eval",
+                "on",
+                "--host-reverify-ms",
+                "60000",
+                "--disabled-tools",
+                "page_upload, tab_close",
+            ]),
+            PolicyCommand::Set {
+                overlay: PolicyOverlay {
+                    page_eval_enabled: Some(true),
+                    host_reverify_ms: Some(60_000),
+                    disabled_tools: Some(vec!["page_upload".into(), "tab_close".into()]),
+                    ..PolicyOverlay::default()
+                },
+                touched: vec![
+                    PolicyField::PageEvalEnabled,
+                    PolicyField::HostReverifyMs,
+                    PolicyField::DisabledTools,
+                ],
+            }
+        );
+
+        // restrict: the same parser, overlay only.
+        assert_eq!(
+            ok(&["policy", "restrict", "--confirm-page-eval", "on"]),
+            PolicyCommand::Restrict {
+                overlay: PolicyOverlay {
+                    confirm_page_eval: Some(true),
+                    ..PolicyOverlay::default()
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn policy_args_fail_loud() {
+        use super::policy_args;
+        let err = |list: &[&str]| policy_args(&args(list)).unwrap_err();
+        // A missing subcommand and an unknown one both name the choices.
+        assert!(err(&["policy"]).contains("needs a subcommand"));
+        assert!(err(&["policy", "grant"]).contains("unknown policy subcommand"));
+        // set / restrict demand at least one field flag.
+        assert!(err(&["policy", "set"]).contains("at least one field flag"));
+        assert!(err(&["policy", "restrict"]).contains("at least one field flag"));
+        // Repeated field, unknown flag, malformed values.
+        assert!(
+            err(&["policy", "set", "--page-eval", "on", "--page-eval", "off"])
+                .contains("given more than once")
+        );
+        assert!(err(&["policy", "set", "--bogus", "on"]).contains("unexpected argument"));
+        assert!(err(&["policy", "set", "--page-eval", "maybe"]).contains("on|off"));
+        assert!(err(&["policy", "set", "--host-reverify-ms", "soon"]).contains("integer"));
+        // A following flag is a missing value, never a swallowed flag.
+        assert!(err(&["policy", "set", "--page-eval", "--host-reverify-ms"])
+            .contains("requires a value"));
+        // Stray args on the read subcommands, and a missing rollback revision.
+        assert!(err(&["policy", "show", "extra"]).contains("unexpected argument"));
+        assert!(err(&["policy", "show", "--json", "--json"]).contains("more than once"));
+        assert!(err(&["policy", "rollback"]).contains("requires --revision"));
+        assert!(err(&["policy", "rollback", "--revision", "x"]).contains("revision number"));
     }
 }

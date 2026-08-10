@@ -62,13 +62,26 @@ pub enum CallError {
     #[error("{0}")]
     Extension(String),
 
+    /// The host-side policy gate refused the call before any bridge traffic
+    /// (ADR-0032 decision 4): a capability grant that gates the tool is off in
+    /// the effective policy, the tool is in the policy's `disabledTools`, or
+    /// the policy store was unreadable and the gate failed closed (deny-all,
+    /// decision 5). Defense in depth for the honest-host path - the extension
+    /// enforces the same policy at its own trust boundary. `tool` is the
+    /// refused op; `reason` names which gate fired.
+    #[error("tool '{tool}' is disabled by host policy: {reason}")]
+    ToolDisabled {
+        tool: String,
+        reason: ToolDisabledReason,
+    },
+
     /// The global kill switch is engaged (ADR-0030): every tool call is
     /// refused until a trusted surface explicitly releases it. Never
     /// retry-until-cleared territory for a client: the state changes only by
     /// an explicit human act.
     #[error(
         "the bridge kill switch is engaged - all bridge activity is refused until it is \
-         explicitly released (`chromium-bridge unkill`, or the extension's options page)"
+         explicitly released (`chromium-bridge unkill`)"
     )]
     Killed,
 
@@ -90,6 +103,43 @@ pub enum CallError {
     Internal(String),
 }
 
+/// Why the host-side policy gate refused a tool call (ADR-0032 decision 4).
+/// All three reasons share the stable `TOOL_DISABLED` code; the reason only
+/// shapes the model-facing message, so it can name which gate fired without
+/// minting a new taxonomy code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolDisabledReason {
+    /// A capability grant that gates the tool is off in the effective policy.
+    /// Field 0 is the grant's wire name (e.g. `pageEvalEnabled`).
+    GrantOff(&'static str),
+    /// The tool's op name is in the effective policy's `disabledTools`.
+    InDisabledList,
+    /// The host policy store is present but unreadable or corrupt, so the gate
+    /// fails closed and refuses every tool (decision 5). Field 0 is the read
+    /// error.
+    StoreUnreadable(String),
+}
+
+impl std::fmt::Display for ToolDisabledReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolDisabledReason::GrantOff(grant) => {
+                write!(
+                    f,
+                    "the '{grant}' capability grant is off in the host policy"
+                )
+            }
+            ToolDisabledReason::InDisabledList => {
+                write!(f, "it is in the host policy's disabled-tools list")
+            }
+            ToolDisabledReason::StoreUnreadable(err) => write!(
+                f,
+                "the host policy store could not be read ({err}); failing closed"
+            ),
+        }
+    }
+}
+
 impl CallError {
     /// The taxonomy entry for this variant. Returning a reference into
     /// [`specs`] (rather than a bare string) makes it impossible for a
@@ -108,6 +158,7 @@ impl CallError {
             CallError::AmbiguousBrowser(_) => &specs::BROWSER_AMBIGUOUS,
             CallError::BrowserNotFound(..) => &specs::BROWSER_NOT_FOUND,
             CallError::Extension(_) => &specs::EXECUTION_FAILED,
+            CallError::ToolDisabled { .. } => &specs::TOOL_DISABLED,
             CallError::Killed => &specs::BRIDGE_KILLED,
             CallError::KillStateUnknown(_) => &specs::BRIDGE_KILLED,
             CallError::Internal(_) => &specs::INTERNAL_ERROR,
@@ -192,7 +243,8 @@ macro_rules! error_taxonomy {
         /// `src/packages/shared/src/errors.gen.ts`. Today only the Rust server
         /// assigns codes, via [`CallError::code`], and only to a subset of the
         /// table; the extension reports its failures as free-form strings
-        /// (surfaced as `EXECUTION_FAILED`). Of the unassigned codes,
+        /// (surfaced as `EXECUTION_FAILED`). `TOOL_DISABLED` is assigned by the
+        /// host-side policy gate (ADR-0032 decision 4). Of the unassigned codes,
         /// `PROTOCOL_MISMATCH` awaits the version/capability handshake wiring
         /// (see docs/compatibility.md); the others would need structured error
         /// reporting from the extension in place of those free-form strings.
@@ -238,7 +290,8 @@ error_taxonomy! {
     TOOL_DISABLED {
         category: Permission,
         retryable: false,
-        message: "This tool is disabled in the extension settings.",
+        message: "This tool is disabled by the host policy (a capability grant is off, the tool \
+          is in the disabled list, or the policy store is unreadable).",
     },
     USER_DENIED {
         category: User,
@@ -324,6 +377,31 @@ mod tests {
             .contains("did not respond"));
     }
 
+    #[test]
+    fn tool_disabled_message_names_which_gate_fired() {
+        let grant_off = CallError::ToolDisabled {
+            tool: "page_eval".into(),
+            reason: ToolDisabledReason::GrantOff("pageEvalEnabled"),
+        };
+        assert!(grant_off.to_string().contains("page_eval"));
+        assert!(grant_off.to_string().contains("pageEvalEnabled"));
+        assert_eq!(grant_off.code(), "TOOL_DISABLED");
+
+        let listed = CallError::ToolDisabled {
+            tool: "tab_close".into(),
+            reason: ToolDisabledReason::InDisabledList,
+        };
+        assert!(listed.to_string().contains("disabled-tools list"));
+        assert_eq!(listed.code(), "TOOL_DISABLED");
+
+        let unreadable = CallError::ToolDisabled {
+            tool: "tab_list".into(),
+            reason: ToolDisabledReason::StoreUnreadable("bad json".into()),
+        };
+        assert!(unreadable.to_string().contains("failing closed"));
+        assert_eq!(unreadable.code(), "TOOL_DISABLED");
+    }
+
     // ERROR_SPECS is the single source of truth for cross-process error
     // codes (the TS constants are generated from it). Every CallError variant
     // must map into the table.
@@ -346,6 +424,10 @@ mod tests {
             CallError::AmbiguousBrowser("brave, chrome".into()),
             CallError::BrowserNotFound("edge".into(), "brave, chrome".into()),
             CallError::Extension("boom".into()),
+            CallError::ToolDisabled {
+                tool: "page_eval".into(),
+                reason: ToolDisabledReason::GrantOff("pageEvalEnabled"),
+            },
             CallError::Killed,
             CallError::KillStateUnknown("corrupt".into()),
             CallError::Internal("poisoned lock".into()),

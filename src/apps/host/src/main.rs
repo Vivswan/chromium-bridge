@@ -12,7 +12,7 @@
 
 use chromium_bridge_core::cli::{parse, print_help, Command};
 use chromium_bridge_core::{
-    allowlist, audit, doctor, enclave, kill, mcp_server, native_host, registration,
+    allowlist, audit, doctor, enclave, kill, mcp_server, native_host, policy, registration,
 };
 
 fn main() {
@@ -36,6 +36,7 @@ fn main() {
         Command::Kill => kill::run_kill(),
         Command::Unkill => kill::run_unkill(),
         Command::Audit => audit::run_audit(&args),
+        Command::Policy => policy::run_policy(&args),
         Command::McpServer => mcp_server::run(),
         Command::Unknown => {
             print_help();

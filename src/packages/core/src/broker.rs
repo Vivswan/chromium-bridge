@@ -1365,6 +1365,8 @@ mod tests {
             epoch,
             clients_epoch: 0,
             host_key_epoch: 0,
+            policy_epoch: 0,
+            lang_epoch: 0,
             clients_enrolled: latched,
             killed: false,
             kill_epoch: 0,
