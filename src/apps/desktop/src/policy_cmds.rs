@@ -332,14 +332,22 @@ fn run_policy_op(mut args: Vec<String>) -> Result<PolicyOutcome, String> {
             // report must not repaint that success as a failure (the user
             // would retry a write that took). ok stands, the status stays
             // untrusted (None - the UI re-reads the store), and the
-            // transcript says exactly what happened.
-            Err(e) => PolicyOutcome {
-                ok: true,
-                transcript: format!(
-                    "the write was applied, but its status report could not be read: {e}"
-                ),
-                status: None,
-            },
+            // transcript says exactly what happened, keeping whatever the
+            // subprocess said on stderr.
+            Err(e) => {
+                let stderr = run.stderr.trim_end();
+                let mut transcript =
+                    format!("the write was applied, but its status report could not be read: {e}");
+                if !stderr.is_empty() {
+                    transcript.push('\n');
+                    transcript.push_str(stderr);
+                }
+                PolicyOutcome {
+                    ok: true,
+                    transcript,
+                    status: None,
+                }
+            }
         });
     }
     let transcript = match parse_policy_error_json(run.stdout.trim()) {

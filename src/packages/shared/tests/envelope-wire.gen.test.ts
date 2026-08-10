@@ -18,6 +18,8 @@ import {
   EnclaveErrorFrameSchema,
   EnclaveProofFrameSchema,
   KillStatusResultSchema,
+  LangCurrentFrameSchema,
+  PolicyCurrentFrameSchema,
   PresenceErrorFrameSchema,
   PresenceProofFrameSchema,
   TrustedClientSchema,
@@ -40,6 +42,12 @@ import {
   KillReleaseWireSchema,
   KillStatusResultWireSchema,
   KillStatusWireSchema,
+  LangCurrentWireSchema,
+  LangGetWireSchema,
+  LangSetWireSchema,
+  LegacySettingsWireSchema,
+  PolicyCurrentWireSchema,
+  PolicyGetWireSchema,
   PresenceChallengeWireSchema,
   PresenceErrorWireSchema,
   PresenceProofWireSchema,
@@ -149,6 +157,28 @@ const WIRE_CASES: ReadonlyArray<{
     valid: { type: "kill_status_result", ok: true, killed: false, error: "e" },
     // `killed` is an Option: `ok: false` deliberately carries no claim.
     required: ["type", "ok"],
+  },
+  {
+    name: "PolicyCurrentWireSchema",
+    schema: PolicyCurrentWireSchema,
+    enforced: PolicyCurrentFrameSchema,
+    valid: {
+      type: "policy_current",
+      ok: true,
+      baseline: "YmFzZQ==",
+      sig: "c2ln",
+      overlay: { pageEvalEnabled: false, confirmGraceMs: 1000, disabledTools: ["page_eval"] },
+      error: "e",
+    },
+    // baseline/sig/overlay/error are Options: ok:false carries only error.
+    required: ["type", "ok"],
+  },
+  {
+    name: "LangCurrentWireSchema",
+    schema: LangCurrentWireSchema,
+    enforced: LangCurrentFrameSchema,
+    valid: { type: "lang_current", value: "en", seq: 3 },
+    required: ["type", "value", "seq"],
   },
 ];
 
@@ -361,6 +391,12 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
         KillStatusResultSchema,
         { type: "kill_status_result", ok: true },
       ],
+      [PolicyCurrentWireSchema, PolicyCurrentFrameSchema, { type: "policy_current", ok: true }],
+      [
+        LangCurrentWireSchema,
+        LangCurrentFrameSchema,
+        { type: "lang_current", value: "en", seq: 1 },
+      ],
     ];
     for (const [wire, enforced, valid] of frames) {
       const grown = { ...valid, hostAdded: "field" };
@@ -415,6 +451,87 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
       expect(KillStatusResultSchema.safeParse(frame).success).toBe(false);
     }
   });
+
+  test("policy baseline/sig (OPTIONAL_NONEMPTY_STRING): null arm dropped, empty refused early", () => {
+    for (const field of ["baseline", "sig"]) {
+      for (const hostile of [null, ""]) {
+        const frame = { type: "policy_current", ok: true, [field]: hostile };
+        expect(PolicyCurrentWireSchema.safeParse(frame).success).toBe(true);
+        expect(PolicyCurrentFrameSchema.safeParse(frame).success).toBe(false);
+      }
+    }
+  });
+
+  test("policy error (OPTIONAL_STRING) and overlay: null arms dropped", () => {
+    for (const frame of [
+      { type: "policy_current", ok: false, error: null },
+      { type: "policy_current", ok: true, overlay: null },
+    ]) {
+      expect(PolicyCurrentWireSchema.safeParse(frame).success).toBe(true);
+      expect(PolicyCurrentFrameSchema.safeParse(frame).success).toBe(false);
+    }
+  });
+
+  test("overlay (STRICT_ZOD_NODES): strict on BOTH sides inside the R5-loose frame", () => {
+    // The frame itself reads loose (host may add fields)...
+    const grownFrame = { type: "policy_current", ok: true, hostAdded: "field" };
+    expect(PolicyCurrentFrameSchema.safeParse(grownFrame).success).toBe(true);
+    // ...but an overlay field the catalogue does not own fails the whole
+    // frame on the enforced side too - a policy claim nobody owns is never
+    // silently carried (ADR-0032 decision 4).
+    const grownOverlay = {
+      type: "policy_current",
+      ok: true,
+      overlay: { pageEvalEnabled: false, requireEnrollment: false },
+    };
+    expect(PolicyCurrentWireSchema.safeParse(grownOverlay).success).toBe(false);
+    expect(PolicyCurrentFrameSchema.safeParse(grownOverlay).success).toBe(false);
+  });
+
+  test("overlay values (OVERLAY_FIELD): JS-safe ms bounds and disabledTools caps enforced early", () => {
+    const withOverlay = (overlay: Record<string, unknown>) => ({
+      type: "policy_current",
+      ok: true,
+      overlay,
+    });
+    // Both sides refuse an unsafe integer in this runtime (the base's
+    // z.number().int() is already safe-integer-bound); the schema-level
+    // JS-safe maximum is the pinned OVERLAY_FIELD zod form.
+    expect(
+      PolicyCurrentWireSchema.safeParse(withOverlay({ confirmGraceMs: 2 ** 60 })).success,
+    ).toBe(false);
+    expect(
+      PolicyCurrentFrameSchema.safeParse(withOverlay({ confirmGraceMs: 2 ** 60 })).success,
+    ).toBe(false);
+    expect(
+      PolicyCurrentFrameSchema.safeParse(withOverlay({ confirmGraceMs: Number.MAX_SAFE_INTEGER }))
+        .success,
+    ).toBe(true);
+    // The null arm inside the overlay is dropped with the rest.
+    expect(PolicyCurrentWireSchema.safeParse(withOverlay({ cdpMode: null })).success).toBe(true);
+    expect(PolicyCurrentFrameSchema.safeParse(withOverlay({ cdpMode: null })).success).toBe(false);
+    // The disabledTools entry bounds mirror the Rust deserializers.
+    expect(PolicyCurrentWireSchema.safeParse(withOverlay({ disabledTools: [""] })).success).toBe(
+      true,
+    );
+    expect(PolicyCurrentFrameSchema.safeParse(withOverlay({ disabledTools: [""] })).success).toBe(
+      false,
+    );
+    expect(
+      PolicyCurrentFrameSchema.safeParse(withOverlay({ disabledTools: ["a".repeat(129)] })).success,
+    ).toBe(false);
+  });
+
+  test("lang seq (U64_COUNTER_FIELD): both sides refuse unsafe, negative, and fractional", () => {
+    // The runtime difference is invisible here (the base's z.number().int()
+    // is already safe-integer-bound); the schema-level JS-safe maximum is
+    // the pinned U64_COUNTER_FIELD zod form.
+    const frame = (seq: number) => ({ type: "lang_current", value: "en", seq });
+    for (const seq of [2 ** 60, -1, 1.5]) {
+      expect(LangCurrentWireSchema.safeParse(frame(seq)).success).toBe(false);
+      expect(LangCurrentFrameSchema.safeParse(frame(seq)).success).toBe(false);
+    }
+  });
 });
 
 // The generated WRITER schemas (extension->host; the Rust serde parser is
@@ -444,6 +561,13 @@ describe("generated writer schemas admit exactly the frames the extension constr
       schema: AuditEventWireSchema,
       valid: { type: "audit_event", kind: "confirm_denied", tool: "page_eval", cid: "c-1" },
     },
+    { schema: PolicyGetWireSchema, valid: { type: "policy_get" } },
+    {
+      schema: LegacySettingsWireSchema,
+      valid: { type: "legacy_settings", bag: { pageEvalEnabled: true } },
+    },
+    { schema: LangGetWireSchema, valid: { type: "lang_get" } },
+    { schema: LangSetWireSchema, valid: { type: "lang_set", value: "zh_CN" } },
   ];
 
   for (const { schema, valid } of WRITER_CASES) {

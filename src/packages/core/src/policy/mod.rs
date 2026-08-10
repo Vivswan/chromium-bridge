@@ -422,6 +422,7 @@ impl PolicyDoc {
 /// sends its per-field edits in exactly this shape, strict-parsed by serde
 /// at the Tauri boundary (`deny_unknown_fields`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(optional_fields))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyOverlay {

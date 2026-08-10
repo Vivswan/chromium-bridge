@@ -502,6 +502,12 @@ interface EnclaveVector {
   sigB64: string;
 }
 
+interface PolicyVector {
+  docB64: string;
+  messageHex: string;
+  sigB64: string;
+}
+
 interface EnclaveContract {
   challengeDomain: string;
   presenceDomain: string;
@@ -514,6 +520,10 @@ interface EnclaveContract {
     pubkeyB64: string;
     keyIdHex: string;
     vectors: EnclaveVector[];
+  };
+  policyFixture: {
+    policyDomain: string;
+    vectors: PolicyVector[];
   };
 }
 
@@ -565,6 +575,24 @@ for (const v of enclave.fixture.vectors) {
 }
 if (!/^[0-9a-f]{64}$/.test(enclave.fixture.keyIdHex)) {
   throw new Error("gen-ops: the fixture key id is not a lowercase-hex SHA-256");
+}
+// The policy vectors must actually be POLICY_DOMAIN messages over their own
+// document bytes: messageHex is hex(domain) || 00 || hex(doc), and the doc is
+// JSON (the strict parse itself is replayed in policy.gen.test.ts against
+// the generated PolicyDocSchema).
+if (enclave.policyFixture.vectors.length === 0) {
+  throw new Error("gen-ops: the policy golden fixture has no vectors");
+}
+const policyDomainHex = `${Buffer.from(enclave.policyFixture.policyDomain, "utf8").toString("hex")}00`;
+for (const v of enclave.policyFixture.vectors) {
+  if (!/^([0-9a-f]{2})+$/.test(v.messageHex)) {
+    throw new Error("gen-ops: a policy fixture vector has bad message hex");
+  }
+  const docBytes = Buffer.from(v.docB64, "base64");
+  if (v.messageHex !== policyDomainHex + docBytes.toString("hex")) {
+    throw new Error("gen-ops: a policy fixture message is not domain || 0x00 || doc bytes");
+  }
+  JSON.parse(docBytes.toString("utf8"));
 }
 
 // String emitter for every emitted enclave string: JSON.stringify plus \u
@@ -648,6 +676,17 @@ const vectorItems = enclave.fixture.vectors
   )
   .join("\n");
 
+const policyVectorItems = enclave.policyFixture.vectors
+  .map(
+    (v) =>
+      `  {\n` +
+      `    docB64: ${JSON.stringify(v.docB64)},\n` +
+      `    messageHex: ${JSON.stringify(v.messageHex)},\n` +
+      `    sigB64: ${JSON.stringify(v.sigB64)},\n` +
+      `  },`,
+  )
+  .join("\n");
+
 const fixtureOut = `// GENERATED from the Rust core (examples/emit_enclave_contract.rs, over
 // src/packages/core/src/enclave/) by scripts/gen-ops.ts - DO NOT EDIT.
 // Run \`moon run gen\`.
@@ -690,6 +729,37 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
   keyIdHex: ${JSON.stringify(enclave.fixture.keyIdHex)},
   vectors: [
 ${vectorItems}
+  ],
+};
+
+// The POLICY_DOMAIN vectors (ADR-0032 decision 3): signed policy baselines
+// over the same fixture key. Each message is the Rust policy_message
+// (POLICY_DOMAIN || 0x00 || the exact document bytes), docB64 is those exact
+// bytes as the wire \`baseline\` carries them, and the document strict-parses
+// under the generated PolicyDocSchema. The extension's policy golden test
+// replays the full verify-then-parse path through WebCrypto.
+
+export interface PolicyGoldenVector {
+  /** Base64 of the exact signed document bytes (the wire \`baseline\`). */
+  docB64: string;
+  /** The exact bytes the signature covers, hex-encoded. */
+  messageHex: string;
+  /** Raw ${enclave.sigLen}-byte IEEE P1363 signature over messageHex, base64. */
+  sigB64: string;
+}
+
+export interface PolicyGoldenFixture {
+  /** The same public fixture key the enclave vectors use. */
+  pubkeyB64: string;
+  keyIdHex: string;
+  vectors: readonly PolicyGoldenVector[];
+}
+
+export const POLICY_GOLDEN_FIXTURE: PolicyGoldenFixture = {
+  pubkeyB64: ${JSON.stringify(enclave.fixture.pubkeyB64)},
+  keyIdHex: ${JSON.stringify(enclave.fixture.keyIdHex)},
+  vectors: [
+${policyVectorItems}
   ],
 };
 `;
@@ -761,6 +831,12 @@ if (
   policy.policyDomain === enclave.presenceDomain
 ) {
   throw new Error("gen-ops: the policy domain must differ from both enclave domains");
+}
+// The policy fixture vectors (enclave-fixture.gen.ts above) sign under the
+// same domain this contract names, or a golden replay would verify against
+// bytes the real push never carries.
+if (policy.policyDomain !== enclave.policyFixture.policyDomain) {
+  throw new Error("gen-ops: the policy fixture signs under a different domain than the contract");
 }
 if (!Number.isInteger(policy.docVersion) || policy.docVersion <= 0) {
   throw new Error(
@@ -846,6 +922,9 @@ const policyDirectionItems = policy.fields
   .join("\n");
 const policyValueFields = policy.fields
   .map((f) => `  ${emitKey(f.name)}: ${policyZodType(f)},`)
+  .join("\n");
+const policyOverlayFields = policy.fields
+  .map((f) => `  ${emitKey(f.name)}: ${policyZodType(f)}.optional(),`)
   .join("\n");
 const policyDefaultItems = policy.fields
   .map((f) => `  ${emitKey(f.name)}: ${JSON.stringify(policy.defaults[f.name])},`)
@@ -947,6 +1026,19 @@ ${policyValueFields}
 });
 
 export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
+
+// The unsigned restriction overlay (Rust PolicyOverlay): per-field overrides
+// on top of the signed baseline, every field optional, the same per-field
+// bounds as the document (JS-safe millisecond values, the disabledTools
+// caps). Strict on purpose, unlike the R5-loose control-frame wrappers: an
+// overlay field the catalogue does not own fails the whole frame parse,
+// fail closed (ADR-0032 decision 4). Whether a parsed overlay actually
+// RESTRICTS is the consumer's direction check, never this shape's.
+export const PolicyOverlaySchema = z.strictObject({
+${policyOverlayFields}
+});
+
+export type PolicyOverlay = z.infer<typeof PolicyOverlaySchema>;
 
 // Frozen (including the nested array): salvage hands these instances out as
 // fallbacks, so a caller mutating its "copy" must throw instead of quietly

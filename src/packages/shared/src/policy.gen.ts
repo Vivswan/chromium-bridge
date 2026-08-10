@@ -151,6 +151,33 @@ export const PolicyDocSchema = z.strictObject({
 
 export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
 
+// The unsigned restriction overlay (Rust PolicyOverlay): per-field overrides
+// on top of the signed baseline, every field optional, the same per-field
+// bounds as the document (JS-safe millisecond values, the disabledTools
+// caps). Strict on purpose, unlike the R5-loose control-frame wrappers: an
+// overlay field the catalogue does not own fails the whole frame parse,
+// fail closed (ADR-0032 decision 4). Whether a parsed overlay actually
+// RESTRICTS is the consumer's direction check, never this shape's.
+export const PolicyOverlaySchema = z.strictObject({
+  cdpMode: z.boolean().optional(),
+  fileUploadEnabled: z.boolean().optional(),
+  handleDialogEnabled: z.boolean().optional(),
+  pageEvalEnabled: z.boolean().optional(),
+  confirmHighRiskClick: z.boolean().optional(),
+  confirmPageEval: z.boolean().optional(),
+  touchIdConfirm: z.boolean().optional(),
+  confirmTabClose: z.boolean().optional(),
+  warnPreciseSnapshot: z.boolean().optional(),
+  evalMask: z.boolean().optional(),
+  hostReverifyMs: z.int().nonnegative().optional(),
+  confirmGraceMs: z.int().nonnegative().optional(),
+  clickToastTimeoutMs: z.int().nonnegative().optional(),
+  evalToastTimeoutMs: z.int().nonnegative().optional(),
+  disabledTools: z.array(z.string().min(1).max(128)).max(256).optional(),
+});
+
+export type PolicyOverlay = z.infer<typeof PolicyOverlaySchema>;
+
 // Frozen (including the nested array): salvage hands these instances out as
 // fallbacks, so a caller mutating its "copy" must throw instead of quietly
 // rewriting the defaults for everyone after it.

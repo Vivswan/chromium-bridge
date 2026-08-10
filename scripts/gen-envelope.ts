@@ -213,7 +213,10 @@ export function prepare(node: unknown, path: string): unknown {
   }
 
   if ("items" in out || types.includes("array")) {
-    if (types.length !== 1 || types[0] !== "array") {
+    // The sole non-null type must be "array"; serde's Option<Vec<_>> null-arm
+    // beside it is inert (an array keyword never constrains null) and stays
+    // allowed, like the numeric Option arms above.
+    if (types.filter((t) => t !== "null").join() !== "array") {
       throw new Error(`gen-envelope: ${path} carries items but type is not "array" (G5)`);
     }
     if (!isObject(out.items)) {
@@ -286,7 +289,8 @@ function emitZod(node: unknown, override?: (node: unknown) => string | undefined
   if ("const" in node) return `z.literal(${JSON.stringify(node.const)})`;
   if (Array.isArray(node.type)) {
     // serde's Option null-arm and friends: one branch per type, each keeping
-    // the node's other keywords (only numeric ones exist, per G5 placement).
+    // the node's other keywords (numeric ones and items, per G5 placement;
+    // the null branch ignores them - none constrains null).
     const branches = node.type.map((type) => emitZod({ ...node, type }, override));
     return `z.union([${branches.join(", ")}])`;
   }
@@ -358,12 +362,17 @@ export function convert(
   return code;
 }
 
+// The control-frame groups, keyed by the emit_envelope_schema output field
+// that carries each Rust enum (EnclaveControl / AdminControl / PolicyControl).
+const GROUPS = ["enclave", "admin", "policy"] as const;
+type Group = (typeof GROUPS)[number];
+
 // The host->extension frames the extension validates, and the export name of
 // each generated base schema. enclave_revoked is a bare classification tag
 // with no per-frame validator; it stays covered by
 // scripts/check-envelope-parity.ts, which also cross-checks this map against
 // its FRAME_PLANS via GENERATED_WIRE_FRAMES.
-const GENERATED_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, string>>> = {
+const GENERATED_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   enclave: {
     enclave_proof: "EnclaveProofWireSchema",
     enclave_error: "EnclaveErrorWireSchema",
@@ -375,6 +384,10 @@ const GENERATED_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, stri
     client_revoke_result: "ClientRevokeResultWireSchema",
     kill_status_result: "KillStatusResultWireSchema",
   },
+  policy: {
+    policy_current: "PolicyCurrentWireSchema",
+    lang_current: "LangCurrentWireSchema",
+  },
 };
 
 // The extension->host frames the extension CONSTRUCTS (the writer side). The
@@ -385,7 +398,7 @@ const GENERATED_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, stri
 // refuses at runtime. No runtime validation rides on them (no new parser
 // asymmetries). scripts/check-envelope-parity.ts cross-checks this map
 // against its "rust-parsed" plans via GENERATED_WRITER_FRAMES.
-const WRITER_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, string>>> = {
+const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   enclave: {
     enclave_challenge: "EnclaveChallengeWireSchema",
     enclave_revoke: "EnclaveRevokeWireSchema",
@@ -398,6 +411,12 @@ const WRITER_FRAMES: Record<"enclave" | "admin", Readonly<Record<string, string>
     kill_engage: "KillEngageWireSchema",
     kill_release: "KillReleaseWireSchema",
     audit_event: "AuditEventWireSchema",
+  },
+  policy: {
+    policy_get: "PolicyGetWireSchema",
+    legacy_settings: "LegacySettingsWireSchema",
+    lang_set: "LangSetWireSchema",
+    lang_get: "LangGetWireSchema",
   },
 };
 
@@ -428,14 +447,16 @@ function main(): void {
     response: unknown;
     enclave: unknown;
     admin: unknown;
+    policy: unknown;
   };
 
   const variants = {
     enclave: splitTaggedUnionSchema(fromRust.enclave),
     admin: splitTaggedUnionSchema(fromRust.admin),
+    policy: splitTaggedUnionSchema(fromRust.policy),
   };
 
-  function preparedFrame(group: "enclave" | "admin", tag: string): unknown {
+  function preparedFrame(group: Group, tag: string): unknown {
     const variant = variants[group].get(tag);
     if (variant === undefined) {
       throw new Error(`gen-envelope: the Rust ${group} enum has no ${tag} frame`);
@@ -473,8 +494,8 @@ function main(): void {
     "",
   );
 
-  pieces.push("// The host->extension control frames (ADR-0021/0025/0030/0031).");
-  for (const group of ["enclave", "admin"] as const) {
+  pieces.push("// The host->extension control frames (ADR-0021/0025/0030/0031/0032).");
+  for (const group of GROUPS) {
     for (const [tag, name] of Object.entries(GENERATED_FRAMES[group])) {
       const schema = tag === "client_list_result" ? clientListResult : preparedFrame(group, tag);
       const code = convert(schema, name, (node) =>
@@ -484,7 +505,7 @@ function main(): void {
     }
   }
 
-  const manifest = (group: "enclave" | "admin") =>
+  const manifest = (group: Group) =>
     Object.keys(GENERATED_FRAMES[group])
       .map((tag) => JSON.stringify(tag))
       .join(", ");
@@ -496,6 +517,7 @@ function main(): void {
     "export const GENERATED_WIRE_FRAMES = {",
     `  enclave: [${manifest("enclave")}],`,
     `  admin: [${manifest("admin")}],`,
+    `  policy: [${manifest("policy")}],`,
     "} as const;",
     "",
   );
@@ -506,7 +528,7 @@ function main(): void {
     "// types: constructor sites claim conformance with `satisfies`, so a",
     "// drifted field or tag is a compile error. Never used as runtime parsers.",
   );
-  for (const group of ["enclave", "admin"] as const) {
+  for (const group of GROUPS) {
     for (const [tag, name] of Object.entries(WRITER_FRAMES[group])) {
       const code = convert(preparedFrame(group, tag), name);
       pieces.push(
@@ -518,7 +540,7 @@ function main(): void {
     }
   }
 
-  const writerManifest = (group: "enclave" | "admin") =>
+  const writerManifest = (group: Group) =>
     Object.keys(WRITER_FRAMES[group])
       .map((tag) => JSON.stringify(tag))
       .join(", ");
@@ -531,11 +553,13 @@ function main(): void {
     "export const GENERATED_WRITER_FRAMES = {",
     `  enclave: [${writerManifest("enclave")}],`,
     `  admin: [${writerManifest("admin")}],`,
+    `  policy: [${writerManifest("policy")}],`,
     "} as const;",
   );
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs;
-// AdminControl embeds allowlist::ClientEntry) by scripts/gen-envelope.ts -
+// AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
+// policy::PolicyOverlay) by scripts/gen-envelope.ts -
 // DO NOT EDIT. Edit the Rust types, then run \`moon run gen\`.
 //
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->

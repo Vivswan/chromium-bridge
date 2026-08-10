@@ -24,7 +24,9 @@
 // zod) in RECONCILED_FIELDS below, and is refused loudly otherwise. A
 // mismatch there is either real drift or a deliberate contract change that
 // must update this table - it can never be compared away, not even by both
-// sides converging on the canonical form. The rules:
+// sides converging on the canonical form. Pins bind both ways: one whose
+// path the walk never visits (stale after a contract change, or typo'd) is
+// refused too, never left inert (see assertPinsConsumed). The rules:
 //
 //   R1 (annotations, everywhere): $schema/$id/$comment/title/description/
 //      examples constrain nothing and are stripped. `format` is NOT an
@@ -50,7 +52,13 @@
 //      from a frame merely having the right shape - see enclave.ts). Each
 //      origin's exact form is required and then erased, so a Rust frame
 //      going loose or a Zod frame going strict is refused, not compared
-//      away.
+//      away. One pinned exception list (STRICT_ZOD_NODES): a nested
+//      document payload named there must stay STRICT on the Zod side too -
+//      policy_current's overlay, where an unknown field is a policy claim
+//      nobody owns and must fail the frame, fail closed (ADR-0032
+//      decision 4) - so at those paths the zod origin requires
+//      additionalProperties: false instead, and looseness there is the
+//      drift that is refused.
 //
 // Deliberately NOT exported from the package index: this is contract-check
 // infrastructure, not API.
@@ -65,12 +73,13 @@ const REF_SIBLING_ANNOTATION_KEYS = new Set(["$comment", "title", "description",
 /** Which envelope a schema describes; selects the path-scoped rules. */
 export type EnvelopeKind = "request" | "response" | ControlFrameKind;
 
-/** The control frames under the gate (ADR-0021/0025/0030/0031): one kind per
- * `type` tag, extracted from the internally-tagged EnclaveControl /
- * AdminControl enum schemas by splitTaggedUnionSchema. Host->extension
- * frames are diffed against their Zod mirrors; extension->host frames are
- * normalized rust-side only, so the R5 strictness walk still refuses a
- * variant that loses deny_unknown_fields anywhere. */
+/** The control frames under the gate (ADR-0021/0025/0030/0031/0032): one
+ * kind per `type` tag, extracted from the internally-tagged EnclaveControl /
+ * AdminControl / PolicyControl enum schemas by splitTaggedUnionSchema.
+ * Host->extension frames are diffed against their Zod mirrors;
+ * extension->host frames are normalized rust-side only, so the R5
+ * strictness walk still refuses a variant that loses deny_unknown_fields
+ * anywhere. */
 export const CONTROL_FRAME_KINDS = [
   "enclave_challenge",
   "enclave_proof",
@@ -89,6 +98,12 @@ export const CONTROL_FRAME_KINDS = [
   "kill_release",
   "kill_status_result",
   "audit_event",
+  "policy_get",
+  "policy_current",
+  "legacy_settings",
+  "lang_get",
+  "lang_set",
+  "lang_current",
 ] as const;
 
 export type ControlFrameKind = (typeof CONTROL_FRAME_KINDS)[number];
@@ -202,6 +217,93 @@ const ADDED_UNIX_FIELD: Reconciliation = {
   canonical: { type: "integer", minimum: 0 },
 };
 
+// A required u64 counter (lang_current.seq): uint64 on the Rust side, the
+// Zod side hardened to the JS-safe non-negative range (the id idiom - both
+// parsers must read the same number, ADR-0032 decision 7).
+const U64_COUNTER_FIELD: Reconciliation = {
+  rust: { type: "integer", format: "uint64", minimum: 0 },
+  zod: { type: "integer", minimum: 0, maximum: JS_SAFE },
+  canonical: { type: "integer", minimum: 0 },
+};
+
+// Option<String> signed-artifact material (policy_current.baseline/sig): the
+// serde null arm dropped like OPTIONAL_STRING, plus the NONEMPTY_STRING
+// early refusal on the base64 artifacts the host only ever sends whole.
+const OPTIONAL_NONEMPTY_STRING: Reconciliation = {
+  rust: { type: ["string", "null"] },
+  zod: { type: "string", minLength: 1 },
+  canonical: { type: "string" },
+};
+
+// policy_current.overlay: Option<policy::PolicyOverlay> on the Rust side (a
+// null arm around the strict all-optional overlay object, uint64 ms fields);
+// the Zod side is the GENERATED PolicyOverlaySchema (policy.gen.ts) - no
+// null arm, JS-safe ms bounds, and the disabledTools caps
+// (DISABLED_TOOL_NAME_MAX_BYTES = 128, DISABLED_TOOLS_MAX_ENTRIES = 256,
+// pinned here as literals). Note the caps' asymmetry: Rust enforces them in
+// PolicyDoc::validate and at the restrict seam, NOT in PolicyOverlay's
+// Deserialize, and Zod's .max(128) counts UTF-16 code units where Rust
+// counts bytes - both differences point the fail-closed direction (Zod
+// refuses first; tool names are ASCII in practice). The overlay object is
+// also the one STRICT_ZOD_NODES exception to R5's looseness: it stays
+// strict on both sides (ADR-0032 decision 4).
+const OVERLAY_BOOL_FIELDS = [
+  "cdpMode",
+  "fileUploadEnabled",
+  "handleDialogEnabled",
+  "pageEvalEnabled",
+  "confirmHighRiskClick",
+  "confirmPageEval",
+  "touchIdConfirm",
+  "confirmTabClose",
+  "warnPreciseSnapshot",
+  "evalMask",
+] as const;
+
+const OVERLAY_MS_FIELDS = [
+  "hostReverifyMs",
+  "confirmGraceMs",
+  "clickToastTimeoutMs",
+  "evalToastTimeoutMs",
+] as const;
+
+function overlayProperties(origin: SchemaOrigin | "canonical"): JsonObject {
+  const forms = {
+    rust: {
+      bool: { type: ["boolean", "null"] },
+      ms: { type: ["integer", "null"], format: "uint64", minimum: 0 },
+      tools: { type: ["array", "null"], items: { type: "string" } },
+    },
+    zod: {
+      bool: { type: "boolean" },
+      ms: { type: "integer", minimum: 0, maximum: JS_SAFE },
+      tools: {
+        type: "array",
+        items: { type: "string", minLength: 1, maxLength: 128 },
+        maxItems: 256,
+      },
+    },
+    canonical: {
+      bool: { type: "boolean" },
+      ms: { type: "integer", minimum: 0 },
+      tools: { type: "array", items: { type: "string" } },
+    },
+  }[origin];
+  const props: JsonObject = {};
+  for (const field of OVERLAY_BOOL_FIELDS) props[field] = structuredClone(forms.bool);
+  for (const field of OVERLAY_MS_FIELDS) props[field] = structuredClone(forms.ms);
+  props.disabledTools = structuredClone(forms.tools);
+  return props;
+}
+
+const OVERLAY_FIELD: Reconciliation = {
+  rust: {
+    anyOf: [{ type: "object", properties: overlayProperties("rust") }, { type: "null" }],
+  },
+  zod: { type: "object", properties: overlayProperties("zod") },
+  canonical: { type: "object", properties: overlayProperties("canonical") },
+};
+
 const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconciliation>>> = {
   request: {
     "$.properties.id": ID_FIELD,
@@ -255,6 +357,15 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
     "$.properties.error": OPTIONAL_STRING,
     "$.properties.killed": OPTIONAL_BOOL,
   },
+  policy_current: {
+    "$.properties.baseline": OPTIONAL_NONEMPTY_STRING,
+    "$.properties.sig": OPTIONAL_NONEMPTY_STRING,
+    "$.properties.overlay": OVERLAY_FIELD,
+    "$.properties.error": OPTIONAL_STRING,
+  },
+  lang_current: {
+    "$.properties.seq": U64_COUNTER_FIELD,
+  },
   // Extension->host frames: normalized rust-side only (for the R5
   // strictness walk); there is no Zod derivation to reconcile against.
   enclave_challenge: {},
@@ -266,9 +377,55 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
   kill_engage: {},
   kill_release: {},
   audit_event: {},
+  policy_get: {},
+  legacy_settings: {},
+  lang_get: {},
+  lang_set: {},
+};
+
+// The R5 strict-nested exception (see the module doc): at these zod-side
+// paths the wrapped validator must keep additionalProperties: false - the
+// nested document payloads the extension consumes field-by-field, where an
+// unknown field is a policy claim the catalogue does not own and must fail
+// the frame (ADR-0032 decision 4). Pinned per kind and path so looseness
+// can neither creep in here nor strictness anywhere else.
+const STRICT_ZOD_NODES: Readonly<Partial<Record<ControlFrameKind, ReadonlySet<string>>>> = {
+  policy_current: new Set(["$.properties.overlay"]),
 };
 
 const ARGS_PATH = "$.properties.args";
+
+// Every pin above is consulted only when the walk visits a node at its path,
+// so a stale or typo'd pin would otherwise sit inert - erasing nothing,
+// refusing nothing. The walk therefore records the pins it consumed, and
+// normalizeEnvelopeSchema refuses leftovers by default (the gate normalizes
+// the full schemas, so every pin must be hit; unit tests normalizing
+// deliberately partial fixtures opt out).
+type ConsumedPins = { reconciled: Set<string>; strictZod: Set<string> };
+
+function assertPinsConsumed(
+  kind: EnvelopeKind,
+  origin: SchemaOrigin,
+  consumed: ConsumedPins,
+): void {
+  const leftovers: string[] = [];
+  // STRICT_ZOD_NODES pins are zod-side exceptions: only a zod walk can
+  // consume one, so only a zod walk can prove it live.
+  if (origin === "zod" && isControlFrameKind(kind)) {
+    for (const path of STRICT_ZOD_NODES[kind] ?? []) {
+      if (!consumed.strictZod.has(path)) leftovers.push(`STRICT_ZOD_NODES ${path}`);
+    }
+  }
+  for (const path of Object.keys(RECONCILED_FIELDS[kind])) {
+    if (!consumed.reconciled.has(path)) leftovers.push(`RECONCILED_FIELDS ${path}`);
+  }
+  if (leftovers.length > 0) {
+    throw new Error(
+      `normalize: pinned ${kind} paths the ${origin} walk never visited ` +
+        `(stale or typo'd pins, or the schema lost the field): ${leftovers.join(", ")}`,
+    );
+  }
+}
 
 function isObject(v: unknown): v is JsonObject {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -315,18 +472,19 @@ function normalizeNode(
   path: string,
   kind: EnvelopeKind,
   origin: SchemaOrigin,
+  consumed: ConsumedPins,
 ): unknown {
   // R2: `true` means "anything".
   const bare = node === true ? {} : node;
   if (Array.isArray(bare)) {
-    return bare.map((item, i) => normalizeNode(item, `${path}[${i}]`, kind, origin));
+    return bare.map((item, i) => normalizeNode(item, `${path}[${i}]`, kind, origin, consumed));
   }
   if (!isObject(bare)) return bare;
 
   const out: JsonObject = {};
   for (const [key, value] of Object.entries(bare)) {
     if (ANNOTATION_KEYS.has(key)) continue;
-    out[key] = normalizeNode(value, `${path}.${key}`, kind, origin);
+    out[key] = normalizeNode(value, `${path}.${key}`, kind, origin, consumed);
   }
 
   // R3: the request's args bag, per origin (see the module doc).
@@ -340,7 +498,8 @@ function normalizeNode(
   }
 
   // R5: control frames are strict on the Rust side, loose on the Zod side,
-  // at every object node; each origin's exact form is required, then erased
+  // at every object node - except the pinned STRICT_ZOD_NODES, which stay
+  // strict on both; each origin's exact form is required, then erased
   // (see the module doc).
   if (isControlFrameKind(kind) && out.type === "object") {
     const ap = out.additionalProperties;
@@ -348,6 +507,14 @@ function normalizeNode(
       if (ap !== false) {
         throw new Error(
           `normalize: ${path} lost deny_unknown_fields on the rust side (got ${show(ap)})`,
+        );
+      }
+    } else if (STRICT_ZOD_NODES[kind]?.has(path)) {
+      consumed.strictZod.add(path);
+      if (ap !== false) {
+        throw new Error(
+          `normalize: ${path} is no longer the strict nested document the R5 exception ` +
+            `pins on the zod side (got ${show(ap)})`,
         );
       }
     } else if (!(isObject(ap) && Object.keys(ap).length === 0)) {
@@ -363,6 +530,7 @@ function normalizeNode(
   // it is then replaced by the canonical form.
   const reconciliation = RECONCILED_FIELDS[kind][path];
   if (reconciliation !== undefined) {
+    consumed.reconciled.add(path);
     if (deepEquals(out, reconciliation[origin])) return structuredClone(reconciliation.canonical);
     throw new Error(
       `normalize: ${path} no longer matches the approved ${origin} form ` +
@@ -378,17 +546,24 @@ function normalizeNode(
 }
 
 /** Reduce a derived envelope JSON Schema to its canonical structural form
- * (see the module doc for the rule list). */
+ * (see the module doc for the rule list). By default every RECONCILED_FIELDS
+ * / STRICT_ZOD_NODES pin for this kind must be consumed by the walk (no
+ * inert pins); tests normalizing partial fixtures pass
+ * `{ requireConsumedPins: false }`. */
 export function normalizeEnvelopeSchema(
   schema: unknown,
   kind: EnvelopeKind,
   origin: SchemaOrigin,
+  opts: { requireConsumedPins?: boolean } = {},
 ): unknown {
   if (!isObject(schema)) throw new Error("normalize: expected a schema object");
   const defs = isObject(schema.$defs) ? schema.$defs : {};
   const inlined = deref({ ...schema, $defs: undefined }, defs) as JsonObject;
   delete inlined.$defs;
-  return normalizeNode(inlined, "$", kind, origin);
+  const consumed: ConsumedPins = { reconciled: new Set(), strictZod: new Set() };
+  const out = normalizeNode(inlined, "$", kind, origin, consumed);
+  if (opts.requireConsumedPins ?? true) assertPinsConsumed(kind, origin, consumed);
+  return out;
 }
 
 /** Split an internally-tagged (serde `tag = "type"`) enum schema into one

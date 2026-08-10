@@ -1,16 +1,16 @@
-// Shapes for the ADR-0021 enclave enrollment ceremony and the ADR-0025
-// revocation/admin exchange: the control frames exchanged with the native
-// host over the native-messaging port, and the records the extension persists
-// in chrome.storage.local.
+// Shapes for the ADR-0021 enclave enrollment ceremony, the ADR-0025
+// revocation/admin exchange, and the ADR-0032 policy/language sync: the
+// control frames exchanged with the native host over the native-messaging
+// port, and the records the extension persists in chrome.storage.local.
 //
 // The canonical frame contract is the Rust control-frame enums
-// (EnclaveControl / AdminControl in src/packages/core/src/protocol.rs,
-// ADR-0028). The base wire schemas are GENERATED from them
-// (envelope-wire.gen.ts, `moon run gen`); this module layers the extension's
-// DELIBERATE parser asymmetries on top, each pinned in RECONCILED_FIELDS
-// (json-schema-normalize.ts), held to exactly that list by the parity gate
-// (scripts/check-envelope-parity.ts), and exercised behaviorally in
-// tests/envelope-wire.gen.test.ts.
+// (EnclaveControl / AdminControl / PolicyControl in
+// src/packages/core/src/protocol.rs, ADR-0028). The base wire schemas are
+// GENERATED from them (envelope-wire.gen.ts, `moon run gen`); this module
+// layers the extension's DELIBERATE parser asymmetries on top, each pinned
+// in RECONCILED_FIELDS (json-schema-normalize.ts), held to exactly that
+// list by the parity gate (scripts/check-envelope-parity.ts), and exercised
+// behaviorally in tests/envelope-wire.gen.test.ts.
 //
 // ASYMMETRY (loose frames, rule R5): the generated bases are strict (the
 // host refuses unknown fields on these security frames), but the extension
@@ -31,9 +31,12 @@ import {
   EnclaveErrorWireSchema,
   EnclaveProofWireSchema,
   KillStatusResultWireSchema,
+  LangCurrentWireSchema,
+  PolicyCurrentWireSchema,
   PresenceErrorWireSchema,
   PresenceProofWireSchema,
 } from "./envelope-wire.gen";
+import { PolicyOverlaySchema } from "./policy.gen";
 
 // ---- extension->host writer frames (generated, compile-time only) ------------
 
@@ -53,6 +56,10 @@ export type {
   KillEngageWire,
   KillReleaseWire,
   KillStatusWire,
+  LangGetWire,
+  LangSetWire,
+  LegacySettingsWire,
+  PolicyGetWire,
   PresenceChallengeWire,
 } from "./envelope-wire.gen";
 
@@ -199,6 +206,54 @@ export type KillStatusResult = z.infer<typeof KillStatusResultSchema>;
 export function isKillStatusFrame(msg: unknown): msg is KillStatusResult {
   return KillStatusResultSchema.safeParse(msg).success;
 }
+
+// ---- ADR-0032: policy and language frames (host-handled) ----------------------
+
+// The two host->extension pushes (also the replies to policy_get / lang_*).
+// The four extension->host frames are outbound only and never classify
+// inbound; their writer types ride the export block above.
+export const POLICY_FRAME_TYPES = ["policy_current", "lang_current"] as const;
+
+export const PolicyInboundFrameSchema = z.looseObject({
+  type: z.enum(POLICY_FRAME_TYPES),
+});
+
+export type PolicyInboundFrame = z.infer<typeof PolicyInboundFrameSchema>;
+
+// The policy state push (ADR-0032 decision 4). This validator covers ONLY
+// the frame envelope: `baseline` stays an opaque base64 string here - the
+// consumer verifies the signature over the decoded bytes against its pinned
+// key FIRST and strict-parses those same bytes with the generated
+// PolicyDocSchema only after the signature holds (or, unpinned, as the
+// entry point). Never parse the document at this layer.
+// ASYMMETRY (baseline/sig): no null arm (serde's Option; writers omit
+// absent fields), non-empty early - signed artifacts the host only ever
+// sends whole.
+// ASYMMETRY (overlay): no null arm; the GENERATED strict PolicyOverlaySchema
+// (policy.gen.ts), which deliberately stays STRICT inside this R5-loose
+// frame (the pinned STRICT_ZOD_NODES exception in json-schema-normalize.ts):
+// an overlay field the catalogue does not own is a policy claim nobody owns
+// and fails the whole frame, fail closed.
+export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
+  baseline: z.string().min(1).optional(),
+  sig: z.string().min(1).optional(),
+  overlay: PolicyOverlaySchema.optional(),
+  // ASYMMETRY (error): no null arm, as above.
+  error: z.string().optional(),
+}).catchall(z.unknown());
+
+export type PolicyCurrentFrame = z.infer<typeof PolicyCurrentFrameSchema>;
+
+// The shared-language push (ADR-0032 decision 7). `value` is checked against
+// the locale enum by the consumer (an unknown value is refused there and the
+// previous value stands); the frame layer only pins the shape.
+// ASYMMETRY (seq): u64 on the Rust side, hardened to the JS-safe
+// non-negative range (the id idiom) so both parsers read the same number.
+export const LangCurrentFrameSchema = LangCurrentWireSchema.extend({
+  seq: z.int().nonnegative(),
+}).catchall(z.unknown());
+
+export type LangCurrentFrame = z.infer<typeof LangCurrentFrameSchema>;
 
 // The extension-side mirror of the host's kill state, persisted in the #32
 // SW-only trusted storage. STRICT: a record with unexpected fields (or a

@@ -88,6 +88,17 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
     expect(() => prepare({ type: "array", items: true }, "$")).toThrow("G5");
     expect(() => prepare({ type: "array", items: [{ type: "string" }] }, "$")).toThrow("G5");
     expect(() => prepare({ items: { type: "string" } }, "$")).toThrow("G5");
+    // The null arm is the only companion type items admits (Option<Vec<_>>);
+    // anything else beside "array" would leave items unenforced on it.
+    expect(() => prepare({ type: ["array", "string"], items: { type: "string" } }, "$")).toThrow(
+      "G5",
+    );
+  });
+
+  test("serde's Option<Vec<_>> null-arm beside an array is inert and allowed", () => {
+    const optionVec = { type: ["array", "null"], items: { type: "string" } };
+    expect(prepare(optionVec, "$")).toEqual(optionVec);
+    expect(convert(prepare(optionVec, "$"), "t")).toBe("z.union([z.array(z.string()), z.null()])");
   });
 
   test("G5: keywords the generator does not model", () => {

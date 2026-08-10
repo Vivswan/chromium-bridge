@@ -893,6 +893,7 @@ impl PolicyStatus {
 ///   `lang_current { value, seq }` (host -> extension): the shared
 ///   `uiLanguage` preference, echo-suppressed by `seq` (decision 7).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PolicyControl {
     /// Extension -> host: request the current policy. An empty struct
@@ -2727,15 +2728,13 @@ mod tests {
     }
 
     #[test]
-    fn envelope_schema_inputs_are_pinned_and_exclude_policy_tags() {
+    fn envelope_schema_inputs_are_pinned_and_pairwise_disjoint() {
         // emit_envelope_schema.rs - the input to the asymmetry gate
-        // (`moon run check-envelope`) - derives from exactly EnclaveControl
-        // and AdminControl. ADR-0032 keeps PolicyControl OUT of that
-        // emission in phase 1 (no schemars derive, no emitted enum), so the
-        // gate needs no change - which only holds while the emitted enums
-        // are what they were. Pin both tag lists literally, and the policy
-        // set disjoint from both, so a policy frame can never silently join
-        // the enums the gate derives.
+        // (`moon run check-envelope`) - derives from exactly EnclaveControl,
+        // AdminControl, and PolicyControl (ADR-0032 phase 3 added the policy
+        // group). Pin all three tag lists literally, pairwise disjoint, so a
+        // frame can never silently join or leave the enums the gate derives,
+        // and no tag can classify under two groups.
         let enclave: &[&str] = &[
             "enclave_challenge",
             "enclave_proof",
@@ -2759,12 +2758,27 @@ mod tests {
             "audit_event",
         ];
         assert_eq!(ADMIN_CONTROL_TAGS, admin);
-        for tag in POLICY_CONTROL_TAGS {
-            assert!(
-                !ENCLAVE_CONTROL_TAGS.contains(tag) && !ADMIN_CONTROL_TAGS.contains(tag),
-                "policy tag {tag} must stay out of the emitted enums"
-            );
-        }
+        let policy: &[&str] = &[
+            "policy_get",
+            "policy_current",
+            "legacy_settings",
+            "lang_get",
+            "lang_set",
+            "lang_current",
+        ];
+        assert_eq!(POLICY_CONTROL_TAGS, policy);
+        let all: Vec<&str> = [
+            ENCLAVE_CONTROL_TAGS,
+            ADMIN_CONTROL_TAGS,
+            POLICY_CONTROL_TAGS,
+        ]
+        .concat();
+        let distinct: std::collections::BTreeSet<&str> = all.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            all.len(),
+            "a control tag appears in more than one emitted enum"
+        );
     }
 }
 

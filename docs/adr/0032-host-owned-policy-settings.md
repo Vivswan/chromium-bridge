@@ -783,7 +783,10 @@ baseline in the same critical section that deletes the key (decision 3).
 disabled tools with `TOOL_DISABLED`. Desktop app: the control-tower security
 page edits the document, calls `policy::restrict` freely and
 `policy::set_signed` behind its confirm-then-prompt flow (validate before
-any sheet), audits every transition. CLI: `policy` read and edit
+any sheet), audits every transition (amended at Phase 2 implementation:
+the app's grant lane shells out to the bundled signed CLI instead of
+calling `set_signed` in-process - see the decision 8 amendment; only
+`restrict` runs in-process). CLI: `policy` read and edit
 subcommands over the same two seams, with the grant path refused where no
 enclave key exists (decision 5), plus `doctor` rows.
 Tests: cargo units for dispatch refusal, the kill_release refusal, and

@@ -36,17 +36,22 @@ const ZOD = {
   error: { type: "string" },
 };
 
+// The fixtures below often carry a single field on purpose; opt those out of
+// the unconsumed-pin refusal (the gate's default), which its own tests
+// exercise against full schemas.
+const PARTIAL = { requireConsumedPins: false } as const;
+
 function rustReq(properties: Record<string, unknown>): unknown {
-  return normalizeEnvelopeSchema({ type: "object", properties }, "request", "rust");
+  return normalizeEnvelopeSchema({ type: "object", properties }, "request", "rust", PARTIAL);
 }
 function zodReq(properties: Record<string, unknown>): unknown {
-  return normalizeEnvelopeSchema({ type: "object", properties }, "request", "zod");
+  return normalizeEnvelopeSchema({ type: "object", properties }, "request", "zod", PARTIAL);
 }
 function rustResp(properties: Record<string, unknown>): unknown {
-  return normalizeEnvelopeSchema({ type: "object", properties }, "response", "rust");
+  return normalizeEnvelopeSchema({ type: "object", properties }, "response", "rust", PARTIAL);
 }
 function zodResp(properties: Record<string, unknown>): unknown {
-  return normalizeEnvelopeSchema({ type: "object", properties }, "response", "zod");
+  return normalizeEnvelopeSchema({ type: "object", properties }, "response", "zod", PARTIAL);
 }
 
 describe("normalizeEnvelopeSchema", () => {
@@ -63,6 +68,7 @@ describe("normalizeEnvelopeSchema", () => {
       },
       "request",
       "rust",
+      PARTIAL,
     );
     expect(diffSchemas(annotated, rustReq({ op: { type: "string" } }))).toEqual([]);
     // `format` claims an integer width (or a string dialect) and is only
@@ -156,6 +162,26 @@ describe("normalizeEnvelopeSchema", () => {
     );
   });
 
+  test("a pin the walk never consumes is refused, not left inert", () => {
+    // By default (the gate's mode) every RECONCILED_FIELDS pin for the kind
+    // must be hit: a schema that lost a pinned field - or a pin whose path
+    // no longer matches anything - fails loudly, naming the leftover.
+    expect(() =>
+      normalizeEnvelopeSchema({ type: "object", properties: { op: ZOD.op } }, "request", "zod"),
+    ).toThrow(/RECONCILED_FIELDS \$\.properties\.id/);
+    expect(() =>
+      normalizeEnvelopeSchema({ type: "object", properties: { id: RUST.id } }, "response", "rust"),
+    ).toThrow(/RECONCILED_FIELDS \$\.properties\.error/);
+    // The full pin set consumed normalizes cleanly without the opt-out.
+    expect(() =>
+      normalizeEnvelopeSchema(
+        { type: "object", properties: { id: RUST.id, error: RUST.error } },
+        "response",
+        "rust",
+      ),
+    ).not.toThrow();
+  });
+
   test("outside the reconciled paths, differences survive to the diff", () => {
     // A null-arm on a field with no reconciliation entry is a real
     // difference (a newly nullable field must fail the gate).
@@ -180,11 +206,13 @@ describe("normalizeEnvelopeSchema", () => {
       { type: "object", required: ["op", "id", "args"] },
       "request",
       "rust",
+      PARTIAL,
     );
     const b = normalizeEnvelopeSchema(
       { type: "object", required: ["args", "id", "op"] },
       "request",
       "zod",
+      PARTIAL,
     );
     expect(diffSchemas(a, b)).toEqual([]);
     // One side no longer requiring args is a contract change, not noise.
@@ -192,6 +220,7 @@ describe("normalizeEnvelopeSchema", () => {
       { type: "object", required: ["id", "op"] },
       "request",
       "rust",
+      PARTIAL,
     );
     expect(diffSchemas(b, noArgs)).not.toEqual([]);
   });
@@ -201,8 +230,9 @@ describe("normalizeEnvelopeSchema", () => {
       { type: "object", additionalProperties: false },
       "request",
       "rust",
+      PARTIAL,
     );
-    const loose = normalizeEnvelopeSchema({ type: "object" }, "request", "zod");
+    const loose = normalizeEnvelopeSchema({ type: "object" }, "request", "zod", PARTIAL);
     expect(diffSchemas(strict, loose)).not.toEqual([]);
   });
 
@@ -215,6 +245,7 @@ describe("normalizeEnvelopeSchema", () => {
       },
       "request",
       "rust",
+      PARTIAL,
     );
     const inline = rustReq({ extra: { type: "object", properties: { a: { type: "string" } } } });
     expect(diffSchemas(withRef, inline)).toEqual([]);
@@ -259,6 +290,7 @@ describe("normalizeEnvelopeSchema", () => {
       },
       "request",
       "rust",
+      PARTIAL,
     );
     expect(diffSchemas(annotated, rustReq({ x: { type: "string" } }))).toEqual([]);
     // $id and $schema are NOT harmless beside a $ref: they change how a
@@ -553,6 +585,210 @@ describe("normalizeEnvelopeSchema on control frames", () => {
         normalizeEnvelopeSchema(zodOptionalReason, "enclave_error", "zod"),
       ),
     ).not.toEqual([]);
+  });
+});
+
+// ---- the PolicyControl frames (ADR-0032: R5 strict-nested exception + new R4s) --
+
+// The real shapes each derivation emits today for the policy push. The
+// overlay is Option<PolicyOverlay> on the Rust side (a null arm around the
+// strict all-optional object, uint64 ms fields); the Zod side is the
+// generated strict PolicyOverlaySchema (no null arm, JS-safe ms bounds, the
+// disabledTools caps).
+const OVERLAY_BOOLS = [
+  "cdpMode",
+  "fileUploadEnabled",
+  "handleDialogEnabled",
+  "pageEvalEnabled",
+  "confirmHighRiskClick",
+  "confirmPageEval",
+  "touchIdConfirm",
+  "confirmTabClose",
+  "warnPreciseSnapshot",
+  "evalMask",
+] as const;
+const OVERLAY_MS = [
+  "hostReverifyMs",
+  "confirmGraceMs",
+  "clickToastTimeoutMs",
+  "evalToastTimeoutMs",
+] as const;
+
+function rustOverlayObject() {
+  const properties: Record<string, unknown> = {};
+  for (const f of OVERLAY_BOOLS) properties[f] = { type: ["boolean", "null"] };
+  for (const f of OVERLAY_MS)
+    properties[f] = { type: ["integer", "null"], format: "uint64", minimum: 0 };
+  properties.disabledTools = { type: ["array", "null"], items: { type: "string" } };
+  return { type: "object", additionalProperties: false, properties };
+}
+
+function zodOverlayObject() {
+  const properties: Record<string, unknown> = {};
+  for (const f of OVERLAY_BOOLS) properties[f] = { type: "boolean" };
+  for (const f of OVERLAY_MS) properties[f] = { type: "integer", minimum: 0, maximum: JS_SAFE };
+  properties.disabledTools = {
+    type: "array",
+    items: { type: "string", minLength: 1, maxLength: 128 },
+    maxItems: 256,
+  };
+  return { type: "object", additionalProperties: false, properties };
+}
+
+function rustPolicyCurrent() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      type: { type: "string", const: "policy_current" },
+      ok: { type: "boolean" },
+      baseline: { type: ["string", "null"] },
+      sig: { type: ["string", "null"] },
+      overlay: { anyOf: [rustOverlayObject(), { type: "null" }] },
+      error: { type: ["string", "null"] },
+    },
+    required: ["type", "ok"],
+  };
+}
+
+function zodPolicyCurrent() {
+  return {
+    type: "object",
+    additionalProperties: {},
+    properties: {
+      type: { type: "string", const: "policy_current" },
+      ok: { type: "boolean" },
+      baseline: { type: "string", minLength: 1 },
+      sig: { type: "string", minLength: 1 },
+      overlay: zodOverlayObject(),
+      error: { type: "string" },
+    },
+    required: ["type", "ok"],
+  };
+}
+
+const RUST_LANG_CURRENT = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", const: "lang_current" },
+    value: { type: "string" },
+    seq: { type: "integer", format: "uint64", minimum: 0 },
+  },
+  required: ["type", "value", "seq"],
+};
+const ZOD_LANG_CURRENT = {
+  type: "object",
+  additionalProperties: {},
+  properties: {
+    type: { type: "string", const: "lang_current" },
+    value: { type: "string" },
+    seq: { type: "integer", minimum: 0, maximum: JS_SAFE },
+  },
+  required: ["type", "value", "seq"],
+};
+
+describe("normalizeEnvelopeSchema on the policy frames", () => {
+  test("R4 + R5: today's real policy_current derivations are equivalent", () => {
+    expect(
+      diffSchemas(
+        normalizeEnvelopeSchema(rustPolicyCurrent(), "policy_current", "rust"),
+        normalizeEnvelopeSchema(zodPolicyCurrent(), "policy_current", "zod"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("R4: today's real lang_current derivations are equivalent", () => {
+    expect(
+      diffSchemas(
+        normalizeEnvelopeSchema(RUST_LANG_CURRENT, "lang_current", "rust"),
+        normalizeEnvelopeSchema(ZOD_LANG_CURRENT, "lang_current", "zod"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("an unconsumed STRICT_ZOD_NODES pin is refused, not left inert", () => {
+    // The zod frame losing its overlay property entirely: the strict-nested
+    // exception pin (and the overlay reconciliation) would sit inert, so
+    // both are named as leftovers.
+    const noOverlay = zodPolicyCurrent();
+    delete (noOverlay.properties as Record<string, unknown>).overlay;
+    expect(() => normalizeEnvelopeSchema(noOverlay, "policy_current", "zod")).toThrow(
+      /STRICT_ZOD_NODES \$\.properties\.overlay/,
+    );
+    // The rust walk never consults STRICT_ZOD_NODES (it is a zod-side
+    // exception), so only the reconciliation leftover is named there.
+    const rustNoOverlay = rustPolicyCurrent();
+    delete (rustNoOverlay.properties as Record<string, unknown>).overlay;
+    expect(() => normalizeEnvelopeSchema(rustNoOverlay, "policy_current", "rust")).toThrow(
+      /RECONCILED_FIELDS \$\.properties\.overlay/,
+    );
+  });
+
+  test("R5 exception: the zod overlay leaving its pinned strictness is refused", () => {
+    // Going loose would let an unowned policy claim ride the frame - the
+    // exact fail-open the STRICT_ZOD_NODES pin exists to refuse.
+    const loosened = zodPolicyCurrent();
+    (loosened.properties.overlay as Record<string, unknown>).additionalProperties = {};
+    expect(() => normalizeEnvelopeSchema(loosened, "policy_current", "zod")).toThrow(
+      "strict nested document",
+    );
+    const dropped = zodPolicyCurrent();
+    delete (dropped.properties.overlay as Record<string, unknown>).additionalProperties;
+    expect(() => normalizeEnvelopeSchema(dropped, "policy_current", "zod")).toThrow(
+      "strict nested document",
+    );
+    // The exception is scoped to the overlay: the frame top level must stay
+    // the approved looseObject.
+    const strictTop = { ...zodPolicyCurrent(), additionalProperties: false };
+    expect(() => normalizeEnvelopeSchema(strictTop, "policy_current", "zod")).toThrow(
+      "looseObject",
+    );
+  });
+
+  test("R5: the rust overlay losing deny_unknown_fields is refused", () => {
+    const loosened = rustPolicyCurrent();
+    const overlayUnion = loosened.properties.overlay as { anyOf: Record<string, unknown>[] };
+    delete overlayUnion.anyOf[0]?.additionalProperties;
+    expect(() => normalizeEnvelopeSchema(loosened, "policy_current", "rust")).toThrow(
+      "deny_unknown_fields",
+    );
+  });
+
+  test("R4 mutation: overlay bounds and null arms must keep each origin's form", () => {
+    // The zod disabledTools losing its caps.
+    const uncapped = zodPolicyCurrent();
+    uncapped.properties.overlay.properties.disabledTools = {
+      type: "array",
+      items: { type: "string" },
+    };
+    expect(() => normalizeEnvelopeSchema(uncapped, "policy_current", "zod")).toThrow(
+      "approved zod form",
+    );
+    // The rust overlay dropping a field's Option null arm.
+    const changed = rustPolicyCurrent();
+    const rustOverlay = (changed.properties.overlay as { anyOf: Record<string, unknown>[] })
+      .anyOf[0] as { properties: Record<string, unknown> };
+    rustOverlay.properties.cdpMode = { type: "boolean" };
+    expect(() => normalizeEnvelopeSchema(changed, "policy_current", "rust")).toThrow(
+      "approved rust form",
+    );
+  });
+
+  test("R4 mutation: baseline/sig and seq must keep each origin's form", () => {
+    // The zod baseline losing its non-empty guard (which is also the
+    // canonical form, so only the refusal can catch it).
+    const weakened = zodPolicyCurrent();
+    (weakened.properties as Record<string, unknown>).baseline = { type: "string" };
+    expect(() => normalizeEnvelopeSchema(weakened, "policy_current", "zod")).toThrow(
+      "approved zod form",
+    );
+    // The rust seq widening to i64 (the JS-safe agreement gone).
+    const widened = structuredClone(RUST_LANG_CURRENT);
+    (widened.properties as Record<string, unknown>).seq = { type: "integer", format: "int64" };
+    expect(() => normalizeEnvelopeSchema(widened, "lang_current", "rust")).toThrow(
+      "approved rust form",
+    );
   });
 });
 

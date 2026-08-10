@@ -1,7 +1,8 @@
 //! Emit the enclave signing contract as one JSON document on stdout: the
 //! domain-separation strings, the challenge field bounds, the key/signature
-//! byte lengths, the `enclave_error` reason codes, and a golden-vector
-//! fixture that pins the signed-message encoding across languages.
+//! byte lengths, the `enclave_error` reason codes, and golden-vector
+//! fixtures that pin the signed-message encodings across languages - the
+//! challenge/presence vectors and the ADR-0032 policy-baseline vectors.
 //! `scripts/gen-ops.ts` (run via `moon run gen`) consumes this to generate
 //! `src/packages/shared/src/enclave.gen.ts` and `enclave-fixture.gen.ts`;
 //! the emitted JSON itself is never checked in - the Rust sources are the
@@ -28,11 +29,12 @@
 //!   cargo run -q -p chromium-bridge-core --example emit_enclave_contract
 
 use chromium_bridge_core::enclave::{
-    challenge_message, der_to_raw_signature, presence_message, EnclavePublicKey, CHALLENGE_DOMAIN,
-    FIXTURE_KEY_BYTES, FIXTURE_KEY_ID, MAX_CONTEXT_LEN, MAX_NONCE_LEN, PRESENCE_DOMAIN, PUBKEY_LEN,
-    REASON_CODES, SIG_LEN,
+    challenge_message, der_to_raw_signature, policy_message, presence_message, EnclavePublicKey,
+    CHALLENGE_DOMAIN, FIXTURE_KEY_BYTES, FIXTURE_KEY_ID, MAX_CONTEXT_LEN, MAX_NONCE_LEN,
+    POLICY_DOMAIN, PRESENCE_DOMAIN, PUBKEY_LEN, REASON_CODES, SIG_LEN,
 };
 use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
+use chromium_bridge_core::policy::{PolicyDoc, PolicyField};
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};
@@ -137,6 +139,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
+    // The POLICY_DOMAIN vectors (ADR-0032 decision 3): the exact serialized
+    // PolicyDoc bytes the signature covers, signed with the same
+    // deterministic fixture key, so the extension's policy golden test can
+    // replay a full baseline-verify (WebCrypto over `policy_message` bytes,
+    // then strict parse of the same bytes). One deny-baseline revision-1
+    // document with an empty touched set, and one relaxed document whose
+    // touched set names its edits (the scoped-relaxation shape the ratchet
+    // checks). Validated before signing: a malformed fixture document must
+    // fail generation, never ship as a "verified" baseline.
+    let baseline_doc = PolicyDoc {
+        revision: 1,
+        ..PolicyDoc::default()
+    };
+    let relaxed_doc = PolicyDoc {
+        revision: 2,
+        touched: vec![
+            PolicyField::PageEvalEnabled,
+            PolicyField::ConfirmGraceMs,
+            PolicyField::DisabledTools,
+        ],
+        page_eval_enabled: true,
+        confirm_grace_ms: 120_000,
+        disabled_tools: vec!["page_upload".to_string()],
+        ..PolicyDoc::default()
+    };
+    let mut policy_vectors: Vec<Value> = Vec::new();
+    for doc in [&baseline_doc, &relaxed_doc] {
+        doc.validate()
+            .map_err(|e| format!("policy fixture document is malformed: {e}"))?;
+        let doc_bytes = serde_json::to_vec(doc)?;
+        let message = policy_message(&doc_bytes);
+        let sig: Signature = signing_key.sign(&message);
+        let raw = der_to_raw_signature(sig.to_der().as_bytes())?;
+        if raw.as_slice() != sig.to_bytes().as_slice() {
+            return Err("der_to_raw_signature disagrees with p256's raw signature form".into());
+        }
+        policy_vectors.push(json!({
+            "docB64": chromium_bridge_core::enclave::base64_encode(&doc_bytes),
+            "messageHex": hex(&message),
+            "sigB64": chromium_bridge_core::enclave::base64_encode(&raw),
+        }));
+    }
+
     let out = json!({
         "challengeDomain": CHALLENGE_DOMAIN,
         "presenceDomain": PRESENCE_DOMAIN,
@@ -149,6 +194,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "pubkeyB64": pubkey.to_base64(),
             "keyIdHex": pubkey.fingerprint_hex(),
             "vectors": vector_values,
+        },
+        "policyFixture": {
+            "policyDomain": POLICY_DOMAIN,
+            "vectors": policy_vectors,
         },
     });
     println!("{}", serde_json::to_string_pretty(&out)?);

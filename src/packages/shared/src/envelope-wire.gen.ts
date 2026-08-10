@@ -1,5 +1,6 @@
 // GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs;
-// AdminControl embeds allowlist::ClientEntry) by scripts/gen-envelope.ts -
+// AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
+// policy::PolicyOverlay) by scripts/gen-envelope.ts -
 // DO NOT EDIT. Edit the Rust types, then run `moon run gen`.
 //
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
@@ -47,7 +48,7 @@ export const ClientEntryWireSchema = z
   })
   .strict();
 
-// The host->extension control frames (ADR-0021/0025/0030/0031).
+// The host->extension control frames (ADR-0021/0025/0030/0031/0032).
 export const EnclaveProofWireSchema = z
   .object({
     "key_id": z.string(),
@@ -101,12 +102,55 @@ export const KillStatusResultWireSchema = z
   })
   .strict();
 
+export const PolicyCurrentWireSchema = z
+  .object({
+    "baseline": z.union([z.string(), z.null()]).optional(),
+    "error": z.union([z.string(), z.null()]).optional(),
+    "ok": z.boolean(),
+    "overlay": z
+      .union([
+        z
+          .object({
+            "cdpMode": z.union([z.boolean(), z.null()]).optional(),
+            "clickToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+            "confirmGraceMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+            "confirmHighRiskClick": z.union([z.boolean(), z.null()]).optional(),
+            "confirmPageEval": z.union([z.boolean(), z.null()]).optional(),
+            "confirmTabClose": z.union([z.boolean(), z.null()]).optional(),
+            "disabledTools": z.union([z.array(z.string()), z.null()]).optional(),
+            "evalMask": z.union([z.boolean(), z.null()]).optional(),
+            "evalToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+            "fileUploadEnabled": z.union([z.boolean(), z.null()]).optional(),
+            "handleDialogEnabled": z.union([z.boolean(), z.null()]).optional(),
+            "hostReverifyMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+            "pageEvalEnabled": z.union([z.boolean(), z.null()]).optional(),
+            "touchIdConfirm": z.union([z.boolean(), z.null()]).optional(),
+            "warnPreciseSnapshot": z.union([z.boolean(), z.null()]).optional(),
+          })
+          .strict(),
+        z.null(),
+      ])
+      .optional(),
+    "sig": z.union([z.string(), z.null()]).optional(),
+    "type": z.literal("policy_current"),
+  })
+  .strict();
+
+export const LangCurrentWireSchema = z
+  .object({
+    "seq": z.number().int().gte(0),
+    "type": z.literal("lang_current"),
+    "value": z.string(),
+  })
+  .strict();
+
 // Which control-frame tags have a generated base schema above.
 // scripts/check-envelope-parity.ts cross-checks this against its per-frame
 // coverage plan, so a frame cannot silently drop out of generation.
 export const GENERATED_WIRE_FRAMES = {
   enclave: ["enclave_proof", "enclave_error", "presence_proof", "presence_error"],
   admin: ["client_list_result", "client_revoke_result", "kill_status_result"],
+  policy: ["policy_current", "lang_current"],
 } as const;
 
 // The extension->host writer frames (the extension constructs these; the
@@ -173,6 +217,26 @@ export const AuditEventWireSchema = z
 
 export type AuditEventWire = z.infer<typeof AuditEventWireSchema>;
 
+export const PolicyGetWireSchema = z.object({ "type": z.literal("policy_get") }).strict();
+
+export type PolicyGetWire = z.infer<typeof PolicyGetWireSchema>;
+
+export const LegacySettingsWireSchema = z
+  .object({ "bag": z.any(), "type": z.literal("legacy_settings") })
+  .strict();
+
+export type LegacySettingsWire = z.infer<typeof LegacySettingsWireSchema>;
+
+export const LangSetWireSchema = z
+  .object({ "type": z.literal("lang_set"), "value": z.string() })
+  .strict();
+
+export type LangSetWire = z.infer<typeof LangSetWireSchema>;
+
+export const LangGetWireSchema = z.object({ "type": z.literal("lang_get") }).strict();
+
+export type LangGetWire = z.infer<typeof LangGetWireSchema>;
+
 // Which extension->host frames have a generated writer schema above.
 // scripts/check-envelope-parity.ts cross-checks this against its
 // "rust-parsed" plans, so a writer frame cannot silently drop out of
@@ -187,4 +251,5 @@ export const GENERATED_WRITER_FRAMES = {
     "kill_release",
     "audit_event",
   ],
+  policy: ["policy_get", "legacy_settings", "lang_set", "lang_get"],
 } as const;
