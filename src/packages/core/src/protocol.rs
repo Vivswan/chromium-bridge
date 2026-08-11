@@ -921,12 +921,13 @@ impl PolicyStatus {
 ///   already pushed a policy frame (the never-speak-first rule, ADR-0032
 ///   decision 4: an old host would classify it as `Forward` and the MCP
 ///   server's strict `BridgeResp` parse would tear the browser leg down).
-/// - `policy_current { ok, baseline?, sig?, overlay?, error? }` (host ->
-///   extension): the policy state, pushed at every connect and on every
-///   observed change, and the reply to `policy_get`. `baseline` is the exact
-///   signed document bytes (base64), `sig` its signature, `overlay` the
-///   unsigned restriction overlay; `ok: false` carries `error` instead
-///   (unreadable store, fail closed).
+/// - `policy_current { ok, baseline?, sig?, overlay?, reason?, error? }`
+///   (host -> extension): the policy state, pushed at every connect and on
+///   every observed change, and the reply to `policy_get`. `baseline` is the
+///   exact signed document bytes (base64), `sig` its signature, `overlay`
+///   the unsigned restriction overlay; `ok: false` carries `error` plus the
+///   optional structured `reason` instead (see
+///   [`PolicyUnavailableReason`]; fail closed).
 /// - `legacy_settings { bag }` (extension -> host): the snapshotted legacy
 ///   settings bag, recorded host-side as a pending import, never applied
 ///   (ADR-0032 decision 8).

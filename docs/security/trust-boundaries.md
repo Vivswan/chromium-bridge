@@ -51,11 +51,13 @@ MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)->
   with the stable `BRIDGE_KILLED` taxonomy code before any routing. The
   harness connection deliberately stays up so the refusal is delivered as a
   typed error rather than an opaque disconnect. Release is explicit
-  (`unkill`, the options page, or the app through the same `core` call),
+  (`unkill` or the desktop app through the same `core` call - never the
+  extension, whose release path ADR-0032 decision 6 retired: the host
+  refuses an extension-originated `kill_release` and audits the attempt),
   demands a user-presence attestation (a Secure Enclave Touch ID tap on an
-  enrolled Mac, ADR-0031; a typed terminal confirmation or the options
-  page's dialog where no Enclave key exists, with a piped stdin refused
-  outright), and refuses on an unreadable record. Both
+  enrolled Mac, ADR-0031; the CLI's typed terminal confirmation or the
+  app's interactive floor where no Enclave key exists, with a piped stdin
+  refused outright), and refuses on an unreadable record. Both
   transitions are audited; releases carry the auth path that authorized
   them.
 - **Enforcement (protocol)**: strict JSON-RPC parsing; unknown methods ->
@@ -153,17 +155,16 @@ MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)->
   leg are dropped as injections. `audit_event` is additionally
   kind-whitelisted (only the extension-owned confirmation/enrollment kinds)
   and the host stamps the surface itself, so the browser leg cannot forge a
-  host-side event into the audit trail. `kill_release` is the one admin frame
-  that restores capability rather than reducing it; ADR-0030 records why the
-  options page qualifies as a trusted surface for it, the gating that keeps a
-  web page away from it, and the user-presence gate in front of the release
-  itself (the options page's confirmation dialog is the floor where no
-  Enclave key exists; a Secure Enclave Touch ID tap gates it host-side on an
-  enrolled Mac, ADR-0031). While the kill latch is
+  host-side event into the audit trail. `kill_release` is the one admin
+  frame that would restore capability rather than reduce it, and since
+  ADR-0032 decision 6 the host REFUSES it outright, audited: release is an
+  app/CLI act behind the ADR-0031 presence gate, and the extension keeps
+  only engage (ADR-0030's asymmetry - the brake stays one action away on
+  every surface, restoring capability does not). While the kill latch is
   set the host runs a
   control-plane-only mode: it never dials the broker, drops bridge frames,
-  and keeps exactly these control frames working so the release stays
-  reachable.
+  and keeps exactly these control frames working so status, engage, and
+  the policy pull stay reachable while killed.
 - **Residual (host-to-extension is unauthenticated)**: `allowed_origins` pins
   which extension may open the host, but nothing pins which host the extension
   will accept. The manifest lives in a user-writable directory, so a same-user
@@ -198,8 +199,12 @@ MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)->
     for both page backends.
   - **Trust-state isolation (#32)**: `storage.local` and `.session` are confined
     to extension contexts via `setAccessLevel(TRUSTED_CONTEXTS)`, so a content
-    script cannot read or write the enrollment pin, compromised marker,
-    `requireEnrollment`, or the allowlist. The enrollment gate fails closed
+    script cannot read or write the enrollment pin, the compromised marker,
+    the retired `requireEnrollment` key (pre-cutover legacy-import history
+    only; ADR-0032 phase 5 removed the toggle and every enforcement
+    read - enrollment is simply required), the enforced policy state (the
+    ADR-0032 ratchet, cutover flag, and send-once latch), or the allowlist.
+    The enrollment gate fails closed
     until the restriction lands. Residual: a sub-millisecond cold-start window
     before the async restriction resolves (see the threat model).
   - **Kill-switch mirror and audit ring (ADR-0030)**: the SW-only mirror of

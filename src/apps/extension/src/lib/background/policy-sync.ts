@@ -1088,18 +1088,22 @@ let pendingApproval: {
  * RESIDUAL LAG, named (E2F-3, for the SECURITY.md ADR-0032 threat model in
  * Phase 5): port.ts void-routes these frames (`void handlePolicyFrame(msg)`),
  * unsynchronized with the request queue - the same posture as the void-routed
- * kill frames. So between a bad-signature push arriving and the queued
- * compromise actually running, at most one request already past the gate can
- * dispatch under the still-open barrier. Two things bound this to a benign lag,
- * not a hole:
+ * kill frames. The frame chain and the request path share no counter, so
+ * between a bad-signature push arriving and its signature verification
+ * actually FAILING (a frameChain hop, two parses, a base64 decode, a pin
+ * read, and an ECDSA verify later), requests already past the gate - plural;
+ * nothing bounds them to one - can dispatch under the still-open barrier.
+ * Two things bound this to a benign lag, not a hole:
  * - The COMPROMISE arm is closed hard: markPolicyCompromised sets the sticky
- *   in-life latch (E2F-1) SYNCHRONOUSLY inside the frame processing, before any
- *   await, and resolvePolicyState folds it, so no request that reaches the gate
- *   AFTER the bad push begins processing can pass, and a replayed genuine frame
- *   can never reopen the barrier.
- * - The residual is only the benign frame-processing lag: a request the host
- *   itself pipelined ahead of its own tightening push, which by construction
- *   ran under the policy that host was still advertising a moment earlier.
+ *   in-life latch (E2F-1) SYNCHRONOUSLY the moment verification fails, before
+ *   any further await, and the latch is read TWICE per request -
+ *   resolvePolicyState folds it at the gate AND dispatch re-reads it at its
+ *   own policy read - so a request must clear both reads before the failure
+ *   lands, and no request that reaches either read AFTER verification fails
+ *   can pass; a replayed genuine frame can never reopen the barrier.
+ * - The requests that slip through ran under the stored effective policy
+ *   (the ratcheted floor, never laxer than what the user last saw applied) -
+ *   the policy the connection's own verified push was still advertising.
  * A synchronous verifying-hold (parking the request queue until the frame is
  * verified) is deliberately NOT built here - it is the identical trade-off the
  * void-routed kill frames already accepted. */
@@ -1119,8 +1123,9 @@ export function handlePolicyFrame(msg: unknown): Promise<void> {
   // DISTINCT candidates still serialize one prompt each - the frame chain
   // bounds them to one at a time, and each denial is audited (U5), but a
   // hostile host can keep the FIFO busy for as long as the user keeps not
-  // answering. TODO(SECURITY.md threat-model, Phase 5): record this
-  // prompt-occupancy vector and its bounds in the ADR-0032 threat model.
+  // answering. Recorded in docs/security/threat-model.md under "Host-owned
+  // policy (ADR-0032) residual ledger" (the confirmation-FIFO occupancy
+  // entry), with its bounds.
   if (pendingApproval !== null && attachment === pendingApproval.attachment) {
     const dup = PolicyCurrentFrameSchema.safeParse(msg);
     if (
@@ -1195,8 +1200,8 @@ function refuse(why: string, opts: { audit?: boolean } = {}): void {
  *     hostReverifyMs unset the residual stands on bound (1) alone.
  * Closing it fully needs a durable-write-before-proceed or a boot-time
  * re-attestation, not a wider in-memory latch - do NOT re-architect storage here.
- * TODO(SECURITY.md threat-model, Phase 5): record this residual and its bounds
- * in the ADR-0032 threat model. */
+ * Recorded in docs/security/threat-model.md under "Host-owned policy
+ * (ADR-0032) residual ledger" (the compromise-mark persistence entry). */
 async function markPolicyCompromised(
   attachment: PortAttachment | null,
   reason: string,

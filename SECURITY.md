@@ -387,3 +387,16 @@ Extra review care applies to the security-critical surfaces listed in
 `revocation.rs`, `kill.rs`, `presence/`, `enclave/`, `registration.rs`,
 `src/packages/core/src/mcp/` (the rmcp seam, ADR-0034), the extension's
 allowlist/eval/confirmation code, and `wxt.config.ts`.
+
+### ADR-0032: the host-owned policy residual ledger
+
+The host-owned policy work
+([ADR-0032](docs/adr/0032-host-owned-policy-settings.md)) records every
+accepted residual it introduced in one place, the
+[residual ledger in the threat model](docs/security/threat-model.md#host-owned-policy-adr-0032-residual-ledger):
+the compromise-latch persistence edge, the unpinned approval-window
+occupancy, the pending-import tombstone's scope, the relay-under-presence
+bound on the legacy send, the app floor's enrollment TOCTOU, and the CDP
+attach/teardown races, among others. A change that touches one of those
+mechanisms updates its ledger entry there; this file deliberately does not
+duplicate the entries.

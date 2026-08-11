@@ -31,8 +31,9 @@ friction.
 3. **Pair with Touch ID.** On the app's Pairing page, click Pair; Touch ID
    prompts, and the page shows the new key's fingerprint. Approve that same
    fingerprint on the extension's options page. On macOS the extension
-   requires this enrollment by default (`requireEnrollment`) and refuses to
-   act until the pin is in place
+   requires this enrollment unconditionally (ADR-0032 phase 5 retired the
+   old `requireEnrollment` opt-out) and refuses to act until the pin is in
+   place
    ([ADR-0021](./adr/0021-enrollment-ceremony.md)).
 4. **Give your MCP client the command.** On the Setup page, click Install to
    place the `chromium-bridge` command at `~/.local/bin/chromium-bridge`,

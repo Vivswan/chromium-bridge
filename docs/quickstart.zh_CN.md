@@ -23,8 +23,9 @@
    `chrome://extensions`, 开启开发者模式, 点击"加载已解压的扩展程序", 选
    择刚才打开的目录。然后重启浏览器, 使它重新读取原生消息注册。
 3. **用 Touch ID 配对。** 在应用的 Pairing 页点击 Pair; Touch ID 弹出后,
-   页面会显示新密钥的指纹。在扩展的选项页批准同一枚指纹。macOS 上扩展默认
-   要求完成此注册 (`requireEnrollment`), 在钉定完成之前拒绝执行任何操作
+   页面会显示新密钥的指纹。在扩展的选项页批准同一枚指纹。macOS 上扩展
+   无条件要求完成此注册 (ADR-0032 第 5 阶段移除了旧的 `requireEnrollment`
+   开关), 在钉定完成之前拒绝执行任何操作
    ([ADR-0021](./adr/0021-enrollment-ceremony.md))。
 4. **把命令交给 MCP 客户端。** 在 Setup 页点击 Install, 将
    `chromium-bridge` 命令放到 `~/.local/bin/chromium-bridge`, 然后在客户端

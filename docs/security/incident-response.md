@@ -54,12 +54,19 @@ allowlist/confirmation bypasses are the highest priority.
 Users can take these actions themselves to **shrink the blast radius** before a patch is
 ready:
 
-- **Disable a single tool**: on the extension Options page, add the affected tool to
-  `disabledTools`; the dispatch gate then refuses the op with a "tool disabled in
-  settings" error (surfaced today under `EXECUTION_FAILED`; the `TOOL_DISABLED` code in
-  [`ERROR_SPECS`](../../src/packages/core/src/error.rs) is reserved for structured
-  extension error reporting). A high-risk tool such as `page_eval`
-  should be disabled first.
+- **Disable a single tool**: add the affected tool to the host policy's
+  `disabledTools` - in the desktop app's policy editor, or with
+  `chromium-bridge policy restrict --disabled-tools <list>` (the flag
+  states the full comma-separated disabled list, so keep any tools already
+  in it; the write is free, no Touch ID prompt, because a restriction only
+  removes capability - see
+  [cli.md](../cli.md#host-owned-policy-policy)). The host's dispatch gate
+  then refuses the op with the stable `TOOL_DISABLED` code from
+  [`ERROR_SPECS`](../../src/packages/core/src/error.rs) before any bridge
+  traffic, and the extension enforces the pushed policy at its own boundary
+  ([ADR-0032](../adr/0032-host-owned-policy-settings.md)). A high-risk tool
+  such as `page_eval` should be disabled first. Re-enabling it later is a
+  relaxation and costs one signed, Touch ID-gated policy write - by design.
 - **Revoke the allowlist / turn off all-sites**: in Options / the popup, remove the
   authorization for the affected origins, and confirm `allowAllSites` is off (see
   [ADR-0004](../adr/0004-allowlist-with-optional-host-permissions.md),

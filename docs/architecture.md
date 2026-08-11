@@ -297,6 +297,10 @@ Runtime state, in the 0700 per-user runtime directory (macOS:
 | the bridge socket (0600) | Unix only; no listening port exists |
 | `clients.json` (0600) | The trusted-client allowlist ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)) |
 | `revocation.json` (0600) | The revocation epoch, the enrollment latch, and the kill latch ([ADR-0025](./adr/0025-any-side-revocation-epoch.md), [ADR-0030](./adr/0030-global-kill-switch-and-audit.md)) |
+| `policy.json` (0600) | The host-owned policy: the signed baseline and the unsigned restriction overlay ([ADR-0032](./adr/0032-host-owned-policy-settings.md), section 11.3) |
+| `policy-history.json` (0600) | Superseded policy revisions, a bounded ring; data for rollback, never authority |
+| `pending-import.json` (0600) | The one-shot legacy-settings import: pending bag or consumed tombstone (section 11.3) |
+| `lang.json` (0600) | The shared `uiLanguage` preference and its echo-suppression sequence |
 | `audit.log` (0600) | The durable audit trail, size-capped |
 
 The Secure Enclave enrollment key lives in the keychain under
@@ -545,9 +549,33 @@ against it. The canonical modules and their derived artifacts:
   test data and deny-listed as an enrollment identity on both sides
   (`ensure_not_fixture_key` in the core, `ENCLAVE_FIXTURE_KEY_ID` in the
   extension's pairing verifier and stored-pin validators).
+- **Policy document and directions** (`src/packages/core/src/policy/`,
+  ADR-0032): the host-owned `PolicyDoc` - the fifteen policy fields (the
+  four capability grants, the confirmation policy, `disabledTools`, the
+  confirmation timeouts), their deny defaults, the per-field
+  permissive-direction table, and the `relaxes`/`restricts` comparisons -
+  plus the signed store and the `set_signed`/`restrict` write seams.
+  `moon run gen` emits `src/packages/shared/src/policy.gen.ts`: the signing
+  domain constant, the field list with its directions, the defaults, and
+  strict Zod validators for the document, the values, and the restriction
+  overlay. The extension recomputes every direction comparison from the
+  emitted table itself; it never trusts a host's claim about which way a
+  change points. On an enrolled Mac, grants are signed by the enrollment
+  key over
+  `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` - a third,
+  NUL-separated signing domain, injective against the enclave challenge and
+  presence domains, so no artifact of one ceremony replays as another (on a
+  genuinely unenrolled Mac the desktop app's interactive floor stores the
+  baseline unsigned; what that is worth at the extension is section 11.3's
+  unpinned lane, never a pinned one).
+  There is no canonicalization step anywhere: the host signs and stores the
+  exact document bytes, and the extension verifies the exact bytes it
+  received against its pinned key before strict-parsing those same bytes.
+  Section 11.3 covers the frames that carry all of this.
 - **Wire envelopes and control frames** (`BridgeReq` / `BridgeResp`,
-  `EnclaveControl`, and `AdminControl` - the latter embedding
-  `allowlist::ClientEntry` - in `src/packages/core/src/protocol.rs`): the
+  `EnclaveControl`, `AdminControl` - the latter embedding
+  `allowlist::ClientEntry` - and `PolicyControl` in
+  `src/packages/core/src/protocol.rs`): the
   Rust types ARE the contract, and the extension's validators are built
   from it in two layers. The base layer is generated: `moon run gen` runs the
   core's `emit_envelope_schema` example (schemars behind the gen-only
@@ -610,7 +638,11 @@ At the tool-call boundary, Rust's typed error `CallError` maps to the stable
 `code`s in `ERROR_SPECS` (`src/packages/core/src/error.rs`); `cargo test`
 validates the mapping. Today the Rust server is the only assigner, and it
 covers a subset of the table: the extension reports its failures as
-free-form strings, which the host surfaces as `EXECUTION_FAILED`. Of the
+free-form strings, which the host surfaces as `EXECUTION_FAILED`.
+`TOOL_DISABLED` is assigned by the host-side policy gate (ADR-0032
+decision 4, section 11.3): dispatch refuses a tool whose capability grant
+is off or that the effective policy disables, before any bridge traffic.
+Of the
 unassigned codes, `PROTOCOL_MISMATCH` awaits the version/capability
 handshake wiring (see [compatibility.md](./compatibility.md)); the others
 (`SITE_NOT_ALLOWED`, `USER_DENIED`, `TAB_NOT_FOUND`, ...) would need
@@ -638,6 +670,99 @@ front. The wiring status of this negotiation is tracked honestly in
 Note the three distinct "versions": the MCP JSON-RPC version `2026-07-28`
 (section 3.2), the internal bridge protocol version (an integer), and the
 release version (Cargo-sourced). They are all different.
+
+### 11.3 Host-owned policy and language sync (ADR-0032)
+
+Since [ADR-0032](./adr/0032-host-owned-policy-settings.md) the host owns the
+security policy: the four capability grants, the confirmation policy,
+`disabledTools`, and the confirmation timeouts. The host persists at most
+one signed baseline plus an unsigned restriction overlay in
+`runtime_dir()/policy.json`, and the state travels over six additive
+host-handled control frames (`PolicyControl` in `protocol.rs`), classified
+and terminated exactly like the enclave and admin frames: answered by the
+host, never forwarded to the MCP server, and dropped when the server leg
+tries to inject one.
+
+- `policy_get {}` (extension -> host): on-demand refresh. Like every
+  extension-originated frame in this family, it is sent only on a
+  connection where the host has already pushed a frame on the same lane
+  (`policy_current` for the policy frames, `lang_current` for the language
+  ones - the
+  never-speak-first rule: an old host would classify an unknown frame as
+  forwardable and the MCP server's strict parse would tear the browser leg
+  down, so against an old host the new frames simply never flow).
+- `policy_current { ok, baseline?, sig?, overlay?, reason?, error? }`
+  (host -> extension): the policy state, pushed unsolicited at every
+  connect and on every observed store change, and the reply to
+  `policy_get`. The frame is ok-split, and the host builds it only through
+  a typed intermediate so the mixtures the extension must never see cannot
+  be constructed: `ok: true` carries the exact signed baseline bytes
+  (base64, so the signed artifact survives the JSON hop byte-for-byte),
+  the optional signature, and the optional overlay; `ok: false` carries
+  `error` plus an optional structured `reason`
+  (`absent` / `damaged` / `unreadable`) and never a baseline, so the
+  extension fails closed rather than trusting bytes nobody vouched for.
+  `absent` (no baseline yet, the pre-cutover state) is the only reason that
+  can trigger the one-shot legacy import below; `damaged` and `unreadable`
+  are fail-closed states.
+- `legacy_settings { bag }` (extension -> host): the snapshotted legacy
+  settings bag, sent at most once ever, and only to a pinned host that has
+  proven key possession on the same connection through a fresh-nonce
+  challenge (ADR-0032 decision 8 as amended). The host records it as a
+  pending import, never applies it.
+- `lang_get {}` / `lang_set { value }` (extension -> host) and
+  `lang_current { value, seq }` (host -> extension): the shared
+  `uiLanguage` preference (`runtime_dir()/lang.json`), deliberately outside
+  the signed policy document - not signed, not ratcheted, unable to affect
+  any security decision - with echo suppression by sequence number.
+
+The enforcement contract is asymmetric by design (ADR-0032 decision 3):
+policy that grants capability must carry proof no same-user process can
+forge - on an enrolled Mac, a Secure Enclave signature by the enrollment
+key, whose user-presence ACL makes the Touch ID tap and the signature one
+act - while policy that only removes capability travels free as the
+unsigned overlay. A genuinely unenrolled Mac has exactly one grant
+surface, the desktop app's interactive floor, which stores the baseline
+unsigned: a pinned extension refuses it, and an unpinned one accepts it
+only through the approval window below.
+The extension verifies the signature against its own pinned key (never a
+frame-supplied identity), strict-parses the verified bytes, direction-checks
+the overlay locally, and keeps a value ratchet in trusted storage: a pinned
+extension never applies a relaxation without a fresh signature whose signed
+`touched` set names the relaxed field. Post-cutover a per-connection
+dispatch barrier refuses bridge ops until the connection's first policy
+push has verified and applied, so an op cannot race ahead of a tightening.
+On the wire-validation side the six frames ride the same two-layer
+machinery as every other control frame (section 11 above): generated strict
+bases in `envelope-wire.gen.ts`, wrapped by hand-written enforced
+validators next to the enclave ones - the `policy_current` ok-split
+refinement is one of the individually pinned asymmetries the
+`moon run check-envelope` gate holds to its approved list.
+
+The pending legacy import (`runtime_dir()/pending-import.json`) has a
+deliberately narrow lifecycle: record-once (only an absent store accepts a
+bag; the first bag wins and later receipts are dropped, so a
+later-compromised extension cannot replace the user's real legacy bag),
+read-only inspection (`chromium-bridge policy pending-import`, `doctor`,
+and the app's first-run screen), then consumption into a durable tombstone
+when the first baseline lands. Recording a bag bumps the policy epoch, so
+a running desktop app learns of a mid-session arrival rather than only
+discovering it at first run. The tombstone write happens in the
+same critical section as - and durably before - the revision 1 baseline
+write, so a baseline can never land with the import window still
+open, and the tombstone survives key disposal, closing the
+forged-bag-replant path from the host side. What the tombstone cannot
+defend against is a hostile same-user native process deleting the file;
+that residual is recorded in the
+[threat model](./security/threat-model.md#host-owned-policy-adr-0032-residual-ledger).
+
+The host also enforces its own policy at dispatch (`policy/gating.rs`):
+a tool whose capability grant is off or that is in `disabledTools` is
+refused with the stable `TOOL_DISABLED` code before any bridge traffic,
+with an absent store allowing (pre-cutover) and an unreadable one denying
+all. That check is defense in depth for the honest-host path; the
+extension's gate stays authoritative at its boundary precisely because the
+host may not be ours.
 
 > To troubleshoot these links at runtime (whether the connection is
 > reachable; whether the lock file, socket, and manifests are in place), use

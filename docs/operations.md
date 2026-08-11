@@ -39,7 +39,9 @@ the desktop app drives the same engines
 not bind the socket, does not write the lock file, and does not spawn child
 processes. It reports the version/platform, the lock file's endpoint and
 pid, a passive reachability probe of the bridge socket, the kill-switch
-state, and each known browser's registration state. Plain doctor does no
+state, the host-owned policy state (the `policy baseline:` and
+`pending import:` rows, below), and each known browser's registration
+state. Plain doctor does no
 repairs; repairing a registration is the explicit, opt-in
 `chromium-bridge doctor --fix` (with `uninstall` as its reverse), and the
 report and the repair share one browser-path resolver, so they always agree
@@ -105,6 +107,61 @@ Recovery is deliberately manual:
    re-engage the kill switch if you had it on. The extension's enrollment
    pin is not affected (the host key never lived in these files).
 
+## Host-owned policy: the doctor rows and the pending import
+
+Since [ADR-0032](./adr/0032-host-owned-policy-settings.md) the host owns the
+security policy (see
+[architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync-adr-0032);
+the editing surfaces are documented in
+[cli.md](./cli.md#host-owned-policy-policy)). `doctor` reports two rows:
+
+- **`policy baseline:`**
+  - `none yet` is HEALTHY: it is the pre-cutover state, in which the
+    extension keeps enforcing its legacy local settings (a post-cutover
+    extension with no stored policy - a fresh install, a wiped profile -
+    enforces the deny baseline instead: every capability grant off, every
+    confirmation on), until the app or `chromium-bridge policy set` writes
+    a first baseline. It never flips doctor's exit code.
+  - A present store reports the baseline's revision, whether it carries a
+    signature (`signed` / `unsigned (app-floor baseline)`), and whether an
+    unsigned restriction overlay is active. The host never self-certifies
+    the signature: only the extension can verify it, against its own pinned
+    key, so doctor reports signed-ness and says so rather than claiming
+    "valid".
+  - `present but UNREADABLE` means the store exists but cannot be read or
+    parsed: every consumer fails closed (the host's dispatch gate denies
+    all tools; the extension keeps enforcing its stored effective policy,
+    or the deny baseline), and doctor exits non-zero. An unreadable store
+    is never silently replaced with defaults - defaults can be laxer than
+    the user's restricted policy, so "garbage in, defaults out" would be a
+    relaxation lever made of garbage.
+- **`pending import:`** - the one-shot legacy-settings import
+  (`pending-import.json` in the runtime directory).
+  - `none` is the ordinary state (nothing waiting to import), and
+    `recorded` / `consumed` are the two normal lifecycle states: a
+    recorded bag is reviewed and imported on the app's first-run screen,
+    and consumption happens exactly once, when the first baseline
+    lands.
+  - `present but UNREADABLE` names the file's full path and exits
+    non-zero, because consuming the pending import is a prerequisite of
+    the first signed baseline write: an unreadable file refuses the user's
+    first grant until it is dealt with. The row also states the remedy
+    honestly: removing the file REOPENS the one-time legacy-import window,
+    so only do that if you know no genuine import is pending - a
+    user-informed choice, deliberately not automated.
+
+Two of the host's durable audit kinds belong to this surface: every policy
+transition (`policy_write`: the surface, the outcome, and for grants the
+presence rung that authorized the signature, so a hardware-signed grant is
+never conflated with an app-floor one), and every legacy-bag receipt
+(`legacy_import_receipt`, with its outcome: `recorded`, `dropped_oversize`,
+`dropped_already_pending`, `dropped_consumed`, `dropped_malformed`, or
+`error`). The extension additionally records its own side in its local
+audit ring - `policy_refused`, `policy_compromised`, and
+`legacy_settings_sent` - which is extension-local by design: those kinds
+are not in the forwarding whitelist and never reach the host's
+`audit.log`.
+
 ## The runtime directory and the lock file
 
 The bridge rendezvous lives in a 0700 per-user runtime directory (macOS:
@@ -114,7 +171,10 @@ The bridge rendezvous lives in a 0700 per-user runtime directory (macOS:
 `%LOCALAPPDATA%\chromium-bridge`). It holds the lock file (`run.lock`, 0600:
 the broker's pid, endpoint, and per-run secret), the bridge socket itself on
 Unix, the trusted-client allowlist (`clients.json`), the revocation/kill
-record (`revocation.json`), and the audit trail (`audit.log`).
+record (`revocation.json`), the host-owned policy store and its history
+ring (`policy.json`, `policy-history.json`), the pending legacy import
+(`pending-import.json`), the shared language preference (`lang.json`), and
+the audit trail (`audit.log`).
 
 Peers read the lock file, connect to the endpoint, and must pass the kernel
 checks and the HMAC challenge-response before the mandatory attach frame

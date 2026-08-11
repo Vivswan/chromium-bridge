@@ -118,7 +118,7 @@ as connected and the tools are callable.
 
 ### FR-5 Read-only cookie/storage (phase three)
 - **FR-5.1 `cookie_get`**: reads cookies (including httpOnly), naturally constrained by host_permissions (reusing the allowlist); output values are masked, while structural fields (name/domain/httpOnly) are kept
-- **FR-5.2 `storage_get`**: reads the page's localStorage/sessionStorage (content script, same origin); output is always masked (not governed by the evalMask switch, because the token-leak risk of a silent read is equivalent to eval)
+- **FR-5.2 `storage_get`**: reads the page's localStorage/sessionStorage (content script, same origin); output is always masked (not governed by the `evalMask` policy field, host-owned since [ADR-0032](./adr/0032-host-owned-policy-settings.md), because the token-leak risk of a silent read is equivalent to eval)
 - **FR-5.3 No writes**: no cookie_set / cookie_remove / storage_set. cookie_set could forge httpOnly cookies (session fixation), which not even XSS can do. See [ADR-0010](./adr/0010-cookie-storage-readonly.md)
 
 ## 5. Non-functional requirements

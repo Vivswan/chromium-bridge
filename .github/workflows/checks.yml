@@ -45,10 +45,25 @@ jobs:
         with:
           cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # The fuzz crate is its own cargo workspace with its own target/
+          # (root [workspace].exclude); cache both so the fuzz-check step
+          # below stays cheap.
+          workspaces: |
+            .
+            src/packages/core/fuzz
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --release
+      # The fuzz crate is excluded from the root workspace, so nothing above
+      # compiles it, and its targets have silently rotted once already
+      # (nightly-fuzz.yml is the only job that runs them, off the PR path).
+      # A cargo check on the pinned stable toolchain is enough to catch that
+      # class at PR time (verified: the crate compiles on stable; RUNNING the
+      # targets still needs nightly + cargo-fuzz and stays in nightly-fuzz.yml).
+      # Locally: `moon run check-fuzz-workspace`.
+      - run: cargo check --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
 
   # The enclave/attestation code is cfg(target_os = "macos") and invisible to
   # the ubuntu jobs; without this job it would only ever be compiled at

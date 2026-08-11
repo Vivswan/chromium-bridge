@@ -24,8 +24,9 @@ Windows)。兩者驅動同一個引擎、寫入相同的註冊資訊, 所以可�
    選擇剛才開啟的目錄。然後重新啟動瀏覽器, 使它重新讀取原生訊息註冊。
 3. **用 Touch ID 配對。** 在應用程式的 Pairing 頁點擊 Pair; Touch ID 彈出
    後, 頁面會顯示新金鑰的指紋。在擴充功能的選項頁核准同一枚指紋。macOS 上
-   擴充功能預設要求完成此註冊 (`requireEnrollment`), 在釘選完成之前拒絕執
-   行任何操作 ([ADR-0021](./adr/0021-enrollment-ceremony.md))。
+   擴充功能無條件要求完成此註冊 (ADR-0032 第 5 階段移除了舊的
+   `requireEnrollment` 開關), 在釘選完成之前
+   拒絕執行任何操作 ([ADR-0021](./adr/0021-enrollment-ceremony.md))。
 4. **把指令交給 MCP 用戶端。** 在 Setup 頁點擊 Install, 將
    `chromium-bridge` 指令放到 `~/.local/bin/chromium-bridge`, 然後在用戶端
    裡註冊。對 Claude Code 來說, 這是整條路徑中唯一的一條指令:

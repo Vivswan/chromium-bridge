@@ -64,6 +64,36 @@ affecting a new one (see
 `PROTOCOL_MISMATCH` error code is already in place in the contract, ready to enable once
 the wiring lands.
 
+## Additive host-handled control frames (ADR-0032): no version bump
+
+[ADR-0032](./adr/0032-host-owned-policy-settings.md) added six control
+frames for the host-owned policy and the shared language preference -
+`policy_get`, `policy_current`, `legacy_settings`, `lang_get`, `lang_set`,
+`lang_current` (see
+[architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync-adr-0032)).
+They did NOT bump `BRIDGE_PROTOCOL_VERSION`: every frame is additive and
+host-handled, the `BridgeReq`/`BridgeResp` envelopes are untouched, and
+both old-peer combinations degrade to the pre-ADR-0032 behavior:
+
+| Skew | Behavior |
+|------|----------|
+| New extension, old host | The host never pushes a policy frame, so per the never-speak-first rule the extension never sends one either (an old host would classify the unknown frame as forwardable and the MCP server's strict parse would tear the browser leg down). The extension stays on its legacy local settings indefinitely - exactly the pre-ADR-0032 system. |
+| Old extension, new host | The old extension drops the unfamiliar `policy_current` push on the floor (pinned by test, not assumed) and keeps enforcing its local settings; the new host still applies its own policy at dispatch, so the combined enforcement is never more permissive than the old extension alone. |
+
+The `policy_current` frame's `reason` field (Phase 4) is additive and
+optional the same way: an old host omits it, and the extension reads the
+missing field as "never send the legacy bag" - fail closed on the absence
+of the signal. When the deferred capability handshake above lands, the
+advertised capability set should be computed from the effective policy,
+which ADR-0032 makes possible but does not wire.
+
+One platform consequence of the same record is a breaking change without a
+version bump: ADR-0032 phase 5 retired the `requireEnrollment` opt-out, so
+a Mac without a Secure Enclave (pre-T2 Intel hardware) can no longer
+enroll and the bridge stays blocked there permanently - deliberate
+fail-closed behavior with no recovery path, since every grant and policy
+signature hangs off the enclave key that hardware cannot hold.
+
 ## Related
 
 - Error taxonomy and `PROTOCOL_MISMATCH`: [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs),

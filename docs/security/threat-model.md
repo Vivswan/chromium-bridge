@@ -214,7 +214,11 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   by [ADR-0027](../adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)).
   `page_eval` is not in this window; it reconfirms on every call.
 - **Trust-state isolation has a cold-start window (#32, ADR-0027).** The
-  enrollment pin, the compromised marker, `requireEnrollment`, and the
+  enrollment pin, the compromised marker, the retired `requireEnrollment`
+  key (pre-cutover legacy-import history only; ADR-0032 phase 5 removed
+  the toggle and every enforcement read - enrollment is simply
+  required), the enforced policy state (the ADR-0032 ratchet, cutover flag,
+  and legacy-send-once latch), and the
   allowlist live in `storage.local`, which Chrome exposes to content scripts by
   default. The extension confines both storage areas to extension contexts with
   `setAccessLevel(TRUSTED_CONTEXTS)` and fails the enrollment gate closed until
@@ -249,7 +253,9 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   verdict is an unforgeable, host-signed user-presence check (Touch ID or
   the login password). The window remains the confirmation surface for the
   other high-risk kinds, on non-macOS platforms, on an un-enrolled Mac, and
-  when `touchIdConfirm` is opted out.
+  when the host policy opts out `touchIdConfirm` (a relaxation that itself
+  costs a presence-gated policy write: signed Touch ID on an enrolled Mac,
+  the desktop app's interactive floor on an unenrolled one; ADR-0032).
 - **`page_upload` can attach any local file the caller names.** When the tool
   is enabled (it is off by default), it attaches whatever absolute path the
   call supplies to a file input, so a model induced to call it on a page can
@@ -263,7 +269,9 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   picker, so the model names no path) before file upload is recommended for
   general use.
 - `page_snapshot_precise` briefly attaches the debugger (infobar flash).
-- **CDP mode** (`cdpMode`, opt-in, off by default - see
+- **CDP mode** (`cdpMode`, a host-owned policy grant since ADR-0032, off by
+  default; enabling it is a presence-gated policy write - signed Touch ID
+  on an enrolled Mac, the app floor on an unenrolled one - see
   [ADR-0017](../adr/0017-cdp-mode-all-ops.md)) routes all page ops through
   `chrome.debugger`. When enabled it **bypasses page CSP** (letting `page_eval`
   run on strict-CSP sites) and holds a **persistent debugger attach** for the
@@ -271,6 +279,227 @@ against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the
   per-action confirmations, and masking are unchanged; the residual risk
   is the wider surface and the removed CSP defense-in-depth layer, accepted as
   the explicit price of the opt-in.
+
+### Host-owned policy (ADR-0032) residual ledger
+
+[ADR-0032](../adr/0032-host-owned-policy-settings.md) moved the security
+policy host-side: a signed baseline, an unsigned restriction overlay, an
+extension-side value ratchet, and a per-connection dispatch barrier. The
+implementation reviews named the residuals below, each accepted
+deliberately; the entries state what can happen, the exact precondition,
+what bounds it, and why it is accepted. [SECURITY.md](../../SECURITY.md)
+points here, and the load-bearing code comments do too. Read the entries
+together, not in isolation - they compose. One worked example: the first
+entry's bound (only a genuine baseline at or above the stored revision)
+anchors on the stored ratchet record, and the cold-start entry below makes
+that record deletable in its window - with the anchor deleted, the
+most-permissive genuine baseline the key ever signed applies as a
+first-ever policy, at any revision.
+
+- **A failed compromise-mark persist plus a worker restart reopens the
+  barrier to a captured genuine policy.** When a policy push fails
+  signature verification against the pin, the extension latches an
+  in-memory compromise flag synchronously and then writes the durable
+  compromised mark. If that durable write FAILS and the service worker then
+  restarts, the fresh worker starts unlatched with no durable mark, so a
+  replayed genuine, byte-identical `policy_current` verifies, ratchets as
+  an idempotent replay, and reopens the dispatch barrier. Precondition: a
+  durable-storage write failure (an edge case), an SW restart, and a
+  captured genuine frame. Bounds: the barrier reopens only to SOME genuine
+  policy the pinned key signed at or above the stored revision - the
+  attacker picks among documents it captured, but cannot forge a fresh
+  relaxation past the ratchet and the signed touched-set rule - and host
+  re-attestation narrows it further only where the user opted into
+  periodic re-verification (`hostReverifyMs`; on the default of 0 no
+  reconnect is ever challenged, ADR-0021, so the bound stands on the
+  ratchet alone). Within one worker life the in-memory latch holds
+  regardless. The failed persist is logged, never silently swallowed - but
+  under this premise no durable evidence of it survives: the audit event
+  writes to the same storage that just failed, and the compromise kind is
+  extension-local, never forwarded to the host's trail. Accepted because an
+  in-memory latch cannot, by definition, survive a restart; closing this
+  fully needs durable-write-before-proceed or boot-time re-attestation,
+  not a wider latch.
+- **One microtask window in the same-key undo path.** The write-undo that
+  restores a superseded stored policy record re-checks the pin-reset epoch
+  immediately before its restoring write, but `chrome.storage` is not
+  transactional, so a same-key re-pair completing between that final check
+  and the write can still see the undo restore a record the reset just
+  removed. One-directional by construction: the epoch is captured before
+  the prior-record read, so a misfire on the other side turns a restore
+  into a remove (fail-closed), and the surviving direction can only
+  resurrect an inert record that the scope checks keep out of enforcement
+  under any other pin. Accepted: unfixable without transactional storage.
+- **One-push disagreement, and requests racing a bad push's verification.**
+  The two enforcement points (host dispatch, extension gate) can disagree
+  transiently around a policy change; the window is one push, and the
+  extension is authoritative at its boundary (a named ADR-0032
+  consequence). Separately, policy frames route before the request gates
+  but are not ordered against the request queue (the same void-routing the
+  kill frames accepted): the frame path and the request path share no
+  counter, so between a bad-signature push arriving and its signature
+  verification actually FAILING (a frame-chain hop, two parses, a base64
+  decode, a pin read, and an ECDSA verify later), requests already past
+  the gate - plural, nothing bounds them to one - can still dispatch under
+  the still-open barrier. What bounds it: the in-life compromise latch is
+  set synchronously the moment verification fails, and it is read twice
+  per request (folded at the gate AND re-read at dispatch's own policy
+  read), so a request must clear both reads before the failure lands; and
+  the requests that slip through ran under the stored effective policy,
+  the ratcheted floor that is never laxer than what the user last saw
+  applied.
+- **A throwing presence probe denies the op - deliberately no window
+  fallback.** If the probe that asks "is hardware presence routing
+  available" throws (anomalous: a compromised or absent pin returns
+  `false` cleanly, without throwing), the operation is DENIED. The legacy
+  behavior fell back to the extension-window confirmation; restoring that
+  fallback would let any probe failure downgrade a hardware-required
+  (`touchIdConfirm`) `page_eval`/`page_upload` approval to an ordinary
+  window click - the ADR-0031 no-downgrade rule inverted. Scope, stated
+  precisely: this covers the ANOMALOUS (throwing) path only. A probe that
+  cleanly reports no hardware capability still routes to the window
+  confirmation, which is the documented degraded surface for that state,
+  not a downgrade. The cost is availability on an anomalous path, never
+  capability.
+- **A hostile unpinned host can occupy the confirmation FIFO with
+  relaxation prompts.** On a machine with no pin, a policy relaxation is
+  held for the user's window approval. Byte-identical replays of the push
+  already awaiting approval (same baseline bytes, same overlay, same
+  connection) are collapsed onto the pending prompt, but pushes with
+  DISTINCT candidates serialize one prompt each, so a hostile host can
+  keep the global confirmation FIFO busy for as long as the user keeps not
+  answering - and the FIFO is global across ALL confirmation kinds, so the
+  occupancy also starves `page_eval`/`page_upload`/click confirmations
+  queued behind it. Two sharpenings, named: the collapse keys on a
+  JSON-stringified overlay, so a key-reordered or trivially-varied
+  restriction defeats it (costing an extra prompt, never suppressing a
+  distinct push); and a forged unsigned RESTRICTION applies silently with
+  no prompt at all - the forged-restriction denial-of-service ADR-0032
+  concedes by design, since it only removes capability. Bounds: one prompt
+  at a time, each denial audited, nothing relaxes without an explicit
+  approval, and pinned machines are unaffected (no approval window exists
+  there). Accepted: the unpinned approval window is inherently occupiable
+  by the one peer allowed to request it.
+- **The pending-import tombstone defends against a compromised extension,
+  not a hostile same-user native process.** The consumed tombstone refuses
+  a re-recorded legacy bag for the lifetime of the file - and the file is
+  same-user deletable, so a hostile local process can delete it and reopen
+  the one-time import window (doctor says exactly this when the file is
+  unreadable). What that wins is the chance to plant a forged bag that the
+  user then reviews field-by-field in the app: it becomes policy only
+  through the user's own presence-gated confirmation over the displayed
+  values (Touch ID on an enrolled Mac, the app floor on an unenrolled
+  one). Related posture, named: the tombstone write fsyncs the file (and,
+  on Unix, its parent directory) because durability is its whole point;
+  the other runtime trust files use atomic-rename without fsync (the audit
+  log is append-and-flush) and accept the ordinary crash window.
+- **The import window can close without an import.** Two deliberate
+  asymmetries in the pending-import lifecycle. A first baseline written
+  before the extension ever connects consumes from the Absent
+  state and closes the window permanently: a user who signs a baseline
+  first has chosen to start fresh, and a bag arriving afterwards is
+  refused. And because the tombstone is written durably BEFORE the
+  baseline in the same critical section, a crash between the two leaves
+  the window closed with no baseline: the user re-taps. Safety (revision 1
+  can never land with the import window still open) was chosen over
+  delivery in both. Softening the first asymmetry in practice: recording a
+  bag bumps the policy epoch, so a running desktop app learns of a
+  mid-session arrival rather than only discovering it at first run.
+- **Relay-under-presence: proof of key possession proves the key answered,
+  not who asked.** The one-shot `legacy_settings` send requires a pinned
+  host that proved key possession on the same connection via a fresh-nonce
+  challenge. A substituted host can still RELAY that fresh challenge to
+  the genuine native host, which signs what it is handed under a real
+  Touch ID presence prompt - a user who approves the unexpected prompt
+  hands the substituted host a valid proof. The possession gate defends
+  against passive substitution and replay, not against a presence-approved
+  relay; that relay bound is the pre-existing presence-channel property
+  (the manifest-substitution residual above). What it can win here is the
+  legacy settings bag: low-sensitivity browser-local settings - no
+  cookies, no tokens, no keys - which still cannot become policy without a
+  tap.
+- **Posted is not recorded (the legacy send-once flag).** The extension
+  marks the bag sent after successfully posting the frame, but a post is
+  not a delivery: a host that dies before recording leaves the flag set
+  with nothing recorded, and the flag is deliberately never reset (a reset
+  lever would reopen the replant vector the flag exists to close, so it
+  survives revoke and re-pair). The inverse gap exists too: a crash
+  between the post and the flag write can produce at most one duplicate
+  send, which the host's first-bag-wins rule drops. Chosen as safety over
+  delivery: the failure mode is a missing import the user redoes by hand
+  in the app, never an unbounded resend - and every receipt outcome is
+  durably recorded in the host's audit trail (the `legacy_import_receipt`
+  kind), so a lost or dropped bag leaves evidence.
+- **Key disposal's epoch bump is best-effort.** `revoke` and `pair
+  --reset` clear the signed baseline and bump the host-key epoch in the
+  disposal critical section, but the epoch write itself can fail, and a
+  first-write baseline signed mid-disposal can then land. Bounds: landing
+  it still costs a genuine Touch ID tap (it is a user-present signed
+  write), and the next enrollment's unconditional pre-mint baseline clear
+  attempts to remove it before a new key exists to confuse it with (that
+  clear is itself best-effort: a failure warns and the mint proceeds).
+- **A corrupted compromise mark reads as not-compromised.** The durable
+  compromise mark's reader returns null on a record it cannot parse, so a
+  corrupted mark reads as "no evidence" - module-wide, across the eight-plus
+  read sites that inherit it, including the enrollment gate, the
+  presence-capability probe, the legacy send-once gate (a corrupt mark
+  re-enables the send), and the pairing-notice suppression. Named plainly:
+  within the surfaces that can write this storage, corrupting the mark
+  clears compromise evidence. Bounds: the write path is confined to
+  TRUSTED_CONTEXTS storage, so producing the corruption needs extension
+  contexts or the cold-start window below - not a web page, not a content
+  script in steady state - and the pin record's own self-check (its key id
+  must match its stored public key) is internal consistency, not
+  authenticity, but it does mean a corrupt mark cannot forge or alter the
+  pin.
+- **The trusted-storage cold-start window now also fronts the policy
+  state.** The sub-millisecond `setAccessLevel(TRUSTED_CONTEXTS)` window
+  already named in the #32 residual above now also covers the policy
+  ratchet, the cutover flag, the durable compromise mark, the prior-pin
+  record (`bridgePolicyPriorPin`), and the send-once latch. Same window, wider blast radius - and
+  one honest difference from the enrollment gate: policy frames route
+  before the gates and the policy path does not itself wait on the
+  restriction landing (the send-once disclosure path is the exception; it
+  re-hardens before reading), so the policy state relies on the
+  restriction being applied early, not re-checked at use. No user-space
+  API closes the window.
+- **"A pinned extension refuses unsigned baselines" is a pinned-case bound
+  only.** On a machine whose extension has no pin, the approval-window
+  lane accepts an unsigned document behind a fresh, explicit user approval
+  (ADR-0032 decision 3). An app-floor unsigned baseline is therefore worth
+  exactly that: nothing against a pinned extension, one user-approved
+  cutover against an unpinned one - with the window lane's own concession
+  (software driving the extension's pages could answer its prompts)
+  applying unchanged.
+- **The app's unenrolled floor has an enrollment TOCTOU.** The desktop app
+  decides its grant lane from the signed CLI's enclave status - deliberately
+  host-authored, because the unentitled app binary reads a real enrolled
+  key as absent from inside its own process. A key enrolled between that
+  probe and the floor write is therefore invisible to the app, and a
+  baseline could be stored unsigned around a real key. Bounds: the lane
+  decision is host-authored (never the app's own blind lookup), no user
+  interaction occurs between the probe and the write, and a pinned
+  extension rejects unsigned baselines (the pinned-case bound above). A
+  mechanical closure is proposed, not yet implemented: have `pair` bump
+  the host-key epoch at mint (today only disposal bumps it) and the
+  app-floor write carry a pre-proof epoch checked under the runtime lock.
+- **A decision racing a `cdpMode` revocation can produce a transient
+  debugger attach.** The attach for a new CDP session resolves before the
+  post-attach policy recheck reads the grant, so an in-flight decision
+  that snapshotted `cdpMode: true` can still attach after a revocation
+  push lands. No CDP command is sent on that session: the recheck tears it
+  down and fails the op - with the honest caveat that the session layer
+  swallows detach errors, so the teardown is best-effort. The recheck sits
+  after the attach deliberately; rechecking pre-attach broke pinned
+  attach-protocol orderings.
+- **A pin revoke leaves live CDP attachments in place.** The policy-driven
+  teardown listener fires on storage writes, and the revoke path
+  deliberately retains the stored policy record (it is the same-key
+  anti-replay anchor), so no write fires and an existing debugger
+  attachment - and its banner - survives until the tab closes. The
+  dispatch barrier stops all new work immediately (post-cutover; a
+  pre-cutover extension is still on its legacy settings and has no
+  barrier); the attachment can only linger, not act.
 
 ## Rebuild delta: new trust boundaries
 
@@ -391,15 +620,19 @@ as delivered: mechanism, enforcement point, residual.
    (no Allow button). Residual: macOS-and-enrolled-only; other platforms and
    an un-enrolled Mac degrade to an off-DOM, fail-closed extension surface
    that is better than the in-page toast but not unspoofable in the same way.
-   Per-action Touch ID is a user setting (`touchIdConfirm`, default on);
-   opting out returns those two kinds to the window confirmation. Prompt
+   Per-action Touch ID is a host-owned policy field (`touchIdConfirm`,
+   default on; ADR-0032): opting out returns those two kinds to the window
+   confirmation, and is a relaxation that itself requires a signed,
+   presence-gated policy write. Prompt
    fatigue is a real cost and is why only the highest-risk tools route here.
 
-6. **The global kill switch and the audit trail (delivered, ADR-0030).**
+6. **The global kill switch and the audit trail (delivered, ADR-0030;
+   release surfaces narrowed by ADR-0032).**
    One latch (`killed` in `runtime_dir()/revocation.json`, flipped
    atomically with an epoch bump) halts all bridge activity from any
-   trusted surface: the CLI (`kill`/`unkill`), the extension options page
-   (host-mediated `kill_engage`/`kill_release` control frames), and the
+   trusted surface: the CLI (`kill`), the extension (a host-mediated
+   `kill_engage` control frame; ADR-0032 decision 6 retired the
+   extension's `kill_release` - the host refuses it, audited), and the
    desktop app through the same `core` calls. Enforced independently at
    four layers so no single check is load-bearing: every `tools/call` from
    every harness is refused with the stable `BRIDGE_KILLED` code at the
@@ -407,14 +640,16 @@ as delivered: mechanism, enforcement point, residual.
    connection within a tick and browser attaches are refused at admission;
    a native host that starts while killed (or with the record unreadable)
    never dials the broker and serves only the control plane, which is what
-   keeps the extension's release reachable; and the extension's own gate
-   refuses on its SW-only mirror. Release is explicit, never automatic, and
+   keeps status, engage, and the policy pull reachable; and the
+   extension's own gate
+   refuses on its SW-only mirror. Release is explicit, never automatic,
+   app/CLI only, and
    requires proof of user presence (`kill::release` demands a
    `PresenceAttestation` only `src/packages/core/src/presence/` can construct):
    a Secure Enclave Touch ID tap on an enrolled Mac (ADR-0031); where no
    Enclave key exists, a typed confirmation on a real terminal for the CLI
-   (a piped stdin is refused outright) and the options page's confirmation
-   dialog for the extension, attested by the native-messaging channel. A
+   (a piped stdin is refused outright) or the desktop app's interactive
+   floor. A
    hardware refusal never falls back to a floor, and failed or unavailable
    auth leaves the switch engaged. Both transitions refuse on an unreadable record (releasing from
    an unknown state would fail open). Alongside it, every security decision --
@@ -429,7 +664,8 @@ as delivered: mechanism, enforcement point, residual.
    same-user process can release the switch, exactly as it can delete the
    trust files -- threat #4's class); the presence floors (used where no
    Enclave key exists) attest intent rather than hardware (a same-user
-   process can drive a pty, and the extension floor is a channel-attested
+   process can drive a pty, and the app's interactive floor is an
+   in-process
    claim), so they stop silent, scripted, and accidental unkills, not that
    hostile process -- every release is audited with the rung that authorized
    it; engagement has a

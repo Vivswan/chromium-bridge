@@ -365,6 +365,14 @@ tasks:
     options:
       cache: false # in the ci gate: gates are never cached
 
+  check-fuzz-workspace:
+    description: 'Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets cannot rot outside the main build; CI runs the same check in checks.yml''s rust job'
+    command: 'cargo check --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
+    toolchains: ['system']
+    options:
+      cache: false
+      runInCI: false # CI runs the identical command directly in checks.yml
+
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
 
   check-uv:
