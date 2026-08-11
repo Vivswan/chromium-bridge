@@ -252,7 +252,14 @@ fn write_consumed_durable(_lock: &ipc::RuntimeLockToken) -> io::Result<()> {
     })?;
     let path = path();
     ipc::write_private_atomic(&path, &bytes)?;
-    std::fs::File::open(&path)?.sync_all()?;
+    // Reopen with WRITE access to sync: on Windows sync_all -> FlushFileBuffers
+    // requires a writable handle, so a read-only File::open handle fails with
+    // access denied (os error 5). The owner can always open its own 0600 file
+    // for write on Unix, so this is portable.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)?
+        .sync_all()?;
     // Persist the rename itself. std cannot open a directory handle on
     // Windows; the file sync above is the best std offers there.
     #[cfg(unix)]
