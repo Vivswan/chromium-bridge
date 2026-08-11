@@ -14,7 +14,7 @@
 //   - opted-out (touchIdConfirm=false) falls back to the window provider -
 //     still confirmed - and non-eval/upload kinds never route to hardware.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared";
+import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing";
 import { getCompromised, setPin } from "@/lib/background/enclave-pin";
@@ -130,7 +130,7 @@ async function roundTrip(
   return verdict;
 }
 
-function payload(kind: ConfirmPayload["kind"], detail: string): ConfirmPayload {
+function payload(kind: "eval" | "upload", detail: string): ConfirmPayload {
   return {
     id: `confirm_test_${Math.random()}`,
     kind,
@@ -513,7 +513,7 @@ describe("service routing and the window-approval refusal", () => {
     });
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
     const shown = first(display.shown);
-    expect(shown.hardware).toBe(true);
+    expect(isHardwareGated(shown)).toBe(true);
 
     // The adversarial move: something with extension-page reach tries to
     // approve through the window path. Refused - the tap is the approval.
@@ -573,7 +573,7 @@ describe("service routing and the window-approval refusal", () => {
     });
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
     const shown = first(display.shown);
-    expect(shown.hardware).toBeUndefined();
+    expect(isHardwareGated(shown)).toBe(false);
     // The window Allow works, as before Phase 8.
     expect(resolveConfirm(shown.id, true).ok).toBe(true);
     expect(await result).toBe(true);
@@ -597,7 +597,7 @@ describe("service routing and the window-approval refusal", () => {
       panicEpoch: currentPanicEpoch(),
     });
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
-    expect(first(display.shown).hardware).toBeUndefined();
+    expect(isHardwareGated(first(display.shown))).toBe(false);
     expect(resolveConfirm(first(display.shown).id, false).ok).toBe(true);
     expect(await result).toBe(false);
   });

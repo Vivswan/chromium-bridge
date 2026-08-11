@@ -1106,3 +1106,34 @@ mod tests {
         assert!(err(&["policy", "rollback", "--revision", "x"]).contains("revision number"));
     }
 }
+
+/// Property-based proof of the `--disabled-tools` transport fidelity: the
+/// protocol.rs `mod proptests` pattern.
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Bounded arbitrary tool names over arbitrary Unicode scalar values
+    /// (commas and whitespace included, so the validator's refusals are the
+    /// only thing standing between a hostile name and the transport).
+    fn arb_name() -> impl Strategy<Value = String> {
+        prop::collection::vec(any::<char>(), 1..12).prop_map(|cs| cs.into_iter().collect())
+    }
+
+    proptest! {
+        /// Every disabledTools list the shared validator accepts survives
+        /// the CLI's comma-joined argv transport byte-for-byte: join,
+        /// re-split, trim - identity. This is the guarantee the validator's
+        /// comma and whitespace refusals exist to make PROVABLE: a list that
+        /// would not round-trip is refused up front at every write seam,
+        /// never mangled (fail closed).
+        #[test]
+        fn accepted_tool_lists_round_trip_the_comma_transport(
+            tools in prop::collection::vec(arb_name(), 0..8)
+        ) {
+            prop_assume!(crate::policy::validate_disabled_tools(&tools).is_ok());
+            prop_assert_eq!(parse_tool_list(&tools.join(",")), tools);
+        }
+    }
+}

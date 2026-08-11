@@ -14,24 +14,11 @@ export async function send<T = Record<string, unknown>>(msg: object): Promise<T 
   }
 }
 
-/** The SW's answer to get_enrollment, mirroring (hand-written)
- * lib/background/enrollment.ts EnrollmentStatus: discriminated on `state`,
+/** The SW's answer to get_enrollment: the SHARED EnrollmentStatus union
+ * (lib/enrollment-status.ts) - the same definition the background produces,
  * so the views cannot construct or over-guard field combinations the
- * background never produces. */
-export type EnrollmentStatusView = {
-  platformSupported: boolean;
-  blocked: boolean;
-  lastError?: string;
-  paused?: boolean;
-  /** ADR-0025: the host-key deletion of an unpair has not been acknowledged
-   * yet; it completes on the next host connection. */
-  hostRevokePending?: boolean;
-} & (
-  | { state: "unpaired" }
-  | { state: "pending"; fingerprint: string }
-  | { state: "pinned"; fingerprint: string; pinnedAt: number; lastVerifiedAt?: number }
-  | { state: "compromised"; compromisedReason: string; fingerprint?: string }
-);
+ * background never sends. The old hand-written mirror here is gone. */
+export type { EnrollmentStatus as EnrollmentStatusView } from "./enrollment-status";
 
 /** The SW's answer to get_clients (ADR-0025), mirroring
  * lib/background/clients.ts ClientListView: success carries the list,

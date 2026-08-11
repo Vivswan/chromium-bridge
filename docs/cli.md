@@ -34,7 +34,7 @@
 | `chromium-bridge policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline: one Touch ID tap. Signature-only; refuses up front where no enrollment key exists. |
 | `chromium-bridge policy restrict <field flags>` | policy (free lane) | Applies an unsigned restriction overlay; no prompt, because it can only remove capability. |
 | `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
-| `chromium-bridge policy pending-import [--json]` | read-only | Prints the pending legacy-import state; `--json` is the only mode that prints the bag. |
+| `chromium-bridge policy pending-import [--json]` | read + self-heal | Prints the pending legacy-import state (finalizing a stranded mid-consume record first); `--json` is the only mode that prints the bag. |
 | `chromium-bridge policy rollback --revision <n> [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay. |
 | `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
 | `chromium-bridge --help` | help | Usage information. |
@@ -274,7 +274,7 @@ chromium-bridge policy show [--json]              # read-only: store state + eff
 chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (Touch ID)
 chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
 chromium-bridge policy history [--json]           # read-only: superseded revisions
-chromium-bridge policy pending-import [--json]    # read-only: the one-shot legacy import
+chromium-bridge policy pending-import [--json]    # the one-shot legacy import's state
 chromium-bridge policy rollback --revision <n> [--json]
 ```
 
@@ -289,7 +289,11 @@ spelled as the kebab-case of its camelCase wire name: `--cdp-mode`,
 `--disabled-tools` takes a comma-separated tool list that states the WHOLE
 disabled set (keep the tools already in it when adding one; empty entries
 are dropped, so `--disabled-tools ""` is the empty set - a full clear,
-which on the `set` lane is a relaxation and costs the tap like any other). Parsing
+which on the `set` lane is a relaxation and costs the tap like any other).
+Because the list travels comma-joined, a tool name containing a comma or
+surrounding whitespace cannot ride this transport faithfully: every write
+seam refuses such a name outright rather than signing a silently mangled
+list. Parsing
 is strict: an unknown subcommand, a stray argument, a repeated flag, or a
 malformed value is an error, never a guess, and `set`/`restrict` demand at
 least one field flag.
@@ -323,8 +327,10 @@ extension's ratchet, which is the anti-replay property, not a limitation.
 stdout (and, for the write lanes, a versioned error object on refusal) -
 the desktop app's parse surface. Check the `v` field first and refuse a
 newer value before reading anything else (fail closed). `pending-import`
-is strictly read-only (it never records, consumes, or repairs anything),
-and `--json` is the ONLY mode that prints the recorded bag: the prose
+never records or consumes a live import; the one write it may perform is
+the idempotent self-heal - finalizing a stranded mid-consume record whose
+baseline already landed - so the app's probe unsticks a crashed finalize.
+`--json` is the ONLY mode that prints the recorded bag: the prose
 rendering deliberately reports state and byte count without bag content,
 because the bag is reviewed in the app, not dumped on a terminal.
 

@@ -44,6 +44,7 @@ import {
   isEnclaveReasonCode,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
+import type { EnrollmentStatus } from "../enrollment-status";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
 import { getEffectivePolicy } from "./effective-policy";
@@ -704,47 +705,11 @@ export function revokePin(): Promise<{ ok: boolean }> {
 
 // ---- status for the popup/options UI ----------------------------------------------
 
-/** The fields every state carries. Enrollment is unconditionally required
- * (ADR-0032 retired the requireEnrollment setting), so `blocked` is decided
- * by the state and the platform alone. */
-interface EnrollmentStatusBase {
-  /** False on platforms without a Secure Enclave (non-mac): enrollment is
-   * unavailable there and the gate never blocks, per the browser's own
-   * platform probe (not the host's claim). */
-  platformSupported: boolean;
-  /** Bridge requests are currently refused by the gate. */
-  blocked: boolean;
-  lastError?: string;
-  paused?: boolean;
-  /** ADR-0025: an unpair's host-key deletion has not been acknowledged yet
-   * (it completes on the next host connection). */
-  hostRevokePending?: boolean;
-}
-
-/** Discriminated on `state`, so which fields are present is determined by
- * the state instead of eight independent optionals: a pending or pinned
- * status always carries its key identity, a compromised one always carries
- * its reason, and `{ state: "compromised" }` with no reason cannot be built.
- * Mirrored (hand-written, UI side) as messages.ts EnrollmentStatusView. */
-export type EnrollmentStatus = EnrollmentStatusBase &
-  (
-    | { state: "unpaired" }
-    | { state: "pending"; keyId: string; fingerprint: string }
-    | {
-        state: "pinned";
-        keyId: string;
-        fingerprint: string;
-        pinnedAt: number;
-        lastVerifiedAt?: number;
-      }
-    | {
-        state: "compromised";
-        compromisedReason: string;
-        /** The pin the failure was measured against, when one survives. */
-        keyId?: string;
-        fingerprint?: string;
-      }
-  );
+/** The SHARED status union (lib/enrollment-status.ts): one definition for
+ * this producer and the popup/options consumers, discriminated on `state`
+ * with the keyId/fingerprint coupling structural. Re-exported here so the
+ * background world keeps its historical import path. */
+export type { EnrollmentStatus };
 
 export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
   const platformSupported = await platformCanEnroll();
@@ -759,14 +724,17 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
     hostRevokePending: (await pinStore.getHostRevokePending()) || undefined,
   };
   if (compromised) {
-    return {
+    const common = {
       ...base,
-      state: "compromised",
-      blocked: true,
+      state: "compromised" as const,
+      blocked: true as const,
       compromisedReason: compromised.reason,
-      keyId: pin?.keyId,
-      fingerprint: pin ? fingerprintDisplay(pin.keyId) : undefined,
     };
+    // The pin the failure was measured against, when one survives: keyId and
+    // fingerprint travel together or not at all (the structural coupling).
+    return pin
+      ? { ...common, keyId: pin.keyId, fingerprint: fingerprintDisplay(pin.keyId) }
+      : common;
   }
   if (pin) {
     return {

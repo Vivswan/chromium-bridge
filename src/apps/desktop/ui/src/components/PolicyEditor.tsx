@@ -75,11 +75,16 @@ export function PolicyEditor() {
   const pendingImport = useAsync(api.pendingImport);
 
   const store = status.data?.store;
+  // The report is a store-tagged sum: narrow the arms once, so the payload
+  // fields below (revision/signed/effective, error detail) are only readable
+  // where the tag says they exist.
+  const present = status.data?.store === "present" ? status.data : undefined;
+  const storeError = status.data?.store === "error" ? status.data : undefined;
   // What the bridge currently enforces, per the report: the effective
   // policy when a baseline exists, the core's deny defaults before one does
   // (never hardcoded here). Undefined while loading or on a store error.
   const anchor: PolicyValues | undefined =
-    store === "present" ? status.data?.effective : store === "none" ? defaults.data : undefined;
+    present !== undefined ? present.effective : store === "none" ? defaults.data : undefined;
 
   const [draft, setDraft] = useState<PolicyDraft>();
   const [busy, setBusy] = useState<string>();
@@ -291,25 +296,17 @@ export function PolicyEditor() {
         </div>
 
         {status.error !== undefined && <ErrorNote>{status.error}</ErrorNote>}
-        {store === "error" && (
-          <ErrorNote>
-            {t("security.policy_error", [
-              status.data?.detail ?? t("security.policy_error_unknown"),
-            ])}
-          </ErrorNote>
+        {storeError !== undefined && (
+          <ErrorNote>{t("security.policy_error", [storeError.detail])}</ErrorNote>
         )}
 
-        {store === "present" && (
+        {present !== undefined && (
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <Pill>{t("security.policy_revision", [String(status.data?.revision ?? 0)])}</Pill>
-            <Pill tone={status.data?.signed === true ? "live" : "pending"}>
-              {status.data?.signed === true
-                ? t("security.policy_signed")
-                : t("security.policy_unsigned")}
+            <Pill>{t("security.policy_revision", [String(present.revision)])}</Pill>
+            <Pill tone={present.signed ? "live" : "pending"}>
+              {present.signed ? t("security.policy_signed") : t("security.policy_unsigned")}
             </Pill>
-            {status.data?.overlay_active === true && (
-              <Pill tone="pending">{t("security.policy_overlay")}</Pill>
-            )}
+            {present.overlay_active && <Pill tone="pending">{t("security.policy_overlay")}</Pill>}
           </div>
         )}
         {store === "none" && (

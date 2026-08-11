@@ -58,10 +58,47 @@ async function keyRecordIsWhole(rec: { keyId: string; pubkeyB64: string }): Prom
   return true;
 }
 
+/** The pin read, as the three states the storage can actually be in: no
+ * record at all, a record that fails the schema or the cryptographic
+ * self-check ([`keyRecordIsWhole`]), or a whole pin. `corrupt` and `absent`
+ * are distinguishable AT THE TYPE LEVEL here so the collapse below is a
+ * visible decision, never an accident of parsing. Exported for tests and
+ * for a future consumer that needs the distinction; every production read
+ * today goes through [`getPin`] (the collapse). */
+export type PinRead =
+  | { state: "absent" }
+  | { state: "corrupt" }
+  | { state: "valid"; pin: EnclavePin };
+
+/** Read the pinned enrollment key three ways. Absent means the storage key
+ * is missing; anything present that fails the strict schema or the
+ * fingerprint self-check is corrupt (already warned about by
+ * keyRecordIsWhole), never folded into absent by THIS reader. */
+export async function readPin(): Promise<PinRead> {
+  const raw = await read(PIN_KEY);
+  if (raw === undefined) return { state: "absent" };
+  const parsed = EnclavePinSchema.safeParse(raw);
+  if (parsed.success && (await keyRecordIsWhole(parsed.data))) {
+    return { state: "valid", pin: parsed.data };
+  }
+  return { state: "corrupt" };
+}
+
+/** THE DOCUMENTED COLLAPSE (Phase 3 decision): every consumer routes a
+ * corrupt pin record exactly like an absent one - the unsigned/unpaired
+ * lane, which fails closed at the enrollment gate and refuses signed-lane
+ * trust. A corrupt record is NOT tampering evidence worth latching on (a
+ * same-user writer who can corrupt this key could equally delete it), so
+ * collapsing it to null grants nothing; it only denies. Consumers that ever
+ * need the distinction read [`readPin`] instead. */
+export function pinOrNull(read: PinRead): EnclavePin | null {
+  return read.state === "valid" ? read.pin : null;
+}
+
+/** The collapsed read every gate/ratchet/lane consumer uses: `pinOrNull`
+ * over [`readPin`], see the collapse contract there. */
 export async function getPin(): Promise<EnclavePin | null> {
-  const parsed = EnclavePinSchema.safeParse(await read(PIN_KEY));
-  if (parsed.success && (await keyRecordIsWhole(parsed.data))) return parsed.data;
-  return null;
+  return pinOrNull(await readPin());
 }
 
 export async function setPin(pin: EnclavePin): Promise<void> {

@@ -203,4 +203,24 @@ describe("policyValuesEqual", () => {
     ).toBe(false);
     expect(policyValuesEqual(values({ evalMask: false }), values())).toBe(false);
   });
+
+  test("disabledTools order breaks equality on purpose (never set-wise)", () => {
+    // Pins the deliberate decision documented on policyValuesEqual: its two
+    // consumers (the unchanged-write suppression and the commit-end undo's
+    // ownership test in policy-sync.ts) need exact stored-value identity, so
+    // a reordered list is a DIFFERENT value here even though the direction
+    // table reads the field as a set.
+    expect(
+      policyValuesEqual(
+        values({ disabledTools: ["a", "b"] }),
+        values({ disabledTools: ["b", "a"] }),
+      ),
+    ).toBe(false);
+    expect(
+      policyValuesEqual(
+        values({ disabledTools: ["a", "a", "b"] }),
+        values({ disabledTools: ["a", "b"] }),
+      ),
+    ).toBe(false);
+  });
 });

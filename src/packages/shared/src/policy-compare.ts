@@ -130,7 +130,25 @@ export function policyValuesFromDoc(doc: PolicyDoc): PolicyValues {
 
 /** Field-wise equality over the 15 policy values (disabledTools compared
  * element-wise): the unchanged-write suppression's comparator, deliberately
- * not JSON.stringify (key order is not part of the contract). */
+ * not JSON.stringify (key order is not part of the contract).
+ *
+ * disabledTools is DELIBERATELY ordered, not set-wise, although the
+ * direction table reads the field as a set (shrinksPermissiveSet). The
+ * hygiene review asked whether this should be set-wise; the caller audit
+ * says no, twice:
+ * - policy-sync.ts writeStoredRecord uses it to SUPPRESS an unchanged
+ *   rewrite: a push whose folded effective differs from the stored one only
+ *   by disabledTools order is a genuinely different stored value, and
+ *   set-wise equality would silently skip that write (and its
+ *   storage.onChanged notifications) - an observable behavior change.
+ * - policy-sync.ts sameStoredRecord is the commit-end undo's OWNERSHIP test
+ *   ("is the current record byte-for-byte the one this push wrote?");
+ *   set-wise equality would loosen it into claiming records the push did
+ *   not write.
+ * Neither anchor affects the security ratchet, which compares BYTES
+ * (baselineB64) and per-field directions, never this function. A consumer
+ * that wants the direction table's set reading composes relaxedPolicyFields
+ * in both directions instead. */
 export function policyValuesEqual(a: PolicyValues, b: PolicyValues): boolean {
   return POLICY_FIELDS.every((f) => {
     const va = a[f];

@@ -706,22 +706,54 @@ fn write_baseline_locked(
     };
     if prev.is_none() {
         // First baseline (revision 1): the cutover the pending legacy import
-        // fed. Write the durable Consumed tombstone (ADR-0032 decision 8,
-        // P4H-1) BEFORE committing the baseline, in the same critical
-        // section, and REFUSE the whole signed write if it fails (Io is
-        // retryable: the user re-taps once whatever broke I/O is fixed).
+        // fed. Durably CLOSE the import window (ADR-0032 decision 8, P4H-1)
+        // BEFORE committing the baseline, in the same critical section, and
+        // REFUSE the whole signed write if it fails (Io is retryable: the
+        // user re-taps once whatever broke I/O is fixed).
         // Best-effort-after-write would let revision 1 land with the import
         // window silently still open - post-disposal, exactly the forged-bag
-        // hole the tombstone closes. The chosen ordering's one asymmetry: if
-        // the BASELINE write below fails after the tombstone landed, the
-        // import window is closed although no baseline exists. Acceptable:
-        // the user already chose to sign (the app holds the values it
-        // gathered from the bag and simply re-taps), whereas the reverse
-        // ordering reopens an attack window; the tombstone never needs
-        // un-writing.
-        crate::pending_import::consume_locked(lock).map_err(PolicyWriteError::Io)?;
+        // hole the tombstone closes. A recorded bag is RETAINED in the
+        // mid-consume Consuming record (P4G-4), so a crash between this
+        // window-close and the baseline write below leaves the window closed
+        // with the bag preserved: the app re-offers it and the user's re-tap
+        // resumes; the finalize after the write is what disposes of it.
+        crate::pending_import::begin_consume_locked(lock).map_err(PolicyWriteError::Io)?;
     }
     next.write(lock).map_err(PolicyWriteError::Io)?;
+    if prev.is_none() {
+        // Phase 2 (P4G-4): the baseline landed, so finalize the mid-consume
+        // record to the bagless tombstone - but only over a DURABLE baseline.
+        // The store's atomic write above deliberately does not fsync, while
+        // the tombstone write does: without the fsync-first ordering a power
+        // loss after the finalize could keep the durable tombstone and take
+        // back the baseline rename - Consumed, no baseline, no bag, exactly
+        // the P4G-4 loss class. attest_baseline_durable fsyncs the baseline
+        // (file + unix dir) and mints the typestate proof
+        // finalize_consume_locked's signature demands, so the wrong order
+        // does not compile. Either failure here is bag disposal deferred -
+        // the fail-closed Consuming record stands (closed window, bag
+        // retained; the startup/read reconcile heals it later) - and must
+        // NOT repaint the landed baseline as a failed write, which would
+        // make the user re-tap a write that took.
+        match crate::pending_import::attest_baseline_durable(lock) {
+            Ok(proof) => {
+                if let Err(e) = crate::pending_import::finalize_consume_locked(lock, proof) {
+                    log_warn!(
+                        "policy",
+                        "first baseline written but the pending-import finalize failed ({e}); \
+                         the import window stays closed with the bag retained in the \
+                         mid-consume record until a reconcile heals it"
+                    );
+                }
+            }
+            Err(e) => log_warn!(
+                "policy",
+                "first baseline written but could not be fsynced ({e}); deferring the \
+                 pending-import finalize so the retained bag outlives any power loss \
+                 that takes the baseline back"
+            ),
+        }
+    }
     bump_policy_epoch_locked(lock);
     if let Some(prev) = &prev {
         push_history_locked(lock, prev);
@@ -1235,13 +1267,138 @@ mod store_tests {
     }
 
     #[test]
+    fn a_crash_between_window_close_and_baseline_preserves_the_bag() {
+        // P4G-4: the old single-phase ordering lost the bag if the process
+        // died after the tombstone but before the baseline. Simulate exactly
+        // that interleave - the window-close landed (Consuming), the baseline
+        // write never did - and assert the three recovery properties: the
+        // window is closed to plants, the bag is still readable, and the
+        // user's re-tap (a fresh first-baseline write) resumes and finalizes.
+        let _dir = scratch_runtime_dir("policy-consuming-crash-preserves-bag");
+        let _reset = policy_test_hook::ResetOnDrop;
+        let bag = serde_json::json!({ "pageEvalEnabled": true });
+        crate::pending_import::record_if_absent(bag.clone()).unwrap();
+        // Phase 1 alone = the crash point: window closed, baseline absent.
+        ipc::with_runtime_lock(crate::pending_import::begin_consume_locked).unwrap();
+        assert!(PolicyStore::load().unwrap().is_none());
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Consuming { bag: bag.clone() },
+            "the bag survives the crash in the mid-consume record"
+        );
+        // Window closed for new bags, exactly like the tombstone.
+        assert_eq!(
+            crate::pending_import::record_if_absent(serde_json::json!({ "forged": true })).unwrap(),
+            crate::pending_import::RecordOutcome::AlreadyConsumed
+        );
+        // The read surface still reports the retained bag for the app.
+        assert_eq!(
+            crate::pending_import::gather_pending_import(),
+            crate::pending_import::PendingImportReport::Consuming {
+                v: 1,
+                bag: bag.clone()
+            }
+        );
+        // The re-tap: a fresh first-baseline write consumes and finalizes.
+        policy_test_hook::set(signed_mock());
+        set_signed(
+            PolicyValues {
+                page_eval_enabled: true,
+                ..PolicyValues::default()
+            },
+            vec![PolicyField::PageEvalEnabled],
+            Surface::Core,
+            PolicyGrantFloor::SignatureOnly,
+        )
+        .unwrap();
+        assert!(PolicyStore::load().unwrap().is_some());
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Consumed,
+            "the re-tap finalizes the mid-consume record to the bagless tombstone"
+        );
+    }
+
+    #[test]
+    fn a_stranded_consuming_record_heals_once_its_baseline_landed() {
+        // HYG-FIX-1: a Consuming record whose baseline landed but whose
+        // finalize never ran (crash between the baseline write and the
+        // finalize, or a swallowed finalize failure) has no later seam on the
+        // write path (revision-2+ writes never revisit the store). The
+        // reconcile - run at native-host startup and by the pending-import
+        // read command - finalizes it: the baseline is fsynced (the durable
+        // proof), the bag is disposed, and the window stays closed.
+        let _dir = scratch_runtime_dir("policy-reconcile-heals-stranded-consuming");
+        crate::pending_import::record_if_absent(serde_json::json!({ "a": 1 })).unwrap();
+        ipc::with_runtime_lock(crate::pending_import::begin_consume_locked).unwrap();
+        seed_store(1, &PolicyValues::default(), None); // the baseline "landed"
+        assert!(
+            crate::pending_import::reconcile_consuming().unwrap(),
+            "a stranded Consuming record with a landed baseline must heal"
+        );
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Consumed,
+            "healed to the bagless tombstone"
+        );
+        // Idempotent: a second pass has nothing to do.
+        assert!(!crate::pending_import::reconcile_consuming().unwrap());
+        // And the window stays closed to plants, as ever.
+        assert_eq!(
+            crate::pending_import::record_if_absent(serde_json::json!({ "forged": true })).unwrap(),
+            crate::pending_import::RecordOutcome::AlreadyConsumed
+        );
+    }
+
+    #[test]
+    fn reconcile_refuses_to_dispose_the_bag_over_an_unusable_baseline() {
+        // HYG-FIX-9: PolicyStore::load() validates only the file ENVELOPE;
+        // the baseline bytes decode/parse/validate in baseline_doc(). A
+        // valid envelope around an unusable baseline enforces nothing, so
+        // the reconcile must NOT treat it as "the baseline landed" and
+        // finalize away the user's only recoverable copy of the import -
+        // the fail-closed Consuming record stays untouched, bag preserved.
+        let _dir = scratch_runtime_dir("policy-reconcile-unusable-baseline");
+        let bag = serde_json::json!({ "keep": true });
+        crate::pending_import::record_if_absent(bag.clone()).unwrap();
+        ipc::with_runtime_lock(crate::pending_import::begin_consume_locked).unwrap();
+        // A store whose envelope loads but whose baseline cannot decode.
+        let damaged = PolicyStore {
+            version: POLICY_STORE_VERSION,
+            baseline_b64: "not base64!".into(),
+            sig_b64: None,
+            key_id: None,
+            overlay: None,
+        };
+        fs::write(PolicyStore::path(), serde_json::to_vec(&damaged).unwrap()).unwrap();
+        assert!(PolicyStore::load().unwrap().is_some(), "the envelope loads");
+        assert!(
+            PolicyStore::load()
+                .unwrap()
+                .unwrap()
+                .baseline_doc()
+                .is_err(),
+            "sanity: the baseline is unusable"
+        );
+        assert!(
+            !crate::pending_import::reconcile_consuming().unwrap(),
+            "no heal over an unusable baseline"
+        );
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Consuming { bag },
+            "the mid-consume record and its bag are preserved"
+        );
+    }
+
+    #[test]
     fn a_failed_tombstone_write_refuses_the_first_baseline() {
         // P4F-7: closing the import window is a PREREQUISITE of the first
         // signed baseline, not best-effort cleanup after it. Inject the
         // failure through the store's own fail-closed path: an unreadable
-        // pending-import file makes consume_locked refuse, which must refuse
-        // the whole signed write (retryable Io - the user re-taps once the
-        // file is dealt with), and no baseline may land while the window
+        // pending-import file makes begin_consume_locked refuse, which must
+        // refuse the whole signed write (retryable Io - the user re-taps once
+        // the file is dealt with), and no baseline may land while the window
         // cannot be closed.
         let _dir = scratch_runtime_dir("policy-tombstone-failure-refuses-baseline");
         let _reset = policy_test_hook::ResetOnDrop;

@@ -209,33 +209,36 @@ fn render(r: &Report) -> String {
     }
 
     out.push_str("policy baseline: ");
-    match r.policy.store {
+    match &r.policy {
         // No baseline yet is HEALTHY (pre-cutover): the extension keeps
         // enforcing its legacy local settings until a first policy signs (the
         // deny baseline covers only a post-cutover extension with no stored
         // policy). It must not read as broken.
-        PolicyStoreState::None => out.push_str(
+        PolicyStatusReport::None { .. } => out.push_str(
             "none yet (pre-cutover; the extension keeps enforcing its legacy local\n  \
              settings until the app or `chromium-bridge policy set` signs a baseline)\n",
         ),
-        PolicyStoreState::Present => {
-            let revision = r.policy.revision.unwrap_or(0);
+        PolicyStatusReport::Present {
+            revision,
+            signed,
+            overlay_active,
+            ..
+        } => {
             // The host never self-certifies the signature; the extension
             // verifies it against its pinned key. So report signed-ness, never
             // "valid"/"invalid", and say verification is not done here.
-            let signed = match r.policy.signed {
-                Some(true) => "signed (the extension verifies it against its pinned key, not here)",
-                Some(false) => "unsigned (app-floor baseline)",
-                None => "signature state unknown",
+            let signed = if *signed {
+                "signed (the extension verifies it against its pinned key, not here)"
+            } else {
+                "unsigned (app-floor baseline)"
             };
             out.push_str(&format!("revision {revision}, {signed}\n"));
-            if r.policy.overlay_active.unwrap_or(false) {
+            if *overlay_active {
                 out.push_str("  restriction overlay: active\n");
             }
         }
-        PolicyStoreState::Error => out.push_str(&format!(
-            "present but UNREADABLE ({}) - failing closed; see docs/operations.md\n",
-            r.policy.detail.as_deref().unwrap_or("unknown"),
+        PolicyStatusReport::Error { detail, .. } => out.push_str(&format!(
+            "present but UNREADABLE ({detail}) - failing closed; see docs/operations.md\n",
         )),
     }
 
@@ -246,6 +249,10 @@ fn render(r: &Report) -> String {
         PendingImportReport::Present { .. } => {
             out.push_str("recorded (the app's first-run screen imports it, signing revision 1)\n")
         }
+        PendingImportReport::Consuming { .. } => out.push_str(
+            "consuming (a first signed baseline began the one-time import; the window is\n  \
+             closed to new bags and the recorded settings are retained for the app)\n",
+        ),
         PendingImportReport::Consumed { .. } => {
             out.push_str("consumed (imported at the first signed baseline; the window is closed)\n")
         }
@@ -304,7 +311,7 @@ fn summary(r: &Report) -> &'static str {
     // A present-but-unreadable policy store fails closed like the kill record.
     // A missing baseline (`none`) is the healthy pre-cutover state and must
     // NOT flip the verdict.
-    if r.policy.store == PolicyStoreState::Error {
+    if r.policy.store() == PolicyStoreState::Error {
         return "policy store present but unreadable - failing closed; see docs/operations.md";
     }
     // An unreadable pending-import store is now LOAD-BEARING (ADR-0032 P4G-2):
@@ -312,8 +319,10 @@ fn summary(r: &Report) -> &'static str {
     // corrupt file refuses the user's first grant until it is dealt with.
     // That is no longer a healthy state - surface it, with the remedy the row
     // above already spells out (the file path + that removing it reopens the
-    // one-time import window). `none`/`present`/`consumed` never flip the
-    // verdict: those are ordinary states.
+    // one-time import window). `none`/`present`/`consuming`/`consumed` never
+    // flip the verdict: those are ordinary lifecycle states (`consuming`
+    // included - the window is closed and the reconcile heals it once its
+    // baseline is seen).
     if matches!(r.pending_import, PendingImportReport::Error { .. }) {
         return "pending import present but unreadable - it will refuse the first signed \
                 policy baseline; see the pending-import row above";
@@ -427,17 +436,20 @@ mod tests {
 
     /// A `PolicyStatusReport` in a given store state, for the doctor row tests.
     fn policy_report(store: PolicyStoreState) -> PolicyStatusReport {
-        let json = match store {
-            PolicyStoreState::None => r#"{"v":1,"store":"none"}"#.to_string(),
-            PolicyStoreState::Present => {
-                r#"{"v":1,"store":"present","revision":3,"signed":true,"overlay_active":false}"#
-                    .to_string()
-            }
-            PolicyStoreState::Error => {
-                r#"{"v":1,"store":"error","detail":"policy store decode: bad"}"#.to_string()
-            }
-        };
-        serde_json::from_str(&json).expect("policy report fixture parses")
+        match store {
+            PolicyStoreState::None => PolicyStatusReport::None { v: 1 },
+            PolicyStoreState::Present => PolicyStatusReport::Present {
+                v: 1,
+                revision: 3,
+                signed: true,
+                overlay_active: false,
+                effective: crate::policy::PolicyValues::default(),
+            },
+            PolicyStoreState::Error => PolicyStatusReport::Error {
+                v: 1,
+                detail: "policy store decode: bad".into(),
+            },
+        }
     }
 
     #[test]

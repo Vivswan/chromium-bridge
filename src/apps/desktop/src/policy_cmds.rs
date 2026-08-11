@@ -250,8 +250,26 @@ fn field_edit(overlay: &PolicyOverlay, field: PolicyField) -> Option<FieldEdit> 
 /// The `chromium-bridge policy set` argv for an overlay: individual field
 /// flags in catalogue order (never a whole document - the CLI builds the
 /// signed document over the current baseline itself). `Err` on an empty
-/// overlay, so an edit-less invoke never reaches the subprocess.
+/// overlay, so an edit-less invoke never reaches the subprocess, and on a
+/// disabledTools entry the comma-joined argv transport cannot round-trip
+/// (a comma splits a name into two, surrounding whitespace trims away, an
+/// empty entry drops) - the join below must never sign something other than
+/// what the caller stated, so it refuses instead of mangling (the CLI's
+/// validate_disabled_tools refuses the same shapes on its side, but a
+/// mangled entry would arrive there already split, looking valid).
 fn set_args(overlay: &PolicyOverlay) -> Result<Vec<String>, String> {
+    if let Some(tools) = &overlay.disabled_tools {
+        if let Some(bad) = tools
+            .iter()
+            .find(|t| t.is_empty() || t.contains(',') || t.trim() != t.as_str())
+        {
+            return Err(format!(
+                "policy set: disabledTools entry {bad:?} cannot round-trip the CLI \
+                 transport (empty entries, commas, and surrounding whitespace are \
+                 refused, never mangled)"
+            ));
+        }
+    }
     let mut args = vec![argv::POLICY.to_string(), argv::POLICY_SET.to_string()];
     for field in PolicyField::ALL.iter().copied() {
         if let Some(edit) = field_edit(overlay, field) {
@@ -545,7 +563,7 @@ pub fn rollback(revision: u64) -> Result<PolicyOutcome, String> {
 /// (each behind its own dialog and prompt), so a collision there re-signs
 /// user-reviewed values, never anything unattended.
 pub fn adopt(overlay: PolicyOverlay) -> Result<PolicyOutcome, String> {
-    if let Err(refusal) = adopt_gate(gather_policy_status().store) {
+    if let Err(refusal) = adopt_gate(gather_policy_status().store()) {
         return Ok(PolicyOutcome {
             ok: false,
             transcript: refusal,
@@ -598,18 +616,14 @@ pub fn restrict(overlay: PolicyOverlay) -> Result<PolicyStatusReport, String> {
 /// store refuses - a plan over garbage would be a lane decision over
 /// garbage.
 pub fn plan(overlay: PolicyOverlay) -> Result<PolicyPlan, String> {
-    let report = gather_policy_status();
-    let anchor = match report.store {
-        PolicyStoreState::Error => {
+    let anchor = match gather_policy_status() {
+        PolicyStatusReport::Error { detail, .. } => {
             return Err(format!(
-                "the policy store is unreadable ({}); failing closed",
-                report.detail.as_deref().unwrap_or("unknown")
+                "the policy store is unreadable ({detail}); failing closed"
             ));
         }
-        PolicyStoreState::None => PolicyValues::default(),
-        PolicyStoreState::Present => report
-            .effective
-            .ok_or("the policy status carried no effective policy")?,
+        PolicyStatusReport::None { .. } => PolicyValues::default(),
+        PolicyStatusReport::Present { effective, .. } => effective,
     };
     Ok(classify(&overlay, &anchor))
 }
@@ -696,6 +710,28 @@ mod tests {
         // An edit-less write must never spawn the subprocess (the CLI would
         // refuse it too; this is the earlier, cheaper refusal).
         assert!(set_args(&PolicyOverlay::default()).is_err());
+    }
+
+    #[test]
+    fn set_args_refuses_tools_the_argv_transport_cannot_round_trip() {
+        // The set lane comma-joins the list into one argv value; an entry a
+        // re-split would mangle (comma inside a name, surrounding whitespace,
+        // an empty entry) must be refused BEFORE the join, or the signed
+        // document states something other than what the caller passed.
+        for bad in ["a,b", " page_eval", "page_eval ", ""] {
+            let overlay = PolicyOverlay {
+                disabled_tools: Some(vec![bad.into()]),
+                ..PolicyOverlay::default()
+            };
+            let err = set_args(&overlay).unwrap_err();
+            assert!(err.contains("round-trip"), "{bad:?} -> {err}");
+        }
+        // Positive control: ordinary names pass through untouched.
+        let overlay = PolicyOverlay {
+            disabled_tools: Some(vec!["page_eval".into()]),
+            ..PolicyOverlay::default()
+        };
+        assert!(set_args(&overlay).is_ok());
     }
 
     #[test]
@@ -786,8 +822,8 @@ mod tests {
     fn parse_accepts_a_well_formed_v1_report() {
         let report =
             parse_policy_status_json(r#"{"store":"none","v":1}"#).expect("a v1 report parses");
-        assert_eq!(report.v, 1);
-        assert_eq!(report.store, PolicyStoreState::None);
+        assert!(matches!(report, PolicyStatusReport::None { v: 1 }));
+        assert_eq!(report.store(), PolicyStoreState::None);
     }
 
     #[test]

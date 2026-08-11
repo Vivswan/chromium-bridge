@@ -37,6 +37,24 @@ function inState<S extends EnrollmentStatus["state"]>(
   return st as Extract<EnrollmentStatus, { state: S }>;
 }
 
+// Type-level pins for the SHARED EnrollmentStatus union (lib/enrollment-status.ts,
+// consumed verbatim by the popup/options views as EnrollmentStatusView): the
+// invalid combinations are unrepresentable, not merely unproduced.
+function enrollmentStatusTypePins(): EnrollmentStatus[] {
+  const base = { platformSupported: true } as const;
+  return [
+    // @ts-expect-error a pinned status is structurally never blocked
+    { ...base, state: "pinned", blocked: true, keyId: "k", fingerprint: "f", pinnedAt: 1 },
+    // @ts-expect-error a compromised status is structurally always blocked
+    { ...base, state: "compromised", blocked: false, compromisedReason: "r" },
+    // @ts-expect-error a compromised keyId cannot travel without its fingerprint
+    { ...base, state: "compromised", blocked: true, compromisedReason: "r", keyId: "k" },
+    // @ts-expect-error a pending status always carries its key identity
+    { ...base, state: "pending", blocked: true },
+  ];
+}
+void enrollmentStatusTypePins;
+
 // The ceremony state machine, driven end to end with a mocked chrome and a
 // WebCrypto key standing in for the host's Secure Enclave key. What CANNOT be
 // tested here: the real native host, the keychain, and the Touch ID prompt;
@@ -225,6 +243,25 @@ describe("pin store", () => {
     store.enclavePin = { keyId: "a".repeat(64), pubkeyB64: key.pubkeyB64, pinnedAt: 1 };
     expect(await pinStore.getPin()).toBeNull();
     expect((await enrollmentGate()).allowed).toBe(false);
+  });
+
+  test("readPin is a visible three-way; getPin is its documented collapse", async () => {
+    // Absent and corrupt are DISTINCT at the type level (readPin), and the
+    // corrupt-routes-like-absent decision is one explicit, greppable
+    // collapse (pinOrNull/getPin) - the Phase-3 unsigned-lane routing, not
+    // an accident of parsing.
+    expect(await pinStore.readPin()).toEqual({ state: "absent" });
+    store.enclavePin = { keyId: "a".repeat(64), pubkeyB64: "QUJD", pinnedAt: 1 };
+    expect(await pinStore.readPin()).toEqual({ state: "corrupt" });
+    expect(await pinStore.getPin()).toBeNull();
+    const key = await genKey();
+    const pin = { keyId: key.keyId, pubkeyB64: key.pubkeyB64, pinnedAt: 1 };
+    store.enclavePin = pin;
+    expect(await pinStore.readPin()).toEqual({ state: "valid", pin });
+    expect(await pinStore.getPin()).toEqual(pin);
+    expect(pinStore.pinOrNull({ state: "corrupt" })).toBeNull();
+    expect(pinStore.pinOrNull({ state: "absent" })).toBeNull();
+    expect(pinStore.pinOrNull({ state: "valid", pin })).toEqual(pin);
   });
 
   test("a stored pin whose pubkey does not decode is not a pin", async () => {

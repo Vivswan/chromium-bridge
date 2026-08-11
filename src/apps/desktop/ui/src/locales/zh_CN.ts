@@ -238,7 +238,6 @@ export const zh_CN: Record<MessageKey, string> = {
   "security.policy_note": "由主机持有。收紧立即生效; 任何放宽都需要你的批准。",
   "security.policy_none": "尚未签署任何策略 - 扩展执行拒绝基线。在此应用更改将签署首个基线。",
   "security.policy_error": "策略存储不可读 - 按失效关闭处理: $1",
-  "security.policy_error_unknown": "未知",
   "security.policy_revision": "修订 $1",
   "security.policy_signed": "已签名",
   "security.policy_unsigned": "未签名",

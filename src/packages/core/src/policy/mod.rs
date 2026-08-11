@@ -71,6 +71,28 @@ pub const DISABLED_TOOL_NAME_MAX_BYTES: usize = 128;
 /// it to documents, [`restrict`] to the merged overlay, so neither lane can
 /// persist a list the other side's parser (or the store's own read cap)
 /// would refuse.
+///
+/// Beyond the size bounds it refuses entries the CLI transport cannot carry
+/// FAITHFULLY: the co-equal surfaces ship the list as one comma-joined argv
+/// value that `cli::parse_tool_list` re-splits and trims, so a name holding
+/// a comma would silently become two names, and one with surrounding
+/// whitespace would silently become its trimmed self - a signed document
+/// stating something other than what was written. Refusing them here makes
+/// the join/split round trip provably faithful for every list this
+/// validator accepts (the round-trip property test in `cli`), fail-closed:
+/// refuse, never mangle. The desktop app's editor (policy-edit.ts
+/// draftErrors), its import mapping (import_cmds tools_of), and its set_args
+/// join refuse the same shapes on their side.
+///
+/// This also runs on the READ path (`PolicyStore::baseline_doc` ->
+/// `PolicyDoc::validate`), which is deliberate wire-safety, not an
+/// oversight: a stored comma entry would corrupt the comma-joined pushes
+/// built from the store (an entry could re-split and silently DROP a tool
+/// from the deny list - the permissive direction), so such a store reads
+/// present-but-UNREADABLE instead. The only conceivable producer was a
+/// historical direct `set_signed` call (the CLI always re-split its input),
+/// and this repo is pre-release - nothing shipped could have stored one -
+/// so no migration exists; re-signing the policy is the repair.
 pub(crate) fn validate_disabled_tools(tools: &[String]) -> Result<(), &'static str> {
     if tools.len() > DISABLED_TOOLS_MAX_ENTRIES {
         return Err("disabledTools carries more than 256 entries");
@@ -80,6 +102,18 @@ pub(crate) fn validate_disabled_tools(tools: &[String]) -> Result<(), &'static s
         .any(|t| t.is_empty() || t.len() > DISABLED_TOOL_NAME_MAX_BYTES)
     {
         return Err("a disabledTools entry is empty or longer than 128 bytes");
+    }
+    if tools.iter().any(|t| t.contains(',')) {
+        return Err(
+            "a disabledTools entry contains a comma, which the comma-joined CLI \
+             transport cannot round-trip",
+        );
+    }
+    if tools.iter().any(|t| t.trim() != t.as_str()) {
+        return Err(
+            "a disabledTools entry carries surrounding whitespace, which the CLI \
+             transport's trimming re-split cannot round-trip",
+        );
     }
     Ok(())
 }
@@ -926,6 +960,53 @@ mod tests {
             .validate()
             .is_err());
         assert!(doc(vec![String::new()]).validate().is_err());
+    }
+
+    #[test]
+    fn validate_refuses_entries_the_cli_transport_cannot_round_trip() {
+        // Structural comma fidelity: the co-equal surfaces ship the list as
+        // one comma-joined argv value that parse_tool_list re-splits and
+        // trims, so a comma inside a name (split into two), surrounding
+        // whitespace (trimmed away), or a whitespace-only name (trimmed to
+        // empty and dropped) would sign something other than what was
+        // written. Every such entry is REFUSED at the validation seams both
+        // lanes share - never mangled.
+        let doc = |tools: Vec<String>| PolicyDoc {
+            disabled_tools: tools,
+            ..PolicyDoc::default()
+        };
+        for bad in [
+            "a,b",
+            ",",
+            "page_eval,",
+            " page_eval",
+            "page_eval ",
+            "\tx",
+            " ",
+        ] {
+            assert!(
+                doc(vec![bad.into()]).validate().is_err(),
+                "{bad:?} must fail validate()"
+            );
+        }
+        // Positive control: ordinary names still validate.
+        assert!(doc(vec!["page_eval".into(), "tab_close".into()])
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn policy_field_wire_names_carry_no_comma() {
+        // The audit details and the rollback plan comma-join FIELD wire
+        // names (wire_name_list / wire_names); this pins that join faithful
+        // for the catalogue itself.
+        for field in PolicyField::ALL {
+            assert!(
+                !field.wire_name().contains(','),
+                "{} must not contain a comma",
+                field.wire_name()
+            );
+        }
     }
 
     #[test]

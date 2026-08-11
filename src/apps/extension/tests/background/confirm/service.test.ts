@@ -3,7 +3,7 @@
 // popup window; the isolated-browser suite proves the guarded page cannot
 // reach it.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared";
+import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
@@ -273,7 +273,7 @@ describe("presence routing (the verdict travels in the request)", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(windowShown.length).toBe(0);
     expect(hwShown.length).toBe(1);
-    expect(hwShown[0]!.hardware).toBe(true);
+    expect(isHardwareGated(hwShown[0]!)).toBe(true);
     await expect(verdict).resolves.toBe(false);
   });
 
@@ -290,7 +290,7 @@ describe("presence routing (the verdict travels in the request)", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(hwShown.length).toBe(0);
     expect(windowShown.length).toBe(1);
-    expect(windowShown[0]!.payload.hardware).toBeUndefined();
+    expect(isHardwareGated(windowShown[0]!.payload)).toBe(false);
     resolveConfirm(windowShown[0]!.payload.id, false);
     await expect(verdict).resolves.toBe(false);
   });

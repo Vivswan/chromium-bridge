@@ -19,7 +19,12 @@
 // What only the CHROME_BIN isolated-browser suite can verify remains a REAL
 // mid-confirmation policy push surviving SW timing; flagged, not attempted.
 
-import { type ConfirmPayload, POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared";
+import {
+  type ConfirmPayload,
+  isHardwareGated,
+  POLICY_DEFAULTS,
+  type PolicyValues,
+} from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
@@ -643,7 +648,7 @@ describe("presence routing is decided from the per-request snapshot (S1)", () =>
     ).rejects.toThrow("user denied page_eval");
     expect(hw.length).toBe(0);
     expect(asked.length).toBe(1);
-    expect(asked[0]?.hardware).toBeUndefined();
+    expect(asked[0] !== undefined && isHardwareGated(asked[0])).toBe(false);
   });
 
   test("grant: policy touchIdConfirm=true routes to hardware although legacy opted out", async () => {
@@ -664,7 +669,7 @@ describe("presence routing is decided from the per-request snapshot (S1)", () =>
     ).rejects.toThrow("user denied page_eval");
     expect(asked.length).toBe(0);
     expect(hw.length).toBe(1);
-    expect(hw[0]?.hardware).toBe(true);
+    expect(hw[0] !== undefined && isHardwareGated(hw[0])).toBe(true);
   });
 
   test("the routing verdict itself reads the snapshot, not live storage", async () => {
@@ -688,7 +693,7 @@ describe("a blocked posture is not consumable as values and the barrier refuses 
   // Two layers keep that from ever enforcing: the state-typed effective
   // policy carries NO values in the blocked arms (SFX-1), and the dispatch
   // barrier refuses the same states. Pin both, in both arms.
-  test("awaitingBaseline (cutover armed, no record): blocked + refusal; the raw accessor still folds to defaults", async () => {
+  test("awaitingBaseline (cutover armed, no record): blocked + refusal; the raw accessor reports the arm honestly", async () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
     // Exact shape, not toMatchObject (CS-5): the blocked arm must carry NO
     // .values key at all - the leak is closed structurally, not by callers
@@ -701,13 +706,10 @@ describe("a blocked posture is not consumable as values and the barrier refuses 
       allowed: false,
       reason: expect.any(String),
     });
-    await expect(getPolicySnapshotForTests()).resolves.toEqual({
-      cutover: true,
-      effective: POLICY_DEFAULTS,
-    });
+    await expect(getPolicySnapshotForTests()).resolves.toEqual({ kind: "awaitingBaseline" });
   });
 
-  test("compromised (corrupt record): blocked + refusal; the raw accessor still folds to defaults", async () => {
+  test("compromised (corrupt record): blocked + refusal; the raw accessor reports the arm honestly", async () => {
     await fakeBrowser.storage.local.set({
       bridgePolicyCutover: true,
       bridgePolicyState: { tampered: true },
@@ -723,10 +725,7 @@ describe("a blocked posture is not consumable as values and the barrier refuses 
       allowed: false,
       reason: expect.any(String),
     });
-    await expect(getPolicySnapshotForTests()).resolves.toEqual({
-      cutover: true,
-      effective: POLICY_DEFAULTS,
-    });
+    await expect(getPolicySnapshotForTests()).resolves.toEqual({ kind: "compromised" });
   });
 
   test("active in-scope record: the stored effective is served", async () => {

@@ -10,14 +10,24 @@ import type { MessageKey } from "@/locales/en";
 
 export type PolicyFieldName = keyof PolicyValues;
 export type PolicyGroup = "grants" | "confirmations" | "timing" | "tools";
-export type PolicyFieldKind = "bool" | "ms" | "tools";
+export type PolicyFieldKind = PolicyFieldSpec["kind"];
 
-export interface PolicyFieldSpec {
-  name: PolicyFieldName;
-  kind: PolicyFieldKind;
-  group: PolicyGroup;
-  labelKey: MessageKey;
-}
+/** The editor kind a field's VALUE TYPE dictates: booleans render the
+ * toggle row, numbers the ms input, the string list the tools input. */
+type PolicyFieldKindOf<V> = V extends boolean ? "bool" : V extends number ? "ms" : "tools";
+
+/** One field's display spec, with `kind` tied to `PolicyValues[name]` at the
+ * type level (a mapped union over the field names): a spec claiming the
+ * wrong editor for its field - `cdpMode` with kind "ms", say - fails to
+ * compile instead of rendering a boolean through the numeric input. */
+export type PolicyFieldSpec = {
+  [K in PolicyFieldName]: {
+    name: K;
+    kind: PolicyFieldKindOf<PolicyValues[K]>;
+    group: PolicyGroup;
+    labelKey: MessageKey;
+  };
+}[PolicyFieldName];
 
 /** The 15 host-owned fields in catalogue order (mirrors the Rust
  * `PolicyField::ALL`), grouped for display. */
@@ -131,6 +141,19 @@ const MS_MAX = 9007199254740991;
 const TOOLS_MAX_ENTRIES = 256;
 const TOOL_NAME_MAX_BYTES = 128;
 
+// The host refuses tool entries its comma-joined CLI transport cannot carry
+// faithfully (validate_disabled_tools): commas, and edge whitespace by
+// RUST's definition (char::is_whitespace = the Unicode White_Space set).
+// parseTools' JS .trim() covers a slightly DIFFERENT set - it misses U+0085
+// (NEL) - so an entry can survive the split+trim above and still carry
+// host-trimmable whitespace at an edge. This pattern is the Rust set,
+// spelled with escapes (the repo bans literal invisible unicode), so the
+// editor refuses exactly what the host would and the sheet never opens on a
+// draft the write seam refuses.
+const RUST_WHITESPACE =
+  "\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000";
+const RUST_WHITESPACE_EDGE = new RegExp(`^[${RUST_WHITESPACE}]|[${RUST_WHITESPACE}]$`);
+
 export type DraftErrorKind = "ms" | "tool_count" | "tool_name";
 
 export interface DraftError {
@@ -156,9 +179,19 @@ export function draftErrors(d: PolicyDraft): DraftError[] {
         errors.push({ field: spec.name, kind: "tool_count" });
       } else if (
         // Byte bound mirrors the Rust check; the flag-like refusal mirrors
-        // the CLI argv layer (a "--"-prefixed value is refused there), so
-        // the free and signed lanes fail the same drafts.
-        tools.some((t) => encoder.encode(t).length > TOOL_NAME_MAX_BYTES || t.startsWith("--"))
+        // the CLI argv layer (a "--"-prefixed value is refused there); the
+        // comma and Rust-edge-whitespace refusals mirror
+        // validate_disabled_tools' transport-fidelity rule (the comma is
+        // unreachable past parseTools' split, kept for self-documentation) -
+        // so the free and signed lanes fail the same drafts, before any
+        // dialog.
+        tools.some(
+          (t) =>
+            encoder.encode(t).length > TOOL_NAME_MAX_BYTES ||
+            t.startsWith("--") ||
+            t.includes(",") ||
+            RUST_WHITESPACE_EDGE.test(t),
+        )
       ) {
         errors.push({ field: spec.name, kind: "tool_name" });
       }

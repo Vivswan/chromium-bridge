@@ -30,14 +30,11 @@
 // them: the tap is the only approval. The queue, deadline, and fail-closed
 // semantics here stay unchanged.
 
-import type { ConfirmKind, ConfirmPayload } from "@chromium-bridge/shared";
+import { type ConfirmKind, type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
 import { auditEvent } from "../audit-log";
 
-export interface ConfirmRequest {
-  kind: ConfirmKind;
-  origin: string;
-  tabTitle: string;
-  detail: string;
+/** The fields every confirmation request carries. */
+interface ConfirmRequestBase {
   timeoutMs: number;
   /** Route this confirmation to the Enclave user-presence provider
    * (ADR-0031)? Decided by the CALLER at decision time - for the gated ops,
@@ -57,6 +54,21 @@ export interface ConfirmRequest {
    * denies on the epoch mismatch (SFX-2). */
   panicEpoch: number;
 }
+
+/** Discriminated on `kind`, mirroring the payload union it feeds
+ * (ConfirmPayload): the page-op kinds carry their page context, while a
+ * `policy_relax` request - no page is involved - pins origin/tabTitle to
+ * "", so a request claiming a page for a policy approval cannot be built. */
+export type ConfirmRequest = ConfirmRequestBase &
+  (
+    | {
+        kind: Exclude<ConfirmKind, "policy_relax">;
+        origin: string;
+        tabTitle: string;
+        detail: string;
+      }
+    | { kind: "policy_relax"; origin: ""; tabTitle: ""; detail: string }
+  );
 
 /** A live presentation of one confirmation. */
 export interface Presentation {
@@ -260,19 +272,37 @@ async function presentOne(
     return;
   }
   const { provider, hardware } = providerFor(req);
-  const payload: ConfirmPayload = {
+  // Built per arm of the request union, so each payload carries exactly its
+  // kind's fields: `hardware` can only ride the two presence-gated kinds
+  // (providerFor only raises it there, and the payload union would refuse it
+  // anywhere else), and a policy_relax payload is structurally page-less.
+  const common = {
     // The attempt's id doubles as the surface routing handle
     // (getPendingConfirm/resolveConfirm match on it). Same value the
     // audit events above and below carry, so the shown row and its
     // verdict join exactly.
     id: cid,
-    kind: req.kind,
-    origin: req.origin,
-    tabTitle: req.tabTitle,
-    detail: req.detail,
     deadline: Date.now() + req.timeoutMs,
-    ...(hardware ? { hardware: true } : {}),
   };
+  const payload: ConfirmPayload =
+    req.kind === "policy_relax"
+      ? { ...common, kind: "policy_relax", origin: "", tabTitle: "", detail: req.detail }
+      : req.kind === "eval" || req.kind === "upload"
+        ? {
+            ...common,
+            kind: req.kind,
+            origin: req.origin,
+            tabTitle: req.tabTitle,
+            detail: req.detail,
+            ...(hardware ? { hardware: true } : {}),
+          }
+        : {
+            ...common,
+            kind: req.kind,
+            origin: req.origin,
+            tabTitle: req.tabTitle,
+            detail: req.detail,
+          };
   if (!provider) {
     console.error("[bb] no confirmation provider installed; denying", req.kind);
     resolve(false);
@@ -354,7 +384,7 @@ export function resolveConfirm(id: string, approved: boolean): { ok: boolean; er
   if (!active || active.payload.id !== id) {
     return { ok: false, error: "no such pending confirmation" };
   }
-  if (approved && active.payload.hardware) {
+  if (approved && isHardwareGated(active.payload)) {
     return {
       ok: false,
       error: "hardware-gated confirmation: approval requires the Touch ID prompt",

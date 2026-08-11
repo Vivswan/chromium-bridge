@@ -5,6 +5,7 @@ import {
   draftErrors,
   draftFromValues,
   POLICY_FIELDS,
+  type PolicyFieldSpec,
   parseTools,
   valuesFromDraft,
 } from "../src/lib/policy-edit";
@@ -92,6 +93,21 @@ describe("draftErrors", () => {
     // "--" only counts at the start of an entry, even after a spaced comma.
     expect(draftErrors({ ...draftFromValues(values()), disabledTools: "a--b, c" })).toEqual([]);
   });
+
+  it("refuses entries the host's transport-fidelity rule would refuse (validate-before-prompt)", () => {
+    // U+0085 (NEL) is whitespace to Rust's trim but NOT to JS .trim(), so it
+    // survives parseTools and would only die at the host's
+    // validate_disabled_tools - AFTER the confirm sheet. The editor must
+    // refuse it first, restoring validate-before-prompt.
+    expect(draftErrors({ ...draftFromValues(values()), disabledTools: "ok, \u0085bad" })).toEqual([
+      { field: "disabledTools", kind: "tool_name" },
+    ]);
+    expect(draftErrors({ ...draftFromValues(values()), disabledTools: "bad\u0085" })).toEqual([
+      { field: "disabledTools", kind: "tool_name" },
+    ]);
+    // Interior exotic whitespace is a legal name byte; only the edges matter.
+    expect(draftErrors({ ...draftFromValues(values()), disabledTools: "a\u0085b" })).toEqual([]);
+  });
 });
 
 describe("parseTools", () => {
@@ -126,3 +142,24 @@ describe("diffOverlay", () => {
     ]);
   });
 });
+
+// Type-level pins for the field catalogue: each spec's `kind` is tied to
+// PolicyValues[name], so a spec claiming the wrong editor for its field
+// fails to COMPILE - a boolean can never render through the ms input, and
+// the list field can never lose its tools editor.
+function policyFieldSpecTypePins(): PolicyFieldSpec[] {
+  return [
+    // @ts-expect-error a boolean field cannot claim the ms editor
+    { name: "cdpMode", kind: "ms", group: "grants", labelKey: "security.field_cdp_mode" },
+    // @ts-expect-error an ms field cannot claim the bool editor
+    { name: "confirmGraceMs", kind: "bool", group: "timing", labelKey: "security.field_grace_ms" },
+    // @ts-expect-error the tool list cannot claim the ms editor
+    {
+      name: "disabledTools",
+      kind: "ms",
+      group: "tools",
+      labelKey: "security.field_disabled_tools",
+    },
+  ];
+}
+void policyFieldSpecTypePins;

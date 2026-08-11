@@ -73,9 +73,18 @@ pub struct ImportSuggestion {
 pub fn survey() -> Result<PendingImportSurvey, String> {
     Ok(match pending_import_report()? {
         PendingImportReport::None { .. } => PendingImportSurvey::None,
-        PendingImportReport::Present { bag, .. } => PendingImportSurvey::Present {
-            suggestion: suggestion_from_bag(&bag),
-        },
+        // `consuming` (P4G-4) is a crash-recovery state: a first-baseline
+        // write closed the import window but its baseline was not observed to
+        // commit, and the bag was retained exactly so this screen can
+        // re-offer it. For the app the two states offer the same action -
+        // review and sign - so it maps to `present`; the difference (plants
+        // are refused host-side) is the store's business, not this surface's,
+        // and a baseline that DID land makes Adopt refuse at its own gate.
+        PendingImportReport::Present { bag, .. } | PendingImportReport::Consuming { bag, .. } => {
+            PendingImportSurvey::Present {
+                suggestion: suggestion_from_bag(&bag),
+            }
+        }
         PendingImportReport::Consumed { .. } => PendingImportSurvey::Consumed,
         PendingImportReport::Error { detail, .. } => PendingImportSurvey::Error { detail },
     })
@@ -257,6 +266,11 @@ mod tests {
         assert!(matches!(
             parse_pending_import_json(r#"{"state":"none","v":1}"#).unwrap(),
             PendingImportReport::None { .. }
+        ));
+        assert!(matches!(
+            parse_pending_import_json(r#"{"state":"consuming","v":1,"bag":{"cdpMode":true}}"#)
+                .unwrap(),
+            PendingImportReport::Consuming { .. }
         ));
         assert!(matches!(
             parse_pending_import_json(r#"{"state":"consumed","v":1}"#).unwrap(),

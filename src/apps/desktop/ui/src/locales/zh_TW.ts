@@ -239,7 +239,6 @@ export const zh_TW: Record<MessageKey, string> = {
   "security.policy_note": "由主機持有。收緊立即生效; 任何放寬都需要你的批准。",
   "security.policy_none": "尚未簽署任何原則 - 擴充功能執行拒絕基線。在此套用變更將簽署首個基線。",
   "security.policy_error": "原則儲存不可讀 - 按失效關閉處理: $1",
-  "security.policy_error_unknown": "未知",
   "security.policy_revision": "修訂 $1",
   "security.policy_signed": "已簽名",
   "security.policy_unsigned": "未簽名",

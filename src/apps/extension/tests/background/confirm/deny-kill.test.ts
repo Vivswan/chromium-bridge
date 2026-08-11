@@ -7,7 +7,7 @@
 // (queued or newly arriving) is presented for approval. Sender gating rides
 // the same confirm-window-only rule as the other confirm_* messages.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared";
+import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
@@ -188,7 +188,7 @@ describe("confirm_deny_kill", () => {
     const verdict = confirmWithUser(REQ()); // eval routes to the presence provider
     await vi.advanceTimersByTimeAsync(0);
     const shown = presented[0];
-    expect(shown?.payload.hardware).toBe(true);
+    expect(shown && isHardwareGated(shown.payload)).toBe(true);
 
     attachPort(() => true);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});

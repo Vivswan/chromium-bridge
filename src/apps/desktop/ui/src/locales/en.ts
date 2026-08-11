@@ -254,7 +254,6 @@ export const en = {
   "security.policy_none":
     "No policy signed yet - the extension enforces the deny baseline. Applying a change here signs the first baseline.",
   "security.policy_error": "Policy store unreadable - failing closed: $1",
-  "security.policy_error_unknown": "unknown",
   "security.policy_revision": "revision $1",
   "security.policy_signed": "signed",
   "security.policy_unsigned": "unsigned",

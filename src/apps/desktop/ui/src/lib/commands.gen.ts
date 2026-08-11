@@ -171,50 +171,68 @@ export type PolicyStoreState = "none" | "present" | "error";
  * `chromium-bridge policy show --json` prints (ADR-0032), the typed mirror
  * the desktop app parses back, and the shape the doctor row renders from.
  *
- * The wire form is frozen: a consumer refuses an unrecognized `v` before it
- * trusts any other field, so field names and `v` must not change without a
- * version bump. `deny_unknown_fields` makes an unexpected shape a loud
- * refusal on the parsing side. The fields below carry data only when the
- * store is `present`; `detail` only when it is `error`.
+ * A sum internally tagged on `store` (the [`PendingImportReport`] shape):
+ * each arm carries exactly its own fields, so a `none` report smuggling an
+ * effective policy - or a `present` one missing its revision - cannot even
+ * deserialize. The tag serializes to the same `store` field the v1 flat
+ * shape carried and every arm's fields are spelled identically, so the wire
+ * form is VALUE-identical to v1 (JSON key order may differ on paths that
+ * serialize the struct directly rather than through the sorted-keys `Value`
+ * this CLI prints; no JSON consumer reads key order, so no `v` bump): a
+ * consumer still refuses an unrecognized `v` before it trusts any other
+ * field, and `deny_unknown_fields` still makes an unexpected shape a loud
+ * refusal.
+ *
+ * [`PendingImportReport`]: crate::pending_import::PendingImportReport
  */
-export type PolicyStatusReport = {
-  /**
-   * Schema version. `1` today; a newer value must be refused before any
-   * field below is read (fail closed).
-   */
-  v: number;
-  /**
-   * The store's state.
-   */
-  store: PolicyStoreState;
-  /**
-   * The signed baseline's monotonic revision; present only when
-   * `store == present`.
-   */
-  revision?: number;
-  /**
-   * Whether the stored baseline carries an enclave signature (`true`) or is
-   * an app-floor UNSIGNED baseline (`false`). Present only when
-   * `store == present`. Host-side this is only "a signature is stored" -
-   * the host never self-certifies; the extension verifies it against its
-   * pinned key.
-   */
-  signed?: boolean;
-  /**
-   * Whether an unsigned restriction overlay is active on top of the
-   * baseline. Present only when `store == present`.
-   */
-  overlay_active?: boolean;
-  /**
-   * The effective policy: the baseline with the overlay folded over it -
-   * what the bridge actually enforces. Present only when `store == present`.
-   */
-  effective?: PolicyValues;
-  /**
-   * Human detail for a `store == error` state.
-   */
-  detail?: string;
-};
+export type PolicyStatusReport =
+  | {
+      "store": "none";
+      /**
+       * Schema version. `1` today; a newer value must be refused before
+       * any field below is read (fail closed).
+       */
+      v: number;
+    }
+  | {
+      "store": "present";
+      /**
+       * Schema version; see the `none` arm.
+       */
+      v: number;
+      /**
+       * The signed baseline's monotonic revision.
+       */
+      revision: number;
+      /**
+       * Whether the stored baseline carries an enclave signature (`true`)
+       * or is an app-floor UNSIGNED baseline (`false`). Host-side this is
+       * only "a signature is stored" - the host never self-certifies; the
+       * extension verifies it against its pinned key.
+       */
+      signed: boolean;
+      /**
+       * Whether an unsigned restriction overlay is active on top of the
+       * baseline.
+       */
+      overlay_active: boolean;
+      /**
+       * The effective policy: the baseline with the overlay folded over
+       * it - what the bridge actually enforces.
+       */
+      effective: PolicyValues;
+    }
+  | {
+      "store": "error";
+      /**
+       * Schema version; see the `none` arm.
+       */
+      v: number;
+      /**
+       * Human detail of the read failure.
+       */
+      detail: string;
+    };
 
 /**
  * One superseded record, reduced to what a rollback surface needs.
@@ -327,9 +345,10 @@ export type PolicyOutcome = {
  * tagged sum like the on-disk record, so an impossible combination (a
  * `consumed` answer smuggling a bag, an `error` with no detail) cannot even
  * deserialize: `none` is the ordinary no-receipt state (healthy), `present`
- * is the only arm that carries the recorded bag, `consumed` is the
- * post-import tombstone (structurally bagless), `error` is a
- * present-but-unreadable receipt (fail closed).
+ * and `consuming` are the only arms that carry a recorded bag (`consuming`
+ * with the window already closed, P4G-4), `consumed` is the post-import
+ * tombstone (structurally bagless), `error` is a present-but-unreadable
+ * receipt (fail closed).
  */
 export type PendingImportReport =
   | {
@@ -349,6 +368,18 @@ export type PendingImportReport =
        * The recorded legacy settings bag. Untrusted free-form JSON
        * (`unknown` on the TS side): a suggestion the user reviews, never
        * applied as policy.
+       */
+      bag: unknown;
+    }
+  | {
+      "state": "consuming";
+      /**
+       * Schema version; see [`PENDING_IMPORT_REPORT_VERSION`].
+       */
+      v: number;
+      /**
+       * The retained legacy settings bag, same trust posture as
+       * `present`'s.
        */
       bag: unknown;
     }

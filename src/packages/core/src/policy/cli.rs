@@ -54,73 +54,77 @@ pub enum PolicyStoreState {
 /// `chromium-bridge policy show --json` prints (ADR-0032), the typed mirror
 /// the desktop app parses back, and the shape the doctor row renders from.
 ///
-/// The wire form is frozen: a consumer refuses an unrecognized `v` before it
-/// trusts any other field, so field names and `v` must not change without a
-/// version bump. `deny_unknown_fields` makes an unexpected shape a loud
-/// refusal on the parsing side. The fields below carry data only when the
-/// store is `present`; `detail` only when it is `error`.
+/// A sum internally tagged on `store` (the [`PendingImportReport`] shape):
+/// each arm carries exactly its own fields, so a `none` report smuggling an
+/// effective policy - or a `present` one missing its revision - cannot even
+/// deserialize. The tag serializes to the same `store` field the v1 flat
+/// shape carried and every arm's fields are spelled identically, so the wire
+/// form is VALUE-identical to v1 (JSON key order may differ on paths that
+/// serialize the struct directly rather than through the sorted-keys `Value`
+/// this CLI prints; no JSON consumer reads key order, so no `v` bump): a
+/// consumer still refuses an unrecognized `v` before it trusts any other
+/// field, and `deny_unknown_fields` still makes an unexpected shape a loud
+/// refusal.
+///
+/// [`PendingImportReport`]: crate::pending_import::PendingImportReport
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[serde(deny_unknown_fields)]
-pub struct PolicyStatusReport {
-    /// Schema version. `1` today; a newer value must be refused before any
-    /// field below is read (fail closed).
-    pub v: u32,
-    /// The store's state.
-    pub store: PolicyStoreState,
-    /// The signed baseline's monotonic revision; present only when
-    /// `store == present`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
-    pub revision: Option<u64>,
-    /// Whether the stored baseline carries an enclave signature (`true`) or is
-    /// an app-floor UNSIGNED baseline (`false`). Present only when
-    /// `store == present`. Host-side this is only "a signature is stored" -
-    /// the host never self-certifies; the extension verifies it against its
-    /// pinned key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
-    pub signed: Option<bool>,
-    /// Whether an unsigned restriction overlay is active on top of the
-    /// baseline. Present only when `store == present`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
-    pub overlay_active: Option<bool>,
-    /// The effective policy: the baseline with the overlay folded over it -
-    /// what the bridge actually enforces. Present only when `store == present`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
-    pub effective: Option<PolicyValues>,
-    /// Human detail for a `store == error` state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
-    pub detail: Option<String>,
+#[serde(tag = "store", rename_all = "lowercase", deny_unknown_fields)]
+pub enum PolicyStatusReport {
+    /// No policy baseline on this machine yet (pre-cutover, healthy; the
+    /// extension keeps enforcing its legacy local settings).
+    None {
+        /// Schema version. `1` today; a newer value must be refused before
+        /// any field below is read (fail closed).
+        v: u32,
+    },
+    /// A baseline exists and parsed.
+    Present {
+        /// Schema version; see the `none` arm.
+        v: u32,
+        /// The signed baseline's monotonic revision.
+        revision: u64,
+        /// Whether the stored baseline carries an enclave signature (`true`)
+        /// or is an app-floor UNSIGNED baseline (`false`). Host-side this is
+        /// only "a signature is stored" - the host never self-certifies; the
+        /// extension verifies it against its pinned key.
+        signed: bool,
+        /// Whether an unsigned restriction overlay is active on top of the
+        /// baseline.
+        overlay_active: bool,
+        /// The effective policy: the baseline with the overlay folded over
+        /// it - what the bridge actually enforces.
+        effective: PolicyValues,
+    },
+    /// The store is present but unreadable (corrupt, oversized, wrong
+    /// version, or an undecodable baseline): fail closed.
+    Error {
+        /// Schema version; see the `none` arm.
+        v: u32,
+        /// Human detail of the read failure.
+        detail: String,
+    },
 }
 
 impl PolicyStatusReport {
     /// The pre-cutover no-baseline report (healthy).
     fn none() -> Self {
-        PolicyStatusReport {
-            v: 1,
-            store: PolicyStoreState::None,
-            revision: None,
-            signed: None,
-            overlay_active: None,
-            effective: None,
-            detail: None,
-        }
+        PolicyStatusReport::None { v: 1 }
     }
 
     /// The fail-closed unreadable-store report.
     fn error(detail: String) -> Self {
-        PolicyStatusReport {
-            v: 1,
-            store: PolicyStoreState::Error,
-            revision: None,
-            signed: None,
-            overlay_active: None,
-            effective: None,
-            detail: Some(detail),
+        PolicyStatusReport::Error { v: 1, detail }
+    }
+
+    /// The store state this report describes: the tag, as the shared
+    /// [`PolicyStoreState`] the doctor verdict and the desktop app's adopt
+    /// gate branch on without caring about the arm's payload.
+    pub fn store(&self) -> PolicyStoreState {
+        match self {
+            PolicyStatusReport::None { .. } => PolicyStoreState::None,
+            PolicyStatusReport::Present { .. } => PolicyStoreState::Present,
+            PolicyStatusReport::Error { .. } => PolicyStoreState::Error,
         }
     }
 }
@@ -191,14 +195,12 @@ pub fn gather_policy_status() -> PolicyStatusReport {
 fn status_from_store(store: &PolicyStore) -> PolicyStatusReport {
     match (store.baseline_doc(), store.effective()) {
         (Err(e), _) | (_, Err(e)) => PolicyStatusReport::error(e.to_string()),
-        (Ok(doc), Ok(effective)) => PolicyStatusReport {
+        (Ok(doc), Ok(effective)) => PolicyStatusReport::Present {
             v: 1,
-            store: PolicyStoreState::Present,
-            revision: Some(doc.revision),
-            signed: Some(store.sig_b64.is_some()),
-            overlay_active: Some(store.overlay.is_some()),
-            effective: Some(effective),
-            detail: None,
+            revision: doc.revision,
+            signed: store.sig_b64.is_some(),
+            overlay_active: store.overlay.is_some(),
+            effective,
         },
     }
 }
@@ -250,38 +252,38 @@ fn decode_entry_doc(baseline_b64: &str) -> Result<PolicyDoc, String> {
 /// The human `policy show` text.
 fn render_status(r: &PolicyStatusReport) -> String {
     let mut out = String::from("chromium-bridge policy\n");
-    match r.store {
-        PolicyStoreState::None => {
+    match r {
+        PolicyStatusReport::None { .. } => {
             out.push_str(
                 "store:      none yet (pre-cutover; the extension keeps enforcing its legacy\n            \
                  local settings until a baseline is signed via the app or\n            \
                  `chromium-bridge policy set`)\n",
             );
         }
-        PolicyStoreState::Error => {
+        PolicyStatusReport::Error { detail, .. } => {
             out.push_str(&format!(
-                "store:      present but UNREADABLE ({}) - failing closed\n",
-                r.detail.as_deref().unwrap_or("unknown")
+                "store:      present but UNREADABLE ({detail}) - failing closed\n"
             ));
         }
-        PolicyStoreState::Present => {
-            out.push_str(&format!(
-                "store:      present (revision {})\n",
-                r.revision.unwrap_or(0)
-            ));
-            out.push_str(&format!("baseline:   {}\n", signed_line(r.signed)));
+        PolicyStatusReport::Present {
+            revision,
+            signed,
+            overlay_active,
+            effective,
+            ..
+        } => {
+            out.push_str(&format!("store:      present (revision {revision})\n"));
+            out.push_str(&format!("baseline:   {}\n", signed_line(*signed)));
             out.push_str(&format!(
                 "overlay:    {}\n",
-                if r.overlay_active.unwrap_or(false) {
+                if *overlay_active {
                     "restriction overlay active"
                 } else {
                     "none"
                 }
             ));
-            if let Some(values) = &r.effective {
-                out.push_str("effective policy:\n");
-                out.push_str(&render_values(values));
-            }
+            out.push_str("effective policy:\n");
+            out.push_str(&render_values(effective));
         }
     }
     out
@@ -289,13 +291,11 @@ fn render_status(r: &PolicyStatusReport) -> String {
 
 /// The signed/unsigned line, never claiming host-side verification (the
 /// extension verifies against its pinned key; this binary cannot).
-fn signed_line(signed: Option<bool>) -> &'static str {
-    match signed {
-        Some(true) => {
-            "signed (the extension verifies it against its pinned key; not verifiable here)"
-        }
-        Some(false) => "unsigned (app-floor baseline)",
-        None => "unknown",
+fn signed_line(signed: bool) -> &'static str {
+    if signed {
+        "signed (the extension verifies it against its pinned key; not verifiable here)"
+    } else {
+        "unsigned (app-floor baseline)"
     }
 }
 
@@ -741,15 +741,24 @@ fn run_history(json: bool) -> i32 {
 }
 
 /// `policy pending-import [--json]`: the pending legacy import's state
-/// (ADR-0032 decision 8), READ-ONLY - the gather is exactly the fail-closed
-/// read the desktop app's first-run import screen consumes; nothing here can
-/// record, consume, or repair the store. `--json` emits the versioned
+/// (ADR-0032 decision 8). The gather is exactly the fail-closed read the
+/// desktop app's first-run import screen consumes; nothing here can record
+/// or consume a live import. The ONE write this command may perform is the
+/// idempotent self-heal ([`crate::pending_import::reconcile_consuming`]):
+/// finalizing a STRANDED mid-consume record whose baseline already landed,
+/// so the desktop app's own probe unsticks a crashed finalize instead of
+/// re-offering an import that can only refuse. Best-effort - a failed heal
+/// never blocks the read (the gather then reports what actually stands).
+/// `--json` emits the versioned
 /// [`crate::pending_import::PendingImportReport`] through `Value` (sorted
 /// keys, the status-report precedent) and is the ONLY mode that prints the
 /// bag: stdout is the payload, and the prose rendering deliberately reports
 /// state without bag content (the bag is reviewed in the app, not dumped on
 /// a terminal).
 fn run_pending_import(json: bool) -> i32 {
+    if let Err(e) = crate::pending_import::reconcile_consuming() {
+        eprintln!("policy pending-import: reconcile of a stranded mid-consume record failed: {e}");
+    }
     let report = crate::pending_import::gather_pending_import();
     if json {
         match serde_json::to_value(&report) {
@@ -782,6 +791,14 @@ fn render_pending_import(r: &crate::pending_import::PendingImportReport) -> Stri
             out.push_str(&format!(
                 "state:      present ({bytes} bytes recorded; review and adopt it in the \
                  desktop app, or re-run with --json)\n"
+            ));
+        }
+        PendingImportReport::Consuming { bag, .. } => {
+            let bytes = serde_json::to_vec(bag).map(|b| b.len()).unwrap_or(0);
+            out.push_str(&format!(
+                "state:      consuming ({bytes} bytes retained; a first signed baseline began \
+                 the one-time\n            import, so the window is closed to new bags - review \
+                 what was recorded in\n            the desktop app, or re-run with --json)\n"
             ));
         }
         PendingImportReport::Consumed { .. } => {
@@ -1077,13 +1094,12 @@ mod tests {
     #[test]
     fn status_none_is_the_pre_cutover_state() {
         let r = PolicyStatusReport::none();
-        assert_eq!(r.store, PolicyStoreState::None);
-        assert!(r.revision.is_none());
-        // The wire form omits the absent fields entirely.
+        assert_eq!(r.store(), PolicyStoreState::None);
+        assert!(matches!(r, PolicyStatusReport::None { v: 1 }));
+        // The wire form carries only the tag and the version: the sum cannot
+        // smuggle present-arm fields onto the none arm.
         let v = serde_json::to_value(&r).unwrap();
-        assert_eq!(v["store"], "none");
-        assert!(v.get("revision").is_none());
-        assert!(v.get("effective").is_none());
+        assert_eq!(v, serde_json::json!({ "store": "none", "v": 1 }));
     }
 
     #[test]
@@ -1097,12 +1113,23 @@ mod tests {
             ..PolicyOverlay::default()
         };
         let r = status_from_store(&store(3, &base, true, Some(overlay)));
-        assert_eq!(r.store, PolicyStoreState::Present);
-        assert_eq!(r.revision, Some(3));
-        assert_eq!(r.signed, Some(true));
-        assert_eq!(r.overlay_active, Some(true));
+        assert_eq!(r.store(), PolicyStoreState::Present);
+        let PolicyStatusReport::Present {
+            v,
+            revision,
+            signed,
+            overlay_active,
+            ref effective,
+        } = r
+        else {
+            panic!("expected Present, got {r:?}");
+        };
+        assert_eq!(v, 1);
+        assert_eq!(revision, 3);
+        assert!(signed);
+        assert!(overlay_active);
         // Effective folds the overlay: pageEval restricted back off.
-        assert!(!r.effective.as_ref().unwrap().page_eval_enabled);
+        assert!(!effective.page_eval_enabled);
         // The signed line never claims host-side verification.
         assert!(render_status(&r).contains("not verifiable here"));
     }
@@ -1112,11 +1139,14 @@ mod tests {
         let mut s = store(1, &PolicyValues::default(), false, None);
         s.baseline_b64 = "not base64!".into();
         let r = status_from_store(&s);
-        assert_eq!(r.store, PolicyStoreState::Error);
-        assert!(r.detail.is_some());
+        assert_eq!(r.store(), PolicyStoreState::Error);
+        assert!(matches!(r, PolicyStatusReport::Error { .. }));
         // An unsigned baseline reads as unsigned, never "invalid".
         let unsigned = status_from_store(&store(1, &PolicyValues::default(), false, None));
-        assert_eq!(unsigned.signed, Some(false));
+        assert!(matches!(
+            unsigned,
+            PolicyStatusReport::Present { signed: false, .. }
+        ));
         assert!(render_status(&unsigned).contains("unsigned"));
     }
 
@@ -1129,6 +1159,13 @@ mod tests {
         // deny_unknown_fields is the app's fail-closed guard.
         let bad = r#"{"v":1,"store":"none","surprise":1}"#;
         assert!(serde_json::from_str::<PolicyStatusReport>(bad).is_err());
+        // The sum makes a contradictory mixture a parse error, not a value:
+        // a none report cannot smuggle present-arm data, and a present one
+        // cannot omit its payload.
+        let smuggled = r#"{"v":1,"store":"none","revision":3}"#;
+        assert!(serde_json::from_str::<PolicyStatusReport>(smuggled).is_err());
+        let hollow = r#"{"v":1,"store":"present"}"#;
+        assert!(serde_json::from_str::<PolicyStatusReport>(hollow).is_err());
     }
 
     #[test]
@@ -1198,6 +1235,15 @@ mod tests {
         assert!(present.contains("present"), "got: {present}");
         assert!(!present.contains("hunter2"), "got: {present}");
         assert!(!present.contains("secretish"), "got: {present}");
+        // The mid-consume arm retains a bag too (P4G-4): same no-content rule.
+        let consuming = render_pending_import(&PendingImportReport::Consuming {
+            v: 1,
+            bag: serde_json::json!({ "secretish": "hunter2" }),
+        });
+        assert!(consuming.contains("consuming"), "got: {consuming}");
+        assert!(consuming.contains("closed to new bags"), "got: {consuming}");
+        assert!(!consuming.contains("hunter2"), "got: {consuming}");
+        assert!(!consuming.contains("secretish"), "got: {consuming}");
         assert!(
             render_pending_import(&PendingImportReport::None { v: 1 }).contains("none"),
             "the healthy no-receipt state renders as none"

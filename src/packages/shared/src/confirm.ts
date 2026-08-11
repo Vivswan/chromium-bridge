@@ -13,6 +13,14 @@
 // (Touch ID) on a capable, enrolled device. The surface stays as a
 // display-only window; `hardware: true` marks such a payload, and the
 // service refuses a window-side approval for it - the tap is the approval.
+//
+// The payload is a discriminated union on `kind`, each arm carrying exactly
+// its own fields, so the combinations the service never produces cannot even
+// parse: `hardware` exists only on the two presence-gated kinds (a
+// `policy_relax` or `click` payload claiming hardware attestation is a
+// schema error, not a rendering decision), and `policy_relax` - where no
+// page is involved - pins origin/tabTitle to the empty string instead of
+// merely defaulting them there.
 
 import { z } from "zod";
 
@@ -34,9 +42,16 @@ export const ConfirmKindSchema = z.enum([
 
 export type ConfirmKind = z.infer<typeof ConfirmKindSchema>;
 
-export const ConfirmPayloadSchema = z.strictObject({
+// The fields every arm carries.
+const confirmCommon = {
   id: z.string().min(1),
-  kind: ConfirmKindSchema,
+  /** Auto-deny deadline, ms since epoch. The window renders a countdown and
+   * the service worker enforces it regardless. */
+  deadline: z.int().positive(),
+} as const;
+
+// The page-context fields of the six tool-call kinds.
+const confirmPage = {
   /** Origin of the affected page ("" when not applicable). */
   origin: z.string(),
   /** Title of the affected tab ("" when not applicable). */
@@ -44,14 +59,44 @@ export const ConfirmPayloadSchema = z.strictObject({
   /** Action-specific detail: element description, keys, option value, the
    * full eval code, or the exact upload path. Rendered as text, never HTML. */
   detail: z.string(),
-  /** Auto-deny deadline, ms since epoch. The window renders a countdown and
-   * the service worker enforces it regardless. */
-  deadline: z.int().positive(),
-  /** ADR-0031: approval comes from the host's Enclave user-presence tap, not
-   * the window. The window renders display-only (no Allow button) and the
-   * service refuses a window-side approval; denial stays window-reachable
-   * (removing capability is always friction-free). */
-  hardware: z.boolean().optional(),
-});
+} as const;
+
+/** ADR-0031: approval comes from the host's Enclave user-presence tap, not
+ * the window. The window renders display-only (no Allow button) and the
+ * service refuses a window-side approval; denial stays window-reachable
+ * (removing capability is always friction-free). Only the two
+ * presence-gated kinds ("eval"/"upload") may carry it, and only as the
+ * literal `true`: the service never emits `hardware: false` (absence IS the
+ * not-gated state), so the boolean's dead false arm is unrepresentable. */
+const hardware = z.literal(true).optional();
+
+export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("click"), ...confirmCommon, ...confirmPage }),
+  z.strictObject({ kind: z.literal("press"), ...confirmCommon, ...confirmPage }),
+  z.strictObject({ kind: z.literal("select"), ...confirmCommon, ...confirmPage }),
+  z.strictObject({ kind: z.literal("tab_close"), ...confirmCommon, ...confirmPage }),
+  z.strictObject({ kind: z.literal("eval"), ...confirmCommon, ...confirmPage, hardware }),
+  z.strictObject({ kind: z.literal("upload"), ...confirmCommon, ...confirmPage, hardware }),
+  z.strictObject({
+    kind: z.literal("policy_relax"),
+    ...confirmCommon,
+    /** No page is involved: the push arrives over the native-messaging
+     * port, so the page-context fields are structurally empty rather than
+     * conventionally empty. */
+    origin: z.literal(""),
+    tabTitle: z.literal(""),
+    /** The relaxing fields' wire names, one per line - or, for the
+     * first-ever document, the full `field = value` set (U2). */
+    detail: z.string(),
+  }),
+]);
 
 export type ConfirmPayload = z.infer<typeof ConfirmPayloadSchema>;
+
+/** Whether this payload's approval belongs to the hardware tap (ADR-0031).
+ * The union already confines `hardware` to the two presence-gated kinds;
+ * this is the one place consumers read it, so the narrowing lives here
+ * instead of at every call site. */
+export function isHardwareGated(payload: ConfirmPayload): boolean {
+  return (payload.kind === "eval" || payload.kind === "upload") && payload.hardware === true;
+}

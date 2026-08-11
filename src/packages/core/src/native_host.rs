@@ -1208,6 +1208,23 @@ pub fn run() -> i32 {
         return 1;
     }
 
+    // Self-heal a stranded mid-consume pending-import record (P4G-4): a
+    // Consuming record whose baseline landed but whose finalize crashed has
+    // no other seam left to finish it (revision-2+ writes never revisit the
+    // store). Best-effort and idempotent - a failed heal changes nothing
+    // that is not already durably safe (the worst partial outcome is a
+    // visible-but-unsynced tombstone over an already-fsynced baseline,
+    // where either roll-forward or roll-back is a correct state) and must
+    // not stop the host - and deliberately BEFORE the kill fork below, so
+    // the control-plane-only mode heals too.
+    if let Err(e) = crate::pending_import::reconcile_consuming() {
+        log_warn!(
+            "native-host",
+            "pending-import reconcile failed ({e}); a stranded mid-consume record, \
+             if any, stays until the next host start or pending-import read"
+        );
+    }
+
     // ADR-0030: while the kill switch is engaged -- or its state cannot be
     // read -- this host bridges NOTHING. It does not even dial the broker
     // (which refuses browser attaches while killed); it drops into the

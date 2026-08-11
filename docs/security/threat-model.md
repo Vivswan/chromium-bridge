@@ -409,19 +409,39 @@ first-ever policy, at any revision.
   user then reviews field-by-field in the app: it becomes policy only
   through the user's own presence-gated confirmation over the displayed
   values (Touch ID on an enrolled Mac, the app floor on an unenrolled
-  one). Related posture, named: the tombstone write fsyncs the file (and,
-  on Unix, its parent directory) because durability is its whole point;
-  the other runtime trust files use atomic-rename without fsync (the audit
-  log is append-and-flush) and accept the ordinary crash window.
+  one). Related posture, named: the tombstone and mid-consume writes
+  fsync the file (and, on Unix, its parent directory) because durability
+  is their whole point, and the finalize additionally fsyncs the baseline
+  first; the other runtime trust files use atomic-rename without fsync
+  (the audit log is append-and-flush) and accept the ordinary crash
+  window. That acceptance has a pre-existing edge worth naming: the
+  Pending receipt itself (`write_pending_new`) is never fsynced, so a
+  POWER loss - not a mere process death, which the rename survives - can
+  revert the store to Absent, and a later, possibly hostile receipt then
+  becomes the "first" bag first-bag-wins protects. The "losing a Pending
+  record loses only a receipt" reading assumes the file survives, which
+  power loss does not guarantee; the bag still cannot become policy
+  without the user's reviewed, presence-gated confirmation, which is the
+  bound that makes this acceptable.
 - **The import window can close without an import.** Two deliberate
   asymmetries in the pending-import lifecycle. A first baseline written
   before the extension ever connects consumes from the Absent
   state and closes the window permanently: a user who signs a baseline
   first has chosen to start fresh, and a bag arriving afterwards is
-  refused. And because the tombstone is written durably BEFORE the
-  baseline in the same critical section, a crash between the two leaves
-  the window closed with no baseline: the user re-taps. Safety (revision 1
-  can never land with the import window still open) was chosen over
+  refused. And consuming is two-phase: the window closes durably BEFORE
+  the baseline (the mid-consume `consuming` record, bag retained), and the
+  bagless tombstone finalizes only after the baseline is itself made
+  DURABLE (the baseline write is fsynced first, minting the typestate
+  proof the finalize demands - so a power loss can never keep the
+  tombstone while taking the un-synced baseline rename back, which would
+  be the bag-loss the two-phase shape exists to close). A crash between
+  the phases leaves the window closed with the bag PRESERVED, and it
+  SELF-HEALS: an idempotent reconcile at native-host startup and in the
+  `policy pending-import` read finalizes a `consuming` record once its
+  baseline is durably present (a no-baseline `consuming` record is left
+  for the app to re-offer - the user's re-tap resumes the import). Safety
+  (revision 1 can never land with the import window still open) was
+  chosen over
   delivery in both. Softening the first asymmetry in practice: recording a
   bag bumps the policy epoch, so a running desktop app learns of a
   mid-session arrival rather than only discovering it at first run.

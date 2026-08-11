@@ -90,7 +90,6 @@ import {
   LangCurrentFrameSchema,
   type LangSetWire,
   type LegacySettingsWire,
-  POLICY_DEFAULTS,
   PolicyCurrentFrameSchema,
   PolicyDocSchema,
   PolicyInboundFrameSchema,
@@ -887,30 +886,35 @@ export async function getPolicyPosture(): Promise<PolicyPosture> {
   }
 }
 
-export interface PolicySnapshot {
-  /** True once the first policy push was ever accepted (one-way); also true
-   * while a corrupt flag/record has latched the state closed. */
-  cutover: boolean;
-  /** The post-cutover effective policy: the stored ratcheted effective while
-   * ACTIVE, otherwise the frozen deny baseline. In the awaitingBaseline and
-   * compromised arms the dispatch barrier refuses every request, so nothing
-   * ever enforces against this fallback - POLICY_DEFAULTS is the deny baseline
-   * on the four capability grants but NOT the restrictive pole on every field
-   * (hostReverifyMs/disabledTools/ms-windows), and it is safe here only
-   * because the barrier, not this value, is what fails those states closed.
-   * Pre-cutover (`cutover:false`) the consumer reads the legacy local settings
-   * instead. */
-  effective: PolicyValues;
-}
+/** The resolved persisted state, as tests and diagnostics pin it: the same
+ * honest sum resolvePolicyState folds to, minus the scope/record internals.
+ * Only the `active` arm carries an effective policy - the blocked arms
+ * (awaitingBaseline/compromised) are not consumable as policy values, so a
+ * test can no longer read the deny fallback as if it were an applied policy.
+ * Enforcement callers use getPolicyPosture (via effective-policy.ts), never
+ * this. */
+export type PolicySnapshot =
+  | { kind: "legacy" }
+  | { kind: "awaitingBaseline" }
+  | { kind: "active"; effective: PolicyValues }
+  | { kind: "compromised" };
 
-/** The RAW two-field view, for tests and diagnostics that pin the stored
- * values directly. Enforcement callers must use getPolicyPosture (via
- * effective-policy.ts): this shape folds the blocked states into
- * POLICY_DEFAULTS, which only the dispatch barrier makes safe. */
+/** The RAW resolved view, for tests and diagnostics that pin the stored
+ * state directly. */
 export async function getPolicySnapshotForTests(): Promise<PolicySnapshot> {
   const state = await resolvePolicyState(await currentScope());
-  if (state.kind === "active") return { cutover: true, effective: state.record.effective };
-  return { cutover: state.kind !== "legacy", effective: POLICY_DEFAULTS };
+  switch (state.kind) {
+    case "legacy":
+      return { kind: "legacy" };
+    case "awaitingBaseline":
+      return { kind: "awaitingBaseline" };
+    case "active":
+      return { kind: "active", effective: state.record.effective };
+    case "compromised":
+      return { kind: "compromised" };
+    default:
+      return unreachable(state);
+  }
 }
 
 /** The valid persisted record, or null (absent or corrupt). A raw accessor

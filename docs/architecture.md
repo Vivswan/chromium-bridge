@@ -299,7 +299,7 @@ Runtime state, in the 0700 per-user runtime directory (macOS:
 | `revocation.json` (0600) | The revocation epoch, the enrollment latch, and the kill latch ([ADR-0025](./adr/0025-any-side-revocation-epoch.md), [ADR-0030](./adr/0030-global-kill-switch-and-audit.md)) |
 | `policy.json` (0600) | The host-owned policy: the signed baseline and the unsigned restriction overlay ([ADR-0032](./adr/0032-host-owned-policy-settings.md), section 11.3) |
 | `policy-history.json` (0600) | Superseded policy revisions, a bounded ring; data for rollback, never authority |
-| `pending-import.json` (0600) | The one-shot legacy-settings import: pending bag or consumed tombstone (section 11.3) |
+| `pending-import.json` (0600) | The one-shot legacy-settings import: pending bag, mid-consume record, or consumed tombstone (section 11.3) |
 | `lang.json` (0600) | The shared `uiLanguage` preference and its echo-suppression sequence |
 | `audit.log` (0600) | The durable audit trail, size-capped |
 
@@ -744,13 +744,22 @@ deliberately narrow lifecycle: record-once (only an absent store accepts a
 bag; the first bag wins and later receipts are dropped, so a
 later-compromised extension cannot replace the user's real legacy bag),
 read-only inspection (`chromium-bridge policy pending-import`, `doctor`,
-and the app's first-run screen), then consumption into a durable tombstone
-when the first baseline lands. Recording a bag bumps the policy epoch, so
+and the app's first-run screen), then a two-phase consumption when the
+first baseline lands. Recording a bag bumps the policy epoch, so
 a running desktop app learns of a mid-session arrival rather than only
-discovering it at first run. The tombstone write happens in the
-same critical section as - and durably before - the revision 1 baseline
-write, so a baseline can never land with the import window still
-open, and the tombstone survives key disposal, closing the
+discovering it at first run. Consumption runs in the
+same critical section as the revision 1 baseline write: the window closes
+durably BEFORE it (the mid-consume `consuming` record, which refuses new
+bags like the tombstone but RETAINS the recorded bag), and the bagless
+tombstone finalizes after the baseline is itself fsynced (a typestate
+proof the finalize's signature demands, so disposing the bag over a
+baseline a power loss could take back does not compile) - a baseline can
+never land with the import window still open, and a crash between the
+window-close and the baseline preserves the bag for the app to re-offer
+instead of losing it. A `consuming` record stranded by a crash AFTER its
+baseline landed self-heals: an idempotent reconcile at native-host
+startup and in the pending-import read finalizes it.
+The closed window survives key disposal, closing the
 forged-bag-replant path from the host side. What the tombstone cannot
 defend against is a hostile same-user native process deleting the file;
 that residual is recorded in the

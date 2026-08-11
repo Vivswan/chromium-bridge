@@ -141,7 +141,12 @@ the editing surfaces are documented in
     `recorded` / `consumed` are the two normal lifecycle states: a
     recorded bag is reviewed and imported on the app's first-run screen,
     and consumption happens exactly once, when the first baseline
-    lands.
+    lands. `consuming` is the crash-recovery state between the two: a
+    first-baseline write closed the window (new bags are refused) but its
+    baseline was not observed to commit, and the recorded settings are
+    retained so the app can re-offer them. A `consuming` record whose
+    baseline DID land is finalized automatically (native-host startup and
+    the `policy pending-import` read both run the idempotent reconcile).
   - `present but UNREADABLE` names the file's full path and exits
     non-zero, because consuming the pending import is a prerequisite of
     the first signed baseline write: an unreadable file refuses the user's

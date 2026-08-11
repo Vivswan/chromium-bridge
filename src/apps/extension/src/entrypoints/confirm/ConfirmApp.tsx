@@ -2,6 +2,7 @@ import {
   type ConfirmKind,
   type ConfirmPayload,
   ConfirmPayloadSchema,
+  isHardwareGated,
   isPolicyFieldName,
   type OpName,
   type PolicyFieldName,
@@ -255,7 +256,9 @@ export function ConfirmApp() {
   // ADR-0031: a hardware-gated confirmation renders display-only. Approval
   // is the Touch ID tap on the host's system prompt (the service refuses a
   // window-side approval); Deny stays - removing capability is friction-free.
-  const hardware = payload.hardware === true;
+  // The payload union confines `hardware` to the eval/upload arms; the shared
+  // narrowing helper is the one reader.
+  const hardware = isHardwareGated(payload);
   // ADR-0032 Lane U: an unsigned policy relaxation on an unpinned extension.
   // No page is involved (origin/tabTitle are ""), the chip names the wire
   // frame instead of a tool, and the host segment renders unattested.

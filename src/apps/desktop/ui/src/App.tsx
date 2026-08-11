@@ -49,8 +49,11 @@ export function App() {
   // a recorded bag awaits review - or the state cannot be determined (an
   // unreadable store, a failed probe: both fail-closed notices the user
   // should see) - the import screen opens and its nav entry appears; the
-  // offer keeps reappearing each launch until a first baseline signs (which
-  // consumes the import). Only a clean none/consumed answer stays quiet.
+  // offer keeps reappearing each launch until the import resolves: a first
+  // baseline signs (consuming the import), or - for a mid-consume record a
+  // crash left behind - the host's own reconcile finalizes it once its
+  // baseline is seen (the pending_import probe below triggers that heal
+  // host-side). Only a clean none/consumed answer stays quiet.
   useEffect(() => {
     api.pendingImport().then(
       (survey) => {

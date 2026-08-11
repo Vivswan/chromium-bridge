@@ -8,7 +8,7 @@
 // exact function the router's sender-gated confirm_resolve arm calls
 // (messages.ts pins the confirm-window-only gating in its own tests).
 
-import { type ConfirmPayload, POLICY_DEFAULTS, POLICY_FIELDS } from "@chromium-bridge/shared";
+import { type ConfirmPayload, POLICY_FIELDS } from "@chromium-bridge/shared";
 import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing";
@@ -118,8 +118,10 @@ describe("the unpinned relaxation approval surface", () => {
     expect(first.detail).toContain("hostReverifyMs = 0");
     expect(first.detail).toContain("disabledTools = []");
     expect(first.origin).toBe("");
-    expect(first.hardware).toBeUndefined();
-    expect(await getPolicySnapshotForTests()).toMatchObject({ cutover: true });
+    // The union confines `hardware` to the eval/upload arms: a policy_relax
+    // payload cannot even carry the field.
+    expect("hardware" in first).toBe(false);
+    expect(await getPolicySnapshotForTests()).toMatchObject({ kind: "active" });
 
     // The relaxed rev-2 vector: the detail names EXACTLY the fields that
     // relax the stored effective, wire names in catalogue order (the
@@ -135,10 +137,7 @@ describe("the unpinned relaxation approval surface", () => {
   test("declining in the window refuses the push: no state change, no cutover", async () => {
     await pushAndAnswer(unsignedFrame(0), false);
     expect(await getStoredPolicyState()).toBeNull();
-    expect(await getPolicySnapshotForTests()).toEqual({
-      cutover: false,
-      effective: POLICY_DEFAULTS,
-    });
+    expect(await getPolicySnapshotForTests()).toEqual({ kind: "legacy" });
   });
 
   test("one approval per push, never blanket: the next relaxing push prompts again", async () => {
