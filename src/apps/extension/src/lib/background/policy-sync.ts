@@ -72,8 +72,11 @@
 //
 // Same shape as kill.ts: port.ts hands this module the port (attachPort)
 // and every policy/lang frame, and frames process strictly in arrival
-// order. This module never sends a frame (the never-speak-first rule of
-// decision 4; `policy_get` is Phase 4's business), and it deliberately does
+// order. This module sends exactly ONE kind of frame, the decision-8
+// `legacy_settings` bag (the send-once section at the bottom), and only on a
+// connection whose host has already pushed `policy_current` - so the
+// never-speak-first rule of decision 4 holds structurally (`policy_get` is
+// still future business). It deliberately does
 // not consult the kill or enrollment gates: a killed bridge still processes
 // policy pushes (control-plane mode, decision 6), which port.ts guarantees
 // by routing these frames BEFORE the request parse and the gates.
@@ -97,8 +100,14 @@ import {
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
-import { getPin, setCompromised } from "./enclave-pin";
+import { getCompromised, getPin, setCompromised } from "./enclave-pin";
 import { base64Decode, verifyPolicySignatureAgainstPin } from "./enclave-verify";
+import {
+  getLegacySettingsSent,
+  markLegacySettingsSent,
+  readLegacySettingsBag,
+} from "./legacy-import";
+import { hardenStorageAccess } from "./trusted-storage";
 
 const POLICY_STATE_KEY = "bridgePolicyState";
 const POLICY_CUTOVER_KEY = "bridgePolicyCutover";
@@ -228,17 +237,44 @@ type AttachmentPolicy =
   | { kind: "awaiting" }
   | { kind: "verified"; scope: PolicyScope; generation: number };
 
-/** One port attachment. `post` is held for the Phase 4 frames (policy_get,
- * lang_set); nothing in this phase ever posts. */
+/** Per-connection proof-of-possession of the PINNED key (the decision-8
+ * send-once gate, bottom of this file). `proven` is stamped ONLY by
+ * notePinProvenOnConnection, whose callers hold a FRESH-NONCE
+ * challenge-response verified against the pin on exactly this connection
+ * (the enrollment verify ceremony, a presence round). The policy verified
+ * mark above is deliberately NOT folded in here: a `policy_current`
+ * signature covers only the baseline bytes, which a substituted host can
+ * replay verbatim - it proves the DOCUMENT is genuine, never that the peer
+ * holds the key. `generation` is the pin epoch the proof's round STARTED
+ * under (captured by the caller before its challenge posts, never read live
+ * at stamp time), so a same-key revoke+re-pair during the challenge window
+ * cannot launder old-epoch evidence into the new epoch (E2F-2). */
+type AttachmentIdentity =
+  | { kind: "unproven" }
+  | { kind: "proven"; keyId: string; generation: number };
+
+/** One port attachment. `post` carries the decision-8 `legacy_settings`
+ * send below; nothing else in this module ever posts. */
 interface PortAttachment {
   post: PostFrame;
   policy: AttachmentPolicy;
+  identity: AttachmentIdentity;
+  /** THIS connection's host reported `reason:"absent"` (no policy store, no
+   * prior receipt). Latched per attachment so identity proof arriving later
+   * on the SAME connection can complete a send the report-time gate refused
+   * for lack of evidence; a reconnect inherits nothing. */
+  absentReported: boolean;
 }
 
 let port: PortAttachment | null = null;
 
 export function attachPort(post: PostFrame): void {
-  port = { post, policy: { kind: "awaiting" } };
+  port = {
+    post,
+    policy: { kind: "awaiting" },
+    identity: { kind: "unproven" },
+    absentReported: false,
+  };
 }
 
 export function detachPort(): void {
@@ -751,7 +787,12 @@ export async function onPinPinned(newKeyId: string): Promise<void> {
   // worst case is one extra revoke+re-pair cycle for the user - never a wrong
   // novelty decision, and never a state that fails open.
   await browser.storage.local.remove(POLICY_PRIOR_PIN_KEY);
-  if (port) port.policy = { kind: "awaiting" };
+  if (port) {
+    port.policy = { kind: "awaiting" };
+    // Identity proof is bound to the pin it was earned under: the generation
+    // stamp already makes it inert, this keeps the state honest too.
+    port.identity = { kind: "unproven" };
+  }
 }
 
 /** The pin was revoked (ADR-0032 decision 3). RETAINS the ratchet record so a
@@ -775,7 +816,10 @@ export async function onPinRevoked(revokedKeyId: string | null): Promise<void> {
   // ABA same-key revoke+re-pair is distinguishable from the pre-revoke pin.
   pinGeneration += 1;
   if (revokedKeyId !== null) lastPinnedKeyId = revokedKeyId;
-  if (port) port.policy = { kind: "awaiting" };
+  if (port) {
+    port.policy = { kind: "awaiting" };
+    port.identity = { kind: "unproven" };
+  }
   if (revokedKeyId !== null) {
     await browser.storage.local.set({ [POLICY_PRIOR_PIN_KEY]: revokedKeyId });
   }
@@ -982,9 +1026,19 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
   // The frame is R5-loose and its parse output RETAINS unknown keys: only the
   // named fields below may ever be read - never spread, iterate, or forward
   // the frame object.
-  const { ok, baseline, sig, overlay, error } = parsed.data;
+  const { ok, baseline, sig, overlay, reason, error } = parsed.data;
 
   if (ok !== true || baseline === undefined) {
+    // The Phase-4 migration trigger (ADR-0032 decision 8, D-P4-2): ONLY the
+    // structured `reason:"absent"` - the host attests it has NO baseline and
+    // NO prior receipt - may offer the legacy bag, and the offer is further
+    // gated fail-closed inside (pinned scope, fresh-nonce proof of the pin on
+    // THIS connection, the durable send-once flag, pre-cutover posture). The
+    // frame schema already refused any reason outside the enum, a reason on
+    // an ok:true frame, and an ok:false frame without `error`; an old host
+    // that omits the field entirely lands here as `undefined` and never
+    // triggers.
+    if (reason === "absent") await offerLegacyBag(attachment);
     // The host reports no usable policy (or an ok:true frame arrived without
     // its baseline): nothing to verify, nothing changes, and this NEVER opens
     // the gate - a policy-capable peer gone silent or gone wrong reads as
@@ -1275,6 +1329,159 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
     );
   }
   console.log("[bb] policy push applied: revision", doc.data.revision);
+}
+
+// ---- the legacy-settings send-once (ADR-0032 decision 8, Phase 4) ---------------
+//
+// The one frame this module sends: `legacy_settings { bag }`, the snapshotted
+// legacy settings offered to a host that attests it has no policy store
+// (`reason:"absent"`), so the app's first-run import screen can show them and
+// the user can sign revision 1. The host only records it (pending_import.rs,
+// first-bag-wins, never applied), sends no reply, and none is awaited.
+//
+// THE GATE, fail-closed on every ambiguity (decision 8 + the p4-host review
+// refinement): the bag ships ONLY when ALL of
+//   - trust storage is verifiably confined to extension contexts this SW
+//     life (hardenStorageAccess, ADR-0027 #32): every fact below - the
+//     compromise mark, the pin, the flag, the bag itself - is read from
+//     storage a content script could otherwise have written. Policy frames
+//     route BEFORE the enrollment gate (decision 6 control-plane mode), so
+//     this path must await the restriction itself rather than assume the
+//     gate already did;
+//   - NEITHER compromise signal is set: the in-life policy latch
+//     (compromisedThisLife) NOR the durable enclave mark (getCompromised) -
+//     a failed presence or verify proof latches the DURABLE mark without
+//     touching the in-life policy latch, and a proof stamped before that
+//     failure must not outlive it;
+//   - the durable send-once flag is unset (legacy-import.ts: once sent, sent
+//     forever - no revoke, re-pair, or disposal resets it; a re-send is the
+//     replant vector the host's consumed tombstone refuses, so the extension
+//     refuses it symmetrically);
+//   - the current scope is PINNED, and THIS connection carries a fresh-nonce
+//     proof of possession of exactly that pinned key (AttachmentIdentity),
+//     whose challenge went out under the CURRENT pin epoch:
+//     a substituted host reporting `reason:"absent"` to harvest the bag can
+//     neither produce the proof nor inherit one (proof and report are both
+//     per-attachment; a reconnect starts clean). Decision 8's "a
+//     policy-capable host has identified itself" is deliberately read as
+//     this cryptographic identification, not as "sent a well-formed frame";
+//   - the resolved policy state is `legacy` (pre-cutover): that is the only
+//     state in which the bag IS the governing settings worth importing -
+//     post-cutover, awaiting, or compromised states ship nothing;
+//   - the connection is still the live one after every await.
+//
+// An `absent` report with no proof yet does not die: it latches
+// `absentReported` on the attachment, and notePinProvenOnConnection completes
+// the send when the proof lands later on the SAME connection (in practice:
+// the opt-in hostReverifyMs re-verify, options' "Verify now", or the first
+// presence-confirmed action). The next connect's push-on-connect re-offers
+// either way, so a missed pairing costs latency, never the migration.
+
+/** An opaque handle to the CURRENT connection, for callers that verify a
+ * proof asynchronously: capture it when the challenge goes OUT, hand it back
+ * with the verified result, and notePinProvenOnConnection stamps the proof
+ * only if that exact connection is still the live one - proof earned on a
+ * dead connection credits nobody. */
+export function currentConnectionToken(): object | null {
+  return port;
+}
+
+/** The pin epoch right now. Captured by evidence callers when their round
+ * STARTS - enrollment at challenge send, presence at round claim (two awaits
+ * before its challenge posts; that asymmetry fails closed, see
+ * notePinProvenOnConnection) - and handed back with the verified proof:
+ * notePinProvenOnConnection stamps THAT epoch, never the live one, so a
+ * re-pair during the challenge window cannot promote old-epoch evidence. */
+export function currentPinGeneration(): number {
+  return pinGeneration;
+}
+
+/** Record a fresh-nonce, pin-verified proof of possession for the connection
+ * `token` names (enrollment verify ceremony, presence round).
+ * `generationAtChallenge` is the pin epoch the caller captured when its
+ * round started (currentPinGeneration): enrollment captures it at
+ * challenge-send time, presence at round CLAIM - two awaits before its
+ * challenge actually posts. That asymmetry fails closed: an epoch move
+ * landing between the presence claim and its challenge send only makes this
+ * function discard evidence that was in fact earned under the current pin -
+ * it can never smuggle old-epoch evidence in. A proof whose challenge
+ * predates a pin move proves the OLD pin's holder, so a moved epoch refuses
+ * the stamp outright - even a same-key revoke+re-pair that leaves the keyId
+ * equal. No-op unless that connection is still the live attachment.
+ * Completes a pending absent-report send, serialized on the frame chain so
+ * it cannot interleave with a push (or a second send) in flight. */
+export function notePinProvenOnConnection(
+  token: object | null,
+  keyId: string,
+  generationAtChallenge: number,
+): void {
+  const attachment = port;
+  if (token === null || attachment === null || attachment !== token) return;
+  if (generationAtChallenge !== pinGeneration) return;
+  attachment.identity = { kind: "proven", keyId, generation: generationAtChallenge };
+  if (attachment.absentReported) {
+    frameChain = frameChain
+      .then(() => trySendLegacyBag(attachment))
+      .catch((e) => {
+        console.warn("[bb] legacy settings send failed", e);
+      });
+  }
+}
+
+/** A `reason:"absent"` push arrived on `attachment` (already on the frame
+ * chain): latch the report and attempt the send now. */
+async function offerLegacyBag(attachment: PortAttachment | null): Promise<void> {
+  if (!attachment) return;
+  attachment.absentReported = true;
+  await trySendLegacyBag(attachment);
+}
+
+/** Attempt the send-once under the full gate (section header above). Every
+ * refusal is silent state-wise: nothing is written, nothing is posted, and
+ * the durable flag moves only AFTER a successful post. */
+async function trySendLegacyBag(attachment: PortAttachment): Promise<void> {
+  // Only the live connection may receive the bag; a stale attachment's own
+  // report and proof die with it (the reconnect's push re-offers).
+  if (attachment !== port) return;
+  // A host that failed crypto this SW life gets nothing, whatever it reports.
+  if (compromisedThisLife) return;
+  const proof = attachment.identity;
+  if (proof.kind !== "proven" || proof.generation !== pinGeneration) return;
+  // Every fact below lives in extension storage: confirm it is confined to
+  // extension contexts THIS SW life before believing any of it (#32). This
+  // path is NOT behind the enrollment gate (policy frames route before it,
+  // decision 6), so the restriction is awaited here, fail-closed on failure.
+  if (!(await hardenStorageAccess()).ok) return;
+  // The DURABLE enclave compromise mark, not just the in-life policy latch:
+  // a failed presence or verify proof latches only the durable mark, and a
+  // proof stamped on this connection BEFORE that failure must not ship the
+  // bag after it.
+  if (await getCompromised()) return;
+  const scope = await currentScope();
+  // Pinned, and the proof names exactly the currently pinned key. The
+  // unpinned lane never sends: with no pin there is no mechanism that could
+  // identify the peer, and fail-closed beats convenient (decision 8's
+  // unpinned machines simply keep their legacy settings until pairing).
+  if (!scope.pinned || scope.keyId !== proof.keyId) return;
+  if (await getLegacySettingsSent()) return;
+  // Pre-cutover only: `legacy` is the one state whose bag is the governing
+  // settings. awaitingBaseline/active mean cutover happened (the bag is
+  // history, not policy); compromised ships nothing to a suspect peer.
+  const state = await resolvePolicyState(scope);
+  if (state.kind !== "legacy") return;
+  const bag = await readLegacySettingsBag();
+  // The reads above awaited: re-check the connection and the pin epoch so a
+  // reconnect or re-pair mid-flight cannot receive a bag gated on the OLD
+  // connection's proof, AND both compromise marks - a durable mark landed by
+  // a failing presence/verify proof during those awaits bumps neither the
+  // generation nor the attachment, so only this commit-point recheck can see
+  // it before the bag ships.
+  if (attachment !== port || pinGeneration !== proof.generation) return;
+  if (compromisedThisLife || (await getCompromised())) return;
+  if (!attachment.post({ type: "legacy_settings", bag })) return;
+  await markLegacySettingsSent();
+  auditEvent("legacy_settings_sent", { detail: `to pinned key ${proof.keyId}` });
+  console.log("[bb] legacy settings bag sent for migration - once, ever (ADR-0032 decision 8)");
 }
 
 /** Tests only: forget the port, the language state, any registered approver,

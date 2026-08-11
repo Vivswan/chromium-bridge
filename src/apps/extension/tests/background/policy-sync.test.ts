@@ -39,6 +39,14 @@
 //   launder away the anti-replay anchor and resurrect an old signed
 //   baseline - refused BEFORE the prompt (UF-2, audited), with the write
 //   throw as backstop.
+// - the decision-8 legacy-settings send-once (Phase 4): only reason:"absent"
+//   from a pinned peer with fresh-nonce proof on THIS connection (challenged
+//   under the CURRENT pin epoch), on a pre-cutover extension with hardened
+//   storage, with the durable flag unset, ships the exact 16-field bag -
+//   exactly once, ever; every weaker shape (unproven, unpinned, wrong key,
+//   damaged/unreadable/missing reason, tampered flag, reconnect, re-pair,
+//   challenge-window re-pair, in-life OR durable compromise, unhardenable
+//   storage, post-cutover) posts nothing.
 //
 // The pin store is mocked (the fixture key is deny-listed as a real pin by
 // design); everything below it - crypto, schemas, ratchet, storage - is real.
@@ -47,7 +55,9 @@
 // under a real mid-confirmation push.
 
 import {
+  DEFAULTS,
   POLICY_DEFAULTS,
+  POLICY_FIELDS,
   POLICY_REVISION_MAX,
   PolicyDocSchema,
   type PolicyValues,
@@ -64,12 +74,15 @@ import {
 } from "@/lib/background/enclave-verify";
 import {
   attachPort,
+  currentConnectionToken,
+  currentPinGeneration,
   detachPort,
   getLangState,
   getPolicySnapshotForTests,
   getStoredPolicyState,
   handlePolicyFrame,
   isPolicyFrame,
+  notePinProvenOnConnection,
   onPinPinned,
   onPinRevoked,
   policyCutoverArmed,
@@ -77,6 +90,7 @@ import {
   resetPolicySyncForTests,
   setUnpinnedRelaxationApprover,
 } from "@/lib/background/policy-sync";
+import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
 
 // The pin store is mocked: production deny-lists the golden-fixture key as a
 // pin (its scalar is public repo data), which is exactly why the replay must
@@ -86,10 +100,17 @@ const pinState = vi.hoisted(() => ({
   pin: null as null | { keyId: string; pubkeyB64: string; pinnedAt: number },
   compromised: null as null | { reason: string; at: number },
   throwOnSetCompromised: false,
+  /** Fires on every getPin read: lets a test land state changes INSIDE an
+   * await window of the code under test (the mid-send compromise probe). */
+  onGetPin: null as null | (() => void),
 }));
 
 vi.mock("@/lib/background/enclave-pin", () => ({
-  getPin: () => Promise.resolve(pinState.pin),
+  getPin: () => {
+    pinState.onGetPin?.();
+    return Promise.resolve(pinState.pin);
+  },
+  getCompromised: () => Promise.resolve(pinState.compromised),
   setCompromised: (mark: { reason: string; at: number }) => {
     if (pinState.throwOnSetCompromised) return Promise.reject(new Error("trusted storage full"));
     pinState.compromised = mark;
@@ -194,9 +215,18 @@ let posted: object[];
 beforeEach(() => {
   fakeBrowser.reset();
   resetPolicySyncForTests();
+  // The send-once path awaits the #32 storage restriction before reading any
+  // trust state; fakeBrowser has no setAccessLevel, so stub a success (the
+  // enrollment suite's pattern) and forget the memoized verdict.
+  resetStorageHardeningForTests();
+  (fakeBrowser.storage.local as unknown as Record<string, unknown>).setAccessLevel = () =>
+    Promise.resolve();
+  (fakeBrowser.storage.session as unknown as Record<string, unknown>).setAccessLevel = () =>
+    Promise.resolve();
   pinState.pin = fixturePin();
   pinState.compromised = null;
   pinState.throwOnSetCompromised = false;
+  pinState.onGetPin = null;
   auditCalls.events = [];
   posted = [];
   attachPort((frame) => {
@@ -1571,5 +1601,308 @@ describe("audit trail for refused pushes", () => {
     // A host that simply reports no baseline is benign version-skew: not audited.
     await push({ type: "policy_current", ok: false, error: "store unreadable" });
     expect(auditCalls.events).toEqual([]);
+  });
+});
+
+describe("the legacy-settings send-once (ADR-0032 decision 8, Phase 4)", () => {
+  const SENT_KEY = "legacySettingsSent";
+
+  /** The absent-store push: the ONLY frame allowed to offer the bag. */
+  function absentFrame(): Record<string, unknown> {
+    return { type: "policy_current", ok: false, error: "no policy store", reason: "absent" };
+  }
+
+  /** Stamp fresh-nonce proof of `keyId` onto the CURRENT connection - what
+   * enrollment's verify success and a presence round report in production
+   * (both capture the token AND the pin epoch at challenge-send time). */
+  function proveIdentity(keyId = fixture.keyIdHex): void {
+    notePinProvenOnConnection(currentConnectionToken(), keyId, currentPinGeneration());
+  }
+
+  /** Await the frame chain (a queued evidence-completed send rides it). */
+  async function flushFrameChain(): Promise<void> {
+    await handlePolicyFrame({ not: "a frame" });
+  }
+
+  async function sentFlag(): Promise<unknown> {
+    return (await fakeBrowser.storage.local.get(SENT_KEY))[SENT_KEY];
+  }
+
+  /** The exact bag the frame must carry: the 15 legacy policy fields plus
+   * requireEnrollment (decision 8 keeps it as history), each at its settings
+   * default unless overridden - and NOTHING else. */
+  function expectedBag(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const bag: Record<string, unknown> = {};
+    for (const field of POLICY_FIELDS) bag[field] = DEFAULTS[field];
+    bag.disabledTools = [...DEFAULTS.disabledTools];
+    bag.requireEnrollment = DEFAULTS.requireEnrollment;
+    return { ...bag, ...overrides };
+  }
+
+  test("reason:absent on a pinned, proven, pre-cutover connection sends the exact bag once and latches the flag", async () => {
+    await fakeBrowser.storage.local.set({
+      confirmGraceMs: 5000,
+      disabledTools: ["page_upload"],
+      requireEnrollment: false,
+      // Browser-owned: must NOT ride along in the bag.
+      allowAllSites: true,
+      groupTabs: false,
+      // Fails its own field schema: salvaged to the default, never raw bytes.
+      hostReverifyMs: "garbage",
+    });
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([
+      {
+        type: "legacy_settings",
+        bag: expectedBag({
+          confirmGraceMs: 5000,
+          disabledTools: ["page_upload"],
+          requireEnrollment: false,
+        }),
+      },
+    ]);
+    expect(await sentFlag()).toBe(true);
+    expect(auditCalls.events.some((e) => e.kind === "legacy_settings_sent")).toBe(true);
+    // The offer changes no policy state: no cutover, no record, gate inert.
+    expect(await policyCutoverArmed()).toBe(false);
+    expect(await getStoredPolicyState()).toBeNull();
+  });
+
+  test("a second reason:absent posts nothing more", async () => {
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toHaveLength(1);
+    await push(absentFrame());
+    expect(posted).toHaveLength(1);
+    expect(await sentFlag()).toBe(true);
+  });
+
+  test("the durable flag refuses the send on a fresh, proven connection (once, EVER)", async () => {
+    await fakeBrowser.storage.local.set({ [SENT_KEY]: true });
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+  });
+
+  test("ANY present flag value reads as sent: tampering suppresses, never re-sends", async () => {
+    await fakeBrowser.storage.local.set({ [SENT_KEY]: { weird: 1 } });
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+  });
+
+  test("a pinned but UNPROVEN connection never receives the bag", async () => {
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("an unpinned extension never sends, proof claim or not", async () => {
+    pinState.pin = null;
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("proof of a key OTHER than the current pin never sends", async () => {
+    proveIdentity("ab".repeat(32));
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+  });
+
+  test("reason damaged / unreadable never trigger (the host is NOT store-less)", async () => {
+    proveIdentity();
+    await push({ type: "policy_current", ok: false, error: "store damaged", reason: "damaged" });
+    await push({
+      type: "policy_current",
+      ok: false,
+      error: "store unreadable",
+      reason: "unreadable",
+    });
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("an old host that omits reason entirely never triggers (fail closed)", async () => {
+    proveIdentity();
+    await push({ type: "policy_current", ok: false, error: "no baseline" });
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("a reason outside the enum fails the whole frame and never triggers", async () => {
+    proveIdentity();
+    await push({ type: "policy_current", ok: false, error: "x", reason: "gone" });
+    // ok:false without error fails the ok-split refinement too.
+    await push({ type: "policy_current", ok: false, reason: "absent" });
+    expect(posted).toEqual([]);
+  });
+
+  test("an ok:true frame can never smuggle the absent signal (ok-split)", async () => {
+    proveIdentity();
+    await push(goldenFrame(0, { reason: "absent" }));
+    expect(posted).toEqual([]);
+    // And the malformed frame was refused wholesale: no policy state either.
+    expect(await getStoredPolicyState()).toBeNull();
+  });
+
+  test("proof arriving AFTER the absent report completes the send on the same connection", async () => {
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    proveIdentity();
+    await flushFrameChain();
+    expect(posted).toEqual([{ type: "legacy_settings", bag: expectedBag() }]);
+    expect(await sentFlag()).toBe(true);
+  });
+
+  test("proof earned on a PREVIOUS connection credits nothing after a reconnect", async () => {
+    const staleToken = currentConnectionToken();
+    detachPort();
+    attachPort((frame) => {
+      posted.push(frame);
+      return true;
+    });
+    notePinProvenOnConnection(staleToken, fixture.keyIdHex, currentPinGeneration());
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+  });
+
+  test("a reconnect drops the absent report: the new connection must be re-offered", async () => {
+    await push(absentFrame()); // unproven: latched, not sent
+    detachPort();
+    attachPort((frame) => {
+      posted.push(frame);
+      return true;
+    });
+    proveIdentity(); // proven on the NEW connection, which saw no absent push
+    await flushFrameChain();
+    expect(posted).toEqual([]);
+  });
+
+  test("a re-pair between the proof and the absent push invalidates the proof (generation)", async () => {
+    proveIdentity();
+    await onPinRevoked(fixture.keyIdHex);
+    await onPinPinned(fixture.keyIdHex); // same-key re-pair: epoch moved, proof reset
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+  });
+
+  test("a post-cutover extension never sends: the bag is history, not policy", async () => {
+    await push(goldenFrame(0)); // verifies, applies, arms the cutover
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("after an in-life compromise nothing is offered, proof or not", async () => {
+    const v = fixture.vectors[0];
+    if (!v) throw new Error("missing golden vector");
+    const bytes = base64Decode(v.docB64);
+    const flipped = new Uint8Array(bytes);
+    flipped[0] = (flipped[0] ?? 0) ^ 0xff;
+    await push({
+      type: "policy_current",
+      ok: true,
+      baseline: base64Encode(flipped),
+      sig: v.sigB64,
+    });
+    expect(pinState.compromised).not.toBeNull();
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+  });
+
+  test("the DURABLE compromise mark blocks a send even when the proof predates it (failed presence proof)", async () => {
+    // A proof lands first: the connection is proven, everything else clean.
+    proveIdentity();
+    // Then a presence (or verify) proof FAILS: that path latches only the
+    // DURABLE enclave mark (setCompromised) - it never touches policy-sync's
+    // in-life latch - so the stamped proof would otherwise survive.
+    pinState.compromised = { reason: "presence proof failed verification: bad signature", at: 1 };
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("a durable compromise mark landing DURING the send's await window aborts before the post", async () => {
+    proveIdentity();
+    // The send gate's early durable-mark read passes (still null); the mark
+    // then lands INSIDE the await window - here, during the currentScope pin
+    // read - after the early checks, before the post. setCompromised bumps
+    // neither the generation nor the attachment, so only the commit-point
+    // compromise recheck can catch it.
+    pinState.onGetPin = () => {
+      pinState.compromised = { reason: "presence proof failed mid-send", at: 1 };
+    };
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("a proof challenged under the OLD pin epoch cannot be laundered into the new one", async () => {
+    // The challenge goes out: token and pin epoch captured, as enrollment
+    // and presence do at challenge-send time.
+    const token = currentConnectionToken();
+    const generationAtChallenge = currentPinGeneration();
+    // A same-key revoke+re-pair completes while the (minutes-long) challenge
+    // is outstanding: same keyId, new epoch.
+    await onPinRevoked(fixture.keyIdHex);
+    await onPinPinned(fixture.keyIdHex);
+    // The proof verifies now and reports the CAPTURED epoch: it proves the
+    // old pin's holder, so it must credit nothing in the new epoch.
+    notePinProvenOnConnection(token, fixture.keyIdHex, generationAtChallenge);
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("an unhardenable storage refuses the send (fail closed, #32)", async () => {
+    resetStorageHardeningForTests();
+    (fakeBrowser.storage.local as unknown as Record<string, unknown>).setAccessLevel = () =>
+      Promise.reject(new Error("setAccessLevel unavailable"));
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+  });
+
+  test("a failed post leaves the flag unset so a later occasion retries", async () => {
+    let postOk = false;
+    detachPort();
+    attachPort((frame) => {
+      if (!postOk) return false;
+      posted.push(frame);
+      return true;
+    });
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toEqual([]);
+    expect(await sentFlag()).toBeUndefined();
+    postOk = true;
+    await push(absentFrame());
+    expect(posted).toEqual([{ type: "legacy_settings", bag: expectedBag() }]);
+    expect(await sentFlag()).toBe(true);
+  });
+
+  test("revoke + new-key re-pair never resets the flag (no replant, mirroring the host tombstone)", async () => {
+    proveIdentity();
+    await push(absentFrame());
+    expect(posted).toHaveLength(1);
+    await onPinRevoked(fixture.keyIdHex);
+    const newKeyId = "cd".repeat(32);
+    pinState.pin = { keyId: newKeyId, pubkeyB64: fixture.pubkeyB64, pinnedAt: 2 };
+    await onPinPinned(newKeyId);
+    detachPort();
+    attachPort((frame) => {
+      posted.push(frame);
+      return true;
+    });
+    notePinProvenOnConnection(currentConnectionToken(), newKeyId, currentPinGeneration());
+    await push(absentFrame());
+    expect(posted).toHaveLength(1);
+    expect(await sentFlag()).toBe(true);
   });
 });

@@ -54,7 +54,14 @@ import {
   verifyProofAgainstPin,
 } from "./enclave-verify";
 import { killGate } from "./kill";
-import { onPinPinned, onPinRevoked, policyDispatchGate } from "./policy-sync";
+import {
+  currentConnectionToken,
+  currentPinGeneration,
+  notePinProvenOnConnection,
+  onPinPinned,
+  onPinRevoked,
+  policyDispatchGate,
+} from "./policy-sync";
 import { hardenStorageAccess } from "./trusted-storage";
 
 // ---- frame plumbing ---------------------------------------------------------
@@ -112,6 +119,15 @@ interface Outstanding {
   context: string;
   mode: "pair" | "verify";
   timer: ReturnType<typeof setTimeout>;
+  /** The policy-sync connection the challenge went out on: a verify success
+   * is per-connection identity evidence (ADR-0032 decision 8 send-once), and
+   * the token is what stops a proof verified after a reconnect from
+   * crediting the NEW connection. */
+  connection: object | null;
+  /** The pin epoch at challenge-send time, stamped into the evidence with
+   * the token: a re-pair during the challenge window (even same-key) moves
+   * the epoch, and the stale proof then credits nothing. */
+  generation: number;
 }
 
 let outstanding: Outstanding | null = null;
@@ -140,7 +156,14 @@ async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; e
       )
       .then(updateBadge);
   }, CHALLENGE_TIMEOUT_MS);
-  outstanding = { nonce, context, mode, timer };
+  outstanding = {
+    nonce,
+    context,
+    mode,
+    timer,
+    connection: currentConnectionToken(),
+    generation: currentPinGeneration(),
+  };
   if (!postFrame({ type: "enclave_challenge", nonce, context } satisfies EnclaveChallengeWire)) {
     clearOutstanding();
     return { ok: false, error: "failed to send the challenge to the native host" };
@@ -500,6 +523,12 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
   if (res.ok) {
     await pinStore.setLastVerifiedAt(Date.now());
     await pinStore.clearLastError();
+    // A fresh-nonce proof of the PINNED key just verified: per-connection
+    // identity evidence for the decision-8 legacy-settings send-once
+    // (ADR-0032 Phase 4). The token pins it to the connection the challenge
+    // went out on, the generation to the pin epoch at challenge time; if
+    // either has moved, this credits nobody.
+    notePinProvenOnConnection(current.connection, pin.keyId, current.generation);
     console.log("[bb] pinned key verified");
   } else {
     // Positive cryptographic evidence that whatever answered does not hold

@@ -35,6 +35,11 @@ import { browser } from "wxt/browser";
 import { getCompromised, getPin, setCompromised } from "../enclave-pin";
 import { generateNonce, hexEncode, verifyPresenceProofAgainstPin } from "../enclave-verify";
 import { platformCanEnroll } from "../enrollment";
+import {
+  currentConnectionToken,
+  currentPinGeneration,
+  notePinProvenOnConnection,
+} from "../policy-sync";
 import type { ConfirmationProvider, Presentation } from "./service";
 
 type PostFrame = (frame: object) => boolean;
@@ -61,6 +66,13 @@ type PendingRound =
       nonce: string;
       /** The attachment this round will send on (identity-checked later). */
       port: PortAttachment;
+      /** The policy-sync connection token captured at the same tick, so a
+       * verified proof can be reported as per-connection pin evidence
+       * (ADR-0032 decision 8 send-once). */
+      connection: object | null;
+      /** The pin epoch at round start, reported with the proof: a re-pair
+       * during the round must not launder the evidence into the new epoch. */
+      generation: number;
       settle: (approved: boolean) => void;
     }
   | {
@@ -71,6 +83,10 @@ type PendingRound =
        * longer this exact object at verdict time, the port dropped (or was
        * replaced) and the round fails closed. */
       port: PortAttachment;
+      /** See the preparing stage: carried through unchanged. */
+      connection: object | null;
+      /** See the preparing stage: carried through unchanged. */
+      generation: number;
       settle: (approved: boolean) => void;
     };
 let pending: PendingRound | null = null;
@@ -168,6 +184,12 @@ export function handlePresenceFrame(msg: unknown): void {
       round.settle(false);
       return;
     }
+    // A fresh-nonce proof of the PINNED key verified on this connection:
+    // report it as per-connection identity evidence for the decision-8
+    // legacy-settings send-once (ADR-0032 Phase 4), stamped with the pin
+    // epoch this round STARTED under. Evidence only - the confirmation
+    // verdict below is unchanged by it.
+    notePinProvenOnConnection(round.connection, pin.keyId, round.generation);
     round.settle(true);
   })().catch((e) => {
     console.error("[bb] presence verification errored; denying", e);
@@ -235,6 +257,8 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
       stage: "preparing",
       nonce: generateNonce(),
       port: p,
+      connection: currentConnectionToken(),
+      generation: currentPinGeneration(),
       settle: resolve,
     };
     pending = claim;
@@ -261,7 +285,15 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
         cancelPending("native port changed before the challenge was sent");
         return;
       }
-      mine = { stage: "challenged", nonce: claim.nonce, context, port: p, settle: resolve };
+      mine = {
+        stage: "challenged",
+        nonce: claim.nonce,
+        context,
+        port: p,
+        connection: claim.connection,
+        generation: claim.generation,
+        settle: resolve,
+      };
       pending = mine;
       if (
         !p.post({

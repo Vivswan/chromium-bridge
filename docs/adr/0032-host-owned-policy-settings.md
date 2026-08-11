@@ -637,7 +637,25 @@ a signed baseline without a tap would be a grant on channel evidence.
 Instead, once a policy-capable host has identified itself and has no policy
 store, the extension sends the snapshotted legacy bag once
 (`legacy_settings { bag }`, host-handled, recorded as a pending import,
-never applied). The app's first-run policy screen shows the imported values
+never applied). (Amended at Phase 4 implementation: "identified itself"
+is stricter than a capable frame. A `policy_current` signature covers only
+the baseline bytes - a substituted host can replay it verbatim - so frame
+evidence proves the DOCUMENT, never the peer. The send therefore requires
+a PINNED host that has PROVEN key possession on this exact connection via
+fresh-nonce challenge-response (the enrollment verify ceremony or a
+presence round), under the current pin epoch captured when that challenge
+went out. Consequences, accepted deliberately: an unenrolled or unpinned
+machine never sends the bag - migration follows enrollment, and the app's
+first-run screen finds the pending-import store absent until the user
+enrolls and acts once; with default settings the proof arrives with the
+first presence-confirmed action, so the send completes mid-connection
+rather than at connect. Residual, named honestly: proof of possession
+defends against passive substitution and replay, not against a
+substituted host RELAYING the fresh challenge to a genuine host that
+signs under real user presence - that relay bound is the pre-existing
+presence-channel property recorded in the threat model, and the bag it
+could win is low-sensitivity local settings that still cannot become
+policy without a tap.) The app's first-run policy screen shows the imported values
 against the defaults and ends in one Touch ID tap either way: "restore
 these" signs revision 1 with the confirmed import, "start fresh" signs
 revision 1 with the defaults. A user who abandons the flow entirely leaves
