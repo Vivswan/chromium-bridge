@@ -329,6 +329,14 @@ tasks:
       cache: false # a gating suite (CI's browser job): gates are never cached
       runInCI: false # needs an isolated Chrome; CI's browser job provides its own
 
+  test-browser-container:
+    description: 'Browser suites inside a Linux container (podman/docker) - no test Chrome on the host; mirrors the CI browser job'
+    command: 'bash scripts/run-browser-tests-container.sh'
+    toolchains: ['system']
+    options:
+      cache: false # a gating suite run: gates are never cached
+      runInCI: false # local-verification convenience; CI's browser job is canonical
+
   test-integration:
     description: 'Real E2E integration (opt-in; real binary + isolated Chrome + extension)'
     deps:

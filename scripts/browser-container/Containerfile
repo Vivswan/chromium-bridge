@@ -1,0 +1,39 @@
+# Local browser-suite container: mirrors CI's browser job (checks.yml) so the
+# suites can run WITHOUT any test Chrome/bun process touching the host -
+# ubuntu + the repo's pinned bun + Chrome for Testing + xvfb for the
+# non-headless suites. Build and run via scripts/run-browser-tests-container.sh
+# (podman or docker; see that script's header for the one-liner).
+#
+# Podman-compatible on purpose: fully-qualified base image, OCI-standard
+# instructions only (no BuildKit-only syntax), runs rootless. Always built
+# linux/amd64 (the runner passes --platform): Chrome for Testing ships Linux
+# builds only as x86_64, so Apple Silicon hosts run it under Rosetta/qemu.
+FROM docker.io/library/ubuntu:24.04
+
+# Chrome for Testing's runtime libraries (the linux64 build's shared-object
+# deps, ubuntu 24.04 t64 names), xvfb+xauth for the non-headless suites, and
+# curl/unzip/ca-certificates for the bun installer.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl unzip xvfb xauth \
+    fonts-liberation \
+    libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
+    libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 \
+    libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 \
+    libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# bun, pinned to the repo's packageManager version (the runner script reads
+# package.json and passes it; CI's setup-bun reads the same field).
+ARG BUN_VERSION
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v${BUN_VERSION}"
+
+# Chrome for Testing, provisioned the way tests/README.md documents
+# (@puppeteer/browsers - the same binaries CI's setup-chrome serves), behind a
+# stable symlink so CHROME_BIN survives version bumps. The install path lives
+# in the image: nothing browser-shaped is ever written to the host checkout.
+RUN bunx @puppeteer/browsers install chrome@stable --path /opt/chrome-for-testing \
+    && ln -s "$(find /opt/chrome-for-testing -type f -name chrome -path '*chrome-linux64*')" \
+       /usr/local/bin/chrome-for-testing
+
+ENV CHROME_BIN=/usr/local/bin/chrome-for-testing
+WORKDIR /work
