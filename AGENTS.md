@@ -14,9 +14,6 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 - See `package.json` scripts for the available commands.
 - Rust managed with cargo (`cargo build`, `cargo test`, `cargo clippy`)
 - See `Cargo.toml` for the workspace/crate layout and dependencies.
-- In THIS repository, moon wraps both toolchains as the canonical command
-  interface (`moon run <task>`) - see "Toolchain specifics" under
-  Repository-specific guidance below before reaching for raw commands.
 
 ## Conventions
 
@@ -60,6 +57,10 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 <!-- Add project-specific instructions below. This section survives template
      updates via three-way merge. -->
 <!-- repo-platform:local-section -->
+
+In this repository, moon wraps both toolchains as the canonical command
+interface: prefer `moon run <task>` (see "Toolchain specifics" below) over
+raw bun or cargo commands.
 
 Chromium Bridge (adopted from `whg517/browser-bridge`, Apache-2.0) is a Rust
 MCP server + native-messaging host + MV3 extension that lets an MCP client
