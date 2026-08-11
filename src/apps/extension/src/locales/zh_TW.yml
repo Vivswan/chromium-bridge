@@ -9,10 +9,6 @@ common:
   cancel: "取消"
   remove: "移除"
   add: "新增"
-  save: "儲存"
-  saved: "已儲存"
-  on: "開"
-  off: "關"
 
 content:
   precise_notice: "即將進行精確頁面快照: Chrome 會短暫顯示「正在偵錯」橫幅 (約 1 秒)。"
@@ -148,9 +144,6 @@ settings:
   add_site_placeholder: "https://example.com/*"
   add_site_format: "格式應為 https://host/*"
   add_site_parse_failed: "無法解析該 URL"
-  allow_all_declined: "未授予 <all_urls>; 已保留逐站核准"
-  allow_all_granted: "已允許所有網站"
-  allow_all_reverted: "已恢復逐站核准"
 
 enroll:
   loading: "載入中..."

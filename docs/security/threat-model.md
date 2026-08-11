@@ -385,6 +385,21 @@ first-ever policy, at any revision.
   the diagnostic `sent` flag is delayed, and `chooseLanguage` returns
   false on an unpinned machine anyway. Accepted: the unpinned approval
   window is inherently occupiable by the one peer allowed to request it.
+- **An explicit "en" choice re-offers first-pairing language adoption on
+  every reconnect.** The host's language store maps an absent record to
+  the default (`"en"`, seq 0), and a `lang_set` carrying the value
+  already stored is a deliberate no-op that bumps nothing (the decision-7
+  echo-suppression rule) - so an explicit `lang_set` of `"en"` against a
+  never-set store leaves seq at 0, and the host cannot distinguish "never
+  set" from "explicitly set to the default". An extension whose user
+  explicitly chose English therefore sees seq 0 on every reconnect and
+  re-sends its one adoption `lang_set` each time, forever. Bounds: one
+  frame per connect (the per-connection adoption latch ends it within a
+  connection), the frame is a no-op host-side, and the lane is purely
+  cosmetic - language is browser-owned display state, never policy, never
+  a capability. Accepted as-is, not a bug: folding "explicitly set to the
+  default" into a seq bump would ripple through the echo-suppression
+  semantics the seq exists for, a real risk for a cosmetic gain.
 - **The pending-import tombstone defends against a compromised extension,
   not a hostile same-user native process.** The consumed tombstone refuses
   a re-recorded legacy bag for the lifetime of the file - and the file is
@@ -435,6 +450,21 @@ first-ever policy, at any revision.
   in the app, never an unbounded resend - and every receipt outcome is
   durably recorded in the host's audit trail (the `legacy_import_receipt`
   kind), so a lost or dropped bag leaves evidence.
+- **Browser-leg audit volume can age out earlier security records - the
+  receipt kind widens an existing door.** The audit trail is a 256 KiB
+  live file with a single rotated predecessor, and the host already
+  accepts extension decision records from the browser leg without a
+  volume cap (`handle_audit_event` stamps the surface so host-side kinds
+  cannot be forged, but it does not rate-limit). The
+  `legacy_import_receipt` kind joins that pressure: every
+  `legacy_settings` frame produces a receipt, dropped ones included, so a
+  hostile browser leg spamming either lane pushes earlier security
+  records out of the retained window faster. Pre-existing, not an
+  ADR-0032 regression - the unlimited browser-leg write path predates the
+  receipt, which only adds one more auditable frame kind. Accepted: the
+  trail is best-effort evidence by design (the ADR-0030 posture below),
+  never an enforcement mechanism, and capping it would trade away the
+  records a cap mispredicts.
 - **Key disposal's epoch bump is best-effort.** `revoke` and `pair
   --reset` clear the signed baseline and bump the host-key epoch in the
   disposal critical section, but the epoch write itself can fail, and a

@@ -9,10 +9,6 @@ common:
   cancel: "取消"
   remove: "移除"
   add: "添加"
-  save: "保存"
-  saved: "已保存"
-  on: "开"
-  off: "关"
 
 content:
   precise_notice: "即将进行精确页面快照: Chrome 会短暂显示「正在调试」横幅 (约 1 秒)。"
@@ -148,9 +144,6 @@ settings:
   add_site_placeholder: "https://example.com/*"
   add_site_format: "格式应为 https://host/*"
   add_site_parse_failed: "无法解析该 URL"
-  allow_all_declined: "未授予 <all_urls>; 已保留逐站点批准"
-  allow_all_granted: "已允许所有站点"
-  allow_all_reverted: "已恢复逐站点批准"
 
 enroll:
   loading: "加载中..."

@@ -11,10 +11,6 @@ common:
   cancel: "Cancel"
   remove: "Remove"
   add: "Add"
-  save: "Save"
-  saved: "Saved"
-  on: "On"
-  off: "Off"
 
 content:
   precise_notice: "About to take a precise page snapshot - Chrome will briefly show a 'debugging' banner (about 1 second)."
@@ -150,9 +146,6 @@ settings:
   add_site_placeholder: "https://example.com/*"
   add_site_format: "Format should be https://host/*"
   add_site_parse_failed: "Could not parse the URL"
-  allow_all_declined: "<all_urls> not granted; kept per-site approval"
-  allow_all_granted: "Allowing all sites"
-  allow_all_reverted: "Restored per-site approval"
 
 enroll:
   loading: "Loading..."
