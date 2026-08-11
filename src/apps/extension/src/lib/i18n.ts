@@ -1,3 +1,4 @@
+import type { UiLanguageValue } from "@chromium-bridge/shared";
 import type { PublicPath } from "wxt/browser";
 import { browser } from "wxt/browser";
 import type { GeneratedI18nStructure } from "#i18n";
@@ -16,7 +17,9 @@ import { getSetting } from "./shared/settings";
 // this module is safe in the background graph before `wxt prepare` generates
 // the #i18n module. Ported from cloud-speech-for-chrome's i18n-runtime.ts.
 
-export type UiLanguage = "auto" | "en" | "zh_CN" | "zh_TW";
+// Derived from the shared canonical UI_LANGUAGES list (settings.ts), so this
+// surface cannot drift from the enum the host and the sync lane enforce.
+export type UiLanguage = UiLanguageValue;
 export type UiLocale = Exclude<UiLanguage, "auto">;
 
 export type MessageKey = keyof GeneratedI18nStructure & string;

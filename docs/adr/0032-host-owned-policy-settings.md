@@ -878,8 +878,10 @@ mid-confirmation push.
 
 ### Phase 4: migration and language sync
 
-`legacy_settings` send-once from the snapshot (only after a policy push
-has identified a capable host), pending-import store host-side, the app's
+`legacy_settings` send-once from the snapshot (only to a pinned host that
+proved possession of the pinned key on that exact connection via
+fresh-nonce challenge-response, per the Phase-4 amendment under decision 8
+above), pending-import store host-side, the app's
 first-run import screen signing revision 1 (on an enrolled Mac; on an
 unenrolled one, floor-confirmed and stored unsigned, decision 8),
 immediate overlay application of imported restrictions, `uiLanguage`

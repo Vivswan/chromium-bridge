@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/hooks/useI18n";
 import { useSettings } from "@/hooks/useSettings";
 import type { MessageKey, UiLanguage } from "@/lib/i18n";
+import { send } from "@/lib/messages";
 import { type GateSetting, toolGate } from "@/lib/shared/tool-gates";
 import { AuditPanel } from "./AuditPanel";
 import { EnrollmentPanel } from "./EnrollmentPanel";
@@ -106,7 +107,18 @@ export function OptionsApp() {
         </div>
         <LanguagePicker
           value={settings.uiLanguage as UiLanguage}
-          onChange={(v) => void update("uiLanguage", v)}
+          onChange={(v) => {
+            void (async () => {
+              // Local write first, AWAITED before the relay: the host's echo
+              // push applies through storage, and a still-in-flight local
+              // write landing after it would clobber the applied value. The
+              // lang_choose relay is the gesture -> lang_set path of
+              // ADR-0032 decision 7 (the SW emits only when paired and the
+              // live connection allows it; offline the choice stays local).
+              await update("uiLanguage", v);
+              await send({ type: "lang_choose", value: v });
+            })();
+          }}
         />
       </header>
 

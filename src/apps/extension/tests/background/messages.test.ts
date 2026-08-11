@@ -68,6 +68,10 @@ const GATED: RuntimeMsg[] = [
   // The pending-approval mirror sweep: display-state only, but it writes
   // storage the popup renders, so it stays extension-page gated like the rest.
   { type: "sweep_pending" },
+  // The ADR-0032 decision-7 language choice: a relayed lang_set is only a
+  // cosmetic nuisance, but a page must still not be able to speak to the
+  // host through the SW, so it stays extension-page gated like the rest.
+  { type: "lang_choose", value: "en" },
   { type: "enroll_pair" },
   { type: "enroll_verify" },
   { type: "enroll_approve" },
@@ -116,6 +120,14 @@ describe("router sender gating (#32)", () => {
     )) as { ok?: boolean; list?: string[] };
     expect(resp.ok).toBe(true);
     expect(resp.list).toEqual(["https://ok.example/*"]);
+  });
+
+  test("an extension page's lang_choose routes; with no live host it stays local", async () => {
+    // No port is attached in this suite, so the relay reports sent:false -
+    // the choice stays a local storage write (the picker's own), which is
+    // the designed offline posture (ADR-0032 decision 7).
+    const resp = await callAsync({ type: "lang_choose", value: "zh_CN" }, optionsSender);
+    expect(resp).toEqual({ ok: true, sent: false });
   });
 
   test("confirm_ready/confirm_resolve require the confirm window, not any extension page", () => {

@@ -50,6 +50,7 @@ import {
   setKillSwitch,
   whenKillRevivesAfterRefusal,
 } from "./kill";
+import { chooseLanguage } from "./policy-sync";
 import { isNativeConnected } from "./port";
 
 // True only for a sender that is one of the extension's OWN pages (popup /
@@ -160,6 +161,17 @@ export function route(
       // writes the record - an uncoordinated popup-side remove could race a
       // freshly minted request and orphan its resolver.
       void syncPendingMirror().then(() => sendResponse({ ok: true }));
+      return true;
+    case "lang_choose":
+      // ADR-0032 decision 7: the options picker's user gesture, the ONLY
+      // gesture-driven lang_set emitter (the schema already enum-pinned the
+      // value). The picker wrote uiLanguage locally itself; this relays the
+      // choice to the host, which answers with a lang_current push. `sent`
+      // is diagnostic only - an offline choice legitimately stays local.
+      void chooseLanguage(msg.value).then(
+        (sent) => sendResponse({ ok: true, sent }),
+        () => sendResponse({ ok: false, error: "language relay failed" }),
+      );
       return true;
     case "confirm_ready":
       // The confirmation window (ADR-0027) asking for its payload. Requires the

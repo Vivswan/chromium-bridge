@@ -8,6 +8,8 @@
 
 import { z } from "zod";
 
+import { UI_LANGUAGES } from "./settings";
+
 // The enrollment actions change the extension's trust anchor, so the router
 // additionally requires them to come from the extension's own pages.
 export const ENROLLMENT_ACTION_TYPES = [
@@ -77,6 +79,12 @@ export const RuntimeMsgSchema = z.discriminatedUnion("type", [
   // after "kill everything" no pending confirmation may survive, whichever
   // window asked. Confirm-window senders only, like the other confirm_*.
   z.strictObject({ type: z.literal("confirm_deny_kill") }),
+  // The user chose a display language in the options picker (ADR-0032
+  // decision 7): the SW relays it to the host as `lang_set` when the live
+  // connection has already pushed `lang_current` (never-speak-first). The
+  // value is enum-pinned HERE, at the trust boundary, so the relay can never
+  // put an out-of-enum string on the wire.
+  z.strictObject({ type: z.literal("lang_choose"), value: z.enum(UI_LANGUAGES) }),
 ]);
 
 export type RuntimeMsg = z.infer<typeof RuntimeMsgSchema>;

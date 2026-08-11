@@ -7,6 +7,16 @@
 
 import { z } from "zod";
 
+// The canonical TS-side list of accepted uiLanguage values (ADR-0032
+// decision 7). Language stays browser-owned (decision 1), so this list is
+// NOT generated from the Rust core; the host's hand-kept copy
+// (src/packages/core/src/lang.rs UI_LANGUAGES) is pinned against this one by
+// tests/lang-parity.test.ts. Everything TS-side (the settings schema below,
+// the runtime-message enum, the pickers) derives from here.
+export const UI_LANGUAGES = ["auto", "en", "zh_CN", "zh_TW"] as const;
+
+export type UiLanguageValue = (typeof UI_LANGUAGES)[number];
+
 export const SettingsSchema = z.object({
   pageEvalEnabled: z.boolean().default(true),
   evalMask: z.boolean().default(true),
@@ -58,7 +68,7 @@ export const SettingsSchema = z.object({
   // the browser UI language (zh -> zh_CN, zh-Hant/TW/HK/MO -> zh_TW, else
   // en). Distinct from Chrome's own default_locale: this is the user's
   // explicit choice for in-extension UI.
-  uiLanguage: z.enum(["auto", "en", "zh_CN", "zh_TW"]).default("en"),
+  uiLanguage: z.enum(UI_LANGUAGES).default("en"),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

@@ -47,6 +47,18 @@
 //   damaged/unreadable/missing reason, tampered flag, reconnect, re-pair,
 //   challenge-window re-pair, in-life OR durable compromise, unhardenable
 //   storage, post-cutover) posts nothing.
+// - the decision-7 language lane (Phase 4): an accepted lang_current writes
+//   ONLY the uiLanguage key (sequence-suppressed, enum-refused without
+//   advancing the cursor) and NEVER emits; the whole lane - apply, adoption,
+//   gesture - is gated on the PINNED trust bar (while-paired scope, one
+//   deliberate notch below the bag's pinned+proven); the seq-0 first-pairing
+//   adoption offers an explicitly-set local value exactly once per
+//   connection; the gesture path (chooseLanguage) is the only other lang_set
+//   emitter, gated never-speak-first per connection and serialized on the
+//   frame chain; the apply cursor is per-connection (a departed peer's huge
+//   seq cannot wedge the genuine host) and commits only after the storage
+//   write held; and a full set-push-apply cycle emits exactly ONE lang_set
+//   (the ADR-mandated echo-loop test).
 //
 // The pin store is mocked (the fixture key is deny-listed as a real pin by
 // design); everything below it - crypto, schemas, ratchet, storage - is real.
@@ -74,6 +86,7 @@ import {
 } from "@/lib/background/enclave-verify";
 import {
   attachPort,
+  chooseLanguage,
   currentConnectionToken,
   currentPinGeneration,
   detachPort,
@@ -1390,21 +1403,244 @@ describe("the unpinned lane (Lane U seam)", () => {
   });
 });
 
-describe("lang_current (store-only until Phase 4)", () => {
-  test("stores {value, seq}, sequence-suppressed, malformed dropped", async () => {
-    expect(getLangState()).toBeNull();
-    await push({ type: "lang_current", value: "de", seq: 2 });
-    expect(getLangState()).toEqual({ value: "de", seq: 2 });
-    // An equal or lower sequence never applies (echo suppression).
+describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)", () => {
+  const storedUiLanguage = async (): Promise<unknown> =>
+    (await fakeBrowser.storage.local.get("uiLanguage")).uiLanguage;
+  const langSets = (): object[] =>
+    posted.filter((f) => (f as { type?: string }).type === "lang_set");
+
+  test("apply: an accepted push writes the uiLanguage key and NOTHING else, and never emits", async () => {
+    const before = Object.keys(await fakeBrowser.storage.local.get(null));
+    await push({ type: "lang_current", value: "zh_CN", seq: 2 });
+    expect(getLangState()).toEqual({ value: "zh_CN", seq: 2 });
+    expect(await storedUiLanguage()).toBe("zh_CN");
+    const after = Object.keys(await fakeBrowser.storage.local.get(null));
+    expect(after.sort()).toEqual([...before, "uiLanguage"].sort());
+    // The apply path NEVER emits lang_set (the echo-loop rule).
+    expect(langSets()).toHaveLength(0);
+  });
+
+  test("sequence-suppressed: an equal or lower seq never applies; malformed dropped", async () => {
+    await push({ type: "lang_current", value: "zh_TW", seq: 2 });
     await push({ type: "lang_current", value: "en", seq: 2 });
-    await push({ type: "lang_current", value: "zh", seq: 1 });
-    expect(getLangState()).toEqual({ value: "de", seq: 2 });
+    await push({ type: "lang_current", value: "zh_CN", seq: 1 });
+    expect(getLangState()).toEqual({ value: "zh_TW", seq: 2 });
+    expect(await storedUiLanguage()).toBe("zh_TW");
     await push({ type: "lang_current", value: "en", seq: 3 });
     expect(getLangState()).toEqual({ value: "en", seq: 3 });
+    expect(await storedUiLanguage()).toBe("en");
     // Malformed frames change nothing.
     await push({ type: "lang_current", value: "en" });
     await push({ type: "lang_current", value: 7, seq: 9 });
     expect(getLangState()).toEqual({ value: "en", seq: 3 });
+  });
+
+  test("out-of-enum value refused WITHOUT advancing the seq cursor", async () => {
+    await push({ type: "lang_current", value: "de", seq: 5 });
+    expect(getLangState()).toBeNull();
+    expect(await storedUiLanguage()).toBeUndefined();
+    // The cursor did not advance, so a genuine push with the SAME seq applies.
+    await push({ type: "lang_current", value: "zh_TW", seq: 5 });
+    expect(getLangState()).toEqual({ value: "zh_TW", seq: 5 });
+    expect(await storedUiLanguage()).toBe("zh_TW");
+  });
+
+  test("the equal-value write is skipped (no spurious storage event on the connect replay)", async () => {
+    await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });
+    const set = vi.spyOn(fakeBrowser.storage.local, "set");
+    await push({ type: "lang_current", value: "zh_CN", seq: 4 });
+    expect(getLangState()).toEqual({ value: "zh_CN", seq: 4 });
+    expect(set).not.toHaveBeenCalled();
+    set.mockRestore();
+  });
+
+  test("a stale local uiLanguage is repaired by the connect push (host canonical, in-memory cursor)", async () => {
+    // An offline local pick never reached the host; a fresh SW life starts
+    // with an empty cursor, so the host's push-on-connect re-applies the
+    // host truth instead of letting the stale local value fight it.
+    await fakeBrowser.storage.local.set({ uiLanguage: "zh_TW" });
+    await push({ type: "lang_current", value: "en", seq: 6 });
+    expect(await storedUiLanguage()).toBe("en");
+    expect(langSets()).toHaveLength(0);
+  });
+
+  test("seq 0 is no signal: applies nothing", async () => {
+    await push({ type: "lang_current", value: "zh_CN", seq: 0 });
+    expect(getLangState()).toBeNull();
+    expect(await storedUiLanguage()).toBeUndefined();
+  });
+
+  test("a failed storage write leaves the cursor unmoved, so the same-seq replay repairs", async () => {
+    const set = vi
+      .spyOn(fakeBrowser.storage.local, "set")
+      .mockRejectedValueOnce(new Error("quota"));
+    await push({ type: "lang_current", value: "zh_CN", seq: 2 });
+    expect(getLangState()).toBeNull();
+    expect(await storedUiLanguage()).toBeUndefined();
+    // The host's push-on-reconnect replay of the SAME seq now applies.
+    await push({ type: "lang_current", value: "zh_CN", seq: 2 });
+    expect(getLangState()).toEqual({ value: "zh_CN", seq: 2 });
+    expect(await storedUiLanguage()).toBe("zh_CN");
+    set.mockRestore();
+  });
+
+  test("a reconnect clears the cursor: a departed peer's huge seq cannot suppress the genuine host", async () => {
+    // A paired-but-substituted host wedges the cursor at the JS-safe max...
+    await push({ type: "lang_current", value: "en", seq: 9007199254740991 });
+    expect(await storedUiLanguage()).toBe("en");
+    // ...then disconnects. The genuine host's push-on-connect starts fresh.
+    attachPort((frame) => {
+      posted.push(frame);
+      return true;
+    });
+    await push({ type: "lang_current", value: "zh_TW", seq: 1 });
+    expect(getLangState()).toEqual({ value: "zh_TW", seq: 1 });
+    expect(await storedUiLanguage()).toBe("zh_TW");
+  });
+
+  describe("the pinned trust bar (while-paired scope, decisions 2 and 7)", () => {
+    test("unpinned: a host push never applies - the unpaired extension keeps its local value", async () => {
+      pinState.pin = null;
+      await fakeBrowser.storage.local.set({ uiLanguage: "zh_TW" });
+      await push({ type: "lang_current", value: "en", seq: 5 });
+      expect(getLangState()).toBeNull();
+      expect(await storedUiLanguage()).toBe("zh_TW");
+      expect(langSets()).toHaveLength(0);
+    });
+
+    test("unpinned: seq 0 is ignored and does NOT burn the adoption latch", async () => {
+      await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });
+      pinState.pin = null;
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toHaveLength(0);
+      // The pin is established on the same connection: the next seq-0 push
+      // imports the local value - "imported directly at first pairing".
+      pinState.pin = fixturePin();
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toEqual([{ type: "lang_set", value: "zh_CN" }]);
+    });
+
+    test("unpinned: a gesture stays local even on a lang-capable connection", async () => {
+      await push({ type: "lang_current", value: "en", seq: 1 });
+      pinState.pin = null;
+      expect(await chooseLanguage("zh_CN")).toBe(false);
+      expect(langSets()).toHaveLength(0);
+    });
+  });
+
+  describe("first-pairing adoption (seq 0, ADR :652-654)", () => {
+    test("an explicitly-set local language is offered exactly ONCE across a full seq-0 -> reply cycle", async () => {
+      await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toEqual([{ type: "lang_set", value: "zh_CN" }]);
+      // A repeated seq-0 push (buggy or hostile host) does not re-offer.
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toHaveLength(1);
+      // The host adopted and replies with seq 1: applied through the
+      // NON-EMITTING apply path - the whole cycle emitted exactly one
+      // lang_set (the ADR-mandated loop-absence property).
+      await push({ type: "lang_current", value: "zh_CN", seq: 1 });
+      expect(getLangState()).toEqual({ value: "zh_CN", seq: 1 });
+      expect(await storedUiLanguage()).toBe("zh_CN");
+      expect(langSets()).toHaveLength(1);
+    });
+
+    test("no explicitly-set local language (key absent): nothing is offered", async () => {
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toHaveLength(0);
+    });
+
+    test("a garbage stored uiLanguage is never adopted", async () => {
+      await fakeBrowser.storage.local.set({ uiLanguage: "de" });
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      await fakeBrowser.storage.local.set({ uiLanguage: 7 });
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toHaveLength(0);
+    });
+
+    test("seq 0 AFTER a real applied push is inconsistent noise, not an adoption trigger", async () => {
+      await fakeBrowser.storage.local.set({ uiLanguage: "zh_TW" });
+      await push({ type: "lang_current", value: "zh_TW", seq: 3 });
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toHaveLength(0);
+    });
+
+    test("a reconnect re-offers (the legacy-bag posture: a missed adoption costs latency, never the import)", async () => {
+      await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toHaveLength(1);
+      attachPort((frame) => {
+        posted.push(frame);
+        return true;
+      });
+      await push({ type: "lang_current", value: "en", seq: 0 });
+      expect(langSets()).toHaveLength(2);
+    });
+  });
+
+  describe("chooseLanguage (the gesture path)", () => {
+    test("never speaks first: refused until THIS connection saw a lang_current", async () => {
+      expect(await chooseLanguage("zh_TW")).toBe(false);
+      expect(langSets()).toHaveLength(0);
+      await push({ type: "lang_current", value: "en", seq: 1 });
+      expect(await chooseLanguage("zh_TW")).toBe(true);
+      expect(langSets()).toEqual([{ type: "lang_set", value: "zh_TW" }]);
+    });
+
+    test("a reconnect inherits nothing: the new connection must push before a gesture emits", async () => {
+      await push({ type: "lang_current", value: "en", seq: 1 });
+      attachPort((frame) => {
+        posted.push(frame);
+        return true;
+      });
+      expect(await chooseLanguage("zh_CN")).toBe(false);
+      expect(langSets()).toHaveLength(0);
+    });
+
+    test("detached port: the choice stays local", async () => {
+      await push({ type: "lang_current", value: "en", seq: 1 });
+      detachPort();
+      expect(await chooseLanguage("zh_CN")).toBe(false);
+      expect(langSets()).toHaveLength(0);
+    });
+
+    test("a gesture racing an in-flight push serializes on the frame chain: apply first, then emit", async () => {
+      // Re-attach with a post that snapshots the cursor, so the emission
+      // ordering is asserted from the emit itself, not inferred.
+      const cursorAtPost: Array<{ value: string; seq: number } | null> = [];
+      attachPort((frame) => {
+        posted.push(frame);
+        cursorAtPost.push(getLangState());
+        return true;
+      });
+      // NOT awaited: the gesture lands while the push is still in flight.
+      const pushed = handlePolicyFrame({ type: "lang_current", value: "en", seq: 1 });
+      const chosen = chooseLanguage("zh_TW");
+      const [, sent] = await Promise.all([pushed, chosen]);
+      // The emit succeeded at all only because the chain ran the push FIRST
+      // (langSeen was false when the gesture arrived), and the cursor
+      // snapshot proves the apply had fully committed before the frame went
+      // out - the serialization property the module docs lean on.
+      expect(sent).toBe(true);
+      expect(langSets()).toEqual([{ type: "lang_set", value: "zh_TW" }]);
+      expect(cursorAtPost).toEqual([{ value: "en", seq: 1 }]);
+      expect(await storedUiLanguage()).toBe("en");
+    });
+
+    test("a full set-push-apply cycle emits exactly ONE lang_set (the ADR-mandated echo-loop test)", async () => {
+      // The host's push-on-connect.
+      await push({ type: "lang_current", value: "en", seq: 1 });
+      // The user's gesture (the picker wrote uiLanguage locally already).
+      await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });
+      expect(await chooseLanguage("zh_CN")).toBe(true);
+      expect(langSets()).toHaveLength(1);
+      // The host accepted the set, bumped seq, and pushed the echo: the apply
+      // path records the cursor and emits NOTHING - one lang_set, total.
+      await push({ type: "lang_current", value: "zh_CN", seq: 2 });
+      expect(getLangState()).toEqual({ value: "zh_CN", seq: 2 });
+      expect(await storedUiLanguage()).toBe("zh_CN");
+      expect(langSets()).toEqual([{ type: "lang_set", value: "zh_CN" }]);
+    });
   });
 });
 

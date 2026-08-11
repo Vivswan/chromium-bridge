@@ -1,3 +1,4 @@
+import { UI_LANGUAGES } from "@chromium-bridge/shared";
 import {
   Select,
   SelectContent,
@@ -9,7 +10,7 @@ import { useI18n } from "@/hooks/useI18n";
 import type { UiLanguage } from "@/lib/i18n";
 import { NATIVE_LANGUAGE_NAMES } from "@/lib/native-language-names";
 
-const OPTIONS: UiLanguage[] = ["auto", "en", "zh_CN", "zh_TW"];
+const OPTIONS: readonly UiLanguage[] = UI_LANGUAGES;
 
 // Display-language chooser. Writing uiLanguage triggers storage.onChanged,
 // which the i18n runtime watches and swaps the locale reactively (every open

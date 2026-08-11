@@ -36,12 +36,13 @@ pub const LANG_STORE_VERSION: u32 = 1;
 const LANG_MAX_BYTES: usize = 4 * 1024;
 
 /// The accepted `uiLanguage` values. This mirrors the browser-owned
-/// `uiLanguage` enum in `src/packages/shared/src/settings.ts`
-/// (`z.enum(["auto", "en", "zh_CN", "zh_TW"])`): language stays browser-owned
-/// (ADR-0032 decision 1), so it is NOT emitted into the Rust core by
-/// `moon run gen` the way the policy schema is, and this list is the host's
-/// hand-kept copy of that source of truth. A value outside it is refused
-/// (decision 7) and the previous value stands.
+/// canonical list in `src/packages/shared/src/settings.ts` (`UI_LANGUAGES`):
+/// language stays browser-owned (ADR-0032 decision 1), so it is NOT emitted
+/// into the Rust core by `moon run gen` the way the policy schema is, and
+/// this list is the host's hand-kept copy of that source of truth - pinned
+/// against it by the shared suite's `tests/lang-parity.test.ts`, which reads
+/// this file. A value outside it is refused (decision 7) and the previous
+/// value stands.
 pub const UI_LANGUAGES: &[&str] = &["auto", "en", "zh_CN", "zh_TW"];
 
 /// The default language when the host has no stored value yet. Matches

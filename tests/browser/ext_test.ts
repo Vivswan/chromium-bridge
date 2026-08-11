@@ -193,6 +193,11 @@ async function main(): Promise<void> {
     );
 
     // ---- i18n: English default, three locales, native-name picker ----------
+    // NOT covered here (flagged, ADR-0032 Phase 4): the language ROUND TRIP
+    // extension -> host -> app and back in all three locales needs a
+    // registered native host plus the desktop app, which this suite does not
+    // launch; it belongs with the BB_REAL_E2E integration run once the app
+    // rides it. The locale swap below exercises only the storage-driven half.
     // CJK is written as \u escapes so the check-cjk gate's allowlist stays
     // limited to the locale bundles and the native-names module.
     const NATIVE = {

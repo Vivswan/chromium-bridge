@@ -2,7 +2,8 @@
 // core: verification of `policy_current` pushes against the extension's OWN
 // pinned key, the value ratchet, the stored effective policy, the one-way
 // cutover flag, and the per-connection dispatch barrier the enrollment gate
-// consults. `lang_current` is stored only (Phase 4 consumes it).
+// consults. `lang_current` is consumed by the Phase-4 language lane (the
+// apply/choose split at the `lang_current` section below).
 //
 // Fail closed everywhere (ADR-0032 decisions 3 and 4):
 // - a push is consumed only through: strict frame validation -> signature
@@ -72,10 +73,12 @@
 //
 // Same shape as kill.ts: port.ts hands this module the port (attachPort)
 // and every policy/lang frame, and frames process strictly in arrival
-// order. This module sends exactly ONE kind of frame, the decision-8
-// `legacy_settings` bag (the send-once section at the bottom), and only on a
-// connection whose host has already pushed `policy_current` - so the
-// never-speak-first rule of decision 4 holds structurally (`policy_get` is
+// order. This module sends exactly TWO kinds of frame: the decision-8
+// `legacy_settings` bag (the send-once section at the bottom), only on a
+// connection whose host has already pushed `policy_current`, and the
+// decision-7 `lang_set` (the language section below), only on a connection
+// whose host has already pushed `lang_current` - so the never-speak-first
+// rule of decision 4 holds structurally for both (`policy_get` is
 // still future business). It deliberately does
 // not consult the kill or enrollment gates: a killed bridge still processes
 // policy pushes (control-plane mode, decision 6), which port.ts guarantees
@@ -85,6 +88,8 @@ import {
   foldPolicyOverlay,
   KEY_ID_HEX,
   LangCurrentFrameSchema,
+  type LangSetWire,
+  type LegacySettingsWire,
   POLICY_DEFAULTS,
   PolicyCurrentFrameSchema,
   PolicyDocSchema,
@@ -96,6 +101,8 @@ import {
   relaxedPolicyFields,
   type StoredPolicyState,
   StoredPolicyStateSchema,
+  UI_LANGUAGES,
+  type UiLanguageValue,
   unreachable,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
@@ -254,7 +261,8 @@ type AttachmentIdentity =
   | { kind: "proven"; keyId: string; generation: number };
 
 /** One port attachment. `post` carries the decision-8 `legacy_settings`
- * send below; nothing else in this module ever posts. */
+ * send below and the decision-7 `lang_set` sends; nothing else in this
+ * module ever posts. */
 interface PortAttachment {
   post: PostFrame;
   policy: AttachmentPolicy;
@@ -264,6 +272,16 @@ interface PortAttachment {
    * on the SAME connection can complete a send the report-time gate refused
    * for lack of evidence; a reconnect inherits nothing. */
   absentReported: boolean;
+  /** THIS connection's host has pushed a schema-valid `lang_current`: the
+   * never-speak-first gate for `lang_set` (ADR-0032 decisions 4 and 7). An
+   * old host that never pushes one never sees a language frame it would
+   * fatally forward; a reconnect inherits nothing. */
+  langSeen: boolean;
+  /** The first-pairing adoption `lang_set` (decision 7) already went out on
+   * THIS connection: at most one per connection, however many seq:0 pushes
+   * the host repeats. The honest host's reply push carries seq >= 1, which
+   * ends the adoption condition entirely. */
+  langAdoptionOffered: boolean;
 }
 
 let port: PortAttachment | null = null;
@@ -274,33 +292,212 @@ export function attachPort(post: PostFrame): void {
     policy: { kind: "awaiting" },
     identity: { kind: "unproven" },
     absentReported: false,
+    langSeen: false,
+    langAdoptionOffered: false,
   };
+  // The apply cursor is per-connection, like the two latches above: a
+  // departed peer's {value, seq:MAX} push must not suppress the genuine
+  // host's real, lower seq on the next connection (its own push-on-connect
+  // re-applies idempotently; see the lang section's cursor docs).
+  lang = null;
 }
 
 export function detachPort(): void {
   port = null;
 }
 
-// ---- lang_current (store-only until Phase 4) ----------------------------------
+// ---- lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4) -----
+//
+// The two directions are DIFFERENT paths on purpose (the app's lang-sync.ts
+// split, adapted), and the whole echo-loop rule lives in that split:
+//
+//  - APPLY (host -> extension): an accepted push writes the value to the
+//    `uiLanguage` storage key - the ONLY key this lane ever writes - and the
+//    i18n runtime's storage.onChanged watcher swaps every open page's locale.
+//    This path NEVER emits `lang_set`: a storage.onChanged listener cannot
+//    tell a user's write from an applied push, so emission must never hang
+//    off storage events - it hangs off the two explicit paths below instead.
+//  - CHOOSE (extension -> host): `chooseLanguage`, reached ONLY from the
+//    options picker's user gesture via the `lang_choose` runtime message, is
+//    the one gesture-driven `lang_set` emitter. The picker's local storage
+//    write stays (responsive offline); the host's echo push comes back
+//    through the non-emitting apply path, so a set-push-apply cycle emits
+//    exactly one `lang_set`.
+//  - ADOPTION (the one sanctioned non-gesture emit, decision 7 / the ADR's
+//    first-pairing rule): a push with seq:0 means the host value was never
+//    explicitly set anywhere; if the extension HAS an explicitly-set
+//    uiLanguage, it offers that value once - see
+//    maybeAdoptExtensionLanguage.
+//
+// THE LANE'S TRUST BAR IS PINNED (langLanePinned below): ADR-0032 scopes the
+// shared language to WHILE PAIRED (decision 2 :47-49, decision 7 :568-571 -
+// "an unpaired extension keeps its local value and its local picker", and
+// adoption is "imported directly at first pairing"). Both directions gate on
+// it: an unpinned extension ignores host language pushes AND keeps gestures
+// local. Deliberately PINNED, not the legacy-bag send's PINNED + PROVEN
+// possession: the bag demands a fresh-nonce proof because it DISCLOSES the
+// user's settings to the peer, while language is a cosmetic, own-lane value
+// (decision 7) whose worst abuse is the accepted UI-language flip - so
+// pairing is the right bar, one deliberate notch below the bag's. For the
+// same reason the gate is read fresh per decision with NO commit-time epoch
+// recheck: a pin revoke landing inside an in-flight apply or adoption
+// (microtask scale) is accepted within this same one-notch-lower bar.
+//
+// THE SEQ CURSOR IS DELIBERATELY IN MEMORY, reset at every (re)attach, never
+// stored. The host pushes lang_current on every connect, so each connection
+// re-applies the current {value, seq} - idempotent when storage already
+// agrees (the equal-value write is skipped), and a REPAIR when a stale local
+// uiLanguage diverged from the host (an offline local pick never reached the
+// host and the host is canonical after first set, decision 7 / ADR :672). A
+// PERSISTED cursor would suppress exactly that repair: equal seq would read
+// as already-applied and the stale local value would fight the host forever.
+// The per-attachment reset closes the same hole one notch further in: a
+// paired-but-substituted host that pushed {value, seq:MAX} and disconnected
+// must not suppress the genuine host's real, lower seq for the rest of the
+// SW life - the genuine host's own push-on-connect starts a fresh cursor.
+//
+// SECURITY, stated honestly: lang_current arrives on the host channel with
+// no signature and no ratchet - by design (decision 7). Nothing
+// security-relevant may ever key on it; the value is enum-validated before
+// use and the write surface is the single uiLanguage key. A hostile PAIRED
+// host can flip the UI language - an accepted, cosmetic-only nuisance with
+// zero capability attached, which is exactly why language gets the free
+// lane and policy does not.
 
+const UI_LANGUAGE_KEY = "uiLanguage";
+
+/** The last applied host push on the CURRENT connection (null = none
+ * applied; reset by attachPort). Its `seq` is the apply cursor: only a
+ * strictly greater push applies. */
 let lang: { value: string; seq: number } | null = null;
 
-/** The last host language push this SW life (null = none seen). Phase 4
- * consumes it; nothing security-relevant may ever key on it (decision 7). */
+/** Tests only: the applied-push cursor. Nothing security-relevant may ever
+ * key on it (decision 7). */
 export function getLangState(): { value: string; seq: number } | null {
   return lang;
 }
 
-function handleLangCurrent(msg: unknown): void {
+/** The lane's trust bar (section docs above): PINNED - not the bag's
+ * pinned + proven-possession, and not mere connectedness. Read fresh at
+ * every decision, the same pinned signal every sibling gate consults. */
+async function langLanePinned(): Promise<boolean> {
+  return (await currentScope()).pinned;
+}
+
+/** Whether a host value is one of the shared uiLanguage values. Out-of-enum
+ * is refused (the host refuses them too; this is the display-side backstop)
+ * and the current value stands - the frame schema pins only the shape, so
+ * this enum check is the consumer's job, done here before ANY use. */
+function isSharedLanguage(value: string): value is UiLanguageValue {
+  return (UI_LANGUAGES as readonly string[]).includes(value);
+}
+
+/** The APPLY path plus the adoption offer. Never emits on apply; the ONLY
+ * emit in here is the once-per-connection adoption send for seq:0. Runs on
+ * the frame chain (routeOne), so applies and sends never interleave. */
+async function handleLangCurrent(msg: unknown, attachment: PortAttachment | null): Promise<void> {
   const parsed = LangCurrentFrameSchema.safeParse(msg);
   if (!parsed.success) {
     console.warn("[bb] dropping malformed lang_current frame");
     return;
   }
-  // Sequence-suppressed (ADR-0032 decision 7): only a strictly newer push
-  // applies; an echo or replay has nothing to ride on.
-  if (lang && parsed.data.seq <= lang.seq) return;
-  lang = { value: parsed.data.value, seq: parsed.data.seq };
+  // The host spoke the language lane on this connection: lang_set may go
+  // out from now on (never-speak-first). A schema-valid frame is what
+  // proves the peer handles these frames; the VALUE is judged separately.
+  if (attachment) attachment.langSeen = true;
+  // The pinned gate (the lane's trust bar, section docs above): an unpaired
+  // extension keeps its local value - the push is ignored entirely, and the
+  // adoption latch stays unset so a first pairing can still import.
+  if (!(await langLanePinned())) return;
+  const { value, seq } = parsed.data;
+  if (seq === 0) {
+    // seq 0 = the host store's never-explicitly-set default: no signal,
+    // nothing to apply (the local preference stands), but it is the
+    // first-pairing adoption trigger (ADR-0032 :670-672).
+    await maybeAdoptExtensionLanguage(attachment);
+    return;
+  }
+  // Sequence-suppressed (decision 7): only a strictly newer push applies;
+  // an echo or replay has nothing to ride on.
+  if (lang && seq <= lang.seq) return;
+  // Out-of-enum: refused WITHOUT advancing the cursor, so a later genuine
+  // push with the same seq still applies.
+  if (!isSharedLanguage(value)) {
+    console.warn("[bb] refusing lang_current outside the shared language enum");
+    return;
+  }
+  // Write ONLY the uiLanguage key, and skip the write when storage already
+  // agrees (the steady-state push-on-connect replay must not retrigger the
+  // i18n watcher on every reconnect).
+  const { [UI_LANGUAGE_KEY]: stored } = await browser.storage.local.get(UI_LANGUAGE_KEY);
+  if (stored !== value) {
+    await browser.storage.local.set({ [UI_LANGUAGE_KEY]: value });
+  }
+  // The writes awaited, and attachPort resets the cursor synchronously off
+  // the frame chain: a departed connection's push resuming here must not
+  // re-commit the old peer's seq over the NEW connection's fresh cursor.
+  if (attachment !== port) return;
+  // The cursor commits only once the write held (a throwing write unwinds
+  // through the frame chain's catch with the cursor unmoved, so the host's
+  // same-seq replay can still repair the stale storage).
+  lang = { value, seq };
+}
+
+/** First-pairing adoption (ADR-0032 decision 7, :670-672): the host attests
+ * its language was never explicitly set (seq:0); if the extension's
+ * uiLanguage WAS explicitly set - the raw storage key exists and is
+ * in-enum (absence means the schema default was never overridden; garbage
+ * is not adopted) - send ONE `lang_set` carrying it. Reached only through
+ * the caller's pinned gate, so it fires when the pin is established: exactly
+ * the ADR's "imported directly at first pairing". This is the one
+ * sanctioned exception to gesture-only emission, and it terminates by
+ * construction: the host's reply push carries seq >= 1, which both ends the
+ * seq:0 condition and comes back through the non-emitting apply path. The
+ * per-connection latch bounds a host that keeps repeating seq:0 (buggy or
+ * hostile) to one offer per connection; a reconnect re-offers, which is the
+ * legacy-bag posture - a missed adoption costs latency, never the import. */
+async function maybeAdoptExtensionLanguage(attachment: PortAttachment | null): Promise<void> {
+  if (!attachment || attachment !== port) return;
+  if (attachment.langAdoptionOffered) return;
+  // A real push already applied on this connection: the host HAS an
+  // explicit value, so a later seq:0 is inconsistent noise, not an adoption
+  // trigger.
+  if (lang !== null) return;
+  const { [UI_LANGUAGE_KEY]: stored } = await browser.storage.local.get(UI_LANGUAGE_KEY);
+  if (typeof stored !== "string" || !isSharedLanguage(stored)) return;
+  // The read awaited: re-check the connection so a reconnect mid-read
+  // cannot ride the dead attachment's offer.
+  if (attachment !== port) return;
+  attachment.langAdoptionOffered = true;
+  attachment.post({ type: "lang_set", value: stored } satisfies LangSetWire);
+}
+
+/** The CHOOSE path: the user picked a language in the options page (the
+ * `lang_choose` runtime message; the picker's own local storage write keeps
+ * the UI responsive offline). The ONLY gesture-driven `lang_set` emitter.
+ * Serialized on the frame chain so a send never interleaves with an apply
+ * (or another send) in flight, and gated on the lane's PINNED trust bar
+ * (section docs above) plus `langSeen` (never-speak-first): unpaired or
+ * with no live lang-capable connection the choice simply stays local
+ * ("keeps its local picker"), and the host's next push-on-connect
+ * re-asserts the host truth (canonical after first set). Resolves with
+ * whether a frame was posted. */
+export function chooseLanguage(value: UiLanguageValue): Promise<boolean> {
+  const send = frameChain.then(async () => {
+    const attachment = port;
+    if (!attachment || !attachment.langSeen) return false;
+    if (!(await langLanePinned())) return false;
+    // The pinned read awaited: only the still-live attachment may emit.
+    if (attachment !== port) return false;
+    return attachment.post({ type: "lang_set", value } satisfies LangSetWire);
+  });
+  frameChain = send.then(
+    () => undefined,
+    (e) => {
+      console.warn("[bb] lang_set send failed", e);
+    },
+  );
+  return send;
 }
 
 // ---- the persisted reads (each discriminates its three outcomes) ---------------
@@ -945,7 +1142,7 @@ async function routeOne(msg: unknown, attachment: PortAttachment | null): Promis
   const inbound = PolicyInboundFrameSchema.safeParse(msg);
   if (!inbound.success) return;
   if (inbound.data.type === "lang_current") {
-    handleLangCurrent(msg);
+    await handleLangCurrent(msg, attachment);
     return;
   }
   await handlePolicyCurrent(msg, attachment);
@@ -1478,7 +1675,7 @@ async function trySendLegacyBag(attachment: PortAttachment): Promise<void> {
   // it before the bag ships.
   if (attachment !== port || pinGeneration !== proof.generation) return;
   if (compromisedThisLife || (await getCompromised())) return;
-  if (!attachment.post({ type: "legacy_settings", bag })) return;
+  if (!attachment.post({ type: "legacy_settings", bag } satisfies LegacySettingsWire)) return;
   await markLegacySettingsSent();
   auditEvent("legacy_settings_sent", { detail: `to pinned key ${proof.keyId}` });
   console.log("[bb] legacy settings bag sent for migration - once, ever (ADR-0032 decision 8)");
