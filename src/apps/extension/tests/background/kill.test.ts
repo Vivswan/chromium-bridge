@@ -12,7 +12,7 @@
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { auditEvent, readRing, resetAuditForTests } from "@/lib/background/audit-log";
 import {
   attachPort,

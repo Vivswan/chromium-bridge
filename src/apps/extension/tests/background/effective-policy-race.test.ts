@@ -9,7 +9,7 @@
 // the flag the real posture read would otherwise see first.
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getEffectivePolicy } from "@/lib/background/effective-policy";
 
 vi.mock("@/lib/background/policy-sync", async (importOriginal) => {

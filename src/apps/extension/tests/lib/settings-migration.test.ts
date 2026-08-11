@@ -3,7 +3,7 @@
 // without storage; migrateSettings is covered against fakeBrowser.
 
 import { beforeEach, describe, expect, test } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import {
   type Migration,
   migrateSettings,

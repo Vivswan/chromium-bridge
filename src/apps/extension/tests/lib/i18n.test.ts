@@ -2,7 +2,7 @@
 // English fallback. fetch is stubbed per locale so no _locales build is needed.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 
 const EN = {
   options_title: { message: "Settings" },

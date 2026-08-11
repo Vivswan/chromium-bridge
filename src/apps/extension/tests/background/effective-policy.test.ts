@@ -12,7 +12,7 @@
 
 import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getEffectivePolicy, withFreshPolicy } from "@/lib/background/effective-policy";
 import { policyDispatchGate, resetPolicySyncForTests } from "@/lib/background/policy-sync";
 

@@ -1,7 +1,7 @@
 import { ENCLAVE_FIXTURE_KEY_ID, POLICY_DEFAULTS } from "@chromium-bridge/shared";
 import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import * as pinStore from "@/lib/background/enclave-pin";
 import {
   base64Decode,

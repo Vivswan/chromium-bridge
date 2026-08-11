@@ -223,6 +223,9 @@ const launch = async (): Promise<void> => {
   try {
     const cfg = devBrowserConfig();
     assertFreshTempProfile(cfg);
+    // web-ext-run resolves ONLY from scripts/package.json's own dependency:
+    // wxt 0.21 dropped it (optional web-ext peer instead), so that pin is
+    // load-bearing, not a redundant duplicate of a wxt transitive.
     const { default: webExt } = await import("web-ext-run");
     if (!(await waitForSettledBuild(Date.now() + 120_000))) {
       if (!shuttingDown) {
