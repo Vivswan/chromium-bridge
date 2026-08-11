@@ -209,12 +209,14 @@ async function main(): Promise<void> {
       zh_CN: "\u663E\u793A\u8BED\u8A00",
       zh_TW: "\u986F\u793A\u8A9E\u8A00",
     };
-    // The tab_list tool label, per locale: proves the tool grid reads the
-    // locale bundle (the original leak was this grid showing zh on en).
-    const TAB_LIST_LABEL = {
-      en: "List open tabs",
-      zh_CN: "\u5217\u51FA\u6240\u6709\u6807\u7B7E\u9875",
-      zh_TW: "\u5217\u51FA\u6240\u6709\u5206\u9801",
+    // The Security section's host-owned-policy pointer, per locale: the ADR-0032
+    // Phase 5 replacement for the retired tool grid (settings.policy_managed_title
+    // in the locale bundles), proving the page body reads the locale bundle
+    // (the original leak was the retired grid showing zh on en).
+    const POLICY_MANAGED_TITLE = {
+      en: "Managed in the Chromium Bridge app",
+      zh_CN: "\u5728 Chromium Bridge \u5E94\u7528\u4E2D\u7BA1\u7406",
+      zh_TW: "\u5728 Chromium Bridge \u61C9\u7528\u7A0B\u5F0F\u4E2D\u7BA1\u7406",
     };
 
     const page = await browser.newPage();
@@ -227,8 +229,8 @@ async function main(): Promise<void> {
     // English, whatever the machine's locale is.
     check((await bodyText()).includes(LANG_LABEL.en), "fresh profile renders English");
     check(
-      (await bodyText()).includes(TAB_LIST_LABEL.en),
-      "fresh profile tool grid is English (tab_list)",
+      (await bodyText()).includes(POLICY_MANAGED_TITLE.en),
+      "fresh profile policy pointer is English (policy_managed_title)",
     );
     check(
       (await page.evaluate(() => document.documentElement.lang)) === "en",
@@ -260,8 +262,8 @@ async function main(): Promise<void> {
         .catch(() => {});
       check((await bodyText()).includes(LANG_LABEL[locale]), `${locale} locale renders`);
       check(
-        (await bodyText()).includes(TAB_LIST_LABEL[locale]),
-        `${locale} tool grid is localized (tab_list)`,
+        (await bodyText()).includes(POLICY_MANAGED_TITLE[locale]),
+        `${locale} policy pointer is localized (policy_managed_title)`,
       );
       // Native names stay untranslated under this locale too.
       await page.click('[aria-labelledby="lang-label"]');
