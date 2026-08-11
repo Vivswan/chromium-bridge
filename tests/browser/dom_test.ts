@@ -49,6 +49,35 @@ function check(cond: boolean, label: string): void {
   }
 }
 
+// ─── deadlines ─────────────────────────────────────────────────────────────
+// Every await in the harness path is bounded. A CI runner once stalled
+// between the Chrome spawn and CDP becoming usable, and the then-unbounded
+// waits below turned that one-off flake into a 35+ minute silent hang. Any
+// deadline firing fails the suite loudly, naming the phase, and the bounded
+// cleanup in main()'s finally still runs.
+
+/** How long any single CDP command may take. Generous: every legitimate
+ * command here (evaluate on a local file:// fixture, navigate, enable) is
+ * sub-second; only a wedged browser reaches this. */
+const CDP_COMMAND_TIMEOUT_MS = 30000;
+
+/** Bound `promise` to `ms`, rejecting with a message that names the phase. */
+function withDeadline<T>(promise: Promise<T>, ms: number, phase: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${phase} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 // ─── headless Chrome process ───────────────────────────────────────────────
 class Chrome {
   proc: Subprocess;
@@ -66,6 +95,19 @@ class Chrome {
         "--no-sandbox",
         "--no-first-run",
         "--no-default-browser-check",
+        // Never touch the OS keychain/wallet: a native macOS run once popped a
+        // real "Chromium Safe Storage" login-keychain prompt. Puppeteer passes
+        // both by default; this raw spawn must too.
+        "--use-mock-keychain",
+        "--password-store=basic",
+        // Container/CI hygiene (mirrors puppeteer's test defaults): tolerate a
+        // tiny /dev/shm, and keep the throwaway profile fully offline/quiet.
+        "--disable-dev-shm-usage",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-sync",
+        "--disable-default-apps",
+        "--mute-audio",
         `--user-data-dir=${this.userDataDir}`,
         `--remote-debugging-port=${port}`,
         "--remote-allow-origins=*",
@@ -79,19 +121,32 @@ class Chrome {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const r = await fetch(`http://127.0.0.1:${this.port}/json/version`);
+        // Per-probe abort so one hung fetch cannot outlive the loop deadline.
+        const r = await fetch(`http://127.0.0.1:${this.port}/json/version`, {
+          signal: AbortSignal.timeout(2000),
+        });
         if (r.ok) return;
       } catch {}
       await new Promise((r) => setTimeout(r, 200));
     }
     throw new Error(`Chrome did not become ready on port ${this.port}`);
   }
+  /** Bounded shutdown of exactly the Chrome THIS harness spawned (never a
+   * pattern kill): SIGTERM, a bounded wait for exit, then SIGKILL to the same
+   * child, another bounded wait - so a wedged browser cannot hang cleanup. */
   async stop(): Promise<void> {
     try {
       this.proc.kill();
       // Await exit so Chrome has released the profile before we remove it.
-      await this.proc.exited;
-    } catch {}
+      await withDeadline(this.proc.exited, 5000, "Chrome exit after SIGTERM");
+    } catch {
+      try {
+        this.proc.kill("SIGKILL");
+        await withDeadline(this.proc.exited, 5000, "Chrome exit after SIGKILL");
+      } catch (e) {
+        console.error("[dom_test] Chrome did not exit even after SIGKILL:", e);
+      }
+    }
     try {
       fs.rmSync(this.userDataDir, { recursive: true, force: true });
     } catch {}
@@ -127,19 +182,29 @@ class Page {
   }
   static async connect(port: number): Promise<Page> {
     // Find the page target.
-    const listRes = await fetch(`http://127.0.0.1:${port}/json/list`);
+    const listRes = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: AbortSignal.timeout(10000),
+    });
     const targets = (await listRes.json()) as any[];
     const page = targets.find((t) => t.type === "page");
     if (!page) throw new Error("no page target");
     // Connect to the browser-level WS, then attach via flattened session.
-    const verRes = await fetch(`http://127.0.0.1:${port}/json/version`);
+    const verRes = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(10000),
+    });
     const ver = (await verRes.json()) as any;
     const wsUrl = ver.webSocketDebuggerUrl;
     const ws = new WebSocket(wsUrl);
-    await new Promise<void>((r, rej) => {
-      ws.onopen = () => r();
-      ws.onerror = () => rej(new Error("ws open failed"));
-    });
+    // Deadline-bounded: a stalled browser can fire NEITHER onopen nor onerror,
+    // and this promise would otherwise never settle.
+    await withDeadline(
+      new Promise<void>((r, rej) => {
+        ws.onopen = () => r();
+        ws.onerror = () => rej(new Error("ws open failed"));
+      }),
+      10000,
+      "CDP WebSocket open",
+    );
     // Attach to the page target to get a sessionId for flattened protocol.
     const attach = await Page.sendRaw(ws, "Target.attachToTarget", {
       targetId: page.id,
@@ -151,10 +216,15 @@ class Page {
   }
   private static sendRaw(ws: WebSocket, method: string, params: any): Promise<any> {
     const id = ++Page._staticId;
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.removeEventListener("message", onMsg as any);
+        reject(new Error(`CDP ${method} got no reply within ${CDP_COMMAND_TIMEOUT_MS}ms`));
+      }, CDP_COMMAND_TIMEOUT_MS);
       const onMsg = (e: MessageEvent) => {
         const msg = JSON.parse(e.data as string);
         if (msg.id === id) {
+          clearTimeout(timer);
           ws.removeEventListener("message", onMsg as any);
           resolve(msg);
         }
@@ -166,8 +236,17 @@ class Page {
   private static _staticId = 0;
   send(method: string, params: any = {}): Promise<any> {
     const id = ++this.id;
-    return new Promise((resolve) => {
-      this.pending.set(id, resolve);
+    return new Promise((resolve, reject) => {
+      // Per-command deadline: a reply that never comes (wedged renderer, dead
+      // browser) must fail the command, not park the suite forever.
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} got no reply within ${CDP_COMMAND_TIMEOUT_MS}ms`));
+      }, CDP_COMMAND_TIMEOUT_MS);
+      this.pending.set(id, (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      });
       this.ws.send(JSON.stringify({ id, method, params, sessionId: this.sessionId }));
     });
   }
