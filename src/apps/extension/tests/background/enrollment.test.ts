@@ -1,4 +1,4 @@
-import { ENCLAVE_FIXTURE_KEY_ID } from "@chromium-bridge/shared";
+import { ENCLAVE_FIXTURE_KEY_ID, POLICY_DEFAULTS } from "@chromium-bridge/shared";
 import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing";
@@ -7,6 +7,7 @@ import {
   base64Decode,
   base64Encode,
   buildChallengeMessage,
+  buildPolicyMessage,
   computeKeyId,
 } from "@/lib/background/enclave-verify";
 import {
@@ -24,6 +25,7 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "@/lib/background/enrollment";
+import * as policySync from "@/lib/background/policy-sync";
 import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
 
 /** Assert the status is in `state` and narrow to that arm's fields. */
@@ -997,5 +999,120 @@ describe("platform scoping (non-Enclave platforms)", () => {
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("compromised");
     expect(st.blocked).toBe(true);
+  });
+});
+
+// ---- ADR-0032: the policy barrier in the gate, and the re-pair reset ------------
+
+describe("policy dispatch barrier wiring (ADR-0032)", () => {
+  beforeEach(() => {
+    policySync.resetPolicySyncForTests();
+  });
+
+  test("pre-cutover the barrier is inert: an unpaired gate refuses for ENROLLMENT reasons", async () => {
+    const gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("enrollment required");
+  });
+
+  test("post-cutover the gate refuses BEFORE any enrollment reasoning until this connection verified a push", async () => {
+    // Even a fully pinned, healthy enrollment state is behind the barrier.
+    const key = await genKey();
+    await pairAndPin(key);
+    store.bridgePolicyCutover = true;
+    const gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("policy barrier");
+  });
+
+  test("a push signed by the REAL pinned key opens the barrier end to end", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store.bridgePolicyCutover = true;
+    policySync.attachPort(() => true);
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        v: 1,
+        revision: 1,
+        touched: [],
+        ...POLICY_DEFAULTS,
+        disabledTools: [...POLICY_DEFAULTS.disabledTools],
+      }),
+    );
+    const sig = new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        key.kp.privateKey,
+        buildPolicyMessage(bytes) as BufferSource,
+      ),
+    );
+    await policySync.handlePolicyFrame({
+      type: "policy_current",
+      ok: true,
+      baseline: base64Encode(bytes),
+      sig: base64Encode(sig),
+    });
+    expect((await enrollmentGate()).allowed).toBe(true);
+  });
+
+  test("revokePin RETAINS the stored ratchet (finding 2) but NEVER clears the cutover flag", async () => {
+    // Retaining the anchor across a revoke is what refuses an old permissive
+    // baseline replaying after a revoke + same-key re-pair with zero fresh
+    // presence: the revision high-water-mark must survive the revoke, or a
+    // hostile host could replay any past validly-signed baseline as first-ever.
+    const key = await genKey();
+    await pairAndPin(key);
+    store.bridgePolicyState = {
+      scope: key.keyId,
+      effective: { ...POLICY_DEFAULTS, disabledTools: [] },
+      revision: 2,
+      baselineB64: "AA==",
+      at: 1,
+    };
+    store.bridgePolicyCutover = true;
+    expect((await revokePin()).ok).toBe(true);
+    expect(store.bridgePolicyState).toMatchObject({ scope: key.keyId, revision: 2 });
+    expect(store.bridgePolicyCutover).toBe(true);
+  });
+
+  test("approvePending RESETS the ratchet for a DIFFERENT key but NEVER clears the cutover flag", async () => {
+    const key = await genKey();
+    const other = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    // A record left bound to a DIFFERENT key's scope: pinning `key` is a fresh
+    // ratchet scope, so the stale record is cleared.
+    store.bridgePolicyState = {
+      scope: other.keyId,
+      effective: { ...POLICY_DEFAULTS, disabledTools: [] },
+      revision: 2,
+      baselineB64: "AA==",
+      at: 1,
+    };
+    store.bridgePolicyCutover = true;
+    expect((await approvePending()).ok).toBe(true);
+    expect(store.bridgePolicyState).toBeUndefined();
+    expect(store.bridgePolicyCutover).toBe(true);
+  });
+
+  test("approvePending RETAINS the ratchet when re-pinning the SAME key (finding 2)", async () => {
+    const key = await genKey();
+    await onPortConnected();
+    const { nonce, context } = lastChallenge();
+    await handleEnclaveFrame(await proofFrame(key, nonce, context));
+    // The record is bound to the very key being pinned: a same-key re-pair
+    // keeps the anchor so an old baseline replay stays refused.
+    store.bridgePolicyState = {
+      scope: key.keyId,
+      effective: { ...POLICY_DEFAULTS, disabledTools: [] },
+      revision: 2,
+      baselineB64: "AA==",
+      at: 1,
+    };
+    store.bridgePolicyCutover = true;
+    expect((await approvePending()).ok).toBe(true);
+    expect(store.bridgePolicyState).toMatchObject({ scope: key.keyId, revision: 2 });
+    expect(store.bridgePolicyCutover).toBe(true);
   });
 });

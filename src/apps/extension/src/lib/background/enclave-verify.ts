@@ -22,6 +22,7 @@ import {
   ENCLAVE_FIXTURE_KEY_ID,
   MAX_CONTEXT_BYTES,
   MAX_NONCE_BYTES,
+  POLICY_DOMAIN,
   PRESENCE_DOMAIN,
   PUBKEY_LEN,
   SIG_LEN,
@@ -91,6 +92,50 @@ function buildDomainMessage(domain: string, nonce: string, context?: string): Ui
   msg.set(nonceB, domainB.length + 1);
   msg.set(ctxB, domainB.length + 1 + nonceB.length + 1);
   return msg;
+}
+
+/** Build the exact byte string a POLICY baseline signature covers (ADR-0032
+ * decision 3): UTF8(POLICY_DOMAIN) || 0x00 || the exact document bytes. The
+ * document bytes are opaque here - no bounds, no NUL rule, no
+ * canonicalization - because the domain prefix is fixed and NUL-free, which
+ * already makes the three signing domains mutually non-replayable, and the
+ * whole design is "sign the exact bytes, verify the exact bytes". This
+ * deliberately does NOT reuse buildDomainMessage: the policy message has one
+ * separator and one payload, not the nonce/context pair. */
+export function buildPolicyMessage(docBytes: Uint8Array): Uint8Array {
+  const domainB = utf8.encode(POLICY_DOMAIN);
+  const msg = new Uint8Array(domainB.length + 1 + docBytes.length);
+  // The NUL separator is already 0 in the fresh Uint8Array.
+  msg.set(domainB, 0);
+  msg.set(docBytes, domainB.length + 1);
+  return msg;
+}
+
+/** Policy-baseline verification (ADR-0032 decision 3): the signature over
+ * the exact decoded baseline bytes is verified against the PINNED key only.
+ * Unlike the proof frames there is no frame-supplied key identity to refuse
+ * early - the policy frames deliberately carry none the extension honors -
+ * so the pinned bytes are simply what gets imported. The caller treats a
+ * failure as host-substitution evidence (marks compromised), never a mere
+ * refusal. */
+export async function verifyPolicySignatureAgainstPin(
+  sigB64: string,
+  docBytes: Uint8Array,
+  pinnedPubkeyB64: string,
+): Promise<PinVerifyResult> {
+  let pinned: Uint8Array;
+  let sig: Uint8Array;
+  try {
+    pinned = parsePubkey(pinnedPubkeyB64);
+    sig = parseSig(sigB64);
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+  const valid = await verifySignature(pinned, sig, buildPolicyMessage(docBytes)).catch(() => false);
+  if (!valid) {
+    return { ok: false, reason: "signature verification failed against the pinned key" };
+  }
+  return { ok: true };
 }
 
 /** Decode and validate a proof's `pubkey` field: exactly PUBKEY_LEN bytes

@@ -19,6 +19,7 @@ import {
   onPortConnected,
 } from "./enrollment";
 import * as kill from "./kill";
+import * as policySync from "./policy-sync";
 
 // The native link is in exactly one of these states. One value, not a
 // port/flag/timer trio: a nullable port beside a boolean could contradict
@@ -57,6 +58,7 @@ function teardownLink(): void {
     kill.detachPort();
     auditLog.detachPort();
     presence.detachPort();
+    policySync.detachPort();
     try {
       prev.port.disconnect();
     } catch {
@@ -86,6 +88,7 @@ export function connectNative() {
     kill.attachPort(postFrame);
     auditLog.attachPort(postFrame);
     presence.attachPort(postFrame);
+    policySync.attachPort(postFrame);
     // Pull the kill state on every connect (ADR-0030): this is what clears a
     // stale "killed" mirror after a CLI unkill that happened while the SW
     // slept (the host pushes transitions and bad startup states, but the
@@ -168,6 +171,15 @@ function onNativeMessage(p: Browser.runtime.Port, msg: unknown) {
   // for the confirmation round the presence provider has outstanding.
   if (presence.isPresenceFrame(msg)) {
     presence.handlePresenceFrame(msg);
+    return;
+  }
+  // Policy and language pushes (ADR-0032): host-handled control frames,
+  // routed BEFORE the request parse and the gates below - a killed bridge
+  // still processes policy pushes (control-plane mode, decision 6), and the
+  // dispatch barrier these pushes feed must be able to open on the very
+  // connection it is gating.
+  if (policySync.isPolicyFrame(msg)) {
+    void policySync.handlePolicyFrame(msg);
     return;
   }
   // Everything else must be a well-formed BridgeReq: envelope shape, a known

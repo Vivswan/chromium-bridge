@@ -53,6 +53,7 @@ import {
   verifyProofAgainstPin,
 } from "./enclave-verify";
 import { killGate } from "./kill";
+import { onPinPinned, onPinRevoked, policyDispatchGate } from "./policy-sync";
 import { hardenStorageAccess } from "./trusted-storage";
 
 // ---- frame plumbing ---------------------------------------------------------
@@ -230,6 +231,15 @@ async function readGateState(): Promise<Gate> {
   // storage the line above just confined, which is why the order matters.
   const kill = await killGate();
   if (!kill.allowed) return kill;
+  // The policy dispatch barrier next (ADR-0032 decision 4). Post-cutover,
+  // every bridge request is refused until a policy push has verified and
+  // applied on the CURRENT host connection, whatever the enrollment state -
+  // an op must not race ahead of the connect push and run under a cached
+  // policy the host has since tightened. Pre-cutover (the flag, in the
+  // storage confined above, was never set) the barrier is inert and the
+  // legacy local settings govern.
+  const policy = await policyDispatchGate();
+  if (!policy.allowed) return policy;
   if ((await getSetting("requireEnrollment")) !== true) return { allowed: true };
   const compromised = await pinStore.getCompromised();
   if (compromised) {
@@ -578,6 +588,11 @@ export function approvePending(): Promise<{ ok: boolean; error?: string }> {
     // The pin IS the fresh pairing: a deletion request still pending from
     // before it is stale, and resending it would revoke the key just pinned.
     await pinStore.setHostRevokePending(false);
+    // A (re-)pin decides the policy ratchet scope (ADR-0032 decision 3):
+    // onPinPinned resets the ratchet for a DIFFERENT key but RETAINS it for a
+    // same-key re-pair (so an old permissive baseline cannot replay - finding
+    // 2), drops this connection's verified mark, and keeps the cutover flag.
+    await onPinPinned(pending.keyId);
     await updateBadge();
     console.log("[bb] enrollment pinned:", pending.keyId);
     auditEvent("enroll_approved", { name: fingerprintDisplay(pending.keyId) });
@@ -616,6 +631,14 @@ export function revokePin(): Promise<{ ok: boolean }> {
     clearOutstanding();
     await pinStore.clearAll();
     await pinStore.setPaused(true);
+    // Revoke RETAINS the policy ratchet record (ADR-0032 decision 3, finding
+    // 2): a same-key re-pair must still refuse an old-baseline replay, so the
+    // anchor survives; the record's scope keeps it inert (deny baseline +
+    // closed barrier) while unpinned, and onPinRevoked only drops this
+    // connection's verified mark. The cutover flag deliberately survives too -
+    // post-reset means the deny baseline plus the barrier, never a fall back
+    // to legacy policy.
+    await onPinRevoked();
     // Only where an enclave key can exist: on other platforms there is no
     // host key to delete, and queueing the request would just resend a
     // frame the host answers with unsupported_platform forever.

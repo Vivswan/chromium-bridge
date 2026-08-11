@@ -36,7 +36,7 @@ import {
   PresenceErrorWireSchema,
   PresenceProofWireSchema,
 } from "./envelope-wire.gen";
-import { PolicyOverlaySchema } from "./policy.gen";
+import { POLICY_REVISION_MAX, PolicyOverlaySchema, PolicyValuesSchema } from "./policy.gen";
 
 // ---- extension->host writer frames (generated, compile-time only) ------------
 
@@ -255,6 +255,46 @@ export const LangCurrentFrameSchema = LangCurrentWireSchema.extend({
 
 export type LangCurrentFrame = z.infer<typeof LangCurrentFrameSchema>;
 
+// The key-id shape a trust record may carry: lowercase-hex SHA-256 of a
+// pubkey (the enrollment fingerprint). Declared here so the stored policy
+// scope below can reuse it; `trustedKeyId` further deny-lists the fixture key
+// for the PIN records lower down.
+const KEY_ID_HEX = /^[0-9a-f]{64}$/;
+
+// The extension-side stored effective policy (ADR-0032 decisions 3/4): the
+// ratcheted effective values the extension last applied, the ratchet anchor
+// (the accepted baseline's revision and its exact bytes, base64, for the
+// byte-identical replay check), and the ratchet SCOPE it is bound to. STRICT
+// like every stored trust record. The consumer discriminates the three read
+// outcomes explicitly - absent, valid, corrupt - and does NOT collapse
+// corrupt into absent: post-cutover a corrupt record latches the dispatch
+// barrier closed (the kill-mirror STRICT precedent), because treating it as
+// absent would let an older genuine baseline replay as first-ever while the
+// snapshot fell to POLICY_DEFAULTS. POLICY_DEFAULTS is the deny baseline on
+// the four capability grants but is NOT the restrictive pole on every field
+// (hostReverifyMs 0 is the zero-top MOST permissive value, disabledTools is
+// empty, confirmGraceMs is a middling 60s), so it is safe as a fallback ONLY
+// because the barrier refuses every request whenever it is the answer - never
+// because the values themselves are maximally restrictive. Per-field salvage
+// is likewise forbidden (it would hand a corrupted store a relaxation lever).
+export const StoredPolicyStateSchema = z.strictObject({
+  // The pinned enrollment keyId this ratchet state is bound to, or null for
+  // the unpinned lane (finding 2 / ADR-0032 decision 3). Every read re-checks
+  // it against the CURRENT pin: a record whose scope no longer matches is
+  // inert (deny baseline, closed barrier), so a push that raced a re-pair can
+  // never enforce, and an old baseline captured under a since-revoked pin
+  // cannot replay once a DIFFERENT key is pinned. NOT `trustedKeyId`: the
+  // golden-fixture key is a legitimate scope in tests (the vectors are signed
+  // by it), and deny-listing it would read every such record as corrupt.
+  scope: z.string().regex(KEY_ID_HEX).nullable(),
+  effective: PolicyValuesSchema,
+  revision: z.int().nonnegative().max(POLICY_REVISION_MAX),
+  baselineB64: z.string().min(1),
+  at: z.number(),
+});
+
+export type StoredPolicyState = z.infer<typeof StoredPolicyStateSchema>;
+
 // The extension-side mirror of the host's kill state, persisted in the #32
 // SW-only trusted storage. STRICT: a record with unexpected fields (or a
 // non-record value) is tampering evidence and the gate refuses on it rather
@@ -282,6 +322,13 @@ export const AUDIT_EVENT_KINDS = [
   "kill_engaged",
   "kill_released",
   "kill_status_changed",
+  // ADR-0032 phase 3, local-only (not in the host whitelist, so never
+  // forwarded): a policy push refused after crypto/ratchet reasoning
+  // (attack-shaped evidence, not benign version skew), and the policy-side
+  // compromise mark a bad baseline signature latches. The host audits its own
+  // policy writes authoritatively; these record the EXTENSION's refusals.
+  "policy_refused",
+  "policy_compromised",
 ] as const;
 
 export type AuditEventKind = (typeof AUDIT_EVENT_KINDS)[number];
@@ -307,10 +354,9 @@ export const AuditEntrySchema = z.strictObject({
 
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
-const KEY_ID_HEX = /^[0-9a-f]{64}$/;
-
-// A key identity a trust record may carry: well-formed, and never the
-// deny-listed golden-fixture key (its private scalar is public, so a record
+// A key identity a trust record may carry: well-formed (KEY_ID_HEX above),
+// and never the deny-listed golden-fixture key (its private scalar is public,
+// so a record
 // naming it is planted or corrupt; failing the parse makes the record read
 // as absent, which fails closed at the enrollment gate). Paired with
 // keyRecordIsWhole (background/enclave-pin.ts), which recomputes

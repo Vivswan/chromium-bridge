@@ -47,6 +47,12 @@ const presence = {
   isPresenceFrame: vi.fn(() => false),
   handlePresenceFrame: vi.fn(),
 };
+const policySync = {
+  attachPort: vi.fn(),
+  detachPort: vi.fn(),
+  isPolicyFrame: vi.fn(() => false),
+  handlePolicyFrame: vi.fn(() => Promise.resolve()),
+};
 const dispatch = vi.fn((_req: unknown) => Promise.resolve({}));
 const runtime = {
   connectNative: vi.fn<() => FakePort>(),
@@ -58,6 +64,7 @@ vi.mock("@/lib/background/clients", () => clients);
 vi.mock("@/lib/background/kill", () => kill);
 vi.mock("@/lib/background/audit-log", () => auditLog);
 vi.mock("@/lib/background/confirm/presence", () => presence);
+vi.mock("@/lib/background/policy-sync", () => policySync);
 vi.mock("@/lib/background/dispatch", () => ({ dispatch }));
 vi.mock("wxt/browser", () => ({ browser: { runtime } }));
 
@@ -117,7 +124,7 @@ describe("native link lifecycle", () => {
     runtime.connectNative.mockReturnValueOnce(port);
     mod.connectNative();
     expect(mod.isNativeConnected()).toBe(true);
-    for (const m of [enrollment, clients, kill, auditLog, presence]) {
+    for (const m of [enrollment, clients, kill, auditLog, presence, policySync]) {
       expect(m.attachPort).toHaveBeenCalledTimes(1);
     }
     expect(kill.requestKillStatus).toHaveBeenCalledTimes(1);
@@ -187,7 +194,7 @@ describe("native link lifecycle", () => {
     mod.connectNative();
     portA.emitDisconnect();
     expect(mod.isNativeConnected()).toBe(false);
-    for (const m of [enrollment, clients, kill, auditLog, presence]) {
+    for (const m of [enrollment, clients, kill, auditLog, presence, policySync]) {
       expect(m.detachPort).toHaveBeenCalledTimes(1);
     }
     const portB = makePort();
@@ -205,14 +212,15 @@ describe("native link lifecycle", () => {
     const portA = makePort();
     runtime.connectNative.mockReturnValueOnce(portA);
     mod.connectNative();
-    for (const m of [enrollment, clients, kill, auditLog, presence]) m.detachPort.mockClear();
+    for (const m of [enrollment, clients, kill, auditLog, presence, policySync])
+      m.detachPort.mockClear();
 
     runtime.connectNative.mockImplementationOnce(() => {
       throw new Error("host vanished");
     });
     mod.connectNative(); // re-entrant connect throws: teardown then reconnect
     expect(mod.isNativeConnected()).toBe(false);
-    for (const m of [enrollment, clients, kill, auditLog, presence]) {
+    for (const m of [enrollment, clients, kill, auditLog, presence, policySync]) {
       expect(m.detachPort).toHaveBeenCalledTimes(1);
     }
     await vi.advanceTimersByTimeAsync(2000);
@@ -237,18 +245,20 @@ describe("native link lifecycle", () => {
     expect(presence.handlePresenceFrame).toHaveBeenCalledTimes(1);
   });
 
-  test("an unrecognized policy_current push is dropped without touching the link", async () => {
-    // ADR-0032 decision 8 pins the old-extension assumption: this router,
-    // which knows nothing of policy frames, must ignore a policy_current
-    // push - nothing posted back, the port never torn down - and keep
-    // serving bridge requests on the same port. Without this, an old
-    // extension against a policy-capable host would break at every connect.
+  test("an unrecognized push frame is dropped without touching the link", async () => {
+    // ADR-0032 decision 8's unknown-push pin, RE-ASSERTED over the new
+    // router (policy_current is recognized now, so a future frame type
+    // stands in): a push this router does not know must be ignored -
+    // nothing posted back, the port never torn down - and bridge requests
+    // keep flowing on the same port. Without this, an extension one release
+    // behind a frame-adding host would break at every connect.
     presence.isPresenceFrame.mockReturnValue(false);
+    policySync.isPolicyFrame.mockReturnValue(false);
     const port = makePort();
     runtime.connectNative.mockReturnValueOnce(port);
     mod.connectNative();
 
-    port.emitMessage({ type: "policy_current", ok: true, baseline: "YmFzZQ==" });
+    port.emitMessage({ type: "future_push", ok: true, payload: "YmFzZQ==" });
     expect(port.postMessage).not.toHaveBeenCalled();
     expect(port.disconnect).not.toHaveBeenCalled();
     expect(mod.isNativeConnected()).toBe(true);
@@ -260,5 +270,25 @@ describe("native link lifecycle", () => {
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ id: 1, op: "tab_list" }));
     await vi.advanceTimersByTimeAsync(0);
     expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 1, ok: true }));
+  });
+
+  test("a policy push routes to the policy module BEFORE the request parse and the gates", () => {
+    // ADR-0032 decisions 4/6: the demux hands policy frames to policy-sync
+    // ahead of parseBridgeReq/enrollmentGate, so a killed or unenrolled
+    // bridge still processes pushes (control-plane mode) and the dispatch
+    // barrier can open on the very connection it gates. Nothing is posted
+    // back and nothing reaches dispatch.
+    policySync.isPolicyFrame.mockReturnValue(true);
+    const port = makePort();
+    runtime.connectNative.mockReturnValueOnce(port);
+    mod.connectNative();
+
+    const frame = { type: "policy_current", ok: true, baseline: "YmFzZQ==" };
+    port.emitMessage(frame);
+    expect(policySync.handlePolicyFrame).toHaveBeenCalledTimes(1);
+    expect(policySync.handlePolicyFrame).toHaveBeenCalledWith(frame);
+    expect(enrollment.enrollmentGate).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(port.postMessage).not.toHaveBeenCalled();
   });
 });
