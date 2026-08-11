@@ -9,12 +9,26 @@
 //   over the EXACT decoded baseline bytes against the PINNED key (the
 //   frames carry no key identity the extension honors) -> strict
 //   PolicyDocSchema parse of those same bytes;
-// - the ratchet: a revision <= the stored highest-seen is refused unless
-//   the bytes are identical to the stored baseline (the idempotent
-//   push-on-connect replay), and a push whose folded effective would relax
-//   the STORED effective on any field is refused unless the document's
-//   revision is strictly higher AND its signed `touched` set names every
-//   relaxed field - which is exactly what refuses the overlay-strip replay;
+// - the ratchet (PINNED scope only - the signature is what makes `revision`
+//   and `touched` mean anything, both live inside the signed bytes): a
+//   revision <= the stored highest-seen is refused unless the bytes are
+//   identical to the stored baseline (the idempotent push-on-connect
+//   replay), and a push whose folded effective would relax the STORED
+//   effective on any field is refused unless the document's revision is
+//   strictly higher AND its signed `touched` set names every relaxed field
+//   - which is exactly what refuses the overlay-strip replay. On the
+//   UNPINNED scope every field of the document is unauthenticated, so the
+//   revision is neither enforced nor stored (a forged revision=MAX
+//   "restriction" would otherwise brick every later unsigned push - see
+//   the ratchet gate in handlePolicyCurrent); that lane's protections are
+//   the direction checks, the Lane U approval window, and the
+//   pinned-anchor preservation rule in writeStoredRecord, and unsigned
+//   accepts store revision 0;
+// - an unsigned (scope-null) record can NEVER replace a retained
+//   PINNED-scope record: the retained record is the anti-replay anchor a
+//   same-key re-pair depends on, and writeStoredRecord throws rather than
+//   let an approved unsigned push (a policy-VALUES approval, never an
+//   anchor-disposal warrant) destroy it;
 // - the unsigned overlay may only restrict the verified baseline: one
 //   relaxing entry fails the WHOLE push;
 // - a push that fails in ANY way changes nothing: the stored effective
@@ -70,7 +84,6 @@ import {
   LangCurrentFrameSchema,
   POLICY_DEFAULTS,
   PolicyCurrentFrameSchema,
-  type PolicyDoc,
   PolicyDocSchema,
   PolicyInboundFrameSchema,
   type PolicyValues,
@@ -405,8 +418,12 @@ async function resolvePolicyState(scope: PolicyScope): Promise<PolicyState> {
   const recordScope = scopeFromStored(stored.record.scope);
   // Out of scope (a stale push that raced a re-pair, or a record left by a
   // different key): fail closed to awaitingBaseline. The old effective is NOT
-  // enforced (deny baseline governs), and a fresh in-scope push starts a new
-  // ratchet - which for a DIFFERENT key is exactly the intended reset.
+  // enforced (deny baseline governs). A fresh in-scope push starts a new
+  // ratchet only where the write is allowed to land: under a DIFFERENT pinned
+  // key that is exactly the intended reset, while the UNPINNED scope over a
+  // retained pinned-scope record is refused at writeStoredRecord (U1) - the
+  // retained record is the same-key anti-replay anchor, never overwritable
+  // by an unsigned document.
   if (!scopesEqual(recordScope, scope)) return { kind: "awaitingBaseline", scope };
   return { kind: "active", scope: recordScope, record: stored.record };
 }
@@ -428,6 +445,24 @@ async function writeStoredRecord(next: StoredPolicyState): Promise<boolean> {
   // torn-read backstop.
   if (stored.kind === "corrupt") {
     throw new Error("refusing to overwrite a corrupt policy record");
+  }
+  // Refuse to replace a retained PINNED-scope record with an unsigned one
+  // (U1). onPinRevoked deliberately RETAINS the pinned record so a same-key
+  // re-pair still refuses an old-baseline replay (finding 2); the record is
+  // merely INERT (out of scope) while unpinned, not disposable. Without this
+  // rule an attacker could push an unsigned "restriction" during the
+  // unpinned window, ride the user's approval (a policy-VALUES approval,
+  // never an anchor-disposal warrant) to overwrite the anchor, and after the
+  // user re-pairs the SAME key replay an old, more-permissive genuinely
+  // signed baseline as first-ever with zero fresh presence. Consequence,
+  // accepted as fail-closed: after a revoke the unpinned lane cannot store
+  // ANY document until a re-pair disposes of the pinned record (a new key
+  // clears it; the same key puts it back in scope) - the machine stays
+  // barrier-closed rather than trade the anchor away.
+  if (next.scope === null && stored.kind === "valid" && stored.record.scope !== null) {
+    throw new Error(
+      "refusing to replace a retained pinned-scope policy record with an unsigned one",
+    );
   }
   // Unchanged state writes nothing (the kill.ts setMirror discipline): `at`
   // means "when the state last CHANGED", and an idempotent rewrite would
@@ -722,7 +757,10 @@ export async function onPinPinned(newKeyId: string): Promise<void> {
 /** The pin was revoked (ADR-0032 decision 3). RETAINS the ratchet record so a
  * same-key re-pair still refuses an old-baseline replay (finding 2); the
  * scope check keeps the retained record inert (deny baseline + closed
- * barrier) while unpinned. Drops this connection's verified mark so no op runs
+ * barrier) while unpinned, and writeStoredRecord's pinned-anchor preservation
+ * rule (U1) is what makes the retention REAL rather than assumed: no unsigned
+ * push - approved or not - can replace the retained record during the
+ * unpinned window. Drops this connection's verified mark so no op runs
  * under a stale policy after the pin moved. NEVER clears cutover, and NEVER
  * clears the in-life compromise latch (only a NEW-key re-pair does, E2F-1).
  *
@@ -746,11 +784,14 @@ export async function onPinRevoked(revokedKeyId: string | null): Promise<void> {
 // ---- Lane U's seam: the unpinned window-approval surface -------------------------
 
 export interface UnpinnedRelaxation {
-  /** The strict-parsed document awaiting approval. */
-  doc: PolicyDoc;
-  /** Its folded effective values (baseline + overlay). */
+  /** The folded effective values (baseline + overlay) awaiting approval,
+   * handed over as a frozen copy. The parsed document itself is deliberately
+   * NOT part of this payload (U4): the approver's job is to present the
+   * values this push would enforce, and handing it a live reference to
+   * anything the commit later consumes would widen the seam for no need. */
   effective: PolicyValues;
-  /** The stored effective it would relax (null = first document ever). */
+  /** The stored effective it would relax (null = first document ever),
+   * also a frozen copy. */
   storedEffective: PolicyValues | null;
 }
 
@@ -780,6 +821,21 @@ export function isPolicyFrame(msg: unknown): boolean {
 // otherwise land their ratchet writes in the wrong order.
 let frameChain: Promise<void> = Promise.resolve();
 
+/** The unsigned push currently held at the Lane U approver, or null: its
+ * baseline (b64), its overlay EXACTLY as parsed from the frame (as JSON text;
+ * a byte-identical frame reproduces the same key order), and the attachment
+ * it arrived on. Set around the approver await only. A frame is collapsed at
+ * entry (U6) only when ALL THREE match - anything less is a distinct
+ * candidate that must serialize on the frame chain (UF-1): a different
+ * overlay is a TIGHTENING that must not be lost (the overlay only ever
+ * restricts), and a different attachment is a reconnect's push-on-connect
+ * that must run so the NEW connection can earn its own verified mark. */
+let pendingApproval: {
+  baselineB64: string;
+  overlayJson: string;
+  attachment: PortAttachment | null;
+} | null = null;
+
 /** Route one inbound policy/lang frame. The connection it arrived on is
  * captured synchronously: the verified mark must land on exactly that
  * attachment, so a reconnect that installs a fresh one mid-verification
@@ -805,6 +861,34 @@ let frameChain: Promise<void> = Promise.resolve();
  * void-routed kill frames already accepted. */
 export function handlePolicyFrame(msg: unknown): Promise<void> {
   const attachment = port;
+  // Collapse a TRULY IDENTICAL replay of the push currently held at the
+  // approver (U6, keyed per UF-1): same baseline bytes, same overlay, same
+  // attachment. The pending prompt's verdict covers exactly that candidate
+  // (approval applies it; denial refuses it, and push-on-connect re-offers on
+  // the next connection), so queueing another 120s prompt would only let a
+  // hostile unpinned host occupy the confirmation FIFO. Anything less than a
+  // full match serializes on the frame chain instead: a same-baseline push
+  // with a DIFFERENT overlay is the host tightening mid-window (dropping it
+  // would fail OPEN against that intent), and a push from a DIFFERENT
+  // attachment is a reconnect's push-on-connect the new connection needs in
+  // order to earn its own verified mark. RESIDUAL, named: pushes with
+  // DISTINCT candidates still serialize one prompt each - the frame chain
+  // bounds them to one at a time, and each denial is audited (U5), but a
+  // hostile host can keep the FIFO busy for as long as the user keeps not
+  // answering. TODO(SECURITY.md threat-model, Phase 5): record this
+  // prompt-occupancy vector and its bounds in the ADR-0032 threat model.
+  if (pendingApproval !== null && attachment === pendingApproval.attachment) {
+    const dup = PolicyCurrentFrameSchema.safeParse(msg);
+    if (
+      dup.success &&
+      dup.data.ok === true &&
+      dup.data.baseline === pendingApproval.baselineB64 &&
+      JSON.stringify(dup.data.overlay ?? null) === pendingApproval.overlayJson
+    ) {
+      console.warn("[bb] dropping a policy push identical to one already awaiting approval");
+      return frameChain;
+    }
+  }
   frameChain = frameChain
     .then(() => routeOne(msg, attachment))
     .catch((e) => {
@@ -974,7 +1058,19 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
     return refuse("stored policy state is corrupt; latched closed until re-pair", { audit: true });
   }
   const anchor = state.kind === "active" ? state.record : null;
-  if (anchor) {
+  // The revision/touched ratchet binds only the PINNED scope: the signature is
+  // what makes those fields mean anything (both live inside the signed bytes).
+  // On the unpinned scope every field is attacker-writable, so enforcing the
+  // pushed revision would hand any local forger a permanent denial lever: push
+  // revision=MAX as a silent "restriction" and every later genuine unsigned
+  // push is refused forever (unrecoverable without a pairing ceremony to reset
+  // the scope). The unpinned lane's protections are the direction checks above
+  // and the approval window below: replaying an old restricting document is
+  // the harmless forged-restriction DoS decision 3 already concedes, and
+  // replaying an old relaxing one costs the attacker a visible prompt -
+  // exactly the ADR's stated bound. The anchor itself still matters unpinned:
+  // it is what the direction/approval decisions compare against.
+  if (anchor && scopeAtStart.pinned) {
     // The revision ratchet: strictly higher, or byte-identical to the stored
     // baseline (the idempotent push-on-connect replay).
     if (doc.data.revision < anchor.revision) {
@@ -1016,22 +1112,60 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
     // Lane U's; until it registers the seam above, refuse, fail closed. The
     // approver await can be arbitrarily long (minutes); the commit recheck
     // below is what stops a pin that lands during that window from turning
-    // this unsigned document into an enforced, barrier-opening policy.
+    // this unsigned document into an enforced, barrier-opening policy. NOTE:
+    // after a revoke, a RETAINED pinned-scope record is merely out of scope
+    // here (anchor=null), not gone - an approved unsigned push then still
+    // fails at writeStoredRecord's pinned-anchor preservation rule (U1), so
+    // this lane cannot store anything until a re-pair disposes of that record.
     const needsApproval = !anchor || relaxedPolicyFields(effective, anchor.effective).length > 0;
     if (needsApproval) {
+      // VALIDATE BEFORE PROMPT (UF-2): after a revoke, a RETAINED pinned-scope
+      // record makes this push unstorable - writeStoredRecord's preservation
+      // rule (U1) would refuse it at commit no matter what the user answers.
+      // Consulting the approver first would burn a real approval gesture on a
+      // push that can never apply, and the eventual write throw dies in
+      // frameChain's catch unaudited. Refuse here instead, audited; the write
+      // throw stays as the backstop for any interleave this read cannot see.
+      const storedNow = await readStoredRecord();
+      if (storedNow.kind === "valid" && storedNow.record.scope !== null) {
+        return refuse(
+          "unsigned push cannot replace the retained pinned-scope anchor; re-pair to recover (U1)",
+          { audit: true },
+        );
+      }
       const approver = unpinnedApprover;
       if (!approver) {
         return refuse("unpinned relaxation with no approval surface registered", { audit: true });
       }
-      const approved = await approver({
-        doc: doc.data,
-        // Frozen copies: the approver is Lane U's code, and the values it sees
-        // must be exactly what this push commits - it cannot mutate the object
-        // out from under the commit below (which recomputed none of this).
-        effective: freezePolicyValues(effective),
-        storedEffective: anchor ? freezePolicyValues(anchor.effective) : null,
-      }).catch(() => false);
-      if (!approved) return refuse("unpinned relaxation not approved by the user");
+      // Latch the held candidate for the duration of the approver await (U6):
+      // handlePolicyFrame collapses truly identical pushes (same baseline,
+      // overlay, and attachment) at frame entry while this is set, so a
+      // hostile host cannot stack N copies of one document into N sequential
+      // occupations of the confirmation FIFO.
+      pendingApproval = {
+        baselineB64: baseline,
+        overlayJson: JSON.stringify(overlay ?? null),
+        attachment,
+      };
+      let approved: boolean;
+      try {
+        approved = await approver({
+          // Frozen copies: the approver is Lane U's code, and the values it
+          // sees must be exactly what this push commits - it cannot mutate the
+          // object out from under the commit below (which recomputed none of
+          // this).
+          effective: freezePolicyValues(effective),
+          storedEffective: anchor ? freezePolicyValues(anchor.effective) : null,
+        }).catch(() => false);
+      } finally {
+        pendingApproval = null;
+      }
+      if (!approved) {
+        // Audited (U5): one decline is a user choice, but repeated declines
+        // are an attack signal - a hostile unpinned host grinding at the
+        // approval window - and the ring is where that pattern shows.
+        return refuse("unpinned relaxation not approved by the user", { audit: true });
+      }
     }
   }
 
@@ -1074,7 +1208,12 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
   const committed: StoredPolicyState = {
     scope: scopeToStored(scopeAtStart),
     effective,
-    revision: doc.data.revision,
+    // An unsigned document's revision is unauthenticated noise: store 0 so the
+    // record can never smuggle a forged revision into a ratchet decision. The
+    // scope stamp already keeps the signed lane from anchoring on an
+    // unsigned-era record (a pin transition is a fresh scope); the clamp makes
+    // the stored value honest by construction, not by call order.
+    revision: scopeAtStart.pinned ? doc.data.revision : 0,
     baselineB64: baseline,
     at: Date.now(),
   };
@@ -1120,9 +1259,20 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
   // The mark carries the snapshot scope AND generation - both still equal the
   // commit values, so the mark is honest. Stamping the generation (E2F-2) means
   // a stale continuation from a prior generation cannot resurrect a verified
-  // mark the dispatch gate would honor.
-  if (attachment) {
+  // mark the dispatch gate would honor. ATTACHMENT RECHECK (UF-1): the mark
+  // lands only when the attachment this frame arrived on is STILL the current
+  // port attachment. A reconnect mid-flight makes the captured attachment a
+  // dead object - stamping it would verify a connection that no longer exists
+  // while the LIVE one earned nothing - so stamp no mark at all, fail closed:
+  // the record itself is sound (in-scope, ratcheted) and stays applied, and
+  // the new connection's own push-on-connect earns its own mark.
+  if (attachment && attachment === port) {
     attachment.policy = { kind: "verified", scope: scopeAtStart, generation: generationAtStart };
+  } else if (attachment) {
+    console.warn(
+      "[bb] policy push applied, but the host connection changed mid-flight; no verified mark " +
+        "stamped - the new connection's own push opens its barrier",
+    );
   }
   console.log("[bb] policy push applied: revision", doc.data.revision);
 }
@@ -1137,6 +1287,7 @@ export function resetPolicySyncForTests(): void {
   port = null;
   lang = null;
   unpinnedApprover = null;
+  pendingApproval = null;
   compromisedThisLife = false;
   pinGeneration = 0;
   ratchetResetGeneration = 0;

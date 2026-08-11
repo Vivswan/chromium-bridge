@@ -10,6 +10,7 @@ import {
 import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
+import { registerUnpinnedRelaxationApprover } from "@/lib/background/policy-approval";
 import { connectNative } from "@/lib/background/port";
 import { hardenStorageAccess } from "@/lib/background/trusted-storage";
 import { migrateSettings } from "@/lib/shared/settings-migration";
@@ -63,6 +64,14 @@ export default defineBackground(() => {
   const windowProvider = new ExtensionWindowProvider();
   installConfirmationProvider(windowProvider);
   installPresenceProvider(new EnclavePresenceProvider(windowProvider));
+
+  // Lane U (ADR-0032 decision 3): on an UNPINNED extension, an unsigned
+  // policy push that would relax the enforced effective policy is applied
+  // only after an explicit approval in the confirmation window above.
+  // Registered after the provider so a consultation always has a surface;
+  // policy-sync refuses every relaxation while this seam is empty, and never
+  // consults it on a pinned extension.
+  registerUnpinnedRelaxationApprover();
 
   // Every connect path first COMPLETES the pending-approval sweep, then
   // connects. The sweep re-derives the popup mirror and badge from this

@@ -2,7 +2,9 @@ import {
   type ConfirmKind,
   type ConfirmPayload,
   ConfirmPayloadSchema,
+  isPolicyFieldName,
   type OpName,
+  type PolicyFieldName,
 } from "@chromium-bridge/shared";
 import { useEffect, useRef, useState } from "react";
 import { browser } from "wxt/browser";
@@ -29,6 +31,7 @@ const HEADLINE_KEY: Record<ConfirmKind, MessageKey> = {
   eval: "confirm.h_eval",
   tab_close: "confirm.h_tab_close",
   upload: "confirm.h_upload",
+  policy_relax: "confirm.h_policy_relax",
 };
 
 // One consequence line per control (design law): every kind states what
@@ -40,13 +43,16 @@ const WARNING_KEY: Record<ConfirmKind, MessageKey> = {
   eval: "confirm.warn_eval",
   tab_close: "confirm.warn_tab_close",
   upload: "confirm.warn_upload",
+  policy_relax: "confirm.warn_policy_relax",
 };
 
 // The meta chip speaks the catalogue's tool vocabulary (page_click, ...), the
 // same names the options grid and the audit trail use - never the internal
 // ConfirmKind spelling. `satisfies` pins every value to the generated OpName
 // union, so a catalogue rename breaks this map at compile time instead of
-// leaving the security chip showing a stale name.
+// leaving the security chip showing a stale name. policy_relax is the one
+// kind that is not a tool call: its chip shows the wire frame name instead
+// (chipName below).
 const TOOL_NAME = {
   click: "page_click",
   press: "page_press",
@@ -54,7 +60,49 @@ const TOOL_NAME = {
   eval: "page_eval",
   tab_close: "tab_close",
   upload: "page_upload",
-} as const satisfies Record<ConfirmKind, OpName>;
+} as const satisfies Record<Exclude<ConfirmKind, "policy_relax">, OpName>;
+
+// ADR-0032 Lane U: the policy_relax detail carries the relaxing fields' WIRE
+// names, one per line; this map renders each beside its localized label.
+// `satisfies` pins the map to the generated field catalogue, so a policy
+// field added in the Rust core breaks this at compile time instead of
+// showing an unlabeled wire name in the approval window.
+const POLICY_FIELD_LABEL = {
+  cdpMode: "confirm.pf_cdpMode",
+  fileUploadEnabled: "confirm.pf_fileUploadEnabled",
+  handleDialogEnabled: "confirm.pf_handleDialogEnabled",
+  pageEvalEnabled: "confirm.pf_pageEvalEnabled",
+  confirmHighRiskClick: "confirm.pf_confirmHighRiskClick",
+  confirmPageEval: "confirm.pf_confirmPageEval",
+  touchIdConfirm: "confirm.pf_touchIdConfirm",
+  confirmTabClose: "confirm.pf_confirmTabClose",
+  warnPreciseSnapshot: "confirm.pf_warnPreciseSnapshot",
+  evalMask: "confirm.pf_evalMask",
+  hostReverifyMs: "confirm.pf_hostReverifyMs",
+  confirmGraceMs: "confirm.pf_confirmGraceMs",
+  clickToastTimeoutMs: "confirm.pf_clickToastTimeoutMs",
+  evalToastTimeoutMs: "confirm.pf_evalToastTimeoutMs",
+  disabledTools: "confirm.pf_disabledTools",
+} as const satisfies Record<PolicyFieldName, MessageKey>;
+
+// The contained payload text for a policy_relax confirmation: each wire
+// field name from the detail beside its localized label. Two line shapes
+// arrive (policy-approval.ts): a bare field name (the relaxing fields of a
+// later document) or `field = value` (the FULL value set of the first-ever
+// document, U2). An unrecognized line (a field this build does not know)
+// stays verbatim - showing the raw wire name is the honest fallback, never
+// dropping a granted field from what the user approves.
+function policyRelaxLines(detail: string, t: (k: MessageKey) => string): string {
+  return detail
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const eq = line.indexOf(" = ");
+      const name = eq === -1 ? line : line.slice(0, eq);
+      return isPolicyFieldName(name) ? `${line} - ${t(POLICY_FIELD_LABEL[name])}` : line;
+    })
+    .join("\n");
+}
 
 async function resolve(id: string, approved: boolean): Promise<void> {
   try {
@@ -104,8 +152,19 @@ function fmtCountdown(seconds: number): string {
 // hairlines - the anti-spoof signature a page cannot fake outside this window.
 // The CLIENT segment stays idle/neutral: this window cannot see client
 // attestation (that check lives host-side), so it never overclaims - the
-// same semantics as the popup's micro pipeline.
-function FiringStrip({ hardware, t }: { hardware: boolean; t: (k: MessageKey) => string }) {
+// same semantics as the popup's micro pipeline. `hostUnattested` (the
+// policy_relax kind) keeps the HOST segment idle too: an unsigned push on an
+// unpinned extension proves nothing about the host, and a "passed" dot there
+// would overclaim exactly the identity this approval exists to compensate.
+function FiringStrip({
+  hardware,
+  hostUnattested,
+  t,
+}: {
+  hardware: boolean;
+  hostUnattested: boolean;
+  t: (k: MessageKey) => string;
+}) {
   const seg = (state: "passed" | "held" | "idle", label: string) => (
     <span
       className={`inline-flex flex-none items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.07em] ${
@@ -133,8 +192,8 @@ function FiringStrip({ hardware, t }: { hardware: boolean; t: (k: MessageKey) =>
         </>
       ) : (
         <>
-          {seg("passed", t("confirm.gate_host"))}
-          {link(true)}
+          {seg(hostUnattested ? "idle" : "passed", t("confirm.gate_host"))}
+          {link(!hostUnattested)}
           {seg("held", t("confirm.gate_browser_held"))}
         </>
       )}
@@ -197,6 +256,10 @@ export function ConfirmApp() {
   // is the Touch ID tap on the host's system prompt (the service refuses a
   // window-side approval); Deny stays - removing capability is friction-free.
   const hardware = payload.hardware === true;
+  // ADR-0032 Lane U: an unsigned policy relaxation on an unpinned extension.
+  // No page is involved (origin/tabTitle are ""), the chip names the wire
+  // frame instead of a tool, and the host segment renders unattested.
+  const policyRelax = payload.kind === "policy_relax";
   // The headline names the TARGET site plainly (the requester is the paired
   // MCP client, which this payload cannot attest - so the copy asks about
   // the action's destination, never "X wants"); the chip keeps the exact origin.
@@ -213,7 +276,7 @@ export function ConfirmApp() {
           scroll, as the final bound. flex-1 also absorbs the slack under
           small payloads, keeping the actions pinned to the bottom. */}
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-        <FiringStrip hardware={hardware} t={t} />
+        <FiringStrip hardware={hardware} hostUnattested={policyRelax} t={t} />
         <p className="text-[11px] leading-snug text-text-3">
           {t(hardware ? "confirm.spoof_note_host" : "confirm.spoof_note_browser")}{" "}
           {t("confirm.spoof_note_drawn")}
@@ -221,30 +284,43 @@ export function ConfirmApp() {
 
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-3">
           {t("confirm.via")}
-          <span className="chip-mono">{TOOL_NAME[payload.kind]}</span>
+          <span className="chip-mono">
+            {payload.kind === "policy_relax" ? "policy_current" : TOOL_NAME[payload.kind]}
+          </span>
           {payload.kind === "click" && (
             <span className="pill pill-pending">{t("confirm.high_risk")}</span>
           )}
         </div>
 
         <h1 className="m-0 text-base font-semibold leading-snug tracking-tight">
-          {t(HEADLINE_KEY[payload.kind], [subject])}
+          {policyRelax ? t(HEADLINE_KEY[payload.kind]) : t(HEADLINE_KEY[payload.kind], [subject])}
         </h1>
-        <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-text-2">
-          <span className="chip-mono chip-wrap max-w-full">{payload.origin}</span>
-          {/* the title is page-controlled context, not the grant: clamp it so
-              a hostile document.title cannot crowd out the payload */}
-          <span className="line-clamp-2 min-w-0 text-text-3">&quot;{payload.tabTitle}&quot;</span>
-        </div>
+        {/* No page is involved in a policy_relax: the origin/title row would
+            render empty chips, so it is omitted rather than faked. */}
+        {!policyRelax && (
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-text-2">
+            <span className="chip-mono chip-wrap max-w-full">{payload.origin}</span>
+            {/* the title is page-controlled context, not the grant: clamp it so
+                a hostile document.title cannot crowd out the payload */}
+            <span className="line-clamp-2 min-w-0 text-text-3">&quot;{payload.tabTitle}&quot;</span>
+          </div>
+        )}
 
         {/* the exact payload IS the decision: the only contained surface.
             Sized to content for small payloads, but the only child allowed
             to shrink: a long payload scrolls inside this box while the rest
             of the region stays put. Rendered whitespace-pre: source line
             breaks are preserved and long lines scroll horizontally, so a
-            display wrap can never be mistaken for a source newline. */}
+            display wrap can never be mistaken for a source newline. For
+            policy_relax the payload is the relaxing fields' wire names - or,
+            for the first-ever document, the full `field = value` set (U2) -
+            each rendered beside its localized label; the empty-detail
+            fallback is defensive only (U2 makes it unreachable) and its copy
+            tells the user to deny. */}
         <pre className="code-block m-0 min-h-[60px] shrink whitespace-pre px-3 py-2.5">
-          {payload.detail}
+          {policyRelax
+            ? policyRelaxLines(payload.detail, t) || t("confirm.policy_relax_none")
+            : payload.detail}
         </pre>
 
         <p className="consequence">{t(warnKey)}</p>

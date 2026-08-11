@@ -23,6 +23,13 @@ export const ConfirmKindSchema = z.enum([
   "eval", // page_eval - arbitrary JS; detail carries the FULL code
   "tab_close", // closing a tab
   "upload", // page_upload - detail carries the exact local file path
+  // ADR-0032 decision 3, the unpinned lane: an UNSIGNED host policy push
+  // that would relax the enforced effective policy on an extension with no
+  // pinned key. origin/tabTitle are "" (no page is involved); detail carries
+  // the relaxing fields' wire names, one per line (possibly none: the
+  // first-ever document always rides this lane even when it grants nothing
+  // over the deny baseline). Never presented on a pinned extension.
+  "policy_relax",
 ]);
 
 export type ConfirmKind = z.infer<typeof ConfirmKindSchema>;

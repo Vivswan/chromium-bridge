@@ -302,7 +302,28 @@ stored effective policy, as everywhere: a parsed document that only
 restricts it applies silently, and one that would relax it is held
 unapplied, shown in the extension's off-DOM confirmation window (ADR-0027;
 a surface no web page and no host process can read or answer), and applied
-only on the user's explicit approval, after which it ratchets as usual.
+only on the user's explicit approval. (Amended at Phase 3 implementation:
+on this unsigned lane the extension does NOT enforce the revision ratchet.
+The revision field is unauthenticated here - any local forger can write
+it - so honoring it would hand out a permanent denial lever: one forged
+revision=MAX "restriction", which applies silently, and every later
+genuine unsigned push is refused forever, with no pairing ceremony on
+these machines to reset the scope. The extension treats an unsigned
+document's revision as 0 and clamps the stored record to 0; the lane's
+real protections are the direction checks and this approval window -
+replaying an old restricting document is the forged-restriction DoS this
+decision already concedes, and replaying an old relaxing one costs the
+attacker a visible prompt. The pinned lane's ratchet is byte-identical
+and unaffected. One further Phase 3 rule binds the lanes at storage: an
+unsigned document can never REPLACE a retained pinned-scope record. After
+a revoke the pinned record is kept as the same-key anti-replay anchor,
+and an approved unsigned push overwriting it would let a hostile host
+launder away that anchor during the unpinned window and replay an old,
+more-permissive signed baseline after the same key is re-paired. The
+extension refuses that write outright, so on a machine that HAS revoked a
+pin the unsigned lane stores nothing until a re-pair disposes of the
+record - fail closed, at the cost of the unpinned window being
+policy-frozen between revoke and re-pair.)
 Before any policy has ever applied there is no stored effective, so the
 first document is by definition a relaxation candidate and always goes
 through the window; on unpinned machines the cutover therefore always rides

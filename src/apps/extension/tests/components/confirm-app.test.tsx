@@ -37,6 +37,18 @@ beforeEach(() => {
     confirm_warn_eval: { message: "This code runs in the page with your session." },
     confirm_kill_note: { message: "Denies this request and cuts every client off every browser." },
     kill_engage: { message: "Engage kill switch" },
+    confirm_h_policy_relax: { message: "Loosen this browser's bridge policy?" },
+    confirm_warn_policy_relax: { message: "Nothing proves who sent this policy." },
+    confirm_policy_relax_none: {
+      message: "The changes in this policy could not be itemized.",
+    },
+    confirm_pf_pageEvalEnabled: { message: "Allow page_eval (arbitrary JavaScript)" },
+    confirm_pf_confirmGraceMs: { message: "Re-confirm grace window" },
+    confirm_gate_strip_label: { message: "Which gate is held" },
+    confirm_gate_client: { message: "client" },
+    confirm_gate_host: { message: "host" },
+    confirm_gate_host_held: { message: "host gate" },
+    confirm_gate_browser_held: { message: "browser gate" },
   };
   vi.stubGlobal(
     "fetch",
@@ -143,5 +155,82 @@ describe("ConfirmApp", () => {
     expect(screen.queryByRole("button", { name: /allow/i })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /kill/i }));
     expect(sent).toContainEqual({ type: "confirm_deny_kill" });
+  });
+});
+
+// ADR-0032 Lane U: the unpinned policy-relaxation payload. No page is
+// involved, the detail carries wire field names that render beside their
+// localized labels, and the ordinary Allow/Deny mechanics (arming delay,
+// Escape, resolve) stay exactly the window's.
+describe("ConfirmApp policy_relax", () => {
+  function stubPolicyPayload(detail: string) {
+    vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
+      const m = msg as { type: string; approved?: boolean };
+      sent.push(m);
+      if (m.type === "confirm_ready") {
+        return {
+          payload: { ...PAYLOAD, kind: "policy_relax", origin: "", tabTitle: "", detail },
+        };
+      }
+      return { ok: true };
+    });
+  }
+
+  test("renders each relaxing field's wire name beside its localized label, and no page row", async () => {
+    stubPolicyPayload("pageEvalEnabled\nconfirmGraceMs = 120000");
+    await mount();
+    expect(await screen.findByText(/Loosen this browser's bridge policy\?/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/pageEvalEnabled - Allow page_eval \(arbitrary JavaScript\)/),
+    ).toBeInTheDocument();
+    // Both line shapes label: a bare wire name (later-document relaxation
+    // diff) and `field = value` (the first document's full value set, U2).
+    expect(
+      screen.getByText(/confirmGraceMs = 120000 - Re-confirm grace window/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("policy_current")).toBeInTheDocument();
+    expect(screen.getByText(/Nothing proves who sent this policy/)).toBeInTheDocument();
+    // No page is involved: the origin/title row is omitted, not rendered empty.
+    expect(screen.queryByText('""')).not.toBeInTheDocument();
+  });
+
+  test("an unknown wire name stays verbatim - a granted field is never dropped from the payload", async () => {
+    stubPolicyPayload("someFutureField");
+    await mount();
+    expect(await screen.findByText("someFutureField")).toBeInTheDocument();
+  });
+
+  test("the HOST segment renders IDLE: an unsigned app-confirm approval never claims host or hardware attestation", async () => {
+    stubPolicyPayload("pageEvalEnabled");
+    await mount();
+    await screen.findByText(/Loosen this browser's bridge policy\?/);
+    // Nothing proved who sent this push, so the gate strip must not claim
+    // otherwise: the host dot is idle - neither passed (live) nor held.
+    const host = screen.getByText("host");
+    expect(host.className).toContain("text-text-3");
+    expect(host.className).not.toContain("text-text-2");
+    const dot = host.querySelector(".status-dot");
+    expect(dot).not.toBeNull();
+    expect(dot?.className).not.toContain("live");
+    expect(dot?.className).not.toContain("pending");
+    // And it is the browser-side strip, never the hardware (Touch ID) one:
+    // the held "host gate" rendering would read as hardware attestation, and
+    // display-only hardware mode would drop the Allow button.
+    expect(screen.queryByText("host gate")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /allow/i })).toBeInTheDocument();
+  });
+
+  test("an empty detail falls back to the could-not-itemize note (defensive; U2 makes it unreachable) and still requires the gesture", async () => {
+    stubPolicyPayload("");
+    const user = userEvent.setup();
+    await mount();
+    expect(
+      await screen.findByText(/The changes in this policy could not be itemized/),
+    ).toBeInTheDocument();
+    // The ordinary window mechanics govern: Allow arms, then approves.
+    const allow = screen.getByRole("button", { name: /allow/i });
+    await waitFor(() => expect(allow).toBeEnabled(), { timeout: 2000 });
+    await user.click(allow);
+    expect(sent).toContainEqual({ type: "confirm_resolve", id: "confirm_1", approved: true });
   });
 });

@@ -25,7 +25,20 @@
 // - armCutover is armed BEFORE the record write, so an armed + absent store
 //   denies rather than enforcing legacy;
 // - refusals and the compromise mark route to the audit ring;
-// - the unpinned lane fails closed while Lane U's approver seam is empty.
+// - the unpinned lane fails closed while Lane U's approver seam is empty,
+//   consults the approver on every relaxation (a rejecting OR throwing
+//   approver refuses with no state write and no verified mark), collapses a
+//   push held at the approver ONLY on a full match - same baseline, same
+//   overlay, same attachment (U6/UF-1: a distinct overlay is a tightening
+//   that must land; a reconnect's push must earn the NEW connection its own
+//   mark) - and never enforces (or stores) the unauthenticated revision
+//   field: a forged revision=MAX "restriction" cannot brick later unsigned
+//   pushes, and pairing starts the signed ratchet on a fresh scope;
+// - an approved unsigned push can never REPLACE a retained pinned-scope
+//   record (U1): the revoke->approve->same-key-re-pair interleave cannot
+//   launder away the anti-replay anchor and resurrect an old signed
+//   baseline - refused BEFORE the prompt (UF-2, audited), with the write
+//   throw as backstop.
 //
 // The pin store is mocked (the fixture key is deny-listed as a real pin by
 // design); everything below it - crypto, schemas, ratchet, storage - is real.
@@ -35,6 +48,7 @@
 
 import {
   POLICY_DEFAULTS,
+  POLICY_REVISION_MAX,
   PolicyDocSchema,
   type PolicyValues,
   policyValuesFromDoc,
@@ -162,6 +176,16 @@ function docJson(
     ...POLICY_DEFAULTS,
     disabledTools: [...POLICY_DEFAULTS.disabledTools],
     ...overrides,
+  };
+}
+
+/** An unsigned policy_current frame over a crafted document (the unpinned
+ * lane's wire shape: baseline bytes, no signature). */
+function unsignedFrame(doc: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: "policy_current",
+    ok: true,
+    baseline: base64Encode(new TextEncoder().encode(JSON.stringify(doc))),
   };
 }
 
@@ -530,6 +554,67 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(2);
     expect((await getStoredPolicyState())?.effective).toEqual(goldenValues(1));
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("U1: an APPROVED unsigned push during the unpinned window cannot destroy the retained pinned anchor", async () => {
+    // rev 2 lands under the pinned fixture key, then the user revokes.
+    await push(goldenFrame(1));
+    pinState.pin = null;
+    await onPinRevoked(fixture.keyIdHex);
+    // THE ATTACK: during the unpinned window a hostile host pushes an
+    // UNSIGNED "restriction" with an armed approver (the user would approve -
+    // it looks harmless). Were the commit allowed to land, the scope-null
+    // record would OVERWRITE the retained pinned-scope record - the
+    // anti-replay anchor - and a same-key re-pair would then read
+    // awaitingBaseline, letting an old signed baseline replay as first-ever
+    // with zero fresh presence. (Since UF-2 the refusal fires BEFORE the
+    // prompt; the writeStoredRecord throw remains the backstop, pinned by its
+    // own test in the Lane U describe.)
+    setUnpinnedRelaxationApprover(() => Promise.resolve(true));
+    await push(unsignedFrame(docJson(1, [], { disabledTools: ["page_eval"] })));
+    // Refused fail-closed: the pinned anchor survives byte-for-byte, nothing
+    // was stored for the unpinned scope, and the barrier stays closed.
+    const retained = await getStoredPolicyState();
+    expect(retained?.scope).toBe(fixture.keyIdHex);
+    expect(retained?.revision).toBe(2);
+    expect(retained?.effective).toEqual(goldenValues(1));
+    expect((await policyDispatchGate()).allowed).toBe(false);
+    // The user re-pairs the SAME key: the anchor is back in scope...
+    pinState.pin = fixturePin();
+    await onPinPinned(fixture.keyIdHex);
+    // ...so the old, more-permissive genuinely-signed rev-1 baseline replay
+    // is REFUSED - the ratchet demands a strictly newer signed document, and
+    // the barrier stays closed (fresh verification demanded).
+    detachPort();
+    attachPort(() => true);
+    await push(goldenFrame(0));
+    expect((await getStoredPolicyState())?.revision).toBe(2);
+    expect((await getStoredPolicyState())?.effective).toEqual(goldenValues(1));
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("UF-2: a post-revoke unsigned push is refused and audited BEFORE the approver is consulted", async () => {
+    await push(goldenFrame(1));
+    pinState.pin = null;
+    await onPinRevoked(fixture.keyIdHex);
+    const consulted = vi.fn(() => Promise.resolve(true));
+    setUnpinnedRelaxationApprover(consulted);
+    auditCalls.events = [];
+    await push(unsignedFrame(docJson(1, [], { disabledTools: ["page_eval"] })));
+    // Validate-before-prompt: the push can never commit (U1's preservation
+    // rule), so the user is never asked to burn an approval gesture on it,
+    // and the refusal reaches the audit ring instead of dying as a throw
+    // swallowed by frameChain's silent catch.
+    expect(consulted).not.toHaveBeenCalled();
+    expect(
+      auditCalls.events.some(
+        (e) => e.kind === "policy_refused" && JSON.stringify(e.fields).includes("pinned-scope"),
+      ),
+    ).toBe(true);
+    const retained = await getStoredPolicyState();
+    expect(retained?.scope).toBe(fixture.keyIdHex);
+    expect(retained?.revision).toBe(2);
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
@@ -1041,12 +1126,14 @@ describe("the unpinned lane (Lane U seam)", () => {
     expect((await policyDispatchGate()).allowed).toBe(true); // never armed
   });
 
-  test("an approved relaxation applies and ratchets; a denied one changes nothing", async () => {
+  test("an approved relaxation applies; a denied one changes nothing", async () => {
     setUnpinnedRelaxationApprover(() => Promise.resolve(false));
     await push(goldenFrame(0));
     expect(await getStoredPolicyState()).toBeNull();
     setUnpinnedRelaxationApprover((relaxation) => {
-      expect(relaxation.doc.revision).toBe(1);
+      // The seam hands over ONLY the frozen value pair (U4): no live document
+      // or other commit input rides along for the approver to hold or mutate.
+      expect(Object.keys(relaxation).sort()).toEqual(["effective", "storedEffective"]);
       expect(relaxation.storedEffective).toBeNull();
       // The approver sees FROZEN copies: it cannot mutate the values this push
       // will commit (the commit recomputes none of them).
@@ -1055,7 +1142,10 @@ describe("the unpinned lane (Lane U seam)", () => {
       return Promise.resolve(true);
     });
     await push(goldenFrame(0));
-    expect((await getStoredPolicyState())?.revision).toBe(1);
+    // Unsigned accepts clamp the stored revision to 0: the document's revision
+    // field is unauthenticated on this lane and must never seed a ratchet
+    // anchor.
+    expect((await getStoredPolicyState())?.revision).toBe(0);
     expect(await getPolicySnapshotForTests()).toEqual({
       cutover: true,
       effective: goldenValues(0),
@@ -1071,14 +1161,202 @@ describe("the unpinned lane (Lane U seam)", () => {
     expect(stored?.effective.pageEvalEnabled).toBe(false);
   });
 
-  test("the ratchet still binds the unpinned lane: a lower revision is refused before any approval", async () => {
+  test("the unauthenticated revision never gates the unpinned lane: a lower-revision restriction still applies", async () => {
     const consulted = vi.fn(() => Promise.resolve(true));
     setUnpinnedRelaxationApprover(consulted);
-    await push(goldenFrame(1));
+    await push(goldenFrame(1)); // rev 2, relaxed - approved
     consulted.mockClear();
-    await push(goldenFrame(0));
-    expect((await getStoredPolicyState())?.revision).toBe(2);
+    // A pure restriction of the stored effective (defaults everywhere, the
+    // vector's page_upload disable retained) carrying a LOWER revision:
+    // applies silently - direction is the unpinned lane's gate, revision is
+    // not - and the approver is not consulted for a restriction.
+    await push(unsignedFrame(docJson(1, [], { disabledTools: ["page_upload"] })));
+    const stored = await getStoredPolicyState();
+    expect(stored?.effective.pageEvalEnabled).toBe(false);
+    expect(stored?.effective.disabledTools).toEqual(["page_upload"]);
+    expect(stored?.revision).toBe(0);
     expect(consulted).not.toHaveBeenCalled();
+  });
+
+  test("a forged revision=MAX restriction cannot brick later unsigned pushes, and pairing starts a clean signed scope", async () => {
+    const consulted = vi.fn(() => Promise.resolve(true));
+    setUnpinnedRelaxationApprover(consulted);
+    await push(unsignedFrame(docJson(1, [])));
+    consulted.mockClear();
+    // The forged "restriction" rides the free lane with the largest revision
+    // the schema admits. It applies (harmless DoS, decision 3) but its
+    // revision is clamped out of the stored record.
+    await push(unsignedFrame(docJson(POLICY_REVISION_MAX, [], { disabledTools: ["page_eval"] })));
+    expect((await getStoredPolicyState())?.revision).toBe(0);
+    expect(consulted).not.toHaveBeenCalled();
+    // A later genuine unsigned relaxation still reaches the window and
+    // applies on approval - nothing was ratcheted shut.
+    await push(unsignedFrame(docJson(1, [], { pageEvalEnabled: true })));
+    expect(consulted).toHaveBeenCalledTimes(1);
+    const stored = await getStoredPolicyState();
+    expect(stored?.effective.pageEvalEnabled).toBe(true);
+    expect(stored?.revision).toBe(0);
+    // Pairing pins a key: the unsigned-era record is OUT OF SCOPE under it
+    // (awaitingBaseline - no reset runs, and none is needed), so the signed
+    // lane starts a fresh ratchet: the rev-1 golden baseline applies as-is,
+    // untouched by the forged revision.
+    pinState.pin = fixturePin();
+    await onPinPinned(fixture.keyIdHex);
+    await push(goldenFrame(0));
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+  });
+
+  test("a REJECTING approver refuses the push: no state write, no verified mark", async () => {
+    setUnpinnedRelaxationApprover(() => Promise.resolve(true));
+    await push(unsignedFrame(docJson(1, []))); // first doc approved: cutover armed
+    // A fresh connection: awaiting until IT verifies a push.
+    attachPort(() => true);
+    const consulted = vi.fn(() => Promise.resolve(false));
+    setUnpinnedRelaxationApprover(consulted);
+    await push(unsignedFrame(docJson(2, [], { pageEvalEnabled: true })));
+    expect(consulted).toHaveBeenCalledTimes(1);
+    const stored = await getStoredPolicyState();
+    expect(stored?.effective.pageEvalEnabled).toBe(false);
+    expect(stored?.revision).toBe(0);
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("a THROWING approver reads as refusal (the .catch fallback): no state write, no verified mark", async () => {
+    setUnpinnedRelaxationApprover(() => Promise.resolve(true));
+    await push(unsignedFrame(docJson(1, []))); // first doc approved: cutover armed
+    attachPort(() => true);
+    // The window crashing, closing, or the confirm service dying mid-prompt
+    // surfaces as a rejected promise; the seam's .catch(() => false) must read
+    // it as a refusal, never as an approval or an unhandled rejection.
+    const consulted = vi.fn(() => Promise.reject(new Error("approval window crashed")));
+    setUnpinnedRelaxationApprover(consulted);
+    await push(unsignedFrame(docJson(2, [], { pageEvalEnabled: true })));
+    expect(consulted).toHaveBeenCalledTimes(1);
+    const stored = await getStoredPolicyState();
+    expect(stored?.effective.pageEvalEnabled).toBe(false);
+    expect(stored?.revision).toBe(0);
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("a byte-identical push arriving while one is already held at the approver is collapsed (U6)", async () => {
+    let release!: (approved: boolean) => void;
+    const consulted = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    setUnpinnedRelaxationApprover(consulted);
+    const frame = unsignedFrame(docJson(1, [], { pageEvalEnabled: true }));
+    const first = handlePolicyFrame(frame);
+    await vi.waitFor(() => {
+      if (consulted.mock.calls.length === 0) throw new Error("not held at the approver yet");
+    });
+    // THE FLOOD: byte-identical copies while the prompt is pending. Each is
+    // dropped at frame entry - it occupies neither the frame chain nor the
+    // confirmation FIFO with another 120s prompt; the pending verdict covers
+    // these exact bytes.
+    const dup1 = handlePolicyFrame(frame);
+    const dup2 = handlePolicyFrame(frame);
+    release(true);
+    await Promise.all([first, dup1, dup2]);
+    expect(consulted).toHaveBeenCalledTimes(1);
+    const stored = await getStoredPolicyState();
+    expect(stored?.effective.pageEvalEnabled).toBe(true);
+    expect(stored?.revision).toBe(0);
+    // The collapse window closes with the verdict: a LATER byte-identical
+    // push is restricts-or-equal against the now-stored effective and applies
+    // without a prompt (and a denied one would be re-offered on reconnect).
+    await push(frame);
+    expect(consulted).toHaveBeenCalledTimes(1);
+  });
+
+  test("UF-1: a same-baseline push with a DIFFERENT overlay is never collapsed - the tightening lands", async () => {
+    let release!: (approved: boolean) => void;
+    const consulted = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    setUnpinnedRelaxationApprover(consulted);
+    const doc = docJson(1, [], { pageEvalEnabled: true });
+    const first = handlePolicyFrame(unsignedFrame(doc));
+    await vi.waitFor(() => {
+      if (consulted.mock.calls.length === 0) throw new Error("not held at the approver yet");
+    });
+    // The host tightens mid-window: SAME baseline bytes, RESTRICTING overlay.
+    // A legitimately DISTINCT candidate - dropping it as a "duplicate" would
+    // fail OPEN against the host's tightening intent (the approved, looser
+    // push would govern until the next reconnect).
+    const tightened = handlePolicyFrame({
+      ...unsignedFrame(doc),
+      overlay: { pageEvalEnabled: false },
+    });
+    release(true);
+    await Promise.all([first, tightened]);
+    // The tightening serialized behind the verdict and applied silently (a
+    // restriction of the just-stored effective needs no prompt).
+    expect(consulted).toHaveBeenCalledTimes(1);
+    expect((await getStoredPolicyState())?.effective.pageEvalEnabled).toBe(false);
+  });
+
+  test("UF-1: a reconnect's byte-identical push-on-connect is never collapsed and earns the NEW connection its mark", async () => {
+    let release!: (approved: boolean) => void;
+    const consulted = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    setUnpinnedRelaxationApprover(consulted);
+    const frame = unsignedFrame(docJson(1, [], { pageEvalEnabled: true }));
+    const first = handlePolicyFrame(frame);
+    await vi.waitFor(() => {
+      if (consulted.mock.calls.length === 0) throw new Error("not held at the approver yet");
+    });
+    // The port reconnects while the prompt is open; the new connection's
+    // push-on-connect carries the same bytes. Collapsing it would strand the
+    // NEW attachment barrier-closed until the host happened to re-push: the
+    // held push's mark belongs to the dead attachment (and the commit-time
+    // attachment recheck refuses to stamp it anywhere else).
+    attachPort(() => true);
+    const reconnectPush = handlePolicyFrame(frame);
+    release(true);
+    await Promise.all([first, reconnectPush]);
+    // One prompt total: the reconnect replay is restricts-or-equal against
+    // the now-stored effective, applying silently - on ITS OWN attachment,
+    // which is exactly what opens the live connection's barrier.
+    expect(consulted).toHaveBeenCalledTimes(1);
+    expect((await getStoredPolicyState())?.effective.pageEvalEnabled).toBe(true);
+    expect((await policyDispatchGate()).allowed).toBe(true);
+  });
+
+  test("U1 backstop: a pinned-scope record landing mid-approval is still refused at the write", async () => {
+    const v = fixture.vectors[1];
+    if (!v) throw new Error("missing golden vector");
+    setUnpinnedRelaxationApprover(async () => {
+      // A pinned-scope record (and the cutover) land WHILE the prompt is open
+      // - an interleave the UF-2 validate-before-prompt read cannot see. The
+      // writeStoredRecord preservation rule is the backstop that still
+      // refuses to trade the anchor away.
+      await fakeBrowser.storage.local.set({
+        bridgePolicyCutover: true,
+        bridgePolicyState: {
+          scope: fixture.keyIdHex,
+          effective: goldenValues(1),
+          revision: 2,
+          baselineB64: v.docB64,
+          at: 5,
+        },
+      });
+      return true;
+    });
+    await push(unsignedFrame(docJson(1, [])));
+    const stored = await getStoredPolicyState();
+    expect(stored?.scope).toBe(fixture.keyIdHex);
+    expect(stored?.revision).toBe(2);
+    expect((await policyDispatchGate()).allowed).toBe(false);
   });
 });
 
