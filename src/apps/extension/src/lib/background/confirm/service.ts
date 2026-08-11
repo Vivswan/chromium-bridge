@@ -20,13 +20,15 @@
 //
 // Phase 8 (ADR-0031): providers implement ConfirmationProvider. The default
 // is the extension popup window (surface.ts). The "eval" and "upload" kinds
-// route to the Enclave user-presence provider (presence.ts) when the user
-// setting is on and the device is capable (macOS + pinned host key) - the
-// host raises the Touch ID prompt and the provider resolves its verdict from
-// the host's SIGNED answer, with a display-only window showing WHAT is being
-// approved. Such payloads carry `hardware: true`, and resolveConfirm refuses
-// a window-side approval for them: the tap is the only approval. The queue,
-// deadline, and fail-closed semantics here stay unchanged.
+// route to the Enclave user-presence provider (presence.ts) when the
+// request's decision-time routing verdict says so (presenceRouting below,
+// computed by the caller from its per-request policy snapshot, ADR-0032
+// decision 4) - the host raises the Touch ID prompt and the provider
+// resolves its verdict from the host's SIGNED answer, with a display-only
+// window showing WHAT is being approved. Such payloads carry
+// `hardware: true`, and resolveConfirm refuses a window-side approval for
+// them: the tap is the only approval. The queue, deadline, and fail-closed
+// semantics here stay unchanged.
 
 import type { ConfirmKind, ConfirmPayload } from "@chromium-bridge/shared";
 import { auditEvent } from "../audit-log";
@@ -37,6 +39,23 @@ export interface ConfirmRequest {
   tabTitle: string;
   detail: string;
   timeoutMs: number;
+  /** Route this confirmation to the Enclave user-presence provider
+   * (ADR-0031)? Decided by the CALLER at decision time - for the gated ops,
+   * from the SAME per-request policy snapshot as the rest of the decision
+   * (ADR-0032 decision 4), so a policy push landing while the confirmation
+   * waits in the queue cannot re-route it. Kinds the presence provider never
+   * serves pass false. Honored only for the "eval"/"upload" kinds while a
+   * presence provider is installed; false (or no provider) falls back to the
+   * off-DOM window confirmation - still confirmed, not hardware-gated. */
+  presenceRouting: boolean;
+  /** The panic epoch captured at DECISION START (currentPanicEpoch below) -
+   * in dispatch, SYNCHRONOUSLY beside the policy snapshot and BEFORE the
+   * decision's first await, then threaded through the confirmation path as a
+   * required parameter. Every await the decision performs - the policy read,
+   * the tab resolve, the presence routing probe, a click probe - follows the
+   * capture, so a deny-kill that lands AND lifts inside any of them still
+   * denies on the epoch mismatch (SFX-2). */
+  panicEpoch: number;
 }
 
 /** A live presentation of one confirmation. */
@@ -77,41 +96,35 @@ export function installConfirmationProvider(p: ConfirmationProvider): void {
   defaultProvider = p;
 }
 
-// The Enclave user-presence provider (ADR-0031) and its routing predicate:
-// one pair, installed and consulted atomically - a provider without its
-// predicate (or the reverse) is unrepresentable, so a half-installed pair
-// can never silently demote hardware kinds to the window path. `enabled` is
-// consulted per confirmation so a settings change applies immediately; a
-// predicate failure routes to the window (still a real confirmation), never
-// to "no confirmation".
-interface PresenceRouting {
-  provider: ConfirmationProvider;
-  enabled: () => Promise<boolean>;
-}
-let presence: PresenceRouting | null = null;
+// The Enclave user-presence provider (ADR-0031). Whether a confirmation
+// routes to it travels IN the request (presenceRouting above), decided from
+// the caller's per-request policy snapshot: providerFor never re-reads live
+// policy, so a push landing between decision and presentation cannot
+// re-route an in-flight confirmation (ADR-0032 decision 4). A missing
+// provider routes to the window (still a real confirmation), never to
+// "no confirmation".
+let presence: ConfirmationProvider | null = null;
 
-export function installPresenceProvider(
-  p: ConfirmationProvider,
-  enabled: () => Promise<boolean>,
-): void {
-  presence = { provider: p, enabled };
+export function installPresenceProvider(p: ConfirmationProvider): void {
+  presence = p;
 }
 
-/** The provider for a given kind. "eval" and "upload" go to the Enclave
- * user-presence gate when it is installed, enabled, and capable; everything
- * else (and every fallback) keeps the window. `hardware` marks the payload
- * so the window renders display-only and resolveConfirm refuses a window
- * approval. */
-async function providerFor(
-  kind: ConfirmKind,
-): Promise<{ provider: ConfirmationProvider | null; hardware: boolean }> {
-  const routing = presence;
-  if ((kind === "eval" || kind === "upload") && routing) {
-    const routed = await routing.enabled().catch((e: unknown) => {
-      console.warn("[bb] presence routing probe failed; using the window", e);
-      return false;
-    });
-    if (routed) return { provider: routing.provider, hardware: true };
+/** The provider for one request. "eval" and "upload" go to the Enclave
+ * user-presence gate when the request's decision-time routing verdict says
+ * so and a provider is installed; everything else (and every fallback)
+ * keeps the window. `hardware` marks the payload so the window renders
+ * display-only and resolveConfirm refuses a window approval. Synchronous on
+ * purpose: no await sits between the front-of-queue latch check and the
+ * `active` registration below, so a panic can never land "mid-selection"
+ * INSIDE the service; the awaits that remain in a decision (the caller-side
+ * routing probe, the queue wait) are covered by the decision-start epoch the
+ * request carries (ConfirmRequest.panicEpoch). */
+function providerFor(req: ConfirmRequest): {
+  provider: ConfirmationProvider | null;
+  hardware: boolean;
+} {
+  if ((req.kind === "eval" || req.kind === "upload") && presence && req.presenceRouting) {
+    return { provider: presence, hardware: true };
   }
   return { provider: defaultProvider, hardware: false };
 }
@@ -129,13 +142,23 @@ async function providerFor(
 // latch stays on - denying consent is the fail-closed reading of "kill
 // everything" - until the SW's own restart clears it.
 let panicDeny = false;
-// Edge marker beside the level latch: bumped on every panic. A request whose
-// provider selection was IN FLIGHT when the panic hit has no `active` entry
-// to settle and may finish selecting only after the latch has already lifted
-// (the kill confirmed quickly) - the level check alone would present it.
-// Every request captures the epoch at CREATION and denies on any mismatch:
-// "a panic crossed this request's lifetime" survives the lift.
+// Edge marker beside the level latch: bumped on every panic, and LOAD-BEARING
+// (SFX-2): every request carries the epoch its DECISION captured at its start
+// (currentPanicEpoch below, threaded through ConfirmRequest.panicEpoch). The
+// decision's own awaits - the presence routing probe, a click probe - and the
+// FIFO queue wait all sit between that capture and presentation, so a panic
+// that lands AND lifts anywhere inside that span is invisible to the level
+// check alone. Any mismatch denies: "a panic crossed this decision's
+// lifetime" survives the lift.
 let panicEpoch = 0;
+
+/** Capture the panic epoch at the START of a decision, before its first
+ * await (SFX-2). Every confirmation the decision raises carries this value,
+ * so the service denies it if a deny-kill crossed the decision - even one
+ * that lifted again before the confirmation was created. */
+export function currentPanicEpoch(): number {
+  return panicEpoch;
+}
 
 /** The confirm window hit the brake: deny the active confirmation and latch
  * everything behind it to auto-deny. Settling the active entry lets the
@@ -175,11 +198,12 @@ export function resetPanicForTests(): void {
  * the extension-owned surface; every other outcome is false. */
 export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    // Captured when the request is CREATED, not when it reaches the front of
-    // the queue: a panic bumps the epoch, so any request that predates the
-    // panic - active, queued behind a slow provider selection, or itself
-    // mid-selection - denies on the mismatch even after the latch lifts.
-    const epoch = panicEpoch;
+    // The DECISION-START epoch the caller captured before its first await
+    // (SFX-2): a panic bumps the epoch, so any request whose decision
+    // predates the panic - active, queued, or still awaiting its caller-side
+    // routing probe when the panic hit - denies on the mismatch even after
+    // the latch lifts.
+    const epoch = req.panicEpoch;
     // One collision-resistant id per confirmation ATTEMPT, minted once here so
     // EVERY audit event this attempt emits carries the same `cid` (ADR-0030) -
     // whether it is shown and gets a verdict, or denied before any surface
@@ -235,17 +259,7 @@ async function presentOne(
     resolve(false);
     return;
   }
-  const { provider, hardware } = await providerFor(req.kind);
-  if (panicDeny || panicEpoch !== epoch) {
-    // The panic landed DURING provider selection: `active` was not yet
-    // registered, so denyAllConfirmations could not settle this one -
-    // and the latch may even have lifted again already (kill confirmed
-    // fast), which is why the epoch is checked, not just the level.
-    // Same denial, before any surface exists - its cid matches no row.
-    auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
-    resolve(false);
-    return;
-  }
+  const { provider, hardware } = providerFor(req);
   const payload: ConfirmPayload = {
     // The attempt's id doubles as the surface routing handle
     // (getPendingConfirm/resolveConfirm match on it). Same value the

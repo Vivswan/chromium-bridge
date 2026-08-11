@@ -15,7 +15,7 @@
 // and may not be capturable - Page.handleJavaScriptDialog then errors, which we
 // surface honestly.
 
-import { getSetting } from "../shared/settings";
+import type { PolicyValues } from "@chromium-bridge/shared";
 import { TOOL_GATES } from "../shared/tool-gates";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
@@ -23,10 +23,18 @@ import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
 import { resolveTargetTab } from "./tabs";
 
-export async function handleDialog(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
-  // The gate setting comes from the shared TOOL_GATES map, the same entry the
-  // options grid renders, so enforcement and UI cannot name different settings.
-  if ((await getSetting(TOOL_GATES.page_handle_dialog)) !== true) {
+export async function handleDialog(
+  maybeTabId: number | undefined,
+  args: OpArgs,
+  policy: PolicyValues,
+): Promise<unknown> {
+  // ONE policy snapshot for the whole decision (ADR-0032 decision 4):
+  // dispatch threads its per-request snapshot in; the REQUIRED parameter is
+  // what holds the invariant (tests start their own decisions via
+  // withFreshPolicy). The gate field comes from the shared TOOL_GATES
+  // map, the same entry the options grid renders, so enforcement and UI
+  // cannot name different settings.
+  if (policy[TOOL_GATES.page_handle_dialog] !== true) {
     throw new Error(
       "page_handle_dialog is disabled. Enable it in the extension settings first (it is off by default because a blocked dialog cannot show an in-page confirmation).",
     );

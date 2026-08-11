@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
+import { withFreshPolicy } from "@/lib/background/effective-policy";
 import { decodeToastReply, snapshotPrecise } from "@/lib/background/precise";
 
 // The toast strings resolve SW-side; the locale machinery is not under test.
@@ -70,7 +71,9 @@ describe("snapshotPrecise honors the toast", () => {
       // The user cancels the pre-attach notice.
       return { ok: true, data: { cancelled: true } };
     });
-    await expect(snapshotPrecise(tab.id, {})).resolves.toEqual({ cancelled: true });
+    await expect(withFreshPolicy((policy) => snapshotPrecise(tab.id, {}, policy))).resolves.toEqual(
+      { cancelled: true },
+    );
     expect(attach).not.toHaveBeenCalled();
   });
 });

@@ -45,6 +45,7 @@ import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
+import { getEffectivePolicy } from "./effective-policy";
 import * as pinStore from "./enclave-pin";
 import {
   fingerprintDisplay,
@@ -329,8 +330,18 @@ async function maybeSendPendingHostRevoke(): Promise<void> {
  * closed. Each re-verify raises a Touch ID prompt, which is why it is
  * opt-in. */
 async function maybePeriodicReverify(pin: pinStore.EnclavePin): Promise<void> {
-  const interval = await getSetting("hostReverifyMs");
-  if (typeof interval !== "number" || interval <= 0) return;
+  // A policy field since ADR-0032 Phase 3; its own decision moment (one read).
+  const effective = await getEffectivePolicy();
+  if (effective.state === "blocked") {
+    // The connect path is NOT behind the dispatch barrier (SFX-1): resolving
+    // a blocked posture to the deny-baseline defaults here would read
+    // hostReverifyMs 0 = never-re-verify and silently skip the user's opt-in
+    // check. Skip LOUDLY instead; the barrier is refusing requests anyway.
+    console.warn("[bb] periodic host re-verification skipped:", effective.reason);
+    return;
+  }
+  const interval = effective.values.hostReverifyMs;
+  if (interval <= 0) return;
   const lastVerified = Math.max(pin.pinnedAt, (await pinStore.getLastVerifiedAt()) ?? 0);
   if (Date.now() - lastVerified < interval) return;
   console.log("[bb] periodic host re-verification due");

@@ -15,7 +15,15 @@ const dbg = vi.hoisted(() => ({
   detach: vi.fn<() => Promise<void>>(() => Promise.resolve()),
   sendCommand: vi.fn(() => Promise.resolve({})),
 }));
-vi.mock("wxt/browser", () => ({ browser: { debugger: dbg } }));
+vi.mock("wxt/browser", () => ({
+  browser: {
+    debugger: dbg,
+    // registry.get's restriction-only policy recheck (SFX-3) reads storage;
+    // answer every read with a legacy cdpMode grant so these lifecycle tests
+    // exercise the attach protocol, not the policy gate.
+    storage: { local: { get: () => Promise.resolve({ cdpMode: true }) } },
+  },
+}));
 
 import { withCdpAttach } from "@/lib/background/cdp/attach";
 import { cdpRegistry } from "@/lib/background/cdp/registry";

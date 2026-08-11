@@ -52,7 +52,7 @@ import {
   attachPort,
   detachPort,
   getLangState,
-  getPolicySnapshot,
+  getPolicySnapshotForTests,
   getStoredPolicyState,
   handlePolicyFrame,
   isPolicyFrame,
@@ -203,7 +203,10 @@ describe("golden-vector replay through the full accept path", () => {
     const stored = await getStoredPolicyState();
     expect(stored?.revision).toBe(1);
     expect(stored?.effective).toEqual(goldenValues(0));
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: goldenValues(0) });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: goldenValues(0),
+    });
     expect((await policyDispatchGate()).allowed).toBe(true);
     // Never-speak-first: consuming pushes posts nothing.
     expect(posted).toEqual([]);
@@ -274,7 +277,10 @@ describe("golden-vector replay through the full accept path", () => {
     expect(gate.allowed).toBe(false);
     if (!gate.allowed) expect(gate.reason).toContain("host-substitution");
     // The snapshot reports the fail-closed deny baseline (cutover-forced true).
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: POLICY_DEFAULTS,
+    });
     expect(pinState.compromised?.reason).toContain("signature verification");
   });
 
@@ -482,13 +488,19 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     // the old effective is never enforced under the new key.
     const other = await makeSigner();
     pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: POLICY_DEFAULTS,
+    });
     expect((await policyDispatchGate()).allowed).toBe(false);
     // Pinning the ORIGINAL key back re-activates the retained anchor (finding
     // 2): the record's scope matches again, so its ratchet governs once more.
     pinState.pin = fixturePin();
     expect((await getStoredPolicyState())?.revision).toBe(2);
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: goldenValues(1) });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: goldenValues(1),
+    });
   });
 
   test("same-key re-pair retains the anchor, so an OLD lower-revision baseline replay is refused (finding 2)", async () => {
@@ -501,7 +513,10 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     pinState.pin = null;
     await onPinRevoked(fixture.keyIdHex); // record RETAINED across revoke
     expect((await getStoredPolicyState())?.revision).toBe(2);
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: POLICY_DEFAULTS,
+    });
     expect((await policyDispatchGate()).allowed).toBe(false);
     // The SAME key is re-pinned: anchor kept, NOT cleared, scope matches again.
     pinState.pin = fixturePin();
@@ -551,7 +566,10 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     // Refused: nothing stored, cutover never armed, no verified mark.
     expect(await getStoredPolicyState()).toBeNull();
     expect(await policyCutoverArmed()).toBe(false);
-    expect(await getPolicySnapshot()).toEqual({ cutover: false, effective: POLICY_DEFAULTS });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: false,
+      effective: POLICY_DEFAULTS,
+    });
     // A subsequent SIGNED rev-1 push under the now-pinned key applies cleanly -
     // it was not clobbered by a stale revision-0 write from the dropped push.
     setUnpinnedRelaxationApprover(null);
@@ -704,7 +722,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
       calls.push(k);
       return realGet(k);
     };
-    await getPolicySnapshot();
+    await getPolicySnapshotForTests();
     local.get = realGet as never;
     // Exactly one get names BOTH policy keys together (no torn two-get read),
     // and neither key is fetched on its own.
@@ -1038,7 +1056,10 @@ describe("the unpinned lane (Lane U seam)", () => {
     });
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(1);
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: goldenValues(0) });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: goldenValues(0),
+    });
   });
 
   test("a pure restriction of the stored effective applies silently, no approver needed", async () => {
@@ -1092,7 +1113,10 @@ describe("corrupt stored state latches closed (finding 3)", () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true, bridgePolicyState: CORRUPT });
     // Latched closed: the snapshot reports cutover (fail-closed), and the gate
     // refuses regardless of any verified mark.
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: POLICY_DEFAULTS,
+    });
     const gate = await policyDispatchGate();
     expect(gate.allowed).toBe(false);
     if (!gate.allowed) expect(gate.reason).toContain("latched");
@@ -1210,7 +1234,10 @@ describe("armCutover ordering is fail-closed", () => {
     // baseline + closed barrier - never legacy-enforced-despite-a-policy.
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
     expect(await getStoredPolicyState()).toBeNull();
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: POLICY_DEFAULTS,
+    });
     expect((await policyDispatchGate()).allowed).toBe(false);
     // Recovery is a fresh verified push, which starts the ratchet cleanly.
     attachPort(() => true);
@@ -1247,7 +1274,10 @@ describe("armCutover ordering is fail-closed", () => {
     // verified mark was set (the commit threw before it).
     expect(await getStoredPolicyState()).toBeNull();
     expect(await policyCutoverArmed()).toBe(true);
-    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect(await getPolicySnapshotForTests()).toEqual({
+      cutover: true,
+      effective: POLICY_DEFAULTS,
+    });
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 });

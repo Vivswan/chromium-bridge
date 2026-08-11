@@ -80,6 +80,7 @@ import {
   relaxedPolicyFields,
   type StoredPolicyState,
   StoredPolicyStateSchema,
+  unreachable,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
@@ -88,6 +89,12 @@ import { base64Decode, verifyPolicySignatureAgainstPin } from "./enclave-verify"
 
 const POLICY_STATE_KEY = "bridgePolicyState";
 const POLICY_CUTOVER_KEY = "bridgePolicyCutover";
+
+/** The storage keys the persisted policy state lives under, for
+ * storage.onChanged consumers that must react on the policy PUSH path (the
+ * accepted push writes these keys): cdp/registry.ts re-evaluates the
+ * effective cdpMode and tears down live sessions when it turned off. */
+export const POLICY_STORAGE_KEYS = [POLICY_CUTOVER_KEY, POLICY_STATE_KEY] as const;
 const POLICY_PRIOR_PIN_KEY = "bridgePolicyPriorPin";
 
 // ---- in-life latches (SW-lifetime, in memory only) ----------------------------
@@ -572,7 +579,42 @@ export async function policyDispatchGate(): Promise<PolicyGate> {
   return { allowed: false, reason: BARRIER_REASON };
 }
 
-// ---- the read API (Lane S consumes this) ----------------------------------------
+// ---- the read API (effective-policy.ts consumes this) ----------------------------
+
+/** The persisted posture, typed so a BLOCKED state is not consumable as
+ * policy values (SFX-1): awaitingBaseline and compromised carry a reason,
+ * never a PolicyValues, so no enforcement caller can mistake the deny
+ * baseline for an applicable policy outside the dispatch barrier.
+ * effective-policy.ts folds `legacy` with the legacy settings read; every
+ * enforcement site consumes ITS state-typed wrapper, not this directly. */
+export type PolicyPosture =
+  | { kind: "legacy" }
+  | { kind: "active"; effective: PolicyValues }
+  | { kind: "blocked"; reason: string };
+
+const AWAITING_REASON =
+  "policy cutover is armed but no in-scope verified policy baseline is stored (ADR-0032 " +
+  "decision 4): the deny posture governs and every enforcement read refuses until a " +
+  "baseline verifies under the current pin.";
+
+export async function getPolicyPosture(): Promise<PolicyPosture> {
+  const state = await resolvePolicyState(await currentScope());
+  switch (state.kind) {
+    case "legacy":
+      return { kind: "legacy" };
+    case "active":
+      return { kind: "active", effective: state.record.effective };
+    case "awaitingBaseline":
+      return { kind: "blocked", reason: AWAITING_REASON };
+    case "compromised":
+      return {
+        kind: "blocked",
+        reason: compromisedThisLife ? COMPROMISED_LIFE_REASON : LATCHED_REASON,
+      };
+    default:
+      return unreachable(state);
+  }
+}
 
 export interface PolicySnapshot {
   /** True once the first policy push was ever accepted (one-way); also true
@@ -586,11 +628,15 @@ export interface PolicySnapshot {
    * (hostReverifyMs/disabledTools/ms-windows), and it is safe here only
    * because the barrier, not this value, is what fails those states closed.
    * Pre-cutover (`cutover:false`) the consumer reads the legacy local settings
-   * instead; that switch is Lane S's. */
+   * instead. */
   effective: PolicyValues;
 }
 
-export async function getPolicySnapshot(): Promise<PolicySnapshot> {
+/** The RAW two-field view, for tests and diagnostics that pin the stored
+ * values directly. Enforcement callers must use getPolicyPosture (via
+ * effective-policy.ts): this shape folds the blocked states into
+ * POLICY_DEFAULTS, which only the dispatch barrier makes safe. */
+export async function getPolicySnapshotForTests(): Promise<PolicySnapshot> {
   const state = await resolvePolicyState(await currentScope());
   if (state.kind === "active") return { cutover: true, effective: state.record.effective };
   return { cutover: state.kind !== "legacy", effective: POLICY_DEFAULTS };

@@ -5,10 +5,9 @@
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach. See ADR-0009.
 
-import { InfoToastResultSchema, PageReplySchema } from "@chromium-bridge/shared";
+import { InfoToastResultSchema, PageReplySchema, type PolicyValues } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { initI18n, t } from "../i18n";
-import { getSetting } from "../shared/settings";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
@@ -96,7 +95,11 @@ export function decodeToastReply(raw: unknown): ToastOutcome {
   return result.data.cancelled ? { kind: "cancelled" } : { kind: "proceed" };
 }
 
-export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpArgs) {
+export async function snapshotPrecise(
+  maybeTabId: number | undefined,
+  _args: OpArgs,
+  policy: PolicyValues,
+) {
   const tab = await resolveTargetTab(maybeTabId);
   await ensureAllowed(tab.url);
 
@@ -107,8 +110,10 @@ export async function snapshotPrecise(maybeTabId: number | undefined, _args: OpA
   }
 
   // Warn the user via an informational toast in the page. Proceed unless
-  // they actively cancel within the timeout. Skippable via settings.
-  const warnPrecise = await getSetting("warnPreciseSnapshot");
+  // they actively cancel within the timeout. Skippable via policy; the
+  // REQUIRED snapshot parameter is dispatch's per-request one (ADR-0032
+  // decision 4), so the whole decision runs under it.
+  const warnPrecise = policy.warnPreciseSnapshot;
   await injectIfNeeded(tab.id);
   if (warnPrecise) {
     // The toast strings resolve here (the SW has the user's locale); the

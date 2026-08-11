@@ -24,7 +24,7 @@
 // the bridge compromised: only a substituted host or a corrupted channel can
 // produce one.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared";
+import type { ConfirmPayload, PolicyValues } from "@chromium-bridge/shared";
 import {
   type PresenceChallengeWire,
   PresenceErrorFrameSchema,
@@ -32,7 +32,6 @@ import {
   PresenceProofFrameSchema,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
-import { getSetting } from "../../shared/settings";
 import { getCompromised, getPin, setCompromised } from "../enclave-pin";
 import { generateNonce, hexEncode, verifyPresenceProofAgainstPin } from "../enclave-verify";
 import { platformCanEnroll } from "../enrollment";
@@ -198,11 +197,21 @@ export async function presenceCapable(): Promise<boolean> {
   return (await getPin()) !== null;
 }
 
-/** The service's routing predicate for the "eval"/"upload" kinds: the user
- * setting (default ON) AND device capability. Opting out falls back to the
- * off-DOM window confirmation - still confirmed, not hardware-gated. */
-export async function presenceRoutingEnabled(): Promise<boolean> {
-  if ((await getSetting("touchIdConfirm")) === false) return false;
+/** The routing verdict for the "eval"/"upload" kinds: the policy field
+ * (default ON) AND device capability. Computed at DECISION time from the
+ * caller's per-request policy snapshot and carried in the ConfirmRequest
+ * (ADR-0032 decision 4): presentation never re-reads live policy, so a push
+ * landing while the confirmation waits in the queue cannot re-route it.
+ * Opting out falls back to the off-DOM window confirmation - still
+ * confirmed, not hardware-gated. */
+export async function presenceRoutingEnabled(policy: PolicyValues): Promise<boolean> {
+  if (policy.touchIdConfirm === false) return false;
+  // A THROWN probe fails the op closed (the throw propagates and the caller
+  // refuses): the legacy window-fallback is deliberately NOT restored here,
+  // because demoting a hardware-required approval to an ordinary window on an
+  // anomalous storage error would downgrade the Touch ID gate (ADR-0031
+  // no-downgrade). A compromised or absent pin returns false cleanly without
+  // throwing, so the normal window routing is unaffected.
   return presenceCapable();
 }
 

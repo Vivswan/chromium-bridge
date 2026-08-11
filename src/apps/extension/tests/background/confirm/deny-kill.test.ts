@@ -15,6 +15,7 @@ import { readRing, resetAuditForTests } from "@/lib/background/audit-log";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
   confirmWithUser,
+  currentPanicEpoch,
   denyAllConfirmations,
   installConfirmationProvider,
   installPresenceProvider,
@@ -73,17 +74,23 @@ function fakeProvider(install: (p: Parameters<typeof installConfirmationProvider
   return presented;
 }
 
-const REQ = {
+// Requests are minted per call: panicEpoch is the DECISION-START capture
+// (SFX-2), so a static literal would go stale the moment any test panics.
+const REQ = () => ({
   kind: "eval" as const,
   origin: "https://example.com",
   tabTitle: "Example",
   detail: "return 1;",
   timeoutMs: 5000,
-};
+  // The decision-time routing verdict (ADR-0032 decision 4): eval routes to
+  // the presence provider whenever one is installed.
+  presenceRouting: true,
+  panicEpoch: currentPanicEpoch(),
+});
 
 // installPresenceProvider has no uninstall (module state), so tests that want
 // the DEFAULT window provider use a kind presence never routes.
-const WINDOW_REQ = { ...REQ, kind: "click" as const };
+const WINDOW_REQ = () => ({ ...REQ(), kind: "click" as const, presenceRouting: false });
 
 beforeEach(() => {
   fakeBrowser.reset();
@@ -104,7 +111,7 @@ afterEach(async () => {
 describe("confirm_deny_kill", () => {
   test("denies first: when the kill frame is posted, the op is already settled", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    const verdict = confirmWithUser(WINDOW_REQ);
+    const verdict = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     const shown = presented[0];
     expect(shown).toBeDefined();
@@ -140,8 +147,8 @@ describe("confirm_deny_kill", () => {
 
   test("queued and newly arriving confirmations are denied unseen while the engage is in flight", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    const first = confirmWithUser(WINDOW_REQ);
-    const queued = confirmWithUser(WINDOW_REQ); // waits behind the first
+    const first = confirmWithUser(WINDOW_REQ());
+    const queued = confirmWithUser(WINDOW_REQ()); // waits behind the first
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
 
@@ -154,7 +161,7 @@ describe("confirm_deny_kill", () => {
     expect(presented).toHaveLength(1);
 
     // A request arriving while the engage is still in flight: denied unseen.
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(1);
 
     // The host confirming the engage does NOT lift the latch: while killed,
@@ -163,14 +170,14 @@ describe("confirm_deny_kill", () => {
     // presence-gated release - before confirmations may present.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(1);
 
     // The user releases the switch: alive after the refusal. The latch
     // lifts and confirmations present normally again.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    const later = confirmWithUser(WINDOW_REQ);
+    const later = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(2);
     resolveConfirm(presented[1]!.payload.id, false);
@@ -178,8 +185,8 @@ describe("confirm_deny_kill", () => {
   });
 
   test("a hardware-gated confirmation is denied and a late tap verdict cannot flip it", async () => {
-    const presented = fakeProvider((p) => installPresenceProvider(p, async () => true));
-    const verdict = confirmWithUser(REQ); // eval routes to the presence provider
+    const presented = fakeProvider((p) => installPresenceProvider(p));
+    const verdict = confirmWithUser(REQ()); // eval routes to the presence provider
     await vi.advanceTimersByTimeAsync(0);
     const shown = presented[0];
     expect(shown?.payload.hardware).toBe(true);
@@ -217,118 +224,94 @@ describe("confirm_deny_kill", () => {
     // keeps it latched - an alive that precedes any refusal proves nothing
     // about the engage still queued on the pipe.
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
 
     // The engage's answer flips the mirror to killed - the refusal applied
     // (the request gate refuses upstream from here on), but the latch still
     // holds: it lifts only when the state reads alive AFTER that refusal.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
 
     // The explicit release lands: alive after the refusal lifts the latch.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    const after = confirmWithUser(WINDOW_REQ);
+    const after = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1); // presented again: the latch lifted
     expect(resolveConfirm(presented[0]!.payload.id, false).ok).toBe(true);
     await expect(after).resolves.toBe(false);
   });
 
-  test("a confirmation mid-provider-selection when the panic lands is denied unseen", async () => {
-    // The panic can land while providerFor is awaiting the presence-routing
-    // predicate: `active` is not yet registered, so the deny-all cannot
-    // settle it - the post-selection latch recheck must catch it instead.
-    let releaseEnabled!: (v: boolean) => void;
-    const enabledGate = new Promise<boolean>((r) => {
-      releaseEnabled = r;
-    });
-    const presented = fakeProvider((p) => installPresenceProvider(p, () => enabledGate));
-    const verdict = confirmWithUser(REQ); // eval routes through the predicate
-    await vi.advanceTimersByTimeAsync(0);
-    expect(presented).toHaveLength(0); // still selecting a provider
+  // The panic-window awaits moved OUT of the service with SFX-2: provider
+  // selection is synchronous (providerFor consumes the request's
+  // decision-time presenceRouting verdict), but the DECISION's own awaits -
+  // the presence routing probe in gate.ts/upload.ts, the click probe -
+  // precede confirmWithUser. The requests below carry an epoch captured at
+  // decision start (currentPanicEpoch), so the three properties the old
+  // parked-predicate tests pinned hold in the new model.
 
+  test("a panic landing during a decision's pre-confirmation await denies its confirmation unseen", async () => {
+    const presented = fakeProvider(installConfirmationProvider);
+    // Decision start: the epoch is captured BEFORE the decision's first
+    // await (the caller-side routing probe stands in for it here).
+    const decisionEpoch = currentPanicEpoch();
     attachPort(() => true);
-    route({ type: "confirm_deny_kill" }, confirmSender, () => {});
-    releaseEnabled(true);
+    route({ type: "confirm_deny_kill" }, confirmSender, () => {}); // the panic lands mid-await
+    const verdict = confirmWithUser({ ...WINDOW_REQ(), panicEpoch: decisionEpoch });
+    await vi.advanceTimersByTimeAsync(0);
     await expect(verdict).resolves.toBe(false);
     expect(presented).toHaveLength(0); // never presented, nothing to approve
   });
 
-  test("mid-selection denial survives the latch lifting before selection completes", async () => {
-    // Harder interleaving: the kill CONFIRMS and is then explicitly
-    // RELEASED (mirror killed, then alive: latch lifted) while provider
-    // selection is still awaited. The level check alone would present the
-    // pre-panic request; the epoch marker must deny it.
-    let releaseEnabled!: (v: boolean) => void;
-    const enabledGate = new Promise<boolean>((r) => {
-      releaseEnabled = r;
-    });
-    const presented = fakeProvider((p) => installPresenceProvider(p, () => enabledGate));
-    const verdict = confirmWithUser(REQ);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(presented).toHaveLength(0);
-
+  test("that denial survives the latch lifting before the confirmation is even created", async () => {
+    // Harder interleaving: the kill CONFIRMS and is then explicitly RELEASED
+    // (mirror killed, then alive: latch lifted) while the decision is still
+    // inside its pre-confirmation await. The level check alone would present
+    // the pre-panic decision's confirmation; the decision-start epoch must
+    // deny it.
+    const presented = fakeProvider(installConfirmationProvider);
+    const decisionEpoch = currentPanicEpoch();
     attachPort(() => true);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
-    // The engage confirms AND the user releases BEFORE selection completes:
-    // the latch lifts.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-
-    releaseEnabled(true);
+    const verdict = confirmWithUser({ ...WINDOW_REQ(), panicEpoch: decisionEpoch });
+    await vi.advanceTimersByTimeAsync(0);
     await expect(verdict).resolves.toBe(false);
-    expect(presented).toHaveLength(0); // the panic crossed its window: denied
+    expect(presented).toHaveLength(0); // the panic crossed the decision: denied
   });
 
-  test("a request QUEUED behind a mid-selection one when the panic lands is denied too", async () => {
-    // A is mid-selection (no active entry to settle), B waits in the queue.
-    // The panic fires and the latch lifts before A's selection completes: A
-    // denies on its epoch, and B - created before the panic - must deny on
-    // ITS request-time epoch rather than present into the lifted latch.
-    const presentedDefault = fakeProvider(installConfirmationProvider);
-    let releaseEnabled!: (v: boolean) => void;
-    const enabledGate = new Promise<boolean>((r) => {
-      releaseEnabled = r;
-    });
-    const presentedHw = fakeProvider((p) => installPresenceProvider(p, () => enabledGate));
-
-    const a = confirmWithUser(REQ); // presence route: parked in selection
-    const b = confirmWithUser(WINDOW_REQ); // queued behind A, pre-panic
+  test("a decision queued behind a mid-await one is denied too; a post-panic decision presents", async () => {
+    // A holds the surface, B's decision has started (epoch captured) but its
+    // confirmation is not created yet; the panic settles A and then lifts
+    // before B reaches the service. B must deny on ITS decision-start epoch;
+    // a decision started AFTER the panic presents normally.
+    const presented = fakeProvider(installConfirmationProvider);
+    const a = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
-    expect(presentedHw).toHaveLength(0);
-    expect(presentedDefault).toHaveLength(0);
-
+    expect(presented).toHaveLength(1);
+    const bEpoch = currentPanicEpoch(); // B's decision start, pre-panic
     attachPort(() => true);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
-    // Created WHILE the latch is on, behind the still-selecting A: must be
-    // denied at the door, not parked in the queue where a lifted latch (and
-    // its own post-panic epoch) would let it present.
-    const c = confirmWithUser(WINDOW_REQ);
-    await expect(c).resolves.toBe(false);
-    // The engage confirms and the user releases: latch lifted before A's
-    // selection completes.
+    await expect(a).resolves.toBe(false);
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-
-    releaseEnabled(true);
-    await expect(a).resolves.toBe(false);
-    await expect(b).resolves.toBe(false);
-    expect(presentedHw).toHaveLength(0);
-    expect(presentedDefault).toHaveLength(0);
-
-    // A request created AFTER the panic settled presents normally.
-    const later = confirmWithUser(WINDOW_REQ);
+    const b = confirmWithUser({ ...WINDOW_REQ(), panicEpoch: bEpoch });
     await vi.advanceTimersByTimeAsync(0);
-    expect(presentedDefault).toHaveLength(1);
-    resolveConfirm(presentedDefault[0]!.payload.id, false);
+    await expect(b).resolves.toBe(false);
+    expect(presented).toHaveLength(1); // B never presented
+
+    const later = confirmWithUser(WINDOW_REQ()); // fresh decision, current epoch
+    await vi.advanceTimersByTimeAsync(0);
+    expect(presented).toHaveLength(2);
+    resolveConfirm(presented[1]!.payload.id, false);
     await expect(later).resolves.toBe(false);
   });
 
@@ -356,17 +339,17 @@ describe("confirm_deny_kill", () => {
     // and the engage is still queued - the latch must hold.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
 
     // The engage applies (killed), then a later explicit release (alive):
     // only THAT alive - ordered after the refusal - lifts the latch.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    const later = confirmWithUser(WINDOW_REQ);
+    const later = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     resolveConfirm(presented[0]!.payload.id, false);
@@ -381,7 +364,7 @@ describe("confirm_deny_kill", () => {
     // but the frame is ON the pipe and the host may still apply it. A lift
     // here would let a confirmation present right as the kill lands.
     await vi.advanceTimersByTimeAsync(11_000);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
   });
 
@@ -392,7 +375,7 @@ describe("confirm_deny_kill", () => {
     await vi.advanceTimersByTimeAsync(0);
     // Nothing reached the pipe: the mirror tells the user the truth and
     // bricking every future confirmation would help no one.
-    const later = confirmWithUser(WINDOW_REQ);
+    const later = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     resolveConfirm(presented[0]!.payload.id, false);
@@ -414,7 +397,7 @@ describe("confirm_deny_kill", () => {
     await vi.advanceTimersByTimeAsync(0);
     // Panic 1's send-failure release has run by now; it must be a no-op
     // against panic 2's still-armed latch.
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
   });
 
@@ -422,10 +405,10 @@ describe("confirm_deny_kill", () => {
     const first = denyAllConfirmations();
     const second = denyAllConfirmations();
     releasePanicDeny(first); // stale: must not lift the newer latch
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     releasePanicDeny(second);
     const presented = fakeProvider(installConfirmationProvider);
-    const later = confirmWithUser(WINDOW_REQ);
+    const later = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     resolveConfirm(presented[0]!.payload.id, false);
@@ -450,14 +433,14 @@ describe("confirm_deny_kill", () => {
     // The pre-panic release answers alive: the latch must hold.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
 
     // The engage's own refusal, then an explicit release: now it lifts.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    const later = confirmWithUser(WINDOW_REQ);
+    const later = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     resolveConfirm(presented[0]!.payload.id, false);
@@ -474,7 +457,7 @@ describe("confirm_deny_kill", () => {
     await vi.advanceTimersByTimeAsync(0);
     detachPort();
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
   });
 
@@ -517,7 +500,7 @@ describe("confirm_deny_kill", () => {
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
   });
 
@@ -540,14 +523,14 @@ describe("confirm_deny_kill", () => {
     await refusal;
     await vi.advanceTimersByTimeAsync(0);
     // Still latched while killed (the mirror gate refuses upstream anyway).
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
 
     // The explicit presence-gated release settles everything: the latch
     // lifts - a send-failure repeat panic must not brick confirmations.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    const later = confirmWithUser(WINDOW_REQ);
+    const later = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     resolveConfirm(presented[0]!.payload.id, false);
@@ -567,14 +550,14 @@ describe("confirm_deny_kill", () => {
     await handleKillFrame({ type: "kill_status_result", ok: false }); // engage failed host-side
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false }); // recovered: alive
     await vi.advanceTimersByTimeAsync(0);
-    await expect(confirmWithUser(WINDOW_REQ)).resolves.toBe(false);
+    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
 
     // Only a kill that provably TOOK, then the explicit release, lifts.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
-    const later = confirmWithUser(WINDOW_REQ);
+    const later = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     resolveConfirm(presented[0]!.payload.id, false);
@@ -610,7 +593,7 @@ describe("confirm_deny_kill", () => {
 
   test("refused senders neither deny nor engage", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    const verdict = confirmWithUser(WINDOW_REQ);
+    const verdict = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     const id = presented[0]!.payload.id;
 
@@ -646,7 +629,7 @@ describe("confirm_deny_kill", () => {
 describe("audit correlation id (cid)", () => {
   test("a confirmation's shown and its verdict share the same cid", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    const verdict = confirmWithUser(WINDOW_REQ);
+    const verdict = confirmWithUser(WINDOW_REQ());
     await vi.advanceTimersByTimeAsync(0);
     const id = presented[0]!.payload.id;
     expect(resolveConfirm(id, true).ok).toBe(true);
@@ -665,8 +648,8 @@ describe("audit correlation id (cid)", () => {
 
   test("the active denial reuses its shown cid; a never-shown denial gets a fresh cid that matches no row", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    const first = confirmWithUser(WINDOW_REQ); // shown, active
-    const queued = confirmWithUser(WINDOW_REQ); // waits behind the first, never shown
+    const first = confirmWithUser(WINDOW_REQ()); // shown, active
+    const queued = confirmWithUser(WINDOW_REQ()); // waits behind the first, never shown
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     const shownId = presented[0]!.payload.id;

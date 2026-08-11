@@ -1,6 +1,6 @@
 import { ENCLAVE_FIXTURE_KEY_ID, POLICY_DEFAULTS } from "@chromium-bridge/shared";
 import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing";
 import * as pinStore from "@/lib/background/enclave-pin";
 import {
@@ -1025,6 +1025,23 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
     if (!gate.allowed) expect(gate.reason).toContain("policy barrier");
   });
 
+  test("the barrier refuses BEFORE the dispatch kickoff runs (S4): onAllowed never fires while the snapshot would fall to POLICY_DEFAULTS", async () => {
+    // The Opus-e2 invariant: in awaitingBaseline the snapshot answers
+    // POLICY_DEFAULTS - safe ONLY because port.ts hands the dispatch kickoff
+    // INTO enrollmentGate, which consults policyDispatchGate before invoking
+    // it. So no .effective read can drive a decision in that state: the
+    // kickoff must never run.
+    const key = await genKey();
+    await pairAndPin(key);
+    store.bridgePolicyCutover = true; // armed, no record: awaitingBaseline
+    let dispatched = 0;
+    const gate = await enrollmentGate(() => {
+      dispatched += 1;
+    });
+    expect(gate.allowed).toBe(false);
+    expect(dispatched).toBe(0);
+  });
+
   test("a push signed by the REAL pinned key opens the barrier end to end", async () => {
     const key = await genKey();
     await pairAndPin(key);
@@ -1152,5 +1169,61 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
     expect(store.bridgePolicyPriorPin).toBe(key.keyId);
     // The prior write is observed strictly before the enclavePin removal.
     expect(ops).toEqual(["set:bridgePolicyPriorPin", "remove:enclavePin"]);
+  });
+});
+
+// ---- ADR-0032 Phase 3, Lane S: hostReverifyMs comes from the policy snapshot ----
+
+describe("post-cutover hostReverifyMs reads the policy snapshot, not legacy settings", () => {
+  function armCutoverWith(scope: string, hostReverifyMs: number): void {
+    store.bridgePolicyCutover = true;
+    store.bridgePolicyState = {
+      scope,
+      effective: { ...POLICY_DEFAULTS, disabledTools: [], hostReverifyMs },
+      revision: 1,
+      baselineB64: "ZG9j",
+      at: 1,
+    };
+  }
+
+  test("grant direction: policy 0 (never re-verify) silences a stale legacy interval", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store.hostReverifyMs = 1000; // legacy would challenge the stale pin
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    armCutoverWith(key.keyId, 0);
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before);
+  });
+
+  test("deny direction: a policy interval challenges a stale pin although legacy says never", async () => {
+    const key = await genKey();
+    await pairAndPin(key);
+    store.hostReverifyMs = 0; // legacy would stay silent
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    armCutoverWith(key.keyId, 1000);
+    await onPortConnected();
+    expect(posted[posted.length - 1]?.type).toBe("enclave_challenge");
+  });
+
+  test("blocked posture (awaitingBaseline): the re-verify check is skipped LOUDLY, not resolved to defaults", async () => {
+    // SFX-1 symptom (b): this runs on the CONNECT path, outside the dispatch
+    // barrier. Folding a blocked posture into the deny-baseline defaults
+    // would read hostReverifyMs 0 = never-re-verify and silently drop the
+    // user's opt-in check; the state-typed read skips it with a warning.
+    const key = await genKey();
+    await pairAndPin(key);
+    store.hostReverifyMs = 1000; // legacy would challenge the stale pin
+    (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
+    store.bridgePolicyCutover = true; // armed, no record: blocked
+    const warn = vi.spyOn(console, "warn");
+    const before = posted.length;
+    await onPortConnected();
+    expect(posted.length).toBe(before); // no challenge posted
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("re-verification skipped"))).toBe(
+      true,
+    );
+    warn.mockRestore();
   });
 });

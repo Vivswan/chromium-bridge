@@ -6,6 +6,8 @@
 // closes, when Chrome detaches us, or when the user turns CDP mode off.
 
 import { browser } from "wxt/browser";
+import { getEffectivePolicy } from "../effective-policy";
+import { POLICY_STORAGE_KEYS } from "../policy-sync";
 import { CdpSession } from "./session";
 
 class CdpSessionRegistry {
@@ -36,7 +38,40 @@ class CdpSessionRegistry {
       if (!session.isAttached) this.sessions.delete(tabId);
       throw e;
     }
+    // Restriction-only recheck AFTER the attach protocol ran (SFX-3): a
+    // decision that snapshotted cdpMode:true and was held open (e.g. by a
+    // confirmation) can reach here AFTER a restricting policy push already
+    // fired teardownAll below - nothing else would ever tear the JUST-MADE
+    // session down, so handing it out registered would let the restriction
+    // leak into a persistent debugger attach. Tear it down and refuse
+    // instead; the in-flight decision simply fails this op (extra
+    // restriction mid-flight is the fail-closed direction of decision 4),
+    // and a blocked posture counts as no grant. The check runs after the
+    // attach so the attach/registration interleaving stays synchronous for
+    // the orphan-cleanup identity machinery above. An ERRORED policy read
+    // fails closed exactly like a refusal (CS-2): the just-made attach must
+    // not outlive a grant we could not read.
+    let granted: boolean;
+    try {
+      const effective = await getEffectivePolicy();
+      granted = effective.state !== "blocked" && effective.values.cdpMode === true;
+    } catch (e) {
+      await this.teardownIfCurrent(tabId, session);
+      throw e;
+    }
+    if (!granted) {
+      await this.teardownIfCurrent(tabId, session);
+      throw new Error("cdp mode is not granted by the effective policy; refusing the session");
+    }
     return session;
+  }
+
+  // Tear down only while the map still holds THIS session (SP-2):
+  // browser.debugger.detach is tab-scoped, so a refusing call's teardown
+  // resolving late must never rip down a newer session a concurrent call
+  // attached to the same tab after ours was replaced.
+  private async teardownIfCurrent(tabId: number, session: CdpSession): Promise<void> {
+    if (this.sessions.get(tabId) === session) await this.teardown(tabId);
   }
 
   // Explicit teardown: detach and forget. Safe to call for an unknown tab.
@@ -96,10 +131,25 @@ export function installCdpLifecycleListeners(): void {
     if (typeof source.tabId === "number") cdpRegistry.handleExternalDetach(source.tabId);
   });
 
-  // CDP mode turned off → detach everything so the banner goes away.
+  // cdpMode turned off -> detach everything so the banner goes away. The
+  // effective mode is policy-resolved (ADR-0032 Phase 3): pre-cutover the
+  // legacy toggle, post-cutover the host-pushed record - so an accepted
+  // policy push restricting cdpMode tears live sessions down on the push
+  // path (the push writes the policy storage keys), exactly like the legacy
+  // toggle always did.
   browser.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    const change = changes.cdpMode;
-    if (change && change.newValue === false) void cdpRegistry.teardownAll();
+    const relevant = "cdpMode" in changes || POLICY_STORAGE_KEYS.some((key) => key in changes);
+    if (!relevant) return;
+    void (async () => {
+      const effective = await getEffectivePolicy();
+      // A blocked posture counts as no grant: teardown is restriction-only,
+      // so it is always the safe reading of "not granted".
+      const granted = effective.state !== "blocked" && effective.values.cdpMode === true;
+      if (!granted) await cdpRegistry.teardownAll();
+    })().catch((e) => {
+      // Teardown is a restriction; a failed check must be loud, not silent.
+      console.warn("[bb] cdp policy teardown check failed", e);
+    });
   });
 }

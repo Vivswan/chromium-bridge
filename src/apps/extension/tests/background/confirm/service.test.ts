@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
   confirmWithUser,
+  currentPanicEpoch,
   getPendingConfirm,
   installConfirmationProvider,
   installPresenceProvider,
@@ -50,6 +51,10 @@ const REQ = {
   tabTitle: "Example",
   detail: "return 1;",
   timeoutMs: 5000,
+  presenceRouting: false,
+  // The decision-start epoch (SFX-2), captured the way a real caller does.
+  // This suite never panics, so the module's epoch never moves.
+  panicEpoch: currentPanicEpoch(),
 };
 
 beforeEach(() => {
@@ -248,64 +253,39 @@ describe("getPendingConfirm", () => {
   });
 });
 
-describe("presence routing pair", () => {
-  test("a reinstall DURING provider selection cannot pair a new provider with the old predicate", async () => {
-    // The real interleaving the single value fixes: providerFor used to read
-    // presenceEnabled, await it, then read presenceProvider - so a reinstall
-    // landing inside that await paired the NEW provider with the OLD
-    // predicate's answer. The pair now travels as one captured value, so the
-    // provider that presents is always the one whose predicate answered.
-    let releaseOldPredicate!: (v: boolean) => void;
-    const oldGate = new Promise<boolean>((r) => {
-      releaseOldPredicate = r;
+describe("presence routing (the verdict travels in the request)", () => {
+  // The routing decision is computed by the CALLER at decision time from its
+  // per-request policy snapshot and carried in the ConfirmRequest (ADR-0032
+  // decision 4): providerFor consults nothing live, so neither a policy push
+  // nor a provider/predicate reinstall during the queue wait can re-route an
+  // in-flight confirmation - the old paired-predicate race is gone with the
+  // predicate itself.
+  test("a true decision-time verdict presents on the presence provider, hardware-marked", async () => {
+    const windowShown = fakeProvider();
+    const hwShown: ConfirmPayload[] = [];
+    installPresenceProvider({
+      present(payload) {
+        hwShown.push(payload);
+        return { verdict: Promise.resolve(false), dismiss() {} };
+      },
     });
-    const oldShown: ConfirmPayload[] = [];
-    installPresenceProvider(
-      {
-        present(payload) {
-          oldShown.push(payload);
-          return { verdict: Promise.resolve(false), dismiss() {} };
-        },
-      },
-      () => oldGate, // parks provider selection inside the await
-    );
-    const newShown: ConfirmPayload[] = [];
-
-    const verdict = confirmWithUser(REQ); // eval routes through the predicate
+    const verdict = confirmWithUser({ ...REQ, presenceRouting: true });
     await vi.advanceTimersByTimeAsync(0);
-    // Selection is parked on the OLD predicate. Reinstall a NEW pair now.
-    installPresenceProvider(
-      {
-        present(payload) {
-          newShown.push(payload);
-          return { verdict: Promise.resolve(false), dismiss() {} };
-        },
-      },
-      async () => true,
-    );
-    // The old predicate resolves true: the request must present on the OLD
-    // provider (its pair), never the newly installed one.
-    releaseOldPredicate(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(newShown.length).toBe(0);
-    expect(oldShown.length).toBe(1);
-    expect(oldShown[0]!.hardware).toBe(true);
-    resolveConfirm(oldShown[0]!.id, false);
+    expect(windowShown.length).toBe(0);
+    expect(hwShown.length).toBe(1);
+    expect(hwShown[0]!.hardware).toBe(true);
     await expect(verdict).resolves.toBe(false);
   });
 
-  test("a declining predicate routes to the window, consulting no hardware provider", async () => {
+  test("a false verdict routes to the window, consulting no hardware provider", async () => {
     const windowShown = fakeProvider();
     const hwShown: ConfirmPayload[] = [];
-    installPresenceProvider(
-      {
-        present(payload) {
-          hwShown.push(payload);
-          return { verdict: Promise.resolve(false), dismiss() {} };
-        },
+    installPresenceProvider({
+      present(payload) {
+        hwShown.push(payload);
+        return { verdict: Promise.resolve(false), dismiss() {} };
       },
-      async () => false,
-    );
+    });
     const verdict = confirmWithUser(REQ);
     await vi.advanceTimersByTimeAsync(0);
     expect(hwShown.length).toBe(0);

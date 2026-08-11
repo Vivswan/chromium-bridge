@@ -41,13 +41,24 @@ import {
 import type { ConfirmationProvider, Presentation } from "@/lib/background/confirm/service";
 import {
   confirmWithUser,
+  currentPanicEpoch,
   installConfirmationProvider,
   installPresenceProvider,
   resolveConfirm,
 } from "@/lib/background/confirm/service";
+import { getEffectivePolicy } from "@/lib/background/effective-policy";
 // The MOCKED capability probe (the factory above), so a test can park or
 // fail one round's setup on demand.
 import { platformCanEnroll } from "@/lib/background/enrollment";
+
+// The decision-start reads a real caller performs (pre-cutover here, so the
+// legacy settings govern): unwrap the state-typed snapshot for the routing
+// predicate.
+async function freshValues() {
+  const policy = await getEffectivePolicy();
+  if (policy.state === "blocked") throw new Error(policy.reason);
+  return policy.values;
+}
 
 // ---- test key + proof helpers (WebCrypto plays the Secure Enclave) -----------
 
@@ -489,7 +500,7 @@ describe("service routing and the window-approval refusal", () => {
     });
     const display = displayStub();
     installConfirmationProvider(display.provider);
-    installPresenceProvider(new EnclavePresenceProvider(display.provider), presenceRoutingEnabled);
+    installPresenceProvider(new EnclavePresenceProvider(display.provider));
 
     const result = confirmWithUser({
       kind: "eval",
@@ -497,6 +508,8 @@ describe("service routing and the window-approval refusal", () => {
       tabTitle: "t",
       detail: "fetch('/steal')",
       timeoutMs: 30_000,
+      presenceRouting: await presenceRoutingEnabled(await freshValues()),
+      panicEpoch: currentPanicEpoch(),
     });
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
     const shown = first(display.shown);
@@ -524,7 +537,7 @@ describe("service routing and the window-approval refusal", () => {
     attachPort(() => true);
     const display = displayStub();
     installConfirmationProvider(display.provider);
-    installPresenceProvider(new EnclavePresenceProvider(display.provider), presenceRoutingEnabled);
+    installPresenceProvider(new EnclavePresenceProvider(display.provider));
 
     const result = confirmWithUser({
       kind: "upload",
@@ -532,6 +545,8 @@ describe("service routing and the window-approval refusal", () => {
       tabTitle: "t",
       detail: "/etc/passwd",
       timeoutMs: 30_000,
+      presenceRouting: await presenceRoutingEnabled(await freshValues()),
+      panicEpoch: currentPanicEpoch(),
     });
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
     const denied = resolveConfirm(first(display.shown).id, false);
@@ -545,7 +560,7 @@ describe("service routing and the window-approval refusal", () => {
     await fakeBrowser.storage.local.set({ touchIdConfirm: false });
     const display = displayStub();
     installConfirmationProvider(display.provider);
-    installPresenceProvider(new EnclavePresenceProvider(display.provider), presenceRoutingEnabled);
+    installPresenceProvider(new EnclavePresenceProvider(display.provider));
 
     const result = confirmWithUser({
       kind: "eval",
@@ -553,6 +568,8 @@ describe("service routing and the window-approval refusal", () => {
       tabTitle: "t",
       detail: "1",
       timeoutMs: 30_000,
+      presenceRouting: await presenceRoutingEnabled(await freshValues()),
+      panicEpoch: currentPanicEpoch(),
     });
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
     const shown = first(display.shown);
@@ -568,7 +585,7 @@ describe("service routing and the window-approval refusal", () => {
     await fakeBrowser.storage.local.set({ touchIdConfirm: true });
     const display = displayStub();
     installConfirmationProvider(display.provider);
-    installPresenceProvider(new EnclavePresenceProvider(display.provider), presenceRoutingEnabled);
+    installPresenceProvider(new EnclavePresenceProvider(display.provider));
 
     const result = confirmWithUser({
       kind: "click",
@@ -576,6 +593,8 @@ describe("service routing and the window-approval refusal", () => {
       tabTitle: "t",
       detail: "submit",
       timeoutMs: 30_000,
+      presenceRouting: await presenceRoutingEnabled(await freshValues()),
+      panicEpoch: currentPanicEpoch(),
     });
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
     expect(first(display.shown).hardware).toBeUndefined();

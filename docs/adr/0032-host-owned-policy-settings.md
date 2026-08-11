@@ -383,7 +383,14 @@ Policy application is also ordered against decisions in flight: a
 confirmation or other decision already in progress completes under the
 policy it started with, and an accepted policy applies from the next
 decision on. A policy arriving mid-confirmation therefore cannot relax,
-or otherwise alter, an in-flight decision.
+or otherwise alter, an in-flight decision. The staleness window this
+accepts spans the decision's ENTIRE lifetime - including the FIFO
+confirmation queue wait before its prompt is even shown, not just the
+open prompt itself. One CDP-specific residual, named: the debugger attach
+for a new session resolves BEFORE the post-attach policy recheck reads
+the grant, so a decision racing a cdpMode revocation can still produce a
+transient debugger attach - torn down by the recheck before any CDP
+command is sent on it.
 
 When there is no stored effective policy at all, the fail-closed baseline
 applies: the generated defaults with every capability grant at its deny

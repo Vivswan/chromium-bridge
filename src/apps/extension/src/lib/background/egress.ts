@@ -14,18 +14,23 @@
 // - everything else: passed through (page_text masks passwords/card numbers
 //   in the page walk itself; cookie_get masks in cookies.ts).
 
-import { StorageReadResultSchema } from "@chromium-bridge/shared";
+import { type PolicyValues, StorageReadResultSchema } from "@chromium-bridge/shared";
 import { maskSensitive, maskString } from "../shared/masking";
 import type { PageOp } from "../shared/page-ops";
-import { getSetting } from "../shared/settings";
 
-export async function maskOpResult(op: PageOp, result: unknown): Promise<unknown> {
+export async function maskOpResult(
+  op: PageOp,
+  result: unknown,
+  policy: PolicyValues,
+): Promise<unknown> {
   switch (op) {
     case "storage_get":
       return maskStorageResult(result);
     case "page_eval": {
-      const mask = (await getSetting("evalMask")) !== false;
-      return mask ? maskSensitive(result) : result;
+      // Dispatch threads its per-request policy snapshot in (ADR-0032
+      // decision 4); the REQUIRED parameter is what holds the invariant
+      // (tests start their own decisions via withFreshPolicy).
+      return policy.evalMask !== false ? maskSensitive(result) : result;
     }
     default:
       return result;

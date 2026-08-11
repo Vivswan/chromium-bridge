@@ -8,8 +8,14 @@
 import type { StorageReadResultWire } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing";
+import { withFreshPolicy } from "@/lib/background/effective-policy";
 import { maskOpResult } from "@/lib/background/egress";
 import type { StorageReadResult } from "@/lib/dom/page-api";
+
+// Each call is its own decision: no dispatch threads a snapshot through
+// these tests, so every mask starts one via the standalone entry.
+const mask = (op: Parameters<typeof maskOpResult>[0], result: unknown) =>
+  withFreshPolicy((policy) => maskOpResult(op, result, policy));
 
 // Shapes the masking catalogue promises to catch (it is best-effort by
 // design - see SECURITY.md - so only promised shapes are asserted).
@@ -27,7 +33,7 @@ beforeEach(() => {
 describe("storage_get is ALWAYS masked", () => {
   test("single-key read", async () => {
     for (const secret of Object.values(SECRETS)) {
-      const out = (await maskOpResult("storage_get", {
+      const out = (await mask("storage_get", {
         key: "k",
         found: true,
         value: `wrapped ${secret} wrapped`,
@@ -38,7 +44,7 @@ describe("storage_get is ALWAYS masked", () => {
   });
 
   test("entries dump", async () => {
-    const out = (await maskOpResult("storage_get", {
+    const out = (await mask("storage_get", {
       type: "local",
       entries: { a: SECRETS.jwt, b: "plain short" },
       count: 2,
@@ -51,7 +57,7 @@ describe("storage_get is ALWAYS masked", () => {
 
   test("masks even when evalMask was opted out (independent toggles)", async () => {
     await fakeBrowser.storage.local.set({ evalMask: false });
-    const out = (await maskOpResult("storage_get", {
+    const out = (await mask("storage_get", {
       key: "k",
       found: true,
       value: SECRETS.jwt,
@@ -60,7 +66,7 @@ describe("storage_get is ALWAYS masked", () => {
   });
 
   test("a not-found result passes through unchanged (nothing to mask)", async () => {
-    expect(await maskOpResult("storage_get", { key: "k", found: false })).toEqual({
+    expect(await mask("storage_get", { key: "k", found: false })).toEqual({
       key: "k",
       found: false,
     });
@@ -70,12 +76,12 @@ describe("storage_get is ALWAYS masked", () => {
     // The exact leak the shape-sniffing version had: `found` is truthy but not
     // the literal true, so neither masking branch matched and the raw value
     // (with the secret) fell through to the host.
-    await expect(
-      maskOpResult("storage_get", { key: "k", found: 1, value: SECRETS.jwt }),
-    ).rejects.toThrow("refusing to egress");
+    await expect(mask("storage_get", { key: "k", found: 1, value: SECRETS.jwt })).rejects.toThrow(
+      "refusing to egress",
+    );
     // Same for entries whose values are not strings...
     await expect(
-      maskOpResult("storage_get", {
+      mask("storage_get", {
         type: "local",
         entries: { a: { nested: SECRETS.jwt } },
         count: 1,
@@ -85,11 +91,11 @@ describe("storage_get is ALWAYS masked", () => {
     ).rejects.toThrow("refusing to egress");
     // ...an unknown extra field on a known shape...
     await expect(
-      maskOpResult("storage_get", { key: "k", found: true, value: "v", extra: SECRETS.jwt }),
+      mask("storage_get", { key: "k", found: true, value: "v", extra: SECRETS.jwt }),
     ).rejects.toThrow("refusing to egress");
     // ...and non-object results.
-    await expect(maskOpResult("storage_get", null)).rejects.toThrow("refusing to egress");
-    await expect(maskOpResult("storage_get", SECRETS.jwt)).rejects.toThrow("refusing to egress");
+    await expect(mask("storage_get", null)).rejects.toThrow("refusing to egress");
+    await expect(mask("storage_get", SECRETS.jwt)).rejects.toThrow("refusing to egress");
   });
 
   test("the wire schema stays in lockstep with the page API's result type", () => {
@@ -103,13 +109,13 @@ describe("storage_get is ALWAYS masked", () => {
 
 describe("page_eval is masked by default, raw only on explicit opt-out", () => {
   test("success values are masked", async () => {
-    const out = await maskOpResult("page_eval", { token: SECRETS.jwt, note: "hi" });
+    const out = await mask("page_eval", { token: SECRETS.jwt, note: "hi" });
     expect(JSON.stringify(out)).not.toContain(SECRETS.jwt);
     expect((out as { note: string }).note).toBe("hi");
   });
 
   test("a thrown secret (structured __evalError) cannot bypass the mask", async () => {
-    const out = (await maskOpResult("page_eval", {
+    const out = (await mask("page_eval", {
       __evalError: true,
       name: "Error",
       message: `boom ${SECRETS.jwt}`,
@@ -121,7 +127,7 @@ describe("page_eval is masked by default, raw only on explicit opt-out", () => {
 
   test("evalMask=false leaves eval results raw", async () => {
     await fakeBrowser.storage.local.set({ evalMask: false });
-    const out = await maskOpResult("page_eval", SECRETS.jwt);
+    const out = await mask("page_eval", SECRETS.jwt);
     expect(out).toBe(SECRETS.jwt);
   });
 });
@@ -129,6 +135,6 @@ describe("page_eval is masked by default, raw only on explicit opt-out", () => {
 describe("non-sensitive ops pass through", () => {
   test("page_scroll result is untouched", async () => {
     const result = { scrollY: 100, scrollX: 0 };
-    expect(await maskOpResult("page_scroll", result)).toBe(result);
+    expect(await mask("page_scroll", result)).toBe(result);
   });
 });

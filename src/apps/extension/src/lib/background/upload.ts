@@ -14,12 +14,13 @@
 // The path is shown UNMASKED in the confirmation on purpose: the user must see
 // exactly which local file would leave their disk.
 
-import { getSetting } from "../shared/settings";
+import type { PolicyValues } from "@chromium-bridge/shared";
 import { TOOL_GATES } from "../shared/tool-gates";
 import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
+import { presenceRoutingEnabled } from "./confirm/presence";
 import { confirmWithUser } from "./confirm/service";
 import { resolveTargetTab } from "./tabs";
 
@@ -30,10 +31,20 @@ interface QuerySelectorResult {
   nodeId?: number;
 }
 
-export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
-  // The gate setting comes from the shared TOOL_GATES map, the same entry the
+export async function pageUpload(
+  maybeTabId: number | undefined,
+  args: OpArgs,
+  policy: PolicyValues,
+  panicEpoch: number,
+): Promise<unknown> {
+  // ONE policy snapshot and ONE decision-start panic epoch for the whole
+  // decision (ADR-0032 decision 4, SFX-2): dispatch captures both at the
+  // decision's true start, before its first await, and threads them in; the
+  // REQUIRED parameters are what hold the invariant (tests start their own
+  // decisions via withFreshPolicy plus currentPanicEpoch()).
+  // The gate field comes from the shared TOOL_GATES map, the same entry the
   // options grid renders, so enforcement and UI cannot name different settings.
-  if ((await getSetting(TOOL_GATES.page_upload)) !== true) {
+  if (policy[TOOL_GATES.page_upload] !== true) {
     throw new Error(
       "page_upload is disabled. Enable it in the extension settings first (it is off by default because attaching a local file to a page can exfiltrate private files).",
     );
@@ -66,7 +77,13 @@ export async function pageUpload(maybeTabId: number | undefined, args: OpArgs): 
     origin: tab.url ? new URL(tab.url).origin : "",
     tabTitle: tab.title || "",
     detail: `${path}\n(input: ${selector})`,
-    timeoutMs: await getSetting("clickToastTimeoutMs"),
+    timeoutMs: policy.clickToastTimeoutMs,
+    // The hardware-routing verdict is part of THIS decision's snapshot
+    // (ADR-0032 decision 4): computed here and carried in the request, so a
+    // policy push landing while the confirmation waits in the queue cannot
+    // re-route it at presentation time.
+    presenceRouting: await presenceRoutingEnabled(policy),
+    panicEpoch,
   });
   if (!approved) {
     throw new Error(`user denied page_upload: ${path}`);

@@ -6,10 +6,29 @@ import type { ConfirmPayload } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing";
 import { bindOrigin, preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
-import { installConfirmationProvider, resolveConfirm } from "@/lib/background/confirm/service";
+import {
+  currentPanicEpoch,
+  installConfirmationProvider,
+  resolveConfirm,
+} from "@/lib/background/confirm/service";
+import { withFreshPolicy } from "@/lib/background/effective-policy";
 import type { PageBackend } from "@/lib/background/page-backend";
 import type { ResolvedTab } from "@/lib/background/tabs";
 import type { ClickProbe } from "@/lib/dom/page-api";
+
+// Each call here is its OWN decision (there is no dispatch threading a
+// per-request snapshot through these tests), so it starts one explicitly:
+// withFreshPolicy is the standalone entry for non-dispatch callers, and the
+// panic epoch is captured at the decision's start the same way dispatch does.
+const preflight = (
+  op: Parameters<typeof preflightPageOp>[0],
+  args: Parameters<typeof preflightPageOp>[1],
+  tab: ResolvedTab,
+  backend: PageBackend,
+) => {
+  const panicEpoch = currentPanicEpoch();
+  return withFreshPolicy((policy) => preflightPageOp(op, args, tab, backend, policy, panicEpoch));
+};
 
 const TAB = { id: 7, url: "https://example.com/x", title: "Example" } as ResolvedTab;
 
@@ -51,14 +70,14 @@ beforeEach(() => {
 describe("page_click", () => {
   test("a plain click needs no confirmation", async () => {
     const asked = autoProvider(false); // would deny if ever asked
-    await preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(PLAIN));
+    await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(0);
   });
 
   test("a submit click asks, and a denial throws", async () => {
     const asked = autoProvider(false);
     await expect(
-      preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT)),
+      preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT)),
     ).rejects.toThrow("user denied: submit");
     expect(asked.length).toBe(1);
     expect(asked[0]?.kind).toBe("click");
@@ -67,31 +86,31 @@ describe("page_click", () => {
 
   test("an approval opens the grace window for the same tab+origin+action", async () => {
     const asked = autoProvider(true);
-    await preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
-    await preflightPageOp("page_click", { selector: "#y" }, TAB, fakeBackend(SUBMIT));
+    await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
+    await preflight("page_click", { selector: "#y" }, TAB, fakeBackend(SUBMIT));
     expect(asked.length).toBe(1); // second ride was within the window
   });
 
   test("the grace window does NOT cross tabs", async () => {
     const asked = autoProvider(true);
-    await preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
+    await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
     const otherTab = { ...TAB, id: 8 };
-    await preflightPageOp("page_click", { selector: "#x" }, otherTab, fakeBackend(SUBMIT));
+    await preflight("page_click", { selector: "#x" }, otherTab, fakeBackend(SUBMIT));
     expect(asked.length).toBe(2);
   });
 
   test("confirmGraceMs=0 reconfirms every click", async () => {
     await fakeBrowser.storage.local.set({ confirmGraceMs: 0 });
     const asked = autoProvider(true);
-    await preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
-    await preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
+    await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
+    await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
     expect(asked.length).toBe(2);
   });
 
   test("confirmHighRiskClick=false skips the gate (explicit opt-out)", async () => {
     await fakeBrowser.storage.local.set({ confirmHighRiskClick: false });
     const asked = autoProvider(false);
-    await preflightPageOp("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
+    await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
     expect(asked.length).toBe(0);
   });
 });
@@ -99,8 +118,8 @@ describe("page_click", () => {
 describe("page_press / page_select confirm on every call", () => {
   test("press asks every time, even after approvals", async () => {
     const asked = autoProvider(true);
-    await preflightPageOp("page_press", { keys: "Enter" }, TAB, fakeBackend(PLAIN));
-    await preflightPageOp("page_press", { keys: "Enter" }, TAB, fakeBackend(PLAIN));
+    await preflight("page_press", { keys: "Enter" }, TAB, fakeBackend(PLAIN));
+    await preflight("page_press", { keys: "Enter" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(2);
     expect(asked[0]?.kind).toBe("press");
     expect(asked[0]?.detail).toBe("Enter");
@@ -109,7 +128,7 @@ describe("page_press / page_select confirm on every call", () => {
   test("select denial throws", async () => {
     autoProvider(false);
     await expect(
-      preflightPageOp("page_select", { selector: "#s", value: "b" }, TAB, fakeBackend(PLAIN)),
+      preflight("page_select", { selector: "#s", value: "b" }, TAB, fakeBackend(PLAIN)),
     ).rejects.toThrow("user denied: select b");
   });
 });
@@ -119,15 +138,15 @@ describe("page_eval", () => {
     await fakeBrowser.storage.local.set({ pageEvalEnabled: false });
     const asked = autoProvider(true);
     await expect(
-      preflightPageOp("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
+      preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
     ).rejects.toThrow("page_eval disabled in settings");
     expect(asked.length).toBe(0);
   });
 
   test("every eval reconfirms - approval opens NO grace window", async () => {
     const asked = autoProvider(true);
-    await preflightPageOp("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
-    await preflightPageOp("page_eval", { code: "return 2;" }, TAB, fakeBackend(PLAIN));
+    await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
+    await preflight("page_eval", { code: "return 2;" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(2);
     expect(asked[0]?.kind).toBe("eval");
     expect(asked[0]?.detail).toBe("return 1;"); // the FULL code is shown
@@ -136,17 +155,17 @@ describe("page_eval", () => {
   test("denial throws and empty code is refused", async () => {
     autoProvider(false);
     await expect(
-      preflightPageOp("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
+      preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
     ).rejects.toThrow("user denied page_eval");
-    await expect(
-      preflightPageOp("page_eval", { code: "  " }, TAB, fakeBackend(PLAIN)),
-    ).rejects.toThrow("page_eval needs non-empty `code`");
+    await expect(preflight("page_eval", { code: "  " }, TAB, fakeBackend(PLAIN))).rejects.toThrow(
+      "page_eval needs non-empty `code`",
+    );
   });
 
   test("confirmPageEval=false runs unprompted (explicit opt-out)", async () => {
     await fakeBrowser.storage.local.set({ confirmPageEval: false });
     const asked = autoProvider(false);
-    await preflightPageOp("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
+    await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(0);
   });
 });
@@ -154,7 +173,7 @@ describe("page_eval", () => {
 describe("ungated ops", () => {
   test("page_snapshot has no preflight gate", async () => {
     const asked = autoProvider(false);
-    await preflightPageOp("page_snapshot", {}, TAB, fakeBackend(PLAIN));
+    await preflight("page_snapshot", {}, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(0);
   });
 });
@@ -162,13 +181,8 @@ describe("ungated ops", () => {
 describe("the preflight -> guard split", () => {
   test("page_click's preflight always carries the probe the decision ran on", async () => {
     autoProvider(true);
-    const preflight = await preflightPageOp(
-      "page_click",
-      { selector: "#x" },
-      TAB,
-      fakeBackend(SUBMIT),
-    );
-    expect(preflight.clickExpect).toEqual(SUBMIT);
+    const result = await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
+    expect(result.clickExpect).toEqual(SUBMIT);
   });
 
   test("bindOrigin produces the guard the backends require", () => {

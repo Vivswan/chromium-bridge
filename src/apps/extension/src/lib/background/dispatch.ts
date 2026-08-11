@@ -4,16 +4,17 @@
 // generated OpName union and, together with the server-answered ops, must
 // partition the catalogue exactly (enforced by the roster drift test).
 
-import { isOpName, type OpName, unreachable } from "@chromium-bridge/shared";
+import { isOpName, type OpName, type PolicyValues, unreachable } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { isPageOp } from "../shared/page-ops";
-import { getSetting } from "../shared/settings";
 import type { BridgeReq } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { bindOrigin, preflightPageOp } from "./confirm/gate";
+import { currentPanicEpoch } from "./confirm/service";
 import { consoleGet } from "./console";
 import { cookieGet } from "./cookies";
 import { handleDialog } from "./dialog";
+import { getEffectivePolicy } from "./effective-policy";
 import { maskOpResult } from "./egress";
 import { selectBackend } from "./page-backend";
 import { decide } from "./policy";
@@ -120,12 +121,35 @@ function originOf(url: string | undefined): string {
 }
 
 export async function dispatch(req: BridgeReq): Promise<unknown> {
-  // Tool enable/disable gate: if the op is in the user's disabledTools list,
-  // reject before doing anything.
-  const disabled = await getSetting("disabledTools");
-  assertNotDisabled(req.op, disabled);
+  // Decision-start panic-epoch capture (SFX-2), SYNCHRONOUS and before this
+  // request's FIRST await: every confirmation this decision raises carries
+  // this value, threaded exactly like the policy snapshot below, so a
+  // deny-kill that lands AND lifts anywhere across the decision - including
+  // inside the policy read, the tab resolve, or the allowlist check - still
+  // denies the confirmation on the epoch mismatch.
+  const panicEpoch = currentPanicEpoch();
+  // ONE policy snapshot per request (ADR-0032 decision 4), threaded through
+  // the disable gate, the backend choice, the confirmation preflight, the
+  // SW-op handlers, and egress masking: a policy push landing while this
+  // request is in flight - a confirmation can hold the pipeline open for
+  // tens of seconds - cannot alter the decision it started under. An
+  // accepted push applies from the next request on.
+  const effective = await getEffectivePolicy();
+  if (effective.state === "blocked") {
+    // The single read carries the refusal (SFX-1): the enrollment gate's
+    // barrier check and this snapshot are SEPARATE awaits, so a compromise
+    // latching between them must refuse HERE rather than let the request run
+    // under the deny-baseline defaults (whose empty disabledTools is the
+    // permissive pole).
+    throw new Error(effective.reason);
+  }
+  const policy = effective.values;
 
-  if (isSwReq(req)) return await dispatchSw(req);
+  // Tool enable/disable gate: if the op is in the disabledTools list, reject
+  // before doing anything.
+  assertNotDisabled(req.op, policy.disabledTools);
+
+  if (isSwReq(req)) return await dispatchSw(req, policy, panicEpoch);
 
   if (isPageOp(req.op)) {
     // Page-level ops, one pipeline for both backends:
@@ -135,9 +159,8 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
     // Policy never lives in a backend, so it cannot drift between them.
     const tab = await resolveTargetTab(req.tabId);
     await ensureAllowed(tab.url);
-    const cdpMode = (await getSetting("cdpMode")) === true;
-    const backend = selectBackend(cdpMode);
-    const preflight = await preflightPageOp(req.op, req.args, tab, backend);
+    const backend = selectBackend(policy.cdpMode === true);
+    const preflight = await preflightPageOp(req.op, req.args, tab, backend, policy, panicEpoch);
     // A confirmation can hold the pipeline open for tens of seconds, during
     // which the tab may navigate ANYWHERE. Re-fetch the SAME tab (by id, so
     // an active-tab switch cannot substitute a different one) and fail
@@ -150,7 +173,7 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
     // backend's evaluate/message.
     const guard = bindOrigin(preflight, originOf(tab.url));
     const result = await backend.run(req.op, req.args, current, guard);
-    return await maskOpResult(req.op, result);
+    return await maskOpResult(req.op, result, policy);
   }
 
   // What remains is the server scope (list_browsers): answered by the MCP
@@ -162,7 +185,7 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
 // (BridgeCommand), so the required args (e.g. tabId, url) are typed
 // non-optional - no `!` needed. The `default` arm is the exhaustiveness
 // backstop: adding an op to SW_OPS without a case here fails to compile.
-async function dispatchSw(req: SwReq): Promise<unknown> {
+async function dispatchSw(req: SwReq, policy: PolicyValues, panicEpoch: number): Promise<unknown> {
   switch (req.op) {
     case "tab_list":
       return await tabList();
@@ -171,7 +194,7 @@ async function dispatchSw(req: SwReq): Promise<unknown> {
     case "tab_open":
       return await tabOpen(req.args.url);
     case "tab_close":
-      return await tabClose(req.args.tabId);
+      return await tabClose(req.args.tabId, policy, panicEpoch);
     case "page_navigate":
       return await pageNavigate(req.args.url);
     case "page_back":
@@ -182,7 +205,7 @@ async function dispatchSw(req: SwReq): Promise<unknown> {
       return await pageReload();
     case "page_snapshot_precise":
       // Handled in SW via browser.debugger; does NOT go through content.js.
-      return await snapshotPrecise(req.tabId, req.args);
+      return await snapshotPrecise(req.tabId, req.args, policy);
     case "cookie_get":
       // browser.cookies API is only available in SW context.
       return await cookieGet(req.tabId, req.args);
@@ -191,10 +214,10 @@ async function dispatchSw(req: SwReq): Promise<unknown> {
       return await consoleGet(req.tabId, req.args);
     case "page_handle_dialog":
       // browser.debugger (CDP Page.handleJavaScriptDialog); SW-only.
-      return await handleDialog(req.tabId, req.args);
+      return await handleDialog(req.tabId, req.args, policy);
     case "page_upload":
       // browser.debugger (CDP DOM.setFileInputFiles); SW-only. OFF by default.
-      return await pageUpload(req.tabId, req.args);
+      return await pageUpload(req.tabId, req.args, policy, panicEpoch);
     default:
       return unreachable(req);
   }

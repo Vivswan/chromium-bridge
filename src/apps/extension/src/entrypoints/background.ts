@@ -2,7 +2,7 @@ import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 import { syncPendingMirror } from "@/lib/background/allowlist-store";
 import { installCdpLifecycleListeners } from "@/lib/background/cdp/registry";
-import { EnclavePresenceProvider, presenceRoutingEnabled } from "@/lib/background/confirm/presence";
+import { EnclavePresenceProvider } from "@/lib/background/confirm/presence";
 import {
   installConfirmationProvider,
   installPresenceProvider,
@@ -55,11 +55,14 @@ export default defineBackground(() => {
   // The off-DOM confirmation surface (ADR-0027). Without a provider the
   // confirmation service denies everything, so install it before any bridge
   // traffic can arrive. The Enclave user-presence provider (ADR-0031) rides
-  // on top of it for the "eval"/"upload" kinds: the window displays what is
-  // being approved, the Touch ID tap (a verified host signature) approves.
+  // on top of it for the "eval"/"upload" kinds: whether a given confirmation
+  // routes to it is decided by the caller at decision time (ConfirmRequest's
+  // presenceRouting, from the per-request policy snapshot); the window
+  // displays what is being approved, the Touch ID tap (a verified host
+  // signature) approves.
   const windowProvider = new ExtensionWindowProvider();
   installConfirmationProvider(windowProvider);
-  installPresenceProvider(new EnclavePresenceProvider(windowProvider), presenceRoutingEnabled);
+  installPresenceProvider(new EnclavePresenceProvider(windowProvider));
 
   // Every connect path first COMPLETES the pending-approval sweep, then
   // connects. The sweep re-derives the popup mirror and badge from this

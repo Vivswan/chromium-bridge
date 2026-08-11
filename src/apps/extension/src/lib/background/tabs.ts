@@ -1,6 +1,7 @@
 // Tab resolution, content-script injection, and the tab-level tools
 // (tab_list / tab_focus / tab_open / tab_close).
 
+import type { PolicyValues } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
@@ -137,18 +138,23 @@ async function addToWorkspaceGroup(
   }
 }
 
-export async function tabClose(tabId: number) {
+export async function tabClose(tabId: number, policy: PolicyValues, panicEpoch: number) {
+  // ONE policy snapshot and ONE decision-start panic epoch for the whole
+  // decision (ADR-0032 decision 4, SFX-2): dispatch captures both at the
+  // decision's true start, before its first await, and threads them in; the
+  // REQUIRED parameters are what hold the invariant (tests start their own
+  // decisions via withFreshPolicy plus currentPanicEpoch()).
   const tab = await browser.tabs.get(tabId);
   // The "Close tab?" confirmation can be turned off (confirmTabClose=false) for
   // hands-off automation; on by default.
-  if ((await getSetting("confirmTabClose")) !== false) {
-    await confirmTabClose(tab);
+  if (policy.confirmTabClose !== false) {
+    await confirmTabClose(tab, policy, panicEpoch);
   }
   await browser.tabs.remove(tabId);
   return { closed: tabId };
 }
 
-async function confirmTabClose(tab: Browser.tabs.Tab) {
+async function confirmTabClose(tab: Browser.tabs.Tab, policy: PolicyValues, panicEpoch: number) {
   if (!tab?.id) throw new Error("tab not found");
   // Scope stays: only http(s) tabs on allowlisted origins may be closed. The
   // confirmation itself no longer needs the page (it shows on the
@@ -163,7 +169,9 @@ async function confirmTabClose(tab: Browser.tabs.Tab) {
     origin: new URL(tab.url).origin,
     tabTitle: tab.title || "",
     detail: tab.title || tab.url,
-    timeoutMs: await getSetting("clickToastTimeoutMs"),
+    timeoutMs: policy.clickToastTimeoutMs,
+    presenceRouting: false,
+    panicEpoch,
   });
   if (!approved) {
     throw new Error("user denied tab_close");
