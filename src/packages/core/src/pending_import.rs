@@ -298,6 +298,10 @@ pub enum RecordOutcome {
 /// compromised) extension must not overwrite the user's real legacy bag or
 /// reopen a consumed import, and an unreadable file is not proof of absence,
 /// so it fails closed by propagating the read error rather than clobbering it.
+/// A successful recording also bumps [`crate::revocation::Scope::Policy`]
+/// (best-effort) so an already-running app re-probes and surfaces the arrival
+/// (its import nav entry appears and the first-baseline dialog warns) instead
+/// of the bag waiting, unseen, to be consumed by revision 1.
 pub fn record_if_absent(bag: Value) -> io::Result<RecordOutcome> {
     let bytes = serde_json::to_vec(&bag)?;
     if bytes.len() > LEGACY_BAG_MAX_BYTES {
@@ -316,6 +320,24 @@ fn record_if_absent_locked(lock: &ipc::RuntimeLockToken, bag: Value) -> io::Resu
                 bag,
             };
             write_pending_new(&record, lock)?;
+            // A recorded receipt is a policy-adjacent state change the app
+            // must notice NOW: the app re-probes the pending-import store on
+            // every policy-epoch notice (its App-level listener keeps the
+            // import nav entry tracking live state), so without this bump a
+            // bag arriving while the app is open stays invisible until the
+            // user signs a baseline - which consumes the tombstone and loses
+            // the bag for good. Best-effort, same contract as the policy
+            // store's bump_policy_epoch_locked: the epoch is an availability
+            // signal (a change notice), not integrity - the receipt just
+            // written is the authority - so a failed bump is logged and must
+            // NEVER fail the recording it trails.
+            if let Err(e) = crate::revocation::bump_locked(lock, crate::revocation::Scope::Policy) {
+                log_warn!(
+                    "pending-import",
+                    "legacy bag recorded but the policy epoch bump failed ({e}); the app \
+                     notices the pending import only at its next launch"
+                );
+            }
             Ok(RecordOutcome::Recorded)
         }
     }
@@ -437,64 +459,15 @@ pub fn gather_pending_import() -> PendingImportReport {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use serde_json::json;
 
     use super::*;
-
-    #[cfg(unix)]
-    const RUNTIME_ENV: &str = "XDG_RUNTIME_DIR";
-    #[cfg(windows)]
-    const RUNTIME_ENV: &str = "LOCALAPPDATA";
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    /// Points `runtime_dir()` at a fresh scratch directory for one test (the
-    /// policy/lang store pattern), so no test reads or writes the user's real
-    /// runtime state.
-    struct RuntimeDirGuard {
-        _serial: MutexGuard<'static, ()>,
-        dir: PathBuf,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl RuntimeDirGuard {
-        fn new(test: &str) -> Self {
-            let serial = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-            let dir = std::env::temp_dir().join(format!(
-                "chromium-bridge-pending-import-test-{}-{test}",
-                std::process::id()
-            ));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            let prev = std::env::var_os(RUNTIME_ENV);
-            std::env::set_var(RUNTIME_ENV, &dir);
-            RuntimeDirGuard {
-                _serial: serial,
-                dir,
-                prev,
-            }
-        }
-    }
-
-    impl Drop for RuntimeDirGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(RUNTIME_ENV, v),
-                None => std::env::remove_var(RUNTIME_ENV),
-            }
-            let _ = fs::remove_dir_all(&self.dir);
-        }
-    }
+    use crate::test_support::scratch_runtime_dir;
 
     #[test]
     fn absent_store_reads_as_absent() {
-        let _dir = RuntimeDirGuard::new("absent-none");
+        let _dir = scratch_runtime_dir("pending-import-absent-none");
         assert_eq!(load().unwrap(), StoreState::Absent);
         assert_eq!(
             gather_pending_import(),
@@ -506,7 +479,7 @@ mod tests {
 
     #[test]
     fn record_round_trips_the_exact_bag() {
-        let _dir = RuntimeDirGuard::new("round-trip");
+        let _dir = scratch_runtime_dir("pending-import-round-trip");
         let bag = json!({ "fileUploadEnabled": true, "disabledTools": ["page_eval"] });
         assert_eq!(
             record_if_absent(bag.clone()).unwrap(),
@@ -527,7 +500,7 @@ mod tests {
         // P4F-1: the store writes COMPACT, the same encoding both caps
         // measure - a legitimate near-cap bag must round-trip, not blow past
         // the file cap on a pretty-print and be lost to a write error.
-        let _dir = RuntimeDirGuard::new("near-cap");
+        let _dir = scratch_runtime_dir("pending-import-near-cap");
         let bag = json!({ "blob": "x".repeat(LEGACY_BAG_MAX_BYTES - 32) });
         assert!(serde_json::to_vec(&bag).unwrap().len() <= LEGACY_BAG_MAX_BYTES);
         assert_eq!(
@@ -539,7 +512,7 @@ mod tests {
 
     #[test]
     fn first_bag_wins_a_later_receipt_is_dropped() {
-        let _dir = RuntimeDirGuard::new("first-bag-wins");
+        let _dir = scratch_runtime_dir("pending-import-first-bag-wins");
         let first = json!({ "pageEvalEnabled": true });
         let second = json!({ "pageEvalEnabled": false, "attacker": "controlled" });
         assert_eq!(
@@ -556,7 +529,7 @@ mod tests {
 
     #[test]
     fn an_oversize_bag_is_dropped_never_stored() {
-        let _dir = RuntimeDirGuard::new("oversize");
+        let _dir = scratch_runtime_dir("pending-import-oversize");
         let huge = "x".repeat(LEGACY_BAG_MAX_BYTES + 1);
         let bag = json!({ "blob": huge });
         match record_if_absent(bag).unwrap() {
@@ -569,7 +542,7 @@ mod tests {
 
     #[test]
     fn load_is_fail_closed_on_shape_version_and_oversize_bag() {
-        let _dir = RuntimeDirGuard::new("load-fail-closed");
+        let _dir = scratch_runtime_dir("pending-import-load-fail-closed");
         // Unknown field refused, on both record arms.
         fs::write(
             path(),
@@ -611,7 +584,7 @@ mod tests {
 
     #[test]
     fn a_corrupt_existing_file_refuses_both_writers() {
-        let _dir = RuntimeDirGuard::new("corrupt-existing");
+        let _dir = scratch_runtime_dir("pending-import-corrupt-existing");
         fs::write(path(), b"{ not json").unwrap();
         // First-bag-wins fails closed on an unreadable existing file: it
         // propagates the error rather than overwriting a receipt it could not
@@ -633,7 +606,7 @@ mod tests {
         // absence check were raced, OUR writer cannot replace a tombstone
         // (or an existing bag) with a new Pending record. Drive the writer
         // directly, past record_if_absent's own state check.
-        let _dir = RuntimeDirGuard::new("create-new");
+        let _dir = scratch_runtime_dir("pending-import-create-new");
         fs::write(path(), br#"{"state":"consumed","version":2}"#).unwrap();
         let record = PendingImportRecord::Pending {
             version: PENDING_IMPORT_VERSION,
@@ -652,7 +625,7 @@ mod tests {
 
     #[test]
     fn consume_writes_the_tombstone_and_is_idempotent() {
-        let _dir = RuntimeDirGuard::new("consume");
+        let _dir = scratch_runtime_dir("pending-import-consume");
         record_if_absent(json!({ "a": 1 })).unwrap();
         assert!(consume().unwrap(), "a recorded import existed");
         assert_eq!(load().unwrap(), StoreState::Consumed);
@@ -678,7 +651,7 @@ mod tests {
         // load() still reads as Consumed; a short-circuit Ok(false) would
         // leave those exact bytes, while re-running the durable write
         // overwrites them with the canonical compact encoding.
-        let _dir = RuntimeDirGuard::new("consume-resync");
+        let _dir = scratch_runtime_dir("pending-import-consume-resync");
         let planted = br#"{ "version": 2, "state": "consumed" }"#;
         fs::write(path(), planted).unwrap();
         assert_eq!(load().unwrap(), StoreState::Consumed);
@@ -705,7 +678,7 @@ mod tests {
         // machine): the window closes anyway, so a compromised extension
         // cannot start the import dance after the user is already on signed
         // policy.
-        let _dir = RuntimeDirGuard::new("consume-absent");
+        let _dir = scratch_runtime_dir("pending-import-consume-absent");
         assert!(!consume().unwrap(), "no pending bag existed");
         assert_eq!(load().unwrap(), StoreState::Consumed);
         assert_eq!(
@@ -718,7 +691,7 @@ mod tests {
     fn a_post_consume_plant_is_refused_and_never_stored() {
         // P4H-1, the attack the tombstone exists for: after the real import
         // is consumed, a compromised extension re-sends legacy_settings.
-        let _dir = RuntimeDirGuard::new("post-consume-plant");
+        let _dir = scratch_runtime_dir("pending-import-post-consume-plant");
         record_if_absent(json!({ "real": true })).unwrap();
         consume().unwrap();
         assert_eq!(
@@ -784,7 +757,7 @@ mod tests {
         // The read command's contract: gathering is READ-ONLY in every state,
         // including the fail-closed error arm (a damaged receipt is evidence
         // and must not be "repaired" by a read).
-        let _dir = RuntimeDirGuard::new("gather-read-only");
+        let _dir = scratch_runtime_dir("pending-import-gather-read-only");
         // Absent: gathering must not create the file.
         assert_eq!(gather_pending_import(), PendingImportReport::None { v: 1 });
         assert!(!path().exists());
@@ -807,5 +780,74 @@ mod tests {
     #[test]
     fn path_has_expected_filename() {
         assert_eq!(path().file_name().unwrap(), "pending-import.json");
+    }
+
+    fn policy_epoch() -> u64 {
+        crate::revocation::Revocation::current()
+            .unwrap()
+            .policy_epoch
+    }
+
+    #[test]
+    fn recording_bumps_the_policy_epoch_and_drops_do_not() {
+        // Finding 2 (silent data loss): the app's import probe re-reads only
+        // on a policy-epoch notice, so the Recorded arm - and ONLY that arm -
+        // must bump Scope::Policy; the dropped arms change no state worth
+        // announcing.
+        let _dir = scratch_runtime_dir("pending-import-epoch-bump");
+        assert_eq!(policy_epoch(), 0);
+        assert_eq!(
+            record_if_absent(json!({ "a": 1 })).unwrap(),
+            RecordOutcome::Recorded
+        );
+        let after_record = policy_epoch();
+        assert!(after_record > 0, "a recorded receipt must bump the epoch");
+        assert_eq!(
+            record_if_absent(json!({ "b": 2 })).unwrap(),
+            RecordOutcome::AlreadyPresent
+        );
+        assert_eq!(
+            policy_epoch(),
+            after_record,
+            "a first-bag-wins drop must not bump"
+        );
+        let oversize = json!({ "blob": "x".repeat(LEGACY_BAG_MAX_BYTES + 1) });
+        assert!(matches!(
+            record_if_absent(oversize).unwrap(),
+            RecordOutcome::Oversize { .. }
+        ));
+        assert_eq!(
+            policy_epoch(),
+            after_record,
+            "an oversize drop must not bump"
+        );
+        consume().unwrap();
+        let after_consume = policy_epoch();
+        assert_eq!(
+            record_if_absent(json!({ "c": 3 })).unwrap(),
+            RecordOutcome::AlreadyConsumed
+        );
+        assert_eq!(
+            policy_epoch(),
+            after_consume,
+            "a post-consume drop must not bump"
+        );
+    }
+
+    #[test]
+    fn a_failed_epoch_bump_does_not_fail_the_recording() {
+        // The bump is an availability signal, not integrity: a corrupt
+        // revocation record makes bump_locked fail, and the recording must
+        // land anyway (the receipt is the authority; the app still finds it
+        // at its next launch probe).
+        let _dir = scratch_runtime_dir("pending-import-epoch-bump-fails");
+        fs::write(crate::revocation::Revocation::path(), b"{ not json").unwrap();
+        let bag = json!({ "kept": true });
+        assert_eq!(
+            record_if_absent(bag.clone()).unwrap(),
+            RecordOutcome::Recorded,
+            "a failed epoch bump must not fail the receipt recording"
+        );
+        assert_eq!(load().unwrap(), StoreState::Pending { bag });
     }
 }

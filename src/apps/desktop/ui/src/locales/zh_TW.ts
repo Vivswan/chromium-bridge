@@ -285,6 +285,12 @@ export const zh_TW: Record<MessageKey, string> = {
   "security.first_dialog_title": "簽署首個原則基線?",
   "security.first_dialog_body":
     "尚無基線, 因此這會以上方的值簽署修訂 1。在有 Touch ID 的 Mac 上會要求你的指紋。",
+  "security.first_dialog_import_warning":
+    "現在簽署還會永久關閉一次性舊設定匯入視窗 - 擴充功能之後送出的設定快照將無法匯入。",
+  "security.first_dialog_import_discard_warning":
+    "已記錄的舊設定快照仍在等待審查 - 現在簽署將永久捨棄它。如需保留, 請先在「舊設定匯入」畫面中審查。",
+  "security.first_dialog_import_probe_error":
+    "無法讀取舊設定匯入狀態 ($1) - 現在簽署可能會永久關閉一次性匯入視窗或捨棄待處理的匯入。",
   "security.history_title": "原則歷史",
   "security.history_note": "被取代的修訂。回復會將過去狀態作為全新寫入重新套用 - 絕非重放。",
   "security.history_empty": "尚無被取代的修訂。",
@@ -348,15 +354,17 @@ export const zh_TW: Record<MessageKey, string> = {
   "import.sub": "擴充功能在主機原則之前使用的設定, 等待審查。在你簽署之前不會套用任何內容。",
   "import.none_body":
     "沒有等待中的舊設定。只有當擴充功能的設定快照等待審查時, 此畫面才會提供匯入。",
+  "import.none_unenrolled_note":
+    "擴充功能只會向已配對並證明其金鑰的主機送出設定快照 - 若期待遷移提議, 請先在「瀏覽器」中配對。",
   "import.consumed_body":
-    "一次性匯入已經完成 - 原則基線已存在, 匯入視窗已永久關閉。請在「安全」中管理原則。",
+    "一次性匯入已經處理完畢, 匯入視窗已永久關閉 - 即使撤銷並重新配對也不會重新開啟。請在「安全」中管理原則。",
   "import.error_body": "無法讀取已記錄的舊設定 ($1) - 以失敗關閉處理。不提供任何匯入。",
   "import.review_title": "已記錄的舊設定",
   "import.review_note": "擴充功能一次性送出的快照。它只是建議; 在你簽署之前, 拒絕基線持續生效。",
   "import.changed": "與預設值不同",
   "import.default_was": "拒絕預設值: $1",
   "import.tools_none": "(無)",
-  "import.ignored_note": "未匯入 (瀏覽器自有、未知或格式錯誤):",
+  "import.ignored_note": "未匯入 (瀏覽器自有、已淘汰的歷史欄位、未知或格式錯誤):",
   "import.empty_mapping":
     "快照中沒有可用的原則欄位。採用會將拒絕預設值簽署為修訂版 1 並關閉匯入視窗。",
   "import.adopt": "採用並簽署",

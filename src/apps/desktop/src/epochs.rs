@@ -27,9 +27,11 @@ use chromium_bridge_core::lang;
 use chromium_bridge_core::revocation::Revocation;
 
 /// Emitted when the revocation record's `policy_epoch` moved: a policy
-/// write landed somewhere (this app, the CLI, a rollback). Payload: the new
-/// epoch. Listeners re-read `policy_status` (and the import screen re-reads
-/// `pending_import` - revision 1 consumes it).
+/// write landed somewhere (this app, the CLI, a rollback) - or the host
+/// recorded a legacy-import receipt, which bumps the same epoch so an open
+/// app surfaces the arrival. Payload: the new epoch. Listeners re-read
+/// `policy_status` (and the import surfaces re-read `pending_import` - a
+/// receipt creates it, revision 1 consumes it).
 pub const POLICY_EPOCH_EVENT: &str = "policy-epoch-changed";
 
 /// Emitted when `lang_epoch` moved: the shared language changed (the

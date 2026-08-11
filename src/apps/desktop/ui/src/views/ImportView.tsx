@@ -7,7 +7,12 @@ import { useEpochEvent } from "@/hooks/useEpochEvent";
 import { useI18n } from "@/hooks/useI18n";
 import { POLICY_EPOCH_EVENT } from "@/lib/epoch-events";
 import type { MessageKey } from "@/lib/i18n";
-import { adoptLane, type ImportRow, importRows } from "@/lib/import-review";
+import {
+  adoptLane,
+  type ImportRow,
+  importRows,
+  needsEnrollmentForImport,
+} from "@/lib/import-review";
 import { POLICY_FIELDS } from "@/lib/policy-edit";
 import { api, errorText, type PolicyOutcome } from "@/lib/tauri";
 import { useAppStore } from "@/store";
@@ -112,7 +117,19 @@ export function ImportView() {
         <p className="m-0 py-2 text-xs text-text-3">{t("common.loading")}</p>
       )}
 
-      {state === "none" && <Consequence className="quiet">{t("import.none_body")}</Consequence>}
+      {state === "none" && (
+        <>
+          <Consequence className="quiet">{t("import.none_body")}</Consequence>
+          {/* An unenrolled Mac can never receive the offer: the extension
+              sends its snapshot only to a pinned host that proved key
+              possession (decision 8 as amended), so point at pairing as the
+              path instead of leaving the user waiting for a bag that cannot
+              arrive. */}
+          {enclave.data !== undefined && needsEnrollmentForImport(enclave.data) && (
+            <Consequence className="quiet">{t("import.none_unenrolled_note")}</Consequence>
+          )}
+        </>
+      )}
       {state === "consumed" && (
         <>
           <Consequence className="quiet">{t("import.consumed_body")}</Consequence>

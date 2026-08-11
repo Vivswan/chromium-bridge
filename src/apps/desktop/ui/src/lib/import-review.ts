@@ -5,7 +5,12 @@
 // write time.
 
 import { POLICY_FIELDS, type PolicyFieldSpec } from "@/lib/policy-edit";
-import type { EnclaveStatusReport, ImportSuggestion, PolicyValues } from "@/lib/tauri";
+import type {
+  EnclaveStatusReport,
+  ImportSuggestion,
+  PendingImportSurvey,
+  PolicyValues,
+} from "@/lib/tauri";
 
 /** One reviewable field: the suggestion's value against the deny default. */
 export interface ImportRow {
@@ -54,4 +59,48 @@ export function adoptLane(report: EnclaveStatusReport): AdoptLane {
   if (report.key === "present") return { kind: "signed" };
   if (report.key === "none" && report.supported) return { kind: "floor" };
   return { kind: "blocked", detail: report.detail ?? report.key };
+}
+
+/** Whether the import screen's empty ("none") state should point at
+ * enrollment: the extension sends its snapshot only to a pinned host that
+ * proved key possession (ADR-0032 decision 8 as amended), so on an
+ * unenrolled Mac no offer can ever arrive until the user pairs. Only the
+ * genuinely unenrolled state (`key none` AND enclave-supported hardware,
+ * adoptLane's floor rule) qualifies: on unsupported hardware pairing is not
+ * followable advice, and invalid/error key states have their own repair
+ * paths and claim nothing here. */
+export function needsEnrollmentForImport(report: EnclaveStatusReport): boolean {
+  return report.key === "none" && report.supported;
+}
+
+/** What the first-baseline confirm dialog must say about the one-time legacy
+ * import window (ADR-0032 decision 8) before revision 1 signs. */
+export type ImportSignWarning =
+  /** Store reads `none`: no receipt was ever recorded, and the tombstone
+   * the first signed write leaves closes the window for good - a snapshot
+   * arriving later can never be imported. */
+  | { kind: "closes_window" }
+  /** Store reads `present`: a REAL recorded bag is waiting for review, and
+   * signing revision 1 consumes it unseen - the stronger warning. */
+  | { kind: "discards_pending" }
+  /** The probe itself failed (rejected, no data): the import state is
+   * unknown, so the dialog says so instead of silently closing a window it
+   * cannot vouch for. */
+  | { kind: "probe_failed"; detail: string };
+
+/** The warning for the first-baseline confirm dialog, from the pending-import
+ * probe's state and error. `consumed` is already closed (nothing to say);
+ * a store-level `error` state fails closed host-side (consume refuses, so
+ * the signed write cannot land over it); an in-flight probe (no data, no
+ * error yet) claims nothing. */
+export function importSignWarning(
+  state: PendingImportSurvey["state"] | undefined,
+  probeError: string | undefined,
+): ImportSignWarning | undefined {
+  if (state === "none") return { kind: "closes_window" };
+  if (state === "present") return { kind: "discards_pending" };
+  if (state === undefined && probeError !== undefined) {
+    return { kind: "probe_failed", detail: probeError };
+  }
+  return undefined;
 }

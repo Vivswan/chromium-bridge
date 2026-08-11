@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { adoptLane, importRows } from "../src/lib/import-review";
+import {
+  adoptLane,
+  importRows,
+  importSignWarning,
+  needsEnrollmentForImport,
+} from "../src/lib/import-review";
 import type { EnclaveStatusReport, ImportSuggestion, PolicyValues } from "../src/lib/tauri";
 
 // The core's deny defaults, mirrored for the fixtures (the real screen gets
@@ -106,5 +111,50 @@ describe("adoptLane (display mirror of the Rust grant_lane)", () => {
     });
     expect(adoptLane(report("error", true))).toEqual({ kind: "blocked", detail: "detail words" });
     expect(adoptLane(report("unsupported", false)).kind).toBe("blocked");
+  });
+
+  it("points the empty import state at enrollment ONLY when genuinely unenrolled", () => {
+    // Decision 8 as amended: the extension sends only to a pinned host that
+    // proved possession, so an unenrolled Mac never receives the offer.
+    // Same rule as adoptLane's floor: key none AND supported hardware -
+    // "pair in Browsers" is not followable advice without an enclave.
+    expect(needsEnrollmentForImport(report("none", true))).toBe(true);
+    expect(needsEnrollmentForImport(report("none", false))).toBe(false);
+    // Every other key state has its own repair path; no enrollment claim.
+    expect(needsEnrollmentForImport(report("present", true))).toBe(false);
+    expect(needsEnrollmentForImport(report("invalid", true))).toBe(false);
+    expect(needsEnrollmentForImport(report("error", true))).toBe(false);
+    expect(needsEnrollmentForImport(report("unsupported", false))).toBe(false);
+  });
+});
+
+describe("importSignWarning (the first-baseline dialog's import warning)", () => {
+  it("warns that signing closes the never-used window when the store reads none", () => {
+    // Signing revision 1 with NO import ever recorded permanently closes
+    // the one-time window (the tombstone outlives even key disposal).
+    expect(importSignWarning("none", undefined)).toEqual({ kind: "closes_window" });
+  });
+
+  it("warns that signing discards a RECORDED bag when the store reads present", () => {
+    // The stronger warning: a real recorded snapshot is waiting for review,
+    // and revision 1 would consume it unseen.
+    expect(importSignWarning("present", undefined)).toEqual({ kind: "discards_pending" });
+  });
+
+  it("surfaces a failed probe instead of silently closing an unknown window", () => {
+    expect(importSignWarning(undefined, "probe exploded")).toEqual({
+      kind: "probe_failed",
+      detail: "probe exploded",
+    });
+  });
+
+  it("stays silent for consumed, store-level error, and in-flight states", () => {
+    // consumed: the window is already closed, nothing left to lose.
+    expect(importSignWarning("consumed", undefined)).toBeUndefined();
+    // store-level error: the host fails closed (consume refuses, so the
+    // signed write cannot land over an unreadable store).
+    expect(importSignWarning("error", undefined)).toBeUndefined();
+    // in-flight (no data, no error yet): claims nothing.
+    expect(importSignWarning(undefined, undefined)).toBeUndefined();
   });
 });

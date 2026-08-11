@@ -1319,6 +1319,14 @@ pub enum FrameDisposition {
     /// malformed `lang_set` replies `lang_current` with the value+seq that
     /// stand, decision 7), do not forward.
     MalformedPolicy(PolicyKind),
+    /// Carries the `legacy_settings` type but does not parse as that frame (a
+    /// missing or mistyped bag): dropped, never forwarded - fire-and-forget
+    /// owes no reply - but audited as a `dropped_malformed` receipt
+    /// (native_host), because the drop may be a version-skewed legitimate
+    /// extension losing its ONE migration send. Carries only the frame's
+    /// compact byte count: the content failed to parse and is never quoted
+    /// into any log or trail.
+    MalformedLegacySettings { bytes: usize },
 }
 
 /// Resolve `tag` to its `'static` copy in the derived host-control tag set
@@ -1428,8 +1436,12 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
         "legacy_settings" => match serde_json::from_value(frame.clone()) {
             Ok(PolicyControl::LegacySettings { bag }) => FrameDisposition::LegacySettings { bag },
             // Fire-and-forget has no reply contract (Phase 4 owns the pending
-            // store); a malformed bag is dropped, never forwarded.
-            _ => FrameDisposition::Drop("malformed legacy_settings"),
+            // store); a malformed bag is dropped, never forwarded - and
+            // audited (the frame may be a legitimate extension's one
+            // migration send, lost to version skew), carrying only its size.
+            _ => FrameDisposition::MalformedLegacySettings {
+                bytes: serde_json::to_vec(frame).map(|b| b.len()).unwrap_or(0),
+            },
         },
         "lang_get" => match serde_json::from_value(frame.clone()) {
             Ok(PolicyControl::LangGet {}) => FrameDisposition::LangGet,
@@ -2674,7 +2686,7 @@ mod tests {
         }
         // Malformed extension-originated frames take their typed malformed arm
         // (a reply is owed) rather than Forward - except legacy_settings,
-        // which is fire-and-forget and drops.
+        // which is fire-and-forget and drops (audited, with the size only).
         assert!(matches!(
             classify_nm_frame(&json!({ "type": "policy_get", "extra": 1 })),
             FrameDisposition::MalformedPolicy(PolicyKind::PolicyGet)
@@ -2687,9 +2699,11 @@ mod tests {
             classify_nm_frame(&json!({ "type": "lang_set" })),
             FrameDisposition::MalformedPolicy(PolicyKind::LangSet)
         ));
+        let bagless = json!({ "type": "legacy_settings" });
+        let expected = serde_json::to_vec(&bagless).unwrap().len();
         assert!(matches!(
-            classify_nm_frame(&json!({ "type": "legacy_settings" })),
-            FrameDisposition::Drop(_)
+            classify_nm_frame(&bagless),
+            FrameDisposition::MalformedLegacySettings { bytes } if bytes == expected
         ));
     }
 

@@ -33,6 +33,7 @@ fuzz_target!(|data: &[u8]| {
         | FrameDisposition::Malformed
         | FrameDisposition::MalformedPresence
         | FrameDisposition::MalformedAdmin(_)
-        | FrameDisposition::MalformedPolicy(_) => {}
+        | FrameDisposition::MalformedPolicy(_)
+        | FrameDisposition::MalformedLegacySettings { .. } => {}
     }
 });

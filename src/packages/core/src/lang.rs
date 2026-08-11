@@ -193,58 +193,10 @@ fn set_locked(lock: &ipc::RuntimeLockToken, value: &str) -> io::Result<(String, 
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
 
-    #[cfg(unix)]
-    const RUNTIME_ENV: &str = "XDG_RUNTIME_DIR";
-    #[cfg(windows)]
-    const RUNTIME_ENV: &str = "LOCALAPPDATA";
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    /// Points `runtime_dir()` at a fresh scratch directory for one test (the
-    /// policy store's `RuntimeDirGuard` pattern), so no test reads or writes
-    /// the user's real runtime state.
-    struct RuntimeDirGuard {
-        _serial: MutexGuard<'static, ()>,
-        dir: PathBuf,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl RuntimeDirGuard {
-        fn new(test: &str) -> Self {
-            let serial = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-            let dir = std::env::temp_dir().join(format!(
-                "chromium-bridge-lang-test-{}-{test}",
-                std::process::id()
-            ));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            let prev = std::env::var_os(RUNTIME_ENV);
-            std::env::set_var(RUNTIME_ENV, &dir);
-            RuntimeDirGuard {
-                _serial: serial,
-                dir,
-                prev,
-            }
-        }
-    }
-
-    impl Drop for RuntimeDirGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(RUNTIME_ENV, v),
-                None => std::env::remove_var(RUNTIME_ENV),
-            }
-            let _ = fs::remove_dir_all(&self.dir);
-        }
-    }
+    use crate::test_support::scratch_runtime_dir;
 
     fn lang_epoch() -> u64 {
         crate::revocation::Revocation::current().unwrap().lang_epoch
@@ -252,14 +204,14 @@ mod tests {
 
     #[test]
     fn absent_store_reads_the_default() {
-        let _dir = RuntimeDirGuard::new("absent-default");
+        let _dir = scratch_runtime_dir("lang-absent-default");
         assert!(LangStore::load().unwrap().is_none());
         assert_eq!(load_current().unwrap(), ("en".to_string(), 0));
     }
 
     #[test]
     fn a_changing_set_round_trips_and_bumps_seq_and_epoch() {
-        let _dir = RuntimeDirGuard::new("set-round-trip");
+        let _dir = scratch_runtime_dir("lang-set-round-trip");
         let before = lang_epoch();
         let (value, seq) = set("zh_CN").unwrap();
         assert_eq!(value, "zh_CN");
@@ -275,7 +227,7 @@ mod tests {
 
     #[test]
     fn a_noop_set_does_not_bump_seq_or_epoch() {
-        let _dir = RuntimeDirGuard::new("noop-set");
+        let _dir = scratch_runtime_dir("lang-noop-set");
         set("zh_CN").unwrap();
         let epoch_after_change = lang_epoch();
         // Re-setting the same value is a no-op: seq stands, epoch stands, so a
@@ -288,7 +240,7 @@ mod tests {
 
     #[test]
     fn setting_the_default_value_on_a_fresh_store_is_a_noop() {
-        let _dir = RuntimeDirGuard::new("noop-default");
+        let _dir = scratch_runtime_dir("lang-noop-default");
         let before = lang_epoch();
         // The host's implicit value is the default "en"; setting "en" changes
         // nothing, so seq stays 0 and nothing propagates.
@@ -311,7 +263,7 @@ mod tests {
 
     #[test]
     fn load_is_fail_closed_on_shape_version_and_out_of_enum() {
-        let _dir = RuntimeDirGuard::new("load-fail-closed");
+        let _dir = scratch_runtime_dir("lang-load-fail-closed");
         // Unknown field refused.
         fs::write(
             LangStore::path(),

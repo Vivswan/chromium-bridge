@@ -1227,14 +1227,17 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
 
   if (ok !== true || baseline === undefined) {
     // The Phase-4 migration trigger (ADR-0032 decision 8, D-P4-2): ONLY the
-    // structured `reason:"absent"` - the host attests it has NO baseline and
-    // NO prior receipt - may offer the legacy bag, and the offer is further
-    // gated fail-closed inside (pinned scope, fresh-nonce proof of the pin on
-    // THIS connection, the durable send-once flag, pre-cutover posture). The
-    // frame schema already refused any reason outside the enum, a reason on
-    // an ok:true frame, and an ok:false frame without `error`; an old host
-    // that omits the field entirely lands here as `undefined` and never
-    // triggers.
+    // structured `reason:"absent"` - the host attests it has NO signed
+    // baseline (it says nothing about receipts: the host derives the reason
+    // from its policy store alone, so a routine re-push after our bag was
+    // recorded still says absent; the durable send-once flag and the host's
+    // first-bag-wins store make that re-offer a no-op) - may offer the
+    // legacy bag, and the offer is further gated fail-closed inside (pinned
+    // scope, fresh-nonce proof of the pin on THIS connection, the durable
+    // send-once flag, pre-cutover posture). The frame schema already refused
+    // any reason outside the enum, a reason on an ok:true frame, and an
+    // ok:false frame without `error`; an old host that omits the field
+    // entirely lands here as `undefined` and never triggers.
     if (reason === "absent") await offerLegacyBag(attachment);
     // The host reports no usable policy (or an ok:true frame arrived without
     // its baseline): nothing to verify, nothing changes, and this NEVER opens

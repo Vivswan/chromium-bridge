@@ -15,6 +15,7 @@ import { useEpochEvent } from "@/hooks/useEpochEvent";
 import { useI18n } from "@/hooks/useI18n";
 import { POLICY_EPOCH_EVENT } from "@/lib/epoch-events";
 import type { MessageKey } from "@/lib/i18n";
+import { importSignWarning } from "@/lib/import-review";
 import {
   changedFields,
   type DraftError,
@@ -67,6 +68,11 @@ export function PolicyEditor() {
   const status = useAsync(api.policyStatus);
   const history = useAsync(api.policyHistory);
   const defaults = useAsync(api.policyDefaults);
+  // Read for the first-baseline dialog only: signing revision 1 writes the
+  // consumed tombstone, which permanently closes the one-time import window
+  // (none) or discards a recorded bag unseen (present) - the dialog says
+  // which, one informing sentence, no extra friction.
+  const pendingImport = useAsync(api.pendingImport);
 
   const store = status.data?.store;
   // What the bridge currently enforces, per the report: the effective
@@ -102,6 +108,10 @@ export function PolicyEditor() {
   useEpochEvent(POLICY_EPOCH_EVENT, () => {
     status.reload();
     history.reload();
+    // A policy-epoch notice also fires when the host records a legacy
+    // receipt, and revision 1 consumes it - either way the dialog's warning
+    // must speak to the CURRENT import state.
+    pendingImport.reload();
   });
 
   const clearResults = () => {
@@ -440,6 +450,20 @@ export function PolicyEditor() {
             <p className="m-0">
               {store === "none" ? t("security.first_dialog_body") : t("security.relax_dialog_body")}
             </p>
+            {store === "none" &&
+              (() => {
+                const warning = importSignWarning(pendingImport.data?.state, pendingImport.error);
+                if (warning === undefined) return null;
+                return (
+                  <p className="m-0">
+                    {warning.kind === "closes_window" && t("security.first_dialog_import_warning")}
+                    {warning.kind === "discards_pending" &&
+                      t("security.first_dialog_import_discard_warning")}
+                    {warning.kind === "probe_failed" &&
+                      t("security.first_dialog_import_probe_error", [warning.detail])}
+                  </p>
+                );
+              })()}
           </>
         }
         confirmLabel={t("security.relax_confirm")}

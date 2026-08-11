@@ -504,6 +504,7 @@ export type AuditKind =
   | "kill_release"
   | "presence_sign"
   | "policy_write"
+  | "legacy_import_receipt"
   | "confirm_shown"
   | "confirm_allowed"
   | "confirm_denied"

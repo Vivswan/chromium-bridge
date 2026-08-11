@@ -724,6 +724,60 @@ fn handle_presence_challenge(
     Ok(())
 }
 
+/// Handle one `legacy_settings` receipt (ADR-0032 decision 8): record the bag
+/// as the pending import and audit what the receipt turned into. The audit
+/// record (log-after-decide, written outside the runtime lock
+/// `record_if_absent` takes and releases) is what keeps a dropped bag visible
+/// to the user - the one import this host will ever offer must not vanish
+/// into a stderr line. It carries the outcome and the bag's compact byte
+/// count, NEVER the bag itself (the user's settings stay out of every log
+/// and trail).
+fn handle_legacy_settings(bag: Value) {
+    let bag_bytes = serde_json::to_vec(&bag).map(|b| b.len()).unwrap_or(0);
+    let outcome = match crate::pending_import::record_if_absent(bag) {
+        Ok(crate::pending_import::RecordOutcome::Recorded) => {
+            log_info!("native-host", "recorded the legacy settings pending import");
+            "recorded"
+        }
+        Ok(crate::pending_import::RecordOutcome::AlreadyPresent) => {
+            log_info!(
+                "native-host",
+                "legacy_settings received but a pending import already exists; dropped \
+                 (first-bag-wins)"
+            );
+            "dropped_already_pending"
+        }
+        Ok(crate::pending_import::RecordOutcome::AlreadyConsumed) => {
+            log_warn!(
+                "native-host",
+                "legacy_settings received after the import was consumed; dropped \
+                 (the import window is closed)"
+            );
+            "dropped_consumed"
+        }
+        Ok(crate::pending_import::RecordOutcome::Oversize { bytes }) => {
+            log_warn!(
+                "native-host",
+                "legacy_settings bag is {bytes} bytes, over the pending-import cap; dropped"
+            );
+            "dropped_oversize"
+        }
+        Err(e) => {
+            log_warn!(
+                "native-host",
+                "legacy_settings could not be recorded ({e}); dropped"
+            );
+            "error"
+        }
+    };
+    crate::audit::record(
+        crate::audit::AuditRecord::new(crate::audit::AuditKind::LegacyImportReceipt)
+            .surface(crate::audit::Surface::Host)
+            .outcome(outcome)
+            .detail(&format!("{bag_bytes} bytes")),
+    );
+}
+
 /// What one inbound native-messaging frame turned into.
 enum Inbound {
     /// A host-handled control frame: the reply (if any) has been written.
@@ -797,29 +851,7 @@ fn handle_control_frame(
             // pending import (first-bag-wins, D-P4-4), never applied. The frame
             // owes no reply; the write fails closed (an oversize or unwritable
             // receipt is logged and dropped, never crashes, never forwarded).
-            match crate::pending_import::record_if_absent(bag) {
-                Ok(crate::pending_import::RecordOutcome::Recorded) => {
-                    log_info!("native-host", "recorded the legacy settings pending import")
-                }
-                Ok(crate::pending_import::RecordOutcome::AlreadyPresent) => log_info!(
-                    "native-host",
-                    "legacy_settings received but a pending import already exists; dropped \
-                     (first-bag-wins)"
-                ),
-                Ok(crate::pending_import::RecordOutcome::AlreadyConsumed) => log_warn!(
-                    "native-host",
-                    "legacy_settings received after the import was consumed; dropped \
-                     (the import window is closed)"
-                ),
-                Ok(crate::pending_import::RecordOutcome::Oversize { bytes }) => log_warn!(
-                    "native-host",
-                    "legacy_settings bag is {bytes} bytes, over the pending-import cap; dropped"
-                ),
-                Err(e) => log_warn!(
-                    "native-host",
-                    "legacy_settings could not be recorded ({e}); dropped"
-                ),
-            }
+            handle_legacy_settings(bag);
             Ok(Inbound::Handled)
         }
         FrameDisposition::LangGet => {
@@ -843,6 +875,24 @@ fn handle_control_frame(
             if let Some(reply) = malformed_policy_reply(kind) {
                 write_control_reply(out, &reply)?;
             }
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::MalformedLegacySettings { bytes } => {
+            // The one receipt kind whose loss the user can never re-trigger:
+            // a frame carrying the legacy_settings type that fails the parse
+            // may be a version-skewed legitimate extension spending its ONE
+            // migration send, so the drop is audited (size only - the
+            // content did not parse and is never quoted), not just logged.
+            log_warn!(
+                "native-host",
+                "malformed legacy_settings frame from browser; dropped"
+            );
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::LegacyImportReceipt)
+                    .surface(crate::audit::Surface::Host)
+                    .outcome("dropped_malformed")
+                    .detail(&format!("{bytes} bytes")),
+            );
             Ok(Inbound::Handled)
         }
         FrameDisposition::AuditEvent(fields) => {
@@ -1556,52 +1606,11 @@ mod tests {
 
     /// A scratch runtime dir for the ADR-0032 frame-answer tests (the policy
     /// and language stores, the revocation record, and the audit trail all
-    /// resolve their paths internally), the policy store's `RuntimeDirGuard`
-    /// pattern lifted here so no test reads or writes the user's real state.
-    #[cfg(unix)]
-    const RUNTIME_ENV: &str = "XDG_RUNTIME_DIR";
-    #[cfg(windows)]
-    const RUNTIME_ENV: &str = "LOCALAPPDATA";
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct RuntimeDirGuard {
-        _serial: std::sync::MutexGuard<'static, ()>,
-        dir: std::path::PathBuf,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl RuntimeDirGuard {
-        fn new(test: &str) -> Self {
-            let serial = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-            let dir = std::env::temp_dir().join(format!(
-                "chromium-bridge-native-host-test-{}-{test}",
-                std::process::id()
-            ));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let prev = std::env::var_os(RUNTIME_ENV);
-            std::env::set_var(RUNTIME_ENV, &dir);
-            RuntimeDirGuard {
-                _serial: serial,
-                dir,
-                prev,
-            }
-        }
-    }
-
-    impl Drop for RuntimeDirGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(RUNTIME_ENV, v),
-                None => std::env::remove_var(RUNTIME_ENV),
-            }
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
+    /// resolve their paths internally): the crate-wide
+    /// [`crate::test_support::scratch_runtime_dir`] guard, so no test reads
+    /// or writes the user's real state and no other module's tests race the
+    /// process-global env var under plain `cargo test`.
+    use crate::test_support::scratch_runtime_dir;
 
     fn audit_text() -> String {
         std::fs::read_to_string(crate::audit::audit_path()).unwrap_or_default()
@@ -1617,7 +1626,7 @@ mod tests {
         // (policy_current, lang_current) arriving FROM the browser stay
         // DROPPED (host->extension only). All are Handled, never forwarded. A
         // scratch runtime dir isolates the store reads/writes the answers do.
-        let _dir = RuntimeDirGuard::new("answered-or-dropped");
+        let _dir = scratch_runtime_dir("native-host-answered-or-dropped");
         let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
         for (frame, is_drop) in [
             (serde_json::json!({ "type": "policy_get" }), false),
@@ -1660,11 +1669,89 @@ mod tests {
     }
 
     #[test]
+    fn legacy_settings_receipts_are_audited_and_only_recording_bumps_the_epoch() {
+        // Finding 2: every receipt outcome lands in the audit trail (kind
+        // legacy_import_receipt, host-owned) with the outcome and byte count
+        // but NEVER the bag, and only the Recorded arm bumps the policy
+        // epoch (which is what makes an open app re-probe and surface the
+        // arrival through its import nav entry).
+        let _dir = scratch_runtime_dir("native-host-legacy-receipt-audit");
+        let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+        let policy_epoch = || {
+            crate::revocation::Revocation::current()
+                .unwrap()
+                .policy_epoch
+        };
+        let send = |bag: serde_json::Value| {
+            let frame = serde_json::json!({ "type": "legacy_settings", "bag": bag });
+            assert!(matches!(
+                handle_control_frame(frame, &out).unwrap(),
+                Inbound::Handled
+            ));
+        };
+
+        // Recorded: audited, epoch bumped.
+        send(serde_json::json!({ "pageEvalEnabled": true, "marker": "sekritbagvalue" }));
+        let text = audit_text();
+        assert!(text.contains("legacy_import_receipt"), "{text}");
+        assert!(text.contains("\"outcome\":\"recorded\""), "{text}");
+        assert!(
+            !text.contains("sekritbagvalue") && !text.contains("pageEvalEnabled"),
+            "the audit trail must never carry bag contents: {text}"
+        );
+        let after_record = policy_epoch();
+        assert!(after_record > 0, "recording must bump the policy epoch");
+
+        // First-bag-wins drop: audited, no bump.
+        send(serde_json::json!({ "later": true }));
+        assert!(audit_text().contains("\"outcome\":\"dropped_already_pending\""));
+        assert_eq!(policy_epoch(), after_record);
+
+        // Post-consume drop: audited, no bump (consume itself bumps nothing;
+        // the policy write that drives it audits and bumps separately).
+        crate::pending_import::consume().unwrap();
+        let epoch_after_consume = policy_epoch();
+        send(serde_json::json!({ "replant": true }));
+        assert!(audit_text().contains("\"outcome\":\"dropped_consumed\""));
+        assert_eq!(policy_epoch(), epoch_after_consume);
+
+        // Oversize drop: audited with the byte count, no bump.
+        let huge = "x".repeat(crate::pending_import::LEGACY_BAG_MAX_BYTES + 1);
+        send(serde_json::json!({ "blob": huge }));
+        let text = audit_text();
+        assert!(text.contains("\"outcome\":\"dropped_oversize\""), "{text}");
+        assert!(
+            !text.contains("xxxxxxxxxx"),
+            "no bag bytes in the trail: {text}"
+        );
+        assert_eq!(policy_epoch(), epoch_after_consume);
+
+        // Unreadable store: the error outcome is audited too.
+        std::fs::write(crate::pending_import::path(), b"{ not json").unwrap();
+        send(serde_json::json!({ "after": "corruption" }));
+        assert!(audit_text().contains("\"outcome\":\"error\""));
+
+        // Malformed frame (no parsable bag): audited as dropped_malformed
+        // with the size only - the unparsed content never reaches the trail.
+        let malformed = serde_json::json!({ "type": "legacy_settings", "surprisemarker": true });
+        assert!(matches!(
+            handle_control_frame(malformed, &out).unwrap(),
+            Inbound::Handled
+        ));
+        let text = audit_text();
+        assert!(text.contains("\"outcome\":\"dropped_malformed\""), "{text}");
+        assert!(
+            !text.contains("surprisemarker"),
+            "unparsed frame content must never reach the trail: {text}"
+        );
+    }
+
+    #[test]
     fn policy_get_answers_ok_false_when_no_store_exists() {
         // Fail closed (ADR-0032 decision 4/5): an absent store answers
         // ok:false with an error and no baseline claim, so the extension keeps
         // its deny baseline rather than trusting bytes nobody vouched for.
-        let _dir = RuntimeDirGuard::new("policy-get-absent");
+        let _dir = scratch_runtime_dir("native-host-policy-get-absent");
         match policy_current_reply() {
             PolicyControl::PolicyCurrent {
                 ok: false,
@@ -1680,7 +1767,7 @@ mod tests {
 
     #[test]
     fn policy_get_answers_the_signed_baseline_from_the_store() {
-        let _dir = RuntimeDirGuard::new("policy-get-present");
+        let _dir = scratch_runtime_dir("native-host-policy-get-present");
         let _reset = crate::presence::policy_test_hook::ResetOnDrop;
         crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
             crate::presence::PolicySignOutcome::Signed {
@@ -1717,7 +1804,7 @@ mod tests {
         // ok:false - the push must agree with the dispatch gate's deny-all
         // reading of the same state, never vouch ok:true for bytes the gate
         // refuses.
-        let _dir = RuntimeDirGuard::new("policy-get-damaged");
+        let _dir = scratch_runtime_dir("native-host-policy-get-damaged");
         // Envelope parses, baseline bytes are garbage.
         let garbage = crate::policy::PolicyStore {
             version: 1,
@@ -1782,7 +1869,7 @@ mod tests {
         // or a content-damaged store - it answers reason=unreadable, so the
         // extension keeps its deny baseline and never mistakes it for the
         // absent state that triggers the legacy import.
-        let _dir = RuntimeDirGuard::new("policy-get-unreadable");
+        let _dir = scratch_runtime_dir("native-host-policy-get-unreadable");
         std::fs::write(
             crate::policy::PolicyStore::path(),
             br#"{"version":99,"baseline_b64":"e30="}"#,
@@ -1801,7 +1888,7 @@ mod tests {
 
     #[test]
     fn lang_get_answers_the_current_language() {
-        let _dir = RuntimeDirGuard::new("lang-get");
+        let _dir = scratch_runtime_dir("native-host-lang-get");
         crate::lang::set("zh_TW").unwrap();
         match lang_current_frame().unwrap() {
             PolicyControl::LangCurrent { value, seq } => {
@@ -1814,7 +1901,7 @@ mod tests {
 
     #[test]
     fn lang_set_applies_a_valid_value_and_bumps_the_sequence() {
-        let _dir = RuntimeDirGuard::new("lang-set-valid");
+        let _dir = scratch_runtime_dir("native-host-lang-set-valid");
         match handle_lang_set("zh_CN".into()).unwrap() {
             PolicyControl::LangCurrent { value, seq } => {
                 assert_eq!(value, "zh_CN");
@@ -1833,7 +1920,7 @@ mod tests {
         // ADR-0032 decision 7: a value outside the enum is refused and the
         // previous value stands - the reply is lang_current with the
         // UNCHANGED value+seq, and the store is untouched.
-        let _dir = RuntimeDirGuard::new("lang-set-invalid");
+        let _dir = scratch_runtime_dir("native-host-lang-set-invalid");
         crate::lang::set("zh_CN").unwrap();
         match handle_lang_set("fr".into()).unwrap() {
             PolicyControl::LangCurrent { value, seq } => {
@@ -1854,7 +1941,7 @@ mod tests {
         // the kill switch, then attempt release from the extension: the reply
         // is a refusal (ok:false, no killed claim), the trail records it, and
         // the bridge stays killed - the refusal never calls kill::release.
-        let _dir = RuntimeDirGuard::new("kill-release-refused");
+        let _dir = scratch_runtime_dir("native-host-kill-release-refused");
         crate::kill::engage(crate::audit::Surface::Cli).unwrap();
         match handle_kill_release_refused() {
             AdminControl::KillStatusResult {

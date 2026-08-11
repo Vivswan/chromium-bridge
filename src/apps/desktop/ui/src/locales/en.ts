@@ -302,6 +302,12 @@ export const en = {
   "security.first_dialog_title": "Sign the first policy baseline?",
   "security.first_dialog_body":
     "No baseline exists yet, so this signs revision 1 with the values above. On a Touch ID Mac you will be asked for your fingerprint.",
+  "security.first_dialog_import_warning":
+    "Signing now also permanently closes the one-time legacy import window - a settings snapshot the extension sends later cannot be imported.",
+  "security.first_dialog_import_discard_warning":
+    "A recorded legacy settings snapshot is still waiting for review - signing now permanently discards it. Review it on the Legacy import screen first if you want it.",
+  "security.first_dialog_import_probe_error":
+    "The legacy import state could not be read ($1) - signing now may permanently close the one-time import window or discard a pending import.",
   "security.history_title": "Policy history",
   "security.history_note":
     "Superseded revisions. Rolling back re-applies a past state as a fresh write - never a replay.",
@@ -370,8 +376,10 @@ export const en = {
     "Settings your extension used before host-owned policy, waiting for review. Nothing applies until you sign it.",
   "import.none_body":
     "No legacy settings are waiting. This screen has an offer only while a snapshot from the extension awaits review.",
+  "import.none_unenrolled_note":
+    "The extension sends its snapshot only to a paired host that has proven its key - pair in Browsers first if you expect a migration offer.",
   "import.consumed_body":
-    "The one-time import already happened - a policy baseline exists and the import window is closed for good. Manage policy in Security.",
+    "The one-time import was already resolved and the import window is permanently closed - it stays closed even after a revoke or re-pair. Manage policy in Security.",
   "import.error_body":
     "The recorded legacy settings could not be read ($1) - failing closed. Nothing is offered for import.",
   "import.review_title": "Recorded legacy settings",
@@ -380,7 +388,7 @@ export const en = {
   "import.changed": "differs from default",
   "import.default_was": "Deny default: $1",
   "import.tools_none": "(none)",
-  "import.ignored_note": "Not imported (browser-owned, unknown, or malformed):",
+  "import.ignored_note": "Not imported (browser-owned, retired history, unknown, or malformed):",
   "import.empty_mapping":
     "The snapshot carries no usable policy fields. Adopting signs the deny defaults as revision 1 and closes the import window.",
   "import.adopt": "Adopt & sign",

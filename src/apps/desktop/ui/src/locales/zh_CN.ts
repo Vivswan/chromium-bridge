@@ -284,6 +284,12 @@ export const zh_CN: Record<MessageKey, string> = {
   "security.first_dialog_title": "签署首个策略基线?",
   "security.first_dialog_body":
     "尚无基线, 因此这会以上方的值签署修订 1。在有 Touch ID 的 Mac 上会要求你的指纹。",
+  "security.first_dialog_import_warning":
+    "现在签署还会永久关闭一次性旧设置导入窗口 - 扩展之后发送的设置快照将无法导入。",
+  "security.first_dialog_import_discard_warning":
+    "已记录的旧设置快照仍在等待审查 - 现在签署将永久丢弃它。如需保留, 请先在「旧设置导入」屏幕中审查。",
+  "security.first_dialog_import_probe_error":
+    "无法读取旧设置导入状态 ($1) - 现在签署可能会永久关闭一次性导入窗口或丢弃待处理的导入。",
   "security.history_title": "策略历史",
   "security.history_note": "被取代的修订。回滚会将过去状态作为全新写入重新应用 - 绝非重放。",
   "security.history_empty": "尚无被取代的修订。",
@@ -346,15 +352,17 @@ export const zh_CN: Record<MessageKey, string> = {
 
   "import.sub": "扩展在主机策略之前使用的设置, 等待审查。在你签署之前不会应用任何内容。",
   "import.none_body": "没有等待中的旧设置。只有当扩展的设置快照等待审查时, 此屏幕才会提供导入。",
+  "import.none_unenrolled_note":
+    "扩展只会向已配对并证明其密钥的主机发送设置快照 - 若期待迁移提议, 请先在「浏览器」中配对。",
   "import.consumed_body":
-    "一次性导入已经完成 - 策略基线已存在, 导入窗口已永久关闭。请在「安全」中管理策略。",
+    "一次性导入已经处理完毕, 导入窗口已永久关闭 - 即使撤销并重新配对也不会重新打开。请在「安全」中管理策略。",
   "import.error_body": "无法读取已记录的旧设置 ($1) - 按失败关闭处理。不提供任何导入。",
   "import.review_title": "已记录的旧设置",
   "import.review_note": "扩展一次性发送的快照。它只是建议; 在你签署之前, 拒绝基线继续生效。",
   "import.changed": "与默认值不同",
   "import.default_was": "拒绝默认值: $1",
   "import.tools_none": "(无)",
-  "import.ignored_note": "未导入 (浏览器自有、未知或格式错误):",
+  "import.ignored_note": "未导入 (浏览器自有、已退役的历史字段、未知或格式错误):",
   "import.empty_mapping":
     "快照中没有可用的策略字段。采用将把拒绝默认值签署为修订版 1 并关闭导入窗口。",
   "import.adopt": "采用并签署",

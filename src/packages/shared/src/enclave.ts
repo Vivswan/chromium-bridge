@@ -372,8 +372,9 @@ export const AUDIT_EVENT_KINDS = [
   "policy_refused",
   "policy_compromised",
   // ADR-0032 phase 4, local-only: the one-time legacy_settings bag send (the
-  // decision-8 migration offer). The host audits the receipt authoritatively
-  // when it records the pending import; this records the EXTENSION's send.
+  // decision-8 migration offer). The host audits every receipt outcome
+  // authoritatively (recorded or dropped, the legacy_import_receipt kind);
+  // this records the EXTENSION's send.
   "legacy_settings_sent",
 ] as const;
 

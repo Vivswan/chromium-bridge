@@ -12,8 +12,10 @@ interface AppState {
   setView: (view: View) => void;
   /** Whether the first-run legacy import needs the user's attention (a
    * pending bag awaits review, or the pending store is unreadable). Drives
-   * the conditional nav entry; the ImportView owns the actual state and
-   * keeps this in sync from every fresh survey. */
+   * the conditional nav entry. Kept LIVE, not just at launch: App's startup
+   * probe and its policy-epoch re-probe (a receipt landing mid-session bumps
+   * the policy epoch) both write it, as does ImportView from every fresh
+   * survey while mounted. */
   importAttention: boolean;
   setImportAttention: (importAttention: boolean) => void;
   status: BridgeStatus | undefined;

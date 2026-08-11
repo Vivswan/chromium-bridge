@@ -8,9 +8,11 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useEpochEvent } from "@/hooks/useEpochEvent";
 import { useI18n } from "@/hooks/useI18n";
 import { cn } from "@/lib/cn";
+import { POLICY_EPOCH_EVENT } from "@/lib/epoch-events";
 import type { MessageKey } from "@/lib/i18n";
 import { api, errorText } from "@/lib/tauri";
 import { useAppStore, type View } from "@/store";
@@ -66,6 +68,30 @@ export function App() {
       },
     );
   }, [setImportAttention, setView]);
+
+  // Mid-session arrival (the host bumps the policy epoch when it records a
+  // legacy receipt): re-probe and keep importAttention tracking LIVE state,
+  // so a bag arriving while the user is on any other screen grows the nav
+  // entry instead of waiting, invisible, to be consumed by the next signed
+  // baseline. No forced navigation - the entry appearing is the surfacing;
+  // a failed re-probe keeps (or raises) attention, fail closed. The
+  // sequence token (useAsync's own pattern) makes the LATEST probe win:
+  // without it, two epoch events in quick succession could let an older
+  // `none` resolve last and clobber a fresh `present`, hiding the entry.
+  const importProbeSeq = useRef(0);
+  useEpochEvent(POLICY_EPOCH_EVENT, () => {
+    const mySeq = ++importProbeSeq.current;
+    api.pendingImport().then(
+      (survey) => {
+        if (importProbeSeq.current !== mySeq) return;
+        setImportAttention(survey.state === "present" || survey.state === "error");
+      },
+      () => {
+        if (importProbeSeq.current !== mySeq) return;
+        setImportAttention(true);
+      },
+    );
+  });
 
   // Shared status: fetched on start, refreshed on window focus (the cheap,
   // event-driven alternative to polling for a control panel).
