@@ -8,7 +8,7 @@
 
 import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 
 function record(overrides: Partial<PolicyValues>) {
   return {

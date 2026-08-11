@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { withFreshPolicy } from "@/lib/background/effective-policy";
 import { decodeToastReply, snapshotPrecise } from "@/lib/background/precise";
 

@@ -27,7 +27,7 @@ import {
 } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
 import { presenceRoutingEnabled } from "@/lib/background/confirm/presence";
 import {

@@ -7,7 +7,7 @@ import type { ConfirmPayload } from "@chromium-bridge/shared";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 
 const PAYLOAD: ConfirmPayload = {
   id: "confirm_1",

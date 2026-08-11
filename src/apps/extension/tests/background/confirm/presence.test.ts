@@ -16,7 +16,7 @@
 
 import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getCompromised, setPin } from "@/lib/background/enclave-pin";
 import {
   base64Encode,

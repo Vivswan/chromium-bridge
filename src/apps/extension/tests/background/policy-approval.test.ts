@@ -11,7 +11,7 @@
 import { type ConfirmPayload, POLICY_FIELDS } from "@chromium-bridge/shared";
 import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
   denyAllConfirmations,

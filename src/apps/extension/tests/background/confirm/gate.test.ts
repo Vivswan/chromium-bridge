@@ -4,7 +4,7 @@
 
 import type { ConfirmPayload } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { bindOrigin, preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
 import {
   currentPanicEpoch,

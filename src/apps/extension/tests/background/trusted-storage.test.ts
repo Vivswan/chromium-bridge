@@ -6,7 +6,7 @@
 // result is memoized, and a failure blocks the gate.
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import {
   hardenStorageAccess,
   resetStorageHardeningForTests,

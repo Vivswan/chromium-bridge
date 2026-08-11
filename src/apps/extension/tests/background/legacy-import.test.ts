@@ -8,7 +8,7 @@
 // permissive direction).
 
 import { beforeEach, describe, expect, test } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { readLegacySettingsBag } from "@/lib/background/legacy-import";
 
 const HOST_BAG_CAP_BYTES = 64 * 1024; // pending_import.rs LEGACY_BAG_MAX_BYTES

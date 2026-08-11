@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { ContentScriptBackend } from "@/lib/background/backends/content-script";
 import type { PageOpGuard } from "@/lib/background/confirm/gate";
 import type { ResolvedTab } from "@/lib/background/tabs";

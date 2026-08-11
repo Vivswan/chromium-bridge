@@ -9,7 +9,7 @@ import type { RuntimeMsg } from "@chromium-bridge/shared";
 import { RuntimeMsgSchema } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { Browser } from "wxt/browser";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { route } from "@/lib/background/messages";
 
 const EXT_ID = "test-ext-id";

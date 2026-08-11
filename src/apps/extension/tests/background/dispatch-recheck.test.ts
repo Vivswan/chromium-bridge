@@ -4,7 +4,7 @@
 // object is what the backend acts on.
 
 import { beforeEach, describe, expect, test } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { recheckTab } from "@/lib/background/dispatch";
 import type { ResolvedTab } from "@/lib/background/tabs";
 

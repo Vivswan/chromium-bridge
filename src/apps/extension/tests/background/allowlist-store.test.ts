@@ -11,7 +11,7 @@
 
 import type { PendingApproval } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import {
   addAllow,
   canonicalOriginGlob,
@@ -166,17 +166,25 @@ describe("pending approvals (the popup mirror is derived, not parallel)", () => 
     // fires while resolvePendingAllow is between "seen" and "persisted". Only
     // arm the gate for the read INSIDE resolvePendingAllow, not ensureAllowed's.
     let armed = false;
+    let gateEntered = false;
     let releaseRead!: () => void;
     const readGate = new Promise<void>((r) => {
       releaseRead = r;
     });
-    const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
-    const getSpy = vi
-      .spyOn(fakeBrowser.storage.local, "get")
-      .mockImplementation(async (keys?: Parameters<typeof realGet>[0]) => {
-        if (armed && keys === "allowlist") await readGate;
-        return realGet(keys);
-      });
+    // get() is overloaded (promise form + Chrome callback forms); bind and
+    // mockImplementation both resolve to the callback overload, so pin the
+    // promise form the code under test actually calls.
+    type StorageGet = (keys?: string | string[] | null) => Promise<Record<string, unknown>>;
+    const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local) as StorageGet;
+    const getSpy = vi.spyOn(fakeBrowser.storage.local, "get").mockImplementation((async (
+      keys?: Parameters<StorageGet>[0],
+    ) => {
+      if (armed && keys === "allowlist") {
+        gateEntered = true;
+        await readGate;
+      }
+      return realGet(keys);
+    }) as typeof fakeBrowser.storage.local.get);
     try {
       const p = outcomeOf(ensureAllowed("https://race.test/x"));
       await vi.advanceTimersByTimeAsync(0);
@@ -190,6 +198,10 @@ describe("pending approvals (the popup mirror is derived, not parallel)", () => 
       await vi.advanceTimersByTimeAsync(60_000);
       releaseRead();
       const approveResult = await approve;
+      // The race is only exercised if the approve actually reached the gated
+      // read; without this the "approve wins" outcome is indistinguishable
+      // from the un-raced path.
+      expect(gateEntered).toBe(true);
 
       // Exactly one winner, and it is consistent: the synchronous claim means
       // approve took the slot, so the request is ALLOWED and its glob is on

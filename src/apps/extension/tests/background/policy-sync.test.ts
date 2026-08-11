@@ -77,7 +77,7 @@ import {
 } from "@chromium-bridge/shared";
 import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import {
   base64Decode,
   base64Encode,

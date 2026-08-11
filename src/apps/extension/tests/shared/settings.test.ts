@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { DEFAULTS, getSetting } from "@/lib/shared/settings";
 
 describe("DEFAULTS", () => {

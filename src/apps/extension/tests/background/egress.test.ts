@@ -7,7 +7,7 @@
 
 import type { StorageReadResultWire } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
-import { fakeBrowser } from "wxt/testing";
+import { fakeBrowser } from "wxt/testing/fake-browser";
 import { withFreshPolicy } from "@/lib/background/effective-policy";
 import { maskOpResult } from "@/lib/background/egress";
 import type { StorageReadResult } from "@/lib/dom/page-api";

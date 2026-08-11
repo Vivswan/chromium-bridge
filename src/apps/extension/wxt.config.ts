@@ -65,7 +65,7 @@ export default defineConfig({
     // explicit --user-data-dir - so this hook guards profile reuse only.
     "config:resolved": (wxt) => {
       if (wxt.config.command !== "serve") return;
-      const resolved = wxt.config.runnerConfig.config ?? {};
+      const resolved = wxt.config.webExt.config ?? {};
       const problems: string[] = [];
       if (resolved.disabled !== true) {
         problems.push(
