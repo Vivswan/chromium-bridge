@@ -258,8 +258,10 @@ export type LangCurrentFrame = z.infer<typeof LangCurrentFrameSchema>;
 // The key-id shape a trust record may carry: lowercase-hex SHA-256 of a
 // pubkey (the enrollment fingerprint). Declared here so the stored policy
 // scope below can reuse it; `trustedKeyId` further deny-lists the fixture key
-// for the PIN records lower down.
-const KEY_ID_HEX = /^[0-9a-f]{64}$/;
+// for the PIN records lower down. Exported so policy-sync's durable prior-pin
+// validator reuses this ONE definition rather than keeping a second copy that
+// could drift.
+export const KEY_ID_HEX = /^[0-9a-f]{64}$/;
 
 // The extension-side stored effective policy (ADR-0032 decisions 3/4): the
 // ratcheted effective values the extension last applied, the ratchet anchor

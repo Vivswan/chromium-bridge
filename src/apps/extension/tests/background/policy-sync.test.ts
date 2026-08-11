@@ -262,16 +262,19 @@ describe("golden-vector replay through the full accept path", () => {
     expect(pinState.compromised?.reason).toContain("signature verification");
   });
 
-  test("a genuine push against the WRONG pin is refused AND marks compromised", async () => {
+  test("a genuine push against the WRONG pin is refused, marks compromised, and latches the gate (E2F-1)", async () => {
     const other = await makeSigner();
     pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 1 };
     await push(goldenFrame(0));
     expect(await getStoredPolicyState()).toBeNull();
-    expect((await policyDispatchGate()).allowed).toBe(true); // still pre-cutover...
-    expect(await getPolicySnapshot()).toEqual({
-      cutover: false,
-      effective: POLICY_DEFAULTS,
-    });
+    // E2F-1: a signature failure sets the sticky in-life compromise latch, so
+    // the dispatch barrier refuses for the rest of this SW life even pre-cutover
+    // (in production the durable mark also fails the enrollment gate closed).
+    const gate = await policyDispatchGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("host-substitution");
+    // The snapshot reports the fail-closed deny baseline (cutover-forced true).
+    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
     expect(pinState.compromised?.reason).toContain("signature verification");
   });
 
@@ -458,7 +461,7 @@ describe("the dispatch barrier and the one-way cutover", () => {
     // onPinRevoked RETAINS the ratchet record (finding 2: a same-key re-pair
     // must still refuse an old-baseline replay) and only drops this
     // connection's verified mark. The cutover flag survives.
-    await onPinRevoked();
+    await onPinRevoked(fixture.keyIdHex);
     expect((await getStoredPolicyState())?.revision).toBe(2);
     expect(await policyCutoverArmed()).toBe(true);
     // The mark is dropped: deny + barrier until a fresh push on this connection.
@@ -491,25 +494,38 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
   test("same-key re-pair retains the anchor, so an OLD lower-revision baseline replay is refused (finding 2)", async () => {
     // rev 2 lands, then the user revokes and re-pairs the SAME key.
     await push(goldenFrame(1));
-    await onPinRevoked(); // record RETAINED across revoke
-    await onPinPinned(fixture.keyIdHex); // same key: anchor kept, NOT cleared
+    // Model the ACTUAL unpinned interval (E2F-6): pin=null between revoke and
+    // re-pair. The retained record's scope no longer matches (unpinned), so it
+    // goes inert - deny baseline, barrier closed - even though the anchor
+    // survives in storage.
+    pinState.pin = null;
+    await onPinRevoked(fixture.keyIdHex); // record RETAINED across revoke
     expect((await getStoredPolicyState())?.revision).toBe(2);
-    // A hostile host now replays the genuine, validly-signed rev-1 baseline.
-    // With the anchor gone this would apply as first-ever; with it retained
-    // the revision ratchet refuses it.
+    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect((await policyDispatchGate()).allowed).toBe(false);
+    // The SAME key is re-pinned: anchor kept, NOT cleared, scope matches again.
+    pinState.pin = fixturePin();
+    await onPinPinned(fixture.keyIdHex);
+    expect((await getStoredPolicyState())?.revision).toBe(2);
+    // A hostile host now replays the genuine, validly-signed rev-1 baseline on a
+    // fresh connection. With the anchor gone this would apply as first-ever; with
+    // it retained the revision ratchet refuses it, and the barrier stays closed.
     detachPort();
     attachPort(() => true);
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(2);
     expect((await getStoredPolicyState())?.effective).toEqual(goldenValues(1));
+    expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
   test("different-key re-pair resets the ratchet: onPinPinned clears the retained record", async () => {
     await push(goldenFrame(1));
-    await onPinRevoked();
+    // The revoke records the fixture key as the DURABLE prior identity (H1);
+    // key-novelty at the next pin is decided against it.
+    await onPinRevoked(fixture.keyIdHex);
     const other = await makeSigner();
-    // A DIFFERENT key is pinned: the retained fixture-key record is cleared so
-    // the new scope starts fresh (the intended reset).
+    // A DIFFERENT key is pinned: prior=fixture, new=other, so the retained
+    // fixture-key record is cleared and the new scope starts fresh.
     await onPinPinned(other.keyId);
     expect(await getStoredPolicyState()).toBeNull();
     expect(await policyCutoverArmed()).toBe(true); // one-way, survives the reset
@@ -544,6 +560,455 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(1);
     expect((await policyDispatchGate()).allowed).toBe(true);
+  });
+
+  test("an ABA same-key revoke+re-pair mid-verify is dropped by the generation epoch (E2F-2)", async () => {
+    // rev 1 lands, active under the fixture key.
+    await push(goldenFrame(0));
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    // A rev 2 push arrives. Mid-flight - modeled by firing on the
+    // resolvePolicyState storage read - the user revokes and re-pairs the SAME
+    // key. The keyId is unchanged, so the commit-time SCOPE recheck alone would
+    // pass; only the generation epoch, bumped by each transition, catches the
+    // ABA and drops the push (the verified-mark / no-downgrade invariant).
+    let fired = false;
+    const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
+    const local = fakeBrowser.storage.local as unknown as {
+      get: (k: string | string[]) => Promise<Record<string, unknown>>;
+    };
+    local.get = async (k) => {
+      const keys = Array.isArray(k) ? k : [k];
+      if (!fired && keys.includes("bridgePolicyState") && keys.includes("bridgePolicyCutover")) {
+        fired = true;
+        local.get = realGet as never; // the transitions below read storage too
+        await onPinRevoked(fixture.keyIdHex); // gen bump 1
+        await onPinPinned(fixture.keyIdHex); // same key: scope unchanged, gen bump 2
+      }
+      return realGet(k);
+    };
+    await push(goldenFrame(1));
+    local.get = realGet as never;
+    // Dropped at commit: the stored ratchet still shows rev 1, not rev 2, and
+    // the connection holds no verified mark under the new generation.
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+});
+
+describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 undo, E2F-5)", () => {
+  test("H1: the durable prior survives an SW restart, so a different-key re-pair still recovers a corrupt cutover flag", async () => {
+    // THE REGRESSION: with the prior identity held only in memory, every re-pair
+    // after an SW restart read as "prior unknown" -> never a new key -> the
+    // normalize path never ran. Since armCutover THROWS on a corrupt flag and
+    // nothing else in the codebase clears it, a tampered flag was permanently
+    // unrecoverable and LATCHED_REASON's "revoke and re-pair" promise was false.
+    await fakeBrowser.storage.local.set({ bridgePolicyCutover: "yes" });
+    expect(await policyDispatchGate()).toMatchObject({ allowed: false }); // latched
+    // The user revokes. The revoke writes the durable prior identity.
+    await onPinRevoked(fixture.keyIdHex);
+    expect((await fakeBrowser.storage.local.get("bridgePolicyPriorPin")).bridgePolicyPriorPin).toBe(
+      fixture.keyIdHex,
+    );
+    // THE SERVICE WORKER DIES between the revoke and the re-pair (the common MV3
+    // case): every in-memory latch, epoch, and mirror is gone. Storage is not.
+    resetPolicySyncForTests();
+    attachPort(() => true);
+    // The user re-pairs with a FRESH key. Novelty is decided against the durable
+    // prior, so this is recognized as new and the corrupt flag is normalized.
+    const other = await makeSigner();
+    pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
+    await onPinPinned(other.keyId);
+    const raw = await fakeBrowser.storage.local.get("bridgePolicyCutover");
+    expect(raw.bridgePolicyCutover).toBe(true); // exactly `true`: recovered, one-way preserved
+    // The prior is CONSUMED, so a much later re-pair cannot re-decide against it.
+    expect(
+      (await fakeBrowser.storage.local.get("bridgePolicyPriorPin")).bridgePolicyPriorPin,
+    ).toBeUndefined();
+    // Recovery lands in awaitingBaseline: armed, no record, barrier closed.
+    expect(await policyCutoverArmed()).toBe(true);
+    expect(await getStoredPolicyState()).toBeNull();
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("H1: a SAME-key re-pair across an SW restart is still not new, so a corrupt flag stays latched", async () => {
+    // The mirror image of the test above: the durable prior must DECIDE novelty,
+    // not merely make every re-pair look new. Re-pinning the very key that was
+    // revoked is not fresh evidence, so nothing is cleared or normalized.
+    await fakeBrowser.storage.local.set({ bridgePolicyCutover: "yes" });
+    await onPinRevoked(fixture.keyIdHex);
+    resetPolicySyncForTests();
+    attachPort(() => true);
+    await onPinPinned(fixture.keyIdHex);
+    const raw = await fakeBrowser.storage.local.get("bridgePolicyCutover");
+    expect(raw.bridgePolicyCutover).toBe("yes"); // untouched: still tampering evidence
+    expect(await policyDispatchGate()).toMatchObject({ allowed: false });
+  });
+
+  test("H1: known-A -> revoke -> re-pair A retains the ratchet across an SW restart (finding 2)", async () => {
+    // The anchor must survive the restart too, or the old-baseline replay that
+    // finding 2 closed would reopen on every re-paired worker.
+    await push(goldenFrame(1)); // rev 2 active under the fixture key
+    await onPinRevoked(fixture.keyIdHex);
+    resetPolicySyncForTests(); // the SW dies mid-ceremony
+    attachPort(() => true);
+    await onPinPinned(fixture.keyIdHex); // SAME key: not new, anchor retained
+    expect((await getStoredPolicyState())?.revision).toBe(2);
+    // The hostile host replays the genuine, validly-signed rev-1 baseline: the
+    // retained anchor refuses it, and the barrier stays closed.
+    await push(goldenFrame(0));
+    expect((await getStoredPolicyState())?.revision).toBe(2);
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("F2: a same-key re-pair keeps the compromise latch (no stored record); a different-key re-pair clears it", async () => {
+    await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
+    // Set the sticky latch: a flipped-byte baseline fails the fixture-key sig.
+    const v = fixture.vectors[0];
+    if (!v) throw new Error("missing golden vector");
+    const bad = base64Decode(v.docB64);
+    bad[40] = (bad[40] ?? 0) ^ 0x01;
+    await push({ type: "policy_current", ok: true, baseline: base64Encode(bad), sig: v.sigB64 });
+    expect(await getStoredPolicyState()).toBeNull(); // nothing stored
+    let gate = await policyDispatchGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("host-substitution");
+    // A SAME-key re-pair with NO stored record must NOT clear the latch. The F2
+    // bug: the old sameScope check read the absent record as !sameScope and
+    // wrongly cleared the latch (promised "cleared ONLY on a NEW-key re-pair").
+    await onPinRevoked(fixture.keyIdHex);
+    await onPinPinned(fixture.keyIdHex);
+    gate = await policyDispatchGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("host-substitution");
+    // A DIFFERENT-key re-pair IS genuine new evidence: it clears the latch, and
+    // a fresh push signed by that key then opens the barrier.
+    const other = await makeSigner();
+    pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
+    await onPinRevoked(fixture.keyIdHex);
+    await onPinPinned(other.keyId);
+    detachPort();
+    attachPort(() => true);
+    const { baseline, sig } = await other.signDoc(docJson(1, []));
+    await push({ type: "policy_current", ok: true, baseline, sig });
+    expect((await policyDispatchGate()).allowed).toBe(true);
+  });
+
+  test("E2F-5: resolution reads the cutover flag and the record in a SINGLE two-key storage.get", async () => {
+    await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
+    const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
+    const calls: (string | string[])[] = [];
+    const local = fakeBrowser.storage.local as unknown as {
+      get: (k: string | string[]) => Promise<Record<string, unknown>>;
+    };
+    local.get = (k) => {
+      calls.push(k);
+      return realGet(k);
+    };
+    await getPolicySnapshot();
+    local.get = realGet as never;
+    // Exactly one get names BOTH policy keys together (no torn two-get read),
+    // and neither key is fetched on its own.
+    const twoKeyGets = calls.filter(
+      (k) =>
+        Array.isArray(k) && k.includes("bridgePolicyCutover") && k.includes("bridgePolicyState"),
+    );
+    expect(twoKeyGets).toHaveLength(1);
+    const singleKeyGets = calls.filter(
+      (k) => k === "bridgePolicyCutover" || k === "bridgePolicyState",
+    );
+    expect(singleKeyGets).toHaveLength(0);
+  });
+
+  test("F3: an ABA revoke+re-pair DURING the commit writes leaves no stale record and stamps no mark", async () => {
+    const signer = await makeSigner();
+    pinState.pin = { keyId: signer.keyId, pubkeyB64: signer.pubkeyB64, pinnedAt: 1 };
+    const rev1 = await signer.signDoc(docJson(1, []));
+    await push({ type: "policy_current", ok: true, baseline: rev1.baseline, sig: rev1.sig });
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    expect((await policyDispatchGate()).allowed).toBe(true);
+    // A rev-2 push. Fire a SAME-key revoke+re-pair while the rev-2 RECORD write
+    // is in flight - the window AFTER the pre-write recheck. The keyId is
+    // unchanged, so only the generation epoch catches the ABA; the F3 end recheck
+    // must UNDO the stale rev-2 write (restore rev 1) and stamp no mark.
+    const rev2 = await signer.signDoc(docJson(2, []));
+    const realSet = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    const local = fakeBrowser.storage.local as unknown as {
+      set: (o: Record<string, unknown>) => Promise<void>;
+    };
+    let fired = false;
+    local.set = async (obj) => {
+      const rec = obj.bridgePolicyState as { revision?: number } | undefined;
+      if (!fired && rec?.revision === 2) {
+        fired = true;
+        local.set = realSet as never;
+        await realSet(obj); // the stale rev-2 record lands...
+        await onPinRevoked(signer.keyId); // gen bump 1
+        await onPinPinned(signer.keyId); // SAME key: no reset, scope unchanged, gen bump 2
+        return;
+      }
+      return realSet(obj);
+    };
+    await push({ type: "policy_current", ok: true, baseline: rev2.baseline, sig: rev2.sig });
+    local.set = realSet as never;
+    // The stale rev-2 write was undone (restored to rev 1); the connection holds
+    // no verified mark under the new generation, so the barrier is closed.
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("HC-3: a reset landing during the prior-snapshot read does not resurrect the dead anchor (epoch captured before the read)", async () => {
+    // The undo restores the pre-write anchor - UNLESS a ratchet reset ran while
+    // this push was in flight, in which case that anchor is dead and must be
+    // removed. The discriminator is WHERE the reset epoch is captured: if it were
+    // captured AFTER the awaited prior-snapshot read, a reset completing DURING
+    // that read would leave the undo comparing equal epochs and restoring the
+    // dead anchor. Captured BEFORE the read, the undo sees the epoch move and
+    // removes. This hooks the single-key bridgePolicyState read so a GENUINE
+    // new-key revoke+re-pair lands the instant it resolves.
+    const signer = await makeSigner();
+    pinState.pin = { keyId: signer.keyId, pubkeyB64: signer.pubkeyB64, pinnedAt: 1 };
+    const rev1 = await signer.signDoc(docJson(1, []));
+    await push({ type: "policy_current", ok: true, baseline: rev1.baseline, sig: rev1.sig });
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    const rev2 = await signer.signDoc(docJson(2, []));
+    const other = await makeSigner();
+    const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
+    const local = fakeBrowser.storage.local as unknown as {
+      get: (k: string | string[]) => Promise<Record<string, unknown>>;
+    };
+    let fired = false;
+    local.get = async (k) => {
+      const result = await realGet(k);
+      const single = typeof k === "string" ? k : Array.isArray(k) && k.length === 1 ? k[0] : null;
+      if (!fired && single === "bridgePolicyState") {
+        fired = true;
+        local.get = realGet as never;
+        // A genuine new-key revoke+re-pair: bumps the reset epoch AND deletes the
+        // rev-1 anchor, exactly the continuation the capture-before guards against.
+        await onPinRevoked(signer.keyId);
+        await onPinPinned(other.keyId);
+        pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
+      }
+      return result;
+    };
+    await push({ type: "policy_current", ok: true, baseline: rev2.baseline, sig: rev2.sig });
+    local.get = realGet as never;
+    // The dead rev-1 anchor was removed, not restored: the record is absent and
+    // the barrier is closed. (Captured after the read, this would read rev 1.)
+    expect(await getStoredPolicyState()).toBeNull();
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("H4: an A->B->A transition during a stalled push does not resurrect the reset anchor", async () => {
+    // Both new-key pins RESET the ratchet (they remove the record). If the undo
+    // blindly restored its pre-write snapshot, the A/rev-1 anchor would come back
+    // ACTIVE under scope A - silently defeating the reset and refusing legitimate
+    // lower-revision A policies. The reset epoch makes the undo remove instead.
+    const a = await makeSigner();
+    const b = await makeSigner();
+    pinState.pin = { keyId: a.keyId, pubkeyB64: a.pubkeyB64, pinnedAt: 1 };
+    const rev1 = await a.signDoc(docJson(1, []));
+    await push({ type: "policy_current", ok: true, baseline: rev1.baseline, sig: rev1.sig });
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    const rev2 = await a.signDoc(docJson(2, []));
+    const realSet = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    const local = fakeBrowser.storage.local as unknown as {
+      set: (o: Record<string, unknown>) => Promise<void>;
+    };
+    let fired = false;
+    local.set = async (obj) => {
+      const rec = obj.bridgePolicyState as { revision?: number } | undefined;
+      if (!fired && rec?.revision === 2) {
+        fired = true;
+        local.set = realSet as never;
+        // A -> B -> A, both legs a genuine new key, so both RESET the ratchet.
+        await onPinRevoked(a.keyId);
+        await onPinPinned(b.keyId);
+        await onPinRevoked(b.keyId);
+        await onPinPinned(a.keyId);
+        pinState.pin = { keyId: a.keyId, pubkeyB64: a.pubkeyB64, pinnedAt: 3 };
+        // ...and only THEN does the stalled push's own write land, so the record
+        // is unambiguously ours and the ownership check alone would not save us.
+        await realSet(obj);
+        return;
+      }
+      return realSet(obj);
+    };
+    await push({ type: "policy_current", ok: true, baseline: rev2.baseline, sig: rev2.sig });
+    local.set = realSet as never;
+    // Neither the stale rev 2 nor the reset-away rev 1 survives: the scope starts
+    // fresh, exactly as the two new-key re-pairs intended.
+    expect(await getStoredPolicyState()).toBeNull();
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("H4: an undo that itself fails still refuses and audits the race", async () => {
+    // The undo is best-effort; the REFUSAL is not. If the restore throws and the
+    // exception escapes, frameChain's catch swallows it and the policy_refused
+    // audit never fires - the race would go unrecorded.
+    const signer = await makeSigner();
+    pinState.pin = { keyId: signer.keyId, pubkeyB64: signer.pubkeyB64, pinnedAt: 1 };
+    const rev1 = await signer.signDoc(docJson(1, []));
+    await push({ type: "policy_current", ok: true, baseline: rev1.baseline, sig: rev1.sig });
+    const rev2 = await signer.signDoc(docJson(2, []));
+    auditCalls.events = [];
+    const realSet = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    const local = fakeBrowser.storage.local as unknown as {
+      set: (o: Record<string, unknown>) => Promise<void>;
+    };
+    let writes = 0;
+    local.set = async (obj) => {
+      const rec = obj.bridgePolicyState as { revision?: number } | undefined;
+      if (rec === undefined) return realSet(obj);
+      writes += 1;
+      if (writes === 1) {
+        await realSet(obj); // the stale rev-2 record lands
+        await onPinRevoked(signer.keyId);
+        await onPinPinned(signer.keyId); // same key: gen moves, no reset
+        return;
+      }
+      throw new Error("storage unavailable"); // the undo's restore fails
+    };
+    await push({ type: "policy_current", ok: true, baseline: rev2.baseline, sig: rev2.sig });
+    local.set = realSet as never;
+    // The refusal and its audit fired despite the failed undo, and the barrier is
+    // closed - the push never earned a verified mark.
+    expect(auditCalls.events.some((e) => e.kind === "policy_refused")).toBe(true);
+    expect((await policyDispatchGate()).allowed).toBe(false);
+  });
+
+  test("a TAMPERED durable prior (valid-length garbage) does not clear the compromise latch", async () => {
+    // The fail-OPEN the shapeless version had: any non-empty string read as a
+    // known prior, so a tamperer could make the user's own SAME-key re-pair look
+    // new and silently reset the ratchet, clear the latch, and launder a corrupt
+    // cutover flag. Structural validation refuses a non-keyId-shaped string, and
+    // "unknown" is fail-closed to not-new.
+    await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
+    const v = fixture.vectors[0];
+    if (!v) throw new Error("missing golden vector");
+    const bad = base64Decode(v.docB64);
+    bad[40] = (bad[40] ?? 0) ^ 0x01;
+    await push({ type: "policy_current", ok: true, baseline: base64Encode(bad), sig: v.sigB64 });
+    expect(await policyDispatchGate()).toMatchObject({ allowed: false }); // latch set
+    // A tampered prior of the right LENGTH but the wrong alphabet.
+    await fakeBrowser.storage.local.set({ bridgePolicyPriorPin: "z".repeat(64) });
+    await onPinPinned(fixture.keyIdHex);
+    const gate = await policyDispatchGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("host-substitution"); // latch survived
+  });
+
+  test("classifyPriorPin: non-string and non-hex-string priors both read as unknown", async () => {
+    // Both tamper directions land on "unknown" -> not new -> nothing is reset.
+    // Exercised through onPinPinned, the only consumer.
+    for (const tampered of [
+      42,
+      { keyId: "x" },
+      ["a"],
+      true,
+      "",
+      "not-hex",
+      fixture.keyIdHex.toUpperCase(), // uppercase hex is not the keyId shape
+      fixture.keyIdHex.slice(0, 63), // one char short
+      `${fixture.keyIdHex}0`, // one char long
+    ]) {
+      fakeBrowser.reset();
+      resetPolicySyncForTests();
+      attachPort(() => true);
+      // A corrupt cutover flag is the visible proof: only a NEW-key re-pair
+      // normalizes it, so if the tampered prior were honoured as known this
+      // different-key pin would repair the flag.
+      await fakeBrowser.storage.local.set({
+        bridgePolicyCutover: "yes",
+        bridgePolicyPriorPin: tampered,
+      });
+      const other = await makeSigner();
+      await onPinPinned(other.keyId);
+      const raw = await fakeBrowser.storage.local.get("bridgePolicyCutover");
+      expect(raw.bridgePolicyCutover).toBe("yes"); // untouched: read as not-new
+    }
+  });
+
+  test("onPinRevoked(null) preserves an existing durable prior (a double revoke)", async () => {
+    // A revoke with nothing pinned has no identity to record. It must NOT clear
+    // the prior a real revoke already wrote, or the second revoke would strand
+    // the very recovery the first one enabled.
+    await onPinRevoked(fixture.keyIdHex);
+    expect((await fakeBrowser.storage.local.get("bridgePolicyPriorPin")).bridgePolicyPriorPin).toBe(
+      fixture.keyIdHex,
+    );
+    pinState.pin = null;
+    await onPinRevoked(null); // nothing pinned this time
+    expect((await fakeBrowser.storage.local.get("bridgePolicyPriorPin")).bridgePolicyPriorPin).toBe(
+      fixture.keyIdHex,
+    );
+    // And the preserved prior still decides novelty correctly.
+    const other = await makeSigner();
+    pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
+    await fakeBrowser.storage.local.set({ bridgePolicyCutover: "yes" });
+    await onPinPinned(other.keyId);
+    expect((await fakeBrowser.storage.local.get("bridgePolicyCutover")).bridgePolicyCutover).toBe(
+      true,
+    );
+  });
+
+  test("H5: a raced idempotent replay writes nothing at all - no record write, no undo write", async () => {
+    // The idempotent push-on-connect replay writes nothing (setMirror discipline).
+    // If a pin transition races THAT push, the undo must not "restore" a record
+    // it never replaced - a blind re-set would retrigger every onChanged consumer.
+    // TWO independent guards produce this, and the test pins the OBSERVABLE
+    // result rather than either one: the `wrote` flag skips the undo outright,
+    // and the ownership check would also refuse it because `committed` carries a
+    // fresh `at` that no suppressed write ever stored.
+    const signer = await makeSigner();
+    pinState.pin = { keyId: signer.keyId, pubkeyB64: signer.pubkeyB64, pinnedAt: 1 };
+    const rev1 = await signer.signDoc(docJson(1, []));
+    await push({ type: "policy_current", ok: true, baseline: rev1.baseline, sig: rev1.sig });
+    const stored = await getStoredPolicyState();
+    expect(stored?.revision).toBe(1);
+    // Replay the identical frame on a fresh connection, and fire a same-key ABA
+    // during the commit. The record write is suppressed as unchanged, so the
+    // commit-end race must simply refuse and touch storage not at all.
+    detachPort();
+    attachPort(() => true);
+    const realSet = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    const realRemove = fakeBrowser.storage.local.remove.bind(fakeBrowser.storage.local);
+    const local = fakeBrowser.storage.local as unknown as {
+      set: (o: Record<string, unknown>) => Promise<void>;
+      remove: (k: string | string[]) => Promise<void>;
+    };
+    const recordWrites: string[] = [];
+    local.set = async (obj) => {
+      if ("bridgePolicyState" in obj) recordWrites.push("set");
+      return realSet(obj);
+    };
+    local.remove = async (k) => {
+      if (k === "bridgePolicyState") recordWrites.push("remove");
+      return realRemove(k);
+    };
+    let fired = false;
+    const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
+    const localGet = fakeBrowser.storage.local as unknown as {
+      get: (k: string | string[]) => Promise<Record<string, unknown>>;
+    };
+    localGet.get = async (k) => {
+      const keys = Array.isArray(k) ? k : [k];
+      if (!fired && keys.includes("bridgePolicyState") && keys.includes("bridgePolicyCutover")) {
+        fired = true;
+        localGet.get = realGet as never;
+        await onPinRevoked(signer.keyId);
+        await onPinPinned(signer.keyId); // same key: gen moves, no reset
+      }
+      return realGet(k);
+    };
+    await push({ type: "policy_current", ok: true, baseline: rev1.baseline, sig: rev1.sig });
+    local.set = realSet as never;
+    local.remove = realRemove as never;
+    localGet.get = realGet as never;
+    // No record write and no undo write happened at all, and the record stands.
+    expect(recordWrites).toEqual([]);
+    expect(await getStoredPolicyState()).toEqual(stored);
+    expect((await policyDispatchGate()).allowed).toBe(false);
   });
 });
 
@@ -636,8 +1101,10 @@ describe("corrupt stored state latches closed (finding 3)", () => {
     // landing as first-ever). Recovery is a re-pair, below.
     await push(goldenFrame(0));
     expect(await policyDispatchGate()).toMatchObject({ allowed: false });
-    // A DIFFERENT-key re-pair clears the corrupt record and recovers.
+    // A DIFFERENT-key re-pair clears the corrupt record and recovers. The revoke
+    // records the fixture key as the durable prior, so `other` reads as new.
     const other = await makeSigner();
+    await onPinRevoked(fixture.keyIdHex);
     await onPinPinned(other.keyId);
     expect(await getStoredPolicyState()).toBeNull();
   });
@@ -694,6 +1161,46 @@ describe("compromise closes the connection (finding 4)", () => {
     expect(pinState.compromised).toBeNull(); // the persist failed...
     expect((await policyDispatchGate()).allowed).toBe(false); // ...but the barrier is shut
   });
+
+  test("a failed-persist compromise stays sticky against a replayed genuine frame (E2F-1)", async () => {
+    await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
+    // A genuine push verifies this connection: barrier open, record stored.
+    await push(goldenFrame(0));
+    expect((await policyDispatchGate()).allowed).toBe(true);
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    // The host is substituted and sends a bad-signature push; the durable
+    // compromise persist THROWS. The sticky in-life latch shuts the barrier.
+    pinState.throwOnSetCompromised = true;
+    const v = fixture.vectors[1];
+    if (!v) throw new Error("missing golden vector");
+    const bad = base64Decode(v.docB64);
+    bad[40] = (bad[40] ?? 0) ^ 0x01;
+    await push({ type: "policy_current", ok: true, baseline: base64Encode(bad), sig: v.sigB64 });
+    expect(pinState.compromised).toBeNull(); // no durable mark landed
+    expect((await policyDispatchGate()).allowed).toBe(false);
+    // THE ATTACK: replay the earlier genuine, byte-identical frame. Its
+    // signature verifies and the ratchet would accept it as an idempotent
+    // replay - re-marking the attachment verified and reopening the barrier -
+    // were it not for the sticky latch folding every resolve to compromised.
+    pinState.throwOnSetCompromised = false; // even a working persist cannot help the attacker now
+    await push(goldenFrame(0));
+    expect((await policyDispatchGate()).allowed).toBe(false);
+    // The stored record is untouched: the replay never committed a verified mark.
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    // Only a NEW-key re-pair clears the sticky latch (never a valid push). Pin a
+    // fresh key and push a document signed by it: the gate opens, proving the
+    // latch was lifted by the re-pair and by nothing else above.
+    const other = await makeSigner();
+    pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
+    await onPinRevoked(fixture.keyIdHex); // records the durable prior identity
+    await onPinPinned(other.keyId); // different key: clears the record and the latch
+    detachPort();
+    attachPort(() => true);
+    const { baseline, sig } = await other.signDoc(docJson(1, []));
+    await push({ type: "policy_current", ok: true, baseline, sig });
+    expect((await getStoredPolicyState())?.revision).toBe(1);
+    expect((await policyDispatchGate()).allowed).toBe(true);
+  });
 });
 
 describe("armCutover ordering is fail-closed", () => {
@@ -710,6 +1217,38 @@ describe("armCutover ordering is fail-closed", () => {
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(1);
     expect((await policyDispatchGate()).allowed).toBe(true);
+  });
+
+  test("the write order is cutover-first, and a record-write failure leaves deny (E2F-6)", async () => {
+    // Drive the real accept path and INTERCEPT the writes: assert the cutover
+    // flag lands before the record, then fail the record write to reproduce the
+    // "SW died between arm and write" shape from live code, not a seeded flag.
+    const signer = await makeSigner();
+    pinState.pin = { keyId: signer.keyId, pubkeyB64: signer.pubkeyB64, pinnedAt: 1 };
+    const { baseline, sig } = await signer.signDoc(docJson(1, []));
+    const realSet = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    const local = fakeBrowser.storage.local as unknown as {
+      set: (o: Record<string, unknown>) => Promise<void>;
+    };
+    const writes: string[] = [];
+    local.set = (obj) => {
+      const keys = Object.keys(obj);
+      writes.push(...keys);
+      // The record write fails; the cutover write already landed.
+      if (keys.includes("bridgePolicyState")) return Promise.reject(new Error("write failed"));
+      return realSet(obj);
+    };
+    await push({ type: "policy_current", ok: true, baseline, sig });
+    local.set = realSet as never;
+    // Cutover was armed FIRST; the record write came after (and failed).
+    expect(writes[0]).toBe("bridgePolicyCutover");
+    expect(writes).toContain("bridgePolicyState");
+    // The resulting armed + absent-record state denies, never legacy, and no
+    // verified mark was set (the commit threw before it).
+    expect(await getStoredPolicyState()).toBeNull();
+    expect(await policyCutoverArmed()).toBe(true);
+    expect(await getPolicySnapshot()).toEqual({ cutover: true, effective: POLICY_DEFAULTS });
+    expect((await policyDispatchGate()).allowed).toBe(false);
   });
 });
 

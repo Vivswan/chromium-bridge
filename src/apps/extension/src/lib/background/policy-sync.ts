@@ -66,6 +66,7 @@
 
 import {
   foldPolicyOverlay,
+  KEY_ID_HEX,
   LangCurrentFrameSchema,
   POLICY_DEFAULTS,
   PolicyCurrentFrameSchema,
@@ -87,6 +88,70 @@ import { base64Decode, verifyPolicySignatureAgainstPin } from "./enclave-verify"
 
 const POLICY_STATE_KEY = "bridgePolicyState";
 const POLICY_CUTOVER_KEY = "bridgePolicyCutover";
+const POLICY_PRIOR_PIN_KEY = "bridgePolicyPriorPin";
+
+// ---- in-life latches (SW-lifetime, in memory only) ----------------------------
+//
+// The four module-level values below hold facts a persisted read cannot: they
+// survive across the awaits WITHIN one service-worker life but reset to their
+// initial value on SW death (when the durable setCompromised mark, the durable
+// prior-pin identity, and the stored ratchet re-derive the posture). Each is the
+// structural answer to a race the persisted state alone cannot see.
+
+/** The sticky in-life compromise latch (E2F-1). Set SYNCHRONOUSLY the instant a
+ * policy baseline fails signature verification against the pin - before any
+ * await - by markPolicyCompromised. Once set, resolvePolicyState resolves to
+ * `compromised` REGARDLESS of the cutover flag, stored record, scope, or
+ * verified mark, so the dispatch barrier and every enforcement read refuse for
+ * the rest of this SW life.
+ *
+ * Why a durable mark is not enough: markPolicyCompromised persists
+ * setCompromised asynchronously, and that persist can THROW. Without this
+ * latch a hostile host that just failed a signature could REPLAY a captured
+ * genuine, byte-identical frame - the signature verifies, the ratchet accepts
+ * it as an idempotent replay, the attachment returns to verified, and the
+ * barrier reopens with the enrollment gate never learning a compromise
+ * happened. The latch is set before the persist is even attempted, so a failed
+ * persist cannot leave a reopenable barrier behind.
+ *
+ * Cleared within a life ONLY by a NEW-key re-pair, where "new" is decided from
+ * the PRIOR PIN IDENTITY (onPinPinned's prior-keyId check, F2): a fresh,
+ * presence-verified enrollment key whose keyId genuinely differs from the last
+ * pinned one is real new evidence the substituted signer is gone. NEVER cleared
+ * by a later valid push, a cutover change, a same-key re-pair, or a re-pair
+ * whose prior identity is unknown. */
+let compromisedThisLife = false;
+
+/** The pin-transition generation epoch (E2F-2). Bumped synchronously by every
+ * pin transition (onPinRevoked, onPinPinned) BEFORE its awaits, so a push in
+ * flight can detect that the pin moved even when the keyId ends up equal (an
+ * ABA same-key revoke+re-pair). A push snapshots it at start alongside the
+ * scope, refuses at commit if it moved, and stamps it into the verified mark so
+ * a stale continuation from a prior generation cannot resurrect a verified
+ * mark. In memory only: a fresh SW starts at 0 and re-verifies from scratch.
+ *
+ * COUPLING INVARIANT with ratchetResetGeneration, relied on by the commit-end
+ * undo: every ratchetResetGeneration bump is PRECEDED by a pinGeneration bump
+ * and IMMEDIATELY FOLLOWED by the record removal, in that order. So a reset is
+ * never observable without the pin move that caused it also being observable,
+ * and a push that sees an unchanged pinGeneration cannot have missed a reset. */
+let pinGeneration = 0;
+
+/** The same-life mirror of the prior pin identity: the keyId the last
+ * onPinPinned bound, or the last onPinRevoked revoked. A fast path only - the
+ * DURABLE prior (POLICY_PRIOR_PIN_KEY, written on the revoke path) is what
+ * survives an SW restart and is consulted FIRST. onPinPinned owns the novelty
+ * rules; they are stated once, there. */
+let lastPinnedKeyId: string | null = null;
+
+/** Bumped ONLY by onPinPinned's new-key reset path - the branch that removes the
+ * stored record. A push's commit-end undo compares it (H4): if a ratchet RESET
+ * ran while the push was in flight, the undo must NOT restore the pre-write
+ * record, or an A->B->A transition would resurrect the very anchor the reset
+ * deleted. In memory only, like the generation epoch. See the coupling invariant
+ * on pinGeneration above: bump order is pinGeneration, then this, then the
+ * record removal - the undo's epoch comparison is only sound under that order. */
+let ratchetResetGeneration = 0;
 
 // ---- the ratchet scope --------------------------------------------------------
 
@@ -136,10 +201,12 @@ type PostFrame = (frame: object) => boolean;
 /** The per-connection barrier state (ADR-0032 decision 4): a fresh attachment
  * per attachPort, so "did THIS connection verify a policy push, and under
  * which scope?" is a reference-identity fact - a reconnect installs a new,
- * `awaiting` attachment that inherits nothing. `Verified{scope}` (not a bare
- * boolean) is what lets the barrier close the instant the pin moves away from
- * the scope the mark was earned under. */
-type AttachmentPolicy = { kind: "awaiting" } | { kind: "verified"; scope: PolicyScope };
+ * `awaiting` attachment that inherits nothing. `Verified{scope, generation}`
+ * (not a bare boolean) is what lets the barrier close the instant the pin moves
+ * away from the scope, OR the generation, the mark was earned under (E2F-2). */
+type AttachmentPolicy =
+  | { kind: "awaiting" }
+  | { kind: "verified"; scope: PolicyScope; generation: number };
 
 /** One port attachment. `post` is held for the Phase 4 frames (policy_get,
  * lang_set); nothing in this phase ever posts. */
@@ -185,15 +252,20 @@ function handleLangCurrent(msg: unknown): void {
 /** The one-way cutover fact (ADR-0032 decision 8), read as three DISTINCT
  * outcomes. `corrupt` (present but not exactly `true`) is tampering and must
  * not be read as either armed or unarmed: it latches closed. Written only as
- * `true`, and never cleared - not even by a re-pair. */
+ * `true`; cleared by nothing except a NEW-key re-pair normalizing a CORRUPT
+ * flag (E2F-4). */
 type CutoverRead = "unarmed" | "armed" | "corrupt";
+
+/** Classify a raw stored cutover value. `undefined` is the absent signal
+ * (storage cannot hold undefined); any other non-`true` value is tampering. */
+function classifyCutover(value: unknown): CutoverRead {
+  if (value === undefined) return "unarmed";
+  return value === true ? "armed" : "corrupt";
+}
 
 async function readCutover(): Promise<CutoverRead> {
   const { [POLICY_CUTOVER_KEY]: value } = await browser.storage.local.get(POLICY_CUTOVER_KEY);
-  // `undefined` is the absent signal (storage cannot hold undefined); any
-  // other non-`true` value is a tampered flag.
-  if (value === undefined) return "unarmed";
-  return value === true ? "armed" : "corrupt";
+  return classifyCutover(value);
 }
 
 /** The stored ratchet record, read as three DISTINCT outcomes (finding 3):
@@ -205,10 +277,9 @@ type StoredRead =
   | { kind: "corrupt" }
   | { kind: "valid"; record: StoredPolicyState };
 
-async function readStoredRecord(): Promise<StoredRead> {
-  const { [POLICY_STATE_KEY]: value } = await browser.storage.local.get(POLICY_STATE_KEY);
-  // `undefined` is the absent signal (storage cannot hold undefined); any
-  // stored value that fails the strict schema is corrupt, never absent.
+/** Classify a raw stored record value. `undefined` is the absent signal; any
+ * stored value that fails the strict schema is corrupt, never absent. */
+function classifyStored(value: unknown): StoredRead {
   if (value === undefined) return { kind: "absent" };
   const parsed = StoredPolicyStateSchema.safeParse(value);
   if (!parsed.success) return { kind: "corrupt" };
@@ -217,6 +288,76 @@ async function readStoredRecord(): Promise<StoredRead> {
   const effective = parseStoredPolicyValues(parsed.data.effective);
   if (!effective) return { kind: "corrupt" };
   return { kind: "valid", record: { ...parsed.data, effective } };
+}
+
+async function readStoredRecord(): Promise<StoredRead> {
+  const { [POLICY_STATE_KEY]: value } = await browser.storage.local.get(POLICY_STATE_KEY);
+  return classifyStored(value);
+}
+
+/** The DURABLE prior-pin identity (H1): the keyId that was pinned when the last
+ * revoke ran, written by onPinRevoked and consumed by the next onPinPinned.
+ *
+ * Why durable rather than an in-memory seed: the MV3 service worker very
+ * commonly dies between the revoke and the re-pair, and the in-memory mirror
+ * would be gone. Without a durable prior EVERY re-pair after an SW restart
+ * reads as "prior unknown" -> never a new key -> the compromise latch is never
+ * cleared and a CORRUPT cutover flag is never normalized, which would make both
+ * LATCHED_REASON's and COMPROMISED_LIFE_REASON's promised "revoke and re-pair"
+ * recovery false (onPinPinned's normalize path is the only writer anywhere that
+ * can repair a tampered cutover flag).
+ *
+ * THE TRUST PROPOSITION, stated honestly. This value carries LESS trust than the
+ * pin store it is copied from. The pin store's keyId is self-checking - it must
+ * equal SHA-256(pubkey), and the enclave verify path recomputes that - whereas
+ * this is a bare string with no accompanying pubkey to check it against, so
+ * nothing here can prove it was ever a real key. All it gets is STRUCTURAL
+ * validation (64 lowercase hex chars, the keyId shape), which is a filter on
+ * garbage, not a proof of authenticity. It is written only on the user-present
+ * revoke path from the pin store's own value.
+ *
+ * THE RESIDUALS, both directions, neither closable in the extension (there is no
+ * in-extension secret to MAC this with - the enclave key is the host's):
+ * - A tamperer who writes a DIFFERENT but validly-shaped keyId forces the next
+ *   re-pair to read as "new": the ratchet resets, the latch clears, a corrupt
+ *   cutover flag normalizes. That is bounded because it is equivalent to simply
+ *   deleting bridgePolicyState outright, which the same tamperer can already do
+ *   - it grants no capability the storage write itself did not.
+ * - A tamperer who writes a non-string or a malformed string forces "not new":
+ *   recovery stalls. That is DoS-equivalent to tampering the cutover flag, and
+ *   it self-heals - the next revoke overwrites this key with the real pin.
+ * Structural validation is what stops the WORSE case the shapeless version had:
+ * any garbage string reading as a known prior, so the user's own SAME-key
+ * re-pair looked new and silently reset the ratchet. */
+type PriorPinRead = { kind: "known"; keyId: string } | { kind: "unknown" };
+
+function classifyPriorPin(value: unknown): PriorPinRead {
+  // Anything that is not a keyId-SHAPED string - absent, a number/object/array,
+  // "", uppercase hex, or any other length - is unknown, which is fail-closed to
+  // "not a new key" (latch kept, ratchet retained). KEY_ID_HEX is the single
+  // shared keyId regex (keyId = lowercase-hex SHA-256 of the raw pubkey, so
+  // exactly 64 hex chars), reused so this validator cannot drift from it.
+  return typeof value === "string" && KEY_ID_HEX.test(value)
+    ? { kind: "known", keyId: value }
+    : { kind: "unknown" };
+}
+
+async function readPriorPin(): Promise<PriorPinRead> {
+  const { [POLICY_PRIOR_PIN_KEY]: value } = await browser.storage.local.get(POLICY_PRIOR_PIN_KEY);
+  return classifyPriorPin(value);
+}
+
+/** Read the cutover flag and the ratchet record from ONE storage snapshot
+ * (E2F-5): the two facts are folded together by resolvePolicyState, and two
+ * separate `get`s could tear (a pin transition or a partial write landing
+ * between them), letting the fold reason over an inconsistent pair. One `get`
+ * gives a single point-in-time view of both keys. */
+async function readPolicyStorage(): Promise<{ cutover: CutoverRead; stored: StoredRead }> {
+  const raw = await browser.storage.local.get([POLICY_CUTOVER_KEY, POLICY_STATE_KEY]);
+  return {
+    cutover: classifyCutover(raw[POLICY_CUTOVER_KEY]),
+    stored: classifyStored(raw[POLICY_STATE_KEY]),
+  };
 }
 
 // ---- the resolved policy state (the no-invalid-states sum type) ----------------
@@ -234,9 +375,17 @@ type PolicyState =
  * lifecycle invariants live; every consumer (the gate, the snapshot, the push
  * ratchet) branches on the result rather than re-deriving flags. */
 async function resolvePolicyState(scope: PolicyScope): Promise<PolicyState> {
-  const cutover = await readCutover();
+  // The sticky in-life compromise latch (E2F-1) DOMINATES every persisted
+  // fact: once a signature failed against the pin this SW life, no later valid
+  // push, cutover value, stored record, or verified mark can resolve to
+  // anything but compromised. This is what makes a replayed genuine frame -
+  // which would otherwise verify and ratchet as an idempotent replay - unable
+  // to reopen the barrier when the durable compromise persist failed.
+  if (compromisedThisLife) return { kind: "compromised" };
+  // One storage snapshot for both facts (E2F-5): the fold below reasons over
+  // the cutover flag and the record together, so they must be read together.
+  const { cutover, stored } = await readPolicyStorage();
   if (cutover === "corrupt") return { kind: "compromised" };
-  const stored = await readStoredRecord();
   if (cutover === "unarmed") {
     // Pre-cutover the record should not exist yet: `armCutover` precedes the
     // record write, so a record present with no cutover is tampering - latch
@@ -257,8 +406,22 @@ async function resolvePolicyState(scope: PolicyScope): Promise<PolicyState> {
 
 // ---- writers ------------------------------------------------------------------
 
-async function writeStoredRecord(next: StoredPolicyState): Promise<void> {
+/** Write the ratchet record. Returns whether a write actually landed, so the
+ * commit-end undo (H5) can skip restoring a record it never replaced - an
+ * unchanged-state push writes nothing, and a blind undo `set` would retrigger
+ * every storage.onChanged consumer, breaking the setMirror discipline below. */
+async function writeStoredRecord(next: StoredPolicyState): Promise<boolean> {
   const stored = await readStoredRecord();
+  // Refuse to overwrite a corrupt read (E2F-5): a corrupt record is the
+  // latched-closed state, and a push silently replacing it would be exactly
+  // the finding-3 fail-open (an older baseline landing as first-ever over
+  // tampering evidence). Recovery is a re-pair, which removes the key
+  // directly, never a push. Throwing aborts the accept path fail-closed; the
+  // read-time latch in resolvePolicyState is the primary guard and this is the
+  // torn-read backstop.
+  if (stored.kind === "corrupt") {
+    throw new Error("refusing to overwrite a corrupt policy record");
+  }
   // Unchanged state writes nothing (the kill.ts setMirror discipline): `at`
   // means "when the state last CHANGED", and an idempotent rewrite would
   // retrigger every storage.onChanged consumer on the steady-state
@@ -270,19 +433,82 @@ async function writeStoredRecord(next: StoredPolicyState): Promise<void> {
     stored.record.baselineB64 === next.baselineB64 &&
     policyValuesEqual(stored.record.effective, next.effective)
   ) {
-    return;
+    return false;
   }
   await browser.storage.local.set({ [POLICY_STATE_KEY]: next });
+  return true;
+}
+
+/** Is `a` EXACTLY the record `b` describes, `at` stamp included? The ownership
+ * test the commit-end undo uses (H4): an undo may only touch the record the
+ * push itself wrote, never whatever a newer pin transition or push has since
+ * put there. */
+function sameStoredRecord(a: StoredPolicyState, b: StoredPolicyState): boolean {
+  return (
+    a.scope === b.scope &&
+    a.revision === b.revision &&
+    a.baselineB64 === b.baselineB64 &&
+    a.at === b.at &&
+    policyValuesEqual(a.effective, b.effective)
+  );
+}
+
+/** Undo a stale commit-end record write (F3), ownership-checked (H4).
+ *
+ * Only ever acts when the CURRENT stored record is byte-for-byte the one this
+ * push wrote; anything else means a newer transition or push owns the slot now,
+ * and leaving it alone (including leaving it ABSENT) is correct. When a ratchet
+ * RESET ran while this push was in flight the pre-write record was deliberately
+ * deleted, so restoring it would resurrect a dead anchor (the A->B->A case) -
+ * remove instead, landing in awaitingBaseline (deny baseline + closed barrier).
+ * Corrupt is NEVER folded into absent (H3): it throws, the torn-read-backstop
+ * posture armCutover and writeStoredRecord already take. */
+async function undoRecordWrite(
+  written: StoredPolicyState,
+  prior: StoredRead,
+  resetGenerationAtWrite: number,
+): Promise<void> {
+  const now = await readStoredRecord();
+  if (now.kind !== "valid" || !sameStoredRecord(now.record, written)) return;
+  // Re-check the reset epoch here, right after the awaited read above: a reset
+  // can complete DURING that read, and restoring the pre-write record after one
+  // would resurrect the dead anchor the reset deleted - so remove instead.
+  // THE LAST WINDOW, named: browser.storage.local has no transaction, so the
+  // microtask gap between this check and the set() below cannot be closed in
+  // user space. It is one-directional: a reset arriving inside it degrades to a
+  // restore that a subsequent transition's own removal supersedes, never to a
+  // wrong novelty decision or an opened barrier.
+  if (ratchetResetGeneration !== resetGenerationAtWrite) {
+    await browser.storage.local.remove(POLICY_STATE_KEY);
+    return;
+  }
+  if (prior.kind === "valid") {
+    await browser.storage.local.set({ [POLICY_STATE_KEY]: prior.record });
+    return;
+  }
+  if (prior.kind === "absent") {
+    await browser.storage.local.remove(POLICY_STATE_KEY);
+    return;
+  }
+  throw new Error("refusing to undo a policy record write over a corrupt prior record");
 }
 
 /** Arm the one-way cutover (ADR-0032 decision 8). Set on the first accepted
- * push, cleared by nothing - not even a re-pair. Deliberately armed BEFORE
- * the record write on the accept path: if the SW dies between the two, the
- * resulting armed + absent-record state resolves to awaitingBaseline (deny
- * baseline + closed barrier = fail closed), never legacy-enforced-despite-an-
- * applied-policy. */
+ * push, cleared by nothing on the accept path. Deliberately armed BEFORE the
+ * record write: if the SW dies between the two, the resulting armed +
+ * absent-record state resolves to awaitingBaseline (deny baseline + closed
+ * barrier = fail closed), never legacy-enforced-despite-an-applied-policy. */
 async function armCutover(): Promise<void> {
-  if ((await readCutover()) === "armed") return;
+  const cutover = await readCutover();
+  if (cutover === "armed") return;
+  // Refuse to overwrite a corrupt read (E2F-5): laundering a tampered flag
+  // into a clean `true` would erase the tampering evidence that
+  // resolvePolicyState latches on. resolvePolicyState already refused this
+  // push (corrupt cutover -> compromised) before the accept path reached here;
+  // this is the torn-read backstop, and throwing keeps the accept fail-closed.
+  if (cutover === "corrupt") {
+    throw new Error("refusing to overwrite a corrupt cutover flag");
+  }
   await browser.storage.local.set({ [POLICY_CUTOVER_KEY]: true });
   console.log("[bb] policy cutover armed: host policy governs from here on (one-way)");
 }
@@ -309,24 +535,37 @@ const LATCHED_REASON =
   "(tampering evidence). Every bridge request is refused until you revoke the pin and " +
   "re-pair (ADR-0032 decision 4, the kill-mirror STRICT precedent).";
 
+const COMPROMISED_LIFE_REASON =
+  "policy state latched closed: a policy baseline failed signature verification against the " +
+  "pinned key this session (host-substitution evidence, ADR-0031 posture). Every bridge " +
+  "request is refused for the rest of this browser session; revoke the pin and re-pair with " +
+  "a fresh key to recover (ADR-0032, E2F-1).";
+
 /** The per-connection dispatch barrier (ADR-0032 decision 4). Post-cutover,
  * bridge requests are refused until a policy push has verified and applied on
- * the CURRENT host connection UNDER THE CURRENT SCOPE - so no op can race
- * ahead of the connect push and run under a cached copy the host has since
- * tightened, and a pin transition closes the barrier the instant it lands.
- * Pre-cutover the barrier is inert: the legacy local settings govern. A
- * corrupt store latches it closed regardless of the connection. */
+ * the CURRENT host connection UNDER THE CURRENT SCOPE AND GENERATION - so no op
+ * can race ahead of the connect push and run under a cached copy the host has
+ * since tightened, and a pin transition (scope OR generation move) closes the
+ * barrier the instant it lands. Pre-cutover the barrier is inert: the legacy
+ * local settings govern. A corrupt store, or an in-life signature failure,
+ * latches it closed regardless of the connection. */
 export async function policyDispatchGate(): Promise<PolicyGate> {
+  // The sticky in-life latch first (E2F-1): a signature failure this SW life
+  // refuses everything, whatever the cutover/pin/record say.
+  if (compromisedThisLife) return { allowed: false, reason: COMPROMISED_LIFE_REASON };
   const scope = await currentScope();
   const state = await resolvePolicyState(scope);
   if (state.kind === "legacy") return { allowed: true };
   if (state.kind === "compromised") return { allowed: false, reason: LATCHED_REASON };
   // awaitingBaseline | active: the barrier opens only for an ACTIVE (in-scope)
-  // record when THIS connection verified a push under the current scope.
+  // record when THIS connection verified a push under the current scope AND the
+  // current pin generation (E2F-2: a stale verified mark from before an ABA
+  // same-key re-pair carries the old generation and no longer opens the gate).
   if (
     state.kind === "active" &&
     port?.policy.kind === "verified" &&
-    scopesEqual(port.policy.scope, scope)
+    scopesEqual(port.policy.scope, scope) &&
+    port.policy.generation === pinGeneration
   ) {
     return { allowed: true };
   }
@@ -367,21 +606,70 @@ export async function getStoredPolicyState(): Promise<StoredPolicyState | null> 
 
 // ---- pin lifecycle hooks (called from enrollment.ts) ----------------------------
 
-/** A key was (re-)pinned (ADR-0032 decision 3). Resets the ratchet scope
- * UNLESS the new key matches the scope the stored record is already bound to:
- * a same-key re-pair RETAINS the anchor, which is what refuses an old
- * permissive baseline from replaying after a revoke+re-pair with zero fresh
- * presence (finding 2). A different key (or a corrupt/absent record) clears
- * it so the new scope starts fresh. Always drops this connection's verified
- * mark so the barrier re-verifies under the new pin. NEVER clears cutover:
- * post-reset the deny baseline plus the barrier govern until the first
- * baseline verifies under the new pin, never the legacy settings again. */
+/** A key was (re-)pinned (ADR-0032 decision 3). THE NOVELTY RULES, stated once:
+ *
+ * - Key-novelty is decided from the PRIOR PIN IDENTITY - the durable prior
+ *   written at revoke (H1), falling back to this life's mirror - and NEVER from
+ *   the stored record's scope (F2): a same-key re-pair whose record is absent or
+ *   corrupt must not be misread as a new key.
+ * - A CONFIRMED different prior keyId is the ONLY thing that resets the ratchet,
+ *   clears the in-life compromise latch (E2F-1), normalizes a corrupt cutover
+ *   flag (E2F-4), and bumps ratchetResetGeneration.
+ * - An equal prior keyId RETAINS the anchor, which is what refuses an old
+ *   permissive baseline from replaying after a revoke+re-pair with zero fresh
+ *   presence (finding 2).
+ * - An UNKNOWN prior (no durable prior and a fresh SW mirror - e.g. a first-ever
+ *   pairing) is fail-closed to "not new": latch kept, ratchet retained.
+ *
+ * Always drops this connection's verified mark so the barrier re-verifies under
+ * the new pin, and always bumps the generation epoch (E2F-2). NEVER clears an
+ * armed cutover: post-reset the deny baseline plus the barrier govern until the
+ * first baseline verifies under the new pin, never the legacy settings again. */
 export async function onPinPinned(newKeyId: string): Promise<void> {
-  const stored = await readStoredRecord();
-  const sameScope =
-    stored.kind === "valid" &&
-    scopesEqual(scopeFromStored(stored.record.scope), { pinned: true, keyId: newKeyId });
-  if (!sameScope) await browser.storage.local.remove(POLICY_STATE_KEY);
+  // Bump the generation epoch FIRST, synchronously (E2F-2): a push in flight
+  // must observe that the pin moved even when the new keyId equals the old.
+  pinGeneration += 1;
+  // The durable prior wins over this life's mirror: it is the one that survives
+  // the SW restart that so often falls between the revoke and the re-pair.
+  const durablePrior = await readPriorPin();
+  const priorKeyId = durablePrior.kind === "known" ? durablePrior.keyId : lastPinnedKeyId;
+  const isNewKey = priorKeyId !== null && priorKeyId !== newKeyId;
+  lastPinnedKeyId = newKeyId;
+  if (isNewKey) {
+    ratchetResetGeneration += 1;
+    await browser.storage.local.remove(POLICY_STATE_KEY);
+    // A NEW-key re-pair is fresh, presence-verified evidence the substituted
+    // signer is gone: clear the in-life compromise latch (E2F-1). The ONLY
+    // place it is cleared within a SW life.
+    compromisedThisLife = false;
+    // Recover from a CORRUPT cutover flag (E2F-4): resolvePolicyState checks
+    // cutover-corruption FIRST, so a tampered flag latches the state closed
+    // forever, and LATCHED_REASON promises re-pair recovery - this normalize is
+    // the only writer anywhere that can honour that promise (armCutover throws
+    // on corrupt). Normalize the tampered value to its one-way armed value
+    // (`true`) - not clear it - so recovery lands in awaitingBaseline (deny
+    // baseline + closed barrier), preserving the one-way cutover rather than
+    // falling back to legacy.
+    if ((await readCutover()) === "corrupt") {
+      await browser.storage.local.set({ [POLICY_CUTOVER_KEY]: true });
+    }
+  }
+  // Consume the prior LAST, only once the reset above has fully landed: an SW
+  // death mid-reset must not leave the prior already consumed and the recovery
+  // half-done, which would strand the user in the latched state the re-pair was
+  // meant to clear. Re-reading a not-yet-consumed prior is safe because every
+  // route back into onPinPinned - another revokePin, or approvePending
+  // proceeding when the pin record stops parsing (corrupt/tampered) - requires a
+  // full presence ceremony (Touch ID), so no same-user process can turn a
+  // stranded stale prior into a silent novelty decision; and the revokePin route
+  // additionally overwrites the prior with the real current pin before it could
+  // ever be re-read.
+  //
+  // The remaining window, named: there is no restart-reconciliation hook, so an
+  // SW death between the reset and this remove leaves the prior in place. The
+  // worst case is one extra revoke+re-pair cycle for the user - never a wrong
+  // novelty decision, and never a state that fails open.
+  await browser.storage.local.remove(POLICY_PRIOR_PIN_KEY);
   if (port) port.policy = { kind: "awaiting" };
 }
 
@@ -389,9 +677,24 @@ export async function onPinPinned(newKeyId: string): Promise<void> {
  * same-key re-pair still refuses an old-baseline replay (finding 2); the
  * scope check keeps the retained record inert (deny baseline + closed
  * barrier) while unpinned. Drops this connection's verified mark so no op runs
- * under a stale policy after the pin moved. NEVER clears cutover. */
-export async function onPinRevoked(): Promise<void> {
+ * under a stale policy after the pin moved. NEVER clears cutover, and NEVER
+ * clears the in-life compromise latch (only a NEW-key re-pair does, E2F-1).
+ *
+ * `revokedKeyId` is the keyId that was pinned, read by the caller BEFORE it
+ * clears the pin store, and persisted here as the durable prior identity the
+ * next onPinPinned decides novelty against (H1). `null` means no key was pinned:
+ * there is nothing to record, and any existing durable prior is deliberately
+ * LEFT intact rather than cleared - clearing it would strand the recovery path
+ * exactly as the missing-durable-prior regression did. */
+export async function onPinRevoked(revokedKeyId: string | null): Promise<void> {
+  // Bump the generation epoch synchronously (E2F-2), so the second leg of an
+  // ABA same-key revoke+re-pair is distinguishable from the pre-revoke pin.
+  pinGeneration += 1;
+  if (revokedKeyId !== null) lastPinnedKeyId = revokedKeyId;
   if (port) port.policy = { kind: "awaiting" };
+  if (revokedKeyId !== null) {
+    await browser.storage.local.set({ [POLICY_PRIOR_PIN_KEY]: revokedKeyId });
+  }
 }
 
 // ---- Lane U's seam: the unpinned window-approval surface -------------------------
@@ -434,7 +737,26 @@ let frameChain: Promise<void> = Promise.resolve();
 /** Route one inbound policy/lang frame. The connection it arrived on is
  * captured synchronously: the verified mark must land on exactly that
  * attachment, so a reconnect that installs a fresh one mid-verification
- * stays unverified (its own connect push will open its barrier). */
+ * stays unverified (its own connect push will open its barrier).
+ *
+ * RESIDUAL LAG, named (E2F-3, for the SECURITY.md ADR-0032 threat model in
+ * Phase 5): port.ts void-routes these frames (`void handlePolicyFrame(msg)`),
+ * unsynchronized with the request queue - the same posture as the void-routed
+ * kill frames. So between a bad-signature push arriving and the queued
+ * compromise actually running, at most one request already past the gate can
+ * dispatch under the still-open barrier. Two things bound this to a benign lag,
+ * not a hole:
+ * - The COMPROMISE arm is closed hard: markPolicyCompromised sets the sticky
+ *   in-life latch (E2F-1) SYNCHRONOUSLY inside the frame processing, before any
+ *   await, and resolvePolicyState folds it, so no request that reaches the gate
+ *   AFTER the bad push begins processing can pass, and a replayed genuine frame
+ *   can never reopen the barrier.
+ * - The residual is only the benign frame-processing lag: a request the host
+ *   itself pipelined ahead of its own tightening push, which by construction
+ *   ran under the policy that host was still advertising a moment earlier.
+ * A synchronous verifying-hold (parking the request queue until the frame is
+ * verified) is deliberately NOT built here - it is the identical trade-off the
+ * void-routed kill frames already accepted. */
 export function handlePolicyFrame(msg: unknown): Promise<void> {
   const attachment = port;
   frameChain = frameChain
@@ -467,16 +789,46 @@ function refuse(why: string, opts: { audit?: boolean } = {}): void {
 }
 
 /** A baseline signature failed against the pin (ADR-0031 posture): positive
- * evidence the signer does not hold the pinned key. Synchronously drop THIS
- * connection's verified mark so the barrier closes immediately (finding 4),
- * audit the compromise, and latch the enrollment-side compromised mark. A
- * FAILED persist is treated as fail-closed - the barrier is already shut and
- * stays shut (a substituted host's every push keeps failing this check), and
- * the failure is surfaced loudly rather than swallowed as best-effort. */
+ * evidence the signer does not hold the pinned key. Latch the sticky in-life
+ * compromise flag SYNCHRONOUSLY (E2F-1) - before any await - so a replayed
+ * genuine, byte-identical frame cannot ride the idempotent-replay path back to
+ * a verified mark and reopen the barrier, even in the window before (or after
+ * a FAILED) durable persist. Also synchronously drop THIS connection's
+ * verified mark so the barrier closes immediately (finding 4), audit the
+ * compromise, and latch the enrollment-side compromised mark. A failed persist
+ * is fail-closed: the sticky latch and the dropped mark already shut the
+ * barrier for this SW life, and the failure is surfaced loudly rather than
+ * swallowed as best-effort.
+ *
+ * RESIDUAL, named (F1, for the SECURITY.md ADR-0032 threat model in Phase 5):
+ * the E2F-1 sticky latch is IN MEMORY, so it cannot survive a failed
+ * setCompromised persist AND a subsequent SW restart together. If the durable
+ * mark never wrote (persist threw) and the SW then dies, the fresh SW starts
+ * with compromisedThisLife=false and no durable mark, so a replayed genuine,
+ * byte-identical frame verifies, ratchets as an idempotent replay, and reopens
+ * the barrier. This residual is un-closable by an in-memory latch (that is what
+ * "in memory" means). What bounds it:
+ * (1) The barrier can only reopen to SOME genuine policy the pinned key signed
+ *     at or above the stored revision - the attacker picks among the documents
+ *     it captured, but cannot forge a fresh relaxation past the ratchet and the
+ *     touched-set rule.
+ * (2) Enclave re-attestation bounds it further ONLY when the user has opted
+ *     into it: policy frames deliberately route BEFORE the gates (port.ts, and
+ *     this module's header - decision 6 control-plane mode), ADR-0021 reconnects
+ *     are not challenged by default (hostReverifyMs defaults to 0 = never
+ *     re-verify), and the enrollment gate reads the DURABLE compromise mark -
+ *     the very persist that failed in this residual's premise. With
+ *     hostReverifyMs unset the residual stands on bound (1) alone.
+ * Closing it fully needs a durable-write-before-proceed or a boot-time
+ * re-attestation, not a wider in-memory latch - do NOT re-architect storage here.
+ * TODO(SECURITY.md threat-model, Phase 5): record this residual and its bounds
+ * in the ADR-0032 threat model. */
 async function markPolicyCompromised(
   attachment: PortAttachment | null,
   reason: string,
 ): Promise<void> {
+  // SYNCHRONOUS, before any await: this is the whole point of the sticky latch.
+  compromisedThisLife = true;
   if (attachment) attachment.policy = { kind: "awaiting" };
   console.error("[bb] policy baseline failed signature verification:", reason);
   auditEvent("policy_compromised", { detail: reason.slice(0, 512) });
@@ -487,8 +839,8 @@ async function markPolicyCompromised(
     });
   } catch (e) {
     console.error(
-      "[bb] FAIL-CLOSED: could not persist the policy compromise mark; " +
-        "the dispatch barrier stays closed on this connection regardless",
+      "[bb] FAIL-CLOSED: could not persist the policy compromise mark; the in-life sticky " +
+        "latch and the dropped verified mark keep the dispatch barrier closed for this SW life",
       e,
     );
   }
@@ -517,12 +869,15 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
     return refuse(`baseline is not canonical base64: ${e instanceof Error ? e.message : e}`);
   }
 
-  // Snapshot the scope the push is evaluated under. Captured HERE, re-checked
-  // at commit: a pin transition on enrollment's separate queue between now and
-  // the write must not let this push land in the wrong scope (finding 1). The
-  // pin OBJECT is read once - its keyId is the scope identity, its pubkey is
-  // what the signature is verified against (keyId = SHA-256(pubkey), so
-  // binding the scope to the keyId binds it to the exact verifying key).
+  // Snapshot the scope AND the generation epoch the push is evaluated under.
+  // Captured HERE, re-checked at commit: a pin transition on enrollment's
+  // separate queue between now and the write must not let this push land in the
+  // wrong scope (finding 1), NOR resurrect a verified mark across an ABA
+  // same-key revoke+re-pair that leaves the keyId equal (E2F-2). The pin OBJECT
+  // is read once - its keyId is the scope identity, its pubkey is what the
+  // signature is verified against (keyId = SHA-256(pubkey), so binding the
+  // scope to the keyId binds it to the exact verifying key).
+  const generationAtStart = pinGeneration;
   const pinAtStart = await getPin();
   const scopeAtStart: PolicyScope = pinAtStart
     ? { pinned: true, keyId: pinAtStart.keyId }
@@ -634,41 +989,111 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
     }
   }
 
-  // COMMIT-TIME SCOPE RECHECK (finding 1). Re-read the scope: if the pin moved
-  // while this push was in flight - crucially including unpinned-at-snapshot ->
-  // pinned-at-commit, which would otherwise commit an UNSIGNED document under a
-  // just-pinned key and open the barrier (the no-downgrade violation) - drop
-  // the push, fail closed. The stamped scope makes the mismatch detectable;
-  // the read-time scope checks above are the backstop if a write ever still
+  // PRE-WRITE SCOPE + GENERATION RECHECK (finding 1, E2F-2). Re-read the
+  // scope and compare the generation epoch AFTER the (possibly minutes-long)
+  // approver await and before the writes: if the pin moved while this push was
+  // in flight - a different scope (crucially including unpinned-at-snapshot
+  // -> pinned-at-commit, which would otherwise commit an UNSIGNED document
+  // under a just-pinned key and open the barrier, the no-downgrade violation),
+  // OR an ABA same-key revoke+re-pair that left the keyId equal but bumped the
+  // generation - drop the push, fail closed. A second recheck AFTER the writes
+  // (below, F3) closes the narrower window of the writes' own awaits; the
+  // read-time scope checks above are the backstop if a write ever still
   // slipped through.
   const scopeAtCommit = await currentScope();
-  if (!scopesEqual(scopeAtCommit, scopeAtStart)) {
-    return refuse("pin scope changed while the push was in flight; dropping to stay fail-closed", {
-      audit: true,
-    });
+  if (!scopesEqual(scopeAtCommit, scopeAtStart) || pinGeneration !== generationAtStart) {
+    return refuse(
+      "pin scope or generation changed while the push was in flight; dropping to stay fail-closed",
+      { audit: true },
+    );
   }
 
-  // Arm cutover BEFORE the record write (fail-closed ordering, above). Then
-  // write the scope-stamped record and mark THIS attachment verified under the
-  // snapshot scope - which now equals the commit scope, so the mark is honest.
+  // Arm cutover BEFORE the record write (fail-closed ordering, above). Arming
+  // is monotonic (false->true, one-way) so a stale arm is harmless. Then write
+  // the scope-stamped record.
   await armCutover();
-  await writeStoredRecord({
+  // Capture the reset epoch BEFORE the awaited prior-snapshot read: a reset that
+  // completes DURING that read would otherwise leave the undo comparing equal
+  // epochs and restoring an anchor the reset just deleted. Capturing early can
+  // only turn a restore into a remove, which is the fail-closed direction.
+  const resetGenerationAtWrite = ratchetResetGeneration;
+  // Snapshot the record as it stands BEFORE our write, so a race detected AFTER
+  // the write can be UNDONE by restoring exactly it (F3) - restoring rather than
+  // dropping the anchor, which would reopen the old-baseline replay (finding 2).
+  // The one case that deliberately removes instead is a ratchet RESET landing
+  // mid-flight: the snapshot is then a DEAD anchor that must not come back (H4).
+  // resolvePolicyState already refused a corrupt record above, so this is `valid`
+  // (the active anchor) or `absent`.
+  const priorRecord = await readStoredRecord();
+  const committed: StoredPolicyState = {
     scope: scopeToStored(scopeAtStart),
     effective,
     revision: doc.data.revision,
     baselineB64: baseline,
     at: Date.now(),
-  });
-  if (attachment) attachment.policy = { kind: "verified", scope: scopeAtStart };
+  };
+  const wrote = await writeStoredRecord(committed);
+  // COMMIT-END SCOPE + GENERATION RECHECK (F3). armCutover and writeStoredRecord
+  // above are awaited, so an ABA revoke+re-pair on enrollment's separate queue
+  // can still move the pin AFTER the pre-write recheck. Re-read the scope and
+  // compare the generation ONE more time, right before stamping the mark: if
+  // either moved, this record and its would-be verified mark are stale. The
+  // stale mark is already inert (the gate rejects a generation mismatch), but
+  // the stale RECORD could later resurrect as a ratchet anchor under a same-key
+  // ABA - so undo the write (ownership-checked) and do NOT stamp the mark.
+  const scopeAtEnd = await currentScope();
+  if (!scopesEqual(scopeAtEnd, scopeAtStart) || pinGeneration !== generationAtStart) {
+    // Nothing to undo when the write was suppressed as unchanged (H5): a blind
+    // re-set would retrigger every storage.onChanged consumer. The `wrote` flag
+    // is the PRIMARY guard here - exact and timing-independent, since a
+    // suppressed write set nothing at all, so there is nothing to undo. The
+    // ownership `at`-comparison in undoRecordWrite is only a BACKSTOP: it would
+    // also refuse (a suppressed write kept the stored record's OLD `at`, which
+    // differs from `committed`'s fresh one) EXCEPT in a same-millisecond
+    // collision where the two `at`s coincide - which is exactly why the flag,
+    // not the backstop, is what makes this correct. The undo is also wrapped so
+    // it can NEVER swallow the refusal: an exception escaping here would skip
+    // refuse() and its policy_refused audit entirely, since frameChain's catch
+    // is silent (H4).
+    if (wrote) {
+      try {
+        await undoRecordWrite(committed, priorRecord, resetGenerationAtWrite);
+      } catch (e) {
+        console.error(
+          "[bb] FAIL-CLOSED: could not undo a stale policy record write; the barrier stays " +
+            "closed on this connection and the push is refused",
+          e,
+        );
+      }
+    }
+    return refuse(
+      "pin scope or generation changed during the commit writes; undoing the record write to stay fail-closed",
+      { audit: true },
+    );
+  }
+  // The mark carries the snapshot scope AND generation - both still equal the
+  // commit values, so the mark is honest. Stamping the generation (E2F-2) means
+  // a stale continuation from a prior generation cannot resurrect a verified
+  // mark the dispatch gate would honor.
+  if (attachment) {
+    attachment.policy = { kind: "verified", scope: scopeAtStart, generation: generationAtStart };
+  }
   console.log("[bb] policy push applied: revision", doc.data.revision);
 }
 
 /** Tests only: forget the port, the language state, any registered approver,
- * and the frame chain. Stored policy state deliberately stays - suites that
- * need a clean store reset fakeBrowser storage. */
+ * the frame chain, and the in-life latches (the sticky compromise flag, the
+ * generation epoch, the reset epoch, and the last-pinned mirror) - i.e.
+ * everything an SW restart would reset. Stored policy state deliberately stays,
+ * INCLUDING the durable prior-pin identity, which is exactly what a restart is
+ * meant to preserve - suites that need a clean store reset fakeBrowser storage. */
 export function resetPolicySyncForTests(): void {
   port = null;
   lang = null;
   unpinnedApprover = null;
+  compromisedThisLife = false;
+  pinGeneration = 0;
+  ratchetResetGeneration = 0;
+  lastPinnedKeyId = null;
   frameChain = Promise.resolve();
 }

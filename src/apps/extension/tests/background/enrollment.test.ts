@@ -1078,6 +1078,9 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
   test("approvePending RESETS the ratchet for a DIFFERENT key but NEVER clears the cutover flag", async () => {
     const key = await genKey();
     const other = await genKey();
+    // Model `other` as the previously pinned identity through the REAL path: a
+    // revoke records it durably, so pinning `key` next is a CONFIRMED new key.
+    await policySync.onPinRevoked(other.keyId);
     await onPortConnected();
     const { nonce, context } = lastChallenge();
     await handleEnclaveFrame(await proofFrame(key, nonce, context));
@@ -1098,6 +1101,11 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
 
   test("approvePending RETAINS the ratchet when re-pinning the SAME key (finding 2)", async () => {
     const key = await genKey();
+    // Establish `key` as the prior pinned identity through the REAL path - a
+    // revoke that records it durably. Without this the retention below would come
+    // from the unknown-prior fallback rather than from the same-key rule, and the
+    // test would pass even if novelty were decided wrongly.
+    await policySync.onPinRevoked(key.keyId);
     await onPortConnected();
     const { nonce, context } = lastChallenge();
     await handleEnclaveFrame(await proofFrame(key, nonce, context));
@@ -1114,5 +1122,35 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
     expect((await approvePending()).ok).toBe(true);
     expect(store.bridgePolicyState).toMatchObject({ scope: key.keyId, revision: 2 });
     expect(store.bridgePolicyCutover).toBe(true);
+  });
+
+  test("revokePin records the durable prior identity BEFORE clearing the pin store", async () => {
+    // Asserting the final value alone passes under a clear-then-write order too,
+    // so pin the ORDER: the durable prior write must precede the pin-store clear,
+    // or a crash between them loses both copies of the identity and strands the
+    // revoke-and-re-pair recovery the latched-state messages promise.
+    const key = await genKey();
+    await pairAndPin(key);
+    const local = fakeBrowser.storage.local as unknown as {
+      set: (o: Record<string, unknown>) => Promise<void>;
+      remove: (k: string | string[]) => Promise<void>;
+    };
+    const realSet = local.set.bind(local);
+    const realRemove = local.remove.bind(local);
+    const ops: string[] = [];
+    local.set = (obj) => {
+      if ("bridgePolicyPriorPin" in obj) ops.push("set:bridgePolicyPriorPin");
+      return realSet(obj);
+    };
+    local.remove = (k) => {
+      if ((Array.isArray(k) ? k : [k]).includes("enclavePin")) ops.push("remove:enclavePin");
+      return realRemove(k);
+    };
+    expect((await revokePin()).ok).toBe(true);
+    local.set = realSet;
+    local.remove = realRemove;
+    expect(store.bridgePolicyPriorPin).toBe(key.keyId);
+    // The prior write is observed strictly before the enclavePin removal.
+    expect(ops).toEqual(["set:bridgePolicyPriorPin", "remove:enclavePin"]);
   });
 });

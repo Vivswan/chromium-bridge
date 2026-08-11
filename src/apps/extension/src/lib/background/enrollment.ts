@@ -629,16 +629,25 @@ export function rejectPending(): Promise<{ ok: boolean; error?: string }> {
 export function revokePin(): Promise<{ ok: boolean }> {
   return serialized(async () => {
     clearOutstanding();
+    // Read the pin BEFORE clearing the store: its keyId is the prior identity
+    // onPinRevoked persists durably, and the next re-pair decides key-novelty
+    // against it (ADR-0032 decision 3). Read after clearAll it would always be
+    // null, and every re-pair would read as "prior unknown" - which is
+    // fail-closed but strands the revoke-and-re-pair recovery the latched-state
+    // messages promise. `null` here means nothing was pinned.
+    const revokedKeyId = (await pinStore.getPin())?.keyId ?? null;
+    // Hand the identity over BEFORE clearAll, so no SW death can land in a gap
+    // where both copies are gone: until clearAll runs the pin store still holds
+    // it, and after onPinRevoked returns the durable prior does. Revoke RETAINS
+    // the policy ratchet record (ADR-0032 decision 3, finding 2): a same-key
+    // re-pair must still refuse an old-baseline replay, so the anchor survives;
+    // the record's scope keeps it inert (deny baseline + closed barrier) while
+    // unpinned, and onPinRevoked only drops this connection's verified mark. The
+    // cutover flag deliberately survives too - post-reset means the deny baseline
+    // plus the barrier, never a fall back to legacy policy.
+    await onPinRevoked(revokedKeyId);
     await pinStore.clearAll();
     await pinStore.setPaused(true);
-    // Revoke RETAINS the policy ratchet record (ADR-0032 decision 3, finding
-    // 2): a same-key re-pair must still refuse an old-baseline replay, so the
-    // anchor survives; the record's scope keeps it inert (deny baseline +
-    // closed barrier) while unpinned, and onPinRevoked only drops this
-    // connection's verified mark. The cutover flag deliberately survives too -
-    // post-reset means the deny baseline plus the barrier, never a fall back
-    // to legacy policy.
-    await onPinRevoked();
     // Only where an enclave key can exist: on other platforms there is no
     // host key to delete, and queueing the request would just resend a
     // frame the host answers with unsupported_platform forever.
