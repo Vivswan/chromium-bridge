@@ -8,12 +8,15 @@ import type { KillView } from "@/lib/background/kill";
 import { send } from "@/lib/messages";
 
 // The ADR-0030 kill-switch panel: one prominent, explicit switch that halts
-// all bridge activity everywhere until it is just as explicitly released.
-// Everything here goes through the SW router (extension-page senders only)
-// and is RELAYED to the native host, which performs the transition and
-// answers with the resulting state - this panel can only ask, never decide.
-// Event-driven: the SW-only mirror is watched via storage.onChanged, so a
-// kill or unkill from the CLI reflects here without polling.
+// all bridge activity everywhere. ENGAGE-ONLY (ADR-0032 decision 6): the
+// host refuses `kill_release` from the extension, so releasing lives in the
+// Chromium Bridge app and `chromium-bridge unkill` - this panel engages and
+// shows the state, never releases. Everything here goes through the SW
+// router (extension-page senders only) and is RELAYED to the native host,
+// which performs the transition and answers with the resulting state - this
+// panel can only ask, never decide. Event-driven: the SW-only mirror is
+// watched via storage.onChanged, so a kill or unkill from any surface
+// reflects here without polling.
 export function KillSwitchPanel() {
   const { t } = useI18n();
   const [view, setView] = useState<KillView | null>(null);
@@ -42,17 +45,16 @@ export function KillSwitchPanel() {
 
   const killed = view?.state === "killed";
 
-  const toggle = async () => {
+  const engage = async () => {
     // Engaging is deliberately zero-friction (ADR-0030): the brake must be
-    // one action from every surface. Releasing restores capability, so it
-    // carries the explicit confirmation - the interactive floor of the
-    // user-presence ladder, which the host audits as auth=extension_confirm
-    // (hardware presence takes over when Phase 8 lands).
-    if (killed && !window.confirm(t("kill.release_confirm"))) return;
+    // one action from every surface. Releasing restores capability, so it is
+    // not offered here at all: the host refuses kill_release from the
+    // extension (ADR-0032 decision 6), and release lives behind the app's
+    // presence gate or `chromium-bridge unkill`.
     setBusy(true);
     setActionError(null);
     try {
-      const r = await send<KillView>({ type: "set_kill", on: !killed });
+      const r = await send<KillView>({ type: "set_kill", on: true });
       if (!r?.ok) setActionError(t("kill.failed", [r?.error ?? t("kill.no_reply")]));
       setView(r ?? null);
     } catch (e) {
@@ -117,7 +119,7 @@ export function KillSwitchPanel() {
       <div className="min-w-0 flex-1">
         <div className="text-[13px]">{stateLine()}</div>
         <p className="consequence mt-1">{t("kill.desc")}</p>
-        <div className="mt-1 text-xs text-text-3">{t("kill.release_note")}</div>
+        <div className="mt-1 text-xs text-text-3">{t("kill.release_pointer")}</div>
         {view?.at !== undefined && (
           <div className="tnum mt-1.5 font-mono text-[11px] text-text-4">
             {t("kill.updated", [new Date(view.at).toLocaleString()])}
@@ -135,9 +137,11 @@ export function KillSwitchPanel() {
           {actionError}
         </div>
       </div>
-      <Button variant={killed ? "default" : "danger"} onClick={() => void toggle()} disabled={busy}>
-        {killed ? t("kill.release") : t("kill.engage")}
-      </Button>
+      {!killed && (
+        <Button variant="danger" onClick={() => void engage()} disabled={busy}>
+          {t("kill.engage")}
+        </Button>
+      )}
     </div>
   );
 }

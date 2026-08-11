@@ -19,7 +19,7 @@ export type Migration = (bag: Record<string, unknown>) => Record<string, unknown
 
 // The ladder: MIGRATIONS[i] migrates vi -> v(i+1). Append when a setting is
 // renamed or its representation changes. Example (illustrative):
-//   (bag) => ({ hostReverifyMs: bag.reverifyIntervalMs }), // v1 -> v2
+//   (bag) => ({ groupTabs: bag.groupBridgeTabs }), // v1 -> v2
 export const MIGRATIONS: readonly Migration[] = [
   // v0 -> v1: the initial stamp; no stored key changes shape.
   () => ({}),

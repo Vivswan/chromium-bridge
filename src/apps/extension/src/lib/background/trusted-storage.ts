@@ -1,10 +1,10 @@
 // #32: trust-state isolation. Everything security-relevant the extension
 // persists - the enrollment pin, the pending pairing, the compromised marker,
-// the requireEnrollment flag, the allowlist, every setting - lives in
+// the policy state, the allowlist, every setting - lives in
 // browser.storage.local, which Chrome exposes to CONTENT SCRIPTS by default.
 // A compromised renderer, acting with a content script's privileges, could
 // therefore read the trust state or, worse, WRITE it (plant a pin, clear a
-// compromised marker, flip requireEnrollment off) and open the gate.
+// compromised marker) and open the gate.
 //
 // The fix is an API-level access restriction, not a convention:
 // setAccessLevel(TRUSTED_CONTEXTS) confines both storage areas to extension

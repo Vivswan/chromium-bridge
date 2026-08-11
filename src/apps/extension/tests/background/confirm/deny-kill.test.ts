@@ -29,7 +29,6 @@ import {
   handleKillFrame,
   requestKillStatus,
   resetKillForTests,
-  setKillSwitch,
 } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
 
@@ -315,14 +314,16 @@ describe("confirm_deny_kill", () => {
     await expect(later).resolves.toBe(false);
   });
 
-  test("panic during a pending release: the stale killed mirror must not lift the latch", async () => {
-    // The switch is engaged (mirror reads killed) and a presence-gated
-    // release is in flight. The panic lands: the mirror still reads the
-    // STALE killed while the host is about to answer the release with
-    // alive - and the panic's engage is queued BEHIND that release on the
-    // pipe. Lifting from the mirror snapshot would open a window (release
-    // answered alive, engage not yet applied) where a fresh confirmation
-    // presents against an open gate.
+  test("panic during a pending exchange answering alive: the stale killed mirror must not lift the latch", async () => {
+    // The switch is engaged (mirror reads killed) and another exchange (a
+    // status query here; a host-side app/CLI release poses the identical
+    // race - the extension itself can no longer emit kill_release,
+    // ADR-0032 decision 6) is in flight. The panic lands: the mirror still
+    // reads the STALE killed while the host is about to answer that
+    // exchange with alive - and the panic's engage is queued BEHIND it on
+    // the pipe. Lifting from the mirror snapshot would open a window
+    // (exchange answered alive, engage not yet applied) where a fresh
+    // confirmation presents against an open gate.
     const presented = fakeProvider(installConfirmationProvider);
     const frames: Array<Record<string, unknown>> = [];
     attachPort((frame) => {
@@ -330,13 +331,14 @@ describe("confirm_deny_kill", () => {
       return true;
     });
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
-    void setKillSwitch(false); // the release occupies the slot, unanswered
+    void requestKillStatus(); // occupies the slot, unanswered
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
-    expect(frames).toEqual([{ type: "kill_release" }, { type: "kill_engage" }]);
+    expect(frames).toEqual([{ type: "kill_status" }, { type: "kill_engage" }]);
     await vi.advanceTimersByTimeAsync(0);
 
-    // The release's answer lands: alive. The request gate is OPEN upstream
-    // and the engage is still queued - the latch must hold.
+    // The pending exchange's answer lands: alive (a host-side release won
+    // the race). The request gate is OPEN upstream and the engage is still
+    // queued - the latch must hold.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
     await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
@@ -419,18 +421,18 @@ describe("confirm_deny_kill", () => {
     // A killed frame ARRIVES (a cross-surface engage push, or a stale status
     // answer) and its serialized mirror write is still in flight when the
     // panic lands. It must not count as the panic's phase-1 refusal: the
-    // only refusal seen predates the engage, so a pre-panic release's alive
-    // answer arriving next would otherwise lift the latch with the engage
-    // still queued behind the release.
+    // only refusal seen predates the engage, so a pre-panic exchange's alive
+    // answer arriving next (a host-side release racing the brake) would
+    // otherwise lift the latch with the engage still queued behind it.
     const presented = fakeProvider(installConfirmationProvider);
     attachPort(() => true);
-    void setKillSwitch(false); // pre-panic release occupies the slot
+    void requestKillStatus(); // pre-panic exchange occupies the slot
     const preKilled = handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     route({ type: "confirm_deny_kill" }, confirmSender, () => {}); // same tick
     await preKilled;
     await vi.advanceTimersByTimeAsync(0);
 
-    // The pre-panic release answers alive: the latch must hold.
+    // The pre-panic exchange answers alive: the latch must hold.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
     await vi.advanceTimersByTimeAsync(0);
     await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);

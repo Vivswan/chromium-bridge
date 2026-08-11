@@ -258,7 +258,7 @@ describe("ceremony state machine", () => {
     expect((await getEnrollmentStatus()).state).toBe("unpaired");
   });
 
-  test("a killed mirror refuses the gate even with enrollment satisfied or off (ADR-0030)", async () => {
+  test("a killed mirror refuses the gate even with enrollment satisfied (ADR-0030)", async () => {
     // Fully pinned...
     const key = await genKey();
     await pairAndPin(key);
@@ -268,14 +268,13 @@ describe("ceremony state machine", () => {
     let gate = await enrollmentGate();
     expect(gate.allowed).toBe(false);
     if (!gate.allowed) expect(gate.reason).toContain("kill switch");
-    // And it wins even when requireEnrollment is off (the gate must not
-    // early-out on the enrollment toggle before the kill check).
+    // And it wins even when a (retired) requireEnrollment=false value is
+    // still lying around in storage - nothing consults it (ADR-0032).
     store.requireEnrollment = false;
     gate = await enrollmentGate();
     expect(gate.allowed).toBe(false);
     // Releasing (an alive mirror) restores the pinned flow.
     store.bridgeKillMirror = { state: "alive", at: 2 };
-    store.requireEnrollment = true;
     expect((await enrollmentGate()).allowed).toBe(true);
   });
 
@@ -644,11 +643,17 @@ describe("ceremony state machine", () => {
     expect(res.error).toContain("revoke");
   });
 
-  test("requireEnrollment=false opens the gate and skips the ceremony", async () => {
+  test("a stored requireEnrollment=false neither opens the gate nor skips the ceremony (retired, ADR-0032)", async () => {
+    // The setting is retired: enrollment is unconditionally required. A
+    // stored `false` - a pre-migration leftover, or a value planted by a
+    // same-user process - must not bypass the gate (the old code path read
+    // it and returned allowed) and must not suppress the connect ceremony.
     store.requireEnrollment = false;
-    expect((await enrollmentGate()).allowed).toBe(true);
+    const gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("enrollment required");
     await onPortConnected();
-    expect(posted.length).toBe(0);
+    expect(posted.length).toBe(1); // the pairing challenge still goes out
   });
 
   test("#32: the gate fails closed when storage hardening fails, even with a pin", async () => {
@@ -662,16 +667,6 @@ describe("ceremony state machine", () => {
     const gate = await enrollmentGate();
     expect(gate.allowed).toBe(false);
     if (!gate.allowed) expect(gate.reason).toContain("storage access could not be restricted");
-  });
-
-  test("#32: the gate fails closed on hardening failure even with requireEnrollment off", async () => {
-    // requireEnrollment reads false, but that read is itself untrusted until
-    // storage is locked down - so a hardening failure blocks regardless.
-    store.requireEnrollment = false;
-    resetStorageHardeningForTests();
-    const local = fakeBrowser.storage.local as unknown as Record<string, unknown>;
-    local.setAccessLevel = () => Promise.reject(new Error("unsupported"));
-    expect((await enrollmentGate()).allowed).toBe(false);
   });
 
   test("a stale reject after approval does not touch the pin", async () => {
@@ -953,7 +948,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
 describe("platform scoping (non-Enclave platforms)", () => {
   test("on linux, enrollment is unavailable: gate open, no ceremony, honest status", async () => {
     mockOs = "linux";
-    expect((await enrollmentGate()).allowed).toBe(true); // requireEnrollment default true
+    expect((await enrollmentGate()).allowed).toBe(true); // enrollment unavailable off-mac
     await onPortConnected();
     expect(posted.length).toBe(0); // no challenge ever issued
     const st = await getEnrollmentStatus();

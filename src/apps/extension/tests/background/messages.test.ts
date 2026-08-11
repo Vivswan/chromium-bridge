@@ -6,6 +6,7 @@
 // content script on an approved origin could add_allow{evil.com}.
 
 import type { RuntimeMsg } from "@chromium-bridge/shared";
+import { RuntimeMsgSchema } from "@chromium-bridge/shared";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
@@ -55,11 +56,11 @@ const GATED: RuntimeMsg[] = [
   // the trust set are extension-page only, like every other trust action.
   { type: "get_clients" },
   { type: "revoke_client", name: "claude-code" },
-  // The ADR-0030 kill switch and audit ring: reading the state, toggling the
+  // The ADR-0030 kill switch and audit ring: reading the state, engaging the
   // switch, and reading the trail are all extension-page only. set_kill is
-  // the crown jewel here - a page that could send it would be able to UNKILL.
+  // engage-only by schema (ADR-0032 decision 6: a release cannot even be
+  // expressed at this boundary; the host refuses kill_release regardless).
   { type: "get_kill" },
-  { type: "set_kill", on: false },
   { type: "set_kill", on: true },
   // The confirm window's deny-and-kill panic exit: gated twice (extension
   // page, then confirm window specifically); this pins the first gate.
@@ -169,5 +170,16 @@ describe("router sender gating (#32)", () => {
     expect(resp).toEqual({ ok: true });
     const { pendingAllow } = await fakeBrowser.storage.local.get("pendingAllow");
     expect(pendingAllow).toBeUndefined();
+  });
+});
+
+describe("kill switch message shape (ADR-0032 decision 6)", () => {
+  test("set_kill is engage-only by schema: a release cannot even be expressed", () => {
+    // The host refuses kill_release from the extension regardless; this pins
+    // the nearer boundary too - the runtime message schema admits no
+    // on:false, so no extension surface can ever ask the SW to relay a
+    // release.
+    expect(RuntimeMsgSchema.safeParse({ type: "set_kill", on: true }).success).toBe(true);
+    expect(RuntimeMsgSchema.safeParse({ type: "set_kill", on: false }).success).toBe(false);
   });
 });

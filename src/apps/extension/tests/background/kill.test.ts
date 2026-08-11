@@ -17,6 +17,7 @@ import { auditEvent, readRing, resetAuditForTests } from "@/lib/background/audit
 import {
   attachPort,
   detachPort,
+  engageKill,
   getKillMirror,
   handleKillFrame,
   isKillStatusFrame,
@@ -25,7 +26,6 @@ import {
   killGateFromStored,
   requestKillStatus,
   resetKillForTests,
-  setKillSwitch,
 } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
 
@@ -119,9 +119,9 @@ describe("kill mirror updates from host frames only", () => {
     expect((await getKillMirror())?.state).toBe("unknown");
   });
 
-  test("set_kill with no port fails without touching the mirror", async () => {
+  test("an engage with no port fails without touching the mirror", async () => {
     await fakeBrowser.storage.local.set({ bridgeKillMirror: { state: "killed", at: 5 } });
-    const r = await setKillSwitch(false);
+    const r = await engageKill();
     expect(r.ok).toBe(false);
     expect((await getKillMirror())?.state).toBe("killed");
   });
@@ -133,7 +133,7 @@ describe("kill mirror updates from host frames only", () => {
       url: "https://evil.example/attack",
     } as Browser.runtime.MessageSender;
     const resp = await new Promise((resolve) => {
-      route({ type: "set_kill", on: false }, contentScriptSender, resolve);
+      route({ type: "set_kill", on: true }, contentScriptSender, resolve);
     });
     expect(resp).toEqual({
       ok: false,

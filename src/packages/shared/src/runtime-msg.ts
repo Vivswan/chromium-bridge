@@ -41,13 +41,16 @@ export const RuntimeMsgSchema = z.discriminatedUnion("type", [
     name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/),
   }),
   // The ADR-0030 kill switch. get_kill returns the SW-only mirror plus a live
-  // host query when the port is up; set_kill relays kill_engage/kill_release
-  // to the native host, which performs the transition and answers with the
-  // resulting state. The router requires an extension-page sender for BOTH
-  // (the top-level gate): a page or content script can neither read nor
-  // toggle the switch.
+  // host query when the port is up; set_kill relays kill_engage to the native
+  // host, which performs the transition and answers with the resulting state.
+  // ENGAGE-ONLY by shape (ADR-0032 decision 6): the host refuses kill_release
+  // from the extension - release lives in the desktop app and `chromium-bridge
+  // unkill` - so `on` is pinned to the literal `true` and a release request
+  // cannot even be expressed at this boundary. The router requires an
+  // extension-page sender for BOTH (the top-level gate): a page or content
+  // script can neither read nor engage the switch.
   z.strictObject({ type: z.literal("get_kill") }),
-  z.strictObject({ type: z.literal("set_kill"), on: z.boolean() }),
+  z.strictObject({ type: z.literal("set_kill"), on: z.literal(true) }),
   // The ADR-0030 read-only audit panel: the SW's local audit ring.
   z.strictObject({ type: z.literal("get_audit") }),
   // The popup found a pendingAllow record it cannot parse (an old-shape or

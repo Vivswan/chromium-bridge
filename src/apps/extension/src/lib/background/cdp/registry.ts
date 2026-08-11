@@ -133,10 +133,16 @@ export function installCdpLifecycleListeners(): void {
 
   // cdpMode turned off -> detach everything so the banner goes away. The
   // effective mode is policy-resolved (ADR-0032 Phase 3): pre-cutover the
-  // legacy toggle, post-cutover the host-pushed record - so an accepted
-  // policy push restricting cdpMode tears live sessions down on the push
-  // path (the push writes the policy storage keys), exactly like the legacy
-  // toggle always did.
+  // legacy stored value, post-cutover the host-pushed record - so an
+  // accepted policy push restricting cdpMode tears live sessions down on
+  // the push path (the push writes the policy storage keys). The legacy
+  // "cdpMode" key stays in this trigger DELIBERATELY (Phase 5): the options
+  // toggle that wrote it is gone, but the key can still change twice -
+  // external storage tampering pre-cutover, and the post-cutover legacy
+  // cleanup DELETING it (legacy-cleanup.ts), which fires this listener once.
+  // Both firings are harmless by construction: the handler re-reads the
+  // EFFECTIVE policy and only ever tears down (restriction-only), never
+  // grants - so keeping the trigger is the simplest fail-closed reading.
   browser.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const relevant = "cdpMode" in changes || POLICY_STORAGE_KEYS.some((key) => key in changes);

@@ -30,7 +30,6 @@ import {
   type KillEngageWire,
   type KillMirror,
   KillMirrorSchema,
-  type KillReleaseWire,
   type KillStatusResult,
   type KillStatusWire,
   unreachable,
@@ -46,12 +45,6 @@ const KILL_MIRROR_KEY = "bridgeKillMirror";
  * fails closed (same posture as the client-admin exchange, #61). */
 const KILL_REQUEST_TIMEOUT_MS = 10_000;
 
-/** kill_release alone gets a longer window (ADR-0031): on macOS the host
- * answers only after the user completes the Touch ID prompt, and a 10s
- * budget would time the request out mid-tap. Timing out still fails closed
- * (the switch stays engaged; a late release is pushed to the mirror). */
-const KILL_RELEASE_TIMEOUT_MS = 120_000;
-
 export type KillGate = { allowed: true } | { allowed: false; reason: string };
 
 /** The mirror's verdict for the request gate. Pure over the stored value so
@@ -64,8 +57,8 @@ export function killGateFromStored(value: unknown): KillGate {
       allowed: false,
       reason:
         "the stored kill-switch mirror is malformed; refusing all bridge activity " +
-        "(possible tampering). Toggle the kill switch from the options page or run " +
-        "`chromium-bridge unkill` to rewrite it.",
+        "(possible tampering). Engage the kill switch from the options page, or run " +
+        "`chromium-bridge kill` / `unkill`, to rewrite it.",
     };
   }
   switch (parsed.data.state) {
@@ -76,7 +69,7 @@ export function killGateFromStored(value: unknown): KillGate {
         allowed: false,
         reason:
           "the bridge kill switch is engaged; all bridge activity is refused until " +
-          "it is explicitly released (options page, or `chromium-bridge unkill`)",
+          "it is explicitly released (the Chromium Bridge app, or `chromium-bridge unkill`)",
       };
     case "unknown":
       return {
@@ -119,15 +112,19 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 
 // ---- port plumbing (mirrors clients.ts) --------------------------------------
 
-/** The three host-directed kill control frames (ADR-0030), as a closed union
- * of the GENERATED wire types (envelope-wire.gen.ts <- protocol.rs), so the
- * tags are compiler-pinned to the Rust contract: a typo'd frame type is a
- * compile error - not a real post the host would forward to the MCP server
- * as an unknown op while the engage-arming switch below silently fails to
- * recognize it. The inbound direction is parsed separately: port.ts
- * classifies kill_status_result frames with the Zod KillStatusResultSchema
- * and anything malformed never reaches handleKillFrame. */
-export type KillControlFrame = KillStatusWire | KillEngageWire | KillReleaseWire;
+/** The two host-directed kill control frames this extension may still emit
+ * (ADR-0030, narrowed by ADR-0032 decision 6: the host refuses kill_release
+ * from the extension, so the release frame is not in this union and no code
+ * path here can post one - release lives in the desktop app and the CLI).
+ * A closed union of the GENERATED wire types (envelope-wire.gen.ts <-
+ * protocol.rs), so the tags are compiler-pinned to the Rust contract: a
+ * typo'd frame type is a compile error - not a real post the host would
+ * forward to the MCP server as an unknown op while the engage-arming switch
+ * below silently fails to recognize it. The inbound direction is parsed
+ * separately: port.ts classifies kill_status_result frames with the Zod
+ * KillStatusResultSchema and anything malformed never reaches
+ * handleKillFrame. */
+export type KillControlFrame = KillStatusWire | KillEngageWire;
 
 let postFrame: ((frame: KillControlFrame) => boolean) | null = null;
 
@@ -199,7 +196,7 @@ async function mirrorView(ok: boolean, sent: boolean, error?: string): Promise<K
   return { ok, sent, state: mirror?.state, at: mirror?.at, error };
 }
 
-/** One kill request (status query or transition) over the port. One request
+/** One kill request (status query or engage) over the port. One request
  * outstanding at a time; the host replies in order on a single pipe. */
 function request(
   frame: KillControlFrame,
@@ -231,7 +228,7 @@ function request(
       pending = null;
       void mirrorView(false, false, "failed to send the request to the native host").then(resolve);
     } else {
-      // Exhaustive over the closed union: adding a fourth control frame
+      // Exhaustive over the closed union: adding another control frame
       // forces a decision here about whether it arms the re-post.
       switch (frame.type) {
         case "kill_engage":
@@ -243,7 +240,6 @@ function request(
           unconfirmedEngageSeq = frameArrivals;
           break;
         case "kill_status":
-        case "kill_release":
           break;
         default:
           unreachable(frame);
@@ -362,27 +358,29 @@ function advancePanicWaiter(state: KillMirror["state"], seq: number): void {
   // refuses on the unknown mirror regardless, so waiting stays fail closed.
 }
 
-/** Engage or release the switch. The host performs the transition (and
- * audits it, surface=extension); the mirror adopts the host's answer. The
- * caller was already gated: the router accepts set_kill only from extension
- * pages, so a page can NEVER reach this. */
-export function setKillSwitch(on: boolean): Promise<KillView> {
-  // Local ring only: the host records the authoritative kill_engage/release.
-  auditEvent(on ? "kill_engaged" : "kill_released", { outcome: "requested" });
-  return on
-    ? request({ type: "kill_engage" })
-    : request({ type: "kill_release" }, KILL_RELEASE_TIMEOUT_MS);
+/** Engage the switch - the ONLY transition this extension can request
+ * (ADR-0032 decision 6: the host refuses kill_release from the extension,
+ * so no release lane exists here; release lives behind the desktop app's
+ * presence gate or `chromium-bridge unkill`). The host performs the
+ * transition (and audits it, surface=extension); the mirror adopts the
+ * host's answer. The caller was already gated: the router accepts set_kill
+ * only from extension pages, and its schema pins `on` to `true`, so a page
+ * can NEVER reach this and a release cannot even be expressed. */
+export function engageKill(): Promise<KillView> {
+  // Local ring only: the host records the authoritative kill_engage.
+  auditEvent("kill_engaged", { outcome: "requested" });
+  return request({ type: "kill_engage" });
 }
 
 /** The panic engage (the confirm window's deny-and-kill, ADR-0030): never
  * refused because some OTHER kill exchange holds the single request slot
- * (the startup status query, an options-page read, or - worst case - an
- * in-flight release). With the slot free this is setKillSwitch(true); with
+ * (the startup status query, or an options-page read). With the slot free
+ * this is engageKill(); with
  * it occupied the engage frame is posted anyway, uncorrelated: the control
  * frames carry no ids, the host applies them in arrival order on one pipe,
  * and the mirror adopts every kill_status_result in order, so the pending
  * exchange settles with equally authoritative state and an engage racing a
- * release still lands AFTER it (final state: killed). The returned view
+ * host-side release (app/CLI) still lands AFTER it (final state: killed). The returned view
  * reports only the SEND outcome plus the last-known mirror, never the
  * engage's result - the result is whatever the mirror adopts, which is what
  * whenKillRevivesAfterRefusal watches. A successfully posted engage also
@@ -393,7 +391,7 @@ export function setKillSwitch(on: boolean): Promise<KillView> {
  * browser through a dead port either, and the popup renders that state
  * severed, never live. */
 export function engageKillSwitch(): Promise<KillView> {
-  if (!pending) return setKillSwitch(true);
+  if (!pending) return engageKill();
   auditEvent("kill_engaged", { outcome: "requested" });
   if (!postFrame) return mirrorView(false, false, "native host not connected");
   if (!postFrame({ type: "kill_engage" })) {

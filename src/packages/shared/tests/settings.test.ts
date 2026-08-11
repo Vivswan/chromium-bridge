@@ -1,6 +1,8 @@
-// Salvage semantics for the settings schema: reads from storage must never
-// surface a shape the schema does not vouch for, and a bad field must not
-// take the healthy fields down with it.
+// Salvage semantics for the slimmed, browser-owned settings schema (ADR-0032
+// Phase 5): reads from storage must never surface a shape the schema does not
+// vouch for, and a bad field must not take the healthy fields down with it.
+// The retired policy fields' legacy schemas are covered by
+// legacy-settings.test.ts.
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULTS, SettingsSchema, salvageSetting, salvageSettings } from "../src/settings";
@@ -10,36 +12,28 @@ describe("DEFAULTS", () => {
     expect(SettingsSchema.parse({})).toEqual(DEFAULTS);
   });
 
-  test("keeps the documented values", () => {
-    expect(DEFAULTS.pageEvalEnabled).toBe(true);
-    expect(DEFAULTS.confirmGraceMs).toBe(60000);
-    expect(DEFAULTS.disabledTools).toEqual([]);
+  test("keeps exactly the browser-owned fields and their documented values", () => {
+    expect(Object.keys(DEFAULTS).sort()).toEqual(["allowAllSites", "groupTabs", "uiLanguage"]);
     expect(DEFAULTS.allowAllSites).toBe(false);
-    expect(DEFAULTS.cdpMode).toBe(false);
-    expect(DEFAULTS.fileUploadEnabled).toBe(false);
-    expect(DEFAULTS.handleDialogEnabled).toBe(false);
-    expect(DEFAULTS.requireEnrollment).toBe(true);
-    expect(DEFAULTS.hostReverifyMs).toBe(0);
+    expect(DEFAULTS.groupTabs).toBe(true);
+    expect(DEFAULTS.uiLanguage).toBe("en");
   });
 });
 
 describe("salvageSetting", () => {
   test("missing value falls back to the default", () => {
-    expect(salvageSetting("confirmPageEval", undefined)).toBe(true);
+    expect(salvageSetting("groupTabs", undefined)).toBe(true);
   });
 
   test("valid value is kept", () => {
-    expect(salvageSetting("confirmPageEval", false)).toBe(false);
-    expect(salvageSetting("disabledTools", ["page_eval"])).toEqual(["page_eval"]);
+    expect(salvageSetting("allowAllSites", true)).toBe(true);
+    expect(salvageSetting("uiLanguage", "zh_TW")).toBe("zh_TW");
   });
 
   test("mistyped value falls back to the default", () => {
-    expect(salvageSetting("confirmPageEval", "yes")).toBe(true);
-    expect(salvageSetting("confirmGraceMs", "60000")).toBe(60000);
-    expect(salvageSetting("confirmGraceMs", -5)).toBe(60000);
-    expect(salvageSetting("confirmGraceMs", 1.5)).toBe(60000);
-    expect(salvageSetting("disabledTools", [1, 2])).toEqual([]);
-    expect(salvageSetting("disabledTools", "page_eval")).toEqual([]);
+    expect(salvageSetting("allowAllSites", "yes")).toBe(false);
+    expect(salvageSetting("groupTabs", 1)).toBe(true);
+    expect(salvageSetting("uiLanguage", "fr")).toBe("en");
   });
 });
 
@@ -51,14 +45,18 @@ describe("salvageSettings", () => {
 
   test("field-by-field: bad fields fall back, healthy fields survive", () => {
     const salvaged = salvageSettings({
-      cdpMode: true,
-      confirmGraceMs: "corrupted",
-      disabledTools: ["page_upload"],
+      allowAllSites: true,
+      groupTabs: "corrupted",
+      uiLanguage: "zh_CN",
       unknownKey: "ignored",
+      // A retired policy field in the bag is an unknown key now: dropped,
+      // never resurrected into Settings.
+      pageEvalEnabled: false,
     });
-    expect(salvaged.cdpMode).toBe(true);
-    expect(salvaged.confirmGraceMs).toBe(DEFAULTS.confirmGraceMs);
-    expect(salvaged.disabledTools).toEqual(["page_upload"]);
+    expect(salvaged.allowAllSites).toBe(true);
+    expect(salvaged.groupTabs).toBe(DEFAULTS.groupTabs);
+    expect(salvaged.uiLanguage).toBe("zh_CN");
     expect("unknownKey" in salvaged).toBe(false);
+    expect("pageEvalEnabled" in salvaged).toBe(false);
   });
 });

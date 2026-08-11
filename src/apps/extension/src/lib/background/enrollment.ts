@@ -7,8 +7,10 @@
 // States, derived from storage on every read (nothing cached across the MV3
 // service-worker restarts):
 //
-//   unpaired    no pin. Bridge traffic is refused while requireEnrollment is
-//               on. Each connect issues a pairing challenge (unless paused);
+//   unpaired    no pin. Bridge traffic is refused (enrollment is required,
+//               ADR-0032: the retired requireEnrollment setting no longer
+//               exists and a stored value is never consulted). Each connect
+//               issues a pairing challenge (unless paused);
 //               on an unenrolled machine that costs one enclave_error round
 //               trip and no prompt, and once `chromium-bridge pair` has minted
 //               a key it raises the single ceremony Touch ID prompt.
@@ -42,7 +44,6 @@ import {
   isEnclaveReasonCode,
 } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
-import { getSetting } from "../shared/settings";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
 import { getEffectivePolicy } from "./effective-policy";
@@ -236,9 +237,7 @@ async function readGateState(): Promise<Gate> {
   // browser.storage, which must be confined to extension contexts before we
   // can believe any of it. If the restriction is not verifiably applied this
   // SW life, a content script could have written the very values we are about
-  // to trust (planted a pin, flipped requireEnrollment off), so refuse - even
-  // when requireEnrollment reads false, since that read is itself untrusted
-  // until storage is locked down.
+  // to trust (planted a pin, cleared the compromised mark), so refuse.
   const hardened = await hardenStorageAccess();
   if (!hardened.ok) {
     return {
@@ -264,7 +263,9 @@ async function readGateState(): Promise<Gate> {
   // legacy local settings govern.
   const policy = await policyDispatchGate();
   if (!policy.allowed) return policy;
-  if ((await getSetting("requireEnrollment")) !== true) return { allowed: true };
+  // Enrollment is unconditionally required where the platform can enroll
+  // (ADR-0032: requireEnrollment is retired; a stored value - however it got
+  // there - is never consulted, so a planted `false` cannot open this gate).
   const compromised = await pinStore.getCompromised();
   if (compromised) {
     return {
@@ -313,7 +314,6 @@ export function onPortConnected(): Promise<void> {
     // key deletion. Independent of the gate/ceremony state below.
     await maybeSendPendingHostRevoke();
     await updateBadge();
-    if ((await getSetting("requireEnrollment")) !== true) return;
     if (!(await platformCanEnroll())) return; // no Enclave here; no ceremony
     if (await pinStore.getCompromised()) return;
     const pin = await pinStore.getPin();
@@ -410,9 +410,9 @@ const REASON_HELP: Record<EnclaveReasonCode, (mode: CeremonyMode) => string> = {
   unsupported_platform: () =>
     "unsupported_platform: the host reports no Secure Enclave, but this browser is " +
     "running on macOS. If this Mac genuinely lacks one (pre-T2 Intel), pairing is " +
-    'impossible and turning off "Require host pairing" is an explicit decision to run ' +
-    "without host verification. Otherwise treat the host binary as suspect (outdated " +
-    "or substituted) and leave the bridge blocked.",
+    "impossible and the bridge stays blocked - enrollment is required on macOS " +
+    "(ADR-0032) and this configuration is unsupported. Otherwise treat the host " +
+    "binary as suspect (outdated or substituted) and leave the bridge blocked.",
   invalid_challenge: () =>
     "invalid_challenge: the host rejected our challenge frame (version mismatch?).",
   key_invalid: () =>
@@ -704,9 +704,10 @@ export function revokePin(): Promise<{ ok: boolean }> {
 
 // ---- status for the popup/options UI ----------------------------------------------
 
-/** The fields every state carries. */
+/** The fields every state carries. Enrollment is unconditionally required
+ * (ADR-0032 retired the requireEnrollment setting), so `blocked` is decided
+ * by the state and the platform alone. */
 interface EnrollmentStatusBase {
-  required: boolean;
   /** False on platforms without a Secure Enclave (non-mac): enrollment is
    * unavailable there and the gate never blocks, per the browser's own
    * platform probe (not the host's claim). */
@@ -746,14 +747,12 @@ export type EnrollmentStatus = EnrollmentStatusBase &
   );
 
 export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
-  const required = (await getSetting("requireEnrollment")) === true;
   const platformSupported = await platformCanEnroll();
   const compromised = await pinStore.getCompromised();
   const pin = await pinStore.getPin();
   const pending = await pinStore.getPending();
   const lastError = await pinStore.getLastError();
   const base = {
-    required,
     platformSupported,
     lastError: lastError ?? undefined,
     paused: await pinStore.getPaused(),
@@ -763,7 +762,7 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
     return {
       ...base,
       state: "compromised",
-      blocked: required,
+      blocked: true,
       compromisedReason: compromised.reason,
       keyId: pin?.keyId,
       fingerprint: pin ? fingerprintDisplay(pin.keyId) : undefined,
@@ -784,12 +783,12 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
     return {
       ...base,
       state: "pending",
-      blocked: required && platformSupported,
+      blocked: platformSupported,
       keyId: pending.keyId,
       fingerprint: fingerprintDisplay(pending.keyId),
     };
   }
-  return { ...base, state: "unpaired", blocked: required && platformSupported };
+  return { ...base, state: "unpaired", blocked: platformSupported };
 }
 
 // ---- badge ----------------------------------------------------------------------

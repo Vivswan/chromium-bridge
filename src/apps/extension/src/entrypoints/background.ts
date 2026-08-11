@@ -9,6 +9,7 @@ import {
 } from "@/lib/background/confirm/service";
 import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
+import { installLegacyCleanup } from "@/lib/background/legacy-cleanup";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
 import { registerUnpinnedRelaxationApprover } from "@/lib/background/policy-approval";
 import { connectNative } from "@/lib/background/port";
@@ -27,7 +28,7 @@ import { migrateSettings } from "@/lib/shared/settings-migration";
 export default defineBackground(() => {
   // #32: confine browser.storage to extension contexts as early as possible,
   // so a content script cannot read or write the enrollment pin, the
-  // compromised marker, requireEnrollment, or the allowlist. This eager call
+  // compromised marker, the policy state, or the allowlist. This eager call
   // only STARTS the async restriction; the enrollment gate and
   // onPortConnected AWAIT its success and fail closed until it lands, so no
   // trust decision is ever made on un-confined storage. See the residual note
@@ -50,8 +51,16 @@ export default defineBackground(() => {
   registerRuntimeMessageRouter();
 
   // CDP mode (ADR-0017): tear down debugger sessions when a tab closes, when
-  // Chrome detaches us, or when the user turns cdpMode off.
+  // Chrome detaches us, or when the effective cdpMode grant goes away.
   installCdpLifecycleListeners();
+
+  // ADR-0032 Phase 5: ONE startup sweep that deletes the retired legacy
+  // policy keys (+ requireEnrollment) from storage, only when the one-way
+  // cutover has armed AND the legacy bag shipped (legacySettingsSent) - no
+  // storage watch, by design (legacy-cleanup.ts: startup-only closes the
+  // read/delete race by construction). Pre-cutover (non-macOS forever, old
+  // hosts indefinitely) and armed-but-never-shipped both delete nothing.
+  installLegacyCleanup();
 
   // The off-DOM confirmation surface (ADR-0027). Without a provider the
   // confirmation service denies everything, so install it before any bridge

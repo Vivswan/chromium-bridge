@@ -85,14 +85,20 @@ describe("riskMatrixViolations", () => {
 describe("offByDefaultViolations", () => {
   const cdpClaim = "- **CDP mode (opt-in, off by default)**: the `cdpMode` setting ...";
 
-  test("off-by-default claims matching the schema defaults pass", () => {
+  test("off-by-default claims matching the policy contract's defaults pass", () => {
     const rows = parseRiskMatrix(
       [
         row("page_upload", "**Critical**", "debugger", "**off by default** (opt-in)"),
         row("page_handle_dialog", "High", "debugger", "**off by default** (opt-in)"),
+        row("page_eval", "**Critical**", "scripting", "**off by default** under host-owned policy"),
       ].join("\n"),
     );
-    const defaults = { fileUploadEnabled: false, handleDialogEnabled: false, cdpMode: false };
+    const defaults = {
+      fileUploadEnabled: false,
+      handleDialogEnabled: false,
+      pageEvalEnabled: false,
+      cdpMode: false,
+    };
     expect(offByDefaultViolations(rows, cdpClaim, defaults)).toEqual([]);
   });
 
@@ -100,7 +106,12 @@ describe("offByDefaultViolations", () => {
     const rows = parseRiskMatrix(
       row("page_upload", "**Critical**", "debugger", "**off by default** (opt-in)"),
     );
-    const defaults = { fileUploadEnabled: true, handleDialogEnabled: false, cdpMode: false };
+    const defaults = {
+      fileUploadEnabled: true,
+      handleDialogEnabled: false,
+      pageEvalEnabled: false,
+      cdpMode: false,
+    };
     const v = offByDefaultViolations(rows, cdpClaim, defaults);
     expect(v).toEqual([
       '`page_upload` row claims "off by default" but fileUploadEnabled defaults to true',
@@ -108,27 +119,40 @@ describe("offByDefaultViolations", () => {
   });
 
   test("an off default whose row dropped the claim is flagged, as is a cdpMode flip", () => {
-    const rows = parseRiskMatrix(row("page_upload", "**Critical**", "debugger", "allowlist only"));
-    const defaults = { fileUploadEnabled: false, handleDialogEnabled: true, cdpMode: true };
+    const rows = parseRiskMatrix(
+      [
+        row("page_upload", "**Critical**", "debugger", "allowlist only"),
+        row("page_eval", "**Critical**", "scripting", "every-call confirm"),
+      ].join("\n"),
+    );
+    const defaults = {
+      fileUploadEnabled: false,
+      handleDialogEnabled: true,
+      pageEvalEnabled: false,
+      cdpMode: true,
+    };
     expect(offByDefaultViolations(rows, cdpClaim, defaults)).toEqual([
       "`page_upload` defaults off (fileUploadEnabled: false) but its row no longer says so",
+      "`page_eval` defaults off (pageEvalEnabled: false) but its row no longer says so",
       "the matrix claims CDP mode is off by default but cdpMode defaults to true",
     ]);
   });
 
-  test("a renamed gate setting fails closed instead of silencing both arms", () => {
+  test("a renamed gate field fails closed instead of silencing both arms", () => {
     const rows = parseRiskMatrix(
       row("page_upload", "**Critical**", "debugger", "**off by default** (opt-in)"),
     );
-    // fileUploadEnabled no longer exists in the schema: the gate must say so,
-    // not fall through the strict-equality arms forever.
-    const defaults = { handleDialogEnabled: false, cdpMode: false };
+    // fileUploadEnabled no longer exists in the policy contract: the gate
+    // must say so, not fall through the strict-equality arms forever.
+    const defaults = { handleDialogEnabled: false, pageEvalEnabled: false, cdpMode: false };
     const v = offByDefaultViolations(rows, cdpClaim, defaults, [
       "page_upload",
       "page_handle_dialog",
+      "page_eval",
     ]);
     expect(v).toEqual([
-      "gate setting `fileUploadEnabled` (for `page_upload`) is not a settings key in settings.ts",
+      "gate field `fileUploadEnabled` (for `page_upload`) is not a policy field in the " +
+        "generated policy contract (policy.gen.ts)",
     ]);
   });
 
@@ -140,10 +164,16 @@ describe("offByDefaultViolations", () => {
     const rows = parseRiskMatrix(
       row("page_attach_file", "**Critical**", "debugger", "**off by default** (opt-in)"),
     );
-    const defaults = { fileUploadEnabled: false, handleDialogEnabled: false, cdpMode: false };
+    const defaults = {
+      fileUploadEnabled: false,
+      handleDialogEnabled: false,
+      pageEvalEnabled: false,
+      cdpMode: false,
+    };
     const v = offByDefaultViolations(rows, cdpClaim, defaults, [
       "page_attach_file",
       "page_handle_dialog",
+      "page_eval",
     ]);
     expect(v).toEqual([
       "gate entry `page_upload` is not a catalogue tool (renamed? update the gates list)",
@@ -184,13 +214,15 @@ describe("securityDefaultsViolations", () => {
     expect(
       securityDefaultsViolations(table, { confirmPageEval: true, confirmGraceMs: 30000 }, required),
     ).toEqual([
-      "SECURITY.md says `confirmGraceMs` defaults to `60000` but settings.ts says `30000`",
+      "SECURITY.md says `confirmGraceMs` defaults to `60000` but the canonical contract " +
+        "says `30000`",
     ]);
   });
 
-  test("a row for a key the schema no longer has is flagged", () => {
+  test("a row for a key neither contract has is flagged", () => {
     expect(securityDefaultsViolations(table, { confirmGraceMs: 60000 }, required)).toEqual([
-      "SECURITY.md documents `confirmPageEval`, which is not a settings key in settings.ts",
+      "SECURITY.md documents `confirmPageEval`, which is neither a policy field " +
+        "(policy.gen.ts) nor a settings key (settings.ts)",
     ]);
   });
 

@@ -17,6 +17,7 @@ export * from "./enclave.gen";
 export * from "./envelope";
 export * from "./errors.gen";
 export * from "./identity.gen";
+export * from "./legacy-settings";
 export * from "./ops.gen";
 export * from "./policy.gen";
 export * from "./policy-compare";

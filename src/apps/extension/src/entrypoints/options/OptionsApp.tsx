@@ -1,40 +1,36 @@
-import { BRIDGE_PROTOCOL_VERSION, NATIVE_HOST_ID, OP_NAMES } from "@chromium-bridge/shared";
+import { BRIDGE_PROTOCOL_VERSION, NATIVE_HOST_ID } from "@chromium-bridge/shared";
 import { useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { LanguagePicker } from "@/components/app/LanguagePicker";
 import { Section, SettingRow } from "@/components/app/SettingRow";
-import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/hooks/useI18n";
 import { useSettings } from "@/hooks/useSettings";
-import type { MessageKey, UiLanguage } from "@/lib/i18n";
+import type { UiLanguage } from "@/lib/i18n";
 import { send } from "@/lib/messages";
-import { type GateSetting, toolGate } from "@/lib/shared/tool-gates";
 import { AuditPanel } from "./AuditPanel";
 import { EnrollmentPanel } from "./EnrollmentPanel";
 import { KillSwitchPanel } from "./KillSwitchPanel";
 import { SiteList } from "./SiteList";
 import { TrustedClientsPanel } from "./TrustedClientsPanel";
 
-// The tool -> master-gate map itself is shared with the background
-// enforcement (lib/shared/tool-gates.ts), so the grid can only ever consult
-// the same setting the background refuses on. This map adds the UI-only
-// half: the i18n title per gate setting, Record-typed over the full gate
-// union so a new TOOL_GATES entry cannot compile without a label here.
-const GATE_TITLES: Record<GateSetting, MessageKey> = {
-  pageEvalEnabled: "settings.page_eval_title",
-  fileUploadEnabled: "settings.file_upload_title",
-  handleDialogEnabled: "settings.handle_dialog_title",
-};
-
-// The options page: security toggles, host pairing, tabs, execution mode,
-// timeouts, tools, and the allowlist. Every write is event-driven (useSettings
-// is backed by storage.onChanged), so there is no polling and no manual
-// refresh; a change from any surface reflects here immediately.
+// The options page: kill switch, host pairing, the allowlist, trusted
+// clients, and the browser-owned toggles (allow-all-sites, tab grouping,
+// language). Every write is event-driven (useSettings is backed by
+// storage.onChanged), so there is no polling and no manual refresh; a change
+// from any surface reflects here immediately.
+//
+// The security policy itself - the 15 host-owned fields (ADR-0032): eval,
+// uploads, dialogs, CDP mode, the confirmation gates, timeouts, and per-tool
+// disables - is NOT edited here. It is set in the Chromium Bridge app (or
+// `chromium-bridge policy`), signed by the paired host key, and enforced by
+// this extension; the Security section below says so where the toggles used
+// to be. Kill RELEASE moved with it (the host refuses `kill_release` from
+// the extension, ADR-0032 decision 6); engaging stays one click away.
 //
 // Control Tower: flat hairline-separated open sections, ordered by decision
 // weight: kill switch, pairing, then the sites hero (the one choice that
-// scopes what clients can touch), with the toggle grids below. Amber and red
-// stay reserved for pending and kill/deny - consequences are neutral ink.
+// scopes what clients can touch). Amber and red stay reserved for pending
+// and kill/deny - consequences are neutral ink.
 export function OptionsApp() {
   const { t } = useI18n();
   const { settings, update } = useSettings();
@@ -82,22 +78,6 @@ export function OptionsApp() {
     await update("allowAllSites", on);
   };
 
-  const num = (
-    key: "confirmGraceMs" | "clickToastTimeoutMs" | "evalToastTimeoutMs" | "hostReverifyMs",
-  ) => (
-    <input
-      id={`opt-${key}`}
-      type="number"
-      min={0}
-      value={settings[key]}
-      onChange={(e) => {
-        const v = Number.parseInt(e.target.value, 10);
-        if (!Number.isNaN(v)) void update(key, v);
-      }}
-      className="tnum w-28 rounded-md border border-edge-strong bg-surface-1 px-2.5 py-1.5 text-xs text-text-1"
-    />
-  );
-
   return (
     <div className="mx-auto max-w-[720px] px-6 pb-20 pt-8 text-sm">
       <header className="flex items-start justify-between gap-4 border-b border-edge pb-4">
@@ -128,16 +108,6 @@ export function OptionsApp() {
 
       <Section title={t("options.section_pairing")} id="pairing">
         <EnrollmentPanel />
-        <div className="border-t border-edge py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <label htmlFor="opt-hostReverifyMs" className="min-w-52 text-[13px] font-medium">
-              {t("settings.reverify_label")}
-            </label>
-            {num("hostReverifyMs")}
-            <span className="text-[11px] text-text-3">{t("settings.reverify_unit")}</span>
-          </div>
-          <div className="mt-1 text-xs text-text-3">{t("settings.reverify_desc")}</div>
-        </div>
       </Section>
 
       <Section title={t("options.section_sites")}>
@@ -161,75 +131,14 @@ export function OptionsApp() {
       </Section>
 
       <Section title={t("options.section_security")}>
-        <SettingRow
-          title={t("settings.require_enrollment_title")}
-          desc={t("settings.require_enrollment_desc")}
-          warn={t("settings.require_enrollment_warn")}
-          more={t("settings.require_enrollment_more")}
-          checked={settings.requireEnrollment}
-          dangerOn="unchecked"
-          onChange={(v) => void update("requireEnrollment", v)}
-        />
-        <SettingRow
-          title={t("settings.page_eval_title")}
-          desc={t("settings.page_eval_desc")}
-          more={t("settings.page_eval_more")}
-          checked={settings.pageEvalEnabled}
-          dangerOn="unchecked"
-          onChange={(v) => void update("pageEvalEnabled", v)}
-        />
-        <SettingRow
-          title={t("settings.eval_mask_title")}
-          desc={t("settings.eval_mask_desc")}
-          warn={t("settings.eval_mask_warn")}
-          more={t("settings.eval_mask_more")}
-          checked={settings.evalMask}
-          dangerOn="unchecked"
-          onChange={(v) => void update("evalMask", v)}
-        />
-        <SettingRow
-          title={t("settings.confirm_click_title")}
-          desc={t("settings.confirm_click_desc")}
-          warn={t("settings.confirm_click_warn")}
-          more={t("settings.confirm_click_more")}
-          checked={settings.confirmHighRiskClick}
-          dangerOn="unchecked"
-          onChange={(v) => void update("confirmHighRiskClick", v)}
-        />
-        <SettingRow
-          title={t("settings.confirm_eval_title")}
-          desc={t("settings.confirm_eval_desc")}
-          warn={t("settings.confirm_eval_warn")}
-          more={t("settings.confirm_eval_more")}
-          checked={settings.confirmPageEval}
-          dangerOn="unchecked"
-          onChange={(v) => void update("confirmPageEval", v)}
-        />
-        <SettingRow
-          title={t("settings.touchid_confirm_title")}
-          desc={t("settings.touchid_confirm_desc")}
-          warn={t("settings.touchid_confirm_warn")}
-          more={t("settings.touchid_confirm_more")}
-          checked={settings.touchIdConfirm}
-          dangerOn="unchecked"
-          onChange={(v) => void update("touchIdConfirm", v)}
-        />
-        <SettingRow
-          title={t("settings.confirm_tab_close_title")}
-          desc={t("settings.confirm_tab_close_desc")}
-          warn={t("settings.confirm_tab_close_warn")}
-          checked={settings.confirmTabClose}
-          dangerOn="unchecked"
-          onChange={(v) => void update("confirmTabClose", v)}
-        />
-        <SettingRow
-          title={t("settings.warn_precise_title")}
-          desc={t("settings.warn_precise_desc")}
-          more={t("settings.warn_precise_more")}
-          checked={settings.warnPreciseSnapshot}
-          dangerOn="unchecked"
-          onChange={(v) => void update("warnPreciseSnapshot", v)}
-        />
+        {/* The ADR-0032 pointer where the 15 policy toggles used to be: the
+            security policy is host-owned - edited in the app, signed by the
+            paired key, enforced here - so this page shows where it lives
+            instead of pretending to control it. */}
+        <div className="py-1">
+          <div className="text-[13px] font-medium">{t("settings.policy_managed_title")}</div>
+          <p className="consequence mt-1">{t("settings.policy_managed_desc")}</p>
+        </div>
       </Section>
 
       <Section title={t("options.section_clients")}>
@@ -245,99 +154,6 @@ export function OptionsApp() {
           dangerOn="unchecked"
           onChange={(v) => void update("groupTabs", v)}
         />
-      </Section>
-
-      <Section title={t("options.section_execution")}>
-        <SettingRow
-          title={t("settings.cdp_mode_title")}
-          desc={t("settings.cdp_mode_desc")}
-          warn={t("settings.cdp_mode_warn")}
-          more={t("settings.cdp_mode_more")}
-          checked={settings.cdpMode}
-          dangerOn="checked"
-          onChange={(v) => void update("cdpMode", v)}
-        />
-        <SettingRow
-          title={t("settings.file_upload_title")}
-          desc={t("settings.file_upload_desc")}
-          warn={t("settings.file_upload_warn")}
-          checked={settings.fileUploadEnabled}
-          dangerOn="checked"
-          onChange={(v) => void update("fileUploadEnabled", v)}
-        />
-        <SettingRow
-          title={t("settings.handle_dialog_title")}
-          desc={t("settings.handle_dialog_desc")}
-          warn={t("settings.handle_dialog_warn")}
-          checked={settings.handleDialogEnabled}
-          dangerOn="checked"
-          onChange={(v) => void update("handleDialogEnabled", v)}
-        />
-      </Section>
-
-      <Section title={t("options.section_timeouts")}>
-        {(
-          [
-            ["settings.grace_label", "settings.grace_unit", "confirmGraceMs"],
-            ["settings.click_timeout_label", "settings.click_timeout_unit", "clickToastTimeoutMs"],
-            ["settings.eval_timeout_label", "settings.eval_timeout_unit", "evalToastTimeoutMs"],
-          ] as const
-        ).map(([label, unit, key]) => (
-          <div
-            key={key}
-            className="flex flex-wrap items-center gap-3 border-b border-edge py-2.5 last:border-b-0"
-          >
-            <label htmlFor={`opt-${key}`} className="min-w-52 text-[13px] font-medium">
-              {t(label)}
-            </label>
-            {num(key)}
-            <span className="text-[11px] text-text-3">{t(unit)}</span>
-          </div>
-        ))}
-      </Section>
-
-      <Section title={t("options.section_tools")}>
-        <p className="consequence mb-2 mt-0">{t("settings.tools_desc")}</p>
-        <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
-          {OP_NAMES.map((op) => {
-            const enabled = !settings.disabledTools.includes(op);
-            // Effective state, not the raw toggle: a tool whose master gate
-            // (Security / Execution mode) is off is refused regardless of
-            // this switch, so it must not render as enabled.
-            const gate = toolGate(op);
-            const gateOff = gate !== undefined && !settings[gate];
-            return (
-              <div key={op} className="flex items-start gap-2.5 border-b border-edge py-2.5">
-                <Switch
-                  id={`tool-${op}`}
-                  checked={enabled && !gateOff}
-                  disabled={gateOff}
-                  className="mt-0.5"
-                  onCheckedChange={(on) => {
-                    const next = on
-                      ? settings.disabledTools.filter((o) => o !== op)
-                      : [...settings.disabledTools, op];
-                    void update("disabledTools", next);
-                  }}
-                />
-                <div className="min-w-0">
-                  <label
-                    htmlFor={`tool-${op}`}
-                    className={`block font-mono text-xs font-semibold ${gateOff ? "text-text-3" : "cursor-pointer"}`}
-                  >
-                    {op}
-                  </label>
-                  <div className="text-[11px] text-text-3">{t(`tools.${op}`)}</div>
-                  {gateOff && gate && (
-                    <div className="text-[11px] text-text-3">
-                      {t("settings.tool_gate_blocked", [t(GATE_TITLES[gate])])}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
       </Section>
 
       <Section title={t("options.section_audit")}>

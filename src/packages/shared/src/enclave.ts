@@ -362,6 +362,9 @@ export const AUDIT_EVENT_KINDS = [
   ...AUDIT_FORWARDED_KINDS,
   "client_revoked",
   "kill_engaged",
+  // Write-dead since ADR-0032 phase 5 (the extension lost its release lane;
+  // the host refuses kill_release), READ-LIVE: retained so historical audit
+  // entries carrying it still render through the kind-to-locale mapping.
   "kill_released",
   "kill_status_changed",
   // ADR-0032 phase 3, local-only (not in the host whitelist, so never

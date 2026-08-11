@@ -25,7 +25,7 @@ export function EnrollmentPanel() {
   useEffect(() => {
     void refresh();
     const onChange = (changes: Record<string, unknown>, area: string) => {
-      // The ceremony writes these keys; requireEnrollment affects the panel too.
+      // The ceremony writes these keys.
       const keys = [
         "enclavePin",
         "enclavePending",
@@ -33,7 +33,6 @@ export function EnrollmentPanel() {
         "enclaveLastError",
         "enclaveLastVerifiedAt",
         "enclaveHostRevokePending",
-        "requireEnrollment",
       ];
       if (area === "local" && keys.some((k) => k in changes)) void refresh();
     };
@@ -148,34 +147,24 @@ export function EnrollmentPanel() {
         </>
       )}
 
-      {st.state === "unpaired" &&
-        (st.required ? (
-          // The bridge-blocking state is the page's recovery hero: amber
-          // (waiting on you), with the unblocking action right here.
-          <div className="rounded-lg border border-pending-edge bg-pending-dim px-3.5 py-3">
-            <div className="flex items-center gap-2 text-[13px] font-semibold">
-              <span className="status-dot pending" />
-              {t("enroll.unpaired_hero_title")}
-            </div>
-            <p className="consequence mt-1">{t("enroll.unpaired_blocked")}</p>
-            <Actions>
-              <Button variant="pending" onClick={() => void act("enroll_pair")}>
-                {t("enroll.btn_pair")}
-              </Button>
-            </Actions>
+      {st.state === "unpaired" && (
+        // Enrollment is required (ADR-0032 retired the opt-out), so the
+        // unpaired state on a capable platform always blocks the bridge: the
+        // page's recovery hero, amber (waiting on you), with the unblocking
+        // action right here.
+        <div className="rounded-lg border border-pending-edge bg-pending-dim px-3.5 py-3">
+          <div className="flex items-center gap-2 text-[13px] font-semibold">
+            <span className="status-dot pending" />
+            {t("enroll.unpaired_hero_title")}
           </div>
-        ) : (
-          <>
-            <div className="flex items-center gap-2 text-[13px] font-medium">
-              <span className="status-dot" />
-              {t("enroll.state_unpaired")}
-            </div>
-            <p className="consequence mt-1">{t("enroll.unpaired_unblocked")}</p>
-            <Actions>
-              <Button onClick={() => void act("enroll_pair")}>{t("enroll.btn_pair")}</Button>
-            </Actions>
-          </>
-        ))}
+          <p className="consequence mt-1">{t("enroll.unpaired_blocked")}</p>
+          <Actions>
+            <Button variant="pending" onClick={() => void act("enroll_pair")}>
+              {t("enroll.btn_pair")}
+            </Button>
+          </Actions>
+        </div>
+      )}
 
       {st.hostRevokePending && (
         <div className="mt-2 text-xs text-text-3">{t("enroll.host_revoke_pending")}</div>

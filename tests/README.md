@@ -113,12 +113,22 @@ BB_REAL_E2E=1 bun browser/integration_e2e.ts     # macOS/Linux shell
 $env:BB_REAL_E2E='1'; node browser/integration_e2e.ts  # Windows PowerShell, Node 22.12+
 ```
 
-- **Opt-in** (skips unless `BB_REAL_E2E=1`), macOS/Windows, and pops a
-  non-headless window. Not in the default suite or CI. Use Chrome for Testing
-  or Chromium: official Google Chrome 137+ ignores `--load-extension`.
-- It always proves the round-trip (native host connects, `tab_list` returns
-  real structured `chrome.tabs` data). One **extra** assertion - that the
-  reply came from *our* throwaway profile - only holds when the launch is
+- **Opt-in** (skips unless `BB_REAL_E2E=1`), **Windows-only** since
+  ADR-0032 phase 5, and pops a non-headless window. Not in the default suite
+  or CI. Use Chrome for Testing or Chromium: official Google Chrome 137+
+  ignores `--load-extension`.
+- **macOS is skipped by the preflight, deliberately**: phase 5 retired the
+  `requireEnrollment` opt-out the test used to write, so on a Mac the
+  enrollment gate is unconditional and satisfying it takes a genuine pairing
+  ceremony (interactive Touch ID) a throwaway profile cannot perform - the
+  bridge would refuse `tab_list` at the gate. This is intentional
+  fail-closed behavior, not a break; browser suites on a Mac that need
+  bridge ops past the gate now require genuine pairing. On Windows the
+  browser's platform probe reports no Secure Enclave, enrollment is
+  unavailable rather than unsatisfied, and the round-trip still runs.
+- On Windows it proves the round-trip (native host connects, `tab_list`
+  returns real structured `chrome.tabs` data). One **extra** assertion - that
+  the reply came from *our* throwaway profile - only holds when the launch is
   isolated. Set `CHROME_BIN` to the Chrome for Testing/Chromium executable.
 
 (Historical note: the smoke test's comment claimed Chrome *forbids*

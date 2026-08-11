@@ -44,10 +44,10 @@ import {
   verifyPinnedNow,
 } from "./enrollment";
 import {
+  engageKill,
   engageKillSwitch,
   engageOutstanding,
   requestKillStatus,
-  setKillSwitch,
   whenKillRevivesAfterRefusal,
 } from "./kill";
 import { chooseLanguage } from "./policy-sync";
@@ -143,11 +143,14 @@ export function route(
       void requestKillStatus().then((r) => sendResponse(r));
       return true;
     case "set_kill":
-      // ADR-0030: engage/release the kill switch. The page-can-NEVER-toggle
-      // guarantee is the top-level gate above: only the extension's own
-      // pages reach this line, and the actual transition happens host-side
-      // (this only relays a control frame the host decides on and audits).
-      void setKillSwitch(msg.on).then((r) => sendResponse(r));
+      // ADR-0030: engage the kill switch - ENGAGE-ONLY (ADR-0032 decision 6:
+      // the message schema pins on:true and the host refuses kill_release
+      // from the extension; release lives in the app/CLI). The
+      // page-can-NEVER-engage guarantee is the top-level gate above: only
+      // the extension's own pages reach this line, and the actual
+      // transition happens host-side (this only relays a control frame the
+      // host decides on and audits).
+      void engageKill().then((r) => sendResponse(r));
       return true;
     case "get_audit":
       // ADR-0030: the read-only audit ring for the options panel.
@@ -205,8 +208,8 @@ export function route(
       // (b) the deny tears the confirm window down (settle -> dismiss), and
       //     a second message sent from that dying document could be lost -
       //     here the engage lives in the SW and survives the teardown.
-      // engageKillSwitch (not setKillSwitch) so an in-flight status query or
-      // release cannot cause the brake to be refused. Deny is always accepted
+      // engageKillSwitch (not engageKill) so an in-flight status query
+      // cannot cause the brake to be refused. Deny is always accepted
       // (capability reduction; hardware payloads refuse only window-side
       // APPROVALS); a stale id changes nothing - whatever is pending is
       // denied and the engage still goes out. The host decides and audits

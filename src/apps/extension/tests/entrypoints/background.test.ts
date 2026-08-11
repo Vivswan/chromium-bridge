@@ -13,6 +13,7 @@ const migrate = vi.fn(() => Promise.resolve());
 const verifyId = vi.fn();
 const registerRouter = vi.fn();
 const installCdp = vi.fn();
+const installLegacyCleanup = vi.fn();
 const installConfirm = vi.fn();
 const installPresence = vi.fn();
 // The startup order is load-bearing: the pending-approval sweep must COMPLETE
@@ -33,6 +34,7 @@ vi.mock("@/lib/shared/settings-migration", () => ({ migrateSettings: migrate }))
 vi.mock("@/lib/background/id-check", () => ({ verifyExtensionId: verifyId }));
 vi.mock("@/lib/background/messages", () => ({ registerRuntimeMessageRouter: registerRouter }));
 vi.mock("@/lib/background/cdp/registry", () => ({ installCdpLifecycleListeners: installCdp }));
+vi.mock("@/lib/background/legacy-cleanup", () => ({ installLegacyCleanup }));
 vi.mock("@/lib/background/allowlist-store", () => ({ syncPendingMirror: sweepPending }));
 vi.mock("@/lib/background/confirm/service", () => ({
   installConfirmationProvider: installConfirm,
@@ -67,6 +69,9 @@ describe("background entrypoint", () => {
     expect(migrate).toHaveBeenCalledTimes(1);
     expect(registerRouter).toHaveBeenCalledTimes(1);
     expect(installCdp).toHaveBeenCalledTimes(1);
+    // The Phase 5 legacy cleanup must be wired at startup: post-cutover the
+    // retired keys are swept, pre-cutover it deletes nothing.
+    expect(installLegacyCleanup).toHaveBeenCalledTimes(1);
     // The startup pending-approval sweep clears a ghost record a prior worker
     // life left behind (stuck badge / a popup Allow for an origin the SW
     // would then refuse).

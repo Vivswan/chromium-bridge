@@ -19,7 +19,6 @@ export async function send<T = Record<string, unknown>>(msg: object): Promise<T 
  * so the views cannot construct or over-guard field combinations the
  * background never produces. */
 export type EnrollmentStatusView = {
-  required: boolean;
   platformSupported: boolean;
   blocked: boolean;
   lastError?: string;

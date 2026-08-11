@@ -10,9 +10,11 @@ content or navigates), **High** (writes to the page, or reads credentials),
 **Critical** (arbitrary code / maximal blast radius).
 
 The protections listed are the defaults. The confirmation gates are
-user-configurable settings (`confirmHighRiskClick`, `confirmTabClose`,
-`confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`); relaxing one is an
-explicit, informed choice with the residual risks tabulated in
+host-owned policy fields (`confirmHighRiskClick`, `confirmTabClose`,
+`confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`), edited in the
+Chromium Bridge app or with `chromium-bridge policy` (ADR-0032), never from
+the extension; relaxing one is an explicit, signed choice with the residual
+risks tabulated in
 [SECURITY.md](../../SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 
 | Tool | Risk | Reads | Writes / effect | Credentials? | Chrome perm | User protection |
@@ -39,7 +41,7 @@ explicit, informed choice with the residual risks tabulated in
 | `console_get` | Medium | recent console output incl. network errors | - | masked | `debugger` | allowlist-gated; output masked; "debugging" banner |
 | `page_handle_dialog` | High | - | **accepts or dismisses** a JS dialog (alert/confirm/prompt) | no | `debugger` | **off by default** (opt-in); allowlist-gated; "debugging" banner |
 | `page_upload` | **Critical** | the named local file's bytes | **attaches a local file** to a file input | possibly (any readable file) | `debugger` | **off by default** (opt-in); allowlist-gated; every-call confirm showing the path; on an enrolled Mac the confirm is a Secure Enclave Touch ID approval (ADR-0031, `touchIdConfirm`); see residual |
-| `page_eval` | **Critical** | anything the page can | **arbitrary JS** in the page | yes (can read tokens/cookies) | `scripting` (host) | **every-call** confirm showing the full code; on an enrolled Mac the confirm is a Secure Enclave Touch ID approval no page or program can forge (ADR-0031, `touchIdConfirm`; opt-out falls back to the off-DOM window); result masked; kill-switch in options |
+| `page_eval` | **Critical** | anything the page can | **arbitrary JS** in the page | yes (can read tokens/cookies) | `scripting` (host) | **off by default** under host-owned policy (`pageEvalEnabled`, granted in the app; pre-cutover legacy installs keep their stored value, historically on); **every-call** confirm showing the full code; on an enrolled Mac the confirm is a Secure Enclave Touch ID approval no page or program can forge (ADR-0031, `touchIdConfirm`; opt-out falls back to the off-DOM window); result masked; kill-switch in options |
 | `page_snapshot_precise` | Medium | authoritative a11y tree (CDP) | - | no | `debugger` | pre-warn toast; "debugging" infobar flashes |
 | `cookie_get` | High | cookies incl. **httpOnly** | - (read-only) | **yes** | `cookies` | allowlist-scoped; values masked; no `cookie_set` by design |
 | `storage_get` | High | local/sessionStorage | - (read-only) | **yes** (tokens) | `scripting` | same-origin; values **always** masked |
@@ -68,7 +70,7 @@ submit button or a navigating link (those trigger the confirmation window).
   earlier approval never lets later, unrelated code run.
 - **Read-only by design**: no `cookie_set` / `storage_set` (writing httpOnly
   cookies is a session-fixation risk - see [ADR-0010](../adr/0010-cookie-storage-readonly.md)).
-- **CDP mode (opt-in, off by default)**: the `cdpMode` setting reroutes **every**
+- **CDP mode (opt-in, off by default)**: the `cdpMode` policy field reroutes **every**
   page-level op through `chrome.debugger` (CDP) in the page's MAIN world instead
   of a content script (see [ADR-0017](../adr/0017-cdp-mode-all-ops.md)). It does
   **not** change any tool's contract, permission, confirmation, or masking - the

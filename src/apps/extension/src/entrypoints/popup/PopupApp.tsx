@@ -365,18 +365,7 @@ export function PopupApp() {
               <p className="consequence mt-1.5">{t("popup.killed_consequence")}</p>
             </div>
             {microStatus(false)}
-            <div>
-              <p className="text-xs leading-relaxed text-text-2">
-                {t("popup.killed_release_note")}
-              </p>
-              <Button
-                className="mt-2 w-full py-2 text-[13px]"
-                onClick={() => browser.runtime.openOptionsPage()}
-              >
-                <BridgeIcon size={12} />
-                {t("popup.killed_release_cta")}
-              </Button>
-            </div>
+            <p className="text-xs leading-relaxed text-text-2">{t("popup.killed_release_note")}</p>
           </>
         ) : enroll?.blocked && enroll.state === "pending" && enroll.fingerprint ? (
           <>

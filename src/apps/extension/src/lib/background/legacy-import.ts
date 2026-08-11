@@ -27,10 +27,47 @@
 // the host's first-bag-wins consumed tombstone (pending_import.rs): it can
 // neither reach an unproven host nor replant a forged bag.
 
-import { POLICY_FIELDS, type PolicyValues, salvageSetting } from "@chromium-bridge/shared";
+import {
+  DISABLED_TOOL_NAME_MAX_BYTES,
+  DISABLED_TOOLS_MAX_ENTRIES,
+  POLICY_FIELDS,
+  type PolicyValues,
+  salvageLegacySetting,
+} from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 
-const SENT_KEY = "legacySettingsSent";
+/** The send-once flag's storage key. Exported ONLY for the Phase 5 legacy
+ * cleanup (legacy-cleanup.ts), which reads it as a deletion PRECONDITION
+ * (bag shipped) and never writes or deletes it; the flag's semantics stay
+ * owned here. */
+export const LEGACY_SETTINGS_SENT_KEY = "legacySettingsSent";
+const SENT_KEY = LEGACY_SETTINGS_SENT_KEY;
+
+/** Bag-site bound on disabledTools (the ONLY unbounded legacy field). The
+ * host drops a `legacy_settings` bag whose compact serialization exceeds its
+ * 64 KiB cap (pending_import.rs LEGACY_BAG_MAX_BYTES) - WHOLE, after the
+ * extension has already latched send-once - so a pathological stored list
+ * must be bounded before it rides the wire. Bounded HERE and only here: the
+ * enforcement salvage (legacy-settings.ts) stays byte-identical to the old
+ * schema because truncating a deny-list is the permissive direction there,
+ * while the bag is a migration suggestion the user reviews and signs, never
+ * enforcement - dropping an entry costs a line on the import screen, no
+ * capability.
+ *
+ * Measured honestly in SERIALIZED BYTES (TextEncoder over JSON.stringify),
+ * the unit the host's cap counts: UTF-16 code-unit lengths undercount
+ * non-ASCII up to ~3x and ignore escape inflation. Caps from the generated
+ * policy contract: entries whose serialized form exceeds
+ * DISABLED_TOOL_NAME_MAX_BYTES (128 - no real op name comes near it) drop
+ * individually, and the list is cut at DISABLED_TOOLS_MAX_ENTRIES (256).
+ * Worst case: 256 entries x 128 bytes + separators, about 33 KiB - under
+ * the 64 KiB cap with the 15 scalar fields' few hundred bytes to spare. */
+function boundBagDisabledTools(list: readonly string[]): string[] {
+  const encoder = new TextEncoder();
+  return list
+    .filter((entry) => encoder.encode(JSON.stringify(entry)).length <= DISABLED_TOOL_NAME_MAX_BYTES)
+    .slice(0, DISABLED_TOOLS_MAX_ENTRIES);
+}
 
 /** The bag `legacy_settings` carries: the 15 legacy policy fields (the
  * migration source the app's first-run import screen signs into revision 1)
@@ -59,29 +96,32 @@ export async function markLegacySettingsSent(): Promise<void> {
 }
 
 /** Snapshot the legacy bag from chrome.storage, each field salvaged by its
- * own legacy schema - the same per-field validation the pre-cutover
- * enforcement read (effective-policy.ts legacyPolicyValues) applies, so the
- * bag is exactly the settings the extension has been enforcing, never raw
- * storage bytes. The object literal is typed LegacySettingsBag, so a policy
- * field this mapping misses fails to compile. */
+ * own legacy schema (legacy-settings.ts) - the same per-field validation the
+ * pre-cutover enforcement read (effective-policy.ts legacyPolicyValues)
+ * applies, so the bag is the settings the extension has been enforcing,
+ * never raw storage bytes - with ONE deliberate divergence: disabledTools is
+ * additionally bounded here to fit the host's bag cap
+ * (boundBagDisabledTools above; enforcement stays unbounded). The object
+ * literal is typed LegacySettingsBag, so a policy field this mapping misses
+ * fails to compile. */
 export async function readLegacySettingsBag(): Promise<LegacySettingsBag> {
   const bag = await browser.storage.local.get([...POLICY_FIELDS, "requireEnrollment"]);
   return {
-    cdpMode: salvageSetting("cdpMode", bag.cdpMode),
-    fileUploadEnabled: salvageSetting("fileUploadEnabled", bag.fileUploadEnabled),
-    handleDialogEnabled: salvageSetting("handleDialogEnabled", bag.handleDialogEnabled),
-    pageEvalEnabled: salvageSetting("pageEvalEnabled", bag.pageEvalEnabled),
-    confirmHighRiskClick: salvageSetting("confirmHighRiskClick", bag.confirmHighRiskClick),
-    confirmPageEval: salvageSetting("confirmPageEval", bag.confirmPageEval),
-    touchIdConfirm: salvageSetting("touchIdConfirm", bag.touchIdConfirm),
-    confirmTabClose: salvageSetting("confirmTabClose", bag.confirmTabClose),
-    warnPreciseSnapshot: salvageSetting("warnPreciseSnapshot", bag.warnPreciseSnapshot),
-    evalMask: salvageSetting("evalMask", bag.evalMask),
-    hostReverifyMs: salvageSetting("hostReverifyMs", bag.hostReverifyMs),
-    confirmGraceMs: salvageSetting("confirmGraceMs", bag.confirmGraceMs),
-    clickToastTimeoutMs: salvageSetting("clickToastTimeoutMs", bag.clickToastTimeoutMs),
-    evalToastTimeoutMs: salvageSetting("evalToastTimeoutMs", bag.evalToastTimeoutMs),
-    disabledTools: salvageSetting("disabledTools", bag.disabledTools),
-    requireEnrollment: salvageSetting("requireEnrollment", bag.requireEnrollment),
+    cdpMode: salvageLegacySetting("cdpMode", bag.cdpMode),
+    fileUploadEnabled: salvageLegacySetting("fileUploadEnabled", bag.fileUploadEnabled),
+    handleDialogEnabled: salvageLegacySetting("handleDialogEnabled", bag.handleDialogEnabled),
+    pageEvalEnabled: salvageLegacySetting("pageEvalEnabled", bag.pageEvalEnabled),
+    confirmHighRiskClick: salvageLegacySetting("confirmHighRiskClick", bag.confirmHighRiskClick),
+    confirmPageEval: salvageLegacySetting("confirmPageEval", bag.confirmPageEval),
+    touchIdConfirm: salvageLegacySetting("touchIdConfirm", bag.touchIdConfirm),
+    confirmTabClose: salvageLegacySetting("confirmTabClose", bag.confirmTabClose),
+    warnPreciseSnapshot: salvageLegacySetting("warnPreciseSnapshot", bag.warnPreciseSnapshot),
+    evalMask: salvageLegacySetting("evalMask", bag.evalMask),
+    hostReverifyMs: salvageLegacySetting("hostReverifyMs", bag.hostReverifyMs),
+    confirmGraceMs: salvageLegacySetting("confirmGraceMs", bag.confirmGraceMs),
+    clickToastTimeoutMs: salvageLegacySetting("clickToastTimeoutMs", bag.clickToastTimeoutMs),
+    evalToastTimeoutMs: salvageLegacySetting("evalToastTimeoutMs", bag.evalToastTimeoutMs),
+    disabledTools: boundBagDisabledTools(salvageLegacySetting("disabledTools", bag.disabledTools)),
+    requireEnrollment: salvageLegacySetting("requireEnrollment", bag.requireEnrollment),
   };
 }

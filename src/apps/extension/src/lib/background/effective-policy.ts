@@ -1,10 +1,10 @@
 // The ONE effective-policy resolution the enforcement sites consume (ADR-0032
 // decision 8, Lane S). Post-cutover: the host-pushed, verified, ratcheted
 // effective policy from policy-sync while ACTIVE. Pre-cutover: the legacy
-// chrome.storage settings, salvaged field-by-field exactly as getSetting
-// always did - today's system, byte-for-byte. settings.ts stays untouched as
-// the owner of the browser-owned fields and keeps carrying the legacy policy
-// fields until Phase 5 slims it.
+// chrome.storage settings, salvaged field-by-field exactly as the
+// pre-migration getSetting always did - the shipped legacy system,
+// byte-for-byte, now read through the permanent legacy-settings module
+// (settings.ts owns only the browser-owned fields since Phase 5).
 //
 // STATE-TYPED (SFX-1): a blocked posture (awaitingBaseline / compromised) is
 // NOT consumable as policy values - the sum type carries a reason instead of
@@ -23,9 +23,9 @@
 // decision. An accepted push applies from the next decision on.
 
 import type { PolicyValues } from "@chromium-bridge/shared";
-import { POLICY_FIELDS, salvageSetting, unreachable } from "@chromium-bridge/shared";
+import { POLICY_FIELDS, salvageLegacySetting, unreachable } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
-import { getPolicyPosture } from "./policy-sync";
+import { getPolicyPosture, POLICY_CUTOVER_KEY } from "./policy-sync";
 
 /** One immutable snapshot of the effective policy, resolved through the
  * cutover flag. `blocked` carries no values on purpose: enforcing anything
@@ -46,8 +46,25 @@ export async function getEffectivePolicy(): Promise<EffectivePolicy> {
       return { state: "active", values: posture.effective };
     case "blocked":
       return { state: "blocked", reason: posture.reason };
-    case "legacy":
-      return { state: "legacy", values: await legacyPolicyValues() };
+    case "legacy": {
+      const values = await legacyPolicyValues();
+      if (values === null) {
+        // The cutover key appeared between the posture read above and the
+        // legacy-keys read (a first accepted push arming mid-decision, or a
+        // torn write). Belt-and-braces single-snapshot coherence: refuse
+        // this decision fail-closed rather than enforce legacy values under
+        // a cutover that has already begun; the next decision re-resolves
+        // through the posture, which will read the flag itself.
+        return {
+          state: "blocked",
+          reason:
+            "the policy cutover flag appeared while resolving the legacy settings " +
+            "(mid-decision arming); refusing this decision - the next one re-resolves " +
+            "through the policy posture (ADR-0032 decision 4)",
+        };
+      }
+      return { state: "legacy", values };
+    }
     default:
       return unreachable(posture);
   }
@@ -68,27 +85,32 @@ export async function withFreshPolicy<T>(fn: (policy: PolicyValues) => Promise<T
 
 /** The pre-cutover values: the 15 policy fields read from the legacy
  * settings bag under their (identical) legacy names, each salvaged by its
- * own legacy schema - the exact per-field validation getSetting applied, so
- * pre-cutover behavior cannot drift from today's. The object literal is
- * typed PolicyValues, so a policy field this mapping misses (or Phase 5
- * removing a legacy field out from under it) fails to compile. */
-async function legacyPolicyValues(): Promise<PolicyValues> {
-  const bag = await browser.storage.local.get([...POLICY_FIELDS]);
+ * own legacy schema (legacy-settings.ts) - the exact per-field validation
+ * the pre-migration getSetting applied, so pre-cutover behavior cannot
+ * drift from what shipped. The cutover flag rides the SAME storage.get
+ * (single-snapshot coherence): a flag present in the snapshot means the
+ * legacy posture this decision started from is already stale, and `null`
+ * tells the caller to refuse instead of enforcing legacy values
+ * post-cutover. The object literal is typed PolicyValues, so a policy
+ * field this mapping misses fails to compile. */
+async function legacyPolicyValues(): Promise<PolicyValues | null> {
+  const bag = await browser.storage.local.get([...POLICY_FIELDS, POLICY_CUTOVER_KEY]);
+  if (bag[POLICY_CUTOVER_KEY] !== undefined) return null;
   return {
-    cdpMode: salvageSetting("cdpMode", bag.cdpMode),
-    fileUploadEnabled: salvageSetting("fileUploadEnabled", bag.fileUploadEnabled),
-    handleDialogEnabled: salvageSetting("handleDialogEnabled", bag.handleDialogEnabled),
-    pageEvalEnabled: salvageSetting("pageEvalEnabled", bag.pageEvalEnabled),
-    confirmHighRiskClick: salvageSetting("confirmHighRiskClick", bag.confirmHighRiskClick),
-    confirmPageEval: salvageSetting("confirmPageEval", bag.confirmPageEval),
-    touchIdConfirm: salvageSetting("touchIdConfirm", bag.touchIdConfirm),
-    confirmTabClose: salvageSetting("confirmTabClose", bag.confirmTabClose),
-    warnPreciseSnapshot: salvageSetting("warnPreciseSnapshot", bag.warnPreciseSnapshot),
-    evalMask: salvageSetting("evalMask", bag.evalMask),
-    hostReverifyMs: salvageSetting("hostReverifyMs", bag.hostReverifyMs),
-    confirmGraceMs: salvageSetting("confirmGraceMs", bag.confirmGraceMs),
-    clickToastTimeoutMs: salvageSetting("clickToastTimeoutMs", bag.clickToastTimeoutMs),
-    evalToastTimeoutMs: salvageSetting("evalToastTimeoutMs", bag.evalToastTimeoutMs),
-    disabledTools: salvageSetting("disabledTools", bag.disabledTools),
+    cdpMode: salvageLegacySetting("cdpMode", bag.cdpMode),
+    fileUploadEnabled: salvageLegacySetting("fileUploadEnabled", bag.fileUploadEnabled),
+    handleDialogEnabled: salvageLegacySetting("handleDialogEnabled", bag.handleDialogEnabled),
+    pageEvalEnabled: salvageLegacySetting("pageEvalEnabled", bag.pageEvalEnabled),
+    confirmHighRiskClick: salvageLegacySetting("confirmHighRiskClick", bag.confirmHighRiskClick),
+    confirmPageEval: salvageLegacySetting("confirmPageEval", bag.confirmPageEval),
+    touchIdConfirm: salvageLegacySetting("touchIdConfirm", bag.touchIdConfirm),
+    confirmTabClose: salvageLegacySetting("confirmTabClose", bag.confirmTabClose),
+    warnPreciseSnapshot: salvageLegacySetting("warnPreciseSnapshot", bag.warnPreciseSnapshot),
+    evalMask: salvageLegacySetting("evalMask", bag.evalMask),
+    hostReverifyMs: salvageLegacySetting("hostReverifyMs", bag.hostReverifyMs),
+    confirmGraceMs: salvageLegacySetting("confirmGraceMs", bag.confirmGraceMs),
+    clickToastTimeoutMs: salvageLegacySetting("clickToastTimeoutMs", bag.clickToastTimeoutMs),
+    evalToastTimeoutMs: salvageLegacySetting("evalToastTimeoutMs", bag.evalToastTimeoutMs),
+    disabledTools: salvageLegacySetting("disabledTools", bag.disabledTools),
   };
 }

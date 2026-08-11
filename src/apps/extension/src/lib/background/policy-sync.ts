@@ -117,7 +117,10 @@ import {
 import { hardenStorageAccess } from "./trusted-storage";
 
 const POLICY_STATE_KEY = "bridgePolicyState";
-const POLICY_CUTOVER_KEY = "bridgePolicyCutover";
+/** The one-way cutover flag's storage key. Exported ONLY for the Phase 5
+ * legacy cleanup (legacy-cleanup.ts), which re-reads the flag itself and
+ * never writes it; every cutover decision stays in this module. */
+export const POLICY_CUTOVER_KEY = "bridgePolicyCutover";
 
 /** The storage keys the persisted policy state lives under, for
  * storage.onChanged consumers that must react on the policy PUSH path (the

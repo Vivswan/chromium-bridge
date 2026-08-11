@@ -4,13 +4,16 @@
 // relaxing a gate must match the canonical policy sources.
 //
 //   - docs/security/tool-risk-matrix.md: its per-tool rows (name, Risk, Chrome
-//     perm), its "off by default" claims, and every settings key it names are
+//     perm), its "off by default" claims, and every gate field it names are
 //     diffed against the generated catalogue metadata
 //     (src/packages/shared/src/ops.gen.ts <- catalogue.rs via `moon run gen`,
-//     freshness enforced by check-gen) and the settings schema defaults
-//     (src/packages/shared/src/settings.ts).
+//     freshness enforced by check-gen) and the canonical defaults: the
+//     GENERATED host-owned policy contract (POLICY_DEFAULTS in
+//     src/packages/shared/src/policy.gen.ts <- policy/mod.rs, ADR-0032) for
+//     the 15 policy fields, and the settings schema
+//     (src/packages/shared/src/settings.ts) for the browser-owned keys.
 //   - SECURITY.md: the fail-safe-defaults table's Default cells are diffed
-//     against the same schema defaults.
+//     against the same two canonical sources.
 //   - The "N tools" headline in all three READMEs and docs/architecture.md is
 //     diffed against the catalogue's tool count.
 //
@@ -22,7 +25,26 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OP_NAMES, TOOL_META } from "../src/packages/shared/src/ops.gen";
+import { POLICY_DEFAULTS, POLICY_FIELDS } from "../src/packages/shared/src/policy.gen";
 import { DEFAULTS } from "../src/packages/shared/src/settings";
+
+/** Every canonical default a doc may pin, from BOTH contracts: the generated
+ * host-owned policy deny baseline (policy.gen.ts, the 15 migrated fields)
+ * and the browser-owned settings schema (settings.ts). The two key sets are
+ * disjoint by construction (Phase 5 removed the policy fields from
+ * settings.ts); the loop enforces that so a re-added duplicate key cannot
+ * silently shadow one contract's default with the other's. */
+for (const field of POLICY_FIELDS) {
+  if (field in DEFAULTS) {
+    throw new Error(
+      `policy field \`${field}\` is also a settings key; the two contracts must stay disjoint`,
+    );
+  }
+}
+export const CANONICAL_DEFAULTS: Readonly<Record<string, unknown>> = Object.freeze({
+  ...DEFAULTS,
+  ...POLICY_DEFAULTS,
+});
 
 export interface MatrixRow {
   name: string;
@@ -84,17 +106,21 @@ export function riskMatrixViolations(
 }
 
 /** The opt-in tools' rows must claim "off by default" exactly when their gate
- * setting defaults to false (and never claim it when it defaults to true). */
+ * field defaults to false (and never claim it when it defaults to true). The
+ * gates are HOST-OWNED policy fields since ADR-0032, so this pin reads the
+ * GENERATED policy contract (POLICY_DEFAULTS <- policy.gen.ts), not the
+ * settings schema. */
 export function offByDefaultViolations(
   rows: MatrixRow[],
   matrixMd: string,
-  defaults: Readonly<Record<string, unknown>> = DEFAULTS,
+  defaults: Readonly<Record<string, unknown>> = POLICY_DEFAULTS,
   names: readonly string[] = OP_NAMES,
 ): string[] {
   const out: string[] = [];
   const gates: Array<[tool: string, key: string]> = [
     ["page_upload", "fileUploadEnabled"],
     ["page_handle_dialog", "handleDialogEnabled"],
+    ["page_eval", "pageEvalEnabled"],
   ];
   for (const [tool, key] of gates) {
     const row = rows.find((r) => r.name === tool);
@@ -107,9 +133,12 @@ export function offByDefaultViolations(
       continue; // otherwise the missing row is already a riskMatrixViolations finding
     }
     if (!(key in defaults)) {
-      // Fail closed on a renamed gate setting: with `defaults[key]` undefined
+      // Fail closed on a renamed gate field: with `defaults[key]` undefined
       // both arms below would go silent forever.
-      out.push(`gate setting \`${key}\` (for \`${tool}\`) is not a settings key in settings.ts`);
+      out.push(
+        `gate field \`${key}\` (for \`${tool}\`) is not a policy field in the generated ` +
+          "policy contract (policy.gen.ts)",
+      );
       continue;
     }
     const claimsOff = row.protection.toLowerCase().includes("off by default");
@@ -120,6 +149,7 @@ export function offByDefaultViolations(
       out.push(`\`${tool}\` row claims "off by default" but ${key} defaults to ${defaults[key]}`);
     }
   }
+  // cdpMode is a policy field too: the same generated contract pins the claim.
   const cdpOffClaim = /CDP mode \(opt-in, off by default\)/.test(matrixMd);
   if (defaults.cdpMode === false && !cdpOffClaim) {
     out.push(
@@ -140,11 +170,14 @@ export function offByDefaultViolations(
  * loosening the scan. */
 export const MATRIX_NON_SETTINGS_TOKENS: ReadonlySet<string> = new Set();
 
-/** Every backticked camelCase token in the matrix must be a real settings key
- * (they are how the doc names the user-configurable gates). */
+/** Every backticked camelCase token in the matrix must be a canonical gate
+ * name (they are how the doc names the configurable gates): a HOST-OWNED
+ * policy field (the generated POLICY_FIELDS catalogue) or a remaining
+ * browser-owned settings key (settings.ts). Same strength as before Phase 5
+ * - the expectation moved contracts, it did not loosen. */
 export function settingsKeyViolations(
   md: string,
-  defaults: Readonly<Record<string, unknown>> = DEFAULTS,
+  defaults: Readonly<Record<string, unknown>> = CANONICAL_DEFAULTS,
   allowed: ReadonlySet<string> = MATRIX_NON_SETTINGS_TOKENS,
 ): string[] {
   const out: string[] = [];
@@ -152,15 +185,17 @@ export function settingsKeyViolations(
     const key = m[1] ?? "";
     if (!(key in defaults) && !allowed.has(key)) {
       out.push(
-        `names \`${key}\`, which is not a settings key in settings.ts ` +
-          "(a legitimate non-settings token goes in MATRIX_NON_SETTINGS_TOKENS)",
+        `names \`${key}\`, which is neither a policy field (policy.gen.ts) nor a settings ` +
+          "key (settings.ts) (a legitimate non-settings token goes in MATRIX_NON_SETTINGS_TOKENS)",
       );
     }
   }
   return out;
 }
 
-/** The settings SECURITY.md's fail-safe-defaults table documents. A pinned
+/** The fields SECURITY.md's fail-safe-defaults table documents - all six are
+ * HOST-OWNED policy fields since ADR-0032, so their Default cells pin the
+ * generated deny baseline (POLICY_DEFAULTS <- policy.gen.ts). A pinned
  * list, like the repo's other pin tests: dropping (or reformatting away) a
  * row must fail here and force a conscious edit, not vanish silently. Adding
  * a row needs no code change; removing one means updating this pin. */
@@ -174,11 +209,12 @@ export const REQUIRED_SECURITY_DEFAULT_ROWS = [
 ] as const;
 
 /** Parse SECURITY.md's fail-safe-defaults table (`| \`key\` | \`default\` | ...`)
- * and diff each Default cell against the schema defaults; the pinned row set
- * must all be present. */
+ * and diff each Default cell against the canonical defaults - the generated
+ * policy contract for policy fields, the settings schema for browser-owned
+ * keys; the pinned row set must all be present. */
 export function securityDefaultsViolations(
   securityMd: string,
-  defaults: Readonly<Record<string, unknown>> = DEFAULTS,
+  defaults: Readonly<Record<string, unknown>> = CANONICAL_DEFAULTS,
   requiredRows: readonly string[] = REQUIRED_SECURITY_DEFAULT_ROWS,
 ): string[] {
   const out: string[] = [];
@@ -190,13 +226,17 @@ export function securityDefaultsViolations(
     if (!key || !cell) continue;
     seen.add(key);
     if (!(key in defaults)) {
-      out.push(`SECURITY.md documents \`${key}\`, which is not a settings key in settings.ts`);
+      out.push(
+        `SECURITY.md documents \`${key}\`, which is neither a policy field (policy.gen.ts) ` +
+          "nor a settings key (settings.ts)",
+      );
       continue;
     }
-    const canonical = String(defaults[key as keyof typeof defaults]);
+    const canonical = String(defaults[key]);
     if (cell !== canonical) {
       out.push(
-        `SECURITY.md says \`${key}\` defaults to \`${cell}\` but settings.ts says \`${canonical}\``,
+        `SECURITY.md says \`${key}\` defaults to \`${cell}\` but the canonical contract ` +
+          `says \`${canonical}\``,
       );
     }
   }
@@ -266,13 +306,15 @@ if (import.meta.main) {
     for (const v of violations) console.error(`check-docs-policy: ${v}`);
     console.error(
       `\ncheck-docs-policy: ${violations.length} doc/policy mismatch(es). The canonical ` +
-        "sources are the tool catalogue (catalogue.rs via ops.gen.ts) and the settings " +
-        "schema (src/packages/shared/src/settings.ts); update the docs to match.",
+        "sources are the tool catalogue (catalogue.rs via ops.gen.ts), the generated policy " +
+        "contract (policy/mod.rs via policy.gen.ts), and the settings schema " +
+        "(src/packages/shared/src/settings.ts); update the docs to match.",
     );
     process.exit(1);
   }
   console.log(
     `check-docs-policy: risk matrix (${rows.length} tools), SECURITY.md defaults, ` +
-      `and the ${OP_NAMES.length}-tool headlines match the catalogue and settings schema`,
+      `and the ${OP_NAMES.length}-tool headlines match the catalogue, the policy contract, ` +
+      "and the settings schema",
   );
 }

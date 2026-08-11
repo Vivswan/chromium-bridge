@@ -156,21 +156,31 @@ defaults are set to fail safe (ADR-0008, updated by ADR-0027/0031):
   window. It does not apply to `page_eval`. Those clicks are lower-risk and
   observable in the UI.
 
-These defaults are user-configurable knobs, not removed gates. A power user
-can still relax them, and doing so is an explicit, informed choice:
+These are host-owned POLICY defaults (ADR-0032): the table shows the signed
+policy contract's deny baseline, which governs once a host policy applies. A
+power user can still relax a field - in the desktop app's Security view or
+with `chromium-bridge policy` - and doing so is an explicit, informed choice:
 
 | Setting | Default | Relaxing it means | Residual risk you accept |
 |---------|---------|-------------------|--------------------------|
 | `confirmPageEval` | `true` | `false` = `page_eval` runs with no prompt | Arbitrary JS executes silently on approved origins |
-| `pageEvalEnabled` | `true` | `false` = `page_eval` refused entirely | (hardening, not a relaxation) |
+| `pageEvalEnabled` | `false` | `true` = `page_eval` can run at all (each call still confirms per the rows above) | The arbitrary-JS surface opens on approved origins |
 | `touchIdConfirm` | `true` | `false` = enrolled Macs fall back to the extension-window confirmation for `page_eval`/`page_upload` | The verdict is a window click the extension trusts, not a hardware tap |
 | `confirmHighRiskClick` | `true` | `false` = high-risk clicks (submit/link) run with no prompt; `page_press` and `page_select` still confirm on every call regardless | A prompt-injected model can click submit/links on approved origins silently |
 | `confirmTabClose` | `true` | `false` = `tab_close` runs with no prompt | Silent data loss in a closed tab |
 | `confirmGraceMs` | `60000` | Larger = longer click/submit silence window; `0` = every click reconfirms | A same-origin click/submit within the window is silent (never eval) |
 
-The options page shows an explicit warning on the `confirmPageEval` toggle.
-The site allowlist (per-origin) and the global kill switch remain in force
-regardless of these settings.
+Note the deliberate baseline flip on `pageEvalEnabled`: the pre-migration
+local setting defaulted to `true` (and still does on a pre-cutover install,
+via the legacy settings the extension keeps enforcing until a first policy
+applies - indefinitely on non-macOS); the host-owned baseline denies it
+until an explicit grant. Relaxing a field is never silent: every relaxing
+policy write goes through the desktop app's confirmation dialog (which names
+each relaxed field) followed by a Touch ID-signed policy document, or the
+CLI's grant path, whose enclave signature raises the same Touch ID
+user-presence prompt - the extension's options page no longer carries
+these toggles. The site allowlist (per-origin) and the global kill switch
+remain in force regardless of the policy.
 
 ## Masking is heuristic and best-effort
 

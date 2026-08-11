@@ -67,7 +67,7 @@
 // under a real mid-confirmation push.
 
 import {
-  DEFAULTS,
+  LEGACY_DEFAULTS,
   POLICY_DEFAULTS,
   POLICY_FIELDS,
   POLICY_REVISION_MAX,
@@ -1865,13 +1865,14 @@ describe("the legacy-settings send-once (ADR-0032 decision 8, Phase 4)", () => {
   }
 
   /** The exact bag the frame must carry: the 15 legacy policy fields plus
-   * requireEnrollment (decision 8 keeps it as history), each at its settings
-   * default unless overridden - and NOTHING else. */
+   * requireEnrollment (decision 8 keeps it as history), each at its LEGACY
+   * default (legacy-settings.ts, byte-identical to the pre-migration
+   * settings schema) unless overridden - and NOTHING else. */
   function expectedBag(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     const bag: Record<string, unknown> = {};
-    for (const field of POLICY_FIELDS) bag[field] = DEFAULTS[field];
-    bag.disabledTools = [...DEFAULTS.disabledTools];
-    bag.requireEnrollment = DEFAULTS.requireEnrollment;
+    for (const field of POLICY_FIELDS) bag[field] = LEGACY_DEFAULTS[field];
+    bag.disabledTools = [...LEGACY_DEFAULTS.disabledTools];
+    bag.requireEnrollment = LEGACY_DEFAULTS.requireEnrollment;
     return { ...bag, ...overrides };
   }
 
