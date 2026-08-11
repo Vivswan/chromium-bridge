@@ -93,8 +93,9 @@ Windows, on headless machines, and in CI.
 
 5. **On macOS, pair.** Run `chromium-bridge pair` (Touch ID prompts and the
    key's fingerprint is printed), then approve that fingerprint on the
-   extension's options page. The extension requires enrollment on macOS by
-   default and refuses to act until the pin is in place. Linux and Windows
+   extension's options page. On macOS the extension requires this enrollment
+   unconditionally (ADR-0032 phase 5 retired the old `requireEnrollment`
+   opt-out) and refuses to act until the pin is in place. Linux and Windows
    have no Secure Enclave and skip this step.
 
 6. **Connect your MCP client** to the binary's absolute path, as in path A.

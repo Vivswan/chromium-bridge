@@ -75,9 +75,10 @@ CLI 只需要二进制本身。在 Linux、Windows、无界面机器和 CI 上�
    器。
 
 5. **在 macOS 上配对。** 运行 `chromium-bridge pair` (Touch ID 弹出, 并打
-   印密钥指纹), 然后在扩展的选项页批准该指纹。macOS 上扩展默认要求完成此
-   注册, 在钉定完成之前拒绝执行任何操作。Linux 和 Windows 没有 Secure
-   Enclave, 跳过这一步。
+   印密钥指纹), 然后在扩展的选项页批准该指纹。macOS 上扩展无条件要求完成
+   此注册 (ADR-0032 第 5 阶段移除了旧的 `requireEnrollment` 开关), 在钉定
+   完成之前拒绝执行任何操作。Linux 和 Windows 没有 Secure Enclave, 跳过这
+   一步。
 
 6. **接入 MCP 客户端**, 指向二进制的绝对路径, 方法同路径 A。
 

@@ -40,7 +40,8 @@ use crate::enclave::{base64_decode, EnclaveError, EnrollmentKey};
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyStoreState {
-    /// No policy baseline on this machine yet (pre-cutover; deny baseline).
+    /// No policy baseline on this machine yet (pre-cutover; the extension
+    /// keeps enforcing its legacy local settings).
     None,
     /// A baseline exists and parsed.
     Present,
@@ -252,8 +253,9 @@ fn render_status(r: &PolicyStatusReport) -> String {
     match r.store {
         PolicyStoreState::None => {
             out.push_str(
-                "store:      none yet (pre-cutover; the deny baseline is enforced until a\n            \
-                 baseline is signed via the app or `chromium-bridge policy set`)\n",
+                "store:      none yet (pre-cutover; the extension keeps enforcing its legacy\n            \
+                 local settings until a baseline is signed via the app or\n            \
+                 `chromium-bridge policy set`)\n",
             );
         }
         PolicyStoreState::Error => {

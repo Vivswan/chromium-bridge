@@ -210,11 +210,13 @@ fn render(r: &Report) -> String {
 
     out.push_str("policy baseline: ");
     match r.policy.store {
-        // No baseline yet is HEALTHY (pre-cutover): the extension enforces the
-        // deny baseline until a first policy signs. It must not read as broken.
+        // No baseline yet is HEALTHY (pre-cutover): the extension keeps
+        // enforcing its legacy local settings until a first policy signs (the
+        // deny baseline covers only a post-cutover extension with no stored
+        // policy). It must not read as broken.
         PolicyStoreState::None => out.push_str(
-            "none yet (pre-cutover; deny baseline enforced until the app or\n  \
-             `chromium-bridge policy set` signs one)\n",
+            "none yet (pre-cutover; the extension keeps enforcing its legacy local\n  \
+             settings until the app or `chromium-bridge policy set` signs a baseline)\n",
         ),
         PolicyStoreState::Present => {
             let revision = r.policy.revision.unwrap_or(0);

@@ -1085,8 +1085,8 @@ let pendingApproval: {
  * attachment, so a reconnect that installs a fresh one mid-verification
  * stays unverified (its own connect push will open its barrier).
  *
- * RESIDUAL LAG, named (E2F-3, for the SECURITY.md ADR-0032 threat model in
- * Phase 5): port.ts void-routes these frames (`void handlePolicyFrame(msg)`),
+ * RESIDUAL LAG, named (E2F-3, recorded in docs/security/threat-model.md's
+ * "Host-owned policy (ADR-0032) residual ledger"): port.ts void-routes these frames (`void handlePolicyFrame(msg)`),
  * unsynchronized with the request queue - the same posture as the void-routed
  * kill frames. The frame chain and the request path share no counter, so
  * between a bad-signature push arriving and its signature verification
@@ -1179,7 +1179,8 @@ function refuse(why: string, opts: { audit?: boolean } = {}): void {
  * barrier for this SW life, and the failure is surfaced loudly rather than
  * swallowed as best-effort.
  *
- * RESIDUAL, named (F1, for the SECURITY.md ADR-0032 threat model in Phase 5):
+ * RESIDUAL, named (F1, recorded in docs/security/threat-model.md's
+ * "Host-owned policy (ADR-0032) residual ledger"):
  * the E2F-1 sticky latch is IN MEMORY, so it cannot survive a failed
  * setCompromised persist AND a subsequent SW restart together. If the durable
  * mark never wrote (persist threw) and the SW then dies, the fresh SW starts

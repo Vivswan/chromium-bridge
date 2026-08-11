@@ -378,8 +378,13 @@ first-ever policy, at any revision.
   concedes by design, since it only removes capability. Bounds: one prompt
   at a time, each denial audited, nothing relaxes without an explicit
   approval, and pinned machines are unaffected (no approval window exists
-  there). Accepted: the unpinned approval window is inherently occupiable
-  by the one peer allowed to request it.
+  there). One spillover, named: the language lane shares the same
+  frameChain, so on an unpinned machine a queued 120s approval prompt can
+  delay a `lang_choose` response - benign, because the local `uiLanguage`
+  write already landed and the UI already swapped before the relay; only
+  the diagnostic `sent` flag is delayed, and `chooseLanguage` returns
+  false on an unpinned machine anyway. Accepted: the unpinned approval
+  window is inherently occupiable by the one peer allowed to request it.
 - **The pending-import tombstone defends against a compromised extension,
   not a hostile same-user native process.** The consumed tombstone refuses
   a re-recorded legacy bag for the lifetime of the file - and the file is
