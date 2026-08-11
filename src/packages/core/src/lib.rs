@@ -36,6 +36,7 @@ pub mod lang;
 pub mod mcp;
 pub mod mcp_server;
 pub mod native_host;
+pub mod pending_import;
 pub mod policy;
 pub mod presence;
 pub mod protocol;

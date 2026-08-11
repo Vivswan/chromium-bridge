@@ -238,9 +238,49 @@ export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
   baseline: z.string().min(1).optional(),
   sig: z.string().min(1).optional(),
   overlay: PolicyOverlaySchema.optional(),
+  // ASYMMETRY (reason): the host frame field is Option<String> (any string or
+  // absent); the extension pins it to the structured {absent,damaged,unreadable}
+  // enum (ADR-0032 D-P4-2). The Phase-4 send-once MUST gate on
+  // `ok === false && reason === "absent"`, so a value outside the enum, or a
+  // missing field (an old host), reads as "not the absent signal" - never
+  // send - which is fail closed.
+  reason: z.enum(["absent", "damaged", "unreadable"]).optional(),
   // ASYMMETRY (error): no null arm, as above.
   error: z.string().optional(),
-}).catchall(z.unknown());
+})
+  .catchall(z.unknown())
+  // ASYMMETRY (ok-split, superRefine): pinned in FRAME_REFINEMENTS
+  // (scripts/check-envelope-parity.ts) - a refinement never shows up in
+  // z.toJSONSchema, so the structural gate cannot see it and pins it there
+  // instead. On the wire every field is an Option, so the base validates
+  // per-field and would pass shapes PolicyStatus::into_frame (protocol.rs)
+  // can never emit. The refinement encodes the only two real host shapes:
+  // `ok: true` REQUIRES `baseline` (sig/overlay optional) and never carries
+  // `reason` or `error`; `ok: false` REQUIRES `error` (reason optional - an
+  // old host omits it) and never carries `baseline`, `sig`, or `overlay`.
+  // In particular, the send-once condition above can never be satisfied (or
+  // confused) by a frame that also claims success.
+  .superRefine((frame, ctx) => {
+    const [required, forbidden] = frame.ok
+      ? (["baseline", ["reason", "error"]] as const)
+      : (["error", ["baseline", "sig", "overlay"]] as const);
+    if (frame[required] === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: [required],
+        message: `policy_current ok:${frame.ok} always carries ${required} (ok-split)`,
+      });
+    }
+    for (const field of forbidden) {
+      if (frame[field] !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: [field],
+          message: `policy_current ok:${frame.ok} never carries ${field} (ok-split)`,
+        });
+      }
+    }
+  });
 
 export type PolicyCurrentFrame = z.infer<typeof PolicyCurrentFrameSchema>;
 

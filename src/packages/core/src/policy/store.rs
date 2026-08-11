@@ -704,6 +704,23 @@ fn write_baseline_locked(
         key_id,
         overlay: normalize_overlay(overlay),
     };
+    if prev.is_none() {
+        // First baseline (revision 1): the cutover the pending legacy import
+        // fed. Write the durable Consumed tombstone (ADR-0032 decision 8,
+        // P4H-1) BEFORE committing the baseline, in the same critical
+        // section, and REFUSE the whole signed write if it fails (Io is
+        // retryable: the user re-taps once whatever broke I/O is fixed).
+        // Best-effort-after-write would let revision 1 land with the import
+        // window silently still open - post-disposal, exactly the forged-bag
+        // hole the tombstone closes. The chosen ordering's one asymmetry: if
+        // the BASELINE write below fails after the tombstone landed, the
+        // import window is closed although no baseline exists. Acceptable:
+        // the user already chose to sign (the app holds the values it
+        // gathered from the bag and simply re-taps), whereas the reverse
+        // ordering reopens an attack window; the tombstone never needs
+        // un-writing.
+        crate::pending_import::consume_locked(lock).map_err(PolicyWriteError::Io)?;
+    }
     next.write(lock).map_err(PolicyWriteError::Io)?;
     bump_policy_epoch_locked(lock);
     if let Some(prev) = &prev {
@@ -1193,6 +1210,138 @@ mod store_tests {
         // An oversized file is refused without being slurped.
         fs::write(PolicyStore::path(), vec![b' '; POLICY_MAX_BYTES + 1]).unwrap();
         assert!(PolicyStore::load().is_err());
+    }
+
+    #[test]
+    fn the_first_signed_baseline_consumes_the_pending_import() {
+        // ADR-0032 decision 8: signing revision 1 is the cutover the pending
+        // legacy import fed, so the receipt is consumed in the same write -
+        // and consuming writes the durable tombstone (P4H-1), so the window
+        // is closed for good, not returned to absent.
+        let _dir = RuntimeDirGuard::new("consume-pending-import");
+        let _reset = policy_test_hook::ResetOnDrop;
+        crate::pending_import::record_if_absent(serde_json::json!({ "pageEvalEnabled": true }))
+            .unwrap();
+        policy_test_hook::set(signed_mock());
+        set_signed(
+            PolicyValues {
+                page_eval_enabled: true,
+                ..PolicyValues::default()
+            },
+            vec![PolicyField::PageEvalEnabled],
+            Surface::Core,
+            PolicyGrantFloor::SignatureOnly,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Consumed,
+            "the first baseline must consume the pending import into the tombstone"
+        );
+
+        // Post-consume, a re-sent (possibly forged) bag is refused - the
+        // tombstone, not baseline presence, is what keeps the window closed.
+        assert_eq!(
+            crate::pending_import::record_if_absent(serde_json::json!({ "later": true })).unwrap(),
+            crate::pending_import::RecordOutcome::AlreadyConsumed
+        );
+
+        // A SUBSEQUENT baseline write (revision > 1) leaves the tombstone
+        // standing: only revision 1 consumes, and nothing un-consumes.
+        policy_test_hook::set(signed_mock());
+        set_signed(
+            PolicyValues::default(),
+            vec![PolicyField::PageEvalEnabled],
+            Surface::Core,
+            PolicyGrantFloor::SignatureOnly,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Consumed
+        );
+    }
+
+    #[test]
+    fn clearing_the_baseline_leaves_the_pending_import_intact() {
+        // ADR-0032 D-P4-5: disposal (revoke / pair --reset / enclave_revoke)
+        // clears the signed baseline through clear_baseline_locked, but the
+        // pending import is user preference data, not a key artifact, so it
+        // must survive - the policy-history precedent.
+        let _dir = RuntimeDirGuard::new("disposal-keeps-pending-import");
+        seed_store(1, &PolicyValues::default(), None);
+        crate::pending_import::record_if_absent(serde_json::json!({ "keepme": true })).unwrap();
+        ipc::with_runtime_lock(clear_baseline_locked).unwrap();
+        assert!(
+            PolicyStore::load().unwrap().is_none(),
+            "the baseline is cleared on disposal"
+        );
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Pending {
+                bag: serde_json::json!({ "keepme": true })
+            },
+            "the pending import survives disposal untouched"
+        );
+    }
+
+    #[test]
+    fn a_failed_tombstone_write_refuses_the_first_baseline() {
+        // P4F-7: closing the import window is a PREREQUISITE of the first
+        // signed baseline, not best-effort cleanup after it. Inject the
+        // failure through the store's own fail-closed path: an unreadable
+        // pending-import file makes consume_locked refuse, which must refuse
+        // the whole signed write (retryable Io - the user re-taps once the
+        // file is dealt with), and no baseline may land while the window
+        // cannot be closed.
+        let _dir = RuntimeDirGuard::new("tombstone-failure-refuses-baseline");
+        let _reset = policy_test_hook::ResetOnDrop;
+        std::fs::write(crate::pending_import::path(), b"{ not json").unwrap();
+        policy_test_hook::set(signed_mock());
+        let denied = set_signed(
+            PolicyValues::default(),
+            vec![PolicyField::PageEvalEnabled],
+            Surface::Core,
+            PolicyGrantFloor::SignatureOnly,
+        );
+        assert!(
+            matches!(denied, Err(PolicyWriteError::Io(_))),
+            "a failed tombstone write must refuse the signed write, got {denied:?}"
+        );
+        assert!(
+            PolicyStore::load().unwrap().is_none(),
+            "no baseline may land while the import window cannot be closed"
+        );
+        // The unreadable receipt is untouched evidence, not overwritten.
+        assert!(crate::pending_import::load().is_err());
+    }
+
+    #[test]
+    fn the_consumed_tombstone_survives_disposal_and_still_refuses_a_plant() {
+        // P4H-1, the attack the tombstone exists for: consume happens
+        // (revision 1), then disposal clears the BASELINE - if consume had
+        // deleted the file, the store would read absent again and a
+        // compromised extension could plant a forged bag for the next
+        // first-run import. The tombstone must outlive the baseline.
+        let _dir = RuntimeDirGuard::new("tombstone-survives-disposal");
+        crate::pending_import::record_if_absent(serde_json::json!({ "real": true })).unwrap();
+        seed_store(1, &PolicyValues::default(), None);
+        ipc::with_runtime_lock(crate::pending_import::consume_locked).unwrap();
+        ipc::with_runtime_lock(clear_baseline_locked).unwrap();
+        assert!(
+            PolicyStore::load().unwrap().is_none(),
+            "the baseline is cleared on disposal"
+        );
+        assert_eq!(
+            crate::pending_import::load().unwrap(),
+            crate::pending_import::StoreState::Consumed,
+            "the consumed tombstone survives disposal"
+        );
+        assert_eq!(
+            crate::pending_import::record_if_absent(serde_json::json!({ "forged": true })).unwrap(),
+            crate::pending_import::RecordOutcome::AlreadyConsumed,
+            "a post-disposal plant is refused by the tombstone"
+        );
     }
 
     #[test]

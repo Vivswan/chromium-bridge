@@ -78,8 +78,9 @@ fn open_private(opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> {
 /// symlink is refused, never adopted or followed - so no re-assert is needed:
 /// the file cannot exist with a mode we did not give it.
 ///
-/// Unix-only: its sole caller (`ipc::write_private_atomic`) takes a plain
-/// create+truncate open on Windows, where there are no Unix modes to pin.
+/// Unix-only: its callers (`ipc::write_private_atomic`,
+/// `pending_import::write_pending_new`) take a plain create-new/truncate open
+/// on Windows, where there are no Unix modes to pin.
 #[cfg(unix)]
 pub(crate) fn create_private_excl(path: &Path) -> io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;

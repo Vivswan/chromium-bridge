@@ -20,8 +20,10 @@
 // only when it exactly matches its approved form there), and fails on any
 // remaining difference. With the base generated, a surviving diff means the
 // wrapper drifted outside the approved asymmetry list; the diff is NOT
-// tautological because the wrapper is hand-written. The same asymmetries are
-// exercised behaviorally in
+// tautological because the wrapper is hand-written. Refinements
+// (.superRefine) never appear in either derivation, so those asymmetries are
+// pinned separately in FRAME_REFINEMENTS below and checked behaviorally. The
+// same asymmetries are exercised behaviorally in
 // src/packages/shared/tests/envelope-wire.gen.test.ts.
 //
 // The gate also checks coverage: every control frame must have a plan
@@ -164,6 +166,140 @@ const CLASSIFIED_OUTBOUND_TAGS: Record<Group, ReadonlySet<string>> = {
   admin: new Set(),
   policy: new Set(),
 };
+
+// ---- pinned parser refinements (invisible to the structural diff) ------------
+//
+// A refinement (.superRefine / .refine) never appears in z.toJSONSchema
+// output, so the structural diff below can neither see one appear nor see one
+// vanish. Every deliberate refinement on a wrapped frame validator is
+// therefore pinned HERE, RECONCILED_FIELDS-style, and the pins bind both
+// ways: every { zod } plan's custom-check count - walked RECURSIVELY, so a
+// nested .refine cannot ride in unpinned either - must equal its pinned
+// refinement count (an unpinned refinement is refused, and so is a pinned one
+// that is gone), and each pin carries probe frames the refinement must refuse
+// and must keep accepting. Precisely what that guarantees: count stability
+// and the probe behavior, nothing more - a refinement that keeps the count
+// and passes every probe while doing something ELSE as well is beyond any
+// finite probe list, and is owned by review of the schema's documented
+// charter (the ASYMMETRY comment in enclave.ts). Enforced by
+// refinementProblems below, run against every { zod } plan.
+
+export type RefinementPin = {
+  /** Which deliberate asymmetry this is, for the failure message; the full
+   * why lives on the schema in enclave.ts. */
+  name: string;
+  /** Frames the per-field validation accepts that the refinement must
+   * refuse. */
+  refuses: readonly unknown[];
+  /** Legitimate frames the refinement must keep accepting. */
+  accepts: readonly unknown[];
+};
+
+export const FRAME_REFINEMENTS: Readonly<
+  Partial<Record<ControlFrameKind, readonly RefinementPin[]>>
+> = {
+  // The policy_current ok-split (enclave.ts): PolicyStatus::into_frame
+  // (protocol.rs) emits exactly two flat shapes, and the extension refuses
+  // everything per-field validation would pass outside them - `ok: true`
+  // requires `baseline` and never carries `reason` or `error`; `ok: false`
+  // requires `error` and never carries `baseline`, `sig`, or `overlay`. The
+  // Phase-4 legacy-import send-once gates on
+  // `ok === false && reason === "absent"`, so a reason must never be able to
+  // ride a frame that also claims success.
+  policy_current: [
+    {
+      name: "ok-split",
+      refuses: [
+        { type: "policy_current", ok: true, baseline: "e30=", reason: "absent" },
+        { type: "policy_current", ok: true, baseline: "e30=", error: "boom" },
+        { type: "policy_current", ok: true },
+        { type: "policy_current", ok: false, baseline: "e30=", error: "boom" },
+        { type: "policy_current", ok: false, sig: "c2ln", error: "boom" },
+        { type: "policy_current", ok: false, overlay: {}, error: "boom" },
+        { type: "policy_current", ok: false, reason: "absent" },
+      ],
+      accepts: [
+        { type: "policy_current", ok: true, baseline: "e30=", sig: "c2ln", overlay: {} },
+        { type: "policy_current", ok: false, reason: "absent", error: "no policy baseline" },
+      ],
+    },
+  ],
+};
+
+/** Count the CUSTOM checks (refinements) in a Zod schema, recursively:
+ * z.toJSONSchema cannot represent them, so the gate walks the schema graph
+ * (every nested def, with a cycle guard) counting checks whose def.check is
+ * "custom" - a superRefine on the frame or a .refine buried on a nested
+ * property both land here. Built-in checks (min_length, bounds, formats) DO
+ * surface in the JSON Schema derivations and are the structural diff's
+ * business, so they are not counted. */
+function customCheckCount(schema: z.ZodType): number {
+  let count = 0;
+  const seen = new Set<object>();
+  const visit = (node: unknown): void => {
+    if (typeof node !== "object" || node === null || seen.has(node)) return;
+    seen.add(node);
+    const def = (node as { _zod?: { def?: Record<string, unknown> } })._zod?.def;
+    if (def !== undefined) {
+      const checks = def.checks;
+      if (Array.isArray(checks)) {
+        for (const check of checks) {
+          const checkDef = (check as { _zod?: { def?: { check?: unknown } } })._zod?.def;
+          if (checkDef?.check === "custom") count += 1;
+        }
+      }
+      visit(def);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    for (const value of Object.values(node)) visit(value);
+  };
+  visit(schema);
+  return count;
+}
+
+/** The refinement-pin rule (see FRAME_REFINEMENTS): pure over its inputs so
+ * scripts/check-envelope-parity.test.ts can prove the refusals fire; the
+ * running gate passes each { zod } plan with its pins (an unpinned frame gets
+ * the empty list, holding it to zero refinements). Returns the failures,
+ * empty meaning the schema carries exactly the pinned number of custom
+ * refinements and each probe behaves. */
+export function refinementProblems(
+  tag: string,
+  schema: z.ZodType,
+  pins: readonly RefinementPin[],
+): string[] {
+  const problems: string[] = [];
+  const checks = customCheckCount(schema);
+  if (checks !== pins.length) {
+    problems.push(
+      `${tag}: the wrapped validator carries ${checks} custom refinement(s) but ` +
+        `FRAME_REFINEMENTS pins ${pins.length} - refinements are invisible to the ` +
+        `structural diff, so every one must be pinned there (and no pin may outlive ` +
+        `its refinement)`,
+    );
+  }
+  for (const pin of pins) {
+    for (const frame of pin.refuses) {
+      if (schema.safeParse(frame).success) {
+        problems.push(
+          `${tag}: pinned refinement ${pin.name} no longer refuses ${JSON.stringify(frame)}`,
+        );
+      }
+    }
+    for (const frame of pin.accepts) {
+      if (!schema.safeParse(frame).success) {
+        problems.push(
+          `${tag}: pinned refinement ${pin.name} refuses the legitimate ${JSON.stringify(frame)}`,
+        );
+      }
+    }
+  }
+  return problems;
+}
 
 /** The classifier-coverage rule (see the comment on CLASSIFIED_TAGS): pure
  * over its inputs so scripts/check-envelope-parity.test.ts can prove the
@@ -376,6 +512,29 @@ function main(): void {
       rustTags[group],
     )) {
       fail(problem);
+    }
+  }
+
+  // Pinned refinements (FRAME_REFINEMENTS): invisible to the structural diff
+  // above, so every { zod } plan is held to its pinned refinement count and
+  // probe behavior - the unpinned ones to zero.
+  const zodPlannedTags = new Set<string>();
+  for (const group of GROUPS) {
+    for (const [tag, plan] of Object.entries(FRAME_PLANS[group])) {
+      if (typeof plan !== "object") continue;
+      zodPlannedTags.add(tag);
+      const pins = FRAME_REFINEMENTS[tag as ControlFrameKind] ?? [];
+      const problems = refinementProblems(tag, plan.zod, pins);
+      for (const problem of problems) fail(problem);
+      if (pins.length > 0 && problems.length === 0) {
+        console.log(`${group} frame ${tag}: pinned refinement(s) present and behaving`);
+      }
+    }
+  }
+  // The pins bind both ways: one on a frame without a { zod } plan is stale.
+  for (const tag of Object.keys(FRAME_REFINEMENTS)) {
+    if (!zodPlannedTags.has(tag)) {
+      fail(`FRAME_REFINEMENTS pins ${tag} but no { zod } plan carries a validator for it`);
     }
   }
 

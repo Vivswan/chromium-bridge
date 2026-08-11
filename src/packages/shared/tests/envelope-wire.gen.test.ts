@@ -71,6 +71,10 @@ const entry: Frame = { name: "codex", anchor: { kind: "hash", value: "abc123" } 
 // enforced side only (the id's pinned forward-compat arm). `enforcedStrict`
 // marks the wrapped validators that must ALSO refuse unknown fields (the
 // envelopes; the control frames are R5-loose, pinned below).
+// `enforcedRequired` names fields the WRAPPER requires beyond the wire base
+// (a pinned refinement: policy_current's ok-split requires baseline on the
+// ok:true arm) - the minimal-frame probe keeps them for the enforced parse
+// and proves dropping each fails the enforced side only.
 const WIRE_CASES: ReadonlyArray<{
   name: string;
   schema: z.ZodType;
@@ -80,6 +84,7 @@ const WIRE_CASES: ReadonlyArray<{
   freeForm?: readonly string[];
   enforcedStringOk?: readonly string[];
   enforcedStrict?: boolean;
+  enforcedRequired?: readonly string[];
 }> = [
   {
     name: "BridgeReqWireSchema",
@@ -162,16 +167,19 @@ const WIRE_CASES: ReadonlyArray<{
     name: "PolicyCurrentWireSchema",
     schema: PolicyCurrentWireSchema,
     enforced: PolicyCurrentFrameSchema,
+    // The ok:true arm of the ok-split: baseline required, sig/overlay
+    // optional. reason and error ride the ok:false arm exclusively (the
+    // wrapper's pinned superRefine refuses the mixtures); their coverage is
+    // the dedicated ok-split and reason tests below.
     valid: {
       type: "policy_current",
       ok: true,
       baseline: "YmFzZQ==",
       sig: "c2ln",
       overlay: { pageEvalEnabled: false, confirmGraceMs: 1000, disabledTools: ["page_eval"] },
-      error: "e",
     },
-    // baseline/sig/overlay/error are Options: ok:false carries only error.
     required: ["type", "ok"],
+    enforcedRequired: ["baseline"],
   },
   {
     name: "LangCurrentWireSchema",
@@ -211,6 +219,7 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
     freeForm,
     enforcedStringOk,
     enforcedStrict,
+    enforcedRequired,
   } of WIRE_CASES) {
     describe(name, () => {
       test("accepts the representative frame", () => {
@@ -219,11 +228,18 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
       });
 
       test("accepts the frame with optional fields omitted", () => {
-        const minimal = Object.fromEntries(
-          Object.entries(valid).filter(([key]) => required.includes(key)),
-        );
-        expect(schema.safeParse(minimal).success).toBe(true);
-        expect(enforced.safeParse(minimal).success).toBe(true);
+        const keep = (keys: readonly string[]) =>
+          Object.fromEntries(Object.entries(valid).filter(([key]) => keys.includes(key)));
+        const wrapperRequired = [...required, ...(enforcedRequired ?? [])];
+        expect(schema.safeParse(keep(required)).success).toBe(true);
+        expect(enforced.safeParse(keep(wrapperRequired)).success).toBe(true);
+        // Each wrapper-required field: the base accepts its absence, the
+        // wrapper refuses it (a pinned refinement, e.g. the ok-split).
+        for (const key of enforcedRequired ?? []) {
+          const without = keep(wrapperRequired.filter((k) => k !== key));
+          expect(schema.safeParse(without).success).toBe(true);
+          expect(enforced.safeParse(without).success).toBe(false);
+        }
       });
 
       test("rejects an unknown field (the R5-loose wrapped frames are pinned below)", () => {
@@ -260,6 +276,78 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
       }
     });
   }
+
+  test("policy_current reason: wire accepts any string, the wrapper pins the enum", () => {
+    // ADR-0032 D-P4-2: the generated wire base is faithful to the host's
+    // Option<String>, but the enforced wrapper narrows reason to the
+    // {absent,damaged,unreadable} enum the send-once gates on. An out-of-enum
+    // string is accepted by the base and refused by the wrapper (fail closed),
+    // and a missing reason (old host) is accepted by both.
+    const base = { type: "policy_current", ok: false, error: "e" };
+    for (const reason of ["absent", "damaged", "unreadable"]) {
+      expect(PolicyCurrentFrameSchema.safeParse({ ...base, reason }).success).toBe(true);
+    }
+    expect(PolicyCurrentWireSchema.safeParse({ ...base, reason: "bogus" }).success).toBe(true);
+    expect(PolicyCurrentFrameSchema.safeParse({ ...base, reason: "bogus" }).success).toBe(false);
+    expect(PolicyCurrentFrameSchema.safeParse(base).success).toBe(true);
+    // Type confusion on the ok:false-arm fields (the ok:true representative
+    // frame above cannot carry them): both sides refuse a non-string.
+    for (const field of ["reason", "error"]) {
+      for (const hostile of [7, true, { hostile: true }]) {
+        expect(PolicyCurrentWireSchema.safeParse({ ...base, [field]: hostile }).success).toBe(
+          false,
+        );
+        expect(PolicyCurrentFrameSchema.safeParse({ ...base, [field]: hostile }).success).toBe(
+          false,
+        );
+      }
+    }
+  });
+
+  test("policy_current ok-split (superRefine): only the two real host shapes parse", () => {
+    // Pinned in FRAME_REFINEMENTS (scripts/check-envelope-parity.ts): on the
+    // wire every field is an Option, so the base ACCEPTS these; the wrapper's
+    // superRefine refuses everything outside the two shapes into_frame emits
+    // - mixtures of the arms, and an arm missing its mandatory field. The
+    // Phase-4 send-once gates on `ok === false && reason === "absent"`, so a
+    // reason must never ride a frame that also claims success.
+    const outsideTheSplit = [
+      // Mixtures: a field from the other arm.
+      { type: "policy_current", ok: true, baseline: "YmFzZQ==", reason: "absent" },
+      { type: "policy_current", ok: true, baseline: "YmFzZQ==", error: "e" },
+      { type: "policy_current", ok: false, error: "e", baseline: "YmFzZQ==" },
+      { type: "policy_current", ok: false, error: "e", sig: "c2ln" },
+      { type: "policy_current", ok: false, error: "e", overlay: {} },
+      // Missing the arm's mandatory field: ok:true always carries baseline,
+      // ok:false always carries error.
+      { type: "policy_current", ok: true },
+      { type: "policy_current", ok: true, sig: "c2ln" },
+      { type: "policy_current", ok: false },
+      { type: "policy_current", ok: false, reason: "absent" },
+    ];
+    for (const frame of outsideTheSplit) {
+      expect(PolicyCurrentWireSchema.safeParse(frame).success).toBe(true);
+      expect(PolicyCurrentFrameSchema.safeParse(frame).success).toBe(false);
+    }
+    // The two legitimate flat shapes still pass.
+    expect(
+      PolicyCurrentFrameSchema.safeParse({
+        type: "policy_current",
+        ok: true,
+        baseline: "YmFzZQ==",
+        sig: "c2ln",
+        overlay: {},
+      }).success,
+    ).toBe(true);
+    expect(
+      PolicyCurrentFrameSchema.safeParse({
+        type: "policy_current",
+        ok: false,
+        reason: "absent",
+        error: "no policy baseline on this host",
+      }).success,
+    ).toBe(true);
+  });
 
   test("rejects nested extras (client entry, anchor)", () => {
     const withEntryExtra = {
@@ -391,7 +479,11 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
         KillStatusResultSchema,
         { type: "kill_status_result", ok: true },
       ],
-      [PolicyCurrentWireSchema, PolicyCurrentFrameSchema, { type: "policy_current", ok: true }],
+      [
+        PolicyCurrentWireSchema,
+        PolicyCurrentFrameSchema,
+        { type: "policy_current", ok: true, baseline: "YmFzZQ==" },
+      ],
       [
         LangCurrentWireSchema,
         LangCurrentFrameSchema,
@@ -474,7 +566,12 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
 
   test("overlay (STRICT_ZOD_NODES): strict on BOTH sides inside the R5-loose frame", () => {
     // The frame itself reads loose (host may add fields)...
-    const grownFrame = { type: "policy_current", ok: true, hostAdded: "field" };
+    const grownFrame = {
+      type: "policy_current",
+      ok: true,
+      baseline: "YmFzZQ==",
+      hostAdded: "field",
+    };
     expect(PolicyCurrentFrameSchema.safeParse(grownFrame).success).toBe(true);
     // ...but an overlay field the catalogue does not own fails the whole
     // frame on the enforced side too - a policy claim nobody owns is never
@@ -482,6 +579,7 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
     const grownOverlay = {
       type: "policy_current",
       ok: true,
+      baseline: "YmFzZQ==",
       overlay: { pageEvalEnabled: false, requireEnrollment: false },
     };
     expect(PolicyCurrentWireSchema.safeParse(grownOverlay).success).toBe(false);
@@ -492,6 +590,7 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
     const withOverlay = (overlay: Record<string, unknown>) => ({
       type: "policy_current",
       ok: true,
+      baseline: "YmFzZQ==",
       overlay,
     });
     // Both sides refuse an unsafe integer in this runtime (the base's

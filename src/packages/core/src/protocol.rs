@@ -812,15 +812,48 @@ impl KillStatus {
     }
 }
 
+/// Why the host has no usable policy to report (ADR-0032 decision 4, D-P4-2):
+/// the structured cause the `policy_current { ok: false }` frame carries in its
+/// optional `reason` field. The Phase-4 extension gates its one-shot
+/// `legacy_settings` send on `reason == absent` (it imports only when a
+/// capable host genuinely has no baseline yet); `damaged` (an unparsable
+/// baseline or a relaxing overlay) and `unreadable` (a store I/O error) are
+/// fail-closed states the extension keeps its deny baseline on, never an
+/// import trigger. An old host omits the field entirely, which the extension
+/// reads as "never send" - fail closed on absence of the signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyUnavailableReason {
+    /// No policy baseline exists on this host yet (the pre-cutover state).
+    Absent,
+    /// A baseline exists but is unparsable, or its overlay relaxes it: the
+    /// store is present but its content is damaged or tampered.
+    Damaged,
+    /// The store could not be read (an I/O error distinct from absence).
+    Unreadable,
+}
+
+impl PolicyUnavailableReason {
+    /// The camelCase wire token, matching the extension's pinned enum. Single
+    /// words, so camelCase is the lowercase spelling.
+    pub fn wire(self) -> &'static str {
+        match self {
+            PolicyUnavailableReason::Absent => "absent",
+            PolicyUnavailableReason::Damaged => "damaged",
+            PolicyUnavailableReason::Unreadable => "unreadable",
+        }
+    }
+}
+
 /// The policy state the host reports, before it is flattened onto the pinned
 /// `policy_current` wire triple (ADR-0032 decision 4) - the [`KillStatus`]
 /// discipline applied to the policy push. The wire variant
 /// ([`PolicyControl::PolicyCurrent`]) stays `{ ok, baseline?, sig?, overlay?,
-/// error? }` for contract stability, but hand-assembling it let the mixtures
-/// the extension must never see compile: `ok: false` carrying a baseline, a
-/// `sig` with no baseline, an `ok: true` with an error. Every producer builds
-/// one of these instead and lets [`into_frame`](PolicyStatus::into_frame)
-/// emit the only two flat shapes the contract means.
+/// reason?, error? }` for contract stability, but hand-assembling it let the
+/// mixtures the extension must never see compile: `ok: false` carrying a
+/// baseline, a `sig` with no baseline, an `ok: true` with an error. Every
+/// producer builds one of these instead and lets
+/// [`into_frame`](PolicyStatus::into_frame) emit the only two flat shapes the
+/// contract means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyStatus {
     /// The store was readable: the EXACT signed baseline bytes (base64), the
@@ -833,16 +866,22 @@ pub enum PolicyStatus {
         overlay: Option<crate::policy::PolicyOverlay>,
     },
     /// No usable policy: the store is absent, unreadable, or malformed. `ok:
-    /// false` with an error and NO baseline claim, so the extension fails
-    /// closed on its deny baseline rather than trusting bytes nobody vouched
-    /// for (decision 4/5).
-    Unavailable { error: String },
+    /// false` with an error, a structured `reason` (D-P4-2; `None` only when
+    /// the frame answers a malformed request rather than reporting a store
+    /// state), and NO baseline claim, so the extension fails closed on its
+    /// deny baseline rather than trusting bytes nobody vouched for (decision
+    /// 4/5).
+    Unavailable {
+        reason: Option<PolicyUnavailableReason>,
+        error: String,
+    },
 }
 
 impl PolicyStatus {
     /// The pinned `policy_current` wire frame for this state: `baseline` is
-    /// present exactly when the store was readable, `error` exactly when not,
-    /// and a `sig` never appears without its `baseline`.
+    /// present exactly when the store was readable, `error` and the structured
+    /// `reason` exactly when not, and a `sig` never appears without its
+    /// `baseline`.
     pub fn into_frame(self) -> PolicyControl {
         match self {
             PolicyStatus::Present {
@@ -854,13 +893,15 @@ impl PolicyStatus {
                 baseline: Some(baseline_b64),
                 sig: sig_b64,
                 overlay,
+                reason: None,
                 error: None,
             },
-            PolicyStatus::Unavailable { error } => PolicyControl::PolicyCurrent {
+            PolicyStatus::Unavailable { reason, error } => PolicyControl::PolicyCurrent {
                 ok: false,
                 baseline: None,
                 sig: None,
                 overlay: None,
+                reason: reason.map(|r| r.wire().to_string()),
                 error: Some(error),
             },
         }
@@ -913,6 +954,13 @@ pub enum PolicyControl {
         /// fails the whole frame parse, fail closed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         overlay: Option<crate::policy::PolicyOverlay>,
+        /// Why no policy is available, when `ok: false` (ADR-0032 D-P4-2): the
+        /// camelCase [`PolicyUnavailableReason`] token (`absent`/`damaged`/
+        /// `unreadable`). ADDITIVE and OPTIONAL - an old host omits it and the
+        /// extension reads a missing field as "never send" (fail closed).
+        /// Absent on `ok: true`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -1254,10 +1302,10 @@ pub enum FrameDisposition {
     /// `policy_current` from the host store.
     PolicyGet,
     /// A well-formed `legacy_settings` (ADR-0032 decision 8): the snapshotted
-    /// legacy settings bag, recorded pending host-side and never applied.
-    /// Fire-and-forget, no reply. Phase 4 wires the pending-import store; this
-    /// lane only routes it off the forward path (an old host would have
-    /// classified it `Forward`, tearing the browser leg down).
+    /// legacy settings bag, recorded host-side as a pending import
+    /// ([`crate::pending_import`], first-bag-wins) and never applied.
+    /// Fire-and-forget, no reply. Routed off the forward path (an old host
+    /// would have classified it `Forward`, tearing the browser leg down).
     LegacySettings { bag: Value },
     /// A well-formed `lang_get` (ADR-0032 decision 7): answer with
     /// `lang_current` from the language store.
@@ -2493,6 +2541,7 @@ mod tests {
                 baseline: Some("YmFzZQ==".into()),
                 sig: Some("c2ln".into()),
                 overlay: Some(crate::policy::PolicyOverlay::default()),
+                reason: None,
                 error: None,
             },
             PolicyControl::LegacySettings { bag: json!({}) },
@@ -2656,6 +2705,7 @@ mod tests {
             baseline: Some("YmFzZQ==".into()),
             sig: Some("c2ln".into()),
             overlay: Some(crate::policy::PolicyOverlay::default()),
+            reason: Some("absent".into()),
             error: Some("e".into()),
         };
         let value = serde_json::to_value(&frame).unwrap();
@@ -2665,10 +2715,11 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect();
-        let expected: std::collections::BTreeSet<&str> =
-            ["type", "ok", "baseline", "sig", "overlay", "error"]
-                .into_iter()
-                .collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "type", "ok", "baseline", "sig", "overlay", "reason", "error",
+        ]
+        .into_iter()
+        .collect();
         assert_eq!(keys, expected);
     }
 
@@ -2712,6 +2763,7 @@ mod tests {
             other => panic!("unsigned present must carry the baseline and no sig: {other:?}"),
         }
         match (PolicyStatus::Unavailable {
+            reason: Some(PolicyUnavailableReason::Absent),
             error: "no policy baseline".into(),
         })
         .into_frame()
@@ -2721,8 +2773,9 @@ mod tests {
                 baseline: None,
                 sig: None,
                 overlay: None,
+                reason: Some(r),
                 error: Some(_),
-            } => {}
+            } => assert_eq!(r, "absent"),
             other => panic!("unavailable must be ok:false with no baseline claim: {other:?}"),
         }
     }

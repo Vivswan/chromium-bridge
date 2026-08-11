@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use crate::browsers::{self, BaseDirs, Os, HOST_ID};
 use crate::ipc::LockFile;
+use crate::pending_import::PendingImportReport;
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
 use crate::registration::{self, RegState};
 
@@ -45,6 +46,10 @@ struct Report {
     /// `error` is a present-but-unreadable store), so no outer `Result` is
     /// needed - `gather_policy_status` never fails.
     policy: PolicyStatusReport,
+    /// The pending legacy-settings import (ADR-0032 decision 8): the receipt
+    /// the app's first-run screen consumes. `none` is the ordinary state;
+    /// `error` is a present-but-unreadable receipt (fail closed).
+    pending_import: PendingImportReport,
 }
 
 /// The lock file's classification: exactly absent, present-but-unreadable, or
@@ -150,6 +155,7 @@ fn gather() -> Report {
         manifests: gather_manifests(),
         kill: crate::kill::is_killed().map_err(|e| e.to_string()),
         policy: crate::policy::gather_policy_status(),
+        pending_import: crate::pending_import::gather_pending_import(),
     }
 }
 
@@ -231,6 +237,24 @@ fn render(r: &Report) -> String {
         )),
     }
 
+    out.push_str("pending import:  ");
+    match &r.pending_import {
+        // No receipt is the ordinary state: nothing waiting to import.
+        PendingImportReport::None { .. } => out.push_str("none\n"),
+        PendingImportReport::Present { .. } => {
+            out.push_str("recorded (the app's first-run screen imports it, signing revision 1)\n")
+        }
+        PendingImportReport::Consumed { .. } => {
+            out.push_str("consumed (imported at the first signed baseline; the window is closed)\n")
+        }
+        PendingImportReport::Error { detail, .. } => out.push_str(&format!(
+            "present but UNREADABLE ({detail}) - ignored fail-closed\n  \
+             the file stays at {}; removing it REOPENS the one-time legacy-import\n  \
+             window, so only do that if you know no genuine import is pending\n",
+            crate::pending_import::path().display(),
+        )),
+    }
+
     out.push_str(&format!("native manifests: (host id {HOST_ID})\n"));
     match &r.manifests {
         Err(err) => out.push_str(&format!("  could not check: {err}\n")),
@@ -280,6 +304,17 @@ fn summary(r: &Report) -> &'static str {
     // NOT flip the verdict.
     if r.policy.store == PolicyStoreState::Error {
         return "policy store present but unreadable - failing closed; see docs/operations.md";
+    }
+    // An unreadable pending-import store is now LOAD-BEARING (ADR-0032 P4G-2):
+    // consuming it is a prerequisite of the first signed baseline, so a
+    // corrupt file refuses the user's first grant until it is dealt with.
+    // That is no longer a healthy state - surface it, with the remedy the row
+    // above already spells out (the file path + that removing it reopens the
+    // one-time import window). `none`/`present`/`consumed` never flip the
+    // verdict: those are ordinary states.
+    if matches!(r.pending_import, PendingImportReport::Error { .. }) {
+        return "pending import present but unreadable - it will refuse the first signed \
+                policy baseline; see the pending-import row above";
     }
     match &r.lock {
         LockState::Unreadable(_) => {
@@ -384,6 +419,7 @@ mod tests {
             ]),
             kill: Ok(false),
             policy: policy_report(PolicyStoreState::None),
+            pending_import: PendingImportReport::None { v: 1 },
         }
     }
 
@@ -462,6 +498,51 @@ mod tests {
     }
 
     #[test]
+    fn the_pending_import_row_renders_each_state() {
+        // None is the ordinary state.
+        let r = healthy_report();
+        assert!(render(&r).contains("pending import:  none"));
+        // A recorded receipt is surfaced without dumping the bag, and does not
+        // by itself flip the verdict (it is not a fail-closed state).
+        let mut present = healthy_report();
+        present.pending_import = PendingImportReport::Present {
+            v: 1,
+            bag: serde_json::json!({ "secretPref": true }),
+        };
+        let text = render(&present);
+        assert!(text.contains("pending import:  recorded"));
+        assert!(!text.contains("secretPref"), "the bag is never printed");
+        assert_eq!(exit_code(&present), 0);
+        // The consumed tombstone is a healthy, terminal state: the window is
+        // closed and no bag is ever shown for it.
+        let mut consumed = healthy_report();
+        consumed.pending_import = PendingImportReport::Consumed { v: 1 };
+        let consumed_text = render(&consumed);
+        assert!(consumed_text.contains("pending import:  consumed"));
+        assert_eq!(exit_code(&consumed), 0);
+        // A present-but-unreadable receipt is reported fail-closed (ignored;
+        // the file is never deleted here); the row names the file and warns
+        // that removing it reopens the import window, so the user makes that
+        // call knowingly. It IS now load-bearing (P4G-2: it refuses the first
+        // signed baseline), so it flips the verdict to non-healthy.
+        let mut broken = healthy_report();
+        broken.pending_import = PendingImportReport::Error {
+            v: 1,
+            detail: "pending import: bad".into(),
+        };
+        let broken_text = render(&broken);
+        assert!(broken_text.contains("pending import:  present but UNREADABLE"));
+        assert!(broken_text.contains("pending-import.json"));
+        assert!(broken_text.contains("REOPENS the one-time legacy-import"));
+        assert!(broken_text.contains("refuse the first signed"));
+        assert_eq!(
+            exit_code(&broken),
+            1,
+            "an unreadable pending import blocks the first grant, so it is not healthy"
+        );
+    }
+
+    #[test]
     fn manifest_on_undetected_browser_alone_is_not_healthy() {
         // A manifest registered only for a browser this user does not have
         // will never be read; the summary must say so instead of "OK".
@@ -490,6 +571,7 @@ mod tests {
             }]),
             kill: Ok(false),
             policy: policy_report(PolicyStoreState::None),
+            pending_import: PendingImportReport::None { v: 1 },
         };
         let text = render(&r);
         assert!(text.contains("manifest missing"));

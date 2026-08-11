@@ -131,6 +131,7 @@ export const PolicyCurrentWireSchema = z
         z.null(),
       ])
       .optional(),
+    "reason": z.union([z.string(), z.null()]).optional(),
     "sig": z.union([z.string(), z.null()]).optional(),
     "type": z.literal("policy_current"),
   })

@@ -2,8 +2,9 @@
 //! Fuzz the native-messaging control-frame classifier: the router that decides
 //! whether an extension-relayed frame is forwarded, handled locally, or
 //! dropped. It transitively exercises the typed EnclaveControl / AdminControl
-//! decodes, and the exhaustive match below makes a new disposition arm break
-//! this target rather than silently escape fuzz coverage.
+//! / PolicyControl decodes, and the exhaustive match below makes a new
+//! disposition arm break this target rather than silently escape fuzz
+//! coverage.
 use libfuzzer_sys::fuzz_target;
 
 use chromium_bridge_core::protocol::{classify_nm_frame, FrameDisposition};
@@ -24,9 +25,14 @@ fuzz_target!(|data: &[u8]| {
         | FrameDisposition::KillRelease
         | FrameDisposition::AuditEvent { .. }
         | FrameDisposition::DropForeignAuditKind { .. }
+        | FrameDisposition::PolicyGet
+        | FrameDisposition::LegacySettings { .. }
+        | FrameDisposition::LangGet
+        | FrameDisposition::LangSet { .. }
         | FrameDisposition::Drop(_)
         | FrameDisposition::Malformed
         | FrameDisposition::MalformedPresence
-        | FrameDisposition::MalformedAdmin(_) => {}
+        | FrameDisposition::MalformedAdmin(_)
+        | FrameDisposition::MalformedPolicy(_) => {}
     }
 });

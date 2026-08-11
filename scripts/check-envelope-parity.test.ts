@@ -8,12 +8,15 @@
 // caught even if the surrounding script changes.
 
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import {
   CLASSIFIED_TAGS,
   classifierCoverageProblems,
   FRAME_PLANS,
+  FRAME_REFINEMENTS,
   GROUPS,
   type Group,
+  refinementProblems,
 } from "./check-envelope-parity";
 
 // The Rust enum tags as the plan tables expect them; holding the real enum
@@ -70,5 +73,72 @@ describe("classifierCoverageProblems", () => {
     expect(problems).toEqual([
       "classifier: pinned outbound tag enclave_challenge is no longer classified by the enclave arrays",
     ]);
+  });
+});
+
+// The refinement-pin rule (FRAME_REFINEMENTS): a superRefine is invisible to
+// z.toJSONSchema, so the structural diff cannot police it - these tests prove
+// the behavioral pins refuse every way it could drift.
+describe("refinementProblems", () => {
+  test("today's real { zod } plans are clean against their pins", () => {
+    for (const group of GROUPS) {
+      for (const [tag, plan] of Object.entries(FRAME_PLANS[group])) {
+        if (typeof plan !== "object") continue;
+        const pins = FRAME_REFINEMENTS[tag as keyof typeof FRAME_REFINEMENTS] ?? [];
+        expect(refinementProblems(tag, plan.zod, pins)).toEqual([]);
+      }
+    }
+  });
+
+  test("an unpinned refinement riding a frame validator is refused", () => {
+    // THE regression this rule exists for: a superRefine added to a wrapped
+    // validator without a FRAME_REFINEMENTS pin would be invisible to the
+    // structural diff and could silently narrow (or fail to narrow) a
+    // security frame.
+    const sneaky = z.looseObject({ ok: z.boolean() }).superRefine(() => {});
+    const problems = refinementProblems("kill_status_result", sneaky, []);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("1 custom refinement(s)");
+    expect(problems[0]).toContain("pins 0");
+  });
+
+  test("a refinement NESTED below the frame level is counted too", () => {
+    // The count walk is recursive: a .refine buried on a property (or deeper)
+    // is exactly as invisible to z.toJSONSchema as a top-level superRefine,
+    // so it must demand a pin the same way.
+    const buried = z.looseObject({
+      ok: z.boolean(),
+      clients: z.array(z.looseObject({ name: z.string().refine((n) => n !== "x") })),
+    });
+    const problems = refinementProblems("client_list_result", buried, []);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("1 custom refinement(s)");
+    // Built-in checks (min length and friends) surface in the structural
+    // diff and are not counted as refinements.
+    const bounded = z.looseObject({ ok: z.boolean(), name: z.string().min(1).max(8) });
+    expect(refinementProblems("client_list_result", bounded, [])).toEqual([]);
+  });
+
+  test("a pinned refinement that vanished is refused (pins bind both ways)", () => {
+    const unrefined = z.looseObject({ type: z.literal("policy_current"), ok: z.boolean() });
+    const pins = FRAME_REFINEMENTS.policy_current ?? [];
+    expect(pins.length).toBeGreaterThan(0);
+    const problems = refinementProblems("policy_current", unrefined, pins);
+    expect(problems.join("\n")).toContain("pins 1");
+    // Without the refinement, the mixture probes parse: each is reported.
+    expect(problems.join("\n")).toContain("no longer refuses");
+  });
+
+  test("a pinned refinement that stopped firing is refused even at the right count", () => {
+    const inert = z
+      .looseObject({ type: z.literal("policy_current"), ok: z.boolean() })
+      .superRefine(() => {});
+    const pins = FRAME_REFINEMENTS.policy_current ?? [];
+    const problems = refinementProblems("policy_current", inert, pins);
+    // The count matches, so every problem is a probe the no-op let through.
+    expect(problems.length).toBeGreaterThan(0);
+    for (const problem of problems) {
+      expect(problem).toContain("no longer refuses");
+    }
   });
 });

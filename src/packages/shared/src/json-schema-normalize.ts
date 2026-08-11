@@ -235,6 +235,19 @@ const OPTIONAL_NONEMPTY_STRING: Reconciliation = {
   canonical: { type: "string" },
 };
 
+// policy_current.reason (ADR-0032 D-P4-2): the host frame field is
+// Option<String> (any string or absent, the serde null arm), while the
+// extension pins it to the structured {absent,damaged,unreadable} enum - the
+// send-once gates on reason==absent, so a value outside the enum reads as "not
+// the absent signal". The enum is a zod-side-only constraint (the rust field
+// does not constrain the string), so canonical drops it, like NONEMPTY_STRING
+// drops the zod-side minLength.
+const POLICY_REASON_FIELD: Reconciliation = {
+  rust: { type: ["string", "null"] },
+  zod: { type: "string", enum: ["absent", "damaged", "unreadable"] },
+  canonical: { type: "string" },
+};
+
 // policy_current.overlay: Option<policy::PolicyOverlay> on the Rust side (a
 // null arm around the strict all-optional overlay object, uint64 ms fields);
 // the Zod side is the GENERATED PolicyOverlaySchema (policy.gen.ts) - no
@@ -361,6 +374,7 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
     "$.properties.baseline": OPTIONAL_NONEMPTY_STRING,
     "$.properties.sig": OPTIONAL_NONEMPTY_STRING,
     "$.properties.overlay": OVERLAY_FIELD,
+    "$.properties.reason": POLICY_REASON_FIELD,
     "$.properties.error": OPTIONAL_STRING,
   },
   lang_current: {

@@ -38,7 +38,7 @@ use crate::ipc;
 use crate::protocol::{
     bridge_read, bridge_write, classify_nm_frame, host_control_type, nm_read_frame, nm_write_frame,
     AdminControl, AdminKind, AuditEventFields, EnclaveControl, FrameDisposition, KillStatus,
-    PolicyControl, PolicyKind, PolicyStatus,
+    PolicyControl, PolicyKind, PolicyStatus, PolicyUnavailableReason,
 };
 use crate::revocation::{Revocation, REVOCATION_POLL};
 use serde::Serialize;
@@ -303,13 +303,16 @@ fn policy_current_reply() -> PolicyControl {
                 overlay: store.overlay,
             },
             Err(e) => PolicyStatus::Unavailable {
+                reason: Some(PolicyUnavailableReason::Damaged),
                 error: format!("policy store damaged: {e}"),
             },
         },
         Ok(None) => PolicyStatus::Unavailable {
+            reason: Some(PolicyUnavailableReason::Absent),
             error: "no policy baseline on this host".into(),
         },
         Err(e) => PolicyStatus::Unavailable {
+            reason: Some(PolicyUnavailableReason::Unreadable),
             error: format!("policy store unreadable: {e}"),
         },
     };
@@ -369,6 +372,10 @@ fn malformed_policy_reply(kind: PolicyKind) -> Option<PolicyControl> {
     match kind {
         PolicyKind::PolicyGet => Some(
             PolicyStatus::Unavailable {
+                // A malformed REQUEST is not a store-availability state, so it
+                // carries no structured reason: the extension must not read a
+                // bad-frame reply as "no baseline, send the legacy import".
+                reason: None,
                 error: "malformed policy_get frame".into(),
             }
             .into_frame(),
@@ -785,16 +792,34 @@ fn handle_control_frame(
             write_control_reply(out, &policy_current_reply())?;
             Ok(Inbound::Handled)
         }
-        FrameDisposition::LegacySettings { bag: _ } => {
+        FrameDisposition::LegacySettings { bag } => {
             // ADR-0032 decision 8: the snapshotted legacy bag is recorded as a
-            // pending import, never applied. Phase 4 wires the pending-import
-            // store; for THIS lane the frame is only routed off the forward
-            // path (an old host would have Forwarded it, tearing the browser
-            // leg down) - accepted, no reply, no store yet.
-            log_info!(
-                "native-host",
-                "received legacy_settings; Phase 4 records the pending import (dropped for now)"
-            );
+            // pending import (first-bag-wins, D-P4-4), never applied. The frame
+            // owes no reply; the write fails closed (an oversize or unwritable
+            // receipt is logged and dropped, never crashes, never forwarded).
+            match crate::pending_import::record_if_absent(bag) {
+                Ok(crate::pending_import::RecordOutcome::Recorded) => {
+                    log_info!("native-host", "recorded the legacy settings pending import")
+                }
+                Ok(crate::pending_import::RecordOutcome::AlreadyPresent) => log_info!(
+                    "native-host",
+                    "legacy_settings received but a pending import already exists; dropped \
+                     (first-bag-wins)"
+                ),
+                Ok(crate::pending_import::RecordOutcome::AlreadyConsumed) => log_warn!(
+                    "native-host",
+                    "legacy_settings received after the import was consumed; dropped \
+                     (the import window is closed)"
+                ),
+                Ok(crate::pending_import::RecordOutcome::Oversize { bytes }) => log_warn!(
+                    "native-host",
+                    "legacy_settings bag is {bytes} bytes, over the pending-import cap; dropped"
+                ),
+                Err(e) => log_warn!(
+                    "native-host",
+                    "legacy_settings could not be recorded ({e}); dropped"
+                ),
+            }
             Ok(Inbound::Handled)
         }
         FrameDisposition::LangGet => {
@@ -1645,9 +1670,10 @@ mod tests {
                 ok: false,
                 baseline: None,
                 sig: None,
+                reason: Some(reason),
                 error: Some(_),
                 ..
-            } => {}
+            } => assert_eq!(reason, "absent"),
             other => panic!("absent store must answer ok:false with no baseline: {other:?}"),
         }
     }
@@ -1710,9 +1736,10 @@ mod tests {
                 ok: false,
                 baseline: None,
                 sig: None,
+                reason: Some(reason),
                 error: Some(_),
                 ..
-            } => {}
+            } => assert_eq!(reason, "damaged"),
             other => panic!("a damaged baseline must answer ok:false: {other:?}"),
         }
         // Valid baseline, tampered overlay relaxing it (direction-invalid).
@@ -1737,10 +1764,38 @@ mod tests {
                 ok: false,
                 baseline: None,
                 sig: None,
+                reason: Some(reason),
                 error: Some(e),
                 ..
-            } => assert!(e.contains("damaged")),
+            } => {
+                assert!(e.contains("damaged"));
+                assert_eq!(reason, "damaged");
+            }
             other => panic!("a tampered overlay must answer ok:false: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn policy_get_answers_ok_false_unreadable_on_a_damaged_store_envelope() {
+        // ADR-0032 D-P4-2: a store whose ENVELOPE cannot be read (wrong
+        // version here, an I/O failure in general) is distinct from an absent
+        // or a content-damaged store - it answers reason=unreadable, so the
+        // extension keeps its deny baseline and never mistakes it for the
+        // absent state that triggers the legacy import.
+        let _dir = RuntimeDirGuard::new("policy-get-unreadable");
+        std::fs::write(
+            crate::policy::PolicyStore::path(),
+            br#"{"version":99,"baseline_b64":"e30="}"#,
+        )
+        .unwrap();
+        match policy_current_reply() {
+            PolicyControl::PolicyCurrent {
+                ok: false,
+                reason: Some(reason),
+                error: Some(_),
+                ..
+            } => assert_eq!(reason, "unreadable"),
+            other => panic!("an unreadable store envelope must answer ok:false: {other:?}"),
         }
     }
 
