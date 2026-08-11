@@ -11,7 +11,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useAsync } from "@/hooks/useAsync";
+import { useEpochEvent } from "@/hooks/useEpochEvent";
 import { useI18n } from "@/hooks/useI18n";
+import { POLICY_EPOCH_EVENT } from "@/lib/epoch-events";
 import type { MessageKey } from "@/lib/i18n";
 import {
   changedFields,
@@ -91,6 +93,16 @@ export function PolicyEditor() {
   useEffect(() => {
     setDraft(anchor === undefined ? undefined : draftFromValues(anchor));
   }, [anchor]);
+
+  // A policy-epoch notice means a write actually landed (this app, the CLI,
+  // a rollback): re-read so the editor drafts against what is now enforced.
+  // Unlike a focus refresh, this clobbers an in-progress draft on purpose -
+  // finishing an edit against a superseded anchor would misstate what the
+  // apply dialog is about to show.
+  useEpochEvent(POLICY_EPOCH_EVENT, () => {
+    status.reload();
+    history.reload();
+  });
 
   const clearResults = () => {
     setActionError(undefined);

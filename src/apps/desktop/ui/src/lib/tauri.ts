@@ -16,7 +16,9 @@ import type {
   EnclaveStatusReport,
   ExtensionInfo,
   FirstRunReport,
+  LangState,
   McpSnippet,
+  PendingImportSurvey,
   PolicyHistoryReport,
   PolicyOutcome,
   PolicyOverlay,
@@ -55,12 +57,29 @@ export const api = {
   policyPlan: (overlay: PolicyOverlay) => invoke<PolicyPlan>("policy_plan", { overlay }),
   policyRestrict: (overlay: PolicyOverlay) =>
     invoke<PolicyStatusReport>("policy_restrict", { overlay }),
-  /** Signed grant lane (bundled host subprocess, Touch ID): call ONLY from
-   * the confirm handler of the explicit relax dialog. */
+  /** Signed grant lane: call ONLY from the confirm handler of the explicit
+   * relax/adopt dialog. Rust picks the lane: the bundled host subprocess
+   * (Touch ID) on an enrolled Mac, the app's documented unsigned floor on a
+   * genuinely unenrolled one, a refusal everywhere else. */
   policySet: (overlay: PolicyOverlay) => invoke<PolicyOutcome>("policy_set", { overlay }),
   /** May raise Touch ID (a relaxing rollback): same dialog-first obligation
    * as policySet. */
   policyRollback: (revision: number) => invoke<PolicyOutcome>("policy_rollback", { revision }),
+  /** The pending legacy-import state (ADR-0032 decision 8), READ-ONLY, with
+   * a present bag already mapped to a reviewable suggestion. Consuming
+   * happens only when revision 1 signs (policyAdopt / policySet). */
+  pendingImport: () => invoke<PendingImportSurvey>("pending_import"),
+  /** The import screen's Adopt: policySet behind a first-baseline gate (the
+   * reviewed suggestion can only ever become revision 1). Same dialog-first
+   * obligation as policySet. */
+  policyAdopt: (overlay: PolicyOverlay) => invoke<PolicyOutcome>("policy_adopt", { overlay }),
+  /** The shared language state; seq === 0 means never explicitly set. */
+  langCurrent: () => invoke<LangState>("lang_current"),
+  /** USER GESTURE ONLY (decision 7's echo-loop rule): call exclusively from
+   * the language picker's click handler, never from the path that applies an
+   * incoming lang-epoch event. lib/lang-sync.ts#chooseLanguage is the one
+   * sanctioned call site. */
+  langSet: (value: string) => invoke<LangState>("lang_set", { value }),
   browsersList: () => invoke<BrowserRow[]>("browsers_list"),
   browserRegister: (key: string) => invoke<string[]>("browser_register", { key }),
   browserUnregister: (key: string) => invoke<string>("browser_unregister", { key }),

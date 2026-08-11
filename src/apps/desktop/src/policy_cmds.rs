@@ -14,6 +14,17 @@
 //! document carries baseline values on fields it does not touch;
 //! `set_signed` refuses untouched-field drift).
 //!
+//! The one exception to the subprocess rule is the GENUINELY UNENROLLED Mac
+//! (the bundled host's `enclave-status` reports `supported && key == none`):
+//! there is no key to sign with anywhere, the CLI's signature-only lane
+//! refuses by design (decision 5), and the app is the one surface entitled
+//! to carry its interactive floor for the write - `set` then calls
+//! `set_signed` in-process with [`crate::presence_seam::APP_POLICY_FLOOR`],
+//! storing an UNSIGNED baseline after the webview's modal confirmation. Any
+//! other keyless state (invalid, unreadable, unsupported platform) refuses
+//! outright and points at enrollment/repair (fail closed, never a silent
+//! degrade).
+//!
 //! Direction classification (which edits tighten, which relax) is decided
 //! HERE, from the core's direction table - the webview only displays the
 //! verdict, it never computes which way a change points.
@@ -21,12 +32,13 @@
 use serde::Serialize;
 
 use chromium_bridge_core::cli::argv;
+use chromium_bridge_core::enclave::{EnclaveKeyState, EnclaveStatusReport};
 use chromium_bridge_core::policy::{
-    fold, gather_policy_status, relaxes, PolicyErrorReport, PolicyField, PolicyOverlay,
-    PolicyStatusReport, PolicyStoreState, PolicyValues,
+    fold, gather_policy_status, relaxes, set_signed, PolicyErrorReport, PolicyField, PolicyOverlay,
+    PolicyStatusReport, PolicyStore, PolicyStoreState, PolicyValues,
 };
 
-use crate::host;
+use crate::{host, presence_seam};
 
 /// One subprocess policy write, mirroring `EnclaveOutcome`: on success the
 /// post-write [`PolicyStatusReport`] the host printed under `--json`; on a
@@ -368,12 +380,143 @@ fn run_policy_op(mut args: Vec<String>) -> Result<PolicyOutcome, String> {
     })
 }
 
-/// The signed GRANT lane: `chromium-bridge policy set <field flags> --json`
-/// as a subprocess. The Touch ID sheet (and the keyless signature-only
-/// refusal, decision 5) is the subprocess's; this side only builds flags
-/// and parses the result.
+/// The signed GRANT lane's dispatcher: decide the lane from the bundled
+/// host's own `enclave-status` report, then either run
+/// `chromium-bridge policy set <field flags> --json` as a subprocess (a key
+/// exists; the Touch ID sheet and the keyless signature-only refusal,
+/// decision 5, are the subprocess's) or - on a GENUINELY unenrolled,
+/// Enclave-capable Mac - carry the app's interactive floor for the write
+/// ([`set_unenrolled_floor`]). Dialog-first obligation either way: only the
+/// webview's explicit confirm handler may reach this (see
+/// [`crate::presence_seam::APP_POLICY_FLOOR`]).
 pub fn set(overlay: PolicyOverlay) -> Result<PolicyOutcome, String> {
-    run_policy_op(set_args(&overlay)?)
+    // Build (and thereby validate) the argv first: an edit-less write never
+    // spawns the status subprocess either.
+    let args = set_args(&overlay)?;
+    let status = host::enclave_status_report()
+        .map_err(|e| format!("cannot decide the policy grant lane: {e}; refusing"))?;
+    match grant_lane(&status)? {
+        GrantLane::SignedSubprocess => run_policy_op(args),
+        GrantLane::UnenrolledAppFloor => Ok(set_unenrolled_floor(overlay)),
+    }
+}
+
+/// Which lane a policy grant takes on this machine (ADR-0032 decision 5).
+#[derive(Debug, PartialEq, Eq)]
+enum GrantLane {
+    /// A usable enrollment key exists: the signed subprocess lane. A Touch
+    /// ID refusal there is terminal - never downgraded to the floor.
+    SignedSubprocess,
+    /// Genuine unenrollment (`supported && key == none`): the hardware rung
+    /// is UNAVAILABLE, so the app's documented interactive floor
+    /// ([`crate::presence_seam::APP_POLICY_FLOOR`]) may carry the write.
+    UnenrolledAppFloor,
+}
+
+/// The lane decision, pure over the host's report so it is unit-testable
+/// without a subprocess. The authority is the bundled SIGNED host's
+/// `enclave-status` - never an in-process keychain lookup, which (from this
+/// unentitled app) could misread an enrolled machine as keyless and degrade
+/// a signable write to the unsigned floor. Anything that is not provably
+/// "key present" or provably "supported and keyless" refuses (fail closed)
+/// and says what to do instead of degrading silently.
+fn grant_lane(report: &EnclaveStatusReport) -> Result<GrantLane, String> {
+    match report.key {
+        EnclaveKeyState::Present => Ok(GrantLane::SignedSubprocess),
+        EnclaveKeyState::None if report.supported => Ok(GrantLane::UnenrolledAppFloor),
+        // key == none on an unsupported platform should not occur (the host
+        // reports Unsupported for the key too); refuse rather than guess.
+        EnclaveKeyState::None => Err(
+            "the host reports no enclave key on a platform without a Secure Enclave; \
+             refusing to store a policy baseline (non-macOS ships no grant surface, \
+             ADR-0032 decision 8)"
+                .to_string(),
+        ),
+        EnclaveKeyState::Invalid => Err(format!(
+            "the enrollment key is REJECTED as untrusted ({}); refusing to write policy. \
+             Replace it with `chromium-bridge pair --reset`.",
+            report.detail.as_deref().unwrap_or("no detail")
+        )),
+        EnclaveKeyState::Unsupported => Err(
+            "this platform has no Secure Enclave, so a policy grant cannot be signed and \
+             the app refuses (non-macOS ships no grant surface, ADR-0032 decision 8)"
+                .to_string(),
+        ),
+        EnclaveKeyState::Error => Err(format!(
+            "the enclave key state is unreadable ({}); refusing to write policy (fail closed)",
+            report.detail.as_deref().unwrap_or("no detail")
+        )),
+    }
+}
+
+/// The unenrolled-Mac write (ADR-0032 decision 5): the app is the one
+/// surface entitled to store an UNSIGNED baseline where hardware presence is
+/// genuinely unavailable, and only after its own modal confirmation - the
+/// [`crate::presence_seam::APP_POLICY_FLOOR`] obligations. Runs in-process
+/// (`set_signed` needs no keychain on this path), folding the edits over the
+/// current BASELINE (decision 3) exactly like the CLI's set lane, and
+/// returns the same [`PolicyOutcome`] shape the subprocess lane produces so
+/// the webview renders both identically.
+///
+/// Residual, named: a key enrolled between the lane decision and this write
+/// is NOT reliably detected. `set_signed` retries the hardware rung first,
+/// but from this unentitled app process a real enrolled key can be
+/// indistinguishable from absence (the keychain answers not-found without
+/// the access-group entitlement), which maps to `Unavailable` and takes the
+/// floor. What bounds the window: the lane decision is host-authored (the
+/// signed host's own `enclave-status`, never this process's keychain view),
+/// it runs back-to-back with this write inside one [`set`] call with no
+/// user interaction between, and a pinned extension rejects an unsigned
+/// baseline outright - so an unsigned baseline written around a real key is
+/// refused at the boundary that matters. This residual belongs in the Phase
+/// 5 SECURITY.md threat model alongside the other same-user concessions.
+fn set_unenrolled_floor(overlay: PolicyOverlay) -> PolicyOutcome {
+    match floor_write(overlay) {
+        Ok(()) => PolicyOutcome {
+            ok: true,
+            transcript: "unsigned baseline stored via the app's confirmation floor (this \
+                         Mac has no enclave key). Enroll with `chromium-bridge pair` (or \
+                         the Browsers screen) to sign future baselines."
+                .to_string(),
+            status: Some(gather_policy_status()),
+        },
+        Err(e) => PolicyOutcome {
+            ok: false,
+            transcript: e,
+            status: None,
+        },
+    }
+}
+
+/// The floor write's work, output-free (the `do_set` shape from the core's
+/// CLI): fold over the baseline, name the touched fields, write through the
+/// one shared grant seam.
+fn floor_write(overlay: PolicyOverlay) -> Result<(), String> {
+    let touched: Vec<PolicyField> = PolicyField::ALL
+        .iter()
+        .copied()
+        .filter(|f| field_edit(&overlay, *f).is_some())
+        .collect();
+    if touched.is_empty() {
+        return Err("policy set: the edit names no fields".to_string());
+    }
+    let base = match PolicyStore::load() {
+        Ok(Some(store)) => store
+            .baseline_doc()
+            .map_err(|e| format!("the current baseline is unreadable ({e}); refusing"))?
+            .values(),
+        Ok(None) => PolicyValues::default(),
+        Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
+    };
+    let values = fold(&base, &overlay);
+    set_signed(
+        values,
+        touched,
+        chromium_bridge_core::audit::Surface::Core,
+        presence_seam::APP_POLICY_FLOOR,
+    )
+    .map(|_rung| ())
+    .map_err(|e| e.to_string())
 }
 
 /// `chromium-bridge policy rollback --revision <n> --json` as a subprocess:
@@ -387,6 +530,49 @@ pub fn rollback(revision: u64) -> Result<PolicyOutcome, String> {
         argv::POLICY_REVISION_FLAG.to_string(),
         revision.to_string(),
     ])
+}
+
+/// The import screen's Adopt lane (ADR-0032 decision 8): [`set`] behind a
+/// first-baseline gate. The user confirmed "sign the imported settings as
+/// REVISION 1", so a baseline that appeared since the screen surveyed (this
+/// app's editor, the CLI, another window) refuses instead of silently
+/// re-signing the reviewed values as revision 2 over a write the user never
+/// saw. The gate re-reads immediately before the write, shrinking the
+/// exposed window from the dialog's dwell time to the write's own start;
+/// from `set_signed`'s pre-prompt observation onward the core's Conflict
+/// re-check covers the rest. The sliver between this gate and that
+/// observation stays open - both racers are the user's own approved writes
+/// (each behind its own dialog and prompt), so a collision there re-signs
+/// user-reviewed values, never anything unattended.
+pub fn adopt(overlay: PolicyOverlay) -> Result<PolicyOutcome, String> {
+    if let Err(refusal) = adopt_gate(gather_policy_status().store) {
+        return Ok(PolicyOutcome {
+            ok: false,
+            transcript: refusal,
+            status: None,
+        });
+    }
+    set(overlay)
+}
+
+/// The first-baseline gate, pure over the store state: only the
+/// no-baseline-yet state may adopt (revision 1 is what consumes the pending
+/// import); an existing baseline means the window already closed, and an
+/// unreadable store refuses (fail closed).
+fn adopt_gate(store: PolicyStoreState) -> Result<(), String> {
+    match store {
+        PolicyStoreState::None => Ok(()),
+        PolicyStoreState::Present => Err(
+            "a policy baseline already exists, so the one-time import window is closed; \
+             nothing was signed. Manage policy in Security."
+                .to_string(),
+        ),
+        PolicyStoreState::Error => Err(
+            "the policy store is unreadable; refusing to sign the imported settings \
+             (fail closed)"
+                .to_string(),
+        ),
+    }
 }
 
 /// The FREE lane, in-process: `policy::restrict` needs no attestation and
@@ -644,5 +830,68 @@ mod tests {
         let err = parse_policy_error_json(r#"{"v":1,"error":"x","surprise":1}"#)
             .expect_err("an unknown field must be refused");
         assert!(err.contains("unexpected error shape"), "got: {err}");
+    }
+
+    /// A minimal `enclave-status` report with the given key state and
+    /// platform support, for driving [`grant_lane`] purely.
+    fn enclave_report(key: EnclaveKeyState, supported: bool) -> EnclaveStatusReport {
+        EnclaveStatusReport {
+            v: 1,
+            supported,
+            key_label: "label".into(),
+            key,
+            public_key_b64: None,
+            fingerprint: None,
+            detail: Some("detail words".into()),
+            policy: None,
+            policy_error: None,
+        }
+    }
+
+    #[test]
+    fn grant_lane_takes_the_signed_subprocess_where_a_key_exists() {
+        assert_eq!(
+            grant_lane(&enclave_report(EnclaveKeyState::Present, true)).unwrap(),
+            GrantLane::SignedSubprocess
+        );
+    }
+
+    #[test]
+    fn grant_lane_floors_only_genuine_unenrollment() {
+        // supported && key == none is the ONE state entitled to the app's
+        // interactive floor (ADR-0032 decision 5).
+        assert_eq!(
+            grant_lane(&enclave_report(EnclaveKeyState::None, true)).unwrap(),
+            GrantLane::UnenrolledAppFloor
+        );
+    }
+
+    #[test]
+    fn grant_lane_refuses_every_ambiguous_or_unsupported_state() {
+        // Fail closed with a pointer at the fix, never a silent degrade to
+        // the unsigned floor.
+        let err = grant_lane(&enclave_report(EnclaveKeyState::Invalid, true)).unwrap_err();
+        assert!(err.contains("pair --reset"), "got: {err}");
+        assert!(err.contains("detail words"), "got: {err}");
+        let err = grant_lane(&enclave_report(EnclaveKeyState::Error, true)).unwrap_err();
+        assert!(err.contains("fail closed"), "got: {err}");
+        let err = grant_lane(&enclave_report(EnclaveKeyState::Unsupported, false)).unwrap_err();
+        assert!(err.contains("no Secure Enclave"), "got: {err}");
+        // key == none but unsupported: contradictory, refused, never floored.
+        assert!(grant_lane(&enclave_report(EnclaveKeyState::None, false)).is_err());
+    }
+
+    #[test]
+    fn adopt_gate_admits_only_the_no_baseline_state() {
+        // Revision 1 is what consumes the pending import: an existing
+        // baseline means the window closed and Adopt must refuse rather than
+        // re-sign the reviewed values as revision 2; an unreadable store
+        // fails closed.
+        assert!(adopt_gate(PolicyStoreState::None).is_ok());
+        let err = adopt_gate(PolicyStoreState::Present).unwrap_err();
+        assert!(err.contains("already exists"), "got: {err}");
+        assert!(err.contains("nothing was signed"), "got: {err}");
+        let err = adopt_gate(PolicyStoreState::Error).unwrap_err();
+        assert!(err.contains("fail closed"), "got: {err}");
     }
 }

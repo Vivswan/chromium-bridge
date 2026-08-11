@@ -13,6 +13,7 @@ export const zh_TW: Record<MessageKey, string> = {
   "nav.security": "安全性",
   "nav.audit": "稽核",
   "nav.setup": "設定",
+  "nav.import": "舊設定匯入",
   "nav.kill": "緊急停止",
   "nav.kill_engaged": "已停止",
 
@@ -343,4 +344,32 @@ export const zh_TW: Record<MessageKey, string> = {
   "setup.cli_update": "指向本應用程式",
   "setup.cli_uninstall": "解除安裝",
   "setup.cli_uninstall_consequence": "解除安裝會移除 $1; 終端機工作流程將停止運作。",
+
+  "import.sub": "擴充功能在主機原則之前使用的設定, 等待審查。在你簽署之前不會套用任何內容。",
+  "import.none_body":
+    "沒有等待中的舊設定。只有當擴充功能的設定快照等待審查時, 此畫面才會提供匯入。",
+  "import.consumed_body":
+    "一次性匯入已經完成 - 原則基線已存在, 匯入視窗已永久關閉。請在「安全」中管理原則。",
+  "import.error_body": "無法讀取已記錄的舊設定 ($1) - 以失敗關閉處理。不提供任何匯入。",
+  "import.review_title": "已記錄的舊設定",
+  "import.review_note": "擴充功能一次性送出的快照。它只是建議; 在你簽署之前, 拒絕基線持續生效。",
+  "import.changed": "與預設值不同",
+  "import.default_was": "拒絕預設值: $1",
+  "import.tools_none": "(無)",
+  "import.ignored_note": "未匯入 (瀏覽器自有、未知或格式錯誤):",
+  "import.empty_mapping":
+    "快照中沒有可用的原則欄位。採用會將拒絕預設值簽署為修訂版 1 並關閉匯入視窗。",
+  "import.adopt": "採用並簽署",
+  "import.skip": "暫時不要",
+  "import.skip_note": "在簽署首個基線之前 (在此處或「安全」中), 此提議會一直保留。",
+  "import.floor_banner":
+    "這台 Mac 沒有 Enclave 金鑰, 因此採用會在你於應用程式內確認後儲存一個未簽署的首個基線。若想要簽署, 請先在「瀏覽器」中配對。",
+  "import.blocked": "無法採用 - Enclave 金鑰狀態異常 ($1)。請先在「瀏覽器」中修復。",
+  "import.adopt_dialog_title": "將匯入的設定簽署為修訂版 1?",
+  "import.adopt_relaxes": "這些欄位將比拒絕基線更寬鬆:",
+  "import.adopt_dialog_body_signed":
+    "這會將審查過的值簽署為首個原則基線並關閉匯入視窗。在有 Touch ID 的 Mac 上會要求你的指紋。",
+  "import.adopt_dialog_body_floor":
+    "這台 Mac 沒有 Enclave 金鑰: 確認後, 審查過的值會作為未簽署的首個基線儲存, 匯入視窗隨之關閉。之後註冊即可為後續基線簽署。",
+  "import.adopt_confirm": "採用",
 };

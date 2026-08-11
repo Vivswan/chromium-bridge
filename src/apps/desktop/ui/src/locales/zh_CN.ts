@@ -13,6 +13,7 @@ export const zh_CN: Record<MessageKey, string> = {
   "nav.security": "安全",
   "nav.audit": "审计",
   "nav.setup": "设置",
+  "nav.import": "旧设置导入",
   "nav.kill": "紧急停止",
   "nav.kill_engaged": "已停止",
 
@@ -342,4 +343,31 @@ export const zh_CN: Record<MessageKey, string> = {
   "setup.cli_update": "指向本应用",
   "setup.cli_uninstall": "卸载",
   "setup.cli_uninstall_consequence": "卸载会移除 $1; 终端工作流将停止工作。",
+
+  "import.sub": "扩展在主机策略之前使用的设置, 等待审查。在你签署之前不会应用任何内容。",
+  "import.none_body": "没有等待中的旧设置。只有当扩展的设置快照等待审查时, 此屏幕才会提供导入。",
+  "import.consumed_body":
+    "一次性导入已经完成 - 策略基线已存在, 导入窗口已永久关闭。请在「安全」中管理策略。",
+  "import.error_body": "无法读取已记录的旧设置 ($1) - 按失败关闭处理。不提供任何导入。",
+  "import.review_title": "已记录的旧设置",
+  "import.review_note": "扩展一次性发送的快照。它只是建议; 在你签署之前, 拒绝基线继续生效。",
+  "import.changed": "与默认值不同",
+  "import.default_was": "拒绝默认值: $1",
+  "import.tools_none": "(无)",
+  "import.ignored_note": "未导入 (浏览器自有、未知或格式错误):",
+  "import.empty_mapping":
+    "快照中没有可用的策略字段。采用将把拒绝默认值签署为修订版 1 并关闭导入窗口。",
+  "import.adopt": "采用并签署",
+  "import.skip": "暂不",
+  "import.skip_note": "在签署首个基线之前 (在此处或「安全」中), 此提议将一直保留。",
+  "import.floor_banner":
+    "此 Mac 没有 Enclave 密钥, 因此采用会在你应用内确认后存储一个未签名的首个基线。若希望签名, 请先在「浏览器」中配对。",
+  "import.blocked": "无法采用 - Enclave 密钥状态异常 ($1)。请先在「浏览器」中修复。",
+  "import.adopt_dialog_title": "将导入的设置签署为修订版 1?",
+  "import.adopt_relaxes": "这些字段将比拒绝基线更宽松:",
+  "import.adopt_dialog_body_signed":
+    "这会将审查过的值签署为首个策略基线并关闭导入窗口。在有 Touch ID 的 Mac 上会要求你的指纹。",
+  "import.adopt_dialog_body_floor":
+    "此 Mac 没有 Enclave 密钥: 确认后, 审查过的值将作为未签名的首个基线存储, 导入窗口随之关闭。之后注册即可为后续基线签名。",
+  "import.adopt_confirm": "采用",
 };

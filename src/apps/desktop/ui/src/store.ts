@@ -5,11 +5,17 @@
 import { create } from "zustand";
 import { api, type BridgeStatus, errorText } from "@/lib/tauri";
 
-export type View = "overview" | "browsers" | "clients" | "security" | "audit" | "setup";
+export type View = "overview" | "browsers" | "clients" | "security" | "audit" | "setup" | "import";
 
 interface AppState {
   view: View;
   setView: (view: View) => void;
+  /** Whether the first-run legacy import needs the user's attention (a
+   * pending bag awaits review, or the pending store is unreadable). Drives
+   * the conditional nav entry; the ImportView owns the actual state and
+   * keeps this in sync from every fresh survey. */
+  importAttention: boolean;
+  setImportAttention: (importAttention: boolean) => void;
   status: BridgeStatus | undefined;
   statusError: string | undefined;
   /** False whenever the LATEST refresh failed: `status` is then a stale
@@ -42,6 +48,8 @@ let statusSeq = 0;
 export const useAppStore = create<AppState>((set) => ({
   view: "overview",
   setView: (view) => set({ view }),
+  importAttention: false,
+  setImportAttention: (importAttention) => set({ importAttention }),
   status: undefined,
   statusError: undefined,
   statusFresh: false,

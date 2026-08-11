@@ -67,6 +67,14 @@ fn export_commands_gen_ts() {
     push::<chromium_bridge_core::policy::PolicyOverlay>(&mut out, &cfg);
     push::<crate::policy_cmds::PolicyPlan>(&mut out, &cfg);
     push::<crate::policy_cmds::PolicyOutcome>(&mut out, &cfg);
+    // First-run legacy import (ADR-0032 decision 8): the core's report (the
+    // exact `policy pending-import --json` object) precedes the app's survey,
+    // which embeds the mapped suggestion.
+    push::<chromium_bridge_core::pending_import::PendingImportReport>(&mut out, &cfg);
+    push::<crate::import_cmds::ImportSuggestion>(&mut out, &cfg);
+    push::<crate::import_cmds::PendingImportSurvey>(&mut out, &cfg);
+    // Shared language (ADR-0032 decision 7).
+    push::<crate::epochs::LangState>(&mut out, &cfg);
     // Native-messaging registration.
     push::<crate::registration_cmds::RegCode>(&mut out, &cfg);
     push::<crate::registration_cmds::BrowserRow>(&mut out, &cfg);

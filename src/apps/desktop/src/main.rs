@@ -16,7 +16,9 @@
 
 mod cli_tool;
 mod clients;
+mod epochs;
 mod host;
+mod import_cmds;
 mod killswitch;
 mod policy_cmds;
 mod presence_seam;
@@ -137,10 +139,14 @@ async fn policy_restrict(
     blocking(move || policy_cmds::restrict(overlay)).await
 }
 
-/// The signed GRANT lane, via the bundled host subprocess (Touch ID
-/// attributes to the signed host, ADR-0026). Same dialog-first obligation
-/// as `kill_release`: only the app's explicit confirm handler may invoke
-/// this, after the user has seen exactly which fields relax.
+/// The signed GRANT lane (ADR-0026 / ADR-0032 decision 5). Same dialog-first
+/// obligation as `kill_release`: only the app's explicit confirm handler may
+/// invoke this, after the user has seen exactly which fields relax. On an
+/// enrolled Mac it runs the bundled host subprocess (Touch ID attributes to
+/// the signed host); on a GENUINELY unenrolled, Enclave-capable Mac it
+/// carries the app's documented interactive floor instead
+/// (`presence_seam::APP_POLICY_FLOOR`), storing an unsigned baseline; every
+/// other keyless state refuses (fail closed).
 #[tauri::command]
 async fn policy_set(
     overlay: chromium_bridge_core::policy::PolicyOverlay,
@@ -153,6 +159,42 @@ async fn policy_set(
 #[tauri::command]
 async fn policy_rollback(revision: u64) -> Result<policy_cmds::PolicyOutcome, String> {
     blocking(move || policy_cmds::rollback(revision)).await
+}
+
+// ---- first-run legacy import (ADR-0032 decision 8) -------------------------------
+
+/// The pending legacy-import state, read from the bundled host
+/// (`policy pending-import --json`, READ-ONLY) with a present bag already
+/// mapped to a reviewable suggestion. Consuming happens only when revision 1
+/// signs (`policy_adopt` / `policy_set`), never here.
+#[tauri::command]
+async fn pending_import() -> Result<import_cmds::PendingImportSurvey, String> {
+    blocking(import_cmds::survey).await
+}
+
+/// The import screen's Adopt: `policy_set` behind a first-baseline gate, so
+/// the reviewed suggestion can only ever become revision 1 (which consumes
+/// the pending import). Same dialog-first obligation as `policy_set`.
+#[tauri::command]
+async fn policy_adopt(
+    overlay: chromium_bridge_core::policy::PolicyOverlay,
+) -> Result<policy_cmds::PolicyOutcome, String> {
+    blocking(move || policy_cmds::adopt(overlay)).await
+}
+
+// ---- shared language (ADR-0032 decision 7) ----------------------------------------
+
+#[tauri::command]
+async fn lang_current() -> Result<epochs::LangState, String> {
+    blocking(epochs::lang_current).await
+}
+
+/// USER GESTURE ONLY: the webview may call this exclusively from the
+/// language picker's click handler, never from the path that applies an
+/// incoming `lang-epoch-changed` event (the echo-loop rule, decision 7).
+#[tauri::command]
+async fn lang_set(value: String) -> Result<epochs::LangState, String> {
+    blocking(move || epochs::lang_set(&value)).await
 }
 
 // ---- native-messaging registration ---------------------------------------------
@@ -290,6 +332,14 @@ async fn audit_reveal() -> Result<(), String> {
 
 fn main() {
     let outcome = tauri::Builder::default()
+        .setup(|app| {
+            // One background watch for both epochs (D-P4-1): policy_epoch
+            // for the editor and the import screen, lang_epoch for the
+            // language sync. Events are change notices; commands stay
+            // pull-based.
+            epochs::spawn_epoch_watch(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             bridge_status,
             enclave_status,
@@ -302,6 +352,10 @@ fn main() {
             policy_restrict,
             policy_set,
             policy_rollback,
+            pending_import,
+            policy_adopt,
+            lang_current,
+            lang_set,
             browsers_list,
             browser_register,
             browser_unregister,

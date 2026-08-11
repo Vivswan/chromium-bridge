@@ -649,6 +649,7 @@ pub fn run_policy(args: &[String]) -> i32 {
     match cmd {
         PolicyCommand::Show { json } => run_show(json),
         PolicyCommand::History { json } => run_history(json),
+        PolicyCommand::PendingImport { json } => run_pending_import(json),
         PolicyCommand::Set {
             overlay,
             touched,
@@ -735,6 +736,65 @@ fn run_history(json: bool) -> i32 {
             1
         }
     }
+}
+
+/// `policy pending-import [--json]`: the pending legacy import's state
+/// (ADR-0032 decision 8), READ-ONLY - the gather is exactly the fail-closed
+/// read the desktop app's first-run import screen consumes; nothing here can
+/// record, consume, or repair the store. `--json` emits the versioned
+/// [`crate::pending_import::PendingImportReport`] through `Value` (sorted
+/// keys, the status-report precedent) and is the ONLY mode that prints the
+/// bag: stdout is the payload, and the prose rendering deliberately reports
+/// state without bag content (the bag is reviewed in the app, not dumped on
+/// a terminal).
+fn run_pending_import(json: bool) -> i32 {
+    let report = crate::pending_import::gather_pending_import();
+    if json {
+        match serde_json::to_value(&report) {
+            Ok(value) => {
+                println!("{value}");
+                0
+            }
+            Err(e) => {
+                eprintln!("policy pending-import --json failed to serialize the report: {e}");
+                1
+            }
+        }
+    } else {
+        print!("{}", render_pending_import(&report));
+        0
+    }
+}
+
+/// The human `policy pending-import` text. Never includes the bag (see
+/// [`run_pending_import`]); a present bag is reported by size only.
+fn render_pending_import(r: &crate::pending_import::PendingImportReport) -> String {
+    use crate::pending_import::PendingImportReport;
+    let mut out = String::from("chromium-bridge policy pending-import\n");
+    match r {
+        PendingImportReport::None { .. } => {
+            out.push_str("state:      none (no legacy settings recorded)\n");
+        }
+        PendingImportReport::Present { bag, .. } => {
+            let bytes = serde_json::to_vec(bag).map(|b| b.len()).unwrap_or(0);
+            out.push_str(&format!(
+                "state:      present ({bytes} bytes recorded; review and adopt it in the \
+                 desktop app, or re-run with --json)\n"
+            ));
+        }
+        PendingImportReport::Consumed { .. } => {
+            out.push_str(
+                "state:      consumed (the one-time import already happened; the window \
+                 is closed)\n",
+            );
+        }
+        PendingImportReport::Error { detail, .. } => {
+            out.push_str(&format!(
+                "state:      present but UNREADABLE ({detail}) - failing closed\n"
+            ));
+        }
+    }
+    out
 }
 
 /// `policy set <field flags> [--json]`: the GRANT lane. The keyless refusal
@@ -1121,6 +1181,35 @@ mod tests {
         assert_eq!(r.entries[1].revision, None);
         assert!(!r.entries[1].signed);
         assert_eq!(r.entries[1].superseded_unix, 222);
+    }
+
+    #[test]
+    fn pending_import_prose_reports_every_state_without_the_bag() {
+        use crate::pending_import::PendingImportReport;
+        // Prose mode NEVER prints the bag - stdout is only the payload under
+        // --json - so a secret-looking value in the recorded bag must not
+        // appear in the rendering, only its size.
+        let present = render_pending_import(&PendingImportReport::Present {
+            v: 1,
+            bag: serde_json::json!({ "secretish": "hunter2" }),
+        });
+        assert!(present.contains("present"), "got: {present}");
+        assert!(!present.contains("hunter2"), "got: {present}");
+        assert!(!present.contains("secretish"), "got: {present}");
+        assert!(
+            render_pending_import(&PendingImportReport::None { v: 1 }).contains("none"),
+            "the healthy no-receipt state renders as none"
+        );
+        assert!(
+            render_pending_import(&PendingImportReport::Consumed { v: 1 }).contains("consumed")
+        );
+        let error = render_pending_import(&PendingImportReport::Error {
+            v: 1,
+            detail: "version 99 is not supported".into(),
+        });
+        assert!(error.contains("UNREADABLE"), "got: {error}");
+        assert!(error.contains("failing closed"), "got: {error}");
+        assert!(error.contains("version 99"), "got: {error}");
     }
 
     #[test]

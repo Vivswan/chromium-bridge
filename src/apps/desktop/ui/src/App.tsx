@@ -1,5 +1,6 @@
 import {
   Cable,
+  FileInput,
   Globe,
   LayoutGrid,
   Power,
@@ -16,6 +17,7 @@ import { useAppStore, type View } from "@/store";
 import { AuditView } from "@/views/AuditView";
 import { BrowsersView } from "@/views/BrowsersView";
 import { ClientsView } from "@/views/ClientsView";
+import { ImportView } from "@/views/ImportView";
 import { OverviewView } from "@/views/OverviewView";
 import { SecurityView } from "@/views/SecurityView";
 import { SetupView } from "@/views/SetupView";
@@ -36,8 +38,34 @@ export function App() {
   const status = useAppStore((s) => s.status);
   const refreshStatus = useAppStore((s) => s.refreshStatus);
   const setReleasedBy = useAppStore((s) => s.setReleasedBy);
+  const importAttention = useAppStore((s) => s.importAttention);
+  const setImportAttention = useAppStore((s) => s.setImportAttention);
   const [killBusy, setKillBusy] = useState(false);
   const [killError, setKillError] = useState<string>();
+
+  // First-run legacy import (ADR-0032 decision 8): one startup probe. While
+  // a recorded bag awaits review - or the state cannot be determined (an
+  // unreadable store, a failed probe: both fail-closed notices the user
+  // should see) - the import screen opens and its nav entry appears; the
+  // offer keeps reappearing each launch until a first baseline signs (which
+  // consumes the import). Only a clean none/consumed answer stays quiet.
+  useEffect(() => {
+    api.pendingImport().then(
+      (survey) => {
+        if (survey.state === "present" || survey.state === "error") {
+          setImportAttention(true);
+          setView("import");
+        }
+      },
+      () => {
+        // The probe itself failed (no bundled host, a newer report schema):
+        // surface it on the import screen rather than silently hiding the
+        // offer - the screen re-runs the read and shows the exact error.
+        setImportAttention(true);
+        setView("import");
+      },
+    );
+  }, [setImportAttention, setView]);
 
   // Shared status: fetched on start, refreshed on window focus (the cheap,
   // event-driven alternative to polling for a control panel).
@@ -103,6 +131,17 @@ export function App() {
             </button>
           );
         })}
+        {(importAttention || view === "import") && (
+          <button
+            type="button"
+            className={cn("nav-item", view === "import" && "active")}
+            aria-current={view === "import" ? "page" : undefined}
+            onClick={() => setView("import")}
+          >
+            <FileInput size={14} strokeWidth={1.6} aria-hidden />
+            {t("nav.import")}
+          </button>
+        )}
         <div className="nav-spacer" />
         {killError !== undefined && (
           <p role="alert" className="mono m-0 mb-1 px-1 text-[10px] text-danger">
@@ -127,6 +166,7 @@ export function App() {
         {view === "security" && <SecurityView />}
         {view === "audit" && <AuditView />}
         {view === "setup" && <SetupView />}
+        {view === "import" && <ImportView />}
       </main>
     </div>
   );

@@ -318,6 +318,118 @@ export type PolicyOutcome = {
 };
 
 /**
+ * The typed, versioned pending-import status for the desktop app's first-run
+ * import screen (ADR-0032 decision 8), gathered fail-closed from the store -
+ * the same read discipline as [`crate::policy::gather_policy_status`], and
+ * the exact object `chromium-bridge policy pending-import --json` prints
+ * (the [`crate::policy::PolicyStatusReport`] pattern: one Rust definition,
+ * ts_rs-exported, emitted by the host and parsed back by the app). A
+ * tagged sum like the on-disk record, so an impossible combination (a
+ * `consumed` answer smuggling a bag, an `error` with no detail) cannot even
+ * deserialize: `none` is the ordinary no-receipt state (healthy), `present`
+ * is the only arm that carries the recorded bag, `consumed` is the
+ * post-import tombstone (structurally bagless), `error` is a
+ * present-but-unreadable receipt (fail closed).
+ */
+export type PendingImportReport =
+  | {
+      "state": "none";
+      /**
+       * Schema version; see [`PENDING_IMPORT_REPORT_VERSION`].
+       */
+      v: number;
+    }
+  | {
+      "state": "present";
+      /**
+       * Schema version; see [`PENDING_IMPORT_REPORT_VERSION`].
+       */
+      v: number;
+      /**
+       * The recorded legacy settings bag. Untrusted free-form JSON
+       * (`unknown` on the TS side): a suggestion the user reviews, never
+       * applied as policy.
+       */
+      bag: unknown;
+    }
+  | {
+      "state": "consumed";
+      /**
+       * Schema version; see [`PENDING_IMPORT_REPORT_VERSION`].
+       */
+      v: number;
+    }
+  | {
+      "state": "error";
+      /**
+       * Schema version; see [`PENDING_IMPORT_REPORT_VERSION`].
+       */
+      v: number;
+      /**
+       * Human detail of the read failure.
+       */
+      detail: string;
+    };
+
+/**
+ * The reviewable mapping of a legacy bag (ADR-0032 decision 8): what Adopt
+ * would sign, plus exactly which bag keys fed it and which were dropped.
+ */
+export type ImportSuggestion = {
+  /**
+   * The suggested initial policy: the core's deny defaults with every
+   * validly-mapped bag field applied. What revision 1 would carry.
+   */
+  values: PolicyValues;
+  /**
+   * The same values as a FULL overlay (all 15 fields present): the exact
+   * edit Adopt submits to `policy_set`, so the signed document's touched
+   * set names every field the user reviewed - a superset of whatever the
+   * write relaxes, which is what the grant seam's coverage check needs.
+   */
+  overlay: PolicyOverlay;
+  /**
+   * Wire names of the policy fields adopted from the bag, catalogue order.
+   */
+  mapped: Array<string>;
+  /**
+   * Bag keys NOT adopted, sorted: browser-owned settings (the policy
+   * catalogue does not carry them), unknown keys, and known fields whose
+   * value failed its shape check (dropped whole, never coerced).
+   */
+  ignored: Array<string>;
+};
+
+/**
+ * What the first-run import screen renders: the pending-import state with a
+ * `present` bag already mapped to a reviewable suggestion. The same tagged
+ * sum discipline as the report it derives from - `consumed` cannot smuggle
+ * a suggestion, `error` always carries its detail.
+ */
+export type PendingImportSurvey =
+  | { "state": "none" }
+  | { "state": "present"; suggestion: ImportSuggestion }
+  | { "state": "consumed" }
+  | { "state": "error"; detail: string };
+
+/**
+ * The shared-language state the webview renders and the picker round-trips:
+ * `seq == 0` means "never explicitly set anywhere" (the host store's
+ * default), which the applying side treats as no signal.
+ */
+export type LangState = {
+  /**
+   * One of the shared `uiLanguage` values (`auto`, `en`, `zh_CN`, `zh_TW`).
+   */
+  value: string;
+  /**
+   * The echo-suppression sequence; apply a value only when it is strictly
+   * greater than the last applied.
+   */
+  seq: number;
+};
+
+/**
  * Core's [`RegState`] with its reasons stripped, mirrored as a serde enum
  * (the same pattern as `clients::AnchorKind`) so the webview receives a
  * closed literal union instead of a plain string. The `From` impl matches

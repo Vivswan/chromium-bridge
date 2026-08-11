@@ -370,7 +370,10 @@ pub const PENDING_IMPORT_REPORT_VERSION: u32 = 1;
 
 /// The typed, versioned pending-import status for the desktop app's first-run
 /// import screen (ADR-0032 decision 8), gathered fail-closed from the store -
-/// the same read discipline as [`crate::policy::gather_policy_status`]. A
+/// the same read discipline as [`crate::policy::gather_policy_status`], and
+/// the exact object `chromium-bridge policy pending-import --json` prints
+/// (the [`crate::policy::PolicyStatusReport`] pattern: one Rust definition,
+/// ts_rs-exported, emitted by the host and parsed back by the app). A
 /// tagged sum like the on-disk record, so an impossible combination (a
 /// `consumed` answer smuggling a bag, an `error` with no detail) cannot even
 /// deserialize: `none` is the ordinary no-receipt state (healthy), `present`
@@ -378,6 +381,7 @@ pub const PENDING_IMPORT_REPORT_VERSION: u32 = 1;
 /// post-import tombstone (structurally bagless), `error` is a
 /// present-but-unreadable receipt (fail closed).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(tag = "state", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PendingImportReport {
     /// No pending import recorded.
@@ -389,7 +393,10 @@ pub enum PendingImportReport {
     Present {
         /// Schema version; see [`PENDING_IMPORT_REPORT_VERSION`].
         v: u32,
-        /// The recorded legacy settings bag.
+        /// The recorded legacy settings bag. Untrusted free-form JSON
+        /// (`unknown` on the TS side): a suggestion the user reviews, never
+        /// applied as policy.
+        #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
         bag: Value,
     },
     /// The consumed tombstone: the import already happened; the window is
@@ -410,8 +417,10 @@ pub enum PendingImportReport {
 
 /// The current pending-import status, read fail-closed from the store.
 /// Infallible: an unreadable receipt becomes the `error` state, never a panic
-/// or a silent default. The desktop app's first-run screen reads this exact
-/// state (later phase); a future tauri command wraps it directly.
+/// or a silent default. Two read surfaces consume exactly this state:
+/// `chromium-bridge policy pending-import [--json]` (the subprocess the
+/// desktop app shells out to) and the app's first-run import screen behind
+/// it. READ-ONLY by construction - it calls [`load`], never a writer.
 pub fn gather_pending_import() -> PendingImportReport {
     const V: u32 = PENDING_IMPORT_REPORT_VERSION;
     match load() {
@@ -738,6 +747,61 @@ mod tests {
         assert!(
             serde_json::from_str::<PendingImportReport>(r#"{"state":"consumed","v":1}"#).is_ok()
         );
+    }
+
+    #[test]
+    fn the_report_wire_form_is_the_frozen_tagged_shape() {
+        // The exact object `policy pending-import --json` prints (the app
+        // version-gates `v`, then strict-parses): the `state` tag plus each
+        // arm's own fields, nothing else.
+        let present = serde_json::to_value(PendingImportReport::Present {
+            v: PENDING_IMPORT_REPORT_VERSION,
+            bag: json!({ "pageEvalEnabled": true }),
+        })
+        .unwrap();
+        assert_eq!(
+            present,
+            json!({ "state": "present", "v": 1, "bag": { "pageEvalEnabled": true } })
+        );
+        let error = serde_json::to_value(PendingImportReport::Error {
+            v: PENDING_IMPORT_REPORT_VERSION,
+            detail: "boom".into(),
+        })
+        .unwrap();
+        assert_eq!(error, json!({ "state": "error", "v": 1, "detail": "boom" }));
+        assert_eq!(
+            serde_json::to_value(PendingImportReport::Consumed { v: 1 }).unwrap(),
+            json!({ "state": "consumed", "v": 1 })
+        );
+        assert_eq!(
+            serde_json::to_value(PendingImportReport::None { v: 1 }).unwrap(),
+            json!({ "state": "none", "v": 1 })
+        );
+    }
+
+    #[test]
+    fn gather_never_writes_whatever_the_store_holds() {
+        // The read command's contract: gathering is READ-ONLY in every state,
+        // including the fail-closed error arm (a damaged receipt is evidence
+        // and must not be "repaired" by a read).
+        let _dir = RuntimeDirGuard::new("gather-read-only");
+        // Absent: gathering must not create the file.
+        assert_eq!(gather_pending_import(), PendingImportReport::None { v: 1 });
+        assert!(!path().exists());
+        // Pending, consumed, and corrupt: the exact bytes survive the read.
+        for planted in [
+            br#"{"state":"pending","version":2,"bag":{"a":1}}"#.as_slice(),
+            br#"{"state":"consumed","version":2}"#.as_slice(),
+            b"{ not json".as_slice(),
+        ] {
+            fs::write(path(), planted).unwrap();
+            let _ = gather_pending_import();
+            assert_eq!(
+                fs::read(path()).unwrap(),
+                planted.to_vec(),
+                "gather_pending_import must not rewrite the store"
+            );
+        }
     }
 
     #[test]

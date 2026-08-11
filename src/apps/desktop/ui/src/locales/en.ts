@@ -13,6 +13,7 @@ export const en = {
   "nav.security": "Security",
   "nav.audit": "Audit",
   "nav.setup": "Setup",
+  "nav.import": "Legacy import",
   "nav.kill": "Kill switch",
   "nav.kill_engaged": "Kill engaged",
 
@@ -364,6 +365,38 @@ export const en = {
   "setup.cli_update": "Point at this app",
   "setup.cli_uninstall": "Uninstall",
   "setup.cli_uninstall_consequence": "Uninstall removes $1; terminal workflows stop working.",
+
+  "import.sub":
+    "Settings your extension used before host-owned policy, waiting for review. Nothing applies until you sign it.",
+  "import.none_body":
+    "No legacy settings are waiting. This screen has an offer only while a snapshot from the extension awaits review.",
+  "import.consumed_body":
+    "The one-time import already happened - a policy baseline exists and the import window is closed for good. Manage policy in Security.",
+  "import.error_body":
+    "The recorded legacy settings could not be read ($1) - failing closed. Nothing is offered for import.",
+  "import.review_title": "Recorded legacy settings",
+  "import.review_note":
+    "A one-time snapshot the extension sent. It is a suggestion; the deny baseline stays enforced until you sign.",
+  "import.changed": "differs from default",
+  "import.default_was": "Deny default: $1",
+  "import.tools_none": "(none)",
+  "import.ignored_note": "Not imported (browser-owned, unknown, or malformed):",
+  "import.empty_mapping":
+    "The snapshot carries no usable policy fields. Adopting signs the deny defaults as revision 1 and closes the import window.",
+  "import.adopt": "Adopt & sign",
+  "import.skip": "Not now",
+  "import.skip_note": "The offer stays until a first baseline is signed - here or in Security.",
+  "import.floor_banner":
+    "This Mac has no enclave key, so adopting stores an UNSIGNED first baseline after your in-app confirmation. Pair in Browsers first if you want it signed.",
+  "import.blocked":
+    "Adopting is unavailable - the enclave key state is not healthy ($1). Repair it in Browsers first.",
+  "import.adopt_dialog_title": "Sign the imported settings as revision 1?",
+  "import.adopt_relaxes": "These fields become more permissive than the deny baseline:",
+  "import.adopt_dialog_body_signed":
+    "This signs the reviewed values as the first policy baseline and closes the import window. On a Touch ID Mac you will be asked for your fingerprint.",
+  "import.adopt_dialog_body_floor":
+    "This Mac has no enclave key: the reviewed values are stored as an UNSIGNED first baseline on this confirmation, and the import window closes. Enroll later to sign future baselines.",
+  "import.adopt_confirm": "Adopt",
 } as const;
 
 export type MessageKey = keyof typeof en;
