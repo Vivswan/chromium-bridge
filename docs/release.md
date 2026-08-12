@@ -62,7 +62,11 @@ scarce, and Linux uses an older glibc baseline to widen compatibility). For each
    Windows), containing the binary, `extension/dist`, `RELEASE.txt`, `LICENSE.md`, and
    `README.md`.
 4. A `.sha256` for the archive and a separate `.binary.sha256` for the binary inside it
-   are generated, and a build-provenance attestation covers both.
+   are generated, and a build-provenance attestation covers both; its Sigstore bundle
+   becomes the `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` asset. The
+   standalone extension zip, the `.dmg`, and the SBOM ship `<asset>.attestation.jsonl`
+   bundles the same way; `--bundle` verification is documented in
+   [SECURITY.md](../SECURITY.md#release-artifact-integrity).
 5. `gh release upload` attaches the assets to the draft release; the final
    `publish-release` job publishes it once every packaging job is done.
 
@@ -77,7 +81,8 @@ release.yml has a second macOS job, `desktop-app`, that builds the signed
 desktop bundle (the helper-bundle host with its own entitlements,
 [ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md)), wraps it in a
 disk image, and attaches `chromium-bridge-app-<tag>-macos-arm64.dmg` plus its
-`.sha256` and a provenance attestation to the same release. It is the CI
+`.sha256` and its provenance attestation's `.attestation.jsonl` bundle to the
+same release. It is the CI
 equivalent of `moon run dmg-app`, including the re-verification of the app inside
 the mounted image by `scripts/check-desktop-signing.ts`.
 
@@ -150,7 +155,8 @@ immutable, so the SBOM has to land on the draft):
   `actions/attest-build-provenance` step as the binaries and the `.dmg`), so
   `gh attestation verify chromium-bridge.cdx.json --repo <repo>` works on the
   downloaded asset.
-- It attaches the SBOM to the draft release for the tag.
+- It attaches the SBOM and its `.attestation.jsonl` bundle to the draft
+  release for the tag.
 
 An SBOM tooling failure still **never blocks** a binary release:
 `publish-release` waits for the job but tolerates its failure, so the

@@ -190,6 +190,7 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           # Attest the bare binary as well as the archive: users verify
@@ -202,18 +203,31 @@ jobs:
       # Attest the standalone extension zip on the same (macos) leg that built it.
       - name: Attest extension zip provenance
         if: matrix.platform == 'macos'
+        id: attest-extzip
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: ${{ steps.extzip.outputs.name }}.zip
 
+      # The Sigstore bundle ships as a release asset next to the artifacts it
+      # covers, so `gh attestation verify <asset> --repo Vivswan/chromium-bridge
+      # --bundle <file>` verifies against the frozen release without depending
+      # on GitHub's attestations API. One bundle covers both the archive and
+      # the bare binary - which is why it is named after the shared release
+      # stem rather than either file - and verify picks the entry matching the
+      # asset's digest.
       - name: Attach release archive to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           ARCHIVE: ${{ steps.pkg.outputs.archive }}
           SHA256FILE: ${{ steps.pkg.outputs.sha256file }}
           BINSHA256FILE: ${{ steps.pkg.outputs.binsha256file }}
+          NAME: ${{ steps.pkg.outputs.name }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         shell: bash
-        run: gh release upload "$RELEASE_TAG" "$ARCHIVE" "$SHA256FILE" "$BINSHA256FILE" --clobber
+        run: |
+          cp "$BUNDLE" "$NAME.attestation.jsonl"
+          gh release upload "$RELEASE_TAG" "$ARCHIVE" "$SHA256FILE" "$BINSHA256FILE" \
+            "$NAME.attestation.jsonl" --clobber
 
       # The standalone extension zip rides its own macos-only upload (matching
       # the extzip step above): each asset is named explicitly and must exist
@@ -223,8 +237,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXTZIP: ${{ steps.extzip.outputs.name }}
+          BUNDLE: ${{ steps.attest-extzip.outputs.bundle-path }}
         shell: bash
-        run: gh release upload "$RELEASE_TAG" "$EXTZIP.zip" "$EXTZIP.zip.sha256" --clobber
+        run: |
+          cp "$BUNDLE" "$EXTZIP.zip.attestation.jsonl"
+          gh release upload "$RELEASE_TAG" "$EXTZIP.zip" "$EXTZIP.zip.sha256" \
+            "$EXTZIP.zip.attestation.jsonl" --clobber
 
   # The secrets context is not available in a job-level `if`, so a tiny
   # gate job exports "are the desktop signing secrets configured" as an
@@ -379,6 +397,7 @@ jobs:
         run: shasum -a 256 "$DMG" > "$DMG.sha256"
 
       - name: Attest dmg provenance
+        id: attest-dmg
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: ${{ steps.dmg.outputs.asset }}
@@ -387,8 +406,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DMG: ${{ steps.dmg.outputs.asset }}
+          BUNDLE: ${{ steps.attest-dmg.outputs.bundle-path }}
         shell: bash
-        run: gh release upload "$RELEASE_TAG" "$DMG" "$DMG.sha256" --clobber
+        run: |
+          cp "$BUNDLE" "$DMG.attestation.jsonl"
+          gh release upload "$RELEASE_TAG" "$DMG" "$DMG.sha256" "$DMG.attestation.jsonl" --clobber
 
       - name: Delete the ephemeral keychain
         if: always()
@@ -451,6 +473,7 @@ jobs:
       # chromium-bridge.cdx.json --repo <this repo>` must work on it after
       # download.
       - name: Attest SBOM provenance
+        id: attest-sbom
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: chromium-bridge.cdx.json
@@ -458,8 +481,12 @@ jobs:
       - name: Attach SBOM to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
         shell: bash
-        run: gh release upload "$RELEASE_TAG" chromium-bridge.cdx.json --clobber
+        run: |
+          cp "$BUNDLE" chromium-bridge.cdx.json.attestation.jsonl
+          gh release upload "$RELEASE_TAG" chromium-bridge.cdx.json \
+            chromium-bridge.cdx.json.attestation.jsonl --clobber
 
   # Step 3: freeze the release. This job stays last: every job that mutates
   # the release is in its `needs`. desktop-app may be skipped, but only for

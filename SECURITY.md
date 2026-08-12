@@ -212,9 +212,12 @@ checkout paths on the same machine; matching a published hash from another
 machine requires the same rustup toolchain and platform SDK, and independent
 cross-machine rebuilds have not been demonstrated yet. Each release
 publishes the archive's SHA-256, a separate SHA-256 of the binary inside it
-(`<name>.binary.sha256`), and a build provenance attestation covering both.
+(`<name>.binary.sha256`), and a build provenance attestation covering both,
+whose Sigstore bundle is itself published as
+`chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl`.
 The other release assets (the extension zip, the `.dmg`, and the CycloneDX
-SBOM) carry their own attestations, verifiable the same way.
+SBOM) carry their own attestations and `<asset>.attestation.jsonl` bundles,
+verifiable the same way.
 
 Verification is yours to run, before you execute anything from an archive:
 
@@ -225,6 +228,12 @@ gh attestation verify chromium-bridge-<tag>-<platform>-<arch>.tar.gz --repo Vivs
 gh attestation verify chromium-bridge --repo Vivswan/chromium-bridge
 shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.binary.sha256
 ```
+
+Adding `--bundle chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl`
+to either `gh attestation verify` call reads the attestation from the
+downloaded release asset instead of GitHub's attestations API; the one
+bundle covers the archive and the bare binary alike, and verification
+picks the entry matching the asset's digest.
 
 ### Dependency supply chain (ADR-0035)
 
