@@ -27,7 +27,7 @@ on:
   # Weekly CodeQL re-scan with refreshed query packs; every other gate job
   # is event-agnostic or skips its work cleanly on non-PR events.
   schedule:
-    - cron: "23 4 * * 1"
+    - cron: "3 8 * * 1"
 
 permissions:
   contents: read

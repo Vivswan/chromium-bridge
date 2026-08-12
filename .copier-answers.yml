@@ -1,6 +1,6 @@
 # This file is managed by Vivswan/repo-platform.
 # Copier uses it to track the template source and version - do not delete.
-_commit: 97ffa5b
+_commit: 361386f
 _src_path: gh:Vivswan/repo-platform
 channel: staging
 copyright_holder: Vivswan Shah (https://github.com/Vivswan)
@@ -19,7 +19,9 @@ modules:
 - pr-title
 - auto-assign
 - fuzzer
+- nightly
 - settings-sync
+nightly_label: nightly-failure
 pages_build_command: ASTRO_BASE="$PAGES_BASE_PATH" ASTRO_SITE="$PAGES_ORIGIN" bun
     run --cwd src/apps/web build
 pages_dist_dir: build/web
