@@ -358,7 +358,9 @@ cmin). For a real campaign on one target,
 `cargo +nightly fuzz run <target>` from `src/packages/core` runs unbounded.
 
 The nightly job lives in `.github/workflows/nightly-fuzz.yml` (browser and
-mutation testing stay in `nightly.yml`), this repository's instance of
+mutation testing stay in `nightly.yml`, which files the same lifecycle
+under its own `nightly-failure` label - no failure artifacts, so its issue
+points at the run log), this repository's instance of
 repo-platform's fuzzer-module starter. On a red night it uploads
 `fuzz/artifacts/` and `fuzz/failures/` as the `fuzz-failures-<attempt>`
 artifact, files or updates the `fuzz-nightly` tracking issue from the
