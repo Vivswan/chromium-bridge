@@ -411,6 +411,8 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write # attach the SBOM asset to the draft release
+      id-token: write # OIDC token to sign the SLSA build provenance
+      attestations: write # write the build-provenance attestation
     env:
       RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
@@ -443,6 +445,15 @@ jobs:
           # below so the target tag is deterministic.
           upload-artifact: true
           upload-release-assets: false
+
+      # The SBOM is a downloadable release asset like the archives, so it
+      # gets the same provenance attestation: `gh attestation verify
+      # chromium-bridge.cdx.json --repo <this repo>` must work on it after
+      # download.
+      - name: Attest SBOM provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: chromium-bridge.cdx.json
 
       - name: Attach SBOM to the draft release
         env:

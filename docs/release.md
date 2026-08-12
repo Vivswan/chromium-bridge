@@ -146,11 +146,17 @@ immutable, so the SBOM has to land on the draft):
   (`chromium-bridge.cdx.json`) from the **committed lock files** (`Cargo.lock` +
   `bun.lock`), scanning declared dependencies rather than an installed
   tree (a fresh checkout has no `node_modules`/`target`).
+- It attests the SBOM's build provenance (same
+  `actions/attest-build-provenance` step as the binaries and the `.dmg`), so
+  `gh attestation verify chromium-bridge.cdx.json --repo <repo>` works on the
+  downloaded asset.
 - It attaches the SBOM to the draft release for the tag.
 
 An SBOM tooling failure still **never blocks** a binary release:
 `publish-release` waits for the job but tolerates its failure, so the
-release goes out without an SBOM and the red job flags it. The loss is
+release goes out without an SBOM and the red job flags it. Because the
+attest step runs before the upload (an asset nobody can verify must not
+ship), an attestation outage costs the SBOM asset the same way. The loss is
 permanent for that tag - the published release is immutable, so the SBOM
 cannot be attached afterwards; the next release carries one again.
 

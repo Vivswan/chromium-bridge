@@ -213,6 +213,8 @@ machine requires the same rustup toolchain and platform SDK, and independent
 cross-machine rebuilds have not been demonstrated yet. Each release
 publishes the archive's SHA-256, a separate SHA-256 of the binary inside it
 (`<name>.binary.sha256`), and a build provenance attestation covering both.
+The other release assets (the extension zip, the `.dmg`, and the CycloneDX
+SBOM) carry their own attestations, verifiable the same way.
 
 Verification is yours to run, before you execute anything from an archive:
 
