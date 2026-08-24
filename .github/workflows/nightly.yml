@@ -77,10 +77,21 @@ jobs:
   # and mutant timeouts (exit 3) are reported, not fatal: they measure test
   # quality and get fixed deliberately, whereas a baseline build/test failure
   # is a real break.
+  #
+  # The pass is sharded (--shard) because the serial suite outgrew the job
+  # timeout (issue #19). Each shard lists all mutants and tests only its
+  # slice, so all shards must agree on every argument except the shard
+  # index; --no-shuffle keeps the assignment deterministic across the
+  # independent jobs. fail-fast stays off: a cancelled sibling shard would
+  # be indistinguishable from a hang in the report job's aggregate result.
   mutants:
-    name: Mutation testing (cargo-mutants, scheduled)
+    name: Mutation testing (cargo-mutants, scheduled, shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -93,7 +104,7 @@ jobs:
       - name: cargo mutants (missed mutants and timeouts reported, not fatal)
         run: |
           rc=0
-          cargo mutants --no-shuffle || rc=$?
+          cargo mutants --no-shuffle --shard "${{ matrix.shard }}/${{ strategy.job-total }}" || rc=$?
           echo "== outcome summary =="
           for f in missed timeout unviable; do
             if [ -s "mutants.out/$f.txt" ]; then
