@@ -1,24 +1,13 @@
 # Requirements: chromium-bridge
 
-> **Historical document.** These are the original v0.1 requirements, kept for
-> context on what the project set out to do; sections describing the
-> implementation (tool count, in-page Toast confirmations, the TCP bridge,
-> the phase plan) predate the 2026-07 rebuild and no longer describe the
-> system. The current architecture, tool set, and security model are in
-> [architecture.md](./architecture.md) and [security/](./security/).
+> **Historical document.** These are the original v0.1 requirements, kept for context on what the project set out to do; sections describing the implementation (tool count, in-page Toast confirmations, the TCP bridge, the phase plan) predate the 2026-07 rebuild and no longer describe the system. The current architecture, tool set, and security model are in [architecture.md](./architecture.md) and [security/](./security/).
 
-> Let MCP clients (such as Claude Code and Codex) operate **the real Chrome
-> the user is already using** (real tabs, real login state, real cookies)
-> instead of launching a blank simulated browser.
+> Let MCP clients (such as Claude Code and Codex) operate **the real Chrome the user is already using** (real tabs, real login state, real cookies) instead of launching a blank simulated browser.
 
 ## 1. Background and problem
 
 ### 1.1 Current state
-Users want to let an AI (via an MCP client) operate their own browser
-directly: scrape logged-in pages, fill forms automatically, work with
-information across tabs. But the AI has no such ability by default. It can
-make HTTP requests, but it **cannot see or take over the browser sessions the
-user already has open and logged in**.
+Users want to let an AI (via an MCP client) operate their own browser directly: scrape logged-in pages, fill forms automatically, work with information across tabs. But the AI has no such ability by default. It can make HTTP requests, but it **cannot see or take over the browser sessions the user already has open and logged in**.
 
 ### 1.2 Shortcomings of existing approaches
 
@@ -30,8 +19,7 @@ user already has open and logged in**.
 | Plain HTTP scraping | Cannot see login state; JS-rendered pages are unreachable |
 
 ### 1.3 The core problem we solve
-**Without restarting Chrome and without exposing a debug port, let an AI
-safely operate pages in the user's real browser.**
+**Without restarting Chrome and without exposing a debug port, let an AI safely operate pages in the user's real browser.**
 
 ## 2. Goals and non-goals
 
@@ -52,42 +40,29 @@ safely operate pages in the user's real browser.**
 ## 3. User stories
 
 ### US-1: Scrape a logged-in page
-> As a developer, I want the AI to read the content of an internal system
-> page I am **already logged into**, so it can help me analyze real data.
+> As a developer, I want the AI to read the content of an internal system page I am **already logged into**, so it can help me analyze real data.
 
-Acceptance: the AI calls `page_snapshot` + `page_text`; on first visit the
-extension shows the authorization popup and I click Allow; after that it can
-read the masked page text.
+Acceptance: the AI calls `page_snapshot` + `page_text`; on first visit the extension shows the authorization popup and I click Allow; after that it can read the masked page text.
 
 ### US-2: Automatic form filling
-> As an everyday user, I want the AI to fill a long list of fields (address,
-> order details) in a web form for me, reducing manual typing.
+> As an everyday user, I want the AI to fill a long list of fields (address, order details) in a web form for me, reducing manual typing.
 
-Acceptance: the AI calls `page_snapshot` to get field refs, then `page_fill`
-to fill them one by one; password fields are masked in the logs.
+Acceptance: the AI calls `page_snapshot` to get field refs, then `page_fill` to fill them one by one; password fields are masked in the logs.
 
 ### US-3: Working across tabs
-> As a researcher, I want the AI to list all my open tabs, locate one, and
-> answer questions based on its content.
+> As a researcher, I want the AI to list all my open tabs, locate one, and answer questions based on its content.
 
-Acceptance: the AI calls `tab_list` -> `tab_focus` -> `page_snapshot` and
-works across tabs.
+Acceptance: the AI calls `tab_list` -> `tab_focus` -> `page_snapshot` and works across tabs.
 
 ### US-4: Safety confirmation
-> As a user, when the AI is about to click "Submit order" or follow a link, I
-> must have a chance to refuse, to avoid mistakes.
+> As a user, when the AI is about to click "Submit order" or follow a link, I must have a chance to refuse, to avoid mistakes.
 
-Acceptance: clicking a submit-type button or link shows a Toast in the top
-right of the page; no response within 30 seconds rejects automatically; after
-approval, same-origin actions of the same kind get a 60-second grace window.
+Acceptance: clicking a submit-type button or link shows a Toast in the top right of the page; no response within 30 seconds rejects automatically; after approval, same-origin actions of the same kind get a 60-second grace window.
 
 ### US-5: Developer extension integration
-> As an MCP client user, I want to plug chromium-bridge in as an MCP server so
-> that saying "list my tabs" in a conversation just works.
+> As an MCP client user, I want to plug chromium-bridge in as an MCP server so that saying "list my tabs" in a conversation just works.
 
-Acceptance: after adding chromium-bridge to the client's MCP server
-configuration, the client's connection management UI shows `chromium-bridge`
-as connected and the tools are callable.
+Acceptance: after adding chromium-bridge to the client's MCP server configuration, the client's connection management UI shows `chromium-bridge` as connected and the tools are callable.
 
 ## 4. Functional requirements
 

@@ -1,34 +1,17 @@
 # Development guide
 
-This document covers the local dev loop, the build/test toolchain, and the
-release process. For the **branch / commit / sync / merge workflow** (worktrees,
-Conventional Commits, rebase, squash-merge, gates), see
-[`../CONTRIBUTING.md`](../CONTRIBUTING.md). For *why* the project is structured
-the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
+This document covers the local dev loop, the build/test toolchain, and the release process. For the **branch / commit / sync / merge workflow** (worktrees, Conventional Commits, rebase, squash-merge, gates), see [`../CONTRIBUTING.md`](../CONTRIBUTING.md). For *why* the project is structured the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
 
 ## Prerequisites
 
-[proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one
-`proto install` in a fresh checkout provisions every tool pinned in the
-repo-root `.prototools` (bun, moon, a rustup pre-install of the pinned rust,
-uv). One prerequisite proto does not cover: `rustup` itself must already be
-installed (proto's rust plugin manages toolchains *through* rustup rather
-than installing it) - a truly fresh machine needs
-[rustup.rs](https://rustup.rs) first. Install proto once, make sure
-`~/.proto/shims` and `~/.proto/bin` are on your PATH, then:
+[proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one `proto install` in a fresh checkout provisions every tool pinned in the repo-root `.prototools` (bun, moon, a rustup pre-install of the pinned rust, uv). One prerequisite proto does not cover: `rustup` itself must already be installed (proto's rust plugin manages toolchains *through* rustup rather than installing it) - a truly fresh machine needs [rustup.rs](https://rustup.rs) first. Install proto once, make sure `~/.proto/shims` and `~/.proto/bin` are on your PATH, then:
 
 ```sh
 proto install    # provisions bun, moon, rust, uv at the pinned versions
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
-Four gate tools have no first-party proto plugin and are installed once by
-hand: `cargo install cargo-nextest` and `brew install typos-cli
-cargo-machete actionlint` (typos and cargo-machete can also come from `cargo
-install`). CI pins typos and cargo-machete in checks.yml; the managed
-ci.yml's actionlint job follows the action's floating tag (a template-sync
-decision, recorded in ADR-0033), so a local version skew can at worst
-surface a finding early.
+Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`). CI pins typos and cargo-machete in checks.yml; the managed ci.yml's actionlint job follows the action's floating tag (a template-sync decision, recorded in ADR-0033), so a local version skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -41,18 +24,11 @@ surface a finding early.
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates both |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI runs it in the managed ci.yml's actionlint job |
 
-Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`):
-`bun install` wires a pre-commit hook that runs `moon run ci`, so a commit
-that would fail CI fails at commit time instead.
+Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `bun install` wires a pre-commit hook that runs `moon run ci`, so a commit that would fail CI fails at commit time instead.
 
 ## Layout
 
-The TypeScript side is a bun workspace rooted at the repo top level
-(`package.json` `workspaces`), sharing one `bun.lock` and one `node_modules/`.
-Buildable code lives under `src/` (apps and packages); every directory there is
-a member of either the cargo workspace or the bun workspace, so one gate
-compiles the whole graph. TS packages keep sources and tests in separate
-folders (`src/` and `tests/`).
+The TypeScript side is a bun workspace rooted at the repo top level (`package.json` `workspaces`), sharing one `bun.lock` and one `node_modules/`. Buildable code lives under `src/` (apps and packages); every directory there is a member of either the cargo workspace or the bun workspace, so one gate compiles the whole graph. TS packages keep sources and tests in separate folders (`src/` and `tests/`).
 
 ```
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
@@ -76,33 +52,13 @@ src/apps/web/           bun workspace member: minimal Astro site rendering the
                          not part of `moon run ci`)
 ```
 
-All tooling scripts are TypeScript run via bun. Scripts whose only consumer
-is a GitHub workflow live in `.github/scripts/`; everything with a local
-consumer (moon tasks, other scripts) stays in `scripts/`. The fuzz smoke
-moved from the former to the latter when it grew a local moon task, which
-currently leaves `.github/scripts/` empty. Two scripts
-(`scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`) are deliberately
-self-contained on node builtins so they run without a `bun install`: the
-release workflow builds the binary before installing the workspace, and the
-nightly fuzz job never installs it at all.
+All tooling scripts are TypeScript run via bun. Scripts whose only consumer is a GitHub workflow live in `.github/scripts/`; everything with a local consumer (moon tasks, other scripts) stays in `scripts/`. The fuzz smoke moved from the former to the latter when it grew a local moon task, which currently leaves `.github/scripts/` empty. Two scripts (`scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`) are deliberately self-contained on node builtins so they run without a `bun install`: the release workflow builds the binary before installing the workspace, and the nightly fuzz job never installs it at all.
 
-Rust dependencies are gated by automated supply-chain checks
-([ADR-0035](./adr/0035-automated-supply-chain-review.md)): `cargo deny`
-(license allow-list, banned sources, RUSTSEC advisories) and `cargo audit`
-run in every CI gate and in the weekly security sweep, PRs additionally get
-the GitHub dependency-review action (an advisory diff, via the
-platform-managed job in the managed ci.yml), and Dependabot watches cargo,
-bun, and GitHub Actions. Adding or bumping a crate fails CI on a known
-advisory or a license outside `deny.toml`'s allow list; there is no manual
-per-crate audit step. Run `moon run audit` to reproduce the
-cargo-deny/audit pass locally.
+Rust dependencies are gated by automated supply-chain checks ([ADR-0035](./adr/0035-automated-supply-chain-review.md)): `cargo deny` (license allow-list, banned sources, RUSTSEC advisories) and `cargo audit` run in every CI gate and in the weekly security sweep, PRs additionally get the GitHub dependency-review action (an advisory diff, via the platform-managed job in the managed ci.yml), and Dependabot watches cargo, bun, and GitHub Actions. Adding or bumping a crate fails CI on a known advisory or a license outside `deny.toml`'s allow list; there is no manual per-crate audit step. Run `moon run audit` to reproduce the cargo-deny/audit pass locally.
 
 ## Common tasks
 
-moon is the canonical command interface: every dev task is a moon task, and
-`moon run help` prints the full menu with descriptions (raw JSON:
-`moon query tasks`). Unscoped names (`moon run ci`) resolve to the root
-project; per-project tasks are `project:task` (`moon run extension:build`).
+moon is the canonical command interface: every dev task is a moon task, and `moon run help` prints the full menu with descriptions (raw JSON: `moon query tasks`). Unscoped names (`moon run ci`) resolve to the root project; per-project tasks are `project:task` (`moon run extension:build`).
 
 ```sh
 moon run build     # build everything (see below)
@@ -117,27 +73,11 @@ moon run fix       # auto-fix everything: biome check --write + cargo fmt
 moon run run-app   # build, sign, verify, then launch the desktop app
 ```
 
-`moon run build` builds the entire repo in one command: it renders the
-icons, typechecks `src/packages/shared`, bundles the extension, builds the
-desktop UI and the docs site, typechecks `scripts/`, and runs
-`cargo build --workspace`. Use it to prove the whole graph still compiles
-after a cross-cutting change.
+`moon run build` builds the entire repo in one command: it renders the icons, typechecks `src/packages/shared`, bundles the extension, builds the desktop UI and the docs site, typechecks `scripts/`, and runs `cargo build --workspace`. Use it to prove the whole graph still compiles after a cross-cutting change.
 
-`moon run ci` runs the cross-platform gate steps - the same list the old
-`just ci` ran: rust fmt/clippy/nextest+doctests, typos/machete, TS
-typecheck/biome/tests/extension build, protocol e2e, and the contract +
-hygiene checks. CI runs more on top: the macOS/Windows rust matrices,
-dependency review, linux-install, the adversarial/chaos suites, the browser
-suites, the web build, and the macOS-only desktop gate.
+`moon run ci` runs the cross-platform gate steps - the same list the old `just ci` ran: rust fmt/clippy/nextest+doctests, typos/machete, TS typecheck/biome/tests/extension build, protocol e2e, and the contract + hygiene checks. CI runs more on top: the macOS/Windows rust matrices, dependency review, linux-install, the adversarial/chaos suites, the browser suites, the web build, and the macOS-only desktop gate.
 
-The root `package.json` scripts are thin aliases that delegate to the
-corresponding moon task, so both entry points share one implementation. The
-JS-flavored root verbs (`lint`, `format`, `format:check`, `check`, `test`)
-delegate to the `*-ts` tasks; `build`, `gen`, and `typecheck` delegate to the
-same-named tasks; the repo-wide verbs cover every language at once
-(`moon run lint` = clippy + biome lint, `moon run fmt` = cargo fmt + biome
-format, `moon run test` = Rust + protocol e2e). Each task body is a plain
-command you can also run by hand:
+The root `package.json` scripts are thin aliases that delegate to the corresponding moon task, so both entry points share one implementation. The JS-flavored root verbs (`lint`, `format`, `format:check`, `check`, `test`) delegate to the `*-ts` tasks; `build`, `gen`, and `typecheck` delegate to the same-named tasks; the repo-wide verbs cover every language at once (`moon run lint` = clippy + biome lint, `moon run fmt` = cargo fmt + biome format, `moon run test` = Rust + protocol e2e). Each task body is a plain command you can also run by hand:
 
 ```sh
 cargo build --release
@@ -169,23 +109,9 @@ The full task menu, by area:
 
 ## moon: the canonical command interface
 
-Every task has one definition with declared inputs: the repo-wide tasks and
-runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`,
-`extension`, `desktop-ui`, `web`) live in a `moon.yml` next to their code,
-and CI runs the same tasks (the repo-owned `.github/workflows/checks.yml`
-calls `moon run <task>` wherever the step is more than a single thin
-command).
+Every task has one definition with declared inputs: the repo-wide tasks and runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`, `extension`, `desktop-ui`, `web`) live in a `moon.yml` next to their code, and CI runs the same tasks (the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` wherever the step is more than a single thin command).
 
-**Gates are never cached.** The `ci` aggregate, every task reachable from
-it, every `check-*` task, the python suites, and the runbook/ceremony tasks
-all set `options.cache: false` in their moon.yml: a gate that a cache hit
-can satisfy is not a gate, because a wrong hash (moon cannot hash gitignored
-inputs like the generated `.wxt/tsconfig.json`, and a mistaken
-`hasher.ignorePattern` would silently drop tracked files from every hash)
-would let unverified code land. `moon run ci` therefore always executes the
-full suite, in the fixed order its `deps` list declares
-(`runDepsInParallel: false`). The underlying tools (cargo, tsc, vite, bun)
-keep their own incremental caches, so warm reruns stay fast.
+**Gates are never cached.** The `ci` aggregate, every task reachable from it, every `check-*` task, the python suites, and the runbook/ceremony tasks all set `options.cache: false` in their moon.yml: a gate that a cache hit can satisfy is not a gate, because a wrong hash (moon cannot hash gitignored inputs like the generated `.wxt/tsconfig.json`, and a mistaken `hasher.ignorePattern` would silently drop tracked files from every hash) would let unverified code land. `moon run ci` therefore always executes the full suite, in the fixed order its `deps` list declares (`runDepsInParallel: false`). The underlying tools (cargo, tsc, vite, bun) keep their own incremental caches, so warm reruns stay fast.
 
 What moon still buys beyond one task vocabulary:
 
@@ -196,60 +122,23 @@ moon ci                    # affected-only, based on touched files - a LOCAL
                            # convenience for quick iteration, NEVER the gate
 ```
 
-Two tasks are macOS-shaped: `gen-app-types` and `check-app-rust` compile the
-Tauri desktop crate, which needs the platform GUI toolchain (WebKitGTK on
-Linux; nothing ships that setup). They refuse with a pointer to
-`gen-shared` on a box without it, are not part of `moon run ci`, and CI runs
-them in the dedicated macOS `desktop` job.
+Two tasks are macOS-shaped: `gen-app-types` and `check-app-rust` compile the Tauri desktop crate, which needs the platform GUI toolchain (WebKitGTK on Linux; nothing ships that setup). They refuse with a pointer to `gen-shared` on a box without it, are not part of `moon run ci`, and CI runs them in the dedicated macOS `desktop` job.
 
-Cache trust, and the one edge that must never be narrowed: the Rust core is
-the canonical cross-process contract (ADR-0028), so the `shared` and
-`extension` tasks declare the whole core crate (plus `scripts/gen-ops.ts` and
-the cargo manifests) as inputs - the `rust-contract` file group in
-`.moon/tasks/all.yml`. That list is deliberately over-broad; a change anywhere
-in `src/packages/core` marks the downstream TS tasks affected, because a stale
-result on the contract path is the one failure mode this repo cannot accept.
-If you edit these task definitions, it is always safe to widen inputs and
-never safe to narrow them. Generated and downloaded output (target/, build/,
-.wxt/, rendered icons, ...) is kept out of every hash by
-`hasher.ignorePatterns` in `.moon/workspace.yml`; if you add a new gitignored
-output directory, add it there too (forgetting only over-invalidates, it
-cannot go stale), and `moon run check-hasher` (part of the gate) proves no
-tracked file matches any pattern. `.moon/cache/` is local state and
-gitignored; `rm -rf .moon/cache` is the reset button.
+Cache trust, and the one edge that must never be narrowed: the Rust core is the canonical cross-process contract (ADR-0028), so the `shared` and `extension` tasks declare the whole core crate (plus `scripts/gen-ops.ts` and the cargo manifests) as inputs - the `rust-contract` file group in `.moon/tasks/all.yml`. That list is deliberately over-broad; a change anywhere in `src/packages/core` marks the downstream TS tasks affected, because a stale result on the contract path is the one failure mode this repo cannot accept. If you edit these task definitions, it is always safe to widen inputs and never safe to narrow them. Generated and downloaded output (target/, build/, .wxt/, rendered icons, ...) is kept out of every hash by `hasher.ignorePatterns` in `.moon/workspace.yml`; if you add a new gitignored output directory, add it there too (forgetting only over-invalidates, it cannot go stale), and `moon run check-hasher` (part of the gate) proves no tracked file matches any pattern. `.moon/cache/` is local state and gitignored; `rm -rf .moon/cache` is the reset button.
 
 ## Toolchain pinning (proto)
 
-`.prototools` pins proto itself, bun, moon, rust, and uv; `proto install`
-provisions them all, and CI provisions the same way (the
-`moonrepo/setup-toolchain` action, pinned by commit SHA, installs proto +
-moon and the jobs `proto install` what they need). Four pins are
-necessarily duplicated, and `moon run check-toolchain` (part of the gate and
-of CI's version-consistency job) fails if any pair disagrees (for proto and
-moon it checks every setup-toolchain invocation in checks.yml individually,
-and that each is pinned to a full commit SHA):
+`.prototools` pins proto itself, bun, moon, rust, and uv; `proto install` provisions them all, and CI provisions the same way (the `moonrepo/setup-toolchain` action, pinned by commit SHA, installs proto + moon and the jobs `proto install` what they need). Four pins are necessarily duplicated, and `moon run check-toolchain` (part of the gate and of CI's version-consistency job) fails if any pair disagrees (for proto and moon it checks every setup-toolchain invocation in checks.yml individually, and that each is pinned to a full commit SHA):
 
-- **rust**: `rust-toolchain.toml` is the authoritative pin - rustup, IDEs,
-  and CI's `setup-rust-toolchain` read it natively, and it carries the
-  components + profile. The `.prototools` entry only pre-installs that
-  toolchain.
-- **bun**: mirrored in `package.json` `packageManager` (read by `setup-bun`
-  in the CI jobs that do not go through proto).
-- **proto/moon**: `checks.yml` passes explicit `proto-version` /
-  `moon-version` inputs (the action cannot read the proto pin from
-  `.prototools`).
+- **rust**: `rust-toolchain.toml` is the authoritative pin - rustup, IDEs, and CI's `setup-rust-toolchain` read it natively, and it carries the components + profile. The `.prototools` entry only pre-installs that toolchain.
+- **bun**: mirrored in `package.json` `packageManager` (read by `setup-bun` in the CI jobs that do not go through proto).
+- **proto/moon**: `checks.yml` passes explicit `proto-version` / `moon-version` inputs (the action cannot read the proto pin from `.prototools`).
 
-uv is pinned only in `.prototools`, and python is owned by uv exactly as
-before: the protocol suites run under the interpreter pinned in
-`.python-version` via `uv run --no-project --isolated`. proto deliberately
-never provisions python (`settings.builtin-plugins` in `.prototools`).
+uv is pinned only in `.prototools`, and python is owned by uv exactly as before: the protocol suites run under the interpreter pinned in `.python-version` via `uv run --no-project --isolated`. proto deliberately never provisions python (`settings.builtin-plugins` in `.prototools`).
 
 ## Working on the extension
 
-The extension is built on WXT
-([ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)),
-which generates the manifest (including the pinned key) and bundles the
-entrypoints under `src/apps/extension/src/entrypoints/`.
+The extension is built on WXT ([ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)), which generates the manifest (including the pinned key) and bundles the entrypoints under `src/apps/extension/src/entrypoints/`.
 
 ```sh
 bun install
@@ -257,24 +146,15 @@ bun run --cwd src/apps/extension dev       # WXT dev mode: rebuild on change
 bun run --cwd src/apps/extension build     # production bundle
 ```
 
-Load `build/extension/chrome-mv3` as an unpacked extension in
-`chrome://extensions` (Developer mode). Unit tests
-(`bun run --cwd src/apps/extension test`) run on Vitest with `fakeBrowser`,
-no real browser needed.
+Load `build/extension/chrome-mv3` as an unpacked extension in `chrome://extensions` (Developer mode). Unit tests (`bun run --cwd src/apps/extension test`) run on Vitest with `fakeBrowser`, no real browser needed.
 
 ## Testing
 
 Three suites, all wired into `tests/browser/run_all.ts` (and CI):
 
-- **Protocol** (`tests/protocol/e2e.py`) - drives the real release binary as
-  subprocesses over the actual wire protocols. No browser needed.
-- **DOM** (`tests/browser/dom_test.ts`, bun) - injects the built content script
-  (`build/extension/chrome-mv3/content-scripts/content.js`) into
-  a headless Chrome page via CDP and exercises every content-script op.
-- **Smoke** (`tests/browser/ext_test.ts`, bun + puppeteer-core) - launches Chrome with
-  `build/extension/chrome-mv3` loaded and checks the service worker boots. Set
-  `BB_EXT_DIR` to point
-  at a different unpacked extension.
+- **Protocol** (`tests/protocol/e2e.py`) - drives the real release binary as subprocesses over the actual wire protocols. No browser needed.
+- **DOM** (`tests/browser/dom_test.ts`, bun) - injects the built content script (`build/extension/chrome-mv3/content-scripts/content.js`) into a headless Chrome page via CDP and exercises every content-script op.
+- **Smoke** (`tests/browser/ext_test.ts`, bun + puppeteer-core) - launches Chrome with `build/extension/chrome-mv3` loaded and checks the service worker boots. Set `BB_EXT_DIR` to point at a different unpacked extension.
 
 ```sh
 bun tests/browser/run_all.ts          # all three (skips browser tests if Chrome absent)
@@ -283,53 +163,16 @@ CHROME_BIN=/path/to/chrome bun tests/browser/run_all.ts
 
 ## Fuzzing
 
-`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer,
-nightly rust) with ten targets. Five fuzz the wire-frame decoders
-(`nm_frame`, `mcp_jsonrpc`, `bridge_envelope`, `handshake`, `attach`); five
-fuzz the semantic validators behind them (`handshake_verify`,
-`classify_frame`, `enclave_der`, `enclave_challenge`,
-`registration_manifest`). Where a correctness property exists, the semantic
-targets assert it instead of only checking for panics: the MAC verifier must
-accept a correctly computed MAC, the challenge and presence messages must
-stay domain-separated, and manifest ownership must answer `Foreign` for
-anything not provably ours. (The `handshake_verify` target also drives the
-full server handshake over in-memory I/O; the server generates a fresh nonce
-per handshake and the response MAC must bind it, so a static fuzzed response
-can only exercise the fail-closed rejection path there. The accept path is
-covered by the same target's MAC oracle and the socketpair unit tests in
-`handshake.rs`.)
+`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with ten targets. Five fuzz the wire-frame decoders (`nm_frame`, `mcp_jsonrpc`, `bridge_envelope`, `handshake`, `attach`); five fuzz the semantic validators behind them (`handshake_verify`, `classify_frame`, `enclave_der`, `enclave_challenge`, `registration_manifest`). Where a correctness property exists, the semantic targets assert it instead of only checking for panics: the MAC verifier must accept a correctly computed MAC, the challenge and presence messages must stay domain-separated, and manifest ownership must answer `Foreign` for anything not provably ours. (The `handshake_verify` target also drives the full server handshake over in-memory I/O; the server generates a fresh nonce per handshake and the response MAC must bind it, so a static fuzzed response can only exercise the fail-closed rejection path there. The accept path is covered by the same target's MAC oracle and the socketpair unit tests in `handshake.rs`.)
 
-The semantic targets reach private functions through the core crate's
-`fuzzing` feature: off by default, enabled only by the fuzz workspace, and
-consisting of re-exports with no runtime behavior. `--all-features` does
-compile it; the isolation argument is that no shipped binary enables the
-feature and the fuzz crate lives in a separate workspace, so feature
-unification cannot pull it into a real build.
+The semantic targets reach private functions through the core crate's `fuzzing` feature: off by default, enabled only by the fuzz workspace, and consisting of re-exports with no runtime behavior. `--all-features` does compile it; the isolation argument is that no shipped binary enables the feature and the fuzz crate lives in a separate workspace, so feature unification cannot pull it into a real build.
 
 Three directories with different lifecycles, plus the failure reports:
 
-- `fuzz/seeds/<target>/`: committed, hand-curated starting inputs for the
-  byte-input targets (a valid frame per shape, a valid DER signature plus
-  truncations, our real manifest plus near-misses). Crash inputs found by
-  the nightly job get pinned here too (the filed issue says how), so every
-  future run replays them first. The structured targets
-  (`handshake_verify`, `enclave_challenge`) take `Arbitrary`-derived input
-  whose encoding is unstable across `arbitrary` versions, so they get no
-  committed seeds; their regressions get unit tests instead. One seed dir
-  (`seeds/mcp_dispatch/`) is staged for a deferred in-process rmcp-service
-  target and is inert until that target exists (see its README).
-- `fuzz/corpus/<target>/`: gitignored, fuzzer-generated. Nightly CI restores
-  and saves it through `actions/cache`, so exploration accumulates across
-  runs instead of restarting from zero every night.
-- `fuzz/dictionaries/`: token dictionaries handed to libFuzzer
-  (`json_protocol.dict` for the JSON-shaped targets, `der.dict` for
-  `enclave_der`).
-- `fuzz/failures/<target>/`: gitignored, cleared and rewritten by each
-  `fuzz-smoke.ts` run. One directory per crashed target holding a
-  `report.md` (replay command, seed, a base64 embed of small inputs, the
-  pinning instruction) plus a copy of the crash input, following
-  repo-platform's failure-report contract (docs/fuzzer.md there). The
-  nightly job's issue-filing action consumes these.
+- `fuzz/seeds/<target>/`: committed, hand-curated starting inputs for the byte-input targets (a valid frame per shape, a valid DER signature plus truncations, our real manifest plus near-misses). Crash inputs found by the nightly job get pinned here too (the filed issue says how), so every future run replays them first. The structured targets (`handshake_verify`, `enclave_challenge`) take `Arbitrary`-derived input whose encoding is unstable across `arbitrary` versions, so they get no committed seeds; their regressions get unit tests instead. One seed dir (`seeds/mcp_dispatch/`) is staged for a deferred in-process rmcp-service target and is inert until that target exists (see its README).
+- `fuzz/corpus/<target>/`: gitignored, fuzzer-generated. Nightly CI restores and saves it through `actions/cache`, so exploration accumulates across runs instead of restarting from zero every night.
+- `fuzz/dictionaries/`: token dictionaries handed to libFuzzer (`json_protocol.dict` for the JSON-shaped targets, `der.dict` for `enclave_der`).
+- `fuzz/failures/<target>/`: gitignored, cleared and rewritten by each `fuzz-smoke.ts` run. One directory per crashed target holding a `report.md` (replay command, seed, a base64 embed of small inputs, the pinning instruction) plus a copy of the crash input, following repo-platform's failure-report contract (docs/fuzzer.md there). The nightly job's issue-filing action consumes these.
 
 Run it locally:
 
@@ -338,77 +181,29 @@ moon run fuzz-smoke        # bun scripts/fuzz-smoke.ts: every target, bounded ru
 moon run check-fuzz-smoke  # unit tests for the driver itself (in the ci gate)
 ```
 
-The smoke needs a nightly toolchain plus `cargo install cargo-fuzz` and
-skips with a message when either is missing (the nightly job passes
-`--require-toolchain`, which turns that skip into a failure: a skipped
-night must not read as green and auto-close the tracking issue). It
-discovers targets from `cargo +nightly fuzz list`, so the list cannot
-drift from `fuzz/Cargo.toml`.
-A crashing target no longer aborts the pass: the script writes the target's
-failure report, moves on, and exits 1 at the end when anything failed
-(earlier versions re-raised libFuzzer's signal; with several targets there
-is no single status worth propagating). `--seed=N` pins libFuzzer's PRNG for
-a best-effort deterministic re-run; the crash input file stays the real
-reproducer, since the persisted corpus differs from night to night.
-Locally each target gets 30 seconds; the nightly run gives 120 seconds per
-target and passes `--cmin`, which minimizes each passing target's corpus
-before the cache save (cmin bounds the size of each snapshot; the number of
-accumulated cache entries is bounded by GitHub's LRU cache eviction, not by
-cmin). For a real campaign on one target,
-`cargo +nightly fuzz run <target>` from `src/packages/core` runs unbounded.
+The smoke needs a nightly toolchain plus `cargo install cargo-fuzz` and skips with a message when either is missing (the nightly job passes `--require-toolchain`, which turns that skip into a failure: a skipped night must not read as green and auto-close the tracking issue). It discovers targets from `cargo +nightly fuzz list`, so the list cannot drift from `fuzz/Cargo.toml`. A crashing target no longer aborts the pass: the script writes the target's failure report, moves on, and exits 1 at the end when anything failed (earlier versions re-raised libFuzzer's signal; with several targets there is no single status worth propagating). `--seed=N` pins libFuzzer's PRNG for a best-effort deterministic re-run; the crash input file stays the real reproducer, since the persisted corpus differs from night to night. Locally each target gets 30 seconds; the nightly run gives 120 seconds per target and passes `--cmin`, which minimizes each passing target's corpus before the cache save (cmin bounds the size of each snapshot; the number of accumulated cache entries is bounded by GitHub's LRU cache eviction, not by cmin). For a real campaign on one target, `cargo +nightly fuzz run <target>` from `src/packages/core` runs unbounded.
 
-The nightly job lives in `.github/workflows/nightly-fuzz.yml` (browser and
-mutation testing stay in `nightly.yml`, which files the same lifecycle
-under its own `nightly-failure` label - no failure artifacts, so its issue
-points at the run log), this repository's instance of
-repo-platform's fuzzer-module starter. On a red night it uploads
-`fuzz/artifacts/` and `fuzz/failures/` as the `fuzz-failures-<attempt>`
-artifact, files or updates the `fuzz-nightly` tracking issue from the
-reports, and dispatches auto-assign at it; on a green night it closes the
-open issue. `workflow_dispatch` takes `seed` and `iterations`, so any
-night's configuration can be re-run on demand. When a crash is filed:
+The nightly job lives in `.github/workflows/nightly-fuzz.yml` (browser and mutation testing stay in `nightly.yml`, which files the same lifecycle under its own `nightly-failure` label - no failure artifacts, so its issue points at the run log), this repository's instance of repo-platform's fuzzer-module starter. On a red night it uploads `fuzz/artifacts/` and `fuzz/failures/` as the `fuzz-failures-<attempt>` artifact, files or updates the `fuzz-nightly` tracking issue from the reports, and dispatches auto-assign at it; on a green night it closes the open issue. `workflow_dispatch` takes `seed` and `iterations`, so any night's configuration can be re-run on demand. When a crash is filed:
 
-1. Replay it with the command in the issue (download the artifact, or
-   decode the embedded base64).
+1. Replay it with the command in the issue (download the artifact, or decode the embedded base64).
 2. Fix the bug.
-3. Pin the input into `fuzz/seeds/<target>/` (or add a unit test for the
-   two structured targets) and commit it with the fix. The pin is what
-   makes the next green night's auto-close evidence rather than luck.
+3. Pin the input into `fuzz/seeds/<target>/` (or add a unit test for the two structured targets) and commit it with the fix. The pin is what makes the next green night's auto-close evidence rather than luck.
 
 Deliberately not fuzzed, and why:
 
-- `allowlist.rs`, `revocation.rs`, `ipc/lockfile.rs`: pure
-  `serde_json::from_slice` into derived `deny_unknown_fields` structs.
-  Fuzzing them would fuzz serde_json, not our code; negative unit tests
-  already pin the fail-closed behavior.
-- `enclave/pubkey.rs`: `EnclavePublicKey::from_x963` is a length check plus
-  a lead-byte check, not point validation. Too trivial to earn a target.
-- Broker semantics: owned by loom model checking and
-  `tests/protocol/adversarial.py`, which exercise interleavings and hostile
-  peers rather than byte parsing.
+- `allowlist.rs`, `revocation.rs`, `ipc/lockfile.rs`: pure `serde_json::from_slice` into derived `deny_unknown_fields` structs. Fuzzing them would fuzz serde_json, not our code; negative unit tests already pin the fail-closed behavior.
+- `enclave/pubkey.rs`: `EnclavePublicKey::from_x963` is a length check plus a lead-byte check, not point validation. Too trivial to earn a target.
+- Broker semantics: owned by loom model checking and `tests/protocol/adversarial.py`, which exercise interleavings and hostile peers rather than byte parsing.
 - Presence signing: Security.framework calls, not a byte parser.
-- The TypeScript side (the generated Zod schemas and the hand-written
-  envelope asymmetry layer): a scope decision, not a claim that the code is
-  many-eyes-reviewed.
+- The TypeScript side (the generated Zod schemas and the hand-written envelope asymmetry layer): a scope decision, not a claim that the code is many-eyes-reviewed.
 
-Policy: a PR that adds or changes a bespoke parser or semantic validator at
-a trust boundary in the Rust core must add or extend a fuzz target, or add
-the exclusion, with its reason, to the list above. The exact rule, with its
-scoping, lives in
-[SECURITY.md](../SECURITY.md#security-relevant-changes-review-bar).
+Policy: a PR that adds or changes a bespoke parser or semantic validator at a trust boundary in the Rust core must add or extend a fuzz target, or add the exclusion, with its reason, to the list above. The exact rule, with its scoping, lives in [SECURITY.md](../SECURITY.md#security-relevant-changes-review-bar).
 
-Supply-chain scope: the fuzz workspace runs in nightly CI only, is never
-linked into a shipped binary, and its third-party direct dependencies are
-limited to `libfuzzer-sys`, `arbitrary`, and `serde_json` (alongside
-`chromium-bridge-core` itself, the crate under test); `derive_arbitrary`
-comes in transitively through `arbitrary`'s derive feature. A new fuzz
-dependency still goes through the `cargo deny` pass over `fuzz/Cargo.toml`
-in the security workflow, plus ordinary PR review.
+Supply-chain scope: the fuzz workspace runs in nightly CI only, is never linked into a shipped binary, and its third-party direct dependencies are limited to `libfuzzer-sys`, `arbitrary`, and `serde_json` (alongside `chromium-bridge-core` itself, the crate under test); `derive_arbitrary` comes in transitively through `arbitrary`'s derive feature. A new fuzz dependency still goes through the `cargo deny` pass over `fuzz/Cargo.toml` in the security workflow, plus ordinary PR review.
 
 ## Logging
 
-Both binary modes log to **stderr** (stdout carries the wire protocols). Set the
-level with `BB_LOG`:
+Both binary modes log to **stderr** (stdout carries the wire protocols). Set the level with `BB_LOG`:
 
 ```sh
 BB_LOG=debug chromium-bridge          # verbose
@@ -418,21 +213,6 @@ BB_LOG=error chromium-bridge          # quiet
 
 ## Releasing
 
-Releases are cut by release-please: conventional commits on `main` accumulate
-into a rolling release PR that bumps the version and writes `CHANGELOG.md`;
-merging it tags the release, and the same CI run builds the
-macOS Apple Silicon, Linux x64, and Windows x64 archives (binary + built
-extension) and the desktop .dmg, and publishes them to GitHub Releases (see
-[docs/release.md](./release.md)). The bump covers `Cargo.toml` and every
-synced JSON manifest (`versionedJsonFiles` in `scripts/lib.ts`: the extension
-and desktop UI `package.json` files), per release-please-config.json's
-extra-files.
+Releases are cut by release-please: conventional commits on `main` accumulate into a rolling release PR that bumps the version and writes `CHANGELOG.md`; merging it tags the release, and the same CI run builds the macOS Apple Silicon, Linux x64, and Windows x64 archives (binary + built extension) and the desktop .dmg, and publishes them to GitHub Releases (see [docs/release.md](./release.md)). The bump covers `Cargo.toml` and every synced JSON manifest (`versionedJsonFiles` in `scripts/lib.ts`: the extension and desktop UI `package.json` files), per release-please-config.json's extra-files.
 
-`Cargo.toml` stays the single source of truth between releases: after a
-manual version change, `moon run sync-version` (`bun scripts/sync-version.ts`)
-propagates it to the synced JSON manifests (the extension `package.json`,
-which the WXT-built manifest reads its version from, and the desktop UI
-`package.json`), and CI enforces the
-consistency on every push (`moon run check-version`), so drift fails the
-build - including on the release PR itself. Each packaging job additionally
-refuses to run if the tag doesn't match the Cargo version.
+`Cargo.toml` stays the single source of truth between releases: after a manual version change, `moon run sync-version` (`bun scripts/sync-version.ts`) propagates it to the synced JSON manifests (the extension `package.json`, which the WXT-built manifest reads its version from, and the desktop UI `package.json`), and CI enforces the consistency on every push (`moon run check-version`), so drift fails the build - including on the release PR itself. Each packaging job additionally refuses to run if the tag doesn't match the Cargo version.

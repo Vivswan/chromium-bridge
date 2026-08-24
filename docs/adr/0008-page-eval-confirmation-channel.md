@@ -1,10 +1,6 @@
 # ADR-0008: page_eval high-risk confirmation channel
 
-- **Status**: Amended by [ADR-0027](./0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)
-  (page_eval still confirms on every call, but the confirmation renders on the
-  extension-owned window instead of an in-page toast). Phase 8 supersedes the
-  channel entirely for page_eval by routing approval through the host Secure
-  Enclave.
+- **Status**: Amended by [ADR-0027](./0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md) (page_eval still confirms on every call, but the confirmation renders on the extension-owned window instead of an in-page toast). Phase 8 supersedes the channel entirely for page_eval by routing approval through the host Secure Enclave.
 - **Date**: 2026-07-07
 - **Supersedes**: [ADR-0005](./0005-page-eval-disabled-by-default.md) (the "do not implement in v0.1" decision)
 
@@ -105,28 +101,11 @@ Turning off `confirmPageEval` restores the "arbitrary JS with no prompt" attack 
 
 ## Update (2026-07-16): page_eval excluded from the same-origin grace window (fail-safe default)
 
-(When this addendum was written the body above was still Chinese; the whole
-file has since been translated to English.)
+(When this addendum was written the body above was still Chinese; the whole file has since been translated to English.)
 
-This update reverses the original grace-window choice for page_eval and turns
-the rejected option into the shipped one. ADR-0008 first rejected option B
-("confirm every eval", every eval reconfirms with no grace window) and instead
-reused the same-origin 60s grace window keyed `origin:eval`, so that after one
-approval any further eval on that origin within the window ran with no prompt.
-The risk note above ("the confirmation-free window is riskier for eval than
-for click") already recorded why that is dangerous: the two calls one approval
-covers can be unrelated, `document.title` one time and
-`fetch('/transfer', ...)` the next.
+This update reverses the original grace-window choice for page_eval and turns the rejected option into the shipped one. ADR-0008 first rejected option B ("confirm every eval", every eval reconfirms with no grace window) and instead reused the same-origin 60s grace window keyed `origin:eval`, so that after one approval any further eval on that origin within the window ran with no prompt. The risk note above ("the confirmation-free window is riskier for eval than for click") already recorded why that is dangerous: the two calls one approval covers can be unrelated, `document.title` one time and `fetch('/transfer', ...)` the next.
 
-The zero-trust principle in AGENTS.md ("never weaken a check for convenience")
-treats a silent same-origin window as exactly that kind of relaxation, so it
-cannot stay the default. page_eval now behaves the way option B described: every
-call reconfirms, and it is excluded from the grace window entirely. The one
-exception is the explicit opt-out `confirmPageEval=false` (from the 2026-07-15
-update above), which a user sets deliberately. The grace window
-(`confirmGraceMs`, default 60000ms) stays in force for the lower-risk
-click/submit confirmations, where the repeated action is similar and visible in
-the UI. No new setting is added; `confirmGraceMs` no longer applies to eval.
+The zero-trust principle in AGENTS.md ("never weaken a check for convenience") treats a silent same-origin window as exactly that kind of relaxation, so it cannot stay the default. page_eval now behaves the way option B described: every call reconfirms, and it is excluded from the grace window entirely. The one exception is the explicit opt-out `confirmPageEval=false` (from the 2026-07-15 update above), which a user sets deliberately. The grace window (`confirmGraceMs`, default 60000ms) stays in force for the lower-risk click/submit confirmations, where the repeated action is similar and visible in the UI. No new setting is added; `confirmGraceMs` no longer applies to eval.
 
 What each remaining setting relaxes, and the residual the user accepts:
 
@@ -135,27 +114,20 @@ What each remaining setting relaxes, and the residual the user accepts:
 | `confirmPageEval` | `true` | Off = page_eval runs with no prompt at all | Arbitrary JS executes silently; user owns this by opting in (Options warning is explicit) |
 | `confirmGraceMs` | `60000` | Applies to click/submit only; a same-origin re-click within the window does not re-prompt | A second same-origin click/submit within the window is silent. Does NOT affect eval |
 
-Code: `src/apps/extension/src/content/toast.ts` (`confirmWithEvalToast` no longer reads
-or writes `lastConfirmed`), `src/apps/extension/src/background/backends/cdp.ts`
-(`pageEval` confirm block drops the grace check), and
-`src/apps/extension/src/content/eval.ts` / `src/apps/extension/src/shared/settings.ts` comments.
+Code: `src/apps/extension/src/content/toast.ts` (`confirmWithEvalToast` no longer reads or writes `lastConfirmed`), `src/apps/extension/src/background/backends/cdp.ts` (`pageEval` confirm block drops the grace check), and `src/apps/extension/src/content/eval.ts` / `src/apps/extension/src/shared/settings.ts` comments.
 
-This is the explicit, reviewed relaxation-of-a-default record the zero-trust
-rule requires. Superseding only the eval portion of the grace-window decision;
-the rest of ADR-0008 stands.
+This is the explicit, reviewed relaxation-of-a-default record the zero-trust rule requires. Superseding only the eval portion of the grace-window decision; the rest of ADR-0008 stands.
 
 ## Consequences
 
 ### Positive
 - **Capability completed**: complex interactions (CustomEvent, SPA routing, reading JS variables, canvas) become possible
 - **Masking prevents leaks**: return values are processed before leaving the page, so tokens never travel the IPC chain
-- **Reuses existing mechanisms**: Toast + lastConfirmed + storage switches keep the code delta contained
-  (see Update 2026-07-16: eval no longer uses lastConfirmed / the grace window)
+- **Reuses existing mechanisms**: Toast + lastConfirmed + storage switches keep the code delta contained (see Update 2026-07-16: eval no longer uses lastConfirmed / the grace window)
 
 ### Negative
 - **Larger attack surface**: arbitrary JS execution arrives; even with confirmation, one mistaken approval leaks
-- **Confirmation-free window risk**: as described above, higher than the click case
-  (superseded by Update 2026-07-16: eval is excluded from the grace window and always reconfirms; this risk no longer applies to eval)
+- **Confirmation-free window risk**: as described above, higher than the click case (superseded by Update 2026-07-16: eval is excluded from the grace window and always reconfirms; this risk no longer applies to eval)
 - **Masking can mangle**: long numeric IDs and legitimate long hex (such as hashes) get masked; the user can turn the switch off
 - **No execution timeout**: an infinite-loop eval hangs the tool call (the 120s session timeout backstops it, but the page stays stuck)
 

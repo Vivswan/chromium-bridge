@@ -1,8 +1,6 @@
 # chromium-bridge documentation
 
-This directory is the **single source of truth** for the chromium-bridge
-project. Code comments answer "what does this code do"; this directory answers
-"why it is done this way, what it must do, and what the constraints are".
+This directory is the **single source of truth** for the chromium-bridge project. Code comments answer "what does this code do"; this directory answers "why it is done this way, what it must do, and what the constraints are".
 
 ## Doc map
 
@@ -25,21 +23,11 @@ project. Code comments answer "what does this code do"; this directory answers
 | [security/incident-response.md](./security/incident-response.md) | Security incident response runbook: reporting, triage, mitigation, disclosure | Maintainers, reporters |
 | [adr/](./adr/) | Architecture Decision Records (ADRs): a traceable record of every "why was this chosen" | Reviewers, future changers |
 
-> The single source of truth for cross-process contracts (tool catalogue,
-> error taxonomy, capabilities, protocol version, identity, wire envelopes)
-> is the Rust core; the TS side is generated from it (`moon run gen`). See
-> [architecture.md section 11](./architecture.md#11-protocol-boundary-contracts-error-taxonomy-and-handshake)
-> and [ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md).
+> The single source of truth for cross-process contracts (tool catalogue, error taxonomy, capabilities, protocol version, identity, wire envelopes) is the Rust core; the TS side is generated from it (`moon run gen`). See [architecture.md section 11](./architecture.md#11-protocol-boundary-contracts-error-taxonomy-and-handshake) and [ADR-0028](./adr/0028-contracts-dissolved-into-rust-core.md).
 
-> The **development process** (branch/commit/sync/merge rules) is in the
-> root-level [`CONTRIBUTING.md`](../CONTRIBUTING.md); the quick-reference
-> entry point for agents is [`AGENTS.md`](../AGENTS.md). The build/test
-> toolchain is in [development.md](./development.md).
+> The **development process** (branch/commit/sync/merge rules) is in the root-level [`CONTRIBUTING.md`](../CONTRIBUTING.md); the quick-reference entry point for agents is [`AGENTS.md`](../AGENTS.md). The build/test toolchain is in [development.md](./development.md).
 
-> `src/apps/web/` holds a minimal Astro site (`moon run web:build`) that renders
-> these markdown docs and their translations; the markdown stays the single
-> source. Cross-doc links on the rendered site still point at `.md` paths
-> (a link rewrite is a tracked follow-up); navigate from its index page.
+> `src/apps/web/` holds a minimal Astro site (`moon run web:build`) that renders these markdown docs and their translations; the markdown stays the single source. Cross-doc links on the rendered site still point at `.md` paths (a link rewrite is a tracked follow-up); navigate from its index page.
 
 ## How to read
 
@@ -50,9 +38,7 @@ project. Code comments answer "what does this code do"; this directory answers
 
 ## ADR index
 
-An ADR (Architecture Decision Record) records a decision where **multiple
-reasonable options existed and one was chosen**. Uncontroversial routine
-choices do not get an ADR.
+An ADR (Architecture Decision Record) records a decision where **multiple reasonable options existed and one was chosen**. Uncontroversial routine choices do not get an ADR.
 
 | # | Title | Status |
 |---|------|------|
@@ -100,5 +86,4 @@ When adding an ADR:
 - Required sections: context, decision, alternatives considered, consequences
 - One decision per ADR; do not mix
 
-A superseded ADR is **not deleted**: change its status to
-`Superseded by #NNNN` with a link, and keep the history.
+A superseded ADR is **not deleted**: change its status to `Superseded by #NNNN` with a link, and keep the history.
