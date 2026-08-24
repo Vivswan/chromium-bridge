@@ -18,8 +18,7 @@ Expect an acknowledgement within a few days, and a fix in the next release once 
 
 Never include real credentials in a report; redact everything that looks like a key.
 
-<!-- Repository-specific security documentation (scope, threat model, review
-     expectations for security-relevant changes) goes below this line. It survives template updates via three-way merge. -->
+<!-- Everything above this line is managed by Vivswan/repo-platform and replaced on template sync. Repository-specific security documentation (scope, threat model, review expectations for security-relevant changes) goes below this line; it is this repository's own and survives template updates via three-way merge. -->
 <!-- repo-platform:local-section -->
 
 chromium-bridge drives a **real, logged-in browser** on the user's machine. It can read page content, cookies (including httpOnly), and web storage, and can execute JavaScript in pages. This document covers how to report issues, the security model in summary, and the review bar for security-relevant changes.
