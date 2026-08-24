@@ -1,12 +1,12 @@
 # The update stage of the release pipeline: repo-owned, generated once by
-# Vivswan/repo-platform and never overwritten by template
-# sync. The managed release.yml calls this workflow between cutting the
-# draft release and the attested publish, so everything this repository
-# wants on the release happens here: packaging, asset uploads, note edits.
-# Add jobs freely - publishing waits for every job in this file, and every
-# asset uploaded here is attested at publish time into the release's
-# single attestation.jsonl. Recovery when a run dies mid-pipeline is
-# documented in release.yml.
+# Vivswan/repo-platform and never overwritten by template sync. The managed
+# release.yml calls this workflow between cutting the draft release and the
+# attested publish, so everything this repository wants on the release
+# happens here: packaging, asset uploads, note edits. Add jobs freely -
+# publishing waits for every job in this file, and every asset uploaded
+# here is attested at publish time into the release's single
+# attestation.jsonl. Recovery when a run dies mid-pipeline is documented
+# in release.yml; the jobs themselves are documented in docs/release.md.
 
 name: Update Release
 
@@ -19,20 +19,521 @@ on:
         type: string
 
 jobs:
-  update-release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  binaries:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
     permissions:
-      contents: write # also what makes the draft visible to gh
+      contents: write # upload assets to the GitHub Release
+      id-token: write # OIDC token to sign the SLSA build provenance
+      attestations: write # write the build-provenance attestation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Intel (x64) macOS is intentionally NOT built and will not be
+          # re-added: Apple Silicon is the supported macOS target. Rosetta 2
+          # only translates x86_64 to run on Apple Silicon, not the reverse,
+          # so it cannot run the arm64 build on an Intel Mac - Intel users
+          # must build from source.
+          - os: macos-14
+            platform: macos
+            arch: arm64
+          # Build on an older glibc baseline for wider Linux compatibility.
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: windows-2022
+            platform: windows
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      PLATFORM: ${{ matrix.platform }}
+      # Pass the tag through the environment, never spliced into a run: script,
+      # so it cannot break out of a shell command. The Verify step below also
+      # constrains its shape (this workflow has contents/id-token/attestations
+      # write).
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Pin to the tag release-please just published: this run's own sha
+          # IS that commit today, but the tag is what users verify against.
           ref: ${{ inputs.tag }}
-      - name: Update the draft release
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Verify tag matches Cargo version
+        shell: bash
+        run: |
+          TAG="$RELEASE_TAG"
+          # Fail closed on an unexpected tag shape before any later step uses it
+          # in a filename. Env-indirection already blocks shell injection; this
+          # keeps the tag to the release grammar (vMAJOR.MINOR.PATCH[-suffix]).
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "refusing malformed release tag: $TAG"
+            exit 1
+          fi
+          VER="${TAG#v}"          # strip leading v
+          CORE="${VER%%-*}"       # strip any -dev/-rc pre-release suffix
+          CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
+          [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
+
+      - name: Build binary (deterministic)
+        # build-repro.ts pins SOURCE_DATE_EPOCH and remaps build paths so the
+        # binary is bit-for-bit reproducible from the tag with the pinned
+        # toolchain; see SECURITY.md "Release artifact integrity". It is
+        # self-contained (no bun install needed; setup-bun above suffices).
+        shell: bash
+        run: bun scripts/build-repro.ts
+
+      - name: Build extension bundle
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd src/apps/extension build
+
+      - name: Package release archive
+        id: pkg
+        shell: bash
+        run: |
+          TAG="$RELEASE_TAG"
+          NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
+          mkdir -p "$NAME/extension"
+          cp -r build/extension/chrome-mv3 "$NAME/extension/dist"
+          cp LICENSE.md README.md "$NAME/"
+          # RELEASE.txt records which release this archive came from, so a
+          # user can pick the matching published checksum / provenance
+          # attestation when verifying by hand (SECURITY.md "Release artifact
+          # integrity"). Registration itself is `chromium-bridge doctor --fix`,
+          # run from the extracted binary.
+          {
+            echo "repo=${GITHUB_REPOSITORY}"
+            echo "tag=${TAG}"
+            echo "platform=${PLATFORM}"
+            echo "arch=${ARCH}"
+          } > "$NAME/RELEASE.txt"
+          if [ "$PLATFORM" = "windows" ]; then
+            cp target/release/chromium-bridge.exe "$NAME/"
+            BIN_FILE="chromium-bridge.exe"
+            7z a -tzip "$NAME.zip" "$NAME" > /dev/null
+            sha256sum "$NAME.zip" > "$NAME.zip.sha256"
+            ARCHIVE="$NAME.zip"
+          else
+            cp target/release/chromium-bridge "$NAME/"
+            BIN_FILE="chromium-bridge"
+            tar czf "$NAME.tar.gz" "$NAME"
+            if command -v shasum >/dev/null 2>&1; then
+              shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+            else
+              sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+            fi
+            ARCHIVE="$NAME.tar.gz"
+          fi
+          # Per-binary checksum, published as its own release asset, so the
+          # shipped binary can be verified after extraction (the
+          # archive-level .sha256 can't be checked at that point). Hash
+          # from inside $NAME so the recorded file name is the bare binary.
+          if command -v shasum >/dev/null 2>&1; then
+            (cd "$NAME" && shasum -a 256 "$BIN_FILE") > "$NAME.binary.sha256"
+          else
+            (cd "$NAME" && sha256sum "$BIN_FILE") > "$NAME.binary.sha256"
+          fi
+          {
+            echo "name=$NAME"
+            echo "archive=$ARCHIVE"
+            echo "sha256file=$ARCHIVE.sha256"
+            echo "binary=$NAME/$BIN_FILE"
+            echo "binsha256file=$NAME.binary.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      # The built extension bundle is platform-independent, so ONLY the
+      # macos/arm64 leg builds the standalone zip - every leg uploading the
+      # same asset name would conflict. Its upload is the separate macos-only
+      # Publish step below, so the shared Publish step's file list never
+      # carries patterns that are blank on the other legs.
+      - name: Package standalone extension zip
+        id: extzip
+        if: matrix.platform == 'macos'
+        run: |
+          TAG="$RELEASE_TAG"
+          NAME="chromium-bridge-extension-${TAG}"
+          # Zip the built bundle with a top-level `dist/` folder so users can
+          # point "Load unpacked" straight at the extracted directory.
+          rm -rf dist-zip && mkdir dist-zip
+          cp -r build/extension/chrome-mv3 dist-zip/dist
+          (cd dist-zip && zip -r "../$NAME.zip" dist)
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256"
+          else
+            sha256sum "$NAME.zip" > "$NAME.zip.sha256"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      # Per-asset attestation on top of the managed publish stage's global
+      # attestation.jsonl: that stage only attests release ASSETS, and the
+      # bare binary inside the archive is not one - users verify after
+      # extraction, so `gh attestation verify` needs a subject whose digest
+      # matches the shipped binary itself.
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            ${{ steps.pkg.outputs.archive }}
+            ${{ steps.pkg.outputs.binary }}
+
+      # Attest the standalone extension zip on the same (macos) leg that built it.
+      - name: Attest extension zip provenance
+        if: matrix.platform == 'macos'
+        id: attest-extzip
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ steps.extzip.outputs.name }}.zip
+
+      # The Sigstore bundle ships as a release asset next to the artifacts it
+      # covers, so `gh attestation verify <asset> --repo Vivswan/chromium-bridge
+      # --bundle <file>` verifies against the frozen release without depending
+      # on GitHub's attestations API. One bundle covers both the archive and
+      # the bare binary - which is why it is named after the shared release
+      # stem rather than either file - and verify picks the entry matching the
+      # asset's digest.
+      - name: Attach release archive to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-        # Repository-specific release preparation goes here, e.g.:
-        #   ./build.sh
-        #   gh release upload "$RELEASE_TAG" ./artifact --clobber
-        run: echo "nothing to add to $RELEASE_TAG yet"
+          ARCHIVE: ${{ steps.pkg.outputs.archive }}
+          SHA256FILE: ${{ steps.pkg.outputs.sha256file }}
+          BINSHA256FILE: ${{ steps.pkg.outputs.binsha256file }}
+          NAME: ${{ steps.pkg.outputs.name }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        shell: bash
+        run: |
+          cp "$BUNDLE" "$NAME.attestation.jsonl"
+          gh release upload "$RELEASE_TAG" "$ARCHIVE" "$SHA256FILE" "$BINSHA256FILE" \
+            "$NAME.attestation.jsonl" --clobber
+
+      # The standalone extension zip rides its own macos-only upload (matching
+      # the extzip step above): each asset is named explicitly and must exist
+      # on this leg, so `gh release upload` fails loudly on a missing file.
+      - name: Attach extension zip to the draft release
+        if: matrix.platform == 'macos'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXTZIP: ${{ steps.extzip.outputs.name }}
+          BUNDLE: ${{ steps.attest-extzip.outputs.bundle-path }}
+        shell: bash
+        run: |
+          cp "$BUNDLE" "$EXTZIP.zip.attestation.jsonl"
+          gh release upload "$RELEASE_TAG" "$EXTZIP.zip" "$EXTZIP.zip.sha256" \
+            "$EXTZIP.zip.attestation.jsonl" --clobber
+
+  # The secrets context is not available in a job-level `if`, so a tiny
+  # gate job exports "are the desktop signing secrets configured" as an
+  # output. Forks and secretless checkouts skip desktop-app cleanly instead
+  # of failing it; the binary+extension release above is never blocked.
+  desktop-signing-secrets:
+    name: desktop signing secrets present?
+    # Only tests secrets for emptiness; the token needs no permissions.
+    permissions: {}
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - name: Check for signing secrets
+        id: check
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          PROFILE: ${{ secrets.MACOS_PROVISION_PROFILE_BASE64 }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$CERT_PASSWORD" ] && [ -n "$PROFILE" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "desktop signing secrets not configured; skipping the desktop-app job"
+          fi
+
+  # The macOS desktop app: build + sign the bundle (helper-bundle host with
+  # its own entitlements, ADR-0026), wrap it in a .dmg, optionally notarize,
+  # attest, and attach it to the same release. Signing material comes from
+  # repository secrets (see docs/release.md "Desktop app secrets"); the
+  # free-tier provisioning profile expires every 7 days, so the profile
+  # secret needs a refresh shortly before a release PR merges.
+  # Skipping (secrets absent) is clean, but a FAILURE here fails this
+  # workflow and with it the managed publish stage: a broken dmg build can
+  # never publish a half-shipped release.
+  desktop-app:
+    name: macos desktop app (.dmg)
+    needs: [desktop-signing-secrets]
+    if: needs.desktop-signing-secrets.outputs.present == 'true'
+    permissions:
+      contents: write # upload assets to the GitHub Release
+      id-token: write # OIDC token to sign the SLSA build provenance
+      attestations: write # write the build-provenance attestation
+    runs-on: macos-14
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      # Notarization is optional on top of signing: the free Apple
+      # Development certificate cannot notarize, so these secrets exist only
+      # once a paid Developer ID is in place.
+      HAVE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Verify tag matches Cargo version
+        shell: bash
+        run: |
+          TAG="$RELEASE_TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "refusing malformed release tag: $TAG"
+            exit 1
+          fi
+          VER="${TAG#v}"
+          CORE="${VER%%-*}"
+          CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
+          [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
+
+      # An ephemeral keychain scoped to this job: the certificate never
+      # touches the login keychain, and the cleanup step deletes the whole
+      # keychain even when the build fails.
+      - name: Import signing certificate into an ephemeral keychain
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          # Export the keychain path and arm the p12 cleanup FIRST, so a
+          # failure partway through this step still lets the delete step and
+          # this trap remove the material.
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          trap 'rm -f "$RUNNER_TEMP/cert.p12"' EXIT
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$CERT" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+      - name: Stage provisioning profile from the secret
+        env:
+          PROFILE: ${{ secrets.MACOS_PROVISION_PROFILE_BASE64 }}
+        run: |
+          PROFILE_PATH="$RUNNER_TEMP/chromium-bridge.provisionprofile"
+          printf '%s' "$PROFILE" | base64 -d > "$PROFILE_PATH"
+          echo "PROVISION_PROFILE_PATH=$PROFILE_PATH" >> "$GITHUB_ENV"
+
+      - name: Build, sign, and verify the .dmg
+        run: |
+          bun install --frozen-lockfile
+          bun scripts/desktop-bundle.ts --dmg
+
+      # The bundle script names the image after the Cargo version; republish
+      # it under the full release tag so a -rc/-dev prerelease's assets stay
+      # distinguishable from the final release's.
+      - name: Name the release asset
+        id: dmg
+        run: |
+          # The asset name hardcodes arm64 (the supported macOS target), so
+          # refuse to mislabel a build from a different runner arch.
+          [ "$(uname -m)" = "arm64" ] || { echo "expected an arm64 runner, got $(uname -m)"; exit 1; }
+          BUILT="$(ls build/dmg/*.dmg)"
+          ASSET="chromium-bridge-app-${RELEASE_TAG}-macos-arm64.dmg"
+          cp "$BUILT" "$ASSET"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      # Notarize + staple BEFORE hashing/attesting: stapling rewrites the
+      # image, and the published checksum and provenance subject must match
+      # the exact bytes users download.
+      - name: Notarize and staple (only with notarization secrets)
+        if: env.HAVE_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DMG: ${{ steps.dmg.outputs.asset }}
+        run: |
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
+
+      - name: Note the notarization gap (no notarization secrets)
+        if: env.HAVE_NOTARY != 'true'
+        run: |
+          echo "::notice::dmg is dev-signed, NOT notarized - Gatekeeper will warn on other Macs."
+          echo "Notarization needs a paid Developer ID (APPLE_ID / APPLE_APP_PASSWORD / APPLE_TEAM_ID secrets)."
+
+      - name: Checksum the dmg
+        env:
+          DMG: ${{ steps.dmg.outputs.asset }}
+        run: shasum -a 256 "$DMG" > "$DMG.sha256"
+
+      - name: Attest dmg provenance
+        id: attest-dmg
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ steps.dmg.outputs.asset }}
+
+      - name: Attach dmg to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DMG: ${{ steps.dmg.outputs.asset }}
+          BUNDLE: ${{ steps.attest-dmg.outputs.bundle-path }}
+        shell: bash
+        run: |
+          cp "$BUNDLE" "$DMG.attestation.jsonl"
+          gh release upload "$RELEASE_TAG" "$DMG" "$DMG.sha256" "$DMG.attestation.jsonl" --clobber
+
+      - name: Delete the ephemeral keychain
+        if: always()
+        run: |
+          if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -f "$SIGNING_KEYCHAIN" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN"
+          fi
+
+  # CycloneDX SBOM from the committed lockfiles (Cargo.lock + bun.lock),
+  # scanning declared dependencies rather than an installed tree (a fresh
+  # checkout has no node_modules/target). It attaches to the DRAFT: the
+  # release is immutable once published, so a decoupled `release: published`
+  # workflow could never attach it. The managed publish stage waits for
+  # every job in this file, so this job is continue-on-error: an
+  # SBOM-tooling failure still cannot block shipping the binaries - the
+  # release just goes out without an SBOM (and the annotated failure on
+  # the run flags it).
+  sbom:
+    continue-on-error: true
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # attach the SBOM asset to the draft release
+      id-token: write # OIDC token to sign the SLSA build provenance
+      attestations: write # write the build-provenance attestation
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Build the SBOM from the exact released code.
+          ref: ${{ inputs.tag }}
+
+      - name: Verify tag matches Cargo version
+        shell: bash
+        run: |
+          TAG="$RELEASE_TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "refusing malformed release tag: $TAG"
+            exit 1
+          fi
+          VER="${TAG#v}"
+          CORE="${VER%%-*}"
+          CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
+          [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: chromium-bridge.cdx.json
+          # Keep a CI artifact too; the release attach is the explicit step
+          # below so the target tag is deterministic.
+          upload-artifact: true
+          upload-release-assets: false
+
+      # The SBOM is a downloadable release asset like the archives, so it
+      # gets the same provenance attestation: `gh attestation verify
+      # chromium-bridge.cdx.json --repo <this repo>` must work on it after
+      # download.
+      - name: Attest SBOM provenance
+        id: attest-sbom
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: chromium-bridge.cdx.json
+
+      - name: Attach SBOM to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
+        shell: bash
+        run: |
+          cp "$BUNDLE" chromium-bridge.cdx.json.attestation.jsonl
+          gh release upload "$RELEASE_TAG" chromium-bridge.cdx.json \
+            chromium-bridge.cdx.json.attestation.jsonl --clobber
+
+  # Any tag with a suffix (v0.1.0-dev, -rc.1, ...) is a prerelease. Set the
+  # flag on the DRAFT: the managed publish stage only flips draft=false, so
+  # the prerelease bit must already be in place when it does. Runs after
+  # binaries so the draft is only mutated once the packaging legs have
+  # validated the tag against Cargo (matching the old pipeline, which set
+  # the flag at publish time after every gate); the shape re-check below
+  # keeps this job fail-closed on its own inputs too.
+  mark-prerelease:
+    needs: [binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # edit the draft release
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Flag suffixed tags as prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "refusing malformed release tag: $TAG"
+            exit 1
+          fi
+          case "$TAG" in
+            *-*) gh release edit "$TAG" --prerelease ;;
+            *) echo "final release tag; nothing to flag" ;;
+          esac
+
+  # Re-encodes the old publish gate inside the hook: the managed publish
+  # stage only sees this workflow's aggregate result, and a SKIPPED job
+  # does not fail a workflow, so an unexpected skip (a future `if:` on a
+  # packaging job) would otherwise slip through to publication. This job
+  # always runs (unless the run is cancelled) and fails unless every job
+  # landed in an allowed state - the only tolerated skip is desktop-app
+  # with the signing secrets absent. sbom is continue-on-error, so its
+  # failure already reads as success here; a skip or cancellation blocks.
+  release-ready:
+    name: allowed to publish?
+    needs: [binaries, desktop-signing-secrets, desktop-app, sbom, mark-prerelease]
+    if: ${{ !cancelled() }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    env:
+      BINARIES: ${{ needs.binaries.result }}
+      SECRETS_GATE: ${{ needs.desktop-signing-secrets.result }}
+      SECRETS_PRESENT: ${{ needs.desktop-signing-secrets.outputs.present }}
+      DESKTOP: ${{ needs.desktop-app.result }}
+      SBOM: ${{ needs.sbom.result }}
+      PRERELEASE_FLAG: ${{ needs.mark-prerelease.result }}
+    steps:
+      - name: Assert every job landed in an allowed state
+        run: |
+          fail=0
+          [ "$BINARIES" = "success" ] || { echo "binaries: $BINARIES"; fail=1; }
+          [ "$SECRETS_GATE" = "success" ] || { echo "desktop-signing-secrets: $SECRETS_GATE"; fail=1; }
+          if [ "$DESKTOP" != "success" ] && { [ "$DESKTOP" != "skipped" ] || [ "$SECRETS_PRESENT" != "false" ]; }; then
+            echo "desktop-app: $DESKTOP (secrets present: $SECRETS_PRESENT)"; fail=1
+          fi
+          [ "$SBOM" = "success" ] || { echo "sbom: $SBOM"; fail=1; }
+          [ "$PRERELEASE_FLAG" = "success" ] || { echo "mark-prerelease: $PRERELEASE_FLAG"; fail=1; }
+          [ "$fail" -eq 0 ] || { echo "refusing to let the release publish"; exit 1; }

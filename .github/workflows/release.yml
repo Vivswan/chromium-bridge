@@ -130,16 +130,8 @@ jobs:
   # (GitHub attestations need a public repository or Enterprise Cloud, so
   # non-public releases publish unattested by fleet policy).
   publish-release:
-    needs: [release-please, binaries, desktop-signing-secrets, desktop-app, sbom]
-    if: >-
-      ${{ !cancelled()
-          && needs.release-please.outputs.release_created == 'true'
-          && needs.binaries.result == 'success'
-          && needs.desktop-signing-secrets.result == 'success'
-          && (needs.desktop-app.result == 'success'
-              || (needs.desktop-app.result == 'skipped'
-                  && needs.desktop-signing-secrets.outputs.present == 'false'))
-          && needs.sbom.result != 'cancelled' }}
+    needs: [release-please, update-release]
+    if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -198,9 +190,5 @@ jobs:
           gh release upload "$TAG" attestation.jsonl --clobber
       - name: Publish the GitHub release
         env:
-          # Publishing with the default GITHUB_TOKEN cannot trigger the
-          # `on: release` pages production deploy; a repo-scoped
-          # REPO_PLATFORM_TOKEN secret lifts that (without one, dispatch
-          # pages.yml by hand after a release).
           GH_TOKEN: ${{ secrets.REPO_PLATFORM_TOKEN || github.token }}
         run: gh release edit "$TAG" --draft=false
