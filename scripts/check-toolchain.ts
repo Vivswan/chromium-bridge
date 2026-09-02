@@ -9,7 +9,9 @@
 //           components + profile that proto cannot express). The .prototools
 //           rust entry only pre-installs that toolchain and must match.
 //   bun   - package.json's packageManager field (read by setup-bun in the
-//           CI jobs that do not go through proto) must match.
+//           CI jobs that do not go through proto) and the template-managed
+//           .bun-version (what the platform's bun-module jobs run) must
+//           both match.
 //   proto/moon - .github/workflows/checks.yml passes explicit proto-version /
 //           moon-version inputs to moonrepo/setup-toolchain (the action
 //           cannot read the proto pin from .prototools itself); every
@@ -73,6 +75,15 @@ if (!bunFromPkg) {
   fail(`.prototools bun (${pin("bun")}) != package.json packageManager (${bunFromPkg})`);
 }
 console.log(`bun    ${bunFromPkg ?? "<missing>"} (package.json packageManager)`);
+
+// bun again: the template-managed .bun-version is what CI's bun-module jobs
+// actually run, so a local pin that drifts from it typechecks against a bun
+// the gate never uses.
+const bunVersionFile = readFileSync(join(repoRoot, ".bun-version"), "utf8").trim();
+if (bunVersionFile !== pin("bun")) {
+  fail(`.prototools bun (${pin("bun")}) != .bun-version (${bunVersionFile})`);
+}
+console.log(`bun    ${bunVersionFile} (.bun-version, template-managed)`);
 
 // proto + moon: EVERY moonrepo/setup-toolchain step in checks.yml must be
 // SHA-pinned and carry both explicit version inputs in its `with:` block,

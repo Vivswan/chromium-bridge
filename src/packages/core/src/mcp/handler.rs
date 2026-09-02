@@ -105,9 +105,11 @@ impl BridgeHandler {
 
 impl ServerHandler for BridgeHandler {
     /// Advertised identity and capabilities. `protocol_version` here is
-    /// only the legacy `initialize` fallback when a client requests a
-    /// revision outside [`ServerHandler::supported_protocol_versions`];
-    /// a supported requested revision is echoed back (rmcp negotiates).
+    /// only the legacy `initialize` fallback seed: rmcp (3.2+) echoes a
+    /// supported LEGACY requested revision and answers a modern
+    /// (2026-07-28+, which has no initialize handshake) or unknown claim
+    /// with the newest supported legacy revision - this value, being
+    /// modern, defers to that computed fallback.
     /// The supported set stays rmcp's default - every revision the SDK
     /// implements - on purpose: pre-2026 harnesses keep negotiating their
     /// own revision via `initialize` until they migrate (ADR-0034 records

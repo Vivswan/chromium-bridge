@@ -247,6 +247,10 @@ def nm_read(p, skip_pushes=True):
 # src/packages/core/src/protocol.rs; a re-pin there must update these
 # literals by hand (the assertions below fail until it does).
 MODERN_VERSION = "2026-07-28"
+# The newest revision that still has an initialize handshake: rmcp 3.2+
+# answers initialize with this whenever the requested revision is modern
+# (2026-07-28 replaced initialize with per-request metadata) or unknown.
+NEWEST_LEGACY_VERSION = "2025-11-25"
 META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
 META_CAPS_KEY = "io.modelcontextprotocol/clientCapabilities"
 META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
@@ -773,8 +777,10 @@ def test_initialize_is_served_in_every_era():
     legacy negotiation, and the era is a per-request property. The original
     design intended a modern-era initialize to be refused with an error
     naming 2026-07-28; the SDK's actual (recorded in ADR-0034) is to answer
-    it as a negotiation, echoing a supported requested revision. This pin
-    keeps that deviation visible."""
+    it as a negotiation. Since rmcp 3.2 the negotiation is legacy-only:
+    2026-07-28 has no initialize handshake, so a modern or unknown requested
+    revision is answered with the newest LEGACY revision instead of an echo.
+    This pin keeps that deviation visible."""
     print("\n[test] initialize is served in every era (rmcp negotiation)")
     try:
         os.remove(LOCK)
@@ -792,18 +798,18 @@ def test_initialize_is_served_in_every_era():
         res = r.get("result") or {}
         check(r.get("id") == 61 and r.get("error") is None,
               "initialize with modern _meta is served, not refused")
-        check(res.get("protocolVersion") == MODERN_VERSION,
-              "the negotiation echoes the supported requested revision")
+        check(res.get("protocolVersion") == NEWEST_LEGACY_VERSION,
+              "a modern requested revision negotiates the newest legacy one")
         check(all(k not in res for k in ("resultType", "ttlMs", "cacheScope")),
               "the initialize result keeps the legacy shape")
         # An initialize requesting an UNKNOWN revision is answered with the
-        # newest supported one instead of an error (rmcp's fallback).
+        # newest legacy one instead of an error (rmcp's fallback).
         c.send({"jsonrpc": "2.0", "id": 62, "method": "initialize",
                 "params": {"protocolVersion": "1999-01-01", "capabilities": {},
                            "clientInfo": {"name": "e2e", "version": "0.1"}}})
         r = c.recv()
-        check((r.get("result") or {}).get("protocolVersion") == MODERN_VERSION,
-              "an unknown requested revision falls back to the newest supported")
+        check((r.get("result") or {}).get("protocolVersion") == NEWEST_LEGACY_VERSION,
+              "an unknown requested revision falls back to the newest legacy")
     finally:
         try:
             mcp.stdin.close()

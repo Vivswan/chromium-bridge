@@ -21,12 +21,16 @@
 //! answering - an invalid opener, an internal rmcp task failure - its
 //! channel ends or its runtime task finishes, and [`Connection::handle`]
 //! returns an error: the caller drops the connection, fail closed, never
-//! a hang.
+//! a hang. rmcp (3.1.4+) answers an invalid opener with a descriptive
+//! error BEFORE failing the service, so the first non-ping exchange reads
+//! the opener verdict before the reply: a refused opener drops with that
+//! flushed refusal unread, and a bare probe gets EOF, never a reply
+//! confirming the bridge exists.
 
 use std::io;
 use std::sync::OnceLock;
 
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use futures::future::{self, Either};
 use futures::{SinkExt, StreamExt};
 use rmcp::service::{RoleServer, RxJsonRpcMessage, TxJsonRpcMessage};
@@ -63,14 +67,34 @@ fn runtime() -> Option<&'static tokio::runtime::Runtime> {
 pub struct Connection {
     inbound: mpsc::Sender<RxJsonRpcMessage<RoleServer>>,
     outbound: mpsc::Receiver<TxJsonRpcMessage<RoleServer>>,
-    /// The service's runtime task. Awaited alongside `outbound` so a service
-    /// that dies without replying (however it dies) reads as end-of-service,
-    /// never as a wait on a reply that cannot come. `None` once its end has
-    /// been observed: a tokio `JoinHandle` panics if polled again after
-    /// completion - a process abort under `panic = "abort"` - so the spent
-    /// state is unrepresentable instead of a doc-comment obligation on the
-    /// caller.
-    service: Option<tokio::task::JoinHandle<()>>,
+    service: Service,
+}
+
+/// The service lifecycle. Taken (leaving `Spent`) for every replied-to
+/// exchange and restored only on success, so every error path leaves the
+/// connection spent - fail closed by construction - and the contradictory
+/// combinations (a verdict on an open session, a poll after the end was
+/// observed) are unrepresentable.
+enum Service {
+    /// The opener verdict is pending: `verdict` resolves once rmcp's
+    /// serve() accepts the first non-ping request and is canceled (sender
+    /// dropped) when it refuses. The first reply is gated on it so rmcp's
+    /// pre-init refusal flush (the error reply it writes before failing
+    /// the service, rmcp 3.1.4+) stays off the wire.
+    Opening {
+        verdict: oneshot::Receiver<()>,
+        task: tokio::task::JoinHandle<()>,
+    },
+    /// The opener was served. The task is awaited alongside `outbound` so
+    /// a service that dies without replying (however it dies) reads as
+    /// end-of-service, never as a wait on a reply that cannot come.
+    Open { task: tokio::task::JoinHandle<()> },
+    /// The end was observed: the caller was told to drop the connection,
+    /// and this instance can never serve again. Holding no `JoinHandle`
+    /// here matters - a tokio `JoinHandle` panics if polled again after
+    /// completion, a process abort under `panic = "abort"` - so the spent
+    /// state is unrepresentable instead of a doc-comment obligation.
+    Spent,
 }
 
 /// The class of an opener failure, and ONLY the class: rmcp's opener error
@@ -100,14 +124,19 @@ impl Connection {
         let rt = runtime().ok_or_else(|| io::Error::other("MCP runtime unavailable"))?;
         let (in_tx, in_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (out_tx, out_rx) = mpsc::channel::<TxJsonRpcMessage<RoleServer>>(CHANNEL_CAPACITY);
+        let (open_tx, open_rx) = oneshot::channel::<()>();
         let service = rt.spawn(async move {
             // serve() runs the opener exchange (legacy `initialize`, or a
-            // stateless 2026-07-28 request carrying its own `_meta`); an
-            // invalid opener ends the service here. Either way, when this
-            // task finishes the transport - and with it `out_tx` - drops,
-            // which the sync side observes as end-of-service.
+            // stateless 2026-07-28 request carrying its own `_meta`) and
+            // resolves without needing further input; an invalid opener
+            // ends the service here, with `open_tx` dropped unsent so the
+            // sync side refuses before reading the error reply rmcp
+            // flushed. Either way, when this task finishes the transport -
+            // and with it `out_tx` - drops, which the sync side observes
+            // as end-of-service.
             match BridgeHandler::new(session).serve((out_tx, in_rx)).await {
                 Ok(running) => {
+                    let _ = open_tx.send(());
                     let _ = running.waiting().await;
                 }
                 Err(e) => {
@@ -122,7 +151,10 @@ impl Connection {
         Ok(Connection {
             inbound: in_tx,
             outbound: out_rx,
-            service: Some(service),
+            service: Service::Opening {
+                verdict: open_rx,
+                task: service,
+            },
         })
     }
 
@@ -133,9 +165,9 @@ impl Connection {
     pub fn handle(&mut self, msg: &JsonRpc) -> io::Result<Option<JsonRpc>> {
         // A service observed dead stays dead: the caller was told to drop
         // the connection, and this instance can never serve again.
-        let Some(service) = self.service.as_mut() else {
+        if matches!(self.service, Service::Spent) {
             return Err(io::Error::other("mcp service already ended"));
-        };
+        }
         // Refusals for frames that never reach the service. Only a frame
         // with an id can be answered; a malformed notification is swallowed.
         let invalid = |detail: String| {
@@ -165,46 +197,112 @@ impl Connection {
         if !expects_reply {
             return Ok(None);
         }
+        // Take the lifecycle, leaving Spent: it is restored only when the
+        // whole exchange - reply taken AND validated - succeeds, so every
+        // error return below leaves the connection spent without per-arm
+        // bookkeeping.
+        let wire = match std::mem::replace(&mut self.service, Service::Spent) {
+            Service::Spent => return Err(io::Error::other("mcp service already ended")),
+            Service::Opening { verdict, task } => self.first_reply(msg, verdict, task)?,
+            Service::Open { task } => self.next_reply(msg, task)?,
+        };
+        Ok(Some(wire))
+    }
+
+    /// Take the reply deciding the opener. rmcp (3.1.4+) answers an invalid
+    /// opener with a descriptive error BEFORE failing the service, and
+    /// delivering it would turn the fail-closed EOF into an oracle
+    /// confirming the bridge to unauthenticated probes - so for a non-ping
+    /// request the opener verdict is read FIRST (rmcp adjudicates the
+    /// opener on the first non-ping frame without needing further input,
+    /// so the verdict cannot hang), and a refusal returns `Err` with the
+    /// flushed reply left unread. A genuine pre-open ping is answered
+    /// WITHOUT resolving the opener (spec-legal), so a ping waits on
+    /// reply-or-verdict instead; the only error reply a pre-open ping can
+    /// draw is the refusal flush for a frame that names ping but is not
+    /// one, so an error there also drops unanswered.
+    fn first_reply(
+        &mut self,
+        msg: &JsonRpc,
+        verdict: oneshot::Receiver<()>,
+        task: tokio::task::JoinHandle<()>,
+    ) -> io::Result<JsonRpc> {
+        let refused =
+            || io::Error::other("mcp service refused the opener (drop the connection unanswered)");
+        if msg.method.as_deref() != Some("ping") {
+            return match futures::executor::block_on(verdict) {
+                Ok(()) => self.next_reply(msg, task),
+                Err(oneshot::Canceled) => Err(refused()),
+            };
+        }
+        match futures::executor::block_on(future::select(self.outbound.next(), verdict)) {
+            Either::Left((Some(reply), verdict)) => {
+                if matches!(reply, rmcp::model::JsonRpcMessage::Error(_)) {
+                    return Err(refused());
+                }
+                let wire = check_reply(&reply, msg)?;
+                // Still pre-open: a ping does not open the session.
+                self.service = Service::Opening { verdict, task };
+                Ok(wire)
+            }
+            Either::Left((None, _)) => Err(io::Error::other("mcp service ended without replying")),
+            Either::Right((Ok(()), _)) => self.next_reply(msg, task),
+            Either::Right((Err(oneshot::Canceled), _)) => Err(refused()),
+        }
+    }
+
+    /// Take and validate the reply for one in-flight request on an open
+    /// session; `Err` leaves the connection spent.
+    fn next_reply(
+        &mut self,
+        msg: &JsonRpc,
+        mut task: tokio::task::JoinHandle<()>,
+    ) -> io::Result<JsonRpc> {
         // Wait on the reply AND on the service task: a service that dies
         // without replying (an rmcp-internal task failure, an opener error)
         // must read as end-of-service, not as a wait forever. select polls
         // the reply side first, so a reply already buffered when the service
         // exits is still delivered.
-        let outcome = futures::executor::block_on(future::select(self.outbound.next(), service));
+        let outcome = futures::executor::block_on(future::select(self.outbound.next(), &mut task));
         match outcome {
             Either::Left((Some(reply), _)) => {
-                // Only a reply may cross here: rmcp's outbound side can also
-                // carry server-originated requests and notifications, and
-                // writing one where a response belongs would desynchronize
-                // the harness. This handler never originates any (the
-                // quiescence tests pin it), so anything else is an rmcp
-                // behavior change - fail closed rather than desync.
-                use rmcp::model::JsonRpcMessage as M;
-                if !matches!(reply, M::Response(_) | M::Error(_)) {
-                    return Err(io::Error::other(
-                        "mcp service emitted non-reply traffic mid-request",
-                    ));
-                }
-                let wire = to_wire(&reply)?;
-                if wire.id != msg.id {
-                    return Err(io::Error::other("mcp reply id does not match the request"));
-                }
-                Ok(Some(wire))
+                let wire = check_reply(&reply, msg)?;
+                self.service = Service::Open { task };
+                Ok(wire)
             }
             Either::Left((None, _)) => {
                 // The transport is gone, so the service is finished or about
-                // to be; mark the connection spent on this path too rather
-                // than relying on rmcp dropping both channel ends together.
-                self.service = None;
+                // to be; stay spent on this path too rather than relying on
+                // rmcp dropping both channel ends together.
                 Err(io::Error::other("mcp service ended without replying"))
             }
             Either::Right((_, _)) => {
-                // The JoinHandle has yielded; it must never be polled again.
-                self.service = None;
+                // The JoinHandle has yielded; dropping it here (staying
+                // Spent) guarantees it is never polled again.
                 Err(io::Error::other("mcp service died mid-request"))
             }
         }
     }
+}
+
+/// Validate one outbound message as THE reply to `msg` and re-type it for
+/// the wire. Only a reply may cross: rmcp's outbound side can also carry
+/// server-originated requests and notifications, and writing one where a
+/// response belongs would desynchronize the harness. This handler never
+/// originates any (the quiescence tests pin it), so anything else is an
+/// rmcp behavior change - fail closed rather than desync.
+fn check_reply(reply: &TxJsonRpcMessage<RoleServer>, msg: &JsonRpc) -> io::Result<JsonRpc> {
+    use rmcp::model::JsonRpcMessage as M;
+    if !matches!(reply, M::Response(_) | M::Error(_)) {
+        return Err(io::Error::other(
+            "mcp service emitted non-reply traffic mid-request",
+        ));
+    }
+    let wire = to_wire(reply)?;
+    if wire.id != msg.id {
+        return Err(io::Error::other("mcp reply id does not match the request"));
+    }
+    Ok(wire)
 }
 
 /// Re-type one lax inbound frame as rmcp's client message.
@@ -243,8 +341,8 @@ mod tests {
     /// this handler fails here instead of desynchronizing the wire.
     fn assert_quiescent(conn: &mut Connection) {
         assert!(
-            conn.outbound.try_recv().is_err(),
-            "unsolicited outbound message after a completed exchange"
+            matches!(conn.outbound.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "unsolicited outbound message, or a dead service, after a completed exchange"
         );
     }
 
@@ -266,7 +364,9 @@ mod tests {
     #[test]
     fn legacy_initialize_negotiates_the_requested_revision() {
         // 2025-11-25 is the real-world canary: Claude Code 2.1.226 opens
-        // with it. rmcp echoes any supported requested revision. The string
+        // with it. rmcp echoes any supported LEGACY requested revision
+        // (2026-07-28+ has no initialize handshake and negotiates down to
+        // the newest legacy one). The string
         // request id (spec-legal, rarer than numeric) also exercises the
         // seam's reply-id equality check on the non-numeric arm.
         for requested in ["2025-06-18", "2025-11-25"] {
@@ -512,7 +612,9 @@ mod tests {
     }
 
     /// A first request that is neither initialize nor a valid stateless
-    /// opener ends the service; the caller sees end-of-service, not a hang.
+    /// opener ends the service; the caller sees end-of-service - never the
+    /// descriptive -32602 refusal rmcp (3.1.4+) flushes before failing,
+    /// which the opener gate keeps off the wire - not a hang.
     #[test]
     fn an_invalid_opener_fails_the_connection_closed() {
         let mut conn = open();
@@ -520,6 +622,26 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "tools/list"
         })));
         assert!(outcome.is_err(), "expected end-of-service, got {outcome:?}");
+    }
+
+    /// The spec permits ping before the opener: rmcp answers it without
+    /// opening the session, so the ping reply passes the opener gate - and
+    /// a bare opener afterwards still drops, fail closed.
+    #[test]
+    fn a_pre_open_ping_is_answered_without_opening() {
+        let mut conn = open();
+        let reply = request(
+            &mut conn,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }),
+        );
+        assert_eq!(reply.result, Some(json!({})));
+        let outcome = conn.handle(&frame(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+        })));
+        assert!(
+            outcome.is_err(),
+            "a bare opener after a pre-open ping must still drop, got {outcome:?}"
+        );
     }
 
     /// A frame whose id rmcp's model cannot represent (boolean) would be
@@ -572,14 +694,15 @@ mod tests {
             .is_err());
     }
 
-    /// The spent-state short-circuit itself: with `service` cleared (as the
-    /// end-of-service arms do), handle() must refuse immediately - never
-    /// touch the channels, never poll the yielded JoinHandle (a re-poll
-    /// would abort the process under this workspace's panic = "abort").
+    /// The spent-state short-circuit itself: once `Spent` (as every failed
+    /// exchange leaves it), handle() must refuse immediately - never touch
+    /// the channels, and with no JoinHandle held there is nothing to
+    /// re-poll (a re-poll of a yielded handle would abort the process
+    /// under this workspace's panic = "abort").
     #[test]
     fn a_spent_connection_refuses_without_touching_the_service() {
         let mut conn = open();
-        conn.service = None;
+        conn.service = Service::Spent;
         assert!(conn
             .handle(&frame(json!({
                 "jsonrpc": "2.0", "id": 1, "method": "ping"
