@@ -5,7 +5,7 @@
 # happens here: packaging, asset uploads, note edits. Add jobs freely -
 # publishing waits for every job in this file, and every asset uploaded
 # here is attested at publish time into the release's single
-# attestation.jsonl. Recovery when a run dies mid-pipeline is documented
+# attestation.json. Recovery when a run dies mid-pipeline is documented
 # in release.yml; the jobs themselves are documented in docs/release.md.
 
 name: Update Release
@@ -174,7 +174,7 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       # Per-asset attestation on top of the managed publish stage's global
-      # attestation.jsonl: that stage only attests release ASSETS, and the
+      # attestation.json: that stage only attests release ASSETS, and the
       # bare binary inside the archive is not one - users verify after
       # extraction, so `gh attestation verify` needs a subject whose digest
       # matches the shipped binary itself.
