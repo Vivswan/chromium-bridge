@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   auditDefaultLimit,
+  BUNDLE_TOKEN,
   bridgeProtocolVersion,
   bridgeVersionLineViolations,
   browserKeys,
@@ -14,7 +15,9 @@ import {
   mcpLineViolations,
   mcpProtocolVersion,
   presenceViolation,
+  releaseBundleName,
   rustStrConst,
+  tokenPresenceViolation,
 } from "./check-docs-literals";
 
 const HOST_ID = "com.vivswan.chromium_bridge.host";
@@ -82,6 +85,76 @@ describe("canonical extraction", () => {
     // documented value, so the parser must include it.
     expect(envValueSet(src, "BB_LOG")).toEqual(["error", "debug", "info"]);
     expect(() => envValueSet(src, "BB_MISSING")).toThrow("BB_MISSING");
+  });
+});
+
+describe("release attestation bundle", () => {
+  const LABEL = "release attestation bundle";
+
+  test("reads the one live BUNDLE_NAME; a commented-out copy and a trailing comment are ignored", () => {
+    const yml =
+      "    env:\n      # BUNDLE_NAME: attestation.jsonl\n      BUNDLE_NAME: attestation.json # one bundle\n";
+    expect(releaseBundleName(yml)).toBe("attestation.json");
+  });
+
+  test("a release.yml without BUNDLE_NAME, or with two, is an error, never a silent pass", () => {
+    expect(() => releaseBundleName("env:\n  TAG: v1\n")).toThrow("found 0");
+    expect(() =>
+      releaseBundleName("  BUNDLE_NAME: attestation.json\n  BUNDLE_NAME: attestation.jsonl\n"),
+    ).toThrow("found 2");
+  });
+
+  test("a BUNDLE_NAME the family grammar could never match is an error", () => {
+    expect(() => releaseBundleName("  BUNDLE_NAME: bundle.json\n")).toThrow("not an attestation");
+  });
+
+  test("a # glued to the value is part of the value, as in YAML, never a comment", () => {
+    expect(() => releaseBundleName("  BUNDLE_NAME: attestation.json#x\n")).toThrow("found 0");
+  });
+
+  test("the stale release-level name is flagged; per-asset bundles are not", () => {
+    const allowed = new Set(["attestation.json"]);
+    const text = [
+      "ships `chromium-bridge-v1-macos-arm64.attestation.jsonl` and `<asset>.attestation.jsonl` bundles",
+      "verify with `--bundle attestation.json`, then read attestation.json.",
+      "the release-level `attestation.jsonl` (one JSONL line per asset)",
+    ].join("\n");
+    expect(familyViolations("d.md", text, LABEL, BUNDLE_TOKEN, allowed)).toEqual([
+      {
+        doc: "d.md",
+        line: 3,
+        message:
+          'stale release attestation bundle "attestation.jsonl" (canonical: attestation.json)',
+      },
+    ]);
+  });
+
+  test("a longer filename sharing the canonical prefix is compared whole, not by prefix", () => {
+    const v = familyViolations(
+      "d.md",
+      "download attestation.json.sig",
+      LABEL,
+      BUNDLE_TOKEN,
+      new Set(["attestation.json"]),
+    );
+    expect(v).toHaveLength(1);
+    expect(v[0]?.message).toContain('"attestation.json.sig"');
+  });
+
+  test("presence needs the bare name; per-asset bundle names cannot stand in for it", () => {
+    const perAssetOnly = "ships `<asset>.attestation.jsonl` and `foo.zip.attestation.json` bundles";
+    expect(
+      tokenPresenceViolation("d.md", perAssetOnly, BUNDLE_TOKEN, "attestation.json", LABEL),
+    ).toMatchObject({ doc: "d.md", message: expect.stringContaining("attestation.json") });
+    expect(
+      tokenPresenceViolation(
+        "d.md",
+        "--bundle attestation.json",
+        BUNDLE_TOKEN,
+        "attestation.json",
+        LABEL,
+      ),
+    ).toBeNull();
   });
 });
 
