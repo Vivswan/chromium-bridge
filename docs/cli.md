@@ -110,7 +110,7 @@ chromium-bridge revoke-client --name codex
 - Hash anchors change when the client updates; re-run `pair-client` with the same name to replace the entry (the re-pair path).
 - Adding a client is a capability grant, so it is presence-gated: Touch ID on an enrolled Mac, an interactive terminal confirmation otherwise. Revoking is friction-free by design; a live broker drops the revoked client and refuses its re-attach.
 
-Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. Windows has no attestation, so admission is unenforced there (see [SECURITY.md](../SECURITY.md#platform-support)).
+Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. Windows has no attestation, so admission is unenforced there (see [SECURITY.md](../.github/SECURITY.md#platform-support)).
 
 ## Kill switch (kill / unkill)
 

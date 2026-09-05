@@ -286,7 +286,7 @@ if (import.meta.main) {
   const read = (p: string) => readFileSync(resolve(root, p), "utf8");
 
   const matrixMd = read("docs/security/tool-risk-matrix.md");
-  const securityMd = read("SECURITY.md");
+  const securityMd = read(".github/SECURITY.md");
   const rows = parseRiskMatrix(matrixMd);
 
   const violations = [

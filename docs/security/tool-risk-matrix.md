@@ -1,10 +1,10 @@
 # Tool risk matrix
 
-Every tool chromium-bridge exposes, with its risk level, what it can read/change, whether it touches credentials, the Chrome permission it needs, and how the user is protected. This is the reference for security review: **adding or changing a tool means updating this table** (see [SECURITY.md](../../SECURITY.md)).
+Every tool chromium-bridge exposes, with its risk level, what it can read/change, whether it touches credentials, the Chrome permission it needs, and how the user is protected. This is the reference for security review: **adding or changing a tool means updating this table** (see [SECURITY.md](../../.github/SECURITY.md)).
 
 Risk levels: **Low** (read-only, no sensitive data), **Medium** (reads page content or navigates), **High** (writes to the page, or reads credentials), **Critical** (arbitrary code / maximal blast radius).
 
-The protections listed are the defaults. The confirmation gates are host-owned policy fields (`confirmHighRiskClick`, `confirmTabClose`, `confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`), edited in the Chromium Bridge app or with `chromium-bridge policy` (ADR-0032), never from the extension; relaxing one is an explicit, signed choice with the residual risks tabulated in [SECURITY.md](../../SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
+The protections listed are the defaults. The confirmation gates are host-owned policy fields (`confirmHighRiskClick`, `confirmTabClose`, `confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`), edited in the Chromium Bridge app or with `chromium-bridge policy` (ADR-0032), never from the extension; relaxing one is an explicit, signed choice with the residual risks tabulated in [SECURITY.md](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 
 | Tool | Risk | Reads | Writes / effect | Credentials? | Chrome perm | User protection |
 |------|------|-------|-----------------|--------------|-------------|-----------------|
@@ -48,4 +48,4 @@ The protections listed are the defaults. The confirmation gates are host-owned p
 
 ## When you add or change a tool
 
-Update this table **and** run the security-change checklist in [SECURITY.md](../../SECURITY.md). A change that raises a tool's blast radius (new permission, new sensitive read, new write, weaker confirmation, wider masking bypass) requires a threat-model update and a security-labeled review.
+Update this table **and** run the security-change checklist in [SECURITY.md](../../.github/SECURITY.md). A change that raises a tool's blast radius (new permission, new sensitive read, new write, weaker confirmation, wider masking bypass) requires a threat-model update and a security-labeled review.

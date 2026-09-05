@@ -98,7 +98,7 @@ Based on JSON-RPC 2.0 over NDJSON, defined at [modelcontextprotocol.io](https://
 
 ### 3.3 Internal bridge protocol (broker <-> native hosts and relays)
 
-Custom, NDJSON over the bridge socket: a 0600 Unix-domain socket inside the 0700 per-user runtime directory on macOS/Linux, a loopback TCP socket on Windows (see [SECURITY.md](../SECURITY.md#platform-support)).
+Custom, NDJSON over the bridge socket: a 0600 Unix-domain socket inside the 0700 per-user runtime directory on macOS/Linux, a loopback TCP socket on Windows (see [SECURITY.md](../.github/SECURITY.md#platform-support)).
 
 Connection setup, in order, each step fail-closed:
 
@@ -323,7 +323,7 @@ The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web Store 
 
 1. **Snapshot accuracy**: the content-script a11y tree is an approximation (shadow DOM, complex ARIA); `page_snapshot_precise` is the authoritative fallback.
 2. **Cross-origin iframes**: the content script cannot read them.
-3. **Windows bridge downgrade**: no Unix socket, no peer-UID check, no attestation; the HMAC secret is the only gate, and harness admission is unenforced. See [SECURITY.md](../SECURITY.md#platform-support).
+3. **Windows bridge downgrade**: no Unix socket, no peer-UID check, no attestation; the HMAC secret is the only gate, and harness admission is unenforced. See [SECURITY.md](../.github/SECURITY.md#platform-support).
 4. **Same-user attacker running our own binary**: kernel attestation distinguishes binaries, not intentions; see the [threat model](./security/threat-model.md) residuals.
 5. **Revocation latency to the extension**: the socket leg is immediate; the extension's reflection of a host-key revoke is bounded to the next service-worker wake ([ADR-0025](./adr/0025-any-side-revocation-epoch.md)).
 

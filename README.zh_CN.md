@@ -44,9 +44,9 @@ JavaScript。相应的防护措施:
 平台差异, 如实说明: 强桥接保证 (无端口套接字、对端 UID 检查、身份证明) 仅
 存在于 macOS 和 Linux。在 Windows 上, 桥接是一个仅由 HMAC 密钥把守的环回
 TCP 套接字, 服务器启动时会对此发出警告。Windows 支持是尽力而为。详见
-[SECURITY.md](./SECURITY.md#platform-support)。
+[SECURITY.md](./.github/SECURITY.md#platform-support)。
 
-完整细节: [SECURITY.md](./SECURITY.md)、
+完整细节: [SECURITY.md](./.github/SECURITY.md)、
 [威胁模型](./docs/security/threat-model.md)、
 [信任边界](./docs/security/trust-boundaries.md)、
 [逐工具风险矩阵](./docs/security/tool-risk-matrix.md)。
@@ -94,7 +94,7 @@ Windows、无界面机器和 CI 上它是自然选择。
 1. 从[最新发布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下载对应平台的压缩包并解压。建议先校验; macOS/Linux 示例如下 (Windows
    压缩包是 `.zip`, 请用你自己的 sha256 工具核对; 详见
-   [SECURITY.md](./SECURITY.md#release-artifact-integrity)):
+   [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)):
 
    ```sh
    shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.tar.gz.sha256
@@ -233,7 +233,7 @@ CLI 管理同一份状态。
 |---|---|
 | macOS | Apple Silicon (arm64) 预编译; 桌面应用和 Touch ID 门在这里。Intel 需从源码构建。 |
 | Linux | x64 预编译; 任何 Chromium 系浏览器; 用 CLI 管理。 |
-| Windows | x64 预编译 (原生, 无需管理员)。桥接安全性为尽力而为; 见 [SECURITY.md](./SECURITY.md#platform-support)。 |
+| Windows | x64 预编译 (原生, 无需管理员)。桥接安全性为尽力而为; 见 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 浏览器 | 任何 Chromium 系浏览器, Manifest V3 |
 | MCP 协议 | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
 | 内部桥协议 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |
@@ -292,7 +292,7 @@ Code 里用 `/mcp` 重连) 和 `chrome://extensions` 里扩展的 Service Worker
 
 [CONTRIBUTING.md](./CONTRIBUTING.md) (工作流)、
 [GOVERNANCE.md](./GOVERNANCE.md) (变更如何发生)、
-[SECURITY.md](./SECURITY.md) (报告 + 审查标准)、
+[SECURITY.md](./.github/SECURITY.md) (报告 + 审查标准)、
 [docs/development.md](./docs/development.md) (构建/测试/发布)。
 
 ## 许可证

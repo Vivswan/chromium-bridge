@@ -60,4 +60,4 @@ MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)->
 - While the kill switch is engaged, or its record is unreadable, no tool call is served and no browser connection stands; the switch clears only by an explicit release from a trusted surface, never automatically ([ADR-0030](../adr/0030-global-kill-switch-and-audit.md)).
 - The audit trail never gates a decision: recording is log-after-decide, and a failed write drops the record (visibly, via the dropped counter) rather than failing the operation in either direction.
 
-Changing any of these is a **security-relevant change** (see [SECURITY.md](../../SECURITY.md)).
+Changing any of these is a **security-relevant change** (see [SECURITY.md](../../.github/SECURITY.md)).

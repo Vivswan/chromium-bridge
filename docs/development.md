@@ -197,7 +197,7 @@ Deliberately not fuzzed, and why:
 - Presence signing: Security.framework calls, not a byte parser.
 - The TypeScript side (the generated Zod schemas and the hand-written envelope asymmetry layer): a scope decision, not a claim that the code is many-eyes-reviewed.
 
-Policy: a PR that adds or changes a bespoke parser or semantic validator at a trust boundary in the Rust core must add or extend a fuzz target, or add the exclusion, with its reason, to the list above. The exact rule, with its scoping, lives in [SECURITY.md](../SECURITY.md#security-relevant-changes-review-bar).
+Policy: a PR that adds or changes a bespoke parser or semantic validator at a trust boundary in the Rust core must add or extend a fuzz target, or add the exclusion, with its reason, to the list above. The exact rule, with its scoping, lives in [SECURITY.md](../.github/SECURITY.md#security-relevant-changes-review-bar).
 
 Supply-chain scope: the fuzz workspace runs in nightly CI only, is never linked into a shipped binary, and its third-party direct dependencies are limited to `libfuzzer-sys`, `arbitrary`, and `serde_json` (alongside `chromium-bridge-core` itself, the crate under test); `derive_arbitrary` comes in transitively through `arbitrary`'s derive feature. A new fuzz dependency still goes through the `cargo deny` pass over `fuzz/Cargo.toml` in the security workflow, plus ordinary PR review.
 

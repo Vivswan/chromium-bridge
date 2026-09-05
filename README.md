@@ -11,14 +11,14 @@ Translations: [Simplified Chinese](./README.zh_CN.md), [Traditional Chinese](./R
 chromium-bridge drives a real, authenticated browser. It can read page content, cookies (including `httpOnly`), and web storage, and can run JavaScript in your pages. The guardrails:
 
 - **Approve every site.** A new origin triggers a prompt; nothing runs on a site you have not approved.
-- **Confirm high-risk actions.** Submit clicks, key presses, tab close, file uploads, and every `page_eval` confirm on an extension-owned window the page cannot see or click. On a Mac enrolled via Touch ID, `page_eval` and `page_upload` approval is a Secure Enclave user-presence check (Touch ID or the login password) that no page or program can forge ([ADR-0031](./docs/adr/0031-touch-id-confirmations-and-presence-grants.md)). These gates are on by default; each is a documented setting, and relaxing one is an explicit, informed choice ([SECURITY.md](./SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)).
+- **Confirm high-risk actions.** Submit clicks, key presses, tab close, file uploads, and every `page_eval` confirm on an extension-owned window the page cannot see or click. On a Mac enrolled via Touch ID, `page_eval` and `page_upload` approval is a Secure Enclave user-presence check (Touch ID or the login password) that no page or program can forge ([ADR-0031](./docs/adr/0031-touch-id-confirmations-and-presence-grants.md)). These gates are on by default; each is a documented setting, and relaxing one is an explicit, informed choice ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)).
 - **Read-only credentials.** Cookies and storage can be read (always masked: JWTs, long hex, long digit runs), never written. There is no `cookie_set` or `storage_set` by design.
 - **Authenticated, attested bridge.** On macOS and Linux the bridge between the host processes is a private Unix-domain socket (no listening port). Every connection must pass a kernel peer-UID check, kernel-attested executable identity, and an HMAC challenge over a per-run secret. MCP clients themselves are admitted against a trusted-client allowlist keyed on attested code identity, and any side can revoke trust at any time ([ADR-0024](./docs/adr/0024-multi-client-attested-pairing-and-broker.md), [ADR-0025](./docs/adr/0025-any-side-revocation-epoch.md)).
 - **A global kill switch.** One action from the CLI, the extension, or the app halts everything until you release it with proof of presence ([ADR-0030](./docs/adr/0030-global-kill-switch-and-audit.md)). Every security decision lands in an on-disk audit trail.
 
-Platform honesty: the strong bridge guarantees (portless socket, peer-UID check, attestation) exist on macOS and Linux only. On Windows the bridge is a loopback TCP socket gated only by the HMAC secret, and the server warns about this at startup. Windows support is best-effort. Details in [SECURITY.md](./SECURITY.md#platform-support).
+Platform honesty: the strong bridge guarantees (portless socket, peer-UID check, attestation) exist on macOS and Linux only. On Windows the bridge is a loopback TCP socket gated only by the HMAC secret, and the server warns about this at startup. Windows support is best-effort. Details in [SECURITY.md](./.github/SECURITY.md#platform-support).
 
-Full details: [SECURITY.md](./SECURITY.md), [threat model](./docs/security/threat-model.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
+Full details: [SECURITY.md](./.github/SECURITY.md), [threat model](./docs/security/threat-model.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
 
 ## Quickstart with the app (macOS)
 
@@ -52,7 +52,7 @@ The CLI is co-equal: everything the app does, from a terminal, with no dependenc
    gh attestation verify chromium-bridge-<tag>-<platform>-<arch>.tar.gz --repo Vivswan/chromium-bridge
    ```
 
-   The full verification story is in [SECURITY.md](./SECURITY.md#release-artifact-integrity).
+   The full verification story is in [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity).
 
 2. Register the extracted binary with your browsers. Registration is idempotent, so the same command is the fresh install, the repair, and the re-register after moving the binary:
 
@@ -209,7 +209,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md).
 |---|---|
 | macOS | Apple Silicon (arm64) prebuilt; the desktop app and Touch ID gates live here. Intel builds from source. |
 | Linux | x64 prebuilt; any Chromium-based browser; CLI management surface. |
-| Windows | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./SECURITY.md#platform-support). |
+| Windows | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./.github/SECURITY.md#platform-support). |
 | Browser | Any Chromium-based browser, Manifest V3 |
 | MCP protocol | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
 | Internal bridge protocol | `1` (`BRIDGE_PROTOCOL_VERSION` in [src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs)) |
@@ -272,7 +272,7 @@ Pre-1.0 ([Cargo.toml](./Cargo.toml)). The protocol layers are covered by end-to-
 
 ## Contributing and governance
 
-[CONTRIBUTING.md](./CONTRIBUTING.md) (workflow), [GOVERNANCE.md](./GOVERNANCE.md) (how changes get made), [SECURITY.md](./SECURITY.md) (reporting + review bar), [docs/development.md](./docs/development.md) (build/test/release loop).
+[CONTRIBUTING.md](./CONTRIBUTING.md) (workflow), [GOVERNANCE.md](./GOVERNANCE.md) (how changes get made), [SECURITY.md](./.github/SECURITY.md) (reporting + review bar), [docs/development.md](./docs/development.md) (build/test/release loop).
 
 ## License
 

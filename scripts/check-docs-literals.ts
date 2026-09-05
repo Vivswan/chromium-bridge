@@ -460,7 +460,9 @@ if (import.meta.main) {
   }
 
   // Scope: living markdown only. ADRs are point-in-time records; CHANGELOG.md
-  // is release history; sources and tests have their own gates.
+  // is release history; sources and tests have their own gates. The security
+  // policy sits in GitHub's community-health directory, so it is named here -
+  // the rest of .github/ (agent instructions, templates) stays out of scope.
   const docs = execFileSync("git", ["ls-files", "*.md", "docs/**/*.md"], {
     cwd: root,
     encoding: "utf8",
@@ -471,7 +473,7 @@ if (import.meta.main) {
         p !== "" &&
         p !== "CHANGELOG.md" &&
         !p.startsWith("docs/adr/") &&
-        (!p.includes("/") || p.startsWith("docs/")),
+        (!p.includes("/") || p.startsWith("docs/") || p === ".github/SECURITY.md"),
     );
 
   const violations: Violation[] = [];
@@ -538,10 +540,10 @@ if (import.meta.main) {
   const presences: Array<[string, string, string]> = [
     ["AGENTS.md", hostId, "native host id"],
     ["AGENTS.md", keyLabel, "enclave keychain label"],
-    ["SECURITY.md", hostId, "native host id"],
-    ["SECURITY.md", keyLabel, "enclave keychain label"],
-    ["SECURITY.md", extensionId, "pinned extension id"],
-    ["SECURITY.md", challengeDomain, "enclave challenge domain"],
+    [".github/SECURITY.md", hostId, "native host id"],
+    [".github/SECURITY.md", keyLabel, "enclave keychain label"],
+    [".github/SECURITY.md", extensionId, "pinned extension id"],
+    [".github/SECURITY.md", challengeDomain, "enclave challenge domain"],
     ["docs/chrome-web-store.md", extensionId, "pinned extension id"],
     ["docs/architecture.md", hostId, "native host id"],
     ["docs/architecture.md", keyLabel, "enclave keychain label"],
@@ -565,7 +567,7 @@ if (import.meta.main) {
   }
   // The docs that tell users which bundle to verify against must name the
   // release-level one as a whole token, not inside a per-asset bundle name.
-  for (const doc of ["SECURITY.md", "docs/release.md"]) {
+  for (const doc of [".github/SECURITY.md", "docs/release.md"]) {
     const v = tokenPresenceViolation(
       doc,
       readDoc(doc),

@@ -44,9 +44,9 @@ JavaScript。相應的防護措施:
 平台差異, 如實說明: 強橋接保證 (無連接埠通訊端、對端 UID 檢查、身分證明)
 僅存在於 macOS 和 Linux。在 Windows 上, 橋接是一個僅由 HMAC 金鑰把守的回送
 TCP 通訊端, 伺服器啟動時會對此發出警告。Windows 支援是盡力而為。詳見
-[SECURITY.md](./SECURITY.md#platform-support)。
+[SECURITY.md](./.github/SECURITY.md#platform-support)。
 
-完整細節: [SECURITY.md](./SECURITY.md)、
+完整細節: [SECURITY.md](./.github/SECURITY.md)、
 [威脅模型](./docs/security/threat-model.md)、
 [信任邊界](./docs/security/trust-boundaries.md)、
 [逐工具風險矩陣](./docs/security/tool-risk-matrix.md)。
@@ -94,7 +94,7 @@ CLI 與桌面應用程式地位對等: 應用程式能做的它都能做, 只依
 1. 從[最新發布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下載對應平台的壓縮檔並解壓。建議先驗證; macOS/Linux 範例如下 (Windows
    壓縮檔是 `.zip`, 請用你自己的 sha256 工具核對; 詳見
-   [SECURITY.md](./SECURITY.md#release-artifact-integrity)):
+   [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)):
 
    ```sh
    shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.tar.gz.sha256
@@ -233,7 +233,7 @@ CLI 與桌面應用程式地位對等: 應用程式能做的它都能做, 只依
 |---|---|
 | macOS | Apple Silicon (arm64) 預編譯; 桌面應用程式和 Touch ID 門在這裡。Intel 需從原始碼建置。 |
 | Linux | x64 預編譯; 任何 Chromium 系瀏覽器; 用 CLI 管理。 |
-| Windows | x64 預編譯 (原生, 無需管理員)。橋接安全性為盡力而為; 見 [SECURITY.md](./SECURITY.md#platform-support)。 |
+| Windows | x64 預編譯 (原生, 無需管理員)。橋接安全性為盡力而為; 見 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 瀏覽器 | 任何 Chromium 系瀏覽器, Manifest V3 |
 | MCP 協定 | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
 | 內部橋協定 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |
@@ -292,7 +292,7 @@ Worker 主控台 (找 `[bb]` 日誌)。完整手冊: [docs/cli.md](./docs/cli.md
 
 [CONTRIBUTING.md](./CONTRIBUTING.md) (工作流程)、
 [GOVERNANCE.md](./GOVERNANCE.md) (變更如何發生)、
-[SECURITY.md](./SECURITY.md) (回報 + 審查標準)、
+[SECURITY.md](./.github/SECURITY.md) (回報 + 審查標準)、
 [docs/development.md](./docs/development.md) (建置/測試/發布)。
 
 ## 授權

@@ -1,6 +1,6 @@
 # Incident response runbook
 
-> A realistic security incident handling process for a single-maintainer project, consistent with the reporting channel in [SECURITY.md](../../SECURITY.md) and the assets/trust boundaries in [threat-model.md](threat-model.md). The trust boundaries are enumerated in [trust-boundaries.md](trust-boundaries.md); tool risk is in [tool-risk-matrix.md](tool-risk-matrix.md).
+> A realistic security incident handling process for a single-maintainer project, consistent with the reporting channel in [SECURITY.md](../../.github/SECURITY.md) and the assets/trust boundaries in [threat-model.md](threat-model.md). The trust boundaries are enumerated in [trust-boundaries.md](trust-boundaries.md); tool risk is in [tool-risk-matrix.md](tool-risk-matrix.md).
 
 ## What counts as a security incident
 
@@ -11,7 +11,7 @@ A compromise, or suspected compromise, of an asset protected in [threat-model.md
 - the bridge socket accepted an **unauthenticated** local peer, or the host manifest's `allowed_origins` was modified;
 - `page_eval` or its confirmation channel abused with irreversible consequences.
 
-Not incidents: anything requiring the machine to be compromised first, or a malicious MCP client the user configured themselves (trusted by design, see [SECURITY.md's Scope](../../SECURITY.md#scope)).
+Not incidents: anything requiring the machine to be compromised first, or a malicious MCP client the user configured themselves (trusted by design, see [SECURITY.md's Scope](../../.github/SECURITY.md#scope)).
 
 ## Reporting channel
 
@@ -43,17 +43,17 @@ Users can take these actions themselves to **shrink the blast radius** before a 
 
 - Locate the **invariant** that was crossed (see ["invariants that must not regress" in trust-boundaries.md](trust-boundaries.md#invariants-that-must-not-regress)).
 - The fix goes through the **security-relevant change** gate: fill in the [security-change checklist](../../.github/ISSUE_TEMPLATE/security-change.yml), update [tool-risk-matrix.md](tool-risk-matrix.md), and if a trust boundary changed, update [threat-model.md](threat-model.md) too.
-- **A negative security test is mandatory** to prove the boundary holds again (adding positive cases alone is not enough), per [SECURITY.md's review bar](../../SECURITY.md#security-relevant-changes-review-bar).
+- **A negative security test is mandatory** to prove the boundary holds again (adding positive cases alone is not enough), per [SECURITY.md's review bar](../../.github/SECURITY.md#security-relevant-changes-review-bar).
 
 ## Release and disclosure
 
-- Tag and release the fix per [release.md](../release.md); pre-1.0 only the latest release is supported (see [SECURITY.md's Supported versions](../../SECURITY.md#supported-versions)), and security fixes ship as a new patch/minor.
+- Tag and release the fix per [release.md](../release.md); pre-1.0 only the latest release is supported (see [SECURITY.md's Supported versions](../../.github/SECURITY.md#supported-versions)), and security fixes ship as a new patch/minor.
 - Coordinate disclosure through a GitHub Security Advisory: give the reporter a reasonable fix window before going public, and after release, credit the reporter in the advisory and state the affected versions and mitigations.
 - Record the fix in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Related
 
-- Reporting channel and review bar: [SECURITY.md](../../SECURITY.md).
+- Reporting channel and review bar: [SECURITY.md](../../.github/SECURITY.md).
 - Assets, actors, non-goals: [threat-model.md](threat-model.md).
 - Boundaries and invariants: [trust-boundaries.md](trust-boundaries.md).
 - Running and diagnostics: [operations.md](../operations.md).
