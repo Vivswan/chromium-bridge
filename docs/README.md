@@ -34,7 +34,7 @@ This directory is the **single source of truth** for the chromium-bridge project
 - **First time using the project** -> `quickstart.md`
 - **First time learning the project** -> `requirements.md` -> `architecture.md`
 - **Changing a design decision** -> read the corresponding ADR first, see the trade-offs made at the time, then decide whether to overturn it
-- **Changing anything security-relevant** -> `../SECURITY.md` (the review bar) and `security/`
+- **Changing anything security-relevant** -> `../.github/SECURITY.md` (the review bar) and `security/`
 
 ## ADR index
 

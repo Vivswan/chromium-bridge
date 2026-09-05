@@ -20,5 +20,5 @@
 /src/apps/extension/src/lib/content/info-toast.ts @vivswan
 /src/apps/extension/wxt.config.ts @vivswan
 /src/packages/core/src/registration.rs @vivswan
-/SECURITY.md @vivswan
+/.github/SECURITY.md @vivswan
 /docs/security/ @vivswan
