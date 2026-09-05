@@ -68,6 +68,6 @@ Publishing is the usability improvement with the largest single payoff, but it i
 
 ## Related
 
-- Security boundaries and threat model: [SECURITY.md](../SECURITY.md), [security/threat-model.md](./security/threat-model.md), [security/trust-boundaries.md](./security/trust-boundaries.md).
+- Security boundaries and threat model: [SECURITY.md](../.github/SECURITY.md), [security/threat-model.md](./security/threat-model.md), [security/trust-boundaries.md](./security/trust-boundaries.md).
 - Pinned ID and on-disk artifacts: [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
 - Release pipeline and the extension zip: [release.md](./release.md).

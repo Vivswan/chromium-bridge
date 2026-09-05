@@ -1,6 +1,6 @@
 # Governance
 
-How changes get made in chromium-bridge. Small project, light process - but the process that exists is enforced by CI, not by memory. See also [CONTRIBUTING.md](CONTRIBUTING.md) (dev workflow) and [SECURITY.md](SECURITY.md) (security bar).
+How changes get made in chromium-bridge. Small project, light process - but the process that exists is enforced by CI, not by memory. See also [CONTRIBUTING.md](CONTRIBUTING.md) (dev workflow) and [SECURITY.md](.github/SECURITY.md) (security bar).
 
 ## Branching
 
@@ -40,7 +40,7 @@ A change is done when:
 
 ## Security-relevant changes
 
-If a change touches permissions, credential access, confirmation, allowlist, masking, bridge auth, the lock file/secret, or widens `page_eval` (full list in [SECURITY.md](SECURITY.md)):
+If a change touches permissions, credential access, confirmation, allowlist, masking, bridge auth, the lock file/secret, or widens `page_eval` (full list in [SECURITY.md](.github/SECURITY.md)):
 
 - use the [security-change issue/PR checklist](.github/ISSUE_TEMPLATE/security-change.yml);
 - update the [tool risk matrix](docs/security/tool-risk-matrix.md) and, if a trust boundary moves, the [threat model](docs/security/threat-model.md);

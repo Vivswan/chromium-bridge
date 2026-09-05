@@ -18,6 +18,10 @@ export interface DocPage {
 const modules = {
   // Repo-root markdown; only the ROOT_DOCS allowlist (doc-slug.ts) renders.
   ...import.meta.glob<Doc>("../../../../../*.md", { eager: true }),
+  // The security policy lives in GitHub's community-health directory; it is
+  // named exactly, not globbed, so the rest of .github/ (agent instructions,
+  // the PR template) stays out of the site.
+  ...import.meta.glob<Doc>("../../../../../.github/SECURITY.md", { eager: true }),
   // The docs tree: guides, security docs, ADRs, translations.
   ...import.meta.glob<Doc>("../../../../../docs/*.md", { eager: true }),
   ...import.meta.glob<Doc>("../../../../../docs/security/*.md", { eager: true }),

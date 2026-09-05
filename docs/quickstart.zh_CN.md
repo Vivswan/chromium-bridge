@@ -50,7 +50,7 @@ CLI 只需要二进制本身。在 Linux、Windows、无界面机器和 CI 上�
 
 1. **获取二进制。** 从[最新发布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下载对应平台的压缩包并解压。想先校验的话, 核对发布的 SHA-256 和构建来源
-   证明; 命令见 [SECURITY.md](../SECURITY.md#release-artifact-integrity)。
+   证明; 命令见 [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity)。
    也可以从源码构建: `cargo build --release`。
 2. **放到稳定的位置。** 注册指向二进制当前所在的路径, 所以位置不能消失。
    Linux 上 `~/.local/lib/chromium-bridge/` 很合适; macOS 上放在家目录下任

@@ -25,7 +25,7 @@
 ## Security-relevant?
 
 If this touches permissions, credential access, confirmation, allowlist,
-masking, bridge auth, or `page_eval` (see [SECURITY.md](../SECURITY.md)):
+masking, bridge auth, or `page_eval` (see [SECURITY.md](./SECURITY.md)):
 
 - [ ] Not security-relevant
 - [ ] Updated the [tool risk matrix](../docs/security/tool-risk-matrix.md)
