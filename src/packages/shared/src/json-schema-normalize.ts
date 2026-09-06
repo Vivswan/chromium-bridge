@@ -1,9 +1,9 @@
 // Structural JSON Schema comparison for the envelope asymmetry gate
 // (scripts/check-envelope-parity.ts).
 //
-// The canonical wire contract is the Rust types in
-// src/packages/core/src/protocol.rs (ADR-0028): the BridgeReq / BridgeResp
-// envelope pair, and the host-handled control frames (EnclaveControl and
+// The canonical wire contract is the Rust types in src/packages/core/src/
+// (ADR-0028): the BridgeReq / BridgeResp envelope pair in protocol.rs, and
+// the host-handled control frames in protocol/control.rs (EnclaveControl and
 // AdminControl, the latter embedding allowlist::ClientEntry). The extension
 // enforces two-layer validators: a base GENERATED from the Rust schemas
 // (envelope-wire.gen.ts, via scripts/gen-envelope.ts) wrapped by a
@@ -166,7 +166,7 @@ const NONEMPTY_STRING: Reconciliation = {
 };
 
 // The signed-statement frames enclave_proof and presence_proof share one
-// field set (sig, key_id, pubkey; see protocol.rs for the encoding).
+// field set (sig, key_id, pubkey; see protocol/control.rs for the encoding).
 const PROOF_FIELDS: Readonly<Record<string, Reconciliation>> = {
   "$.properties.sig": NONEMPTY_STRING,
   "$.properties.key_id": NONEMPTY_STRING,

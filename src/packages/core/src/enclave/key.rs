@@ -1,7 +1,7 @@
 //! The cross-platform enrollment key handle and the native-host challenge
 //! responder.
 
-use crate::protocol::EnclaveControl;
+use crate::protocol::control::EnclaveControl;
 
 use super::challenge::{challenge_message, policy_message, presence_message};
 use super::encoding::base64_encode;

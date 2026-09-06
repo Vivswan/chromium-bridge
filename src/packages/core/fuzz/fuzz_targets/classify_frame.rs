@@ -7,7 +7,7 @@
 //! coverage.
 use libfuzzer_sys::fuzz_target;
 
-use chromium_bridge_core::protocol::{classify_nm_frame, FrameDisposition};
+use chromium_bridge_core::protocol::control::{classify_nm_frame, FrameDisposition};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(frame) = serde_json::from_slice::<serde_json::Value>(data) else {

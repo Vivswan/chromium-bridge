@@ -4,7 +4,7 @@
 // (enclave-fixture.gen.ts) replay Rust-signed proofs through it.
 //
 // The wire contract is owned by the host
-// (src/packages/core/src/protocol.rs, EnclaveControl).
+// (src/packages/core/src/protocol/control.rs, EnclaveControl).
 // A proof's `sig` is base64 of the raw SIG_LEN-byte IEEE P1363 r||s ECDSA
 // P-256/SHA-256 signature over
 //

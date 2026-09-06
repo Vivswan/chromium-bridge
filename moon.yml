@@ -366,7 +366,9 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   check-fuzz-workspace:
-    description: 'Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets cannot rot outside the main build; CI runs the same check in checks.yml''s rust job'
+    description: >-
+      Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets
+      cannot rot outside the main build; CI runs the same check in checks.yml's rust job
     command: 'cargo check --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
     toolchains: ['system']
     options:
@@ -443,7 +445,16 @@ tasks:
       set -e
       bun scripts/gen-ops.ts
       bun scripts/gen-envelope.ts
-      bunx biome format --write src/packages/shared/src/ops.gen.ts src/packages/shared/src/identity.gen.ts src/packages/shared/src/errors.gen.ts src/packages/shared/src/protocol.gen.ts src/packages/shared/src/enclave.gen.ts src/packages/shared/src/enclave-fixture.gen.ts src/packages/shared/src/envelope-wire.gen.ts src/packages/shared/src/audit.gen.ts src/packages/shared/src/policy.gen.ts
+      bunx biome format --write \
+        src/packages/shared/src/ops.gen.ts \
+        src/packages/shared/src/identity.gen.ts \
+        src/packages/shared/src/errors.gen.ts \
+        src/packages/shared/src/protocol.gen.ts \
+        src/packages/shared/src/enclave.gen.ts \
+        src/packages/shared/src/enclave-fixture.gen.ts \
+        src/packages/shared/src/envelope-wire.gen.ts \
+        src/packages/shared/src/audit.gen.ts \
+        src/packages/shared/src/policy.gen.ts
     toolchains: ['system']
     options:
       cache: false # mutates the tree; check-gen diffs its output
@@ -863,7 +874,9 @@ tasks:
     # installs them and invokes the driver DIRECTLY (moon does not resolve
     # runInCI:false tasks when CI=true). Extra flags pass through, e.g.
     # `moon run harness-smoke -- --mint-seeds`.
-    description: 'Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server and run a fake-LLM live tool call (logs the ADR-0034 opening-method canary)'
+    description: >-
+      Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server and run a
+      fake-LLM live tool call (logs the ADR-0034 opening-method canary)
     deps: ['~:build-release']
     command: 'bun tests/harness/run.ts'
     toolchains: ['system']

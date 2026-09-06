@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 // The envelope asymmetry gate (ADR-0028). The Rust wire types in
-// src/packages/core/src/protocol.rs are the canonical contract: the
+// src/packages/core/src/protocol.rs and protocol/control.rs are the canonical contract: the
 // BridgeReq/BridgeResp envelope pair, and the host-handled control frames
 // (EnclaveControl, AdminControl, and PolicyControl - AdminControl embedding
 // allowlist::ClientEntry, PolicyControl embedding policy::PolicyOverlay).
@@ -199,7 +199,7 @@ export const FRAME_REFINEMENTS: Readonly<
   Partial<Record<ControlFrameKind, readonly RefinementPin[]>>
 > = {
   // The policy_current ok-split (enclave.ts): PolicyStatus::into_frame
-  // (protocol.rs) emits exactly two flat shapes, and the extension refuses
+  // (protocol/control.rs) emits exactly two flat shapes, and the extension refuses
   // everything per-field validation would pass outside them - `ok: true`
   // requires `baseline` and never carries `reason` or `error`; `ok: false`
   // requires `error` and never carries `baseline`, `sig`, or `overlay`. The

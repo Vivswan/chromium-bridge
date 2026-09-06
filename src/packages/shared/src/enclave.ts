@@ -5,7 +5,7 @@
 //
 // The canonical frame contract is the Rust control-frame enums
 // (EnclaveControl / AdminControl / PolicyControl in
-// src/packages/core/src/protocol.rs, ADR-0028). The base wire schemas are
+// src/packages/core/src/protocol/control.rs, ADR-0028). The base wire schemas are
 // GENERATED from them (envelope-wire.gen.ts, `moon run gen`); this module
 // layers the extension's DELIBERATE parser asymmetries on top, each pinned
 // in RECONCILED_FIELDS (json-schema-normalize.ts), held to exactly that
@@ -253,8 +253,9 @@ export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
   // (scripts/check-envelope-parity.ts) - a refinement never shows up in
   // z.toJSONSchema, so the structural gate cannot see it and pins it there
   // instead. On the wire every field is an Option, so the base validates
-  // per-field and would pass shapes PolicyStatus::into_frame (protocol.rs)
-  // can never emit. The refinement encodes the only two real host shapes:
+  // per-field and would pass shapes PolicyStatus::into_frame
+  // (protocol/control.rs) can never emit. The refinement encodes the only
+  // two real host shapes:
   // `ok: true` REQUIRES `baseline` (sig/overlay optional) and never carries
   // `reason` or `error`; `ok: false` REQUIRES `error` (reason optional - an
   // old host omits it) and never carries `baseline`, `sig`, or `overlay`.
