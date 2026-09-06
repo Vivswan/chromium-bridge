@@ -747,31 +747,62 @@ pub fn print_help() {
          chromium-bridge                Run as MCP server (for your MCP client)\n    \
          chromium-bridge doctor         Print a read-only health report (alias: status)\n    \
          chromium-bridge doctor --list  List known browsers + registration state (read-only)\n    \
-         chromium-bridge doctor --fix [--browser <keys> | --all | --manifest-dir <dir>]\n                                Repair (or first-register) the native-messaging\n                                manifests for your Chromium browsers. Default:\n                                every browser detected for this user; keys:\n                                {browser_keys}\n    \
+         chromium-bridge doctor --fix [--browser <keys> | --all | --manifest-dir <dir>]\n\
+         {pad}Repair (or first-register) the native-messaging\n\
+         {pad}manifests for your Chromium browsers. Default:\n\
+         {pad}every browser detected for this user; keys:\n\
+         {pad}{browser_keys}\n    \
          chromium-bridge pair           Enroll: mint the Secure Enclave key (macOS)\n    \
          chromium-bridge pair --reset   Replace the enrollment key with a fresh one\n    \
          chromium-bridge revoke         Delete the enrollment key (fails closed)\n    \
-         chromium-bridge enclave-status [--json]\n                                Print the enrollment state (--json: machine-readable)\n    \
+         chromium-bridge enclave-status [--json]\n\
+         {pad}Print the enrollment state (--json: machine-readable)\n    \
          chromium-bridge presence-selftest  Raise one Touch ID prompt and report (ADR-0031)\n    \
-         chromium-bridge pair-client --name <label> (--this-parent | --hash <hex> | --team-id <id>)\n                                Trust an MCP-client harness (ADR-0024)\n    \
+         chromium-bridge pair-client --name <label> (--this-parent | --hash <hex> | --team-id <id>)\n\
+         {pad}Trust an MCP-client harness (ADR-0024)\n    \
          chromium-bridge revoke-client --name <label>   Untrust a client\n    \
          chromium-bridge list-clients   Print the trusted-client allowlist\n    \
-         chromium-bridge uninstall [--manifest-dir <dir>]\n                                Remove exactly the registrations this project wrote\n                                (re-pass any --manifest-dir you registered)\n    \
-         chromium-bridge kill           ENGAGE the global kill switch: refuse all bridge\n                                activity, sever browser connections, survive restarts\n    \
-         chromium-bridge unkill         Explicitly release the kill switch\n                                (interactive confirmation on the terminal)\n    \
-         chromium-bridge audit [--limit <n>]\n                                Print the audit trail (default: last {audit_limit} records)\n    \
-         chromium-bridge policy show [--json]\n                                Print the host-owned policy: store state, revision,\n                                signed?, overlay, and the effective values\n    \
-         chromium-bridge policy set <field flags> [--json]\n                                GRANT lane: mint a fresh SIGNED baseline (Touch ID).\n                                Signature-only: refuses where no enrollment key exists.\n                                Flags: --page-eval on|off, --file-upload on|off,\n                                --confirm-page-eval on|off, --host-reverify-ms <n>,\n                                --disabled-tools a,b, ... (one per policy field)\n    \
-         chromium-bridge policy restrict <field flags>\n                                FREE lane: apply an unsigned restriction overlay\n                                (no Touch ID; only ever removes capability)\n    \
-         chromium-bridge policy history [--json]\n                                Print the superseded-revision ring\n    \
-         chromium-bridge policy pending-import [--json]\n                                Print the pending legacy-import state (read-only;\n                                --json is the only mode that prints the bag)\n    \
-         chromium-bridge policy rollback --revision <n> [--json]\n                                Re-apply revision <n>'s effective policy as a FRESH\n                                write (tighten-only rides restrict free; any\n                                relaxation is one signed tap; never a replay)\n    \
-         chromium-bridge --native-host [--label <browser>]\n                                Run as the Chrome native messaging host;\n                                --label names this browser (e.g. chrome, brave)\n                                so one MCP server can address several browsers\n\n\
+         chromium-bridge uninstall [--manifest-dir <dir>]\n\
+         {pad}Remove exactly the registrations this project wrote\n\
+         {pad}(re-pass any --manifest-dir you registered)\n    \
+         chromium-bridge kill           ENGAGE the global kill switch: refuse all bridge\n\
+         {pad}activity, sever browser connections, survive restarts\n    \
+         chromium-bridge unkill         Explicitly release the kill switch\n\
+         {pad}(interactive confirmation on the terminal)\n    \
+         chromium-bridge audit [--limit <n>]\n\
+         {pad}Print the audit trail (default: last {audit_limit} records)\n    \
+         chromium-bridge policy show [--json]\n\
+         {pad}Print the host-owned policy: store state, revision,\n\
+         {pad}signed?, overlay, and the effective values\n    \
+         chromium-bridge policy set <field flags> [--json]\n\
+         {pad}GRANT lane: mint a fresh SIGNED baseline (Touch ID).\n\
+         {pad}Signature-only: refuses where no enrollment key exists.\n\
+         {pad}Flags: --page-eval on|off, --file-upload on|off,\n\
+         {pad}--confirm-page-eval on|off, --host-reverify-ms <n>,\n\
+         {pad}--disabled-tools a,b, ... (one per policy field)\n    \
+         chromium-bridge policy restrict <field flags>\n\
+         {pad}FREE lane: apply an unsigned restriction overlay\n\
+         {pad}(no Touch ID; only ever removes capability)\n    \
+         chromium-bridge policy history [--json]\n\
+         {pad}Print the superseded-revision ring\n    \
+         chromium-bridge policy pending-import [--json]\n\
+         {pad}Print the pending legacy-import state (read-only;\n\
+         {pad}--json is the only mode that prints the bag)\n    \
+         chromium-bridge policy rollback --revision <n> [--json]\n\
+         {pad}Re-apply revision <n>'s effective policy as a FRESH\n\
+         {pad}write (tighten-only rides restrict free; any\n\
+         {pad}relaxation is one signed tap; never a replay)\n    \
+         chromium-bridge --native-host [--label <browser>]\n\
+         {pad}Run as the Chrome native messaging host;\n\
+         {pad}--label names this browser (e.g. chrome, brave)\n\
+         {pad}so one MCP server can address several browsers\n\n\
          Configure your MCP client (Claude Code, Codex, ...) to launch this \
          binary with no arguments as an MCP server; Chrome launches it with \
          --native-host via the host manifest. You normally never invoke either \
          mode by hand.",
         version = env!("CARGO_PKG_VERSION"),
+        // Description column: past the 16-char command column and its indent.
+        pad = " ".repeat(32),
         browser_keys = crate::registration::known_keys(),
         audit_limit = crate::audit::DEFAULT_AUDIT_LIMIT,
     );

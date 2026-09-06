@@ -2,8 +2,8 @@
 //! types, as one JSON object `{ "request": ..., "response": ..., "enclave":
 //! ..., "admin": ..., "policy": ... }` on stdout.
 //!
-//! The Rust types in `protocol.rs` are the canonical envelope contract
-//! (ADR-0028). Two consumers read this output:
+//! The Rust types in `protocol.rs` and `protocol/control.rs` are the canonical
+//! envelope contract (ADR-0028). Two consumers read this output:
 //!
 //! - `scripts/gen-envelope.ts` (`moon run gen`) generates the extension's base
 //!   wire validators from it (`src/packages/shared/src/envelope-wire.gen.ts`);
@@ -22,9 +22,8 @@
 //!   cargo run -q -p chromium-bridge-core --features envelope-schema \
 //!     --example emit_envelope_schema
 
-use chromium_bridge_core::protocol::{
-    AdminControl, BridgeReq, BridgeResp, EnclaveControl, PolicyControl,
-};
+use chromium_bridge_core::protocol::control::{AdminControl, EnclaveControl, PolicyControl};
+use chromium_bridge_core::protocol::{BridgeReq, BridgeResp};
 
 fn main() -> Result<(), serde_json::Error> {
     let out = serde_json::json!({

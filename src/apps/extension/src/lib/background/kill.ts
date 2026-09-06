@@ -117,7 +117,7 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
  * from the extension, so the release frame is not in this union and no code
  * path here can post one - release lives in the desktop app and the CLI).
  * A closed union of the GENERATED wire types (envelope-wire.gen.ts <-
- * protocol.rs), so the tags are compiler-pinned to the Rust contract: a
+ * protocol/control.rs), so the tags are compiler-pinned to the Rust contract: a
  * typo'd frame type is a compile error - not a real post the host would
  * forward to the MCP server as an unknown op while the engage-arming switch
  * below silently fails to recognize it. The inbound direction is parsed

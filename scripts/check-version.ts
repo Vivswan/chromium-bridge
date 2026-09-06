@@ -77,13 +77,16 @@ if (manifestVersion === undefined) {
     const initial = config["initial-version"];
     if (initial !== cargo) {
       console.error(
-        `MISMATCH: Cargo.toml (${cargo}) != ${configPath} initial-version (${String(initial)}) - while ${manifestPath} holds the ${bootstrapVersion} bootstrap, the first release PR stamps initial-version into every version copy, silently rewriting the Cargo version`,
+        `MISMATCH: Cargo.toml (${cargo}) != ${configPath} initial-version (${String(initial)}) - ` +
+          `while ${manifestPath} holds the ${bootstrapVersion} bootstrap, the first release PR stamps ` +
+          "initial-version into every version copy, silently rewriting the Cargo version",
       );
       failed = true;
     }
   } else if (manifestVersion !== cargo) {
     console.error(
-      `MISMATCH: ${manifestPath} ["."] (${String(manifestVersion)}) != Cargo.toml (${cargo}) and is not the ${bootstrapVersion} pre-first-release bootstrap`,
+      `MISMATCH: ${manifestPath} ["."] (${String(manifestVersion)}) != Cargo.toml (${cargo}) ` +
+        `and is not the ${bootstrapVersion} pre-first-release bootstrap`,
     );
     failed = true;
   }
@@ -122,7 +125,9 @@ for (const [path, want] of expectedUpdaters) {
     const got = typeof entry === "string" ? {} : entry;
     if (got.type !== want.type || got.jsonpath !== want.jsonpath) {
       console.error(
-        `BAD UPDATER: ${path} in ${configPath} extra-files must be { "type": "${want.type}", "jsonpath": "${want.jsonpath}" } (release-please fails soft on a wrong updater and silently skips the bump)`,
+        `BAD UPDATER: ${path} in ${configPath} extra-files must be ` +
+          `{ "type": "${want.type}", "jsonpath": "${want.jsonpath}" } ` +
+          "(release-please fails soft on a wrong updater and silently skips the bump)",
       );
       failed = true;
     }

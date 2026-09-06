@@ -5,7 +5,7 @@
 //! the Secure Enclave; the private key never leaves the Enclave and every use
 //! is gated on user presence (Touch ID / password). The extension pins the
 //! PUBLIC key and later verifies `enclave_proof` frames (see
-//! [`crate::protocol::EnclaveControl`]) against it, so only a host that can
+//! [`crate::protocol::control::EnclaveControl`]) against it, so only a host that can
 //! drive THIS machine's Enclave - with the user physically approving - can
 //! complete an enrollment.
 //!

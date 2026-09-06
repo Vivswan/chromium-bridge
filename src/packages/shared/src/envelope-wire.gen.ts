@@ -1,4 +1,5 @@
-// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs;
+// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
+// protocol/control.rs;
 // AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
 // policy::PolicyOverlay) by scripts/gen-envelope.ts -
 // DO NOT EDIT. Edit the Rust types, then run `moon run gen`.
