@@ -20,6 +20,7 @@
 // mid-confirmation policy push surviving SW timing; flagged, not attempted.
 
 import {
+  type BridgeReq,
   type ConfirmPayload,
   isHardwareGated,
   POLICY_DEFAULTS,
@@ -51,7 +52,6 @@ import type { ResolvedTab } from "@/lib/background/tabs";
 import { tabClose } from "@/lib/background/tabs";
 import { pageUpload } from "@/lib/background/upload";
 import type { ClickProbe } from "@/lib/dom/page-api";
-import type { BridgeReq } from "@/lib/shared/types";
 
 // The page-backend seam, mocked to observe WHICH mode dispatch selected
 // (the cdpMode site) without dragging real backends in.

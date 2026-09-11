@@ -4,11 +4,10 @@
 // being hand-mirrored between the content-script and CDP backends. The only
 // backend involvement is the click probe (a DOM read).
 
-import type { PolicyValues } from "@chromium-bridge/shared";
+import type { OpArgs, PolicyValues } from "@chromium-bridge/shared";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
 import { TOOL_GATES } from "../../shared/tool-gates";
-import type { OpArgs } from "../../shared/types";
 import type { PageBackend } from "../page-backend";
 import type { ResolvedTab } from "../tabs";
 import { presenceRoutingEnabled } from "./presence";

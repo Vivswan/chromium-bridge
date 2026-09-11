@@ -1,0 +1,63 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreExportsUsedInFile": true,
+  // Binaries that moon tasks and CI provide outside package.json: the task
+  // runner itself, the Rust toolchain, macOS's icon compiler, and the Windows
+  // registry tool the browser e2e drives on that platform.
+  "ignoreBinaries": ["moon", "rustup", "rustc", "iconutil", "reg.exe"],
+  "workspaces": {
+    ".": {
+      // Launched by name from a moon task as well as imported by run.ts.
+      "entry": ["tests/harness/fake-llm.ts"],
+      "project": ["tests/harness/**/*.ts"]
+    },
+    // Launch points knip cannot see for itself: moon task commands (it reads
+    // package scripts and workflow steps, not moon.yml) and the scripts other
+    // scripts spawn by path (dev.ts starts dev-browser.ts; desktop-bundle.ts
+    // runs dmg-dsstore.ts and gen-dmg-background.ts). Helpers such as lib.ts
+    // and provisioning.ts are reached through imports and stay project files.
+    "scripts": {
+      "entry": [
+        "*.test.ts",
+        "check-desktop-signing.ts",
+        "check-envelope-parity.ts",
+        "dev-browser.ts",
+        "dev.ts",
+        "dmg-dsstore.ts",
+        "gen-dmg-background.ts",
+        "gen-envelope.ts",
+        "gen-ops.ts",
+        "help.ts",
+        "sync-version.ts"
+      ],
+      "project": ["**/*.ts"]
+    },
+    // WXT entrypoints: the service worker, the content script, and each
+    // page's main.tsx (the page's index.html loads it).
+    "src/apps/extension": {
+      "entry": ["src/entrypoints/*.ts", "src/entrypoints/*/main.tsx"],
+      "project": ["src/**/*.{ts,tsx,css}", "tests/**/*.{ts,tsx}"]
+    },
+    "src/apps/desktop/ui": {
+      "project": ["src/**/*.{ts,tsx,css}"],
+      // Generated from the desktop crate's command DTOs: the emitter exports
+      // every DTO type whether or not the webview names it yet.
+      "ignore": ["src/lib/commands.gen.ts"]
+    },
+    "src/packages/shared": {
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
+    },
+    // The e2e and the runner that chains the suites are launched by name from
+    // moon tasks; the other suites are package scripts knip reads itself.
+    "tests/browser": {
+      "entry": ["*.test.ts", "integration_e2e.ts", "run_all.ts"],
+      "project": ["**/*.ts"]
+    },
+    "tests/interop": {
+      "project": ["**/*.ts"]
+    },
+    "src/apps/web": {
+      "project": ["src/**/*.{ts,mjs,astro}"]
+    }
+  }
+}

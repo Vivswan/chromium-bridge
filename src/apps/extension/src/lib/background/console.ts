@@ -9,10 +9,10 @@
 // they leave the extension (console lines can carry tokens). Mirrors the
 // transient-attach shape of precise.ts (ADR-0009 / ADR-0017).
 
+import type { OpArgs } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskString } from "../shared/masking";
-import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";

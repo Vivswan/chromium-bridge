@@ -425,7 +425,8 @@ mod tests {
         // socketpair test below and in tests/protocol/e2e.py.
         use std::io::Cursor;
 
-        let secret = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4";
+        // A test fixture, not a credential.
+        let secret = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
         let nonce = "feedface";
         // The MAC covers nonce AND label (handshake_mac_message), so the
         // label claim is authenticated, not merely adjacent to the MAC.
@@ -466,7 +467,8 @@ mod tests {
         use std::io::{BufReader, BufWriter};
         use std::os::unix::net::UnixStream;
 
-        let secret = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+        // A test fixture, not a credential.
+        let secret = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
 
         // Matching secrets on both ends: the server accepts and returns the
         // label the client carried in its signed response.
@@ -539,7 +541,8 @@ mod tests {
         // verification: the MAC covers (nonce, label), so swapping the label
         // while keeping the MAC is detected. This is what makes the label an
         // authenticated claim rather than a free-rider next to the MAC.
-        let secret = "d00dd00dd00dd00dd00dd00dd00dd00d";
+        // A test fixture, not a credential.
+        let secret = "d00dd00dd00dd00dd00dd00dd00dd00d"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
         let nonce = "cafebabe";
         let signed_for_chrome = compute_mac(
             secret.as_bytes(),

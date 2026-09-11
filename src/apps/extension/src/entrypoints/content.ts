@@ -1,8 +1,8 @@
+import type { PageReply } from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { handle } from "@/lib/content/handle";
 import { maskErrorMessage } from "@/lib/shared/masking";
-import type { PageReply } from "@/lib/shared/types";
 
 declare global {
   interface Window {
