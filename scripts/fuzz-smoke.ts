@@ -11,11 +11,11 @@
 // out of scope.
 //
 // A crashing target does not stop the pass: the script records the failure,
-// writes a report for it under --failure-dir (one directory per target,
-// following the fleet's failure-report contract, the fleet repository's
-// docs/fuzzer.md, so the nightly job's issue-filing action can consume it),
-// and continues with the remaining targets. The exit code is 1 when any target
-// failed, 0 when all survived. (Earlier versions re-raised libFuzzer's
+// writes a report for it under --failure-dir (one directory per target, in
+// the shape the fleet repository's docs/fuzzer.md defines, so the nightly
+// job's issue-filing action can consume it), and continues with the remaining
+// targets. The exit code is 1 when any target failed, 0 when all survived.
+// (Earlier versions re-raised libFuzzer's
 // signal / propagated cargo's status; with continue-through-targets there is
 // no single status to propagate, and the callers only branch on nonzero.)
 //
