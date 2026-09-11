@@ -12,7 +12,7 @@ name: Nightly browser and mutation tests
 # or updates one label-deduplicated tracking issue (nightly-failure -
 # distinct from the fuzz stream's fuzz-nightly, a shared label would let
 # one stream's green night close the other's issue), a green night closes
-# it. This file is repo-owned - template sync never updates it - so a
+# it. This file is repo-owned - a sync never updates it - so a
 # breaking change to the fuzz-issue action's inputs needs a manual edit here.
 #
 # It uses browser-actions/setup-chrome to install an isolated Chrome into the

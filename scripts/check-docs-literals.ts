@@ -22,7 +22,7 @@
 //   - BB_* env var names and value sets     src/packages/core/src/log.rs
 //   - audit --limit default                 src/packages/core/src/audit.rs
 //   - browser CLI keys                      src/packages/core/src/browsers.rs
-//   - release-level attestation bundle      .github/workflows/release.yml (BUNDLE_NAME)
+//   - release-level attestation bundle      RELEASE_BUNDLE_NAME below (mirrors the fleet's publish leg)
 //
 // Two kinds of assertion, both fail-closed on a missing canonical value:
 //
@@ -190,30 +190,14 @@ export function envValueSet(logSrc: string, name: string): string[] {
  * `attestation.json.sig` is compared whole, never by its prefix). */
 export const BUNDLE_TOKEN = /(?<![\w.-])attestation\.[\w.-]*\w/g;
 
-/** The release-level attestation bundle's asset name: the `BUNDLE_NAME` env
- * the managed release.yml's publish job uploads under. SECURITY.md tells
- * users to pass it to `gh attestation verify --bundle`, so a template rename
- * must fail here instead of leaving that command pointing at an asset that
- * no longer exists. Exactly one line-leading definition is accepted (a
- * commented-out copy is not one; two live ones are ambiguous; a trailing
- * comment needs whitespace before its `#`, as YAML does, so `x#y` is the
- * value `x#y` and not `x`) and it must be
- * a [`BUNDLE_TOKEN`] itself, or no doc could ever satisfy the family check. */
-export function releaseBundleName(releaseYml: string): string {
-  const names = [...releaseYml.matchAll(/^\s*BUNDLE_NAME:\s*([\w.-]*\w)(?:\s+#.*)?\s*$/gm)].map(
-    (m) => m[1] as string,
-  );
-  if (names.length !== 1) {
-    throw new Error(
-      `expected exactly one BUNDLE_NAME in .github/workflows/release.yml, found ${names.length}`,
-    );
-  }
-  const name = names[0] as string;
-  if (!new RegExp(`^(?:${BUNDLE_TOKEN.source})$`).test(name)) {
-    throw new Error(`BUNDLE_NAME "${name}" is not an attestation.* filename`);
-  }
-  return name;
-}
+/** The release-level attestation bundle's asset name. Source of truth:
+ * repo-platform's fleet-release-publish.yml (`BUNDLE_NAME`, the fleet's
+ * publish leg the managed ci.yml calls), which no file in this repository
+ * carries; SECURITY.md tells users to pass it to `gh attestation verify
+ * --bundle`, so a fleet rename is a manual update here, and the test pins
+ * that the name is a [`BUNDLE_TOKEN`] itself, or no doc could ever satisfy
+ * the family check. */
+export const RELEASE_BUNDLE_NAME = "attestation.json";
 
 /** FAMILY check: every match of `family` in the doc must be in `allowed`. */
 export function familyViolations(
@@ -448,7 +432,6 @@ if (import.meta.main) {
   const logFormats = envValueSet(logRs, "BB_LOG_FORMAT");
   const auditLimit = auditDefaultLimit(rust("audit.rs"));
   const keys = browserKeys(rust("browsers.rs"));
-  const bundleName = releaseBundleName(readDoc(".github/workflows/release.yml"));
   // The desktop app's bundle id, canonical in the Tauri config.
   const bundleId = (
     JSON.parse(readFileSync(resolve(root, "src/apps/desktop/tauri.conf.json"), "utf8")) as {
@@ -520,7 +503,7 @@ if (import.meta.main) {
     {
       label: "release attestation bundle",
       family: BUNDLE_TOKEN,
-      allowed: new Set([bundleName]),
+      allowed: new Set([RELEASE_BUNDLE_NAME]),
     },
   ];
   for (const doc of docs) {
@@ -572,7 +555,7 @@ if (import.meta.main) {
       doc,
       readDoc(doc),
       BUNDLE_TOKEN,
-      bundleName,
+      RELEASE_BUNDLE_NAME,
       "release attestation bundle",
     );
     if (v) violations.push(v);
@@ -602,8 +585,8 @@ if (import.meta.main) {
     console.error(
       `\ncheck-docs-literals: ${violations.length} stale or missing doc literal(s). ` +
         "The canonical values live in the Rust core (identity.rs, enclave/, " +
-        "ipc/lockfile.rs, protocol.rs, mcp_server.rs, log.rs) and in the managed " +
-        "release.yml (BUNDLE_NAME); update the docs to match.",
+        "ipc/lockfile.rs, protocol.rs, mcp_server.rs, log.rs) and in RELEASE_BUNDLE_NAME " +
+        "(this script, mirroring the fleet's publish leg); update the docs to match.",
     );
     process.exit(1);
   }
@@ -612,6 +595,6 @@ if (import.meta.main) {
       `literals (host id, extension id, keychain label, ${lockName}, enclave domains, ` +
       `MCP ${mcpVersion}, bridge v${bridgeVersion}, ${envNames.join("/")}, ` +
       `audit --limit ${auditLimit}, browser keys ${keys.join(",")}, ` +
-      `release bundle ${bundleName})`,
+      `release bundle ${RELEASE_BUNDLE_NAME})`,
   );
 }

@@ -15,7 +15,7 @@ import {
   mcpLineViolations,
   mcpProtocolVersion,
   presenceViolation,
-  releaseBundleName,
+  RELEASE_BUNDLE_NAME,
   rustStrConst,
   tokenPresenceViolation,
 } from "./check-docs-literals";
@@ -91,25 +91,9 @@ describe("canonical extraction", () => {
 describe("release attestation bundle", () => {
   const LABEL = "release attestation bundle";
 
-  test("reads the one live BUNDLE_NAME; a commented-out copy and a trailing comment are ignored", () => {
-    const yml =
-      "    env:\n      # BUNDLE_NAME: attestation.jsonl\n      BUNDLE_NAME: attestation.json # one bundle\n";
-    expect(releaseBundleName(yml)).toBe("attestation.json");
-  });
-
-  test("a release.yml without BUNDLE_NAME, or with two, is an error, never a silent pass", () => {
-    expect(() => releaseBundleName("env:\n  TAG: v1\n")).toThrow("found 0");
-    expect(() =>
-      releaseBundleName("  BUNDLE_NAME: attestation.json\n  BUNDLE_NAME: attestation.jsonl\n"),
-    ).toThrow("found 2");
-  });
-
-  test("a BUNDLE_NAME the family grammar could never match is an error", () => {
-    expect(() => releaseBundleName("  BUNDLE_NAME: bundle.json\n")).toThrow("not an attestation");
-  });
-
-  test("a # glued to the value is part of the value, as in YAML, never a comment", () => {
-    expect(() => releaseBundleName("  BUNDLE_NAME: attestation.json#x\n")).toThrow("found 0");
+  test("the release bundle name is itself a BUNDLE_TOKEN, so a doc can name it", () => {
+    expect(RELEASE_BUNDLE_NAME).toBe("attestation.json");
+    expect(RELEASE_BUNDLE_NAME).toMatch(new RegExp(`^(?:${BUNDLE_TOKEN.source})$`));
   });
 
   test("the stale release-level name is flagged; per-asset bundles are not", () => {
