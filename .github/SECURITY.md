@@ -10,7 +10,11 @@ Report vulnerabilities privately via [GitHub Security Advisories](https://github
 - reproduction steps or a proof of concept,
 - the affected version or commit.
 
-Expect an acknowledgement within a few days, and a fix in the next release once the report is confirmed. Please allow reasonable time for that fix before any public disclosure. Never include real credentials in a report; redact everything that looks like a key. Only the latest release is supported.
+Expect an acknowledgement within a few days, and a fix in the next release once the report is confirmed. Please allow reasonable time for that fix before any public disclosure. Never include real credentials in a report; redact everything that looks like a key.
+
+## Supported versions
+
+Only the latest release is supported.
 
 chromium-bridge drives a **real, logged-in browser** on the user's machine. It can read page content, cookies (including httpOnly), and web storage, and can execute JavaScript in pages. This document covers how to report issues, the security model in summary, and the review bar for security-relevant changes.
 
@@ -94,14 +98,14 @@ Adding `--bundle chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` to e
 Dependency review is fully automated; there is no manual per-crate audit step ([ADR-0035](../docs/adr/0035-automated-supply-chain-review.md), which retired the cargo-vet gate). The stack:
 
 - **cargo-deny + cargo-audit** (RUSTSEC advisories, the license allow-list and banned sources in `deny.toml`) run inside the all-green gate on every PR and push, and again in the weekly security.yml sweep so advisories disclosed between pushes still surface.
-- **GitHub's dependency-review action** runs on every PR through the managed ci.yml's fleet-delivered job (Vivswan/repo-platform, updated by sync PRs), failing the gate on dependencies with known advisories. It only has a diff to review on pull_request events; direct pushes stay covered by cargo-deny + cargo-audit in the same gate plus the weekly sweep. License enforcement is cargo-deny's alone: mirroring the allow-list into the action was evaluated and rejected because the dependency graph misparses several Cargo.lock licenses (ADR-0035).
+- **GitHub's dependency-review action** runs on every PR through the managed ci.yml's fleet-delivered job (updated by sync PRs), failing the gate on dependencies with known advisories. It only has a diff to review on pull_request events; direct pushes stay covered by cargo-deny + cargo-audit in the same gate plus the weekly sweep. License enforcement is cargo-deny's alone: mirroring the allow-list into the action was evaluated and rejected because the dependency graph misparses several Cargo.lock licenses (ADR-0035).
 - **Dependabot** watches cargo, bun, and GitHub Actions and raises alerts and bump PRs.
 
 What this asserts is "no unwaived known advisory (the RUSTSEC exceptions reviewed into `deny.toml`'s ignore list stay waived) and an allowed license", not "a human audited this code"; the residual risk (a novel malicious crate or undiscovered flaw with no published advisory) is recorded in ADR-0035.
 
 ### CI supply chain under the fleet template (ADR-0033)
 
-CI configuration is fleet-managed (Vivswan/repo-platform): the managed ci.yml is a skeleton that calls the platform's reusable workflows and actions at `@build`, the platform's green-gated delivery branch, which moves on every green platform commit. Third-party actions are pinned to commit SHAs on both sides. The moving `@build` ref is a real, accepted widening of the CI supply chain - a compromise of repo-platform executes in this repository's CI, in jobs holding security-events, pages, id-token, contents, and pull-requests write. The acceptance rests on a trust assumption, not a technical boundary: repo-platform stays under the same owner's control. Details and the rest of the accepted residuals live in [ADR-0033](../docs/adr/0033-adopt-repo-platform-fleet-template.md).
+CI configuration is fleet-managed: the managed ci.yml is a skeleton that calls the fleet's reusable workflows and actions at `@build`, the fleet repository's green-gated delivery branch, which moves on every green commit there. Third-party actions are pinned to commit SHAs on both sides. The moving `@build` ref is a real, accepted widening of the CI supply chain - a compromise of the fleet repository executes in this repository's CI, in jobs holding security-events, pages, id-token, contents, and pull-requests write. The acceptance rests on a trust assumption, not a technical boundary: the fleet repository stays under the same owner's control. Details and the rest of the accepted residuals live in [ADR-0033](../docs/adr/0033-adopt-repo-platform-fleet-template.md).
 
 Verifying the whole archive also covers the bundled `extension/dist`. Registration (`doctor --fix`, or the app) points browsers at the binary as it sits on disk; it downloads nothing and adds no verification step of its own, so verify first, then register. You can also skip the release pipeline entirely: the binary builds reproducibly, so install the exact toolchain pinned in `rust-toolchain.toml` via [rustup](https://rustup.rs) (a Homebrew or distro rustc embeds different standard-library paths and will not match) plus [bun](https://bun.sh) to run the build script, on the same platform the release targets, then:
 

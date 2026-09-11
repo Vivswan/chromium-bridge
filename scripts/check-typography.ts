@@ -6,7 +6,7 @@
 // vector (an invisible bidi override or a homoglyph in a security-relevant
 // string reads differently to a human than to a parser).
 //
-// The local mirror of the Vivswan/repo-platform check-typography action:
+// The local mirror of the fleet's check-typography action:
 // the managed ci.yml runs the action, `moon run ci` runs this, both
 // enforcing the same rules:
 //   - every git-tracked path is scanned - content AND filename (a bidi mark

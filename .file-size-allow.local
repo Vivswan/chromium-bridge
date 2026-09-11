@@ -1,4 +1,4 @@
-# Paths exempt from repo-platform's check-file-size action, one per line,
+# Paths exempt from the central CI's file-size check, one per line,
 # relative to the repository root, each with a `# reason` on the same line.
 # Repo-owned: sync never touches this file.
 src/packages/core/src/identity.rs # the pinned extension manifest key is one 392-char base64 literal by contract: scripts/check-extension-id.ts and .gitleaks.toml anchor on that single literal, so splitting it breaks both

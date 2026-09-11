@@ -1,6 +1,6 @@
 # Contributing to chromium-bridge
 
-Thanks for contributing! This document covers the conventions every change in this repository goes through. Some files arrive from [Vivswan/repo-platform](https://github.com/Vivswan/repo-platform): `.github/repo-platform-manifest.json` records each one's class (`managed` files are replaced on every sync and are edited in repo-platform; `starter` files such as `checks.yml`, the release hooks, and `.github/settings.yml` are written once and are this repository's own). [AGENTS.md](./AGENTS.md) summarizes the split.
+Thanks for contributing! This document covers the conventions every change in this repository goes through. Some files arrive from [Vivswan/repo-platform](https://github.com/Vivswan/repo-platform): `.github/repo-platform-manifest.json` records each one's class (`managed` files are replaced on every sync and are edited in the fleet repository; `starter` files such as `checks.yml`, the release hooks, and `.github/settings.yml` are written once and are this repository's own). [AGENTS.md](./AGENTS.md) summarizes the split.
 
 - Changes land through pull requests and are squash-merged; the PR title becomes the commit subject on `main`. Titles and commit subjects follow the [commit convention](#commit-convention) below.
 - By opening a pull request, or offering code in an issue or review for inclusion, you agree to the Contributions section of the [LICENSE.md](./LICENSE.md), which licenses that code to the licensor - including for relicensing under any terms - unless you conspicuously say otherwise when you submit it.
@@ -48,7 +48,7 @@ This is a small, security-sensitive project (it drives a real logged-in browser)
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org): `type(scope): subject`.
 
-- Allowed `type`: `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor` `revert` `style` `test` - the fleet-wide list enforced in CI by `Vivswan/repo-platform/actions/validate-commit-names` (every commit subject in the push/PR range) and the managed ci.yml's `pr-title` job (the PR title). Prefer the most precise type over `chore`: dependency bumps -> `build`, workflow changes -> `ci`, documentation -> `docs`.
+- Allowed `type`: `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor` `revert` `style` `test` - the fleet-wide list enforced in CI by the fleet's validate-commit-names action (every commit subject in the push/PR range) and the managed ci.yml's `pr-title` job (the PR title). Prefer the most precise type over `chore`: dependency bumps -> `build`, workflow changes -> `ci`, documentation -> `docs`.
 - `scope` is optional (`session`, `tools`, `error`, `ci`, `ext`, ...).
 - `subject` is imperative, present tense, lower-case, no trailing period; explain the *why* in the body. One logical change per commit.
 

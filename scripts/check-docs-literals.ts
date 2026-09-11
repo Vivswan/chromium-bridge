@@ -191,7 +191,7 @@ export function envValueSet(logSrc: string, name: string): string[] {
 export const BUNDLE_TOKEN = /(?<![\w.-])attestation\.[\w.-]*\w/g;
 
 /** The release-level attestation bundle's asset name. Source of truth:
- * repo-platform's fleet-release-publish.yml (`BUNDLE_NAME`, the fleet's
+ * the fleet's fleet-release-publish.yml (`BUNDLE_NAME`, the fleet's
  * publish leg the managed ci.yml calls), which no file in this repository
  * carries; SECURITY.md tells users to pass it to `gh attestation verify
  * --bundle`, so a fleet rename is a manual update here, and the test pins
