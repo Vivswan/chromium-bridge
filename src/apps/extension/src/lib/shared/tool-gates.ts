@@ -23,11 +23,3 @@ export const TOOL_GATES = {
   page_upload: "fileUploadEnabled",
   page_handle_dialog: "handleDialogEnabled",
 } as const satisfies Partial<Record<OpName, BooleanPolicyField>>;
-
-export type GatedTool = keyof typeof TOOL_GATES;
-export type GateSetting = (typeof TOOL_GATES)[GatedTool];
-
-/** The master-gate policy field for an op, or undefined when the op has none. */
-export function toolGate(op: OpName): GateSetting | undefined {
-  return (TOOL_GATES as Partial<Record<OpName, GateSetting>>)[op];
-}

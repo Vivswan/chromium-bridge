@@ -14,9 +14,8 @@
 // The path is shown UNMASKED in the confirmation on purpose: the user must see
 // exactly which local file would leave their disk.
 
-import type { PolicyValues } from "@chromium-bridge/shared";
+import type { OpArgs, PolicyValues } from "@chromium-bridge/shared";
 import { TOOL_GATES } from "../shared/tool-gates";
-import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";

@@ -10,7 +10,6 @@ import type { MessageKey } from "@/locales/en";
 
 export type PolicyFieldName = keyof PolicyValues;
 export type PolicyGroup = "grants" | "confirmations" | "timing" | "tools";
-export type PolicyFieldKind = PolicyFieldSpec["kind"];
 
 /** The editor kind a field's VALUE TYPE dictates: booleans render the
  * toggle row, numbers the ms input, the string list the tools input. */

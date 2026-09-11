@@ -8,11 +8,15 @@
 // its guard is refused before it is ever sent) and the reply must match the
 // PageReply envelope (anything else is refused, never shape-sniffed).
 
-import { ClickProbeSchema, ContentMsgSchema, PageReplySchema } from "@chromium-bridge/shared";
+import {
+  ClickProbeSchema,
+  ContentMsgSchema,
+  type OpArgs,
+  PageReplySchema,
+} from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
-import type { OpArgs } from "../../shared/types";
 import type { PageOpGuard } from "../confirm/gate";
 import type { PageBackend } from "../page-backend";
 import { injectIfNeeded, type ResolvedTab } from "../tabs";

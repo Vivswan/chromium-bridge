@@ -143,8 +143,6 @@ export function t(key: MessageKey, substitutions?: string[]): string {
   return key;
 }
 
-export const i18n = { t };
-
 export function getActiveLocale(): UiLocale {
   return activeLocale;
 }

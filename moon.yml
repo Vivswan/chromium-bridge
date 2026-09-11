@@ -246,7 +246,7 @@ tasks:
       cache: false # a check task: gates are never cached
 
   typos:
-    description: 'Source-code spell check (CI gate; config in typos.toml)'
+    description: 'Source-code spell check (CI gate; config in _typos.toml)'
     command: 'typos'
     toolchains: ['system']
     options:

@@ -5,10 +5,14 @@
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach. See ADR-0009.
 
-import { InfoToastResultSchema, PageReplySchema, type PolicyValues } from "@chromium-bridge/shared";
+import {
+  InfoToastResultSchema,
+  type OpArgs,
+  PageReplySchema,
+  type PolicyValues,
+} from "@chromium-bridge/shared";
 import { browser } from "wxt/browser";
 import { initI18n, t } from "../i18n";
-import type { OpArgs } from "../shared/types";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 // The browser.debugger primitives + the non-debuggable URL filter now live in

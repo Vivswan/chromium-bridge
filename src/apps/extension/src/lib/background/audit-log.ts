@@ -128,9 +128,6 @@ export async function readRing(): Promise<AuditEntry[]> {
   });
 }
 
-/** The storage key the options panel watches for event-driven refreshes. */
-export const AUDIT_RING_STORAGE_KEY = AUDIT_RING_KEY;
-
 /** Tests only. */
 export function resetAuditForTests(): void {
   postFrame = null;
