@@ -97,7 +97,7 @@ The full task menu, by area:
 | Aggregates | `build`, `test`, `ci`, `release`, `lint`, `fmt`, `fix` |
 | Dev loops | `dev`, `dev-app`, `dev-web`, `extension:dev`, `desktop-ui:dev` |
 | Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc`), `build-release`, `build-repro`, `typos`, `machete`, `audit`, `fuzz-smoke` |
-| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `desktop-ui:build`, `web:build` |
+| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `desktop-ui:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared` + `gen-app-types`), `gen-icons`, `check-gen`, `check-gen-app`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the ADR-0034 opening-method canary) |
