@@ -11,11 +11,11 @@
 // out of scope.
 //
 // A crashing target does not stop the pass: the script records the failure,
-// writes a report for it under --failure-dir (one directory per target,
-// following repo-platform's failure-report contract - see docs/fuzzer.md
-// there - so the nightly job's issue-filing action can consume it), and
-// continues with the remaining targets. The exit code is 1 when any target
-// failed, 0 when all survived. (Earlier versions re-raised libFuzzer's
+// writes a report for it under --failure-dir (one directory per target, in
+// the shape the fleet repository's docs/fuzzer.md defines, so the nightly
+// job's issue-filing action can consume it), and continues with the remaining
+// targets. The exit code is 1 when any target failed, 0 when all survived.
+// (Earlier versions re-raised libFuzzer's
 // signal / propagated cargo's status; with continue-through-targets there is
 // no single status to propagate, and the callers only branch on nonzero.)
 //
@@ -192,7 +192,7 @@ export interface FailureInfo {
 export const MAX_EMBED_BYTES = 3000;
 
 /**
- * The failure report, following repo-platform's failure-report contract v1:
+ * The failure report, following the fleet's failure-report contract v1:
  * line 1 is a `# title` heading, and the body carries the exact replay
  * command in a fenced block, near the top so head-truncation keeps it.
  */

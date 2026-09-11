@@ -1,6 +1,6 @@
 # Repo-owned CI checks, called by the managed ci.yml inside the all-green
 # gate: every job here must pass before all-green goes green. Generated once
-# by Vivswan/repo-platform and never overwritten by a sync, so edit
+# by the fleet sync and never overwritten by it, so edit
 # freely. Jobs added here are gated automatically (all-green sees this
 # workflow's aggregate result) - no needs-list maintenance.
 #

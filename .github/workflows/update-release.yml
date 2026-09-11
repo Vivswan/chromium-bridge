@@ -1,5 +1,5 @@
 # The update stage of the release pipeline: repo-owned, generated once by
-# Vivswan/repo-platform and never overwritten by a sync. The managed
+# the fleet sync and never overwritten by it. The managed
 # ci.yml's update-release job calls this workflow between cutting the draft
 # release (the fleet's release leg) and the attested publish (the fleet's
 # publish-release leg), so everything this repository wants on the release
