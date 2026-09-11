@@ -1,12 +1,13 @@
 # The update stage of the release pipeline: repo-owned, generated once by
-# Vivswan/repo-platform and never overwritten by template sync. The managed
-# release.yml calls this workflow between cutting the draft release and the
-# attested publish, so everything this repository wants on the release
+# Vivswan/repo-platform and never overwritten by a sync. The managed
+# ci.yml's update-release job calls this workflow between cutting the draft
+# release (the fleet's release leg) and the attested publish (the fleet's
+# publish-release leg), so everything this repository wants on the release
 # happens here: packaging, asset uploads, note edits. Add jobs freely -
 # publishing waits for every job in this file, and every asset uploaded
 # here is attested at publish time into the release's single
-# attestation.json. Recovery when a run dies mid-pipeline is documented
-# in release.yml; the jobs themselves are documented in docs/release.md.
+# attestation.json. Recovery when a run dies mid-pipeline and the jobs
+# themselves are documented in docs/release.md.
 
 name: Update Release
 

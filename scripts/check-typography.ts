@@ -15,7 +15,7 @@
 //   - the four CJK marks it deliberately omits (U+3001 U+3002 U+300C U+300D)
 //     stay usable in CJK prose - whole-script containment is check-cjk.ts's
 //     job, not this one's;
-//   - .typography-allow (managed by template sync) and .typography-allow.local
+//   - .typography-allow (managed, replaced on every sync) and .typography-allow.local
 //     (repo-owned) exempt exact repo-relative paths (one per line,
 //     # comments). Exact, not prefix: the action's prefix matching
 //     could silently exempt a whole subtree from a one-file entry, so this
@@ -211,7 +211,7 @@ if (import.meta.main) {
   }
 
   // Two exemption lists, matching the platform action's pair: the managed
-  // .typography-allow (template sync overwrites it) and the repo-owned
+  // .typography-allow (every sync replaces it) and the repo-owned
   // .typography-allow.local. Entries here are EXACT paths (see the header) -
   // deliberately stricter than the action's prefix matching, so anything
   // this gate passes also passes CI, never the reverse.

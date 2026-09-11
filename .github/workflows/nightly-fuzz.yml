@@ -1,7 +1,7 @@
 # Nightly fuzzing: a long bounded cargo-fuzz pass over every target, working
 # from a corpus persisted across nights. This is this repository's instance
 # of repo-platform's fuzzer-module starter (repo-owned, never overwritten by
-# template sync): the fuzz step is ours, and the issue filing, replay
+# a sync): the fuzz step is ours, and the issue filing, replay
 # inputs, and auto-close come from the shared contract - failure reports
 # land in src/packages/core/fuzz/failures/ per repo-platform's docs/fuzzer.md,
 # and the fuzz-issue action turns them into one label-deduplicated tracking

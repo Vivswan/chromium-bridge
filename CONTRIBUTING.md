@@ -1,3 +1,11 @@
+# Contributing to chromium-bridge
+
+Thanks for contributing! This document covers the conventions every change in this repository goes through. Some files arrive from [Vivswan/repo-platform](https://github.com/Vivswan/repo-platform): `.github/repo-platform-manifest.json` records each one's class (`managed` files are replaced on every sync and are edited in repo-platform; `starter` files such as `checks.yml`, the release hooks, and `.github/settings.yml` are written once and are this repository's own). [AGENTS.md](./AGENTS.md) summarizes the split.
+
+- Changes land through pull requests and are squash-merged; the PR title becomes the commit subject on `main`. Titles and commit subjects follow the [commit convention](#commit-convention) below.
+- By opening a pull request, or offering code in an issue or review for inclusion, you agree to the Contributions section of the [LICENSE.md](./LICENSE.md), which licenses that code to the licensor - including for relicensing under any terms - unless you conspicuously say otherwise when you submit it.
+- Never report vulnerabilities in issues or pull requests - see [SECURITY.md](./.github/SECURITY.md) for the private reporting route.
+- Participation is governed by the account-wide [code of conduct](https://github.com/Vivswan/.github/blob/main/CODE_OF_CONDUCT.md).
 
 ## Before you start
 
