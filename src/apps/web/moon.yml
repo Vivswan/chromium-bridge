@@ -36,6 +36,18 @@ tasks:
     outputs:
       - '/build/web'
 
+  test:
+    description: "Unit-test src/apps/web: the markdown link rewriter's classification"
+    command: 'bun run test'
+    toolchains: ['system']
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/package.json'
+      - '/bun.lock'
+    options:
+      cache: false # a check task: gates are never cached
+
   lint:
     description: "Biome lint for the web app workspace"
     command: 'bunx biome lint $projectSource'

@@ -305,10 +305,11 @@ tasks:
       cache: false
 
   test-ts:
-    description: 'Unit-test shared + extension (the `bun run test` set; the desktop UI suite is desktop-ui:test)'
+    description: 'Unit-test shared + extension + web (the `bun run test` set; the desktop UI suite is desktop-ui:test)'
     deps:
       - 'shared:test'
       - 'extension:test'
+      - 'web:test'
     toolchains: ['system']
     options:
       cache: false
