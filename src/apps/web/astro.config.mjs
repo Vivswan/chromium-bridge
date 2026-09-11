@@ -25,7 +25,13 @@ export default defineConfig({
   markdown: {
     // The default processor plus one plugin: repo-relative .md links become
     // their rendered /docs/ routes (see satteri-md-links.ts).
-    processor: satteri({ hastPlugins: [mdLinksPlugin(SITE_BASE)] }),
+    processor: satteri({
+      hastPlugins: [mdLinksPlugin(SITE_BASE)],
+      // The docs are plain ASCII by rule (check-typography), and smart
+      // punctuation would turn `--fix` into an en dash: wrong on the page and
+      // a heading id GitHub-authored anchors cannot reach.
+      features: { smartPunctuation: false },
+    }),
   },
   vite: {
     // Let the dev server read the repo's markdown above the site root.

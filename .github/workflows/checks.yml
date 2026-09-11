@@ -511,6 +511,7 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run --cwd src/apps/web build
+      - run: bun run --cwd src/apps/web test
 
   cjk:
     name: CJK containment (zh text only in locale files)
