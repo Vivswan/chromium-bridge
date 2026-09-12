@@ -48,31 +48,44 @@ If a change touches permissions, credential access, confirmation, allowlist, mas
 
 ## Decisions: ADR vs RFC
 
-- **ADR** (`docs/adr/`) records a decision *already made* (why single-binary, why localhost TCP, why a given confirmation UI). Status: Proposed / Accepted / Superseded / Deprecated.
-- **RFC** (open a discussion/issue) is for proposing a *significant change* before building it - multi-client broker, a write capability, adopting Tokio, a new protocol version, Edge/Firefox support, enterprise policy. Flow: `RFC → discussion → accepted/rejected → implement → ADR records the outcome`.
+- **ADR** (`docs/adr/`) records a decision *already made*: why single-binary, why a given confirmation UI. Status: Proposed / Accepted / Superseded / Deprecated.
+- **RFC** (open a discussion/issue) proposes a *significant change* before building it: a write capability, a new protocol version, a new browser platform, enterprise policy.
+
+The RFC flow, in order:
+
+1. open the RFC as a discussion or issue;
+2. discuss; the RFC is accepted or rejected;
+3. implement;
+4. an ADR records the outcome.
 
 ## Tracking work & tech debt
 
-Tech debt lives in GitHub Issues, not in comments or memory. Labels:
+Tech debt lives in GitHub Issues, not in comments or memory. Type labels:
 
 ```
-type:feature  type:bug  type:refactor  type:security  type:docs  type:tech-debt
-area:rust  area:extension  area:protocol  area:installer  area:testing  area:release
-priority:P0  priority:P1  priority:P2  priority:P3
+type:feature  type:bug  type:security
 ```
 
 A tech-debt issue states: the problem, the risk, the current workaround, the target state, and what should trigger addressing it.
 
 ## Repository root is reference-locked
 
-The files at the repository root are intentionally minimal, and most of them **cannot move** without breaking tooling - a future "tidy-up" that relocates them will silently break the build or lint gates. Before moving anything at root, know why it is there:
+The files at the repository root are intentionally minimal, and most of them **cannot move** without breaking tooling: a "tidy-up" that relocates them will silently break the build or lint gates. Before moving anything at root, know why it is there:
 
-- **Tool-pinned to root (cannot move):** `Cargo.toml` / `Cargo.lock` (cargo crate root), `rust-toolchain.toml` (rustup resolves it from the project root), `rustfmt.toml` and `clippy.toml` (`cargo fmt` / clippy discover them from the crate root; no CLI override is set), `deny.toml` (`cargo deny check` is invoked bare, so it uses the default root path), `.editorconfig` / `.gitignore` / `.gitattributes` (walked up from the working tree).
-- **Convention / GitHub-surfaced (keep at root):** `README.md`, `LICENSE.md`, `SECURITY.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `CHANGELOG.md`, `AGENTS.md`.
-- **Referenced by path (moving requires editing every reference):** the root `moon.yml` (with `.moon/` + the per-project `moon.yml` files) is the canonical task entrypoint.
+| File | Why it stays at root |
+|---|---|
+| `Cargo.toml`, `Cargo.lock` | Tool-pinned: the cargo crate root |
+| `rust-toolchain.toml` | Tool-pinned: rustup resolves it from the project root |
+| `rustfmt.toml`, `clippy.toml` | Tool-pinned: `cargo fmt` / clippy discover them from the crate root; no CLI override is set |
+| `deny.toml` | Tool-pinned: `cargo deny check` is invoked bare, so it uses the default root path |
+| `.editorconfig`, `.gitignore`, `.gitattributes` | Tool-pinned: walked up from the working tree |
+| `README.md`, `LICENSE.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `CHANGELOG.md`, `AGENTS.md` | Convention: GitHub surfaces them at root |
+| `moon.yml` (with `.moon/` and the per-project `moon.yml` files) | Referenced by path as the canonical task entrypoint; moving it means editing every reference |
 
-If a genuine reason to relocate one appears, update every reference in the same change (CI workflows, moon tasks, `scripts/`, docs, `CODEOWNERS`) and confirm the lint/build gates still find their config.
+If a genuine reason to relocate one appears, update every reference in the same change (CI workflows, moon tasks, `scripts/`, docs, `.github/CODEOWNERS`) and confirm the lint/build gates still find their config.
 
 ## Versioning & release
 
-`Cargo.toml` is the single source of truth; `moon run sync-version` propagates it. Tagging `vX.Y.Z` triggers the release build. SemVer discipline applies even pre-1.0 - a `0.x` bump is not a license to break compatibility silently (tool removal/rename, permission widening, protocol breaks are "major"-shaped). See [docs/development.md](docs/development.md#releasing).
+- `Cargo.toml` is the single source of truth; `moon run sync-version` propagates it.
+- Releases are cut by release-please from a green `main`: merging the rolling release PR tags `vX.Y.Z`, and the same CI run builds and publishes the assets ([docs/development.md](docs/development.md#releasing)).
+- SemVer discipline applies even pre-1.0: a `0.x` bump is not a license to break compatibility silently. Tool removal/rename, permission widening, and protocol breaks are "major"-shaped.
