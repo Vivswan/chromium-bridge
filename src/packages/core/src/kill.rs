@@ -13,13 +13,14 @@
 //!                                                connection stays up so the refusal is delivered
 //! the broker's browser leg (`crate::broker`)  -> live connections severed within one watcher tick; attaches refused
 //! the native host (`crate::native_host`)      -> control-plane only: kill/status frames work, release is refused
-//! the extension                               -> mirrors the state in SW-only trusted storage; the host is authoritative
+//! the extension                               -> mirrors the state in extension-context-only storage; the host is authoritative
 //! ```
 //!
 //! Nothing clears the latch on its own: no timeout, restart, or reconnect. Only [`release`], reached from
 //! `chromium-bridge unkill` and the desktop app (ADR-0032 decision 6 retired the extension release surface), and
 //! it demands a [`crate::presence::PresenceAttestation`], so the user-presence ladder must have run
-//! ([`crate::presence`]). Every release, granted or refused, is audited with the auth path that decided it. A corrupt
+//! ([`crate::presence`]). Every attempt is audited: an attestation's grant or refusal with its auth path, a presence-gate
+//! refusal with its error ([`audit_refused_release`]). A corrupt
 //! record refuses BOTH directions ([`crate::revocation::set_killed_locked`]): an unkill from an unknown state would
 //! be a fail-open.
 //!

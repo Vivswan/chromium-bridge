@@ -5,7 +5,7 @@
 //! ```text
 //! Unix     -> 0600 Unix-domain socket in a private 0700 runtime dir: no port to reach, other users kept out
 //! Windows  -> loopback TCP on an ephemeral port (no std Unix-domain sockets)
-//! both     -> socket path + per-run secret published in the lock file, which the host reads on startup
+//! both     -> endpoint (socket path, or 127.0.0.1:port) + per-run secret published in the lock file the host reads on startup
 //! ```
 //!
 //! Before the handshake, on Linux and macOS, each end kernel-attests the other ([`attest_peer`], ADR-0020): the
