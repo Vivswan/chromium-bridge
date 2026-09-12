@@ -128,17 +128,12 @@ export type EnclaveOutcome = {
 };
 
 /**
- * Just the 15 policy field values, detached from a document's version /
- * revision / touched scoping: the shape the comparisons and the effective
- * policy work in.
+ * Just the 15 policy field values, detached from a document's version / revision / touched scoping: the
+ * shape the comparisons and the effective policy work in, and the `effective` payload of
+ * [`crate::policy::PolicyStatusReport`] that the CLI emits and the desktop app parses back.
  *
- * Serializable in camelCase (the wire field names) so it can be the
- * `effective` payload of [`crate::policy::PolicyStatusReport`] that the CLI
- * emits and the desktop app parses back; `ts_rs`-exported under the gen-only
- * feature, the same posture as the enclave report types. Strict on the way
- * in: serde does NOT inherit a container attribute from an embedding type,
- * so without its own `deny_unknown_fields` an unknown field inside a
- * report's `effective` would parse silently.
+ * Its own `deny_unknown_fields` is load-bearing: serde does NOT inherit a container attribute from an
+ * embedding type, so without it an unknown field inside a report's `effective` would parse silently.
  */
 export type PolicyValues = {
   cdpMode: boolean;
@@ -167,23 +162,15 @@ export type PolicyValues = {
 export type PolicyStoreState = "none" | "present" | "error";
 
 /**
- * The versioned, machine-readable policy status: the exact object
- * `chromium-bridge policy show --json` prints (ADR-0032), the typed mirror
- * the desktop app parses back, and the shape the doctor row renders from.
+ * The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json` prints
+ * (ADR-0032), which the desktop app parses back and the doctor row renders from. A sum tagged on `store` rather than
+ * a flat struct, so a `none` report smuggling an effective policy, or a `present` one missing its revision, cannot
+ * even deserialize.
  *
- * A sum internally tagged on `store` (the [`PendingImportReport`] shape):
- * each arm carries exactly its own fields, so a `none` report smuggling an
- * effective policy - or a `present` one missing its revision - cannot even
- * deserialize. The tag serializes to the same `store` field the v1 flat
- * shape carried and every arm's fields are spelled identically, so the wire
- * form is VALUE-identical to v1 (JSON key order may differ on paths that
- * serialize the struct directly rather than through the sorted-keys `Value`
- * this CLI prints; no JSON consumer reads key order, so no `v` bump): a
- * consumer still refuses an unrecognized `v` before it trusts any other
- * field, and `deny_unknown_fields` still makes an unexpected shape a loud
- * refusal.
- *
- * [`PendingImportReport`]: crate::pending_import::PendingImportReport
+ * ```text
+ * same `store` tag field and field spellings as the flat v1 shape -> wire form VALUE-identical to v1, no `v` bump
+ * serialized directly, not through this CLI's sorted-keys Value   -> key order may differ; no consumer reads key order
+ * ```
  */
 export type PolicyStatusReport =
   | {
@@ -336,19 +323,10 @@ export type PolicyOutcome = {
 };
 
 /**
- * The typed, versioned pending-import status for the desktop app's first-run
- * import screen (ADR-0032 decision 8), gathered fail-closed from the store -
- * the same read discipline as [`crate::policy::gather_policy_status`], and
- * the exact object `chromium-bridge policy pending-import --json` prints
- * (the [`crate::policy::PolicyStatusReport`] pattern: one Rust definition,
- * ts_rs-exported, emitted by the host and parsed back by the app). A
- * tagged sum like the on-disk record, so an impossible combination (a
- * `consumed` answer smuggling a bag, an `error` with no detail) cannot even
- * deserialize: `none` is the ordinary no-receipt state (healthy), `present`
- * and `consuming` are the only arms that carry a recorded bag (`consuming`
- * with the window already closed, P4G-4), `consumed` is the post-import
- * tombstone (structurally bagless), `error` is a present-but-unreadable
- * receipt (fail closed).
+ * The typed, versioned pending-import status for the desktop app's first-run import screen: the exact object
+ * `chromium-bridge policy pending-import --json` prints, one Rust definition ts_rs-exported and parsed back by
+ * the app (the [`crate::policy::PolicyStatusReport`] pattern). A tagged sum like the on-disk record, so an
+ * impossible combination (a `consumed` answer smuggling a bag, an `error` with no detail) cannot deserialize.
  */
 export type PendingImportReport =
   | {
@@ -585,19 +563,15 @@ export type AuditRecord = {
    */
   detail?: string;
   /**
-   * Confirmation-correlation id, for the extension `confirm_*` kinds
-   * (ADR-0030). The extension mints one opaque id per confirmation and
-   * stamps it on the `confirm_shown` record AND on that confirmation's
-   * later `confirm_allowed`/`confirm_denied` verdict, so a reader (the
-   * desktop audit panel) joins a verdict to exactly its own shown row
-   * instead of guessing by tool/origin. Pre-surface denials - the panic
-   * latch denying a confirmation that never reached a surface - carry
-   * their own fresh cid that matches no `confirm_shown` row, so they
-   * resolve none. (This is load-bearing: a cid-less denial would fall to
-   * the subject fallback and could close an unrelated legacy row.)
-   * Distinct from `req`: `req` is the host-side per-tool-call id (a
-   * `u64`), this is the browser-minted confirmation id (an opaque
-   * string), a different subsystem.
+   * Confirmation-correlation id for the extension `confirm_*` kinds (ADR-0030): minted once per confirmation and
+   * stamped on the `confirm_shown` record AND its later verdict, so a reader (the desktop audit panel) joins a
+   * verdict to exactly its own shown row instead of guessing by tool/origin. Distinct from `req`, the host-side
+   * per-tool-call `u64`.
+   *
+   * ```text
+   * denial that never reached a surface -> a fresh cid matching no confirm_shown row
+   * cid-less denial                     -> would fall to the subject fallback and could close an unrelated row
+   * ```
    */
   cid?: string;
   /**

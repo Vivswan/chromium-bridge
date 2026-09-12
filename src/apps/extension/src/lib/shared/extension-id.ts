@@ -18,16 +18,10 @@ export interface IdDiagnosis {
 }
 
 /**
- * Pure diagnosis: does the running extension id match the pinned one?
- *
- * The native-messaging host's manifest pins the expected id in
- * `allowed_origins`, so if the loaded extension has a different id, Chrome
- * rejects the native connection and chromium-bridge cannot work. This surfaces
- * that failure loudly at startup instead of leaving the user to guess.
- *
- * We compare ids only - `browser.runtime.getManifest()` strips the `key` field
- * at runtime, so we cannot reliably tell "no key" from "different key" here;
- * the message lists the likely causes instead of asserting one.
+ * Does the running extension id match the pinned one? The native-messaging host's manifest pins the expected id
+ * in `allowed_origins`, so a different id means Chrome rejects the native connection; this surfaces that at
+ * startup instead of leaving the user to guess. Ids only: `browser.runtime.getManifest()` strips the `key` field
+ * at runtime, so "no key" and "different key" are indistinguishable here and the message lists both causes.
  */
 export function diagnoseExtensionId(
   runtimeId: string,

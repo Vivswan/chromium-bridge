@@ -57,11 +57,9 @@ pub fn presence_message(nonce: &str, context: Option<&str>) -> Result<Vec<u8>, E
 /// UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes
 /// ```
 ///
-/// The document bytes are signed exactly as stored - no canonicalization -
-/// and MAY contain NULs. Cross-domain injectivity still holds: all three
-/// domain constants are NUL-free and pairwise distinct, so the bytes before
-/// the first NUL identify the domain unambiguously (pinned by
-/// `the_three_domains_can_never_collide` below).
+/// The document is signed exactly as stored, no canonicalization, and MAY contain NULs. Cross-domain injectivity
+/// still holds because all three domain constants are NUL-free and pairwise distinct, so the bytes before the first
+/// NUL name the domain unambiguously (pinned by `the_three_domains_can_never_collide` below).
 pub fn policy_message(doc_bytes: &[u8]) -> Vec<u8> {
     let mut msg = Vec::with_capacity(
         POLICY_DOMAIN

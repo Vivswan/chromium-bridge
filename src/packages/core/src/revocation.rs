@@ -1,64 +1,23 @@
-//! The any-side revocation epoch (ADR-0025): one persisted, monotonic counter
-//! that every revocation surface bumps and every enforcement point compares.
+//! The any-side revocation epoch (ADR-0025): one persisted, monotonic counter at `runtime_dir()/revocation.json` that
+//! every revocation surface bumps under the runtime lock, AFTER writing the state change it describes, and every
+//! enforcement point compares, re-deciding admission whenever its cached epoch no longer matches and failing closed
+//! whenever the file cannot be read. The epoch is a change notice, not an authority: the client allowlist
+//! (`clients.json`) and the Secure Enclave key stay authoritative, so a same-user tamperer can force spurious
+//! re-checks or make every read fail closed, but can never admit anyone.
 //!
-//! ## Why this exists
-//!
-//! Phase 4 left revocation half-connected. `revoke-client` rewrote the
-//! allowlist, but a broker that had already admitted that client kept serving
-//! it until the process tree died; `revoke` deleted the enclave key, but a
-//! pinned extension only noticed at the next opt-in reverify. Each revocable
-//! trust state had its own, unsynchronized notion of "current". This module
-//! gives them one: a single epoch, persisted at `runtime_dir()/revocation.json`,
-//! bumped (under the runtime lock, atomically with the state change it
-//! describes) by whichever surface performs a revocation -- the CLI, the
-//! extension via a host-directed control frame, or a future app -- and read by
-//! every enforcement point, which re-decides admission whenever the epoch it
-//! cached no longer matches and **fails closed** whenever the file cannot be
-//! read.
-//!
-//! ## What the epoch is, and is not
-//!
-//! The epoch is a *change notice*, not an authority. The authoritative trust
-//! states stay where they were: the client allowlist (`clients.json`) and the
-//! Secure Enclave key. A bump only tells an enforcement point "re-read the
-//! authority now"; the re-read makes the decision. That keeps the failure
-//! analysis simple: a same-user process that tampers with this file can force
-//! spurious re-checks (each of which re-admits everyone still authorized) or
-//! corrupt it (which makes every enforcement read fail closed). Neither
-//! direction can *admit* anyone.
-//!
-//! ## Scope markers
-//!
-//! Alongside the global counter, two scope fields record the epoch of the last
-//! revocation per trust state, so an observer can tell *what* changed without
-//! guessing: `clients_epoch` (the client allowlist changed) and
-//! `host_key_epoch` (the enclave enrollment key was revoked). The native host
-//! watches `host_key_epoch` to know when to verify the keychain and push the
-//! host-originated `enclave_revoked` frame to the extension (ADR-0025).
-//!
-//! ## Tamper evidence: the enrollment latch
-//!
-//! ADR-0024 named an asymmetry: a corrupt `clients.json` fails closed, but a
-//! DELETED one silently reverts an enrolled bridge to the open, unenrolled
-//! bootstrap (an absent file is how a first install legitimately starts).
-//! `clients_enrolled` is a one-way latch, set when the first client is paired
-//! and never cleared: with the latch set, an absent `clients.json` reads as
-//! tampering and fails closed ([`crate::allowlist::load_enforced`]) instead of
-//! reverting to open. This is deliberately bounded honesty: a same-user
-//! attacker who deletes BOTH files still reaches the bootstrap posture,
-//! because no user-space marker survives a writer who can delete any file we
-//! can write (see ADR-0025 for the full argument). What the latch buys is that
-//! a single-file deletion -- the accidental case, and the lazy attack -- is
-//! detected and refused loudly rather than silently obeyed.
-//!
-//! ## The kill switch rides in this record (ADR-0030)
-//!
-//! The global kill switch's latch (`killed`, plus its `kill_epoch` marker)
-//! lives in this same file, written by [`set_killed_locked`] in one atomic
-//! write with its epoch bump. Unlike the epoch, the latch IS the authority
-//! for the kill state; keeping it in the atomically-written record is what
-//! lets every existing fail-closed read of this file double as a kill-state
-//! read. See `kill.rs` for the enforcement surface.
+//! ```text
+//! lock-free reader   -> may see the new state under the old epoch, never the new epoch over the old state (the lock
+//!                       serializes writers only, see bump_locked)
+//! per-scope epochs   -> record WHICH trust state changed; the native host wakes the keychain and pushes
+//!                       enclave_revoked only for host_key_epoch
+//! clients_enrolled   -> a one-way latch: with it set, an absent clients.json reads as tampering and fails closed
+//!                       (crate::allowlist::load_enforced) instead of reverting to the open bootstrap an absent file
+//!                       means on a first install; an attacker who deletes BOTH files still reaches bootstrap, since no
+//!                       user-space marker survives a writer who can delete anything we can write (ADR-0025), so the
+//!                       latch catches the single-file deletion, the accidental case and the lazy attack
+//! killed (ADR-0030)  -> unlike the epoch, IS the authority; written in the same atomic write as its epoch bump, so
+//!                       every fail-closed read of this file doubles as a kill-state read; enforcement lives in kill.rs
+//! ```
 
 use std::io;
 
@@ -206,20 +165,18 @@ pub enum Scope {
     Lang,
 }
 
-/// Increment the epoch and stamp `scope`'s marker. The
-/// [`ipc::RuntimeLockToken`] parameter is the runtime-lock precondition made
-/// structural: a token exists only inside [`ipc::with_runtime_lock`], so a
-/// lock-free call - a stale read-modify-write that could overwrite a
-/// concurrent `killed: true` - no longer compiles. Every caller performs the
-/// authoritative state change and the bump in ONE critical section, so no
-/// enforcement point can observe the new epoch with the old state or vice
-/// versa -- see `Allowlist::revoke`. Returns the new epoch.
+/// Increment the epoch and stamp `scope`'s marker; returns the new epoch. The [`ipc::RuntimeLockToken`] makes the
+/// lock precondition structural: a token exists only inside [`ipc::with_runtime_lock`], so a lock-free call (a stale
+/// read-modify-write that could overwrite a concurrent `killed: true`) does not compile.
 ///
-/// On an unreadable existing file this returns the error rather than
-/// rebuilding the file: silently replacing a corrupt security record would
-/// mask tampering. The revocation the caller performed is still effective --
-/// a corrupt revocation file makes every enforcement read fail closed, which
-/// is strictly tighter than any epoch bump.
+/// ```text
+/// lock serializes WRITERS only -> every caller writes its authoritative state first and bumps in the same hold, while
+///                                 lock-free enforcement reads may see the new state under the old epoch, never the new
+///                                 epoch over the old state (the broker's EpochGuard::recheck reads the epoch first)
+/// unreadable existing file     -> returned as the error, never rebuilt: silently replacing a corrupt security record
+///                                 would mask tampering, and a corrupt file already fails every enforcement read closed,
+///                                 strictly tighter than any epoch bump
+/// ```
 pub(crate) fn bump_locked(lock: &ipc::RuntimeLockToken, scope: Scope) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
@@ -247,21 +204,16 @@ pub(crate) fn latch_clients_enrolled_locked(lock: &ipc::RuntimeLockToken) -> io:
     Ok(rev.epoch)
 }
 
-/// Flip the kill switch (ADR-0030): set `killed`, stamp `kill_epoch`, and
-/// bump the global epoch, all in ONE atomic write. Same lock-token contract
-/// as [`bump_locked`]: the [`ipc::RuntimeLockToken`] makes a lock-free call
-/// (whose stale read-modify-write could resurrect a cleared or suppressed
-/// state) uncompilable. One write is the load-bearing part: the kill and its
-/// epoch bump can never be observed separately, so an enforcement point that
-/// skips re-reading on an unchanged epoch cannot miss a kill.
+/// Flip the kill switch (ADR-0030): `killed`, `kill_epoch`, and the global epoch in ONE atomic write, so
+/// the kill and its bump can never be observed separately and an enforcement point that skips re-reading
+/// on an unchanged epoch cannot miss a kill. Same lock-token contract as [`bump_locked`].
 ///
-/// Fails on an unreadable existing record, in BOTH directions, rather than
-/// rebuilding the file (rebuilding would mask tampering):
-/// - engaging: the caller should tell the user the bridge is ALREADY refusing
-///   everything (a corrupt record fails every enforcement read closed), so
-///   the kill's goal already holds;
-/// - releasing: an unkill from an unknown state would be a fail-open, so it
-///   is refused; recovery is documented in docs/operations.md.
+/// An unreadable existing record fails in BOTH directions rather than being rebuilt (rebuilding would mask
+/// tampering):
+/// ```text
+/// engaging  -> the corrupt record already fails every enforcement read closed, so the kill's goal holds
+/// releasing -> an unkill from an unknown state would fail open; recovery is in docs/operations.md
+/// ```
 pub(crate) fn set_killed_locked(lock: &ipc::RuntimeLockToken, killed: bool) -> io::Result<u64> {
     let mut rev = Revocation::current()?;
     rev.version = REVOCATION_VERSION;
@@ -293,7 +245,7 @@ mod tests {
     fn kill_fields_default_when_absent_from_an_older_record() {
         // A record written before the kill switch existed (no killed /
         // kill_epoch fields) still parses, reading as not-killed: the fields
-        // were added with serde defaults so a Phase-5 file stays valid.
+        // carry serde defaults so an older file stays valid.
         let old = serde_json::json!({
             "version": 1, "epoch": 3, "clients_epoch": 3,
             "host_key_epoch": 0, "clients_enrolled": true

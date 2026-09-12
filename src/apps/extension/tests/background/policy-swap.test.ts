@@ -1,4 +1,4 @@
-// ADR-0032 Phase 3, Lane S: every enforcement call site reads the
+// ADR-0032: every enforcement call site reads the
 // per-decision policy snapshot, not the legacy chrome.storage bag. Each
 // swapped site gets one post-cutover DENY and one post-cutover GRANT test,
 // always with the legacy storage set to the OPPOSITE value - so a test can
@@ -685,14 +685,12 @@ describe("presence routing is decided from the per-request snapshot (S1)", () =>
   });
 });
 
-// ---- blocked postures are un-consumable AND barred (S4 / Opus-e2 / SFX-1) -----------
+// ---- blocked postures are un-consumable AND barred ----------------------------------
 
 describe("a blocked posture is not consumable as values and the barrier refuses it", () => {
-  // The RAW snapshot's deny-baseline fold is NOT the restrictive pole on
-  // every field (hostReverifyMs 0 is most permissive, confirmGraceMs is 60s).
-  // Two layers keep that from ever enforcing: the state-typed effective
-  // policy carries NO values in the blocked arms (SFX-1), and the dispatch
-  // barrier refuses the same states. Pin both, in both arms.
+  // A blocked arm carries no values anywhere: the raw snapshot reports only the arm, the state-typed
+  // effective policy has no `values` key, and the dispatch barrier refuses the same states. Pin all
+  // three, in both arms.
   test("awaitingBaseline (cutover armed, no record): blocked + refusal; the raw accessor reports the arm honestly", async () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
     // Exact shape, not toMatchObject (CS-5): the blocked arm must carry NO

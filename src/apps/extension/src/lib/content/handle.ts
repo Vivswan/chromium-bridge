@@ -15,8 +15,8 @@
 // self-contained implementation the CDP backend ships via Runtime.evaluate -
 // so the two backends cannot diverge. No settings reads, no confirmations,
 // and no masking happen in this context: those are service-worker policy
-// (confirm/gate.ts + egress.ts). See #32 - the content script reads NOTHING
-// from extension storage.
+// (confirm/gate.ts + egress.ts). The content script reads NOTHING from
+// extension storage (trusted-storage.ts confines it to extension contexts).
 
 import { ContentMsgSchema, unreachable } from "@chromium-bridge/shared";
 import { createPageApi, REF_ATTR } from "../dom/page-api";

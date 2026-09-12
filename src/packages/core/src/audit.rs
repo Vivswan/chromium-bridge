@@ -1,39 +1,18 @@
-//! The audit trail (ADR-0030): a structured record of every security-relevant
-//! decision, written to two sinks.
+//! The audit trail (ADR-0030): one structured record per security-relevant decision, recorded AFTER the decision
+//! is applied, so [`record`] never fails and a full disk or an unwritable file cannot become a denial of service
+//! against enforcement itself. Never call [`record`] while holding the runtime lock: audit I/O stays outside
+//! every critical section.
 //!
-//! - **stderr**, through the existing `log::audit` rendering (text or JSON per
-//!   `BB_LOG_FORMAT`, hidden below `BB_LOG=info`), so a harness or Chrome log
-//!   captures the events alongside the other diagnostics.
-//! - **an on-disk file**, `runtime_dir()/audit.log`: one JSON record per line,
-//!   0600 in the 0700 runtime directory, size-capped with a single rotation
-//!   (`audit.log` -> `audit.log.1`), so the trail survives the short-lived
-//!   processes that produce it (the CLI, the native host, a relay) and is
-//!   readable later via `chromium-bridge audit`. The file is written
-//!   regardless of `BB_LOG`: it is the audit surface, not a diagnostic.
-//!
-//! ## Log-after-decide, and never fail the decision
-//!
-//! Recording is strictly observational. Every caller records AFTER the
-//! decision it describes has been made and applied, and [`record`] never
-//! returns an error: a full disk, an unwritable file, or a poisoned counter
-//! must not turn into a denial of service against enforcement itself (an
-//! attacker who could fill the disk would otherwise hold the bridge hostage
-//! through its own audit trail). A failed write increments a process-local
-//! dropped counter; the next successful record carries `dropped: n` so the
-//! gap is visible in the trail rather than silent.
-//!
-//! Do not call [`record`] while holding the runtime lock: audit I/O stays
-//! outside every critical section, which is what makes the
-//! never-fail-the-decision rule easy to audit at the call sites. Rotation
-//! uses its own sidecar lock (`audit.log.lock`, see [`append_at`]), acquired
-//! non-blocking, precisely so it can never entangle with the runtime lock.
-//!
-//! ## Fail-closed reading
-//!
-//! Records parse with `deny_unknown_fields` and a version check. The reader
-//! (`run_audit`) shows a line that fails to parse as an explicit
-//! "unrecognized record" instead of guessing at it or crashing, and counts
-//! them, so tampering or corruption is visible, never smoothed over.
+//! ```text
+//! stderr via log::audit             -> hidden below BB_LOG=info; the FILE is the audit surface, not a diagnostic
+//! runtime_dir()/audit.log, 0600     -> one JSON line per record regardless of BB_LOG, rotated once to audit.log.1,
+//!                                      read back by `chromium-bridge audit`
+//! failed write                      -> bumps a process-local counter; the next written record carries dropped: n
+//! rotation                          -> its own NON-BLOCKING sidecar lock (audit.log.lock, see append_at), so it can
+//!                                      never entangle with the runtime lock
+//! read-back                         -> deny_unknown_fields plus a version check; run_audit shows a line that does not
+//!                                      parse as an explicit "unrecognized record" and counts it
+//! ```
 
 use std::fs;
 use std::io::{self, Write};
@@ -110,17 +89,14 @@ pub enum AuditKind {
     /// only, NOT in [`EXTENSION_AUDIT_KINDS`]: the browser leg must not be
     /// able to plant policy-transition records.
     PolicyWrite,
-    /// Host: one `legacy_settings` receipt against the pending-import store
-    /// (ADR-0032 decision 8) - `recorded`, or one of the dropped outcomes
-    /// (`dropped_oversize` / `dropped_already_pending` / `dropped_consumed` /
-    /// `dropped_malformed` / `error`), so a bag arriving after the window
-    /// closed - or a frame that never parsed at all - is visible in the
-    /// trail instead of lost to a stderr line nobody reads. The detail is a
-    /// byte count only (the bag's, or the whole frame's for the malformed
-    /// arm), never content. Host-recorded only, NOT
-    /// in [`EXTENSION_AUDIT_KINDS`] (the [`AuditKind::PolicyWrite`]
-    /// precedent): the browser leg must not be able to plant receipt records
-    /// for bags the host never saw.
+    /// Host: one `legacy_settings` receipt against the pending-import store (ADR-0032 decision 8), so a
+    /// bag arriving after the window closed, or a frame that never parsed, is visible in the trail instead
+    /// of lost to a stderr line nobody reads. The detail is a byte count only, never content.
+    /// Host-recorded only, NOT in [`EXTENSION_AUDIT_KINDS`]: the browser leg must not plant receipts for
+    /// bags the host never saw.
+    ///
+    ///   outcome -> `recorded`, `dropped_oversize`, `dropped_already_pending`, `dropped_consumed`,
+    ///              `dropped_malformed`, or `error`
     LegacyImportReceipt,
     /// Extension: a confirmation surface was shown to the user.
     ConfirmShown,
@@ -180,19 +156,15 @@ pub struct AuditRecord {
     /// Bounded free-text detail (a reason, an anchor kind).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// Confirmation-correlation id, for the extension `confirm_*` kinds
-    /// (ADR-0030). The extension mints one opaque id per confirmation and
-    /// stamps it on the `confirm_shown` record AND on that confirmation's
-    /// later `confirm_allowed`/`confirm_denied` verdict, so a reader (the
-    /// desktop audit panel) joins a verdict to exactly its own shown row
-    /// instead of guessing by tool/origin. Pre-surface denials - the panic
-    /// latch denying a confirmation that never reached a surface - carry
-    /// their own fresh cid that matches no `confirm_shown` row, so they
-    /// resolve none. (This is load-bearing: a cid-less denial would fall to
-    /// the subject fallback and could close an unrelated legacy row.)
-    /// Distinct from `req`: `req` is the host-side per-tool-call id (a
-    /// `u64`), this is the browser-minted confirmation id (an opaque
-    /// string), a different subsystem.
+    /// Confirmation-correlation id for the extension `confirm_*` kinds (ADR-0030): minted once per confirmation and
+    /// stamped on the `confirm_shown` record AND its later verdict, so a reader (the desktop audit panel) joins a
+    /// verdict to exactly its own shown row instead of guessing by tool/origin. Distinct from `req`, the host-side
+    /// per-tool-call `u64`.
+    ///
+    /// ```text
+    /// denial that never reached a surface -> a fresh cid matching no confirm_shown row
+    /// cid-less denial                     -> would fall to the subject fallback and could close an unrelated row
+    /// ```
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cid: Option<String>,
     /// Per-call request id, for [`AuditKind::ToolCall`].
@@ -321,18 +293,13 @@ pub fn record(mut rec: AuditRecord) {
     }
 }
 
-/// Append one line to `path`, rotating first when the append would push the
-/// file past `max` bytes.
+/// Append one line to `path`, rotating first when the append would push the file past `max` bytes.
 ///
-/// Rotation runs under a NON-BLOCKING exclusive lock on a sidecar
-/// `audit.log.lock`, with the size re-checked once the lock is held: without
-/// both, a writer acting on a stale size check can rename a freshly rotated
-/// file over the previous rotation and silently discard a whole file of
-/// history. A writer that loses the lock race skips rotating (the winner is
-/// doing it) and just appends, so audit I/O never blocks or deadlocks
-/// against a caller's critical section; the worst case is one append past
-/// the cap. The lock is its own file, deliberately separate from the runtime
-/// lock (see the module docs).
+/// Rotation runs under a NON-BLOCKING exclusive lock on a sidecar `audit.log.lock` (deliberately separate from the
+/// runtime lock, see the module docs) and re-checks the size once the lock is held: without both, a writer acting on
+/// a stale size check can rename a fresh rotation over the previous one and silently discard a whole file of history.
+/// A writer that loses the race just appends, so audit I/O never blocks against a caller's critical section: the file
+/// grows past the cap by one record per losing writer until the next uncontended append rotates it.
 fn append_at(path: &Path, line: &[u8], max: u64) -> io::Result<()> {
     if needs_rotation(path, line.len(), max) {
         rotate_locked(path, line.len(), max);

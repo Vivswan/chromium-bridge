@@ -1,46 +1,32 @@
-//! The ref-counted, attested broker and its relay clients.
+//! The ref-counted, attested broker and its relay clients (ADR-0024).
 //!
-//! ## Why a broker
+//! Several harnesses (Claude Code, Copilot, Codex, ...) drive one browser at once, so the first MCP-server
+//! instance to start becomes the broker: it owns the 0600 bridge socket and the lock, holds the browser
+//! connections in its [`Session`], and multiplexes every attached harness's tool calls. Later instances attest
+//! it and attach as relays; the broker exits when the last harness (its own plus every relay) detaches.
 //!
-//! Before Phase 4 a fresh MCP-server instance supplanted (SIGTERMed) any prior
-//! one: only one harness could drive the browser at a time, newest wins. The
-//! user asked for concurrent multi-client instead -- Claude Code, Copilot,
-//! Codex and others driving the same browser at once. So the first instance to
-//! start becomes the **broker**: it owns the 0600 bridge socket and the lock,
-//! holds the browser connections in its [`Session`], and multiplexes the tool
-//! calls of every attached harness. Later instances do not take it over; they
-//! attest it and **attach as relays**, forwarding their harness's JSON-RPC over
-//! the authenticated socket. The broker is **ref-counted**: it exits when the
-//! last harness (its own plus every relay) detaches, so there is no idle
-//! daemon. See ADR-0024.
+//! Every connection passes the HMAC handshake (ADR-0019/0020), preceded on Unix by the peer-UID check and on
+//! Linux and macOS by `attest_peer` (our own binary; Windows gets neither, see [`crate::ipc`]), then sends one
+//! [`AttachRequest`]:
 //!
-//! ## Two kinds of attach, one socket
+//! ```text
+//! AttachRequest::Browser  -> a Chrome-spawned native host; its label was MAC-signed in the handshake Response
+//! AttachRequest::Client   -> a sibling instance relaying a harness; carries the relay's getppid-attested
+//!                            parent identity, checked against the trusted-client allowlist (crate::allowlist)
+//! ```
 //!
-//! Every connection to the broker socket is, as before, gated by the peer-UID
-//! check, `attest_peer` (the peer must be our own binary), and the HMAC
-//! handshake (ADR-0019/0020). Immediately after the handshake the peer sends
-//! one [`AttachRequest`] declaring its role:
+//! The broker trusts a relay's harness hash/Team-ID because the relay passed `attest_peer`: it is our binary,
+//! which measures its parent honestly. The harness *name* is a log label only; authorization keys on the hash/Team-ID.
 //!
-//! - [`AttachRequest::Browser`] -- a Chrome-spawned native host. Its browser
-//!   label was already MAC-signed in the handshake `Response`, so the browser
-//!   leg's authentication is unchanged; it joins the [`Session`] registry.
-//! - [`AttachRequest::Client`] -- a sibling MCP-server instance relaying a
-//!   harness. It carries the relay's `getppid`-attested parent identity, which
-//!   the broker checks against the trusted-client allowlist ([`crate::allowlist`]).
-//!
-//! ## Trust chain for a relay's harness identity
-//!
-//! The relay reports its harness's attested hash/Team-ID. The broker trusts
-//! that report because the relay connection itself passed `attest_peer`: the
-//! relay is a genuine instance of our own binary, which measures its parent
-//! honestly via `getppid` and cannot be made to lie about it by a same-user
-//! process (that process would not be our binary and would fail `attest_peer`).
-//! The self-asserted harness *name* is a log label only; authorization keys on
-//! the attested hash/Team-ID, never the name. Residual: `getppid` names who
-//! spawned the relay, not who writes its stdin, and the measurement races
-//! reparenting/pid-reuse. A later reparent fails admission closed, but pipe fd
-//! inheritance means spawner and stdin-writer are not provably the same.
-//! Named honestly in ADR-0024; this is not kernel attestation of the pipe.
+//! Residual, named in ADR-0024: `getppid` names who spawned the relay, not who writes its stdin, and it is measured
+//! ONCE at process start (mcp_server's `admit_own_harness`), then cached in `EpochGuard`.
+//! ```text
+//! reparented before the measurement                         -> measured as the reaper: refused once clients are
+//!                                                              enrolled and the reaper is not allowlisted, admitted
+//!                                                              while unenrolled (allowlist::decide ignores identity)
+//! parent exits mid-session, another process holds the stdin -> continues under the admitted identity
+//! pid reused around the measurement                         -> the same race
+//! ```
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -248,36 +234,23 @@ impl RateLimiter {
 // checked inline (immediately), so that interval only bounds the lifetime of
 // an idle revoked connection.
 
-/// Per-connection revocation-epoch guard (ADR-0025). Each admitted harness
-/// (the broker's own stdio harness and every relay) carries the epoch it was
-/// admitted under; before EVERY dispatched request the guard re-reads the
-/// persisted epoch and, on any difference, re-decides admission against the
-/// freshly loaded allowlist. Every failure to read either file is fail-closed:
-/// the connection is dropped, never served on stale trust.
-///
-/// This is the immediate, per-request path. For a backstopped relay it
-/// short-circuits when the epoch is unchanged, so it does not read the
-/// allowlist on every tool call; the broker's [`watch_tick`] watcher is the
-/// correctness backstop that drops a revoked relay within a poll interval even
-/// while it is idle and even if a revocation's epoch bump failed to persist.
-/// The broker's own stdio harness is un-backstopped, so its guard re-decides
-/// on every request instead: an idle revoked own harness stays connected (it
-/// is driving nothing) but is refused before dispatch on its very next
-/// request, with no dependence on the epoch advancing.
+/// Per-connection revocation-epoch guard (ADR-0025): before EVERY dispatched request it re-reads the persisted
+/// epoch and, on a change, re-decides admission against the freshly loaded allowlist; an unreadable record or
+/// allowlist drops the connection, never serves on stale trust.
+/// ```text
+/// relay (backstopped)        -> an unchanged epoch skips the allowlist read; `watch_tick` drops a revoked relay
+///                               within a poll interval even when idle and even if the epoch bump never persisted
+/// own harness (no backstop)  -> re-decides on every request; an idle revoked own harness stays connected (it is
+///                               driving nothing) and is refused on its very next request
+/// ```
 struct EpochGuard {
     /// The harness's attested identity, captured at admission. `None` means
     /// it could not be measured (admitted only while unenrolled).
     identity: Option<ClientIdentity>,
     /// The revocation epoch this connection was last (re-)admitted under.
     seen_epoch: u64,
-    /// Whether a watcher backstop covers this connection. Relays are in the
-    /// [`ClientRegistry`] and swept unconditionally each tick, so their guard
-    /// may take the epoch fast path (skip the allowlist read when the epoch is
-    /// unchanged). The broker's OWN stdio harness is NOT in the registry (it
-    /// serves on stdin/stdout, which has no socket to shut down), so it has no
-    /// backstop; its guard must re-decide on EVERY request. Otherwise a
-    /// revocation whose epoch bump failed to persist would leave the owning
-    /// harness served indefinitely.
+    /// Whether the watcher sweeps this connection ([`ClientRegistry`]). The broker's OWN stdio harness is not in
+    /// the registry (stdin/stdout has no socket to shut down), so its guard re-decides on EVERY request.
     backstopped: bool,
 }
 
@@ -510,29 +483,17 @@ impl ClientRegistry {
     }
 }
 
-/// The watcher loop body: re-decide every live relay against the current
-/// allowlist, once per tick, and enforce the kill switch on the browser leg
-/// (ADR-0030). Factored from the polling thread so the fail-closed matrix is
-/// testable. `drop_browsers` severs every live browser connection (the
-/// session's kill sweep); it is invoked while the switch is engaged and when
-/// the revocation record is unreadable (kill state unknown), and is idempotent
-/// so calling it every tick is harmless. Returns the epoch observed (used only
-/// to deduplicate the "dropped N" log line across ticks), or `None` when a
-/// read failed (so the caller does not advance its logging cursor).
+/// The watcher loop body, factored from the polling thread so the fail-closed matrix is testable: re-decide every
+/// live relay against the current allowlist and enforce the kill switch on the browser leg (ADR-0030). The re-decide
+/// is UNCONDITIONAL, not gated on an epoch change: a revocation whose epoch bump failed to persist (disk full, a
+/// rename error) leaves the counter stale, and a change-gated sweep would then serve the revoked client indefinitely.
 ///
-/// The re-decide is **unconditional**, not gated on an epoch change. The epoch
-/// is a promptness signal for the per-request [`EpochGuard`] fast path, not the
-/// thing enforcement depends on: a revocation whose epoch bump failed to
-/// persist (a disk-full or rename error) would leave the counter stale, and if
-/// the watcher only swept on an epoch change it would then serve the revoked
-/// client indefinitely. Sweeping the allowlist every tick makes correctness
-/// depend on the authoritative `clients.json`, which the revocation already
-/// rewrote, and bounds a stale-epoch exposure to one poll interval. The
-/// allowlist is a small local file; reading it once a second is negligible.
-/// (The kill flag needs no such backstop: it lives IN the epoch's record and
-/// is written atomically with the bump, so it cannot go stale independently --
-/// but the sweep still runs it unconditionally, symmetry being cheaper than
-/// an argument.)
+/// ```text
+/// sweeping clients.json every tick -> bounds that exposure to one poll interval
+/// drop_browsers                    -> idempotent, so calling it every tick is harmless
+/// returned epoch                   -> only deduplicates the "dropped N" log line; None on a failed read keeps the
+///                                     caller's logging cursor
+/// ```
 fn watch_tick(
     registry: &ClientRegistry,
     last_seen: u64,
@@ -1156,18 +1117,13 @@ fn clear_read_timeout(writer: &BufWriter<BridgeStream>) {
     let _ = writer.get_ref().set_read_timeout(None);
 }
 
-/// Serve a JSON-RPC stream (this instance's own stdin, or a relay's socket)
-/// against the shared session: read a message, hand it to this connection's
-/// MCP engine ([`crate::mcp::Connection`], the rmcp service), write the
-/// reply. Mirrors the pre-Phase-4 stdin loop (a parse error yields a
-/// `-32700` and the loop continues; EOF ends it). `peer` bundles the role's
-/// resources ([`ServedPeer`]): a relay is rate-limited - a request over the
-/// per-relay limit drops the connection (fail closed) - and the own harness
-/// is not. Before EVERY dispatched request, the peer's guard re-checks the
-/// revocation epoch (ADR-0025): a revoked harness - or an unreadable
-/// revocation record or allowlist - ends the loop, fail closed, so no
-/// request is ever served on stale trust. The gates run HERE, before a
-/// message reaches the protocol engine, so adopting rmcp moved none of them.
+/// Serve a JSON-RPC stream (this instance's own stdin, or a relay's socket) against the shared session through
+/// this connection's [`crate::mcp::Connection`]. The gates run HERE, before a message reaches the protocol
+/// engine, so adopting rmcp moved none of them; a parse error answers `-32700` and continues, EOF ends the loop.
+/// ```text
+/// relay over its rate limit                              -> connection dropped (fail closed)
+/// revoked, or revocation record / allowlist unreadable   -> loop ends before dispatch (ADR-0025)
+/// ```
 fn serve_jsonrpc<R: BufRead, W: Write>(
     session: &Session,
     reader: &mut R,

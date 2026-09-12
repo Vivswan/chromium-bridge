@@ -1,40 +1,21 @@
 #!/usr/bin/env bun
 
-// The envelope asymmetry gate (ADR-0028). The Rust wire types in
-// src/packages/core/src/protocol.rs and protocol/control.rs are the canonical contract: the
-// BridgeReq/BridgeResp envelope pair, and the host-handled control frames
-// (EnclaveControl, AdminControl, and PolicyControl - AdminControl embedding
-// allowlist::ClientEntry, PolicyControl embedding policy::PolicyOverlay).
-// The validators the extension enforces are built
-// in two layers: a GENERATED base (scripts/gen-envelope.ts ->
-// src/packages/shared/src/envelope-wire.gen.ts, faithful to the Rust
-// schemas; freshness is `moon run check-gen`'s job) wrapped by a hand-written
-// asymmetry layer (envelope.ts / enclave.ts) that deliberately diverges from
-// the contract in a short, documented list of places.
+// The envelope asymmetry gate (ADR-0028). The extension enforces a GENERATED base (envelope-wire.gen.ts, kept
+// fresh by `moon run check-gen`) wrapped by a hand-written asymmetry layer (envelope.ts / enclave.ts); this gate
+// derives a schema from each side and fails on any difference the approved asymmetry list does not explain.
 //
-// This gate pins that hand-written layer. It derives one schema from each
-// side - schemars on the Rust side (behind the gen-only `envelope-schema`
-// cargo feature, absent from every binary), z.toJSONSchema on the WRAPPED
-// exported validators - normalizes both through the documented rules in
-// src/packages/shared/src/json-schema-normalize.ts (each asymmetry is erased
-// only when it exactly matches its approved form there), and fails on any
-// remaining difference. With the base generated, a surviving diff means the
-// wrapper drifted outside the approved asymmetry list; the diff is NOT
-// tautological because the wrapper is hand-written. Refinements
-// (.superRefine) never appear in either derivation, so those asymmetries are
-// pinned separately in FRAME_REFINEMENTS below and checked behaviorally. The
-// same asymmetries are exercised behaviorally in
-// src/packages/shared/tests/envelope-wire.gen.test.ts.
+//   schemars, gen-only `envelope-schema` feature   -> the Rust wire types (protocol.rs, protocol/control.rs)
+//   z.toJSONSchema on the WRAPPED validators        -> the Zod side
+//   json-schema-normalize.ts                       -> erases each asymmetry only in its approved form
+//   diffSchemas                                    -> a surviving diff is wrapper drift
 //
-// The gate also checks coverage: every control frame must have a plan
-// (FRAME_PLANS below), the plans with a Zod reader must exactly match the
-// set of generated base schemas (GENERATED_WIRE_FRAMES), and the classified
-// inbound tag sets must EQUAL the gated inbound plans (modulo the pinned
-// CLASSIFIED_OUTBOUND_TAGS exceptions). That last rule is pure table logic,
-// so it is exported (classifierCoverageProblems) and unit-tested in
-// scripts/check-envelope-parity.test.ts; the gate itself only runs under
-// import.meta.main. Run via `moon run check-envelope` (part of
-// `moon run ci`).
+//   refinements (.superRefine), in neither derivation  -> pinned in FRAME_REFINEMENTS, checked behaviorally
+//   every Rust control frame                            -> needs a FRAME_PLANS entry
+//   the { zod } plans                                   -> must equal the generated base set
+//   classified inbound tags                             -> must equal the gated inbound plans plus the pinned CLASSIFIED_OUTBOUND_TAGS
+//
+// The table rules are exported and unit-tested in scripts/check-envelope-parity.test.ts; the gate itself runs
+// under import.meta.main via `moon run check-envelope` (part of `moon run ci`).
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,32 +47,15 @@ import {
   splitTaggedUnionSchema,
 } from "../src/packages/shared/src/json-schema-normalize";
 
-// How each control-frame tag is covered, one entry per Rust enum variant:
+// How each control-frame tag is covered, one entry per Rust enum variant. Adding, renaming, or removing a
+// variant fails the gate until this plan says how it is covered.
 //
-//   { zod }       a host->extension frame the extension validates: a
-//                 generated base schema (envelope-wire.gen.ts) wrapped by
-//                 the asymmetry layer in shared/enclave.ts (the extension's
-//                 contract surface for it); its two derivations are diffed
-//                 exactly like the envelopes.
-//   "bare-tag"    a host->extension frame that must stay fieldless: the
-//                 `type` classification IS its whole shape, so there is no
-//                 per-frame Zod validator. Pinned to the bare tag - a field
-//                 grown on the Rust side fails the gate until the extension
-//                 gets a validator for it.
-//   "rust-parsed" an extension->host frame: the enforcing reader is the
-//                 Rust serde parser itself, and there is no Zod reader to
-//                 diff. Still normalized rust-side, so the R5 strictness
-//                 walk fails the gate if the variant ever stops refusing
-//                 unknown fields (deny_unknown_fields lost anywhere). The
-//                 WRITER side is generated (GENERATED_WRITER_FRAMES): the
-//                 extension's constructor sites `satisfies` the inferred
-//                 wire types, and the cross-check below holds the generated
-//                 set to exactly these plans.
-//
-// Both directions are checked against the emitted enum, so adding, renaming,
-// or removing a variant fails here until this plan says how it is covered;
-// the { zod } set is additionally cross-checked against the generated frame
-// list below, so a frame cannot silently drop out of generation either.
+//   { zod }        host->extension, validated: the generated base wrapped by shared/enclave.ts, diffed like the envelopes
+//   "bare-tag"     host->extension, fieldless: pinned to the bare tag, so a field grown on the Rust side fails
+//                  until the extension gets a validator for it
+//   "rust-parsed"  extension->host: the Rust serde parser is the reader (the R5 walk still fails if it stops
+//                  refusing unknown fields); the writer side is generated (GENERATED_WRITER_FRAMES) and the
+//                  extension's constructor sites `satisfies` the inferred types
 type FramePlan = { zod: z.ZodType } | "bare-tag" | "rust-parsed";
 
 export const GROUPS = ["enclave", "admin", "policy"] as const;
@@ -137,17 +101,11 @@ function bareTag(tag: string): unknown {
   };
 }
 
-// The runtime classifiers the extension routes inbound frames on. Held to
-// EQUALITY with the plans, per group: every classified tag must be a real
-// frame of the matching Rust enum AND have an inbound validator plan behind
-// it ({ zod } / "bare-tag") - a writer-only tag added to a classification
-// array would otherwise route frames nothing validates - and every gated
-// inbound frame must still be reachable through a classifier - a tag dropped
-// from its classification array would otherwise silently stop routing while
-// the schemas stay green.
-// kill_status_result has no classification array: isKillStatusFrame
-// (shared/enclave.ts) classifies by full-schema parse, whose `type` literal
-// the diff above already pins.
+// The runtime classifiers the extension routes inbound frames on, held per group to the gated inbound plans
+// plus the pinned CLASSIFIED_OUTBOUND_TAGS below: a classified tag with no validator would route frames nothing
+// checks, and a tag dropped from a classification array would silently stop routing while the schemas stay green.
+// kill_status_result has no classification array: isKillStatusFrame (shared/enclave.ts) classifies by
+// full-schema parse, whose `type` literal the diff above already pins.
 export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
   enclave: new Set([...ENCLAVE_FRAME_TYPES, ...PRESENCE_FRAME_TYPES]),
   admin: new Set([...ADMIN_RESULT_FRAME_TYPES, "kill_status_result"]),
@@ -169,20 +127,14 @@ const CLASSIFIED_OUTBOUND_TAGS: Record<Group, ReadonlySet<string>> = {
 
 // ---- pinned parser refinements (invisible to the structural diff) ------------
 //
-// A refinement (.superRefine / .refine) never appears in z.toJSONSchema
-// output, so the structural diff below can neither see one appear nor see one
-// vanish. Every deliberate refinement on a wrapped frame validator is
-// therefore pinned HERE, RECONCILED_FIELDS-style, and the pins bind both
-// ways: every { zod } plan's custom-check count - walked RECURSIVELY, so a
-// nested .refine cannot ride in unpinned either - must equal its pinned
-// refinement count (an unpinned refinement is refused, and so is a pinned one
-// that is gone), and each pin carries probe frames the refinement must refuse
-// and must keep accepting. Precisely what that guarantees: count stability
-// and the probe behavior, nothing more - a refinement that keeps the count
-// and passes every probe while doing something ELSE as well is beyond any
-// finite probe list, and is owned by review of the schema's documented
-// charter (the ASYMMETRY comment in enclave.ts). Enforced by
-// refinementProblems below, run against every { zod } plan.
+// A refinement (.superRefine / .refine) never appears in z.toJSONSchema output, so the diff above can see one
+// neither appear nor vanish; every deliberate refinement on a wrapped validator is pinned HERE instead.
+//
+//   custom-check count, walked RECURSIVELY  -> must equal the pin count (an unpinned or an outlived pin both refuse)
+//   pin.refuses / pin.accepts               -> probe frames the refinement must refuse and must keep accepting
+//
+// That is all it guarantees: a refinement that keeps the count and passes every probe while doing something
+// ELSE as well is beyond any finite probe list and is owned by review of the ASYMMETRY comment in enclave.ts.
 
 export type RefinementPin = {
   /** Which deliberate asymmetry this is, for the failure message; the full
@@ -198,14 +150,11 @@ export type RefinementPin = {
 export const FRAME_REFINEMENTS: Readonly<
   Partial<Record<ControlFrameKind, readonly RefinementPin[]>>
 > = {
-  // The policy_current ok-split (enclave.ts): PolicyStatus::into_frame
-  // (protocol/control.rs) emits exactly two flat shapes, and the extension refuses
-  // everything per-field validation would pass outside them - `ok: true`
-  // requires `baseline` and never carries `reason` or `error`; `ok: false`
-  // requires `error` and never carries `baseline`, `sig`, or `overlay`. The
-  // Phase-4 legacy-import send-once gates on
-  // `ok === false && reason === "absent"`, so a reason must never be able to
-  // ride a frame that also claims success.
+  // The policy_current ok-split (enclave.ts): PolicyStatus::into_frame (protocol/control.rs) emits exactly two
+  // flat shapes, and policy-sync.ts offers the legacy bag only on `ok === false && reason === "absent"`, so a
+  // reason must never be able to ride a frame that also claims success.
+  //   ok: true   -> requires `baseline`, never carries `reason` or `error`
+  //   ok: false  -> requires `error`, never carries `baseline`, `sig`, or `overlay`
   policy_current: [
     {
       name: "ok-split",
@@ -226,13 +175,9 @@ export const FRAME_REFINEMENTS: Readonly<
   ],
 };
 
-/** Count the CUSTOM checks (refinements) in a Zod schema, recursively:
- * z.toJSONSchema cannot represent them, so the gate walks the schema graph
- * (every nested def, with a cycle guard) counting checks whose def.check is
- * "custom" - a superRefine on the frame or a .refine buried on a nested
- * property both land here. Built-in checks (min_length, bounds, formats) DO
- * surface in the JSON Schema derivations and are the structural diff's
- * business, so they are not counted. */
+/** Count the custom checks (refinements) in a Zod schema, recursively, so a .refine buried on a nested property
+ * counts too. Built-in checks (min_length, bounds, formats) surface in the JSON Schema derivations and are the
+ * structural diff's business, so they are not counted. */
 function customCheckCount(schema: z.ZodType): number {
   let count = 0;
   const seen = new Set<object>();

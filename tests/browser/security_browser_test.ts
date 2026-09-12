@@ -1,47 +1,22 @@
 /**
- * Security browser proofs (ADR-0027 / #32) - the runtime verification that the
- * Vitest + fakeBrowser suite cannot do, run against an ISOLATED Chrome for
- * Testing. It proves, in a real browser:
+ * Security browser proofs (ADR-0027): the runtime verification the Vitest + fakeBrowser suite cannot do, run
+ * against an ISOLATED Chrome for Testing. Native messaging is NOT exercised (no host is registered or
+ * connected; integration_e2e.ts drives the real chain).
  *
- *   1. The pinned manifest key is honored: our extension loads at the pinned
- *      extension ID (the native host's allowed_origins depends on this).
- *   2. #32, our side: our real storage.local ACCEPTS the same TRUSTED_CONTEXTS
- *      restriction our production startup applies, and a trusted context reads
- *      a seeded trust key. This shows the production API path works on our
- *      storage; it does NOT observe that startup already applied it (Chrome has
- *      no getAccessLevel, and our extension cannot grant itself host access to
- *      inject a content script under automation) - the production INVOCATION is
- *      asserted by src/apps/extension/tests/entrypoints/background.test.ts, and the
- *      function + gate behavior by trusted-storage.test.ts and the #32 gate
- *      tests in enrollment.test.ts.
- *   3. #32, the mechanism: after setAccessLevel(TRUSTED_CONTEXTS), a
- *      content-script-world read of a seeded key is BLOCKED by Chrome, proven
- *      with a BEFORE/AFTER control - the SAME injected read succeeds before the
- *      restriction and fails after, so the block is the access level and not a
- *      missing permission. Proven with a minimal <all_urls> helper fixture,
- *      since our own extension holds no host permission to inject a content
- *      script under automation. Combined with proof 2 and the compile-time fact
- *      that our content bundle contains no storage access at all, a content
- *      script cannot read the trust state.
- *   4. Off-DOM confirmation, sender gate: confirm_ready / confirm_resolve sent
- *      from a NON-confirm extension page are refused (only /confirm.html may
- *      answer), so no page-reachable context can approve a confirmation.
- *   5. Off-DOM confirmation, not web-accessible: a web page cannot fetch
- *      chrome-extension://<id>/confirm.html (it is not a web-accessible
- *      resource), so the guarded page cannot read the confirmation surface.
- *   6. i18n: the options page renders localized across en / zh_CN / zh_TW, and
- *      the document lang attribute follows the chosen locale.
+ *   1  pinned manifest key honored              -> our extension loads at the ID the native host's allowed_origins pins
+ *   2  trust-state isolation, our side          -> our real storage.local ACCEPTS setAccessLevel(TRUSTED_CONTEXTS) and
+ *                                                  a trusted context still reads a seeded key (caveat at Proof 2)
+ *   3  trust-state isolation, the mechanism     -> a content-script read of a seeded key is BLOCKED after the
+ *                                                  restriction, with a BEFORE control, via the <all_urls> helper fixture
+ *   4  off-DOM confirmation, sender gate        -> confirm_* from a non-confirm extension page is refused
+ *   5  off-DOM confirmation, not web-accessible -> a web page cannot fetch chrome-extension://<id>/confirm.html
+ *   6  i18n                                     -> the options page renders localized across en / zh_CN / zh_TW
  *
- * SAFETY: this launches a NON-HEADLESS Chrome with --load-extension. Driving
- * your daily Chrome/Brave this way can capture and close your real session, so
- * it refuses unless CHROME_BIN points at an isolated Chrome for Testing /
- * Chromium (see tests/README.md). Native messaging is NOT exercised here
- * (this suite never registers or connects a host; integration_e2e.ts drives
- * the real chain), matching ext_test.ts.
+ * SAFETY: this launches a NON-HEADLESS Chrome with --load-extension, which can capture and close a real
+ * session, so it refuses unless CHROME_BIN is an isolated Chrome for Testing / Chromium (tests/README.md).
  *
  * Run:  CHROME_BIN=/path/to/chrome-for-testing bun tests/browser/security_browser_test.ts
- * Requires: bun + puppeteer-core + isolated Chrome (CHROME_BIN). Override the
- * loaded extension dir with BB_EXT_DIR.
+ * BB_EXT_DIR overrides the loaded extension dir.
  */
 
 import * as fs from "node:fs";
@@ -60,11 +35,6 @@ const HELPER_DIR = path.join(REPO, "tests", "fixtures", "access-level-probe");
 const CHROME = process.env.CHROME_BIN ?? "";
 const PINNED_ID = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
 const LOCALES_DIR = path.join(EXTENSION_DIR, "_locales");
-
-// SAFETY: this launches a non-headless Chrome with --load-extension; a real
-// browser could capture and close the user's session. The shared guard runs
-// CHROME_BIN --version and refuses anything that does not identify as an
-// isolated Chrome for Testing (see tests/browser/browser-safety.ts).
 
 let Pass = 0;
 let Fail = 0;
@@ -203,20 +173,14 @@ async function main(): Promise<void> {
       want: PINNED_ID,
     });
 
-    // Proof 2 (#32, our side): our real storage.local ACCEPTS the same
-    // TRUSTED_CONTEXTS restriction our production startup applies
-    // (hardenStorageAccess in lib/background/trusted-storage.ts), and a trusted
-    // context reads a seeded trust key. NOTE what this does and does NOT show:
-    // it shows the API path our production uses works on OUR storage, but it
-    // cannot observe that the startup ALREADY applied it - Chrome has no
-    // getAccessLevel, and our extension holds no host permission to inject a
-    // content script under automation (the click-to-grant prompt is not
-    // auto-acceptable). The production INVOCATION (background.ts calls
-    // hardenStorageAccess at startup) is asserted by an entrypoint-wiring unit
-    // test: src/apps/extension/tests/entrypoints/background.test.ts. The function's
-    // behavior and the gate's fail-closed-until-hardened posture are covered by
-    // trusted-storage.test.ts and the #32 gate tests in enrollment.test.ts. The
-    // BROWSER-enforced blocking our extension relies on is proven in Proof 3.
+    // Proof 2 (trust-state isolation, our side): our real storage.local ACCEPTS the TRUSTED_CONTEXTS restriction
+    // production startup applies (hardenStorageAccess in lib/background/trusted-storage.ts), and a trusted
+    // context reads a seeded key. It cannot observe that startup ALREADY applied it: Chrome has no
+    // getAccessLevel, and our extension holds no host permission to inject a content script under automation
+    // (the click-to-grant prompt is not auto-acceptable).
+    //   production INVOCATION   -> src/apps/extension/tests/entrypoints/background.test.ts
+    //   function + gate posture -> tests/background/trusted-storage.test.ts and enrollment.test.ts
+    //   BROWSER-enforced block  -> Proof 3
     const our32 = (await ours.worker.evaluate(async () => {
       const out: Record<string, unknown> = {};
       try {
@@ -240,7 +204,7 @@ async function main(): Promise<void> {
       our32.trustedRead,
     );
 
-    // Proof 3 (#32, the mechanism): the helper fixture proves Chrome blocks a
+    // Proof 3 (trust-state isolation, the mechanism): the helper fixture proves Chrome blocks a
     // content-script read after TRUSTED_CONTEXTS.
     const helper = await findSwByName(browser, "Access-level probe (test fixture)");
     const webPage = await browser.newPage();

@@ -1,49 +1,25 @@
-//! The host-side pending-import store (ADR-0032 decision 8): the snapshotted
-//! legacy settings bag the extension sends once (`legacy_settings { bag }`)
-//! when a policy-capable host has identified itself and has no policy store.
-//! The bag is RECORDED here as a pending import and NEVER applied - the app's
-//! first-run import screen reads it, shows the imported values against the
-//! defaults, and ends in one Touch ID tap that signs revision 1 (decision 8),
-//! at which point the pending import is consumed.
+//! The host-side pending-import store (ADR-0032 decision 8): the legacy settings bag the extension sends once
+//! (`legacy_settings { bag }`) is RECORDED here and never applied. The app's first-run import screen shows it
+//! against the defaults, and one Touch ID tap signs revision 1, which consumes it.
 //!
-//! The store is a proper state sum, [`StoreState`]:
+//! ```text
+//! Absent              -> Pending    `record_if_absent`: the one legitimate receipt; a later one is logged
+//!                                   and DROPPED whatever the file holds, unreadable included (first bag wins)
+//! Pending | Consuming -> Consuming  `begin_consume_locked`: window durably CLOSED, bag RETAINED, so a crash
+//!                                   before the revision 1 commit keeps the user's bag
+//! Absent | Consumed   -> Consumed   `begin_consume_locked` with no bag to retain
+//! Consuming           -> Consumed   `finalize_consume_locked`, only with a `DurablyCommittedBaseline`
+//! Consumed            -> terminal
+//! ```
 //!
-//! - `Absent` -> `Pending` via [`record_if_absent`] (the one legitimate
-//!   `legacy_settings` receipt);
-//! - `Absent` or `Pending` -> `Consuming`/`Consumed` via the two-phase
-//!   consume ([`begin_consume_locked`] / [`finalize_consume_locked`]; tests
-//!   additionally have a one-shot `consume_locked`, sealed behind
-//!   `cfg(test)` because it disposes without the durability proof);
-//! - `Consuming` is the mid-consume state (P4G-4): the import window is
-//!   durably CLOSED - plants are refused exactly like `Consumed` - but the
-//!   recorded bag is RETAINED, so a crash between the window-close and the
-//!   revision 1 baseline commit no longer loses the user's bag;
-//! - `Consumed` is terminal: no transition leaves it.
+//! Consuming WRITES records rather than deleting the file: deletion would return the store to `Absent`, and key
+//! disposal keeps this file while clearing the signed baseline, so a compromised extension could plant a forged
+//! bag for the NEXT first-run import. Disposal (revoke / `pair --reset` / `enclave_revoke`) leaves the store
+//! alone for the same reason; a pending bag is user preference data, not a key artifact.
 //!
-//! First-bag-wins (D-P4-4): [`record_if_absent`] writes only when the file is
-//! absent in EVERY sense - a later `legacy_settings` receipt is logged and
-//! DROPPED whether the store holds a pending bag, a mid-consume record, the
-//! consumed tombstone, or an unreadable file (not proof of absence; left
-//! untouched, fail closed) - so a later-compromised extension cannot replace
-//! or re-plant the user's real legacy bag.
-//!
-//! Consuming WRITES `Consuming`/`Consumed` records rather than deleting the
-//! file: deletion would return the store to `Absent`, and since key disposal
-//! keeps this file while clearing the signed baseline (D-P4-5), a compromised
-//! extension could then plant a forged bag for the NEXT first-run import.
-//! The durable records close the import window for the lifetime of the
-//! file, disposal or not.
-//!
-//! The store follows [`crate::lang`]'s lighter on-disk pattern (a versioned,
-//! capped, `deny_unknown_fields`, atomically-written 0600 file under the
-//! runtime lock) rather than the heavier policy store: none of the policy
-//! machinery (signatures, overlays, history) applies to a receipt the host
-//! never trusts for enforcement. The bag itself is capped at
-//! [`LEGACY_BAG_MAX_BYTES`]; an oversize receipt is logged and dropped, never
-//! truncated. Disposal (revoke / `pair --reset` / `enclave_revoke`) does NOT
-//! clear it (D-P4-5): a pending bag is user preference data, not a key
-//! artifact (the policy-history precedent), and the consumed tombstone is
-//! exactly what must outlive disposal (above).
+//! On disk it follows [`crate::lang`]'s pattern (versioned, capped, `deny_unknown_fields`, atomically written
+//! 0600 under the runtime lock), not the policy store's: signatures, overlays, and history do not apply to a
+//! receipt the host never trusts for enforcement.
 
 use std::io;
 
@@ -60,7 +36,7 @@ use crate::ipc;
 /// fail as a version/shape mismatch, never be misread).
 pub const PENDING_IMPORT_VERSION: u32 = 2;
 
-/// Upper bound on the stored legacy bag (D-P4-4): the bag is the snapshot of
+/// Upper bound on the stored legacy bag: the bag is the snapshot of
 /// the extension's browser-local settings, kilobytes at most, so anything
 /// larger is not a genuine receipt and is dropped rather than stored. Enforced
 /// on write (an oversize receipt is dropped, never truncated) AND re-checked
@@ -92,7 +68,7 @@ pub enum PendingImportRecord {
         /// The snapshotted legacy settings bag, opaque JSON (never applied).
         bag: Value,
     },
-    /// The mid-consume state (P4G-4): a first-baseline write durably closed
+    /// The mid-consume state: a first-baseline write durably closed
     /// the import window BEFORE committing its baseline, and the bag is
     /// retained until the commit lands. For the window this is `Consumed`
     /// (plants are refused); for the app the bag is still readable, so a
@@ -125,7 +101,7 @@ pub enum StoreState {
         /// The recorded legacy settings bag.
         bag: Value,
     },
-    /// Mid-consume (P4G-4): the import window is closed like `Consumed`, but
+    /// Mid-consume: the import window is closed like `Consumed`, but
     /// the bag is retained for the app to recover.
     Consuming {
         /// The retained legacy settings bag.
@@ -218,17 +194,10 @@ fn encode(record: &PendingImportRecord) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Write the `Pending` record CREATE-NEW: a same-directory temp file (0600,
-/// created exclusively) hard-linked to the final name, which fails on ANY
-/// existing entry instead of replacing it. `Absent -> Pending` is the only
-/// transition allowed to create the file, so even a write racing an
-/// out-of-band change can never replace a recorded bag or the consumed
-/// tombstone with a new `Pending` record. No new claim against a hostile
-/// same-user process (it can write the path directly; the documented
-/// residual stands) - this only removes the replace capability from OUR
-/// writer. The [`ipc::RuntimeLockToken`] proves the caller holds the runtime
-/// lock, so a lock-free write does not compile (the `Allowlist::write` /
-/// policy-store pattern).
+/// Write the `Pending` record CREATE-NEW: an exclusively created 0600 temp file hard-linked to the final name, which
+/// fails on ANY existing entry, so a receipt racing an out-of-band change can never replace a recorded bag or the
+/// tombstone (the consume writers use the replacing atomic write instead). This removes the replace capability from
+/// OUR writer only; a hostile same-user process can still write the path directly.
 fn write_pending_new(
     record: &PendingImportRecord,
     _lock: &ipc::RuntimeLockToken,
@@ -309,30 +278,28 @@ fn bag_over_cap(bag: &Value) -> io::Result<bool> {
 pub enum RecordOutcome {
     /// The bag was recorded (the store was absent).
     Recorded,
-    /// First-bag-wins (D-P4-4): a pending import already exists, so this
+    /// First bag wins: a pending import already exists, so this
     /// later receipt is dropped - the stored bag stands.
     AlreadyPresent,
     /// The consumed tombstone (or the mid-consume `Consuming` record)
     /// exists: the one import this host will ever run already happened or is
     /// underway, so the receipt is dropped - the window stays closed even
-    /// after key disposal (which keeps this file, D-P4-5).
+    /// after key disposal (which keeps this file).
     AlreadyConsumed,
     /// The bag exceeded [`LEGACY_BAG_MAX_BYTES`] and was dropped whole, never
     /// truncated. `bytes` is its measured compact size.
     Oversize { bytes: usize },
 }
 
-/// Record `bag` as the pending import, first-bag-wins (ADR-0032 decision 8,
-/// D-P4-4): written only when the store is absent. An oversize bag is dropped
-/// before the lock is taken (never truncated, never stored). A present file -
-/// pending, consumed, or unreadable - is left untouched: a later (possibly
-/// compromised) extension must not overwrite the user's real legacy bag or
-/// reopen a consumed import, and an unreadable file is not proof of absence,
-/// so it fails closed by propagating the read error rather than clobbering it.
-/// A successful recording also bumps [`crate::revocation::Scope::Policy`]
-/// (best-effort) so an already-running app re-probes and surfaces the arrival
-/// (its import nav entry appears and the first-baseline dialog warns) instead
-/// of the bag waiting, unseen, to be consumed by revision 1.
+/// Record `bag` as the pending import, first bag wins: a later (possibly compromised) extension must not replace
+/// the user's real bag or reopen a consumed import, and an unreadable file is not proof of absence.
+///
+/// ```text
+/// absent                          -> written; the Policy epoch bump (best-effort) makes a running app re-probe
+/// pending, consuming or consumed  -> left untouched
+/// unreadable                      -> the read error propagates
+/// oversize bag                    -> dropped whole before the lock is taken, never truncated
+/// ```
 pub fn record_if_absent(bag: Value) -> io::Result<RecordOutcome> {
     let bytes = serde_json::to_vec(&bag)?;
     if bytes.len() > LEGACY_BAG_MAX_BYTES {
@@ -344,7 +311,7 @@ pub fn record_if_absent(bag: Value) -> io::Result<RecordOutcome> {
 fn record_if_absent_locked(lock: &ipc::RuntimeLockToken, bag: Value) -> io::Result<RecordOutcome> {
     match load()? {
         StoreState::Pending { .. } => Ok(RecordOutcome::AlreadyPresent),
-        // Consuming closes the window exactly like the tombstone (P4G-4): a
+        // Consuming closes the window exactly like the tombstone: a
         // first-baseline write already began consuming, so a receipt arriving
         // now is a late plant and is dropped.
         StoreState::Consuming { .. } | StoreState::Consumed => Ok(RecordOutcome::AlreadyConsumed),
@@ -354,17 +321,10 @@ fn record_if_absent_locked(lock: &ipc::RuntimeLockToken, bag: Value) -> io::Resu
                 bag,
             };
             write_pending_new(&record, lock)?;
-            // A recorded receipt is a policy-adjacent state change the app
-            // must notice NOW: the app re-probes the pending-import store on
-            // every policy-epoch notice (its App-level listener keeps the
-            // import nav entry tracking live state), so without this bump a
-            // bag arriving while the app is open stays invisible until the
-            // user signs a baseline - which consumes the tombstone and loses
-            // the bag for good. Best-effort, same contract as the policy
-            // store's bump_policy_epoch_locked: the epoch is an availability
-            // signal (a change notice), not integrity - the receipt just
-            // written is the authority - so a failed bump is logged and must
-            // NEVER fail the recording it trails.
+            // The app re-probes this store on every policy-epoch notice; without the bump a bag arriving while
+            // the app is open stays invisible until the user signs a baseline, which consumes it unseen. The
+            // epoch is a change notice, not integrity (the receipt just written is the authority), so a failed
+            // bump is logged and must NEVER fail the recording.
             if let Err(e) = crate::revocation::bump_locked(lock, crate::revocation::Scope::Policy) {
                 log_warn!(
                     "pending-import",
@@ -377,27 +337,15 @@ fn record_if_absent_locked(lock: &ipc::RuntimeLockToken, bag: Value) -> io::Resu
     }
 }
 
-/// Phase 1 of consuming (P4G-4): durably CLOSE the import window inside the
-/// caller's runtime-lock hold, BEFORE the first signed baseline (revision 1)
-/// commits - the policy store refuses the whole signed write if this fails.
-/// A recorded bag moves to the [`PendingImportRecord::Consuming`] arm (window
-/// closed, bag RETAINED), so a crash between this write and the baseline
-/// commit no longer loses the bag: the app can still read it and the user's
-/// re-tap resumes from here. With no bag to retain (`Absent`, or already
-/// `Consumed`) the bagless tombstone is written directly - the first baseline
-/// closes the import window for good, receipt or no receipt.
-///
-/// Durability retry (P4G-1): the record is (re)written and fsynced on EVERY
-/// call, including the already-`Consuming`/`Consumed` arms. A prior call may
-/// have landed the rename but died on the following `sync_all` - a VISIBLE
-/// but UNSYNCED record - and then refused the signed write, so the user
-/// re-taps; short-circuiting without re-fsyncing would let revision 1 land
-/// over a window-close a crash could still roll back. The rename-over of an
-/// identical record is harmless and idempotent, so paying the sync again is
-/// the simple, correct fix.
-///
-/// An unreadable store is an error, never overwritten: the damaged receipt is
-/// evidence, and writers stay refused until someone looks (fail closed).
+/// The first consuming step, run inside the runtime-lock hold BEFORE revision 1 commits; the policy store refuses
+/// the whole signed write if this fails. It writes and fsyncs on EVERY call, the already-closed arms included: a
+/// prior call may have landed the rename but died before `sync_all`, and short-circuiting would let revision 1
+/// land over a window-close a crash could still roll back.
+/// ```text
+/// Pending | Consuming -> Consuming   bag RETAINED, so a crash before the commit keeps it for the user's re-tap
+/// Absent | Consumed   -> Consumed    nothing to retain; the bagless tombstone is written directly
+/// unreadable          -> Err         never overwritten: the damaged receipt is evidence
+/// ```
 pub fn begin_consume_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
     let record = match load()? {
         StoreState::Pending { bag } | StoreState::Consuming { bag } => {
@@ -447,19 +395,15 @@ pub fn attest_baseline_durable(
     Ok(DurablyCommittedBaseline(()))
 }
 
-/// Phase 2 of consuming (P4G-4): the baseline committed DURABLY (the
-/// [`DurablyCommittedBaseline`] token is the proof, and the type system is
-/// what demands it), so finalize to the bagless
-/// [`PendingImportRecord::Consumed`] tombstone (durable, same fsync
-/// discipline), disposing of the retained bag. Without the ordering the
-/// token enforces, a power loss after this write could keep the durable
-/// tombstone while taking back the un-fsynced baseline rename - Consumed
-/// plus no baseline plus no bag, exactly the loss class P4G-4 closes.
-/// Unconditional by the same P4G-1 reasoning as [`begin_consume_locked`]:
-/// re-running the durable write over an existing tombstone is idempotent
-/// and re-establishes durability. The window was already closed by phase 1,
-/// so a failure here leaves the fail-closed `Consuming` record standing -
-/// closed window, bag retained - never a reopened window.
+/// The second consuming step: the bagless `Consumed` tombstone, written only over a DURABLE baseline
+/// ([`DurablyCommittedBaseline`]) because a power loss could otherwise keep the fsynced tombstone and take back the
+/// un-fsynced baseline rename: Consumed, no baseline, no bag. Unconditional for the same reason as
+/// [`begin_consume_locked`], and no failure reopens the window.
+/// ```text
+/// Err before the rename, begun from Pending | Consuming -> still Consuming with the bag; the reconcile finishes it
+/// Err before the rename, begun from Absent | Consumed   -> the tombstone begin_consume_locked wrote; nothing to heal
+/// Err after the rename                                  -> the tombstone with only its fsync lost
+/// ```
 pub fn finalize_consume_locked(
     lock: &ipc::RuntimeLockToken,
     _baseline: DurablyCommittedBaseline,
@@ -472,18 +416,9 @@ pub fn finalize_consume_locked(
     )
 }
 
-/// The one-shot consume, for a caller with no baseline write to interleave:
-/// close the window and dispose of any recorded bag in one durable tombstone
-/// write inside the caller's runtime-lock hold. Deliberately NOT gated on
-/// the baseline proof - closing the window is legitimate with no baseline at
-/// all (consume-from-absent) - which is why this writes the tombstone
-/// directly instead of going through [`finalize_consume_locked`]. TEST-ONLY
-/// BY CONSTRUCTION (`cfg(test)`): that direct write is an un-proofed bag
-/// disposal, exactly the escape hatch the [`DurablyCommittedBaseline`]
-/// typestate exists to close, so production code cannot reach it at all -
-/// the first-baseline path goes begin/attest/finalize. Returns whether a
-/// recorded bag (pending or retained mid-consume) was consumed; idempotent
-/// on an already-consumed store (returns `Ok(false)`).
+/// The one-shot consume: close the window and dispose of any recorded bag in one durable tombstone write, with NO
+/// baseline proof (closing the window is legitimate with no baseline at all). That un-proofed bag disposal is exactly
+/// the escape hatch [`DurablyCommittedBaseline`] exists to close, hence `cfg(test)`: production goes begin/attest/finalize.
 #[cfg(test)]
 pub fn consume_locked(lock: &ipc::RuntimeLockToken) -> io::Result<bool> {
     let had_bag = matches!(
@@ -505,24 +440,18 @@ pub fn consume() -> io::Result<bool> {
     ipc::with_runtime_lock(consume_locked)
 }
 
-/// Self-heal a STRANDED mid-consume record (the P4G-4 follow-up): a
-/// `Consuming` record whose baseline DID land - the finalize crashed or its
-/// fsync failed after the baseline write, and revision-2+ writes never
-/// revisit the pending-import store - would otherwise persist forever,
-/// re-offering an import the app can only refuse (its adopt gate refuses
-/// once a baseline exists) and retaining a bag disposal was meant to shed.
-/// Once the baseline is present AND USABLE, finalizing is unambiguously
-/// correct, so this runs idempotently at two host-side seams: native-host
-/// startup, and the `policy pending-import` read command (the desktop app's
-/// own probe, so a running host heals on the next look). A `Consuming`
-/// record with NO baseline is left strictly alone - that is the legitimate
-/// crash-before-baseline state the app SHOULD re-offer. An unreadable
-/// policy store refuses the heal (error, fail closed), and a
-/// present-but-UNUSABLE baseline (valid envelope, damaged or tampered
-/// content - `PolicyStore::load` checks only the envelope) also leaves the
-/// record untouched: a store that enforces nothing must not cost the user
-/// the recoverable import on top of the policy. Returns whether a heal
-/// happened.
+/// Self-heal a STRANDED mid-consume record: a `Consuming` record whose baseline DID land (the finalize crashed
+/// or its fsync failed, and revision-2+ writes never revisit this store) would otherwise persist forever,
+/// re-offering an import the app can only refuse and retaining a bag disposal meant to shed. Runs idempotently
+/// at native-host startup and in the `policy pending-import` read command (the desktop app's own probe).
+///
+/// ```text
+/// Consuming, no baseline                     -> left alone: the legitimate crash-before-baseline state
+/// Consuming, unreadable policy store         -> error, fail closed
+/// Consuming, baseline present but UNUSABLE   -> left alone: a store that enforces nothing must not also
+///                                               cost the user the recoverable import
+/// Consuming, baseline present and usable     -> finalized, returns `true`
+/// ```
 pub fn reconcile_consuming() -> io::Result<bool> {
     ipc::with_runtime_lock(reconcile_consuming_locked)
 }
@@ -573,19 +502,10 @@ fn reconcile_consuming_locked(lock: &ipc::RuntimeLockToken) -> io::Result<bool> 
 /// value before reading any other field (fail closed).
 pub const PENDING_IMPORT_REPORT_VERSION: u32 = 1;
 
-/// The typed, versioned pending-import status for the desktop app's first-run
-/// import screen (ADR-0032 decision 8), gathered fail-closed from the store -
-/// the same read discipline as [`crate::policy::gather_policy_status`], and
-/// the exact object `chromium-bridge policy pending-import --json` prints
-/// (the [`crate::policy::PolicyStatusReport`] pattern: one Rust definition,
-/// ts_rs-exported, emitted by the host and parsed back by the app). A
-/// tagged sum like the on-disk record, so an impossible combination (a
-/// `consumed` answer smuggling a bag, an `error` with no detail) cannot even
-/// deserialize: `none` is the ordinary no-receipt state (healthy), `present`
-/// and `consuming` are the only arms that carry a recorded bag (`consuming`
-/// with the window already closed, P4G-4), `consumed` is the post-import
-/// tombstone (structurally bagless), `error` is a present-but-unreadable
-/// receipt (fail closed).
+/// The typed, versioned pending-import status for the desktop app's first-run import screen: the exact object
+/// `chromium-bridge policy pending-import --json` prints, one Rust definition ts_rs-exported and parsed back by
+/// the app (the [`crate::policy::PolicyStatusReport`] pattern). A tagged sum like the on-disk record, so an
+/// impossible combination (a `consumed` answer smuggling a bag, an `error` with no detail) cannot deserialize.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(tag = "state", rename_all = "lowercase", deny_unknown_fields)]
@@ -605,7 +525,7 @@ pub enum PendingImportReport {
         #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
         bag: Value,
     },
-    /// Mid-consume (P4G-4): a first-baseline write durably closed the import
+    /// Mid-consume: a first-baseline write durably closed the import
     /// window but its baseline commit has not been observed to finish. New
     /// bags are refused exactly like `consumed`, and the retained bag is
     /// still readable - the app re-offers it for review, so a crash between
@@ -696,7 +616,7 @@ mod tests {
 
     #[test]
     fn a_bag_near_the_compact_cap_records_and_reads_back() {
-        // P4F-1: the store writes COMPACT, the same encoding both caps
+        // The store writes COMPACT, the same encoding both caps
         // measure - a legitimate near-cap bag must round-trip, not blow past
         // the file cap on a pretty-print and be lost to a write error.
         let _dir = scratch_runtime_dir("pending-import-near-cap");
@@ -759,7 +679,7 @@ mod tests {
         fs::write(path(), br#"{"version":1,"bag":{}}"#).unwrap();
         assert!(load().is_err());
         // Wrong version refused, on both record arms - including a tagged
-        // version-1 file (P4F-3: the shape change rode a version bump).
+        // version-1 file (the shape change rode a version bump).
         fs::write(path(), br#"{"state":"pending","version":1,"bag":{}}"#).unwrap();
         assert!(load().is_err());
         fs::write(path(), br#"{"state":"pending","version":99,"bag":{}}"#).unwrap();
@@ -820,7 +740,7 @@ mod tests {
 
     #[test]
     fn the_pending_writer_never_replaces_an_existing_file() {
-        // P4F-8: the Absent -> Pending transition creates the file
+        // The Absent -> Pending transition creates the file
         // exclusively (temp + hard_link, no rename-over), so even if the
         // absence check were raced, OUR writer cannot replace a tombstone
         // (or an existing bag) with a new Pending record. Drive the writer
@@ -862,7 +782,7 @@ mod tests {
 
     #[test]
     fn consume_re_runs_the_durable_write_on_an_already_consumed_store() {
-        // P4G-1: the already-Consumed arm must still (re)write and fsync the
+        // The already-Consumed arm must still (re)write and fsync the
         // tombstone, because a prior call may have landed the rename but died
         // on the sync (visible-but-unsynced). fsync is not observable, so we
         // observe that the DURABLE WRITE re-runs at all: plant a valid but
@@ -893,7 +813,7 @@ mod tests {
 
     #[test]
     fn begin_consume_retains_the_bag_and_closes_the_window() {
-        // P4G-4 phase 1: Pending -> Consuming keeps the bag on disk, and the
+        // begin_consume: Pending -> Consuming keeps the bag on disk, and the
         // window is closed to plants exactly like the tombstone.
         let _dir = scratch_runtime_dir("pending-import-begin-consume");
         let bag = json!({ "pageEvalEnabled": true });
@@ -913,7 +833,7 @@ mod tests {
             },
             "the read surface reports the retained bag for the app"
         );
-        // Idempotent re-run (P4G-1, the re-tap): the bag survives, and the
+        // Idempotent re-run (the re-tap): the bag survives, and the
         // durable write re-runs to canonical bytes - plant a valid but
         // non-canonical Consuming record and watch it re-canonicalize.
         let planted = br#"{ "version": 2, "state": "consuming", "bag": {"pageEvalEnabled":true} }"#;
@@ -1008,7 +928,7 @@ mod tests {
 
     #[test]
     fn a_post_consume_plant_is_refused_and_never_stored() {
-        // P4H-1, the attack the tombstone exists for: after the real import
+        // The attack the tombstone exists for: after the real import
         // is consumed, a compromised extension re-sends legacy_settings.
         let _dir = scratch_runtime_dir("pending-import-post-consume-plant");
         record_if_absent(json!({ "real": true })).unwrap();
@@ -1030,7 +950,7 @@ mod tests {
 
     #[test]
     fn the_report_sum_cannot_deserialize_an_impossible_mixture() {
-        // P4F-10: the report is a tagged sum like the on-disk record; a
+        // The report is a tagged sum like the on-disk record; a
         // consumed answer smuggling a bag is a parse error, not a value.
         assert!(serde_json::from_str::<PendingImportReport>(
             r#"{"state":"consumed","v":1,"bag":{"forged":true}}"#
@@ -1118,7 +1038,7 @@ mod tests {
 
     #[test]
     fn recording_bumps_the_policy_epoch_and_drops_do_not() {
-        // Finding 2 (silent data loss): the app's import probe re-reads only
+        // Silent data loss guard: the app's import probe re-reads only
         // on a policy-epoch notice, so the Recorded arm - and ONLY that arm -
         // must bump Scope::Policy; the dropped arms change no state worth
         // announcing.

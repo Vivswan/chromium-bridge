@@ -1,42 +1,12 @@
 #!/usr/bin/env bun
 
-// Docs-literal parity gate: the living docs must state the canonical
-// identifiers, paths, and protocol versions exactly as the code defines them.
-// The SSoT audit found these literals hand-copied into AGENTS.md, SECURITY.md,
-// the READMEs, and docs/ with nothing checking them, so a rename in the code
-// (host id, keychain label, run.lock -> run.v2.lock, an MCP version re-pin, a
-// BB_LOG rename) would leave the troubleshooting and security docs quietly
-// wrong - the docs a user follows when registration or pairing breaks.
+// Docs-literal parity gate: the living docs must state the canonical identifiers, paths, and protocol
+// versions exactly as the code defines them, or a rename in the code leaves the troubleshooting and
+// security docs quietly wrong. Like scripts/check-extension-id.ts, the canonical values are read from
+// source TEXT, so no cargo or bun workspace is needed; a value this gate cannot find fails it.
 //
-// Like scripts/check-extension-id.ts, the canonical values are read from
-// source TEXT (no cargo or bun workspace needed):
-//
-//   - native host id + pinned extension id  src/packages/core/src/identity.rs
-//   - enclave keychain label                src/packages/core/src/enclave/mod.rs
-//   - enclave domain-separation strings     src/packages/core/src/enclave/challenge.rs
-//   - run.lock filename                     src/packages/core/src/ipc/lockfile.rs
-//   - MCP protocol version                  src/packages/core/src/mcp_server.rs
-//                                           (or an MCP_PROTOCOL_VERSION const in protocol.rs)
-//   - client-name env var                   src/packages/core/src/mcp_server.rs
-//   - bridge protocol version               src/packages/core/src/protocol.rs
-//   - BB_* env var names and value sets     src/packages/core/src/log.rs
-//   - audit --limit default                 src/packages/core/src/audit.rs
-//   - browser CLI keys                      src/packages/core/src/browsers.rs
-//   - release-level attestation bundle      RELEASE_BUNDLE_NAME below (mirrors the fleet's publish leg)
-//
-// Two kinds of assertion, both fail-closed on a missing canonical value:
-//
-//   - FAMILY: every doc token matching an identifier's shape (any
-//     com.vivswan.* name, any [a-p]{32} id, any run*.lock filename, any
-//     chromium-bridge-*-vN domain, any BB_LOG* var) must be a current
-//     canonical value. This catches the stale copy a rename leaves behind.
-//   - PRESENCE: the docs whose job is to state a value (AGENTS.md, SECURITY.md,
-//     docs/compatibility.md, the BB_LOG tables) must contain the current one.
-//     This catches the doc that never got the new value at all.
-//
-// Scope: the root *.md files (minus CHANGELOG.md, release history) and
-// docs/**, EXCLUDING docs/adr/ - ADRs are point-in-time records and keep the
-// identifiers they were decided with (the audit's genre exemption).
+//   FAMILY    every doc token shaped like an identifier must be a current canonical value  -> the stale copy a rename leaves
+//   PRESENCE  a doc whose job is to state a value must contain the current one              -> the doc that never got the new value
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -64,18 +34,14 @@ export function rustStrConst(src: string, name: string, file: string): string {
   return m[1];
 }
 
-/** The lock filename from `runtime_dir().join("run.lock")` in lockfile.rs.
- * Anchored on the join call so the pre-planned rename to run.v2.lock is
- * picked up from the code, not hard-coded here. */
+/** The lock filename from the `runtime_dir().join(...)` call in lockfile.rs, so a rename there
+ * is picked up from the code, not hard-coded here. */
 export function lockFilename(lockfileSrc: string): string {
   const m = lockfileSrc.match(/runtime_dir\(\)\.join\("(run[^"]*\.lock)"\)/);
   if (!m?.[1]) throw new Error("cannot find the run.lock join in ipc/lockfile.rs");
   return m[1];
 }
 
-/** The MCP protocol version. Today it is the literal in mcp_server.rs's
- * initialize result; a hoisted MCP_PROTOCOL_VERSION const in protocol.rs (the
- * audit's 4.1.5) is checked first so this gate survives that refactor. */
 export function mcpProtocolVersion(protocolSrc: string, mcpServerSrc: string): string {
   const hoisted = protocolSrc.match(/MCP_PROTOCOL_VERSION: &str = "(\d{4}-\d{2}-\d{2})"/);
   if (hoisted?.[1]) return hoisted[1];
@@ -99,11 +65,8 @@ export function logEnvVars(logSrc: string): string[] {
   return [...new Set(names)] as string[];
 }
 
-/** Strip Rust comments, nesting-aware: a nested block comment leaves nothing
- * exposed (unlike a lazy single-level regex, which stops at the first close
- * delimiter), and `//` line comments are dropped too. Shared by the const
- * extractors so a declaration buried in a nested block comment can never
- * stand in for the canonical value. */
+/** Strip Rust comments nesting-aware (a single-level regex stops at the first close delimiter),
+ * so a declaration buried in a nested block comment can never stand in for the canonical value. */
 export function stripRustComments(src: string): string {
   let out = "";
   let depth = 0;
@@ -143,13 +106,10 @@ export function auditDefaultLimit(auditSrc: string): string {
   return m[1].replaceAll("_", "");
 }
 
-/** The browser CLI keys in Browser::ALL order, from `key()`'s match arms in
- * browsers.rs - the same source `known_keys()` joins into `--help`;
- * docs/cli.md restates the list and is held to it here. Fully fail-closed:
- * EVERY arm line inside key()'s match must classify as a known
- * `Browser::`/`Self::` variant mapping to a key literal, so a key written as
- * `Self::Opera`, a renamed arm, or a `_` catch-all fails the gate instead of
- * silently shrinking the pinned set. */
+/** The browser CLI keys in Browser::ALL order, from `key()`'s match arms in browsers.rs (the same
+ * source `known_keys()` joins into `--help`); docs/cli.md restates the list and is held to it here.
+ * Every arm must map a `Browser::`/`Self::` variant to a key literal, so a `_` catch-all or any
+ * other arm shape fails the gate instead of silently shrinking the pinned set. */
 export function browserKeys(browsersSrc: string): string[] {
   const uncommented = stripRustComments(browsersSrc);
   const block = uncommented.match(/fn key\(self\) -> &'static str \{\s*match self \{([\s\S]*?)\}/);
@@ -541,7 +501,7 @@ if (import.meta.main) {
     ["README.md", mcpVersion, "MCP protocol version"],
     ["docs/development.md", "BB_LOG", "log env var name"],
     // Since --help interpolates these consts, docs/cli.md holds the only
-    // hand-written copies of the audit default and the browser key list.
+    // hand-written copies of the audit --limit default and the browser key list.
     ["docs/cli.md", `last ${auditLimit} records`, "audit --limit default"],
   ];
   for (const [doc, literal, label] of presences) {

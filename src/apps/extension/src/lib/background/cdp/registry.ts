@@ -1,4 +1,4 @@
-// CdpSessionRegistry - a module-level singleton mapping tabId → CdpSession.
+// CdpSessionRegistry - a module-level singleton mapping tabId -> CdpSession.
 //
 // In CDP mode the debugger stays attached across ops (the "Started debugging
 // this browser" banner persists - by design, ADR-0017), so we cache one
@@ -32,25 +32,17 @@ class CdpSessionRegistry {
     try {
       await session.attach();
     } catch (e) {
-      // Attach failed → don't leave a half-dead session cached. But if a
+      // Attach failed -> don't leave a half-dead session cached. But if a
       // concurrent op already attached this same session, keep it - deleting it
       // would orphan a live debugger attach (stuck banner, teardown misses it).
       if (!session.isAttached) this.sessions.delete(tabId);
       throw e;
     }
-    // Restriction-only recheck AFTER the attach protocol ran (SFX-3): a
-    // decision that snapshotted cdpMode:true and was held open (e.g. by a
-    // confirmation) can reach here AFTER a restricting policy push already
-    // fired teardownAll below - nothing else would ever tear the JUST-MADE
-    // session down, so handing it out registered would let the restriction
-    // leak into a persistent debugger attach. Tear it down and refuse
-    // instead; the in-flight decision simply fails this op (extra
-    // restriction mid-flight is the fail-closed direction of decision 4),
-    // and a blocked posture counts as no grant. The check runs after the
-    // attach so the attach/registration interleaving stays synchronous for
-    // the orphan-cleanup identity machinery above. An ERRORED policy read
-    // fails closed exactly like a refusal (CS-2): the just-made attach must
-    // not outlive a grant we could not read.
+    // A decision that snapshotted cdpMode:true and was held open by a confirmation can reach here after a restricting
+    // push already ran teardownAll below; nothing else would ever tear this just-made session down. The check runs
+    // AFTER the attach so the attach/registration interleaving stays synchronous for the identity guard above.
+    //   blocked posture, or the policy read throws  -> no grant
+    //   no grant                                    -> the session is torn down and the in-flight op fails (fail closed)
     let granted: boolean;
     try {
       const effective = await getEffectivePolicy();
@@ -66,9 +58,8 @@ class CdpSessionRegistry {
     return session;
   }
 
-  // Tear down only while the map still holds THIS session (SP-2):
-  // browser.debugger.detach is tab-scoped, so a refusing call's teardown
-  // resolving late must never rip down a newer session a concurrent call
+  // Tear down only while the map still holds THIS session: browser.debugger.detach is tab-scoped, so a
+  // refusing call's teardown resolving late must never rip down a newer session a concurrent call
   // attached to the same tab after ours was replaced.
   private async teardownIfCurrent(tabId: number, session: CdpSession): Promise<void> {
     if (this.sessions.get(tabId) === session) await this.teardown(tabId);
@@ -98,7 +89,7 @@ class CdpSessionRegistry {
   }
 
   // Whether a persistent session is currently held for this tab (no attach, no
-  // side effect). Used by precise.ts to avoid a second, conflicting attach when
+  // side effect). Used by attach.ts to avoid a second, conflicting attach when
   // CDP mode already holds the tab.
   hasSession(tabId: number): boolean {
     return this.sessions.has(tabId);
@@ -120,7 +111,7 @@ export function installCdpLifecycleListeners(): void {
   if (listenersInstalled) return;
   listenersInstalled = true;
 
-  // Tab closed → detach + forget.
+  // Tab closed -> detach + forget.
   browser.tabs.onRemoved.addListener((tabId) => {
     void cdpRegistry.teardown(tabId);
   });
@@ -131,18 +122,11 @@ export function installCdpLifecycleListeners(): void {
     if (typeof source.tabId === "number") cdpRegistry.handleExternalDetach(source.tabId);
   });
 
-  // cdpMode turned off -> detach everything so the banner goes away. The
-  // effective mode is policy-resolved (ADR-0032 Phase 3): pre-cutover the
-  // legacy stored value, post-cutover the host-pushed record - so an
-  // accepted policy push restricting cdpMode tears live sessions down on
-  // the push path (the push writes the policy storage keys). The legacy
-  // "cdpMode" key stays in this trigger DELIBERATELY (Phase 5): the options
-  // toggle that wrote it is gone, but the key can still change twice -
-  // external storage tampering pre-cutover, and the post-cutover legacy
-  // cleanup DELETING it (legacy-cleanup.ts), which fires this listener once.
-  // Both firings are harmless by construction: the handler re-reads the
-  // EFFECTIVE policy and only ever tears down (restriction-only), never
-  // grants - so keeping the trigger is the simplest fail-closed reading.
+  // cdpMode turned off -> detach everything so the banner goes away. A policy push that restricts
+  // cdpMode lands here too, because the push writes the policy storage keys. The legacy "cdpMode" key
+  // stays a trigger on purpose: nothing writes it anymore, but pre-cutover tampering or the post-cutover
+  // cleanup deleting it (legacy-cleanup.ts) still fires this, harmlessly - the handler re-reads the
+  // EFFECTIVE policy and only ever tears down, never grants.
   browser.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const relevant = "cdpMode" in changes || POLICY_STORAGE_KEYS.some((key) => key in changes);

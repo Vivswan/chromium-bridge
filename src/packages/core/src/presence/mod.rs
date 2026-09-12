@@ -1,96 +1,31 @@
-//! Proof of user presence for capability-RESTORING acts (ADR-0030/0031).
+//! Proof of user presence for capability-RESTORING acts (ADR-0030/0031). Removing capability is always
+//! friction-free (kill, revoke, uninstall: fail-closed is the safe state), but restoring or granting it
+//! demands a [`PresenceAttestation`] from this module; [`crate::kill::release`] and [`crate::allowlist`]
+//! pairing are the two callers.
 //!
-//! The presence symmetry rule: removing capability is always friction-free
-//! (kill, revoke, uninstall - fail-closed is the safe state), but RESTORING
-//! or GRANTING capability requires proof of a human. Two acts in this
-//! codebase do that - releasing the kill switch ([`crate::kill::release`])
-//! and pairing a trusted client ([`crate::allowlist`]) - and both demand a
-//! [`PresenceAttestation`] from this module. On macOS the proof is hardware:
-//! a Secure Enclave signing operation gated on the enrollment key's
-//! user-presence ACL, which forces Touch ID (or the login password through
-//! the same system sheet) and cannot succeed without a live user action.
-//! Elsewhere, and on a Mac with no enrollment key to gate on, the caller's
-//! interactive floor holds the line.
+//! [`require_presence`] tries hardware first and falls to the caller's floor ONLY when hardware is
+//! genuinely unavailable: an attacker who can make the Enclave prompt fail must not thereby downgrade
+//! the gate to a softer prompt.
+//! ```text
+//! macOS, enrollment key present  -> Secure Enclave signing gated on the key's user-presence ACL (Touch ID or the login password)
+//! macOS without a key, other OS  -> the caller's interactive floor (`Floor`)
+//! hardware RAN and REFUSED       -> error; the floor never runs, capability stays exactly as reduced
+//! ```
 //!
-//! ## The ladder, and why failure never falls down it
+//! Residual, named: the floors attest intent on a trusted surface, and none of them is hardware. A
+//! same-user process can allocate a pty and type the phrase, or edit `revocation.json` directly (the
+//! conceded same-user boundary); the audit trail records which rung authorized every act, so a
+//! floor-authorized one is always distinguishable from a hardware-authorized one.
 //!
-//! [`require_presence`] tries the hardware provider first and falls back to
-//! the caller's floor ONLY when hardware is genuinely unavailable (non-macOS,
-//! or no usable Enclave key on this machine). A hardware check that RAN and
-//! REFUSED never falls back: an attacker who can make the Enclave prompt fail
-//! must not thereby downgrade the gate to a softer prompt. Failed or
-//! unavailable auth leaves capability exactly as reduced as it was.
-//!
-//! ## Preconditions run BEFORE the hardware prompt
-//!
-//! The CLI floor's surface requirement (stdin is a real terminal) is checked
-//! before any hardware prompt is raised - structurally: [`Floor::CliConfirm`]
-//! can only be constructed from a [`TerminalStdin`] witness, whose sole
-//! constructor is the check. A background script driving
-//! `chromium-bridge unkill` must not be able to put an unexplained Touch ID
-//! sheet in front of the user - a tap-phishing primitive - so a
-//! non-interactive invocation is refused outright, promptless, before
-//! [`require_presence`] can even be called with the CLI floor. The floor
-//! itself re-samples terminal-ness immediately before reading the phrase
-//! (see [`cli_confirm`]): the witness proves the ordering, not that fd 0
-//! stayed a terminal.
-//!
-//! ## The floors
-//!
-//! - [`Floor::CliConfirm`]: an explicit, typed confirmation on the CLI's own
-//!   controlling terminal. Stdin must BE a terminal - a piped or redirected
-//!   stdin is refused outright, so `echo release | chromium-bridge unkill`
-//!   in some background script cannot silently reopen the bridge - and the
-//!   user must type the exact phrase.
-//! - [`Floor::AppConfirm`]: the desktop app's explicit confirmation dialog -
-//!   the evidence lives in the calling surface, which shows its own modal
-//!   confirmation before asking. Only the app's presence-gated actions may
-//!   select it (see the variant docs).
-//!
-//! There is deliberately no extension floor. ADR-0032 decision 6 retired the
-//! extension's `kill_release` path (release is now an app/CLI act), which was
-//! its only caller, so the constructible `Floor::ExtensionConfirm` was
-//! removed rather than left as a zero-caller "claim a confirmation that never
-//! happened" primitive. The [`PresencePath::ExtensionConfirm`] audit LABEL
-//! stays a stable wire value (older audit records and the desktop UI's
-//! auth-label mapping still name it); it simply has no host-side producer
-//! anymore.
-//!
-//! ## Residual, named
-//!
-//! The floors attest intent on a trusted surface; none of them is hardware.
-//! A same-user process can allocate a pty and type the phrase, or (more
-//! directly) edit `revocation.json` itself - the conceded same-user boundary.
-//! The floors exist to make a silent, accidental, or script-driven
-//! capability restoration impossible, not to beat a hostile local process;
-//! Touch ID is what upgrades the gate to hardware where the machine has it.
-//! The audit trail records which rung authorized every act, so a
-//! floor-authorized one is always distinguishable from a hardware-authorized
-//! one.
-//!
-//! ## Testing rule (no real prompts, ever)
-//!
-//! In a dev or prod build, [`require_presence`] with a non-CLI floor raises a
-//! REAL system prompt on a Touch-ID Mac. Automated UNIT tests must never do
-//! that, and cannot: under `cfg(test)`, [`hardware_authenticate`] returns the
-//! injected [`test_hook`] outcome (default `Unavailable`) instead of calling
-//! LocalAuthentication or signing with the enrolled Enclave key, and the real
-//! backend module is not even compiled into a `cfg(test)` build. Set the
-//! outcome with `test_hook::set` to exercise the verified/refused/unavailable
-//! branches. The mock is `cfg(test)`-only, compiled out of every shipped
-//! binary; there is NO runtime env var, flag, or config that disables the
-//! real hardware path (a bypass an attacker could set is forbidden by
-//! AGENTS.md).
-//!
-//! `cfg(test)` covers this crate's own unit tests. Integration tests (in
-//! `tests/`) and the release binary link the crate WITHOUT `cfg(test)`, so
-//! they use the real path - the suite keeps them promptless by construction,
-//! not by this mock: every enclave/presence e2e supplies only MALFORMED
-//! challenges (refused before the keychain), and the presence-gated CLI
-//! commands are skipped on an enrolled machine (see `tests/protocol/e2e.py`,
-//! `enclave_key_present`). The real hardware path is exercised only by the
-//! explicit user runbook (`moon run touchid-gates`), consciously run and
-//! tapped.
+//! No test raises a real prompt: under `cfg(test)` the hardware seams return the injected `test_hook` /
+//! `policy_test_hook` outcome and the real backend is not compiled; there is NO runtime env var, flag, or
+//! config that disables the real path in a shipped binary. Integration tests (`tests/`) link WITHOUT
+//! `cfg(test)` and stay promptless by construction, not by this mock.
+//! ```text
+//! enclave/presence e2e          -> only MALFORMED challenges, refused before the keychain
+//! presence-gated CLI commands   -> skipped on an enrolled machine (`tests/protocol/e2e.py`, `enclave_key_present`)
+//! `moon run touchid-gates`      -> the ONLY real-hardware exercise, consciously run and tapped by the user
+//! ```
 
 // The real hardware backend is compiled only into non-test macOS builds:
 // under cfg(test) `hardware_authenticate` returns the injected mock instead,
@@ -114,7 +49,7 @@ pub enum PresencePath {
     /// The typed confirmation on the CLI's controlling terminal.
     CliConfirm,
     /// The extension options page's confirmation dialog, attested by the
-    /// native-messaging channel (`allowed_origins` + the #32 sender gate).
+    /// native-messaging channel (`allowed_origins` + the router's sender gate).
     /// Retained as a stable audit LABEL only (ADR-0032 decision 6 retired the
     /// extension floor that produced it); no host path emits it anymore.
     ExtensionConfirm,
@@ -134,16 +69,14 @@ impl PresencePath {
     }
 }
 
-/// Evidence that [`require_presence`] ran and succeeded. The private field
-/// means the only way to obtain one is through this module: an API that
-/// demands an attestation (like `kill::release`) structurally cannot be
-/// called with presence unchecked.
+/// Evidence that [`require_presence`] ran and succeeded; the private field makes this module the only
+/// producer, so an API that demands one (like `kill::release`) structurally cannot run with presence
+/// unchecked. LINEAR on purpose, neither `Copy` nor `Clone`: one attestation authorizes exactly one
+/// capability-restoring act, so a tap minted for "pair client X" cannot also release the kill switch
+/// with both audit records claiming presence.
 ///
-/// The witness is LINEAR - deliberately neither `Copy` nor `Clone` - so one
-/// attestation authorizes exactly one capability-restoring act: a Touch ID
-/// tap minted for "pair client X" cannot be replayed to also release the
-/// kill switch with both audit records claiming presence. The doctests
-/// below fail to compile if either impl ever comes back:
+/// Both snippets fail to compile today, which is what the fences assert; an impl coming back makes its
+/// snippet compile and that test fail:
 ///
 /// ```compile_fail
 /// fn takes_copy<T: Copy>() {}
@@ -206,19 +139,16 @@ impl fmt::Display for PresenceError {
     }
 }
 
-/// Proof that stdin was a real terminal when the CLI floor was selected -
-/// the anti-tap-phishing precondition made structural. The private field
-/// keeps [`require`](TerminalStdin::require) the only constructor, so a
-/// [`Floor::CliConfirm`] (which carries one) simply cannot exist for a piped
-/// or redirected stdin: `echo release | chromium-bridge unkill` is refused
-/// while building the floor, before [`require_presence`] - and therefore
-/// before any hardware prompt - can run at all.
+/// Proof that stdin was a real terminal when the CLI floor was selected: the anti-tap-phishing precondition made
+/// structural. The private field keeps [`require`](TerminalStdin::require) the only constructor, so a
+/// [`Floor::CliConfirm`] cannot exist for a piped or redirected stdin, and `echo release | chromium-bridge unkill`
+/// is refused before [`require_presence`], and therefore before any hardware prompt, can run at all.
 ///
-/// What the witness encodes is that ORDERING, not a permanent fact:
-/// terminal-ness is a property of fd 0 at a moment, so [`cli_confirm`]
-/// re-samples it immediately before reading the phrase and refuses on a
-/// mismatch (an fd swapped to a pipe in the window between witness and
-/// floor never gets its input accepted).
+/// ```text
+/// fd 0 swapped for a pipe between witness and floor -> the witness encodes ORDERING, not a permanent fact; cli_confirm
+///                                                      re-samples terminal-ness right before reading the phrase and
+///                                                      refuses on a mismatch
+/// ```
 #[derive(Debug)]
 pub struct TerminalStdin(());
 
@@ -241,20 +171,16 @@ impl TerminalStdin {
     }
 }
 
-/// The interactive fallback a call site is entitled to when hardware is
-/// unavailable. Chosen by the surface, because each surface has exactly one
-/// honest option (see the module docs).
-///
-/// `AppConfirm` succeeds without further checks here, because the evidence
-/// lives in the CALLING SURFACE, not in this process: only the desktop app's
-/// own presence-gated actions - which show their own modal confirmation
-/// first - may select it. Selecting it from any other call site would be
-/// claiming a confirmation that never happened; treat adding such a caller as
-/// a security change (SECURITY.md). `CliConfirm` carries the [`TerminalStdin`]
-/// witness, so selecting it IS the interactivity precondition. There is no
-/// extension floor: ADR-0032 decision 6 retired the extension's `kill_release`
-/// path (its only caller), so a zero-caller constructible floor was removed
-/// rather than left as a latent grant primitive.
+/// The interactive fallback a call site is entitled to when hardware is unavailable; each surface has
+/// exactly one honest option.
+/// ```text
+/// `CliConfirm`  -> carries the `TerminalStdin` witness, so selecting it IS the interactivity precondition
+/// `AppConfirm`  -> succeeds without further checks here: the evidence is the desktop app's own modal
+///                  confirmation, shown before it asks, so only the app's presence-gated actions may select it
+/// ```
+/// Any other `AppConfirm` caller would claim a confirmation that never happened; treat adding one as a
+/// security change (SECURITY.md). There is no extension floor: ADR-0032 decision 6 retired its only
+/// caller (the extension's `kill_release`), and a zero-caller constructible floor is a latent grant primitive.
 #[derive(Debug)]
 pub enum Floor {
     CliConfirm(TerminalStdin),
@@ -300,20 +226,16 @@ pub enum PolicySignOutcome {
     Unavailable,
 }
 
-/// Sign `doc_bytes` under the POLICY signing domain as the presence act
-/// (ADR-0032): the user-presence-gated Enclave signing over the policy
-/// message is itself the Touch ID approval, so `policy::set_signed` never
-/// takes a pre-made attestation and can never double-prompt.
+/// Sign `doc_bytes` under the POLICY signing domain as the presence act (ADR-0032): the user-presence-gated Enclave
+/// signing over the policy message IS the Touch ID approval, so `policy::set_signed` never takes a pre-made
+/// attestation and can never double-prompt. Policy-typed on purpose: it builds the policy-domain message internally
+/// from raw document bytes, so it can never sign enrollment- or presence-domain bytes; do not widen it to "sign the
+/// caller's message".
 ///
-/// Deliberately policy-typed: it takes raw document bytes and builds the
-/// policy-domain message internally, so this primitive can never sign
-/// enrollment- or presence-domain bytes, whatever a caller passes. Do not
-/// widen it to "sign the caller's message".
-///
-/// On a capable Mac this RAISES A REAL SYSTEM PROMPT. Under `cfg(test)` it
-/// returns the injected [`policy_test_hook`] outcome (default `Unavailable`)
-/// and the real backend is not even compiled - the same structural
-/// no-real-prompts rule as [`hardware_authenticate`].
+/// ```text
+/// capable Mac  -> RAISES A REAL SYSTEM PROMPT
+/// cfg(test)    -> the injected policy_test_hook outcome (default Unavailable); the real backend is not compiled
+/// ```
 pub fn sign_policy_as_presence(doc_bytes: &[u8]) -> PolicySignOutcome {
     #[cfg(test)]
     {
@@ -331,20 +253,16 @@ pub fn sign_policy_as_presence(doc_bytes: &[u8]) -> PolicySignOutcome {
     }
 }
 
-/// The hardware rung: a Secure Enclave signing operation gated on user
-/// presence (Touch ID / login password) on macOS; no provider exists on any
-/// other platform, so every call there reports `Unavailable` and
-/// [`require_presence`] uses the floor.
+/// The hardware rung: a Secure Enclave signing operation gated on user presence (Touch ID / login password) on macOS;
+/// no provider exists elsewhere, so every call there reports `Unavailable` and [`require_presence`] uses the floor.
+/// There is no runtime env var, flag, or config that disables the real path in a shipped binary (a bypass an attacker
+/// could set).
 ///
-/// On a capable Mac this RAISES A REAL SYSTEM PROMPT - see the module docs'
-/// testing rule. That is precisely why, under `cfg(test)`, this function
-/// NEVER reaches the real LocalAuthentication / Secure Enclave key: it returns
-/// the injected [`test_hook`] outcome instead. So no automated test binary can
-/// raise a real prompt or sign with the user's enrolled key, even one that
-/// drives the full [`require_presence`] path. `cfg(test)` is compiled OUT of
-/// dev and prod builds; there is no runtime env var, flag, or config that
-/// disables the real hardware path in a shipped binary (that would be a
-/// bypass an attacker could set - forbidden by AGENTS.md).
+/// ```text
+/// capable Mac  -> RAISES A REAL SYSTEM PROMPT
+/// cfg(test)    -> the injected test_hook outcome, never LocalAuthentication or the enrolled key, so no automated test
+///                 binary can raise a prompt even through the full require_presence path
+/// ```
 fn hardware_authenticate(reason: &str) -> HardwareOutcome {
     #[cfg(test)]
     {
@@ -535,17 +453,10 @@ fn ladder(
 /// context.
 pub const CLI_CONFIRM_PHRASE: &str = "release";
 
-/// The CLI floor: require the phrase on the terminal the witness proved.
-/// Prompts go to stderr so they reach the user even with stdout redirected.
-///
-/// Two terminal checks exist on purpose, covering different things. The
-/// [`TerminalStdin`] witness consumed here orders the check BEFORE the
-/// hardware prompt, by construction (a piped invocation can never raise a
-/// Touch ID sheet). But terminal-ness is a property of a file descriptor at
-/// a moment, not of the past - fd 0 can be swapped for a pipe in the window
-/// between the witness and this floor - so it is re-sampled here,
-/// immediately before the read, and a mismatch refuses `NotInteractive`
-/// without reading rather than accepting a phrase from a non-terminal.
+/// The CLI floor: require the phrase on the terminal the witness proved; prompts go to stderr so they reach the user
+/// even with stdout redirected. Terminal-ness is re-sampled here, immediately before the read: the witness ordered
+/// the FIRST check before the hardware prompt, but fd 0 can be swapped for a pipe in the window between witness and
+/// floor, and a mismatch must refuse `NotInteractive` without reading rather than accept a phrase from a non-terminal.
 fn cli_confirm(
     reason: &str,
     _terminal: TerminalStdin,

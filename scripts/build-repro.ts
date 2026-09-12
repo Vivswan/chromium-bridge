@@ -1,35 +1,18 @@
 #!/usr/bin/env bun
 
-// build-repro.ts - deterministic release build of the chromium-bridge binary.
+// Deterministic release build of the chromium-bridge binary: byte-identical across clean rebuilds and checkout
+// paths on one machine. Matching a hash built elsewhere also needs the rust-toolchain.toml toolchain via rustup
+// (a distro/Homebrew rustc embeds different std paths) and the same platform SDK/linker; the release workflow
+// builds with this script. See .github/SECURITY.md "Release artifact integrity".
 //
-// Wraps `cargo build --release --locked` with the environment that makes the
-// binary build deterministically: verified byte-identical across clean
-// rebuilds and different checkout paths on one machine; matching a hash
-// built elsewhere additionally requires the same rustup toolchain
-// (rust-toolchain.toml) and platform SDK/linker.
+//   --remap-path-prefix  -> the checkout, CARGO_HOME, and home paths rustc embeds become fixed placeholders
+//   SOURCE_DATE_EPOCH    -> the last commit's timestamp unless the caller set it; nothing derives from the wall clock
+//   --locked             -> refuses to build if Cargo.lock would change
 //
-//   - --remap-path-prefix rewrites the absolute checkout, CARGO_HOME, and home
-//     directory paths that rustc embeds (panic locations, debug metadata) to
-//     fixed placeholders, so the checkout location leaves no trace
-//   - SOURCE_DATE_EPOCH is pinned to the last commit's timestamp (unless the
-//     caller already set it), so nothing can derive from the build wall clock
-//   - --locked refuses to build if Cargo.lock would change
+// The arm64 macOS ad-hoc signature is linker-derived from the identical content, so the whole file still matches;
+// signing with a real Apple identity would break byte equality and move macOS verification to comparing cdhashes.
 //
-// The release workflow builds with this script. To reproduce a published
-// binary: check out the released tag, install the exact toolchain from
-// rust-toolchain.toml via rustup (a distro/Homebrew rustc embeds different
-// standard-library paths and will NOT match), run this script, and compare
-// sha256 hashes. See SECURITY.md "Release artifact integrity".
-//
-// Not covered yet: once release binaries are signed with a real Apple
-// identity, the embedded signature will differ from a local rebuild and
-// macOS verification will move to comparing cdhashes; today the arm64 macOS
-// ad-hoc signature is linker-derived from the (identical) content, so the
-// whole file still matches byte for byte.
-//
-// Deliberately self-contained (node builtins + Bun only, no lib.ts import):
-// the release workflow runs it before `bun install`, so it must not depend
-// on the workspace being installed.
+// Self-contained (node builtins + Bun, no lib.ts import): the release workflow runs it before `bun install`.
 
 import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
@@ -44,12 +27,9 @@ function bbDie(message: string, exitCode = 1): never {
   process.exit(exitCode);
 }
 
-// The environment the cargo child process will see; mutated below exactly
-// like the old shell script exported its variables.
 const env: Record<string, string | undefined> = { ...process.env };
 
-// $HOME is both a cargo-location candidate and a remap prefix; refuse to
-// guess if it is missing (the shell version aborted under `set -u` too).
+// $HOME is both a cargo-location candidate and a remap prefix; refuse to guess if it is missing.
 const home = env.HOME;
 if (!home) bbDie("HOME is not set");
 
@@ -119,7 +99,6 @@ const result = spawnSync(
   { stdio: "inherit", env },
 );
 if (result.error) bbDie(`failed to run cargo: ${result.error.message}`);
-// The shell script exec'd cargo, so a signal death was visible to the caller
-// as a signal death; re-raise to preserve that.
+// Re-raise a signal death so the caller sees a signal, not an exit code.
 if (result.signal) process.kill(process.pid, result.signal);
 process.exit(result.status ?? 1);

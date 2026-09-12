@@ -37,18 +37,16 @@ import {
   type PolicyValues,
 } from "@/lib/tauri";
 
-// The ADR-0032 policy editor (decision 5's app surface). The webview only
-// drafts and displays: validity, direction (tighten vs relax), and both
-// write lanes are decided in Rust. Apply lanes:
-//  - a diff that relaxes nothing applies instantly through the in-process
-//    free lane (policy_restrict; restrictions carry no attestation);
-//  - anything relaxing - and, with no baseline yet, ANY change, since the
-//    first write signs revision 1 - goes through the app's explicit confirm
-//    dialog FIRST (validate-before-prompt), then ONE signed `policy set`
-//    subprocess naming ALL changed fields. One atomic write and one Touch ID
-//    sheet, so a refused tap never leaves a half-applied mixed edit
-//    (restrict-then-set would strand the tightenings the user approved as a
-//    package with the relaxations).
+// The ADR-0032 policy editor (decision 5). The webview only drafts and displays: validity, direction
+// (tighten vs relax), and the write lane are decided in Rust (policy_cmds.rs).
+//   a diff that relaxes nothing, baseline present  -> the in-process free lane (policy_restrict), no attestation
+//   anything relaxing, or ANY change before a       -> the confirm dialog FIRST (validate-before-prompt), then ONE
+//   baseline exists (the first write is rev 1)         `policy set` naming ALL changed fields: a signed subprocess
+//                                                      with its Touch ID sheet when an enrollment key exists; on a
+//                                                      keyless Enclave-capable Mac an UNSIGNED baseline stored behind
+//                                                      that same dialog (policy_cmds.rs set_unenrolled_floor)
+// One atomic write per grant: a refused dialog or tap never strands the tightenings the user approved as a
+// package with the relaxations (restrict-then-set would).
 type Translate = (key: MessageKey, subs?: readonly string[]) => string;
 
 const GROUPS: readonly { group: PolicyGroup; labelKey: MessageKey }[] = [

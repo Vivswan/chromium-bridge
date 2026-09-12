@@ -1,4 +1,4 @@
-// Sender gating (#32): the runtime router refuses EVERY message from a
+// Sender gating: the runtime router refuses EVERY message from a
 // non-extension-page sender, and confirm_* from anything but the confirmation
 // window. A content script sends the router nothing, so a content-script sender
 // for any of these is a compromised renderer reaching for the trust state

@@ -1,10 +1,6 @@
-//! Typed errors for the tool-call path.
-//!
-//! The IO/wire layers (`protocol`, `ipc`) keep using `std::io::Result` because
-//! `io::Error` is already the right currency there. This module covers the
-//! higher-level session/tool boundary, where errors were previously stringly
-//! typed. Each variant's `Display` text is what the model ultimately sees when
-//! a tool call fails (surfaced through `tools::dispatch` as `isError` content).
+//! Typed errors for the tool-call path: the session/tool boundary above the IO/wire layers (`protocol`, `ipc`), which
+//! keep `std::io::Result` because `io::Error` is already the right currency there. Each variant's `Display` text is
+//! what the model ultimately sees when a tool call fails (surfaced through `tools::dispatch` as `isError` content).
 
 use std::time::Duration;
 
@@ -238,18 +234,14 @@ macro_rules! error_taxonomy {
             };)*
         }
 
-        /// The canonical cross-process error taxonomy (ADR-0028): the single source
-        /// of the stable codes, generated into the TS side as
-        /// `src/packages/shared/src/errors.gen.ts`. Today only the Rust server
-        /// assigns codes, via [`CallError::code`], and only to a subset of the
-        /// table; the extension reports its failures as free-form strings
-        /// (surfaced as `EXECUTION_FAILED`). `TOOL_DISABLED` is assigned by the
-        /// host-side policy gate (ADR-0032 decision 4). Of the unassigned codes,
-        /// `PROTOCOL_MISMATCH` awaits the version/capability handshake wiring
-        /// (see docs/compatibility.md); the others would need structured error
-        /// reporting from the extension in place of those free-form strings.
-        /// One table keeps every defined code in one place, so a side that
-        /// starts assigning a code cannot invent one the other has never heard of.
+        /// The canonical cross-process error taxonomy (ADR-0028), generated into `src/packages/shared/src/errors.gen.ts`:
+        /// one table, so a side that starts assigning a code cannot invent one the other has never heard of.
+        ///
+        /// ```text
+        /// Rust side          -> assigns codes today (CallError::code, including the host policy gate's TOOL_DISABLED)
+        /// extension          -> reports free-form strings, surfaced as EXECUTION_FAILED
+        /// PROTOCOL_MISMATCH  -> unassigned until the version/capability handshake is wired (docs/compatibility.md)
+        /// ```
         pub const ERROR_SPECS: &[ErrorSpec] = &[$(specs::$name),*];
     };
 }

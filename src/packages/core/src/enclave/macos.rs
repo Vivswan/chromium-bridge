@@ -92,17 +92,13 @@ pub(super) fn is_secure_enclave_key(key: &SecKey) -> bool {
     token == expected
 }
 
-/// Find the enrollment key by its stable label, failing closed unless it
-/// is unambiguous and Enclave-resident. Cross-process: the `pair` CLI
-/// mints it, the Chrome-spawned native host finds it here. Obtaining the
-/// reference does not trigger a presence prompt - only using the private
-/// key does.
+/// Find the enrollment key by its label; the `pair` CLI mints it and the Chrome-spawned host finds it here, and
+/// taking the reference raises no presence prompt (only using the private key does).
 ///
-/// Two fail-closed rules beyond the label match:
-/// - More than one key under the label is ambiguity, not a choice to make
-///   silently; refuse rather than pick one.
-/// - A key without the Secure Enclave token is a planted or corrupted
-///   key; refuse rather than sign with it.
+/// ```text
+/// two keys under the label       -> ambiguity, not a choice to make silently: refuse
+/// key without the Enclave token  -> planted or corrupted: refuse
+/// ```
 pub(super) fn lookup() -> Result<Option<SecKey>, EnclaveError> {
     let mut search = ItemSearchOptions::new();
     search

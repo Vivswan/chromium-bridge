@@ -1,48 +1,23 @@
-//! Session state owned by the MCP server process.
+//! Session state owned by the MCP server process: the registry of authenticated native-host connections (one per
+//! browser) and the pending-request table that correlates each `BridgeResp` to its `BridgeReq` by id.
 //!
-//! The MCP server is the single source of truth. It:
-//!   - owns the localhost TCP listener (published via the lock file),
-//!   - accepts inbound connections from native hosts (one per browser, each
-//!     independently attested and HMAC-authenticated),
-//!   - serializes tool invocations as `BridgeReq` over the addressed
-//!     connection and correlates the `BridgeResp` by id using a one-shot
-//!     channel per id.
+//! If no host is connected (Chrome closed, SW recycled), [`Session::call`] waits up to 12s for one to attach; the
+//! extension re-calls `connectNative` on its own.
 //!
-//! If a native host disconnects (Chrome closed, SW recycled), the next tool
-//! call addressed to it blocks/retries until a fresh host connects back. The
-//! extension is responsible for re-calling `connectNative` on its own.
+//! Connections are keyed by browser label (from the handshake `Response`, trusted only after the HMAC verifies;
+//! a missing label maps to [`DEFAULT_LABEL`]). A new dial-in under the SAME label replaces that connection;
+//! different labels coexist. [`resolve_target`] picks the connection for a request.
 //!
-//! ## Label-keyed connection registry
+//! Every connection carries a monotonic `generation` (global across labels), and a pending request is bound to
+//! the generation it was sent under at insert, under the registry lock, immediately before the write, so an
+//! unbound in-flight entry is unrepresentable.
 //!
-//! Each authenticated connection carries a browser label (from the handshake
-//! `Response`, trusted only after the HMAC verifies; missing label maps to
-//! [`DEFAULT_LABEL`]). Connections live in a `HashMap<label, Conn>`, so
-//! several browsers (chrome, brave, ...) can be attached at once. A new
-//! dial-in with the SAME label replaces the old connection for that label
-//! (same-browser reconnect); different labels coexist. Requests resolve to a
-//! connection via [`resolve_target`]: an explicit `browser` argument picks
-//! that label, no argument picks the sole connection, and with several
-//! connections and no argument the call fails with a clear error instead of
-//! guessing.
-//!
-//! ## Generation-guarded connections
-//!
-//! Each accepted connection is stamped with a monotonic `generation` id
-//! (global across labels, so ids never collide between browsers). The live
-//! writer is stored together with the generation that owns it ([`Conn`]), so
-//! a stale reader thread can only tear down *its own* connection: on
-//! disconnect it clears its label's slot **only if** that slot still holds
-//! its generation. If a newer host already attached under the same label in
-//! the race window, the old reader leaves the live connection untouched
-//! instead of clobbering it.
-//!
-//! Pending requests are tagged with the generation they were sent under -
-//! bound at insert, under the registry lock, immediately before the write, so
-//! an unbound in-flight entry is unrepresentable. When a reader for
-//! generation `G` exits, it drains (drops) every pending sender tagged `G`,
-//! so those callers fail fast with [`CallError::Disconnected`] instead of
-//! waiting the full 120s timeout. Pending entries belonging to other
-//! connections survive.
+//! ```text
+//! reader for generation G exits  -> clears its label's slot ONLY if it still holds G; a newer host that attached
+//!                                   in the race window is left alone
+//! same reader                    -> drops every pending sender tagged G, so those callers fail fast with
+//!                                   `CallError::Disconnected` instead of waiting out the 120s timeout
+//! ```
 
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter};
@@ -158,17 +133,17 @@ fn drain_pending_all(
     pending.drain().map(|(_, (_, tx))| tx).collect()
 }
 
-/// Pick the connection a request should run over. `available` are the live
-/// labels (any order); `want` is the request's optional `browser` argument.
+/// Pick the connection a request runs over; `available` are the live labels, `want` the request's optional
+/// `browser` argument. Refusing to guess among several browsers is deliberate: acting in the wrong logged-in
+/// browser is worse than asking the caller to name one.
 ///
-/// - `want = Some(label)`: that label must be live, otherwise the caller gets
-///   [`CallError::BrowserNotFound`] naming what IS connected.
-/// - `want = None` with exactly one connection: route to it (single-browser
-///   back-compat - no argument needed when there is nothing to choose).
-/// - `want = None` with several connections: refuse with
-///   [`CallError::AmbiguousBrowser`] rather than guess - acting in the wrong
-///   logged-in browser is worse than asking the caller to name one.
-/// - No connections at all: [`CallError::NotConnected`].
+/// ```text
+/// `Some(label)`, live             -> that label
+/// `Some(label)`, not live         -> `CallError::BrowserNotFound` naming what IS connected
+/// `None`, exactly one connection  -> that one (no argument needed when there is nothing to choose)
+/// `None`, several                 -> `CallError::AmbiguousBrowser`
+/// nothing connected               -> `CallError::NotConnected`
+/// ```
 fn resolve_target(available: &[&str], want: Option<&str>) -> Result<String, CallError> {
     let mut labels: Vec<&str> = available.to_vec();
     labels.sort_unstable();
@@ -226,25 +201,16 @@ impl Session {
         }
     }
 
-    /// Take ownership of a freshly-accepted, already-authenticated connection
-    /// from a native host and register it under the browser `label` the
-    /// handshake carried. A previous connection under the SAME label is
-    /// replaced (dropped/closed); connections under other labels are untouched.
-    /// Spawns a reader thread that dispatches `BridgeResp` by id.
+    /// Register a freshly-accepted, already-authenticated native-host connection under the `label` the handshake
+    /// carried, replacing a previous connection under the SAME label. The caller (the broker accept path) ran the
+    /// HMAC handshake and the `AttachRequest::Browser` role read on these same buffered halves, so no frame is lost
+    /// and the label is honored only after the MAC verified.
     ///
-    /// Returns `false` when the distinct-browser cap ([`MAX_BROWSERS`]) is
-    /// already reached and `label` is new: the cap is checked ATOMICALLY with
-    /// the insert (one lock acquisition), so concurrent new-label attaches
-    /// cannot each observe room and collectively exceed it. On refusal the
-    /// reader/writer are dropped here (the socket closes and the native host
-    /// reconnects); the caller has already sent the peer `Accepted`, so a
-    /// browser that lost the cap race is dropped rather than breaching the cap
-    /// -- a benign, self-healing degradation at a pathological browser count.
-    ///
-    /// The caller (the broker accept path) performs the HMAC handshake and the
-    /// `AttachRequest::Browser` role read on the same buffered halves before
-    /// handing them here, so no frame is lost and the label is honored only
-    /// after the MAC verified.
+    /// Returns `false` when [`MAX_BROWSERS`] distinct labels exist and `label` is new.
+    /// ```text
+    /// cap checked in the insert's lock acquisition -> concurrent new-label attaches cannot each see room
+    /// refused peer was already sent `Accepted`     -> simply dropped; the socket closes and the host reconnects
+    /// ```
     pub(crate) fn attach_browser(
         &self,
         label: BrowserLabel,
@@ -352,15 +318,12 @@ impl Session {
                         break;
                     }
                 };
-                // Ids are globally unique (a single monotonic counter), but
-                // uniqueness alone is not enforcement: a hostile or broken
-                // extension in browser B could echo an id that belongs to a
-                // request sent to browser A. Deliver a response only when its
-                // pending entry was sent over THIS connection (generation
-                // match); anything else is a protocol violation and drops the
-                // offending connection (fail closed). This path locks only the
-                // pending mutex, which is compatible with the conns→pending
-                // ordering used elsewhere.
+                // Ids are globally unique, but uniqueness is not enforcement: a hostile or broken extension in
+                // browser B could echo an id belonging to a request sent to browser A. Locks only the pending mutex,
+                // compatible with the conns -> pending order.
+                //   pending entry sent over THIS connection (generation match)  -> delivered
+                //   pending entry owned by another generation                   -> protocol violation; this connection is dropped
+                //   no pending entry (unknown id, or its caller already timed out) -> logged; the connection stays
                 let routed = {
                     let Ok(mut pending_guard) = pending.lock() else {
                         // Poisoned pending map: no delivery can be trusted;
@@ -404,16 +367,12 @@ impl Session {
                 }
             }
 
-            // Reader ended (disconnect / error). Under a consistent lock order
-            // (conns mutex THEN pending mutex):
-            //   1. Clear this label's slot, but ONLY if it still holds our
-            //      generation - a newer host may have already replaced us in
-            //      the race window, and clobbering it would leave `call`
-            //      wrongly failing against a healthy connection.
-            //   2. Drop every pending sender tagged with our generation so
-            //      those in-flight callers fail fast with `Disconnected`
-            //      instead of blocking for the full 120s timeout. Pending
-            //      entries of other connections are left untouched.
+            // Reader ended (disconnect / error). Lock order conns THEN pending, as in `try_call`.
+            //   clear this label's slot ONLY if it still holds our generation  -> a newer host may have replaced us
+            //                                                                    in the race window; clobbering it
+            //                                                                    would fail `call` on a healthy connection
+            //   drop every pending sender tagged with our generation           -> those callers fail fast with
+            //                                                                    `Disconnected` instead of the 120s timeout
             let drained = {
                 // A poisoned lock here means another thread panicked while
                 // holding it; skip the half we cannot trust (and say so) --
@@ -474,31 +433,18 @@ impl Session {
         labels
     }
 
-    /// Sever every live browser connection (the kill switch's teeth on the
-    /// browser leg, ADR-0030) and do the registry bookkeeping synchronously:
-    /// clear every slot and drain every sent pending caller into
-    /// [`CallError::Disconnected`]. The sweep must NOT delegate this to the
-    /// reader threads: a reader already blocked in `recv(2)` is not reliably
-    /// woken by `shutdown(2)` on macOS (observed live under load: a reader
-    /// still parked in `__recvfrom` 90 seconds after the sweep), so
-    /// reader-side cleanup may only happen once the peer's end closes. The
-    /// generation guard keeps such a late-waking reader honest: its slot is
-    /// already gone (or re-occupied by a newer generation), so its own
-    /// cleanup degrades to a no-op, and its pending drain finds nothing left.
+    /// Sever every live browser connection (the kill switch's teeth on the browser leg, ADR-0030) and do the
+    /// registry bookkeeping synchronously here, not in the reader threads: on macOS a reader blocked in `recv(2)`
+    /// is not reliably woken by `shutdown(2)` (observed live under load: still parked in `__recvfrom` 90 seconds
+    /// after the sweep). Idempotent, so the broker's watcher may call it every tick while killed; returns how many
+    /// connections THIS call severed.
     ///
-    /// The drain covers every pending entry, not just the connections severed
-    /// by this call: a kill is global, every entry is in flight by
-    /// construction, and an entry left behind by an already-replaced
-    /// connection could otherwise still be answered by that connection's
-    /// lingering reader after the sweep (see [`drain_pending_all`]). A
-    /// response a reader claimed before the sweep (its entry already removed
-    /// for delivery) is a call that completed before the kill, not one that
-    /// survived it.
-    ///
-    /// Idempotent: sweeping an already-empty registry signals nobody, and
-    /// shutting down a socket twice is harmless, so the broker's watcher may
-    /// call this every tick while killed. Returns how many connections were
-    /// severed by THIS call.
+    /// ```text
+    /// late-waking reader           -> its slot is gone or re-occupied (generation guard), so its cleanup is a no-op
+    /// EVERY pending entry drained  -> a replaced connection's lingering reader could otherwise answer after the
+    ///                                 sweep (`drain_pending_all`); the callers get `CallError::Disconnected`
+    /// response claimed pre-sweep   -> a call that completed before the kill, not one that survived it
+    /// ```
     pub(crate) fn shutdown_all_browsers(&self) -> usize {
         // The kill switch must bite even after a panic poisoned a lock:
         // severing sockets, dropping slots, and waking callers with a typed
@@ -567,16 +513,11 @@ impl Session {
         args: Value,
         browser: Option<&str>,
     ) -> Result<Value, CallError> {
-        // If no native host has connected yet, wait briefly for one. The
-        // extension's service worker reconnects on a ~2s timer; right after
-        // the MCP client spawns a fresh MCP server, the first tool call can arrive
-        // before any host has re-established its bridge connection. Waiting
-        // here (rather than failing instantly) makes startup robust. The wait
-        // only covers the empty-registry case: once at least one browser is
-        // attached, an unknown or ambiguous target is a real error the caller
-        // should see immediately, not something to wait out.
-        // A poisoned lock skips the wait (reads as non-empty); try_call below
-        // then surfaces the failure as a typed error.
+        // Wait briefly for the first host: the extension's service worker reconnects on a ~2s timer, so right after
+        // the MCP client spawns a fresh server the first tool call can arrive before any host has re-attached. Only
+        // the empty registry waits: once a browser is attached, an unknown or ambiguous target is a real error the
+        // caller should see immediately, and a poisoned lock reads as non-empty so try_call surfaces the failure as
+        // a typed error.
         let registry_empty = || self.conns.lock().is_ok_and(|g| g.is_empty());
         if registry_empty() {
             // checked_add: an unrepresentable deadline (Instant near its
@@ -615,17 +556,12 @@ impl Session {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel::<ParsedResp>();
 
-        // Resolve the target, register the pending entry, and send, all under
-        // the registry lock so the chosen connection cannot be swapped between
-        // the decision and the write. The entry is inserted ALREADY BOUND to
-        // the resolved connection's generation, immediately before the write:
-        // an unbound in-flight request is unrepresentable (there is no unsent
-        // state to rebind later), and the response cannot beat the
-        // registration because the request is not on the wire until after the
-        // insert. Lock ordering is always conns mutex THEN pending mutex when
-        // nesting, matching the reader-cleanup path, so the two can never
-        // deadlock. A poisoned lock anywhere on this path refuses the call
-        // with a typed internal error instead of acting on suspect state.
+        // Resolve, register the pending entry, and send under the registry lock, so the chosen connection cannot be
+        // swapped between the decision and the write. The entry is inserted ALREADY BOUND to the connection's
+        // generation, immediately before the write: an unbound in-flight request is unrepresentable, and the response
+        // cannot beat the registration because the request is not on the wire until after the insert.
+        //   lock order     -> conns mutex THEN pending mutex, matching the reader-cleanup path, so no deadlock
+        //   poisoned lock  -> refuse the call with a typed internal error instead of acting on suspect state
         {
             let Ok(mut guard) = self.conns.lock() else {
                 return Err(CallError::Internal("browser registry lock poisoned".into()));

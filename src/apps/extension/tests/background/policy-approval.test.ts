@@ -1,4 +1,4 @@
-// Lane U of ADR-0032 Phase 3: the unpinned window-approval surface
+// ADR-0032: the unpinned window-approval surface
 // (policy-approval.ts), driven END TO END through the real confirmation
 // service with a fake provider (the service.test.ts idiom - no browser
 // window) and the real policy-sync accept path over the golden vectors.
@@ -105,7 +105,7 @@ describe("the unpinned relaxation approval surface", () => {
   test("a relaxing push is held for one window approval; approving applies it", async () => {
     // Adopt the deny baseline first: the first-ever document also rides the
     // window, and its detail is the FULL value set, `field = value` per line
-    // (U2) - never a relaxation diff against a fabricated anchor. In
+    // - never a relaxation diff against a fabricated anchor. In
     // particular the fields whose PERMISSIVE pole coincides with
     // POLICY_DEFAULTS (hostReverifyMs 0 = never re-verify, disabledTools [])
     // are shown with their values instead of vanishing from an empty diff.

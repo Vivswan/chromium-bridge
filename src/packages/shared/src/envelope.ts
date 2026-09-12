@@ -105,16 +105,9 @@ function firstIssue(error: z.ZodError): string {
 }
 
 /**
- * Validate one inbound native-messaging frame as a bridge request, fail
- * closed. Three layers, all of which must pass before anything dispatches:
- *
- *   1. the envelope (the Rust BridgeReq wire shape): unknown top-level
- *      fields and unknown args are rejected outright;
- *   2. the op must be in the generated catalogue (OP_NAMES);
- *   3. the args must satisfy that op's validator (required fields, types).
- *
- * On failure the caller gets the extracted id (when there is one) so it can
- * answer with a refusal instead of leaving the host waiting for a timeout.
+ * Validate one inbound native-messaging frame as a bridge request, fail closed. On failure the caller
+ * gets the extracted id (when there is one) so it can answer with a refusal instead of leaving the
+ * host waiting for a timeout.
  */
 export function parseBridgeReq(msg: unknown): ParseBridgeReqResult {
   const envelope = BridgeReqSchema.safeParse(msg);

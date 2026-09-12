@@ -1,11 +1,7 @@
-// Test fixture (not shipped). __runProbe proves Chrome enforces
-// storage.local.setAccessLevel(TRUSTED_CONTEXTS) with a BEFORE/AFTER control:
-// it injects the SAME content-script-world read of a seeded key twice, once
-// before the restriction and once after. The "before" read MUST succeed (the
-// control: it shows the injection runs in a content-script world that CAN
-// reach storage, so the "after" failure is the access level and not a missing
-// permission or an unrelated injection error). The "after" read MUST be
-// blocked. The real extension relies on exactly this Chrome behavior for #32.
+// Test fixture (not shipped): proves Chrome enforces storage.local.setAccessLevel(TRUSTED_CONTEXTS), which the
+// real extension's storage restriction relies on. The same content-script-world read runs twice as a control:
+//   before the restriction -> must succeed (so a later failure is the access level, not a missing permission)
+//   after the restriction  -> must be blocked
 globalThis.__runProbe = async (tabId) => {
   const readInContentScript = async () => {
     const res = await chrome.scripting.executeScript({

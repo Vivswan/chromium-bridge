@@ -29,21 +29,17 @@ pub const POLICY_STORE_VERSION: u32 = 1;
 /// than slurped into memory.
 const POLICY_MAX_BYTES: usize = 256 * 1024;
 
-/// The persisted policy state (ADR-0032 decision 5): the signed baseline as
-/// the EXACT bytes the signature covers (base64, so the artifact survives
-/// the JSON hop byte-for-byte), its signature, and the current restriction
-/// overlay. The file is storage, not authority: nothing here is trusted for
-/// enforcement - the extension verifies the signature against its own pin
-/// and the host re-derives everything from the bytes.
+/// The persisted policy state (ADR-0032 decision 5): the signed baseline as the EXACT bytes the signature covers
+/// (base64, so the artifact survives the JSON hop byte-for-byte), its signature, and the restriction overlay.
+/// Storage, not authority: the extension verifies the signature against its own pin and the host re-derives
+/// everything from the bytes.
 ///
-/// Validation splits deliberately across two seams. [`load`](Self::load) is
-/// the FILE authority: size cap, strict JSON shape, store version - cheap,
-/// no base64 work, so callers that only need the envelope (the watch tick,
-/// `doctor`) never pay for or depend on the baseline decode.
-/// [`baseline_doc`](Self::baseline_doc) is the BYTE authority: strict base64
-/// decode plus the strict [`PolicyDoc`] parse of the exact signed bytes, so
-/// there is exactly one place a damaged baseline surfaces and it fails
-/// closed there.
+/// ```text
+/// load          -> the FILE authority: size cap, strict shape, store version; no base64 work
+/// baseline_doc  -> the BYTE authority: strict base64 and the strict PolicyDoc parse, the one place a damaged
+///                  baseline surfaces and fails closed; the doctor row and the policy_current push both reach it
+///                  through effective()
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyStore {
@@ -115,19 +111,10 @@ impl PolicyStore {
         Ok(doc)
     }
 
-    /// The effective policy this store describes: the baseline with the
-    /// stored restriction overlay folded over it (ADR-0032 decision 3's
-    /// comparison anchor).
-    ///
-    /// The fold is direction-checked: every legitimate write leaves the
-    /// overlay restricting-or-holding the baseline ([`restrict`] only adds
-    /// entries at or under the effective policy, and [`set_signed`] carries
-    /// baseline values on untouched fields and drops the touched entries),
-    /// so a fold that relaxes the baseline anywhere is a tampered or
-    /// corrupted store and reads as an error - never as the relaxed values.
-    /// Enforcement (the dispatch gate, the `policy_current` push, status
-    /// surfaces) fails closed on it, same as an unparsable baseline; the
-    /// extension applies the same direction check independently.
+    /// The baseline with the stored overlay folded over it, direction-checked: every legitimate write leaves the
+    /// overlay restricting-or-holding the baseline, so a fold that relaxes it anywhere is a tampered or corrupted
+    /// store and reads as an error, never as the relaxed values. Enforcement fails closed on it like an
+    /// unparsable baseline; the extension applies the same direction check independently.
     pub fn effective(&self) -> io::Result<PolicyValues> {
         let baseline = self.baseline_doc()?.values();
         let effective = fold(&baseline, &self.overlay.clone().unwrap_or_default());
@@ -385,27 +372,17 @@ impl std::fmt::Display for PolicyWriteError {
     }
 }
 
-/// Write a new signed policy baseline (ADR-0032 decision 3): the one grant
-/// path every editing surface shares. Validates the document BEFORE any
-/// prompt can appear (a malformed request never raises a sheet, the
-/// ADR-0031 tap-phishing rule), obtains presence through
-/// [`crate::presence::sign_policy_as_presence`] - the Enclave signing over
-/// the document bytes IS the Touch ID approval, so this seam never takes a
-/// pre-made attestation and can never double-prompt - and persists the
-/// EXACT signed bytes atomically under the runtime lock. `restrict` is the
-/// other lane; restrictions are free.
-///
-/// A refused hardware prompt is terminal (no-downgrade); only genuinely
-/// unavailable hardware consults `floor`, and only the app's floor may
-/// store the unsigned baseline (decision 5). The retained restriction
-/// overlay survives the write minus its entries on the `touched` fields:
-/// the tap covers exactly those fields (the touched set travels inside the
-/// signed bytes), so entries on untouched fields stay overlay, never
-/// silently folded into the baseline.
-///
-/// Returns the presence rung that authorized the write, for the surface to
-/// show. Every sign outcome is audited ([`crate::audit::AuditKind::PolicyWrite`]),
-/// log-after-decide, outside the lock.
+/// Write a new signed policy baseline (ADR-0032 decision 3), the one grant path every editing surface shares;
+/// `restrict` is the free lane. The Enclave signing over the document bytes IS the Touch ID approval
+/// ([`crate::presence::sign_policy_as_presence`]), so this seam never takes a pre-made attestation and cannot
+/// double-prompt; everything is validated BEFORE the prompt so a malformed request never raises a sheet (ADR-0031).
+/// ```text
+/// hardware refused       -> terminal, never downgraded to `floor`
+/// hardware unavailable   -> `floor` decides; only the app's floor may store an unsigned baseline (decision 5)
+/// retained overlay       -> survives minus its entries on the `touched` fields, which the tap covers
+///                           (the touched set travels inside the signed bytes)
+/// ```
+/// Returns the presence rung that authorized the write. Every sign outcome is audited, log-after-decide, outside the lock.
 pub fn set_signed(
     values: PolicyValues,
     touched: Vec<PolicyField>,
@@ -417,22 +394,13 @@ pub fn set_signed(
             "the touched set is empty (a write must name the fields it edits)",
         ));
     }
-    // The pre-prompt observation: the store state the user's tap will cover.
-    // The locked write below re-checks that the store still matches it -
-    // baseline revision AND overlay - and refuses (Conflict) if a concurrent
-    // writer moved either: the prompt showed THESE bytes against THAT store,
-    // so landing them over anything else (a restrict landing mid-prompt
-    // included) would silently discard the concurrent write. The ADR is
-    // silent on the interleave; failing closed is the only honest option.
-    //
-    // The host-key epoch is observed alongside (and re-checked in the same
-    // critical section) because the store observation alone cannot see a
-    // disposal that ran to completion during the prompt: dispose clears the
-    // baseline, so a first write observes None before AND after and the
-    // store guard passes - landing a baseline signed by the just-deleted
-    // key. A baseline must never outlive (or postdate) its key. Read before
-    // the prompt, fail-closed on an unreadable record (validate-before-
-    // prompt: no sheet is raised for a write that cannot land).
+    // The pre-prompt observation the user's tap covers; the locked write refuses (Conflict) if a concurrent
+    // writer moved any of it, since landing THESE bytes over another store would silently discard that write.
+    //   baseline revision  -> a concurrent signed write
+    //   overlay            -> a restrict landing mid-prompt
+    //   host-key epoch     -> a disposal completing mid-prompt; it clears the baseline, so a first write sees None
+    //                         before AND after and the store guard alone would land a baseline signed by a dead key
+    // Read before the prompt and fail closed on an unreadable record: no sheet for a write that cannot land.
     let host_key_epoch = crate::revocation::Revocation::current()
         .map_err(PolicyWriteError::Io)?
         .host_key_epoch;
@@ -483,16 +451,10 @@ pub fn set_signed(
              carries baseline values on fields it does not touch)",
         ));
     }
-    // Every field this write relaxes must be named in `touched`, or the
-    // signed set would under-state what the tap granted. The comparison
-    // anchors on the post-write EFFECTIVE policy - the new values under the
-    // retained overlay - because an untouched field whose overlay entry
-    // survives the write (decision 3's retention rule) is not relaxed by
-    // baseline bytes the overlay still covers; the extension's ratchet
-    // compares the same fold. Defense in depth for surface bugs: the
-    // extension independently refuses a push relaxing a field outside its
-    // signed touched set, so a write that slipped through here would brick
-    // the push wholesale. Promptless, like every validity refusal here.
+    // Every field this write relaxes must be named in `touched`, or the signed set would under-state what the tap
+    // granted. The anchor is the post-write EFFECTIVE policy: an untouched field whose overlay entry survives is not
+    // relaxed by baseline bytes the overlay still covers, and the extension's ratchet compares the same fold (it
+    // independently refuses a push relaxing a field outside the signed touched set).
     let would_be_effective = fold(
         &values,
         &retained_overlay(
@@ -655,17 +617,14 @@ fn commit_signed_baseline(
     result.map(|()| rung)
 }
 
-/// The critical section of a grant write: re-check the observation guard
-/// (baseline revision, overlay, AND the host-key epoch), retain the previous
-/// overlay minus the touched entries, push the superseded record to history,
-/// and write the store.
-///
-/// The host-key epoch re-check is what makes "a baseline never survives its
-/// key" hold across the prompt gap: a disposal completing during the tap
-/// clears the store, so on a first write the store guard sees None on both
-/// sides and passes - only the epoch (bumped inside the disposal's own
-/// critical section) betrays that the signing key died mid-prompt. An
-/// unreadable revocation record refuses too (fail closed).
+/// The critical section of a grant write. The host-key epoch is re-checked with the revision and overlay because
+/// that is what makes "a baseline never survives its key" hold across the prompt gap (see [`PrePromptObservation`]).
+/// ```text
+/// re-check guard -> write store -> bump policy epoch -> push the superseded record to history
+/// ```
+/// History trails the store write by contract: a history write that fails (logged, never propagated) or a crash
+/// before the history step leaves the new baseline visible with no entry for the record it replaced. A failed
+/// epoch bump is logged and does not skip the history step.
 fn write_baseline_locked(
     lock: &ipc::RuntimeLockToken,
     observed: PrePromptObservation,
@@ -705,36 +664,22 @@ fn write_baseline_locked(
         overlay: normalize_overlay(overlay),
     };
     if prev.is_none() {
-        // First baseline (revision 1): the cutover the pending legacy import
-        // fed. Durably CLOSE the import window (ADR-0032 decision 8, P4H-1)
-        // BEFORE committing the baseline, in the same critical section, and
-        // REFUSE the whole signed write if it fails (Io is retryable: the
-        // user re-taps once whatever broke I/O is fixed).
-        // Best-effort-after-write would let revision 1 land with the import
-        // window silently still open - post-disposal, exactly the forged-bag
-        // hole the tombstone closes. A recorded bag is RETAINED in the
-        // mid-consume Consuming record (P4G-4), so a crash between this
-        // window-close and the baseline write below leaves the window closed
-        // with the bag preserved: the app re-offers it and the user's re-tap
-        // resumes; the finalize after the write is what disposes of it.
+        // First baseline: durably CLOSE the import window BEFORE committing it, in the same critical section, and
+        // refuse the whole write if that fails (Io is retryable: the user re-taps once I/O is fixed); closing after
+        // the write would let revision 1 land with the window still open post-disposal, the forged-bag hole the
+        // tombstone exists to close. The Consuming record RETAINS the bag, so a crash between here and the write
+        // below leaves the window closed and the bag re-offered; the finalize after the write disposes of it.
         crate::pending_import::begin_consume_locked(lock).map_err(PolicyWriteError::Io)?;
     }
     next.write(lock).map_err(PolicyWriteError::Io)?;
     if prev.is_none() {
-        // Phase 2 (P4G-4): the baseline landed, so finalize the mid-consume
-        // record to the bagless tombstone - but only over a DURABLE baseline.
-        // The store's atomic write above deliberately does not fsync, while
-        // the tombstone write does: without the fsync-first ordering a power
-        // loss after the finalize could keep the durable tombstone and take
-        // back the baseline rename - Consumed, no baseline, no bag, exactly
-        // the P4G-4 loss class. attest_baseline_durable fsyncs the baseline
-        // (file + unix dir) and mints the typestate proof
-        // finalize_consume_locked's signature demands, so the wrong order
-        // does not compile. Either failure here is bag disposal deferred -
-        // the fail-closed Consuming record stands (closed window, bag
-        // retained; the startup/read reconcile heals it later) - and must
-        // NOT repaint the landed baseline as a failed write, which would
-        // make the user re-tap a write that took.
+        // Finalize the mid-consume record to the bagless tombstone only over a DURABLE baseline: the store's atomic
+        // write does not fsync while the tombstone write does, so without fsync-first a power loss after the finalize
+        // could keep the tombstone and take back the baseline (Consumed, no baseline, no bag). attest_baseline_durable
+        // fsyncs and mints the proof finalize_consume_locked demands, so the wrong order does not compile.
+        //   attest_baseline_durable fails -> the Consuming record stands and the reconcile heals it
+        //   finalize fails                -> the same, or the tombstone already landed with only its fsync lost
+        //   either                        -> the window stays closed; the landed baseline is NOT repainted as a failed write
         match crate::pending_import::attest_baseline_durable(lock) {
             Ok(proof) => {
                 if let Err(e) = crate::pending_import::finalize_consume_locked(lock, proof) {
@@ -858,21 +803,16 @@ fn bump_policy_epoch_locked(lock: &ipc::RuntimeLockToken) {
     }
 }
 
-/// Clear the signed baseline (ADR-0032 decision 3's key disposal): a baseline
-/// signed by a now-deleted enrollment key is an artifact of a dead key, so it
-/// must not outlive the key. The superseded record - baseline bytes,
-/// signature, key id, AND the overlay - is first pushed onto the history ring,
-/// where the document content survives as an unsigned draft the app re-signs
-/// after re-pairing; then the live `policy.json` is removed. History is kept
-/// (this only appends to it); the overlay is preserved inside that history
-/// record rather than as a live orphan, because the store type binds an
-/// overlay to a baseline and an overlay with no baseline is not representable.
+/// Clear the signed baseline (ADR-0032 decision 3's key disposal): a baseline signed by a deleted enrollment key must
+/// not outlive the key. The superseded record goes onto the history ring first, where the document survives as an
+/// unsigned draft the app re-signs after re-pairing (the overlay travels inside that record because the store type
+/// cannot represent an overlay with no baseline).
 ///
-/// A no-op when there is no store. Runs under the caller's runtime lock (the
-/// [`ipc::RuntimeLockToken`] witness), which the shared enrollment-disposal
-/// seam holds across the key deletion, the baseline clear, and the host-key
-/// epoch bump, so no concurrent reader can observe the baseline outliving its
-/// key.
+/// ```text
+/// caller's runtime lock -> held by the enrollment-disposal seam across the key deletion, this clear, and the host-key
+///                          epoch bump, so no concurrent WRITER lands a fresh baseline in between
+/// readers               -> take no lock; can see the baseline for the instant after the key is gone
+/// ```
 pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
     let Some(prev) = PolicyStore::load()? else {
         return Ok(());
@@ -1027,12 +967,9 @@ fn wire_name_list(fields: &[PolicyField]) -> String {
         .join(",")
 }
 
-/// Store, history, and seam tests. Every test that touches disk points
-/// `runtime_dir()` at its own scratch directory through [`RuntimeDirGuard`]
-/// (the ScratchDir idea from ipc/lockfile.rs, lifted to the env var because
-/// the store and the seams resolve their paths internally); signing
-/// outcomes come from `presence::policy_test_hook`, never a real prompt
-/// (the real backend is compiled out under cfg(test)).
+/// Store, history, and seam tests. Every disk-touching test points `runtime_dir()` at its own scratch directory
+/// through `RuntimeDirGuard` (test_support.rs); signing outcomes come from `presence::policy_test_hook`, never a
+/// real prompt (the real backend is compiled out under cfg(test)).
 #[cfg(test)]
 mod store_tests;
 

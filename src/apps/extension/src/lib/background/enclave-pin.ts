@@ -84,7 +84,7 @@ export async function readPin(): Promise<PinRead> {
   return { state: "corrupt" };
 }
 
-/** THE DOCUMENTED COLLAPSE (Phase 3 decision): every consumer routes a
+/** THE DOCUMENTED COLLAPSE: every consumer routes a
  * corrupt pin record exactly like an absent one - the unsigned/unpaired
  * lane, which fails closed at the enrollment gate and refuses signed-lane
  * trust. A corrupt record is NOT tampering evidence worth latching on (a

@@ -1,4 +1,4 @@
-// ADR-0032 Phase 3 (S2): the CDP session registry's teardown listener is
+// ADR-0032: the CDP session registry's teardown listener is
 // policy-driven, not a raw legacy-settings watch. Pre-cutover the legacy
 // cdpMode toggle tears sessions down exactly as before; post-cutover an
 // accepted policy push whose effective cdpMode is false must tear live
@@ -30,9 +30,9 @@ async function freshRegistry() {
   return teardown;
 }
 
-// The debugger seam: fakeBrowser ships no debugger API, and the SFX-3 tests
+// The debugger seam: fakeBrowser ships no debugger API, and the recheck tests
 // must pin the REAL leak - that the refused session's debugger attach was
-// actually detached (SP-3) - not just the registry bookkeeping.
+// actually detached - not just the registry bookkeeping.
 const dbg = {
   attach: vi.fn(() => Promise.resolve()),
   detach: vi.fn(() => Promise.resolve()),
@@ -42,7 +42,7 @@ beforeEach(() => {
   fakeBrowser.reset();
   dbg.attach = vi.fn(() => Promise.resolve());
   dbg.detach = vi.fn(() => Promise.resolve());
-  // The lifecycle install wires onDetach, and the SFX-3 creation recheck
+  // The lifecycle install wires onDetach, and the creation recheck
   // attaches before it can refuse.
   (fakeBrowser as unknown as { debugger: unknown }).debugger = {
     attach: dbg.attach,
@@ -98,7 +98,7 @@ describe("cdp registry teardown is policy-driven (ADR-0032 S2)", () => {
     const mod = await import("@/lib/background/cdp/registry");
     await expect(mod.cdpRegistry.get(1)).rejects.toThrow("not granted by the effective policy");
     // The real leak, pinned: the just-made debugger attach was detached, not
-    // merely dropped from the registry's bookkeeping (SP-3).
+    // merely dropped from the registry's bookkeeping.
     expect(dbg.detach).toHaveBeenCalledWith({ tabId: 1 });
     expect(mod.cdpRegistry.size).toBe(0);
   });

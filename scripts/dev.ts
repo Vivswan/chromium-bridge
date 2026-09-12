@@ -4,6 +4,7 @@
 //   - extension (WXT):        FOREGROUND - real terminal output + live stdin
 //   - docs site (Astro):      background, output prefixed [web]
 //   - desktop app (tauri):    background, output prefixed [app]
+//   - dev browser:            background, output prefixed [browser]
 //
 // Why not `bun run --filter '*' dev`? The filter runner closes each child's
 // stdin; WXT's readline-based key listener hits EOF and shuts the dev server
@@ -33,21 +34,13 @@ const pipePrefixed = (child: ChildProcess, label: string) => {
   child.stderr?.on("data", (chunk) => console.error(prefixLines(label, chunk)));
 };
 
-// Docs site: background, detached. Detached puts it in its own process group
-// so shutdown can signal the WHOLE tree: `bun run dev` wraps the real
-// `astro dev` process, and killing just the wrapper's pid orphans astro,
-// which then squats on its port across sessions.
-//
-// The dev script (src/apps/web/package.json) is stop-then-start:
-// `astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev`. The stop clears any
-// already-running tracked server (astro exits 0 when none is running);
-// ASTRO_DEV_BACKGROUND=1 then pins Astro 7's lifecycle - the variable marks
-// the process as ALREADY backgrounded, so astro skips its AI-agent
-// auto-daemonization and runs the server inside this child. That keeps the
-// logs on our pipe (prefixed [web]) and the server inside this child's
-// process group, while astro still writes the lockfile that
-// `astro dev stop` / `astro dev status` read. (`astro dev logs` reads the
-// daemon log file, which this mode does not create - the logs are HERE.)
+// Detached so shutdown can signal the WHOLE group: `bun run dev` wraps the real `astro dev`, and
+// killing just the wrapper's pid orphans astro, which then squats on its port across sessions.
+// The dev script's ASTRO_DEV_BACKGROUND=1 marks the process as ALREADY backgrounded, so Astro 7
+// skips its auto-daemonization and runs the server inside this child: logs stay on our pipe, the
+// server stays in this group, and astro still writes the lockfile.
+//   astro dev stop / status  -> read that lockfile and work
+//   astro dev logs           -> reads the daemon log file this mode never creates; the logs are HERE
 const web = spawn("bun", ["run", "dev"], {
   cwd: webDir,
   stdio: ["ignore", "pipe", "pipe"],
@@ -87,18 +80,13 @@ const killWeb = () => {
   }
 };
 
-// Desktop app: background, detached; `moon run dev-app`'s steps MINUS its
-// extension production build - the WXT lane fills the same build/extension
-// outDir continuously, so building it here again would be wasted work. (Small
-// startup race: tauri can be up before WXT's first dev build lands; the app
-// just sees the extension artifacts a moment later.) The prereqs run
-// first (icon rasters, then the host binary Enclave ops need as a sibling of
-// the dev app), then `tauri dev`, whose beforeDevCommand starts the
-// desktop-UI vite on 1420 (strictPort; no clash with astro). tauri dev fans
-// out into cargo, vite, and the native app binary - none of them setsid, so
-// they stay in the detached child's process group and one negative-pid
-// SIGTERM reaps the whole tree. appChild always points at the lane's CURRENT
-// process (a prereq or tauri), so shutdown mid-prereq kills the right group.
+// `moon run dev-app`'s steps MINUS its extension production build. WXT's dev lane writes
+// build/extension/chrome-mv3-dev, but the desktop resolves only build/extension/chrome-mv3
+// (src/apps/desktop/src/cli_tool.rs extension_dir), so the app's "Load unpacked" path stays missing until a
+// production build (`moon run dev-app` or `bun run --cwd src/apps/extension build`) has run once; this lane
+// never refreshes it. Detached because tauri dev fans out into cargo, vite, and the native app binary, none
+// of them setsid, so one negative-pid SIGTERM reaps the tree.
+//   appChild -> always the lane's CURRENT process (a prereq or tauri), so shutdown mid-prereq kills the right group
 let appChild: ChildProcess | null = null;
 let appKilled = false;
 const killApp = () => {
@@ -189,14 +177,10 @@ if (wxt.stdin) {
   wxt.stdin.on("error", () => {});
 }
 
-// Dev browser: a dedicated detached lane (scripts/dev-browser.ts) OWNS the
-// throwaway dev browser through web-ext-run and relaunches it from
-// web-ext-run's own cleanup callback when the developer quits it or it
-// crashes - replacing the old ps-poll / command-line-fingerprint /
-// parent-chain-walk / stdin-`o`-injection watchdog. Detached so one group
-// signal tears down the lane AND the Chromium it spawned; the lane's own
-// SIGTERM handler exits the runner, which closes Chrome by the pid
-// chrome-launcher recorded. Output prefixed [browser].
+// The dev browser lane (scripts/dev-browser.ts) OWNS the throwaway dev browser through web-ext-run
+// and relaunches it from web-ext-run's own cleanup callback when the developer quits it or it
+// crashes. Detached so one group signal tears down the lane AND the Chromium it spawned; the lane's
+// own SIGTERM handler exits the runner, which closes Chrome by the pid chrome-launcher recorded.
 const browser = spawn("bun", [join(repoRoot, "scripts/dev-browser.ts")], {
   cwd: repoRoot,
   stdio: ["ignore", "pipe", "pipe"],

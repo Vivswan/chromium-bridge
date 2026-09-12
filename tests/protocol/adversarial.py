@@ -20,7 +20,7 @@ faked through a path an attacker can never reach.
 
 Attack matrix (live MUST-BLOCK vs annotated residual):
   A1  rogue python3 socket peer                 LIVE  dropped at attestation
-  A2  byte-identical binary copy                LIVE  ACCEPTED (residual, threat #4)
+  A2  byte-identical binary copy                LIVE  ACCEPTED (accepted residual)
   A3  binary-swap-after-launch                  LIVE  python rejected; genuine OK
   A8  blank-line flood on MCP stdin leg         LIVE  server still responds
   A9  over-64MB line on MCP + NM legs           LIVE  bounded rejection, survives
@@ -35,7 +35,7 @@ Attack matrix (live MUST-BLOCK vs annotated residual):
   A4/A5 replay / forged-MAC                      REF  subsumed by attestation (+unit)
   A6/A7 hex / serde parser abuse                 REF  Rust hex_fuzz + serde proptests
   A10 cross-uid connect                          NOTE root/manual; 0700 dir is gate
-  A13 native-messaging manifest substitution    XFAIL browser-gated on enrollment #13
+  A13 native-messaging manifest substitution    XFAIL isolated-browser proof not written; note only
 
 SAFETY (load-bearing): every subprocess runs inside a per-run mkdtemp
 XDG_RUNTIME_DIR (+ XDG_CONFIG_HOME, + HOME on macOS) so the server's lock,
@@ -300,7 +300,7 @@ def a1_rogue_python_peer():
 
 
 # ---------------------------------------------------------------------------
-# A2 - byte-identical binary copy -> ACCEPTED (documented residual, threat #4)
+# A2 - byte-identical binary copy -> ACCEPTED (documented residual)
 # ---------------------------------------------------------------------------
 
 def a2_same_binary_copy():
@@ -674,7 +674,7 @@ def annotated_matrix():
 
 
 # ---------------------------------------------------------------------------
-# A14/A15/A16 - trusted-client allowlist admission (Phase 4, ADR-0024)
+# A14/A15/A16 - trusted-client allowlist admission (ADR-0024)
 # ---------------------------------------------------------------------------
 
 def _clients_path():
@@ -842,7 +842,7 @@ def a16_paired_harness_is_admitted():
 
 
 # ---------------------------------------------------------------------------
-# A17/A18/A19 - any-side revocation epoch (Phase 5, ADR-0025)
+# A17/A18/A19 - any-side revocation epoch (ADR-0025)
 # ---------------------------------------------------------------------------
 
 def _read_revocation():
@@ -1016,9 +1016,9 @@ def a19_deleting_the_allowlist_is_tampering_not_a_reset():
     _rm_clients()
     try:
         # Enroll, then simulate the ADR-0024 residual: a same-user deletion of
-        # clients.json alone. Pre-Phase-5 this silently reverted the bridge to
-        # the open, unenrolled bootstrap; the revocation record's enrollment
-        # latch (ADR-0025) must now fail it closed instead.
+        # clients.json alone. Without the revocation record's enrollment latch
+        # (ADR-0025) this would silently revert the bridge to the open,
+        # unenrolled bootstrap; the latch must fail it closed instead.
         _pair_client("--name", "pytest", "--this-parent")
         os.remove(_clients_path())
         srv = start_server()
@@ -1240,16 +1240,13 @@ def a21_corrupt_kill_marker_fails_closed():
 
 
 def a22_unkill_requires_interactive_user_presence():
-    """ADR-0030: releasing the kill switch requires the user-presence floor.
-    A piped stdin - a script, a harness, any other program - is refused even
-    with the exact phrase on it, so no same-user process can reopen the
-    bridge SILENTLY through the CLI; an interactive session that types the
-    wrong phrase is refused; the switch stays engaged through both refusals,
-    each of which lands in the audit trail with its presence reason; and the
-    typed phrase on a real terminal is what finally releases, audited with
-    auth=cli_confirm. (The remaining non-interactive path, editing
-    revocation.json directly, is the conceded same-user residual; Touch ID
-    hardware replaces this floor in Phase 8.)"""
+    """ADR-0030: releasing the kill switch needs the user-presence floor; with no enrolled key that
+    floor is the CLI's terminal check (an enrolled Mac reaches Touch ID first, hence the skip).
+
+      piped stdin / wrong phrase        -> refused, audited with the presence reason
+      phrase typed on a pty             -> released; step (4) does so through e2e.run_with_cli_presence
+      same-user pty or revocation.json  -> the conceded residual, named in src/packages/core/src/presence/mod.rs
+    """
     print("\n[A22] unkill demands user presence (LIVE: piped/declined refused, typed releases)")
     if _skip_if_enrolled("A22"):
         return
@@ -1309,15 +1306,13 @@ def a22_unkill_requires_interactive_user_presence():
 # ---------------------------------------------------------------------------
 # A23/A24/A25 - stateless MCP 2026-07-28 version negotiation abuse
 # ---------------------------------------------------------------------------
-# The modern protocol carries its version AND the client capabilities
-# per-request in params._meta; a connection OPENS with either a legacy
-# initialize or a well-formed stateless request (anything else is dropped
-# fail-closed - the rmcp opener rule). Post-open: an unsupported STRING
-# version is -32022, malformed/incomplete metadata is -32602, and bare
-# requests are served (legacy shapes) only on initialize-opened
-# connections. As everywhere in this suite, the version strings and the
-# error codes are hard-coded on purpose (independent black-box check;
-# canonical values live in src/packages/core/src/protocol.rs).
+# A connection OPENS with either a legacy initialize or a well-formed stateless request (params._meta carrying
+# the version AND the client capabilities); anything else is dropped fail-closed (the rmcp opener rule).
+#   post-open, unsupported STRING version   -> -32022
+#   malformed or incomplete _meta           -> -32602
+#   bare request (legacy shape)             -> served only on an initialize-opened connection
+# Version strings and error codes are hard-coded on purpose: an independent black-box check against
+# src/packages/core/src/protocol.rs.
 
 _META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
 _META_CAPS_KEY = "io.modelcontextprotocol/clientCapabilities"
@@ -1610,15 +1605,11 @@ def a25_oversized_version_string():
 
 def a13_manifest_substitution_xfail():
     print("\n[A13] native-messaging manifest substitution (XFAIL until enrollment #13)")
-    # A malicious install could point the NM manifest at a different host binary,
-    # or add its own extension id to the allowed_origins. Today nothing but the
-    # 0700 install dir stops a same-user rewrite of the manifest, and proving the
-    # end-to-end effect needs a real (isolated) browser loading the extension.
-    # This flips from XFAIL to a LIVE MUST-BLOCK once enrollment (#13) makes the
-    # extension pin the host's enclave key, so a substituted manifest/host cannot
-    # complete the mutual key exchange.
-    # TODO(#13): implement against an ISOLATED throwaway browser profile after
-    # enrollment lands; assert a substituted host fails the enclave handshake.
+    # A same-user process can repoint the NM manifest at another host binary or add its own extension id to
+    # allowed_origins, and nothing on disk stops it: the manifest is 0644 in the browser's NativeMessagingHosts
+    # dir and the 0700 install dir still grants its owner write access. A substituted host fails pairing only
+    # through the extension's enrollment pin (src/apps/extension/src/lib/background/enrollment.ts); proving that
+    # end to end needs an ISOLATED throwaway browser loading the extension, which this suite never starts.
     note("A13 intentionally not implemented here (browser + enrollment gated). "
          "Documented residual; becomes MUST-BLOCK after task #13.")
 

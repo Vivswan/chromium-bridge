@@ -1,33 +1,18 @@
-//! The app's policy-editor surface (ADR-0032 decision 5): reads, the two
-//! write lanes, and rollback.
+//! The app's policy editor (ADR-0032 decision 5). The app carries no keychain entitlements (ADR-0026), so
+//! anything that signs shells out to the bundled signed host under `--json`: in-process signing would always
+//! degrade to an unsigned floor, and the Touch ID sheet must attribute to the host.
 //!
-//! Reads (`policy_status` / `policy_history` / `policy_plan`) and the FREE
-//! restriction lane run in-process through `chromium_bridge_core::policy` -
-//! plain user-file I/O, no keychain. The signed GRANT lane (`policy_set`)
-//! and `policy_rollback` shell out to the bundled signed host binary under
-//! `--json`, the `enclave_pair` pattern: the app carries no keychain
-//! entitlements (ADR-0026), so the Touch ID sheet a signed write raises
-//! must attribute to the host (in-process signing would always degrade to
-//! an unsigned floor, even on an enrolled machine). The set argv passes
-//! individual field flags, never a whole document, so the CLI folds the
-//! edits over the current BASELINE values itself (decision 3: a signed
-//! document carries baseline values on fields it does not touch;
-//! `set_signed` refuses untouched-field drift).
+//! ```text
+//! reads, the free restriction lane  -> in-process via `chromium_bridge_core::policy` (file I/O, no keychain)
+//! signed grant (`set`), `rollback`  -> `chromium-bridge policy ... --json` subprocess, passing field flags and
+//!                                      never a whole document: the CLI folds the edits over the baseline itself
+//! genuinely unenrolled Mac          -> `set` stores an UNSIGNED baseline in-process behind the webview's modal
+//!                                      confirmation (`crate::presence_seam::APP_POLICY_FLOOR`)
+//! any other keyless state           -> refused, pointing at enrollment or repair
+//! ```
 //!
-//! The one exception to the subprocess rule is the GENUINELY UNENROLLED Mac
-//! (the bundled host's `enclave-status` reports `supported && key == none`):
-//! there is no key to sign with anywhere, the CLI's signature-only lane
-//! refuses by design (decision 5), and the app is the one surface entitled
-//! to carry its interactive floor for the write - `set` then calls
-//! `set_signed` in-process with [`crate::presence_seam::APP_POLICY_FLOOR`],
-//! storing an UNSIGNED baseline after the webview's modal confirmation. Any
-//! other keyless state (invalid, unreadable, unsupported platform) refuses
-//! outright and points at enrollment/repair (fail closed, never a silent
-//! degrade).
-//!
-//! Direction classification (which edits tighten, which relax) is decided
-//! HERE, from the core's direction table - the webview only displays the
-//! verdict, it never computes which way a change points.
+//! Direction classification (which edits tighten, which relax) is decided here from the core's direction
+//! table; the webview only displays the verdict.
 
 use serde::Serialize;
 
@@ -467,27 +452,19 @@ fn grant_lane(report: &EnclaveStatusReport) -> Result<GrantLane, String> {
     }
 }
 
-/// The unenrolled-Mac write (ADR-0032 decision 5): the app is the one
-/// surface entitled to store an UNSIGNED baseline where hardware presence is
-/// genuinely unavailable, and only after its own modal confirmation - the
-/// [`crate::presence_seam::APP_POLICY_FLOOR`] obligations. Runs in-process
-/// (`set_signed` needs no keychain on this path), folding the edits over the
-/// current BASELINE (decision 3) exactly like the CLI's set lane, and
-/// returns the same [`PolicyOutcome`] shape the subprocess lane produces so
-/// the webview renders both identically.
+/// The unenrolled-Mac write: an UNSIGNED baseline stored in-process behind the webview's modal confirmation
+/// ([`crate::presence_seam::APP_POLICY_FLOOR`]). It returns the subprocess lane's [`PolicyOutcome`] shape so
+/// the webview renders both lanes identically.
 ///
-/// Residual, named: a key enrolled between the lane decision and this write
-/// is NOT reliably detected. `set_signed` retries the hardware rung first,
-/// but from this unentitled app process a real enrolled key can be
-/// indistinguishable from absence (the keychain answers not-found without
-/// the access-group entitlement), which maps to `Unavailable` and takes the
-/// floor. What bounds the window: the lane decision is host-authored (the
-/// signed host's own `enclave-status`, never this process's keychain view),
-/// it runs back-to-back with this write inside one [`set`] call with no
-/// user interaction between, and a pinned extension rejects an unsigned
-/// baseline outright - so an unsigned baseline written around a real key is
-/// refused at the boundary that matters. This residual belongs in the Phase
-/// 5 SECURITY.md threat model alongside the other same-user concessions.
+/// Residual, named: a key enrolled between the lane decision and this write is not reliably detected, because
+/// this unentitled process's keychain lookup can read a real key as absent (not-found without the access-group
+/// entitlement), which `set_signed` maps to `Unavailable` and takes the floor. What bounds the window:
+///
+/// ```text
+/// lane decision       -> host-authored (the signed host's own `enclave-status`), never this process's keychain view
+/// decision and write  -> back-to-back inside one `set` call, no user interaction between
+/// pinned extension    -> rejects an unsigned baseline outright, so one written around a real key is refused
+/// ```
 fn set_unenrolled_floor(overlay: PolicyOverlay) -> PolicyOutcome {
     match floor_write(overlay) {
         Ok(()) => PolicyOutcome {
@@ -550,18 +527,16 @@ pub fn rollback(revision: u64) -> Result<PolicyOutcome, String> {
     ])
 }
 
-/// The import screen's Adopt lane (ADR-0032 decision 8): [`set`] behind a
-/// first-baseline gate. The user confirmed "sign the imported settings as
-/// REVISION 1", so a baseline that appeared since the screen surveyed (this
-/// app's editor, the CLI, another window) refuses instead of silently
-/// re-signing the reviewed values as revision 2 over a write the user never
-/// saw. The gate re-reads immediately before the write, shrinking the
-/// exposed window from the dialog's dwell time to the write's own start;
-/// from `set_signed`'s pre-prompt observation onward the core's Conflict
-/// re-check covers the rest. The sliver between this gate and that
-/// observation stays open - both racers are the user's own approved writes
-/// (each behind its own dialog and prompt), so a collision there re-signs
-/// user-reviewed values, never anything unattended.
+/// The import screen's Adopt lane (ADR-0032 decision 8): [`set`] behind a first-baseline gate. The user confirmed
+/// "sign the imported settings as REVISION 1", so a baseline that appeared since the screen surveyed (this app's
+/// editor, the CLI, another window) refuses rather than re-signing the reviewed values as revision 2.
+///
+/// ```text
+/// gate re-read right before the write -> covers up to set_signed's pre-prompt observation; the core's Conflict
+///                                        re-check covers the rest
+/// the sliver between the two          -> open, but both racers there are the user's own dialog-and-prompt-approved
+///                                        writes, so a collision re-signs reviewed values, never anything unattended
+/// ```
 pub fn adopt(overlay: PolicyOverlay) -> Result<PolicyOutcome, String> {
     if let Err(refusal) = adopt_gate(gather_policy_status().store()) {
         return Ok(PolicyOutcome {

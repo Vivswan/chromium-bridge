@@ -12,7 +12,7 @@
 // list by the parity gate (scripts/check-envelope-parity.ts), and exercised
 // behaviorally in tests/envelope-wire.gen.test.ts.
 //
-// ASYMMETRY (loose frames, rule R5): the generated bases are strict (the
+// ASYMMETRY (loose frames, rule R5 in json-schema-normalize.ts): the generated bases are strict (the
 // host refuses unknown fields on these security frames), but the extension
 // reads them loose - .catchall(z.unknown()) below - because the host may add
 // fields and the security decision is made from the validated fields plus
@@ -220,47 +220,34 @@ export const PolicyInboundFrameSchema = z.looseObject({
 
 export type PolicyInboundFrame = z.infer<typeof PolicyInboundFrameSchema>;
 
-// The policy state push (ADR-0032 decision 4). This validator covers ONLY
-// the frame envelope: `baseline` stays an opaque base64 string here - the
-// consumer verifies the signature over the decoded bytes against its pinned
-// key FIRST and strict-parses those same bytes with the generated
-// PolicyDocSchema only after the signature holds (or, unpinned, as the
-// entry point). Never parse the document at this layer.
-// ASYMMETRY (baseline/sig): no null arm (serde's Option; writers omit
-// absent fields), non-empty early - signed artifacts the host only ever
-// sends whole.
-// ASYMMETRY (overlay): no null arm; the GENERATED strict PolicyOverlaySchema
-// (policy.gen.ts), which deliberately stays STRICT inside this R5-loose
-// frame (the pinned STRICT_ZOD_NODES exception in json-schema-normalize.ts):
-// an overlay field the catalogue does not own is a policy claim nobody owns
-// and fails the whole frame, fail closed.
+// The policy state push (ADR-0032 decision 4). This validator covers ONLY the frame envelope: `baseline`
+// stays an opaque base64 string here, because the consumer verifies the signature over the decoded bytes
+// against its pinned key FIRST and strict-parses those same bytes with the generated PolicyDocSchema only
+// after the signature holds (unpinned, the strict parse is the entry point). Never parse the document here.
+//   baseline / sig  -> ASYMMETRY: no null arm (serde Option, writers omit absent fields), non-empty (signed
+//                      artifacts the host only ever sends whole)
+//   overlay         -> ASYMMETRY: no null arm; the GENERATED PolicyOverlaySchema (policy.gen.ts) stays STRICT
+//                      inside this loose frame (the pinned STRICT_ZOD_NODES exception in json-schema-normalize.ts):
+//                      an overlay field the catalogue does not own is a policy claim nobody owns, fail closed
 export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
   baseline: z.string().min(1).optional(),
   sig: z.string().min(1).optional(),
   overlay: PolicyOverlaySchema.optional(),
-  // ASYMMETRY (reason): the host frame field is Option<String> (any string or
-  // absent); the extension pins it to the structured {absent,damaged,unreadable}
-  // enum (ADR-0032 D-P4-2). The Phase-4 send-once MUST gate on
-  // `ok === false && reason === "absent"`, so a value outside the enum, or a
-  // missing field (an old host), reads as "not the absent signal" - never
-  // send - which is fail closed.
+  // ASYMMETRY (reason): the host field is Option<String>; the extension pins it to the structured enum.
+  // The send-once gate fires only on `ok === false && reason === "absent"`, so a value outside the enum or
+  // a missing field (an old host) reads as "not the absent signal": never send, fail closed.
   reason: z.enum(["absent", "damaged", "unreadable"]).optional(),
   // ASYMMETRY (error): no null arm, as above.
   error: z.string().optional(),
 })
   .catchall(z.unknown())
-  // ASYMMETRY (ok-split, superRefine): pinned in FRAME_REFINEMENTS
-  // (scripts/check-envelope-parity.ts) - a refinement never shows up in
-  // z.toJSONSchema, so the structural gate cannot see it and pins it there
-  // instead. On the wire every field is an Option, so the base validates
-  // per-field and would pass shapes PolicyStatus::into_frame
-  // (protocol/control.rs) can never emit. The refinement encodes the only
-  // two real host shapes:
-  // `ok: true` REQUIRES `baseline` (sig/overlay optional) and never carries
-  // `reason` or `error`; `ok: false` REQUIRES `error` (reason optional - an
-  // old host omits it) and never carries `baseline`, `sig`, or `overlay`.
-  // In particular, the send-once condition above can never be satisfied (or
-  // confused) by a frame that also claims success.
+  // ASYMMETRY (ok-split): a refinement never shows up in z.toJSONSchema, so the structural gate cannot see
+  // it and it is pinned in FRAME_REFINEMENTS (scripts/check-envelope-parity.ts) instead. On the wire every
+  // field is an Option, so the base validates per-field and would pass shapes PolicyStatus::into_frame
+  // (protocol/control.rs) can never emit. This encodes the only two real host shapes, so the send-once
+  // condition above can never be met or confused by a frame that also claims success.
+  //   ok: true   -> REQUIRES baseline (sig/overlay optional); never reason or error
+  //   ok: false  -> REQUIRES error (reason optional, an old host omits it); never baseline, sig, or overlay
   .superRefine((frame, ctx) => {
     const [required, forbidden] = frame.ok
       ? (["baseline", ["reason", "error"]] as const)
@@ -304,31 +291,20 @@ export type LangCurrentFrame = z.infer<typeof LangCurrentFrameSchema>;
 // could drift.
 export const KEY_ID_HEX = /^[0-9a-f]{64}$/;
 
-// The extension-side stored effective policy (ADR-0032 decisions 3/4): the
-// ratcheted effective values the extension last applied, the ratchet anchor
-// (the accepted baseline's revision and its exact bytes, base64, for the
-// byte-identical replay check), and the ratchet SCOPE it is bound to. STRICT
-// like every stored trust record. The consumer discriminates the three read
-// outcomes explicitly - absent, valid, corrupt - and does NOT collapse
-// corrupt into absent: post-cutover a corrupt record latches the dispatch
-// barrier closed (the kill-mirror STRICT precedent), because treating it as
-// absent would let an older genuine baseline replay as first-ever while the
-// snapshot fell to POLICY_DEFAULTS. POLICY_DEFAULTS is the deny baseline on
-// the four capability grants but is NOT the restrictive pole on every field
-// (hostReverifyMs 0 is the zero-top MOST permissive value, disabledTools is
-// empty, confirmGraceMs is a middling 60s), so it is safe as a fallback ONLY
-// because the barrier refuses every request whenever it is the answer - never
-// because the values themselves are maximally restrictive. Per-field salvage
-// is likewise forbidden (it would hand a corrupted store a relaxation lever).
+// The stored effective policy (ADR-0032 decisions 3/4): the ratcheted values last applied, the ratchet
+// anchor (the accepted baseline's revision and exact bytes, for the byte-identical replay check), and the
+// scope it is bound to. STRICT like every stored trust record, and policy-sync.ts keeps corrupt DISTINCT
+// from absent: post-cutover a corrupt record resolves to compromised and an absent one to awaitingBaseline,
+// each a blocked posture carrying a reason and no values, so no default is ever enforced in their place.
+// Reading corrupt as absent would let an older genuine baseline replay as first-ever, and per-field salvage
+// would hand a corrupted store a relaxation lever, so parseStoredPolicyValues returns null on any failure.
 export const StoredPolicyStateSchema = z.strictObject({
-  // The pinned enrollment keyId this ratchet state is bound to, or null for
-  // the unpinned lane (finding 2 / ADR-0032 decision 3). Every read re-checks
-  // it against the CURRENT pin: a record whose scope no longer matches is
-  // inert (deny baseline, closed barrier), so a push that raced a re-pair can
-  // never enforce, and an old baseline captured under a since-revoked pin
-  // cannot replay once a DIFFERENT key is pinned. NOT `trustedKeyId`: the
-  // golden-fixture key is a legitimate scope in tests (the vectors are signed
-  // by it), and deny-listing it would read every such record as corrupt.
+  // The pinned enrollment keyId this ratchet state is bound to, or null for the unpinned lane (ADR-0032
+  // decision 3). Every read re-checks it against the CURRENT pin, so a record whose scope no longer matches
+  // is inert (deny baseline, closed barrier): a push that raced a re-pair can never enforce, and a baseline
+  // captured under a since-revoked pin cannot replay once a DIFFERENT key is pinned. NOT `trustedKeyId`:
+  // the golden-fixture key is a legitimate scope in tests (the vectors are signed by it), and deny-listing
+  // it would read every such record as corrupt.
   scope: z.string().regex(KEY_ID_HEX).nullable(),
   effective: PolicyValuesSchema,
   revision: z.int().nonnegative().max(POLICY_REVISION_MAX),
@@ -338,8 +314,8 @@ export const StoredPolicyStateSchema = z.strictObject({
 
 export type StoredPolicyState = z.infer<typeof StoredPolicyStateSchema>;
 
-// The extension-side mirror of the host's kill state, persisted in the #32
-// SW-only trusted storage. STRICT: a record with unexpected fields (or a
+// The extension-side mirror of the host's kill state, persisted in the extension-context-only
+// trusted storage (trusted-storage.ts; content scripts excluded). STRICT: a record with unexpected fields (or a
 // non-record value) is tampering evidence and the gate refuses on it rather
 // than treating it as absent - absent means "never heard from the host"
 // (allowed locally; the host side enforces), so mapping garbage to absent
@@ -363,19 +339,19 @@ export const AUDIT_EVENT_KINDS = [
   ...AUDIT_FORWARDED_KINDS,
   "client_revoked",
   "kill_engaged",
-  // Write-dead since ADR-0032 phase 5 (the extension lost its release lane;
-  // the host refuses kill_release), READ-LIVE: retained so historical audit
-  // entries carrying it still render through the kind-to-locale mapping.
+  // Write-dead since ADR-0032 (the extension lost its release lane; the host
+  // refuses kill_release), READ-LIVE: retained so historical audit entries
+  // carrying it still render through the kind-to-locale mapping.
   "kill_released",
   "kill_status_changed",
-  // ADR-0032 phase 3, local-only (not in the host whitelist, so never
+  // ADR-0032, local-only (not in the host whitelist, so never
   // forwarded): a policy push refused after crypto/ratchet reasoning
   // (attack-shaped evidence, not benign version skew), and the policy-side
   // compromise mark a bad baseline signature latches. The host audits its own
   // policy writes authoritatively; these record the EXTENSION's refusals.
   "policy_refused",
   "policy_compromised",
-  // ADR-0032 phase 4, local-only: the one-time legacy_settings bag send (the
+  // ADR-0032, local-only: the one-time legacy_settings bag send (the
   // decision-8 migration offer). The host audits every receipt outcome
   // authoritatively (recorded or dropped, the legacy_import_receipt kind);
   // this records the EXTENSION's send.

@@ -171,24 +171,16 @@ fn rollback_fresh_mint() {
     let _ = dispose_enrollment_and_policy_baseline();
 }
 
-/// The shared enrollment-disposal seam (ADR-0032 decision 3): every key
-/// deletion path - `chromium-bridge revoke`, `pair --reset`, and the
-/// extension-originated `enclave_revoke` - routes through here so a signed
-/// policy baseline can never survive the key that signed it. Under ONE
-/// runtime-lock hold it deletes the enrollment key, clears the signed baseline
-/// (the history-preserving [`crate::policy::clear_baseline_locked`], keeping
-/// the overlay-bearing record as a re-signable draft), removes the recorded
-/// enrollment config, and bumps the host-key revocation epoch, so no
-/// concurrent reader (a doctor run, a second browser's host) can observe the
-/// baseline outliving its key - the "artifact of a dead key" trap.
+/// The shared enrollment-disposal seam (ADR-0032 decision 3): `chromium-bridge revoke`, `pair --reset`, and the
+/// extension-originated `enclave_revoke` all route here, under ONE runtime-lock hold, so no concurrent WRITER (a
+/// policy write under the doomed key) can land a baseline between the key deletion and the clear. Readers take no
+/// lock: a one-shot read (a doctor run, a second browser's host) can see the baseline for the instant between the
+/// two steps, the same state a failed clear leaves behind. Returns whether an enrollment key existed.
 ///
-/// Returns whether an enrollment key existed. Key deletion is the
-/// authoritative act and runs FIRST: if it fails, the baseline is left in
-/// place (the key, and thus its valid signature, may still be present) and the
-/// enclave error bubbles. The baseline clear and the epoch bump are
-/// best-effort AFTER a successful deletion - a failure there loses only the
-/// cleanup or the proactive push, never the deletion, so it is logged, not
-/// fatal (a pinned extension still fails closed at its next key verification).
+/// ```text
+/// key deletion fails                 -> the error bubbles and the baseline stays: the key, and its valid signature, may still exist
+/// baseline clear or epoch bump fails -> logged, not fatal: only cleanup or the proactive push is lost, never the deletion
+/// ```
 pub fn dispose_enrollment_and_policy_baseline() -> Result<bool, EnclaveError> {
     match crate::ipc::with_runtime_lock(dispose_locked) {
         Ok(inner) => inner,
@@ -210,14 +202,9 @@ fn dispose_locked(
         Err(e) => return Ok(Err(e)),
     };
     HostConfig::remove();
-    // The pending-import store (pending-import.json) is deliberately NOT
-    // cleared here (ADR-0032 D-P4-5): a pending bag is user preference data,
-    // not an artifact of the deleted key, so it survives disposal like the
-    // policy history ring - the app can still offer it after re-pairing. The
-    // consumed tombstone MUST survive too (P4H-1): deleting it here would
-    // reopen the import window right when the baseline below is cleared,
-    // letting a compromised extension plant a forged bag for the next
-    // first-run import.
+    // pending-import.json is deliberately NOT cleared here: a pending bag is user preference data, not an artifact of
+    // the deleted key, so it survives disposal like the policy history ring. Its consumed tombstone must survive too,
+    // or the import window would reopen right as the baseline below clears, letting a compromised extension plant a forged bag.
     if let Err(e) = crate::policy::clear_baseline_locked(lock) {
         log_warn!(
             "enclave",

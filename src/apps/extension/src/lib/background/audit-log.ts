@@ -1,7 +1,8 @@
 // The extension-side audit ring (ADR-0030): a bounded, display-only record of
 // the extension's own user-facing security decisions - confirmations shown /
 // allowed / denied, enrollment approvals, revocations and kill toggles issued
-// from the options page - kept in the #32 trusted storage for the read-only
+// from the options page - kept in the extension-context-only trusted storage (trusted-storage.ts; content
+// scripts excluded) for the read-only
 // options panel, and forwarded (best-effort) to the native host so the
 // decisions land in the host's durable 0600 audit file too.
 //

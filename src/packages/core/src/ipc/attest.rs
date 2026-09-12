@@ -11,17 +11,10 @@ use std::io;
 use super::platform::os;
 use super::socket::BridgeStream;
 
-/// This process's own executable identity, computed once and cached. It is the
-/// trusted value both ends attest against: a peer is accepted only when its
-/// running image yields the same identity, i.e. it is another instance of the
-/// same binary. Self and peer are measured by the identical mechanism, so an
-/// identical image always yields an identical value.
-///
-/// On Linux the identity is the SHA256 of the on-disk executable; on macOS it is
-/// the code-directory hash (cdhash) of the running image, read from the Security
-/// framework. [`ensure_own_identity`] primes the cache at startup, before we
-/// accept or dial any connection, so our notion of "self" is fixed from the
-/// genuine binary and a later on-disk replacement cannot redefine it.
+/// This process's own executable identity, computed once and cached: a peer is accepted only when its running
+/// image yields the same value by the same measurement. [`ensure_own_identity`] primes the cache at startup,
+/// before any connection is accepted or dialed, so "self" is fixed from the genuine binary and a later on-disk
+/// replacement cannot redefine it.
 fn own_identity() -> io::Result<&'static str> {
     use std::sync::OnceLock;
 
@@ -56,32 +49,18 @@ pub fn ensure_own_identity() -> io::Result<&'static str> {
     own_identity()
 }
 
-/// Measure the identity of our **parent process** -- the harness (MCP client)
-/// that spawned this MCP-server-mode instance over stdio. This is the input to
-/// the trusted-client allowlist ([`crate::allowlist`]): stdin is an anonymous
-/// pipe carrying no kernel peer credentials, so the peer we can attest is not
-/// the writer of the pipe but the process that spawned us, which `getppid`
-/// names. We measure that pid's running image the same way [`attest_pid`]
-/// does, and additionally read its macOS signing Team ID when present.
+/// Measure our **parent process**, the harness (MCP client) that spawned this MCP-server-mode instance: the input to
+/// the trusted-client allowlist ([`crate::allowlist`]). stdin is an anonymous pipe with no kernel peer credentials, so
+/// the attestable peer is the spawner `getppid` names, not the pipe's writer.
 ///
-/// What is sound: at process start the OS has just forked us from the harness,
-/// so `getppid` names the genuine spawner at that instant. If the real parent
-/// later dies we are reparented (commonly to pid 1), and a subsequent
-/// measurement of `getppid` then names the reaper, whose identity will not
-/// match the allowlist -- so a stale parent fails admission closed rather than
-/// being trusted.
-///
-/// Residual, named honestly (ADR-0024): this proves who SPAWNED us, not who is
-/// writing our stdin. An anonymous pipe's write end can be inherited or passed
-/// to another process, so "the harness that spawned us" and "the process
-/// feeding our stdin" are not provably the same, and nothing here closes that
-/// gap. The measurement is also pid-keyed, so it carries the same microsecond
-/// pid-reuse race as [`attest_pid`] (ADR-0020); on macOS `pid_client_identity`
-/// still validates the running image via `SecCodeCheckValidity`. This is NOT
-/// kernel attestation of the pipe itself; no such mechanism exists for an
-/// anonymous pipe in user space. It raises the bar (a random same-user process
-/// is not spawned by an allowlisted harness); it does not make the harness
-/// boundary unforgeable.
+/// ```text
+/// real parent already dead  -> measures the reaper (commonly pid 1): refused by an enforced allowlist unless it names
+///                              that binary; unenrolled admission ignores the identity (allowlist::decide)
+/// who writes our stdin      -> unproven (ADR-0024): the pipe's write end can be inherited or passed on, and no
+///                              user-space mechanism attests an anonymous pipe
+/// pid-keyed measurement     -> the same pid-reuse race as attest_pid (ADR-0020); on macOS pid_client_identity still
+///                              validates the running image via SecCodeCheckValidity
+/// ```
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn attest_parent() -> io::Result<super::ClientIdentity> {
     // getppid cannot fail and returns the current parent's pid.
@@ -91,16 +70,10 @@ pub fn attest_parent() -> io::Result<super::ClientIdentity> {
     os::pid_client_identity(ppid)
 }
 
-/// Verify the peer on `stream` is running the same executable image as us, and
-/// fail closed otherwise. Measure the peer's identity from the kernel's view of
-/// it and require it to equal our own: a mismatch returns `PermissionDenied`, and
-/// an inability to establish the peer's identity propagates that error's own
-/// kind. Either way the caller drops the connection. The trusted-identity
-/// allowlist is exactly `{our own binary}`.
-///
-/// Both ends run this: the server attests the native host right after accept, the
-/// native host attests the server right after connect. See ADR-0020 for what this
-/// proves and what it cannot.
+/// Verify the peer on `stream` runs the same executable image as us; the trusted-identity allowlist is exactly
+/// `{our own binary}`, and the caller drops the connection on any error. Both ends run it (the server on the native
+/// host right after accept, the native host on the server right after connect); ADR-0020 says what this proves and
+/// what it cannot.
 pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
     let peer = peer_identity(stream)?;
     let own = own_identity()?;
@@ -200,12 +173,9 @@ mod tests {
 
     #[test]
     fn attest_peer_accepts_our_own_process() {
-        // The peer of a local socketpair is this very process, so its running
-        // image is ours: attestation must accept it. On macOS this exercises the
-        // real audit-token -> SecCode -> cdhash path end to end. The
-        // foreign-binary rejection path is exercised in tests/protocol/e2e.py, which cannot
-        // be done from inside a single process (we cannot become a different
-        // binary).
+        // The peer of a local socketpair is this very process, so attestation must accept it; on macOS this
+        // exercises the real audit-token -> SecCode -> cdhash path end to end. The foreign-binary rejection
+        // lives in tests/protocol/e2e.py: a single process cannot become a different binary.
         let (a, _b) = UnixStream::pair().unwrap();
         assert!(attest_peer(&a).is_ok());
     }
@@ -216,19 +186,10 @@ mod tests {
         // cached self identity.
         assert!(attest_pid(std::process::id()).is_ok());
 
-        // Foreign: a child WE spawned (a specific, verified pid - never a
-        // pattern match) running a different binary must be rejected with
-        // PermissionDenied, the caller's do-not-signal signal.
-        //
-        // Synchronize on the child having exec'd before measuring it: spawn()
-        // can return while the child is still a pre-exec clone of US (its
-        // /proc/<pid>/exe naming our own binary), and measuring in that
-        // window attests the child as self - a CI-speed flake, seen on
-        // GitHub's ubuntu runners. Reading the byte the shell echoes proves
-        // the child has exec'd a foreign image (the shell, or already its
-        // sleep successor - foreign either way). Production callers do not
-        // race this: they measure long-running processes named by lock files,
-        // not pids they just spawned.
+        // Foreign: a child WE spawned (a specific, verified pid, never a pattern match) running a different binary
+        // must be rejected with PermissionDenied. The byte the shell echoes is read before measuring: spawn() can
+        // return while the child is still a pre-exec clone of US (its /proc/<pid>/exe naming our own binary), and
+        // measuring in that window attested it as self on GitHub's ubuntu runners.
         use std::io::Read;
         let mut child = std::process::Command::new("sh")
             .args(["-c", "echo r; exec sleep 30"])
@@ -254,12 +215,8 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attest_parent_measures_the_spawning_process() {
-        // The harness-admission input: measuring our own parent must yield a
-        // non-empty attested hash. The parent here is the test runner (cargo /
-        // a shell), which is a real signed or ad-hoc-signed image, so the
-        // measurement resolves. We do not assert a specific value (it varies by
-        // host); the point is that attest_parent produces a usable identity and
-        // does not panic on the getppid path.
+        // The parent here is the test runner (cargo / a shell), a real signed or ad-hoc-signed image, so the
+        // measurement resolves; the value varies by host, so only its shape is asserted.
         let id = attest_parent().expect("parent must be measurable");
         assert!(!id.hash.is_empty());
         assert_eq!(id.hash.len() % 2, 0);

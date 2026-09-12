@@ -1,29 +1,18 @@
 /**
- * Third-party MCP client interop suite: drives the release binary over stdio
- * with the OFFICIAL TypeScript MCP client SDK v2 (@modelcontextprotocol/client,
- * spec revision 2026-07-28). This is the one real modern client we can test
- * against, so it proves the served protocol works beyond our own test
- * harnesses: era negotiation via `server/discover` and the complete-result
- * shape on `tools/list` / `tools/call`. Every post-connect request also rides
- * the per-request `_meta` protocol-version envelope the SDK auto-attaches on
- * a modern connection, so a server that refused the envelope would fail the
- * whole suite.
+ * Third-party interop: drives the release binary over stdio with the official TypeScript MCP client SDK v2
+ * (@modelcontextprotocol/client, spec revision 2026-07-28), the one real modern client available, so the served
+ * protocol is proven beyond our own harnesses. Every post-connect request rides the per-request `_meta`
+ * protocol-version envelope the SDK attaches on a modern connection, so a server refusing it fails the suite.
  *
- * The client PINS the modern era (`versionNegotiation: { mode: { pin:
- * '2026-07-28' } }`): no legacy fallback, so a server that cannot answer
- * `server/discover` fails the connect loudly instead of silently downgrading
- * to the 2025 `initialize` handshake. On the SDK's stdio transport the pinned
- * probe runs on a short-lived sibling process of the same binary, reaped
- * before the session child starts; the server's stale-lock replacement makes
- * that back-to-back spawn pattern safe.
+ * The era is PINNED (`versionNegotiation: { mode: { pin: '2026-07-28' } }`): a server that cannot answer
+ * `server/discover` fails the connect loudly instead of downgrading to the 2025 `initialize` handshake. The
+ * pinned probe runs on a short-lived sibling process of the same binary, reaped before the session child starts;
+ * the server's stale-lock replacement makes that back-to-back spawn safe.
  *
- * No browser is ever launched: with nothing attached to the bridge, tools/call
- * answers with the typed NOT_CONNECTED error INSIDE the result (isError true),
- * and this suite asserts exactly that shape.
+ * No browser is launched: with nothing attached, tools/call answers the typed NOT_CONNECTED error INSIDE the result.
  *
  * Run:  moon run test-interop   (or: bun test tests/interop/sdk-client.test.ts)
- * Requires the release binary at target/release/chromium-bridge (built if
- * missing via cargo, mirroring tests/protocol/e2e.py).
+ * Needs target/release/chromium-bridge (built via cargo if missing, like tests/protocol/e2e.py).
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";

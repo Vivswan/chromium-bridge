@@ -14,19 +14,16 @@ use super::socket::{listen, BridgeListener};
 
 /// Per-process runtime info the MCP server publishes for the native host.
 ///
-/// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records
-/// (decided in ADR-0025): the lock file is the one file read across BINARY
-/// VERSIONS at the same instant - during an upgrade, a still-installed older
-/// build (Chrome keeps spawning the manifest's host; a harness keeps spawning
-/// its configured server) reads the lock a newer broker wrote, and a strict
-/// parser would take the whole bridge down for the upgrade window if a field
-/// were ever added. Leniency is safe here because the lock file is DISCOVERY,
-/// not authorization: whatever it says, every connection still passes the
-/// peer-UID check, mutual attestation, and the HMAC handshake, so an unknown
-/// field can admit nobody. Forward-compat rule: fields may only be added such
-/// that old readers stay correct ignoring them; a change old readers must NOT
-/// survive gets a NEW FILENAME (`run.lock` -> `run.v2.lock`), so old binaries
-/// see "no lock" and fail closed to no-bridge instead of misreading.
+/// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records (ADR-0025): an older build still
+/// installed during an upgrade reads the lock a newer one wrote, and a strict parser would take the bridge down.
+/// Safe because the lock file is DISCOVERY, not authorization: every connection still passes the HMAC handshake
+/// (and, on Unix, the peer-UID check; on Linux and macOS, image attestation), so an unknown field admits nobody.
+///
+/// ```text
+/// adding a field                         -> only such that old readers stay correct ignoring it
+/// a change old readers must NOT survive  -> a NEW filename (run.lock -> run.v2.lock); old binaries see no lock
+///                                           and fail closed instead of misreading
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockFile {
     /// How the native host reaches the server. On Unix this is the filesystem
@@ -88,16 +85,11 @@ pub(crate) fn runtime_dir() -> PathBuf {
     }
 }
 
-/// Directory hardening for [`runtime_dir`], which returns a path, not a
-/// `Result`: a directory that cannot be created or secured (a pre-planted
-/// symlink at the leaf, an unwritable parent) is LOGGED, loudly, and the path
-/// still returned - not silent, not fatal. What a refused directory loses is
-/// only the directory-level 0700 tightening: every security-bearing file
-/// inside guards its own creation (0600 + `O_NOFOLLOW` opens, exclusive
-/// creates - see [`crate::fsguard`]), and the operation that then touches it
-/// fails closed on its own error. Chmod-through-the-symlink is deliberately
-/// NOT attempted: chmodding a path an attacker chose is the primitive fsguard
-/// exists to remove.
+/// Directory hardening for [`runtime_dir`], which returns a path, not a `Result`: a directory that cannot be created
+/// or secured (a pre-planted symlink at the leaf, an unwritable parent) is logged loudly and the path still returned,
+/// losing only the directory-level 0700 tightening because every security-bearing file inside guards its own creation
+/// (0600 + `O_NOFOLLOW` opens, exclusive creates, see [`crate::fsguard`]) and fails closed on its own error. Chmod
+/// through the symlink is NOT attempted: chmodding an attacker-chosen path is the primitive fsguard exists to remove.
 #[cfg(unix)]
 fn harden_runtime_dir(dir: &std::path::Path) {
     if let Err(e) = crate::fsguard::ensure_private_dir(dir) {
@@ -121,12 +113,9 @@ impl LockFile {
         runtime_dir().join("run.lock")
     }
 
-    /// Write the lock file. Module-private on purpose: the lock file is
-    /// mutated only inside this module's [`RuntimeMutex`] critical sections
-    /// ([`listen_and_publish`]), after ownership is established. A wider
-    /// visibility would let an outside caller write it lock-free, the exact
-    /// interleaving class behind the unconditional-remove incident fixed in
-    /// [`cleanup_stale_lock`].
+    /// Module-private on purpose: the lock file is mutated only inside this module's [`RuntimeMutex`] critical
+    /// sections ([`listen_and_publish`]), after ownership is established. A wider visibility would allow lock-free
+    /// writes, the interleaving class [`cleanup_stale_lock`] exists to prevent.
     fn write(&self) -> io::Result<()> {
         let bytes = serde_json::to_vec(self)?;
         write_private_atomic(&Self::path(), &bytes)
@@ -154,17 +143,11 @@ impl LockFile {
         let _ = fs::remove_file(Self::path());
     }
 
-    /// Remove the lock file (and on Unix the socket) ONLY if the on-disk lock
-    /// still names this process as the owner. An exiting server must never
-    /// clean up its successor's files: after a takeover the lock and socket
-    /// path belong to the new server, so an instance that cannot prove
-    /// ownership leaves them alone. The check-then-remove runs under the
-    /// [`RuntimeMutex`], so it cannot interleave with a successor's
-    /// [`listen_and_publish`] (without the mutex, a successor could publish
-    /// between our read and our remove and we would delete its files).
-    /// Missing or unreadable lock, or an unacquirable mutex: do nothing (fail
-    /// safe - never delete what we cannot prove is ours; a stale file is
-    /// cleared by the next server start).
+    /// Remove the lock file (and on Unix the socket) ONLY if the on-disk lock still names this process: after a
+    /// takeover the paths belong to the successor, and an exiting server must never clean up its successor's files.
+    /// The check-then-remove runs under the [`RuntimeMutex`] so a successor's [`listen_and_publish`] cannot slip
+    /// between the read and the remove; anything unprovable (a missing or unreadable lock, an unacquirable mutex) is
+    /// left alone for the next server start to clear.
     pub fn remove_if_owned() {
         let Ok(_guard) = RuntimeMutex::acquire() else {
             return;
@@ -185,15 +168,11 @@ impl LockFile {
 /// directory).
 struct RuntimeMutex(#[allow(dead_code)] fs::File);
 
-/// Witness that the cross-process [`RuntimeMutex`] is held. Zero-sized and
-/// constructible only in this module: [`with_runtime_lock`] mints one while
-/// its guard is alive and lends it to the closure by reference. A function
-/// that mutates runtime-lock-guarded trust state (the `*_locked` family in
-/// `crate::revocation`, `Allowlist::write`) demands `&RuntimeLockToken`, so
-/// the "caller must hold the runtime lock" doc contract is a compile error
-/// to violate instead of a comment to remember. The higher-ranked closure
-/// signature keeps the borrow from escaping, so a token cannot outlive the
-/// lock hold it proves.
+/// Witness that the cross-process [`RuntimeMutex`] is held: zero-sized and constructible only in this module, minted
+/// by [`with_runtime_lock`] while its guard is alive and lent by reference under a higher-ranked closure signature, so
+/// a token cannot outlive the hold it proves. Mutators of lock-guarded trust state (the `*_locked` family in
+/// `crate::revocation`, `Allowlist::write`) demand `&RuntimeLockToken`, so "caller must hold the runtime lock" is a
+/// compile error to violate, not a comment.
 pub struct RuntimeLockToken(());
 
 impl RuntimeMutex {
@@ -213,35 +192,23 @@ pub enum PublishOutcome {
     LostRace(LockFile),
 }
 
-/// Bind the bridge socket and publish the lock file as one critical section
-/// under the [`RuntimeMutex`]. Re-checks the on-disk lock first: if another
-/// live server published since the caller last looked (two servers starting
-/// at once), nothing is touched and `LostRace` reports the current owner -
-/// binding anyway would unlink that server's freshly-bound socket, the exact
-/// takeover bug this serialization exists to prevent. "Another live server"
-/// means a pid that both is alive and attests as our own binary
-/// ([`super::attest::attest_pid`]); stale state - a dead owner, or a lock
-/// whose pid was reused by some unrelated process - is cleared before binding.
+/// Bind the bridge socket and publish the lock file as one critical section under the [`RuntimeMutex`], re-checking
+/// the on-disk lock first: if another live server published since the caller last looked (two servers starting at
+/// once), nothing is touched and `LostRace` names the owner, since binding anyway would unlink that server's
+/// freshly-bound socket. Stale state (a dead owner, or a pid reused by an unrelated process) is cleared first.
 pub fn listen_and_publish() -> io::Result<PublishOutcome> {
     let _guard = RuntimeMutex::acquire()?;
     if let Ok(Some(cur)) = LockFile::read() {
         if cur.pid != std::process::id() && pid_is_alive(cur.pid) {
-            // A live pid alone does not make the lock current: the pid is a
-            // number read from disk, and after a crash the OS may have reused
-            // it for an unrelated process. Defer (LostRace) only to a pid
-            // PROVEN to be running our own binary. A pid that does not attest
-            // is never signaled and its lock is superseded (removed below,
-            // under this mutex) rather than obeyed. That covers both a
-            // mismatch (a reused pid, or a different release of this binary
-            // after an upgrade) and an unmeasurable target (commonly a pid
-            // reused by another user's process, whose image we cannot read -
-            // deferring to it would brick startup for as long as that pid
-            // lives). If the owner really was a live server we could not
-            // verify, it is not taken down: it keeps its existing connections
-            // and merely stops being named by the lock, and the extension
-            // converges to the new server on its next reconnect. Windows has
-            // no attestation (see SECURITY.md "Platform support") and keeps
-            // the liveness-only behavior.
+            // A live pid alone does not make the lock current: after a crash the OS may have reused the pid for an
+            // unrelated process. Defer (LostRace) only to a pid PROVEN to run our own binary; any other pid is never
+            // signaled and its lock is superseded under this mutex.
+            //   PermissionDenied          -> a different binary (a reused pid, or another release of ours after an upgrade)
+            //   other attest error        -> unmeasurable, commonly a pid reused by another user's process; deferring
+            //                                to it would brick startup for as long as that pid lives
+            //   unverifiable live server  -> keeps its connections and merely stops being named; the extension
+            //                                converges to the new server on reconnect
+            //   Windows                   -> no attestation (SECURITY.md "Platform support"); liveness-only
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             match super::attest::attest_pid(cur.pid) {
                 Ok(()) => return Ok(PublishOutcome::LostRace(cur)),
@@ -347,14 +314,10 @@ pub(super) fn read_lock_or_err() -> io::Result<LockFile> {
     })
 }
 
-/// After a failed connect: remove the lock (and socket) ONLY when, re-checked
-/// under the [`RuntimeMutex`], the on-disk lock is still the one we dialed and
-/// its recorded owner is dead. An unconditional remove here used to delete a
-/// LIVE server's lock and socket on any transient connect failure, taking the
-/// bridge down for good; and without the mutex + re-read, a new server could
-/// publish between our liveness check and the remove, losing its files the
-/// same way. Anything ambiguous is left alone - a truly stale lock is also
-/// cleared by the next server start.
+/// After a failed connect: remove the lock (and socket) ONLY when, re-checked under the [`RuntimeMutex`], the on-disk
+/// lock is still the one we dialed and its owner is dead; anything ambiguous is left alone for the next server start
+/// to clear. An unconditional remove once deleted a LIVE server's files on a transient connect failure, and without
+/// the mutex + re-read a new server could publish between the liveness check and the remove.
 pub(super) fn cleanup_stale_lock(dialed: &LockFile) {
     let Ok(_guard) = RuntimeMutex::acquire() else {
         return;

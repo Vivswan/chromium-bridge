@@ -158,7 +158,7 @@ describe("ConfirmApp", () => {
   });
 });
 
-// ADR-0032 Lane U: the unpinned policy-relaxation payload. No page is
+// ADR-0032: the unpinned policy-relaxation payload. No page is
 // involved, the detail carries wire field names that render beside their
 // localized labels, and the ordinary Allow/Deny mechanics (arming delay,
 // Escape, resolve) stay exactly the window's.
@@ -184,7 +184,7 @@ describe("ConfirmApp policy_relax", () => {
       screen.getByText(/pageEvalEnabled - Allow page_eval \(arbitrary JavaScript\)/),
     ).toBeInTheDocument();
     // Both line shapes label: a bare wire name (later-document relaxation
-    // diff) and `field = value` (the first document's full value set, U2).
+    // diff) and `field = value` (the first document's full value set).
     expect(
       screen.getByText(/confirmGraceMs = 120000 - Re-confirm grace window/),
     ).toBeInTheDocument();

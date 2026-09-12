@@ -7,71 +7,34 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Control frames for the enrollment ceremony (ADR-0021), spoken over the
-/// native-messaging channel between the extension and the native host. They
-/// are HANDLED BY THE HOST ITSELF: the stdin->socket pump answers an
-/// `enclave_challenge` locally (signing with the Secure Enclave key, which
-/// raises the user-presence prompt) and never forwards these frames to the
-/// MCP server. Everything without one of these `type` tags forwards as
-/// before, so the protocol is fully backward compatible -
-/// an extension that never sends a challenge sees no change.
+/// Enrollment (ADR-0021) and per-action presence (ADR-0031) frames, answered by the native host itself: the
+/// stdin->socket pump signs a challenge with the Secure Enclave key (raising the user-presence prompt) and
+/// never forwards these frames to the MCP server. The host keeps no replay state and signs any valid challenge,
+/// so freshness is the extension's job: a fresh single-use CSPRNG nonce per challenge, a proof accepted only for
+/// the outstanding nonce and verified against its PINNED key, never the `pubkey` field (trustworthy only during
+/// the user-verified enrollment ceremony).
 ///
-/// Contract (the extension side consumes this):
-/// - `enclave_challenge { nonce, context? }`: `nonce` is a non-empty NUL-free
-///   string of at most 256 bytes; `context` an optional NUL-free string of at
-///   most 4096 bytes. The host keeps no replay state and will sign any valid
-///   challenge (raising the presence prompt), so freshness is NORMATIVE on
-///   the extension side: the nonce MUST be freshly generated per challenge
-///   from a cryptographic RNG (e.g. 32 bytes of `crypto.getRandomValues`,
-///   encoded), MUST be single-use, and a proof MUST only be accepted for the
-///   exact nonce the extension itself just issued. A proof over any other
-///   nonce, or a second proof over a used nonce, MUST be rejected.
-/// - `enclave_proof { sig, key_id, pubkey }`: `sig` is base64 of the raw
-///   64-byte IEEE P1363 `r||s` ECDSA P-256/SHA-256 signature over
-///   `UTF8("chromium-bridge-enclave-v1") || 0x00 || UTF8(nonce) || 0x00 ||
-///   UTF8(context or "")`; `key_id` is the lowercase-hex SHA-256 of the
-///   65-byte X9.63 public key; `pubkey` is base64 of those 65 bytes. The
-///   extension MUST verify `sig` against its PINNED key, not against the
-///   `pubkey` field (which is trustworthy only during the user-verified
-///   enrollment ceremony itself).
-/// - `enclave_error { reason }`: stable codes `unsupported_platform`,
-///   `not_enrolled`, `invalid_challenge`, `key_invalid`, `keychain_error`,
-///   `signing_failed`.
-/// - `enclave_revoke {}` (extension -> host, ADR-0025): delete the enrollment
-///   key from the keychain, remove the recorded policy, and bump the
-///   revocation epoch. Deletion is not presence-gated (ADR-0021: it only ever
-///   reduces capability). Answered with `enclave_revoked` on success (also
-///   when no key existed -- the requested end state holds either way) or
-///   `enclave_error { keychain_error }` on failure.
-/// - `enclave_revoked {}` (host -> extension, ADR-0025): the enrollment key is
-///   gone. Sent as the acknowledgement of `enclave_revoke`, and PUSHED
-///   host-originated when the host observes the key was revoked out-of-band
-///   (`chromium-bridge revoke`, `pair --reset`), so a pinned extension flips
-///   to its fail-closed compromised state without waiting for an opt-in
-///   reverify. The extension treats it as capability reduction only: with a
-///   pin it marks the bridge compromised; without one it is a no-op.
+/// ```text
+/// nonce            -> non-empty, NUL-free, at most 256 BYTES (MAX_NONCE_LEN)
+/// context          -> optional, NUL-free, at most 4096 BYTES (MAX_CONTEXT_LEN); absent and "" sign identically
+/// sig              -> base64 of the raw 64-byte IEEE P1363 r||s ECDSA P-256/SHA-256 signature over
+///                     UTF8(domain) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
+/// domain           -> chromium-bridge-enclave-v1 (enrollment) or chromium-bridge-presence-v1 (presence),
+///                     so neither statement type can ever be replayed as the other
+/// key_id / pubkey  -> lowercase-hex SHA-256 of the 65-byte X9.63 public key / base64 of those bytes
+/// error reason     -> REASON_CODES; presence adds bridge_killed and busy (the host refuses, without prompting,
+///                     while the kill switch is engaged or unreadable, or another presence round is in flight)
+/// enclave_revoke   -> deletes the enrollment key, then best-effort clears the recorded policy baseline and bumps the
+///                     revocation epoch (ADR-0025); not presence-gated (it only reduces capability). Answered
+///                     enclave_revoked once the key is gone (even when none existed, and even when the baseline clear
+///                     or epoch bump failed: those are only logged); enclave_error carries the key deletion's
+///                     reason code (keychain_error, also for an unavailable runtime lock; unsupported_platform off macOS)
+/// enclave_revoked  -> also PUSHED unprompted when the host sees the key revoked out-of-band (chromium-bridge
+///                     revoke, pair --reset), so a pinned extension flips to its fail-closed compromised state
+///                     without waiting for a reverify; without a pin it is a no-op
+/// ```
 ///
-/// The PER-ACTION presence frames (ADR-0031) ride the same channel and are
-/// likewise host-handled, one round per confirmation of a crown-jewel tool
-/// (`page_eval`, `page_upload`):
-///
-/// - `presence_challenge { nonce, context? }` (extension -> host): same field
-///   bounds and freshness rules as `enclave_challenge` (fresh CSPRNG nonce,
-///   single-use, proof accepted only for the extension's own outstanding
-///   nonce). The signature covers `UTF8("chromium-bridge-presence-v1") ||
-///   0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")` - a DIFFERENT
-///   domain from the enrollment proof, so neither statement type can ever be
-///   replayed as the other. Signing raises the Secure Enclave user-presence
-///   prompt; the Touch ID tap is the approval. The host refuses (without
-///   prompting) while the kill switch is engaged (`bridge_killed`) and while
-///   another presence round is in flight (`busy`).
-/// - `presence_proof { sig, key_id, pubkey }` (host -> extension): same
-///   encoding as `enclave_proof`, under the presence domain. The extension
-///   MUST verify against its PINNED key.
-/// - `presence_error { reason }` (host -> extension): the enclave reason
-///   codes plus `bridge_killed` and `busy`. Every error is a denial; the
-///   extension must fail the confirmation closed, never fall back to a
-///   softer surface (the no-downgrade rule).
+/// Every error is a denial: the extension fails the confirmation closed, never falls back to a softer surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -115,44 +78,26 @@ pub enum EnclaveControl {
     },
 }
 
-/// Host-admin control frames (ADR-0025/0030), spoken over the native-messaging
-/// channel and handled by the native host itself, exactly like
-/// [`EnclaveControl`]: never forwarded to the MCP server, and dropped if the
-/// server leg tries to inject one. They give the extension's options UI a
-/// managed path to the trusted-client allowlist, the global kill switch, and
-/// the audit trail:
+/// Host-admin frames (ADR-0025/0030), answered by the native host itself exactly like [`EnclaveControl`]:
+/// never forwarded to the MCP server, and dropped if the server leg tries to inject one. They give the
+/// options UI the trusted-client allowlist, the global kill switch, and the audit trail, and arrive only from
+/// the extension Chrome connected to this host (`allowed_origins`). List/revoke and `kill_engage` only reduce
+/// capability; `kill_release` would RESTORE it, so the host refuses it (ADR-0032 decision 6) but keeps it
+/// parsed, so a shipped extension gets an audited refusal, never a silent drop.
 ///
-/// - `client_list {}` -> `client_list_result { ok, enrolled, clients, error? }`
-///   Read-only. `enrolled` mirrors the CLI's unenrolled/enrolled distinction;
-///   `clients` reuses the on-disk entry shape (`{name, anchor: {kind, value},
-///   added_unix}`). A load failure (including the ADR-0025 tamper case) comes
-///   back as `ok: false` with the error text -- the UI shows it, nothing is
-///   guessed.
-/// - `client_revoke { name }` -> `client_revoke_result { ok, error? }`
-///   Removes one trusted client and bumps the revocation epoch in the same
-///   critical section, so a live broker drops that client's connections.
-/// - `kill_status {}` / `kill_engage {}` / `kill_release {}` ->
-///   `kill_status_result { ok, killed?, error? }` (ADR-0030). The result frame
-///   is also PUSHED host-originated, unsolicited: at startup and whenever the
-///   host's revocation watch sees the kill marker move, so the extension's
-///   SW-only mirror tracks CLI-driven transitions without polling. `ok: false`
-///   (state unreadable) carries no `killed` claim; the extension treats it as
-///   unknown and fails closed.
-/// - `audit_event { kind, outcome?, tool?, name?, detail?, cid? }` (ADR-0030,
-///   fire-and-forget, no reply): the extension reports one of ITS OWN
-///   user-facing decisions (confirmations, enrollment approvals) for the
-///   host's on-disk audit trail. `cid` is the per-confirmation correlation id
-///   the extension stamps on a `confirm_shown` and its later verdict so the
-///   audit panel joins them exactly. The host accepts only the extension-owned
-///   kinds ([`crate::audit::extension_kind`]) and stamps the surface itself,
-///   so the frame cannot forge host-side events like admissions or kills.
-///
-/// Trust: these frames arrive only from the extension Chrome connected to
-/// this host (`allowed_origins`). The list/revoke pair adds no capability
-/// beyond the CLI's (capability reduction); `kill_engage` is also reduction.
-/// `kill_release` would RESTORE capability, so the host refuses it (ADR-0032
-/// decision 6 retired the extension release surface); the frame stays parsed
-/// so a shipped extension gets an audited refusal, never a silent drop.
+/// ```text
+/// client_list         -> client_list_result { ok, enrolled, clients, error? }; a load failure (including the
+///                        tamper case) is ok: false with the error text, the UI shows it and guesses nothing
+/// client_revoke       -> client_revoke_result { ok, error? }; the revocation-epoch bump shares the critical
+///                        section, so a live broker drops that client's connections
+/// kill_status/engage  -> kill_status_result { ok, killed?, error? }; also PUSHED unsolicited when the host's
+///                        revocation watch sees the kill marker move, and at startup only when killed or unreadable
+///                        (a healthy host waits for the extension's kill_status query), so the SW-only mirror
+///                        never polls; ok: false carries no killed claim (fail closed on unknown)
+/// audit_event         -> no reply; the host accepts only the extension-owned kinds (crate::audit::extension_kind)
+///                        and stamps the surface itself, so the frame cannot forge host-side events like
+///                        admissions or kills; cid joins a confirm_shown to its verdict
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -250,15 +195,14 @@ impl KillStatus {
     }
 }
 
-/// Why the host has no usable policy to report (ADR-0032 decision 4, D-P4-2):
-/// the structured cause the `policy_current { ok: false }` frame carries in its
-/// optional `reason` field. The Phase-4 extension gates its one-shot
-/// `legacy_settings` send on `reason == absent` (it imports only when a
-/// capable host genuinely has no baseline yet); `damaged` (an unparsable
-/// baseline or a relaxing overlay) and `unreadable` (a store I/O error) are
-/// fail-closed states the extension keeps its deny baseline on, never an
-/// import trigger. An old host omits the field entirely, which the extension
-/// reads as "never send" - fail closed on absence of the signal.
+/// Why the host has no usable policy to report (ADR-0032 decision 4): the structured `reason` on a
+/// `policy_current { ok: false }` frame, which decides whether the extension sends its one-shot `legacy_settings`.
+///
+/// ```text
+/// absent                    -> a capable host that genuinely has no baseline yet: the extension sends legacy_settings
+/// damaged, unreadable       -> the extension stays on its deny baseline
+/// field missing (old host)  -> reads as "never send": fail closed on absence of the signal
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyUnavailableReason {
     /// No policy baseline exists on this host yet (the pre-cutover state).
@@ -303,12 +247,9 @@ pub enum PolicyStatus {
         sig_b64: Option<String>,
         overlay: Option<crate::policy::PolicyOverlay>,
     },
-    /// No usable policy: the store is absent, unreadable, or malformed. `ok:
-    /// false` with an error, a structured `reason` (D-P4-2; `None` only when
-    /// the frame answers a malformed request rather than reporting a store
-    /// state), and NO baseline claim, so the extension fails closed on its
-    /// deny baseline rather than trusting bytes nobody vouched for (decision
-    /// 4/5).
+    /// No usable policy: `ok: false` with an error, a structured `reason` (`None` only when the frame
+    /// answers a malformed request rather than reporting a store state), and NO baseline claim, so the
+    /// extension keeps its deny baseline rather than trusting bytes nobody vouched for.
     Unavailable {
         reason: Option<PolicyUnavailableReason>,
         error: String,
@@ -346,32 +287,18 @@ impl PolicyStatus {
     }
 }
 
-/// Policy and language control frames (ADR-0032), spoken over the
-/// native-messaging channel and host-handled exactly like [`EnclaveControl`]
-/// and [`AdminControl`]: never forwarded to the MCP server, and dropped when
-/// the server leg tries to inject one. The host answers the four
-/// extension-originated frames and pushes `policy_current` / `lang_current`
-/// unsolicited (which is why those two carry no request disposition: a result
-/// frame arriving inbound is an injection and is dropped).
+/// Policy and language frames (ADR-0032), host-handled exactly like [`EnclaveControl`] and
+/// [`AdminControl`]: never forwarded to the MCP server, dropped when the server leg tries to inject one.
+/// The host pushes `policy_current` and `lang_current` unsolicited, at every connect and on every observed
+/// change, which is why those two carry no request disposition: one arriving inbound is an injection.
 ///
-/// - `policy_get {}` (extension -> host): on-demand refresh of the policy
-///   state. The extension sends it only on a connection where the host has
-///   already pushed a policy frame (the never-speak-first rule, ADR-0032
-///   decision 4: an old host would classify it as `Forward` and the MCP
-///   server's strict `BridgeResp` parse would tear the browser leg down).
-/// - `policy_current { ok, baseline?, sig?, overlay?, reason?, error? }`
-///   (host -> extension): the policy state, pushed at every connect and on
-///   every observed change, and the reply to `policy_get`. `baseline` is the
-///   exact signed document bytes (base64), `sig` its signature, `overlay`
-///   the unsigned restriction overlay; `ok: false` carries `error` plus the
-///   optional structured `reason` instead (see
-///   [`PolicyUnavailableReason`]; fail closed).
-/// - `legacy_settings { bag }` (extension -> host): the snapshotted legacy
-///   settings bag, recorded host-side as a pending import, never applied
-///   (ADR-0032 decision 8).
-/// - `lang_get {}` / `lang_set { value }` (extension -> host) and
-///   `lang_current { value, seq }` (host -> extension): the shared
-///   `uiLanguage` preference, echo-suppressed by `seq` (decision 7).
+/// ```text
+/// policy_get         -> policy_current; sent only on a connection where the host has already pushed a
+///                       policy frame (never speak first, decision 4): an old host would `Forward` it and
+///                       the MCP server's strict `BridgeResp` parse would tear the browser leg down
+/// legacy_settings    -> no reply; recorded host-side as a pending import, never applied (decision 8)
+/// lang_get/lang_set  -> lang_current { value, seq }; `seq` suppresses the sender's own echo (decision 7)
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -393,11 +320,9 @@ pub enum PolicyControl {
         /// fails the whole frame parse, fail closed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         overlay: Option<crate::policy::PolicyOverlay>,
-        /// Why no policy is available, when `ok: false` (ADR-0032 D-P4-2): the
-        /// camelCase [`PolicyUnavailableReason`] token (`absent`/`damaged`/
-        /// `unreadable`). ADDITIVE and OPTIONAL - an old host omits it and the
-        /// extension reads a missing field as "never send" (fail closed).
-        /// Absent on `ok: true`.
+        /// Why no policy is available, when `ok: false` (ADR-0032 decision 4): the [`PolicyUnavailableReason`] wire
+        /// token, absent on `ok: true`. OPTIONAL, so an old host omits it and the extension reads a missing field as
+        /// "never send" (fail closed).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -874,10 +799,9 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
         },
         "legacy_settings" => match serde_json::from_value(frame.clone()) {
             Ok(PolicyControl::LegacySettings { bag }) => FrameDisposition::LegacySettings { bag },
-            // Fire-and-forget has no reply contract (Phase 4 owns the pending
-            // store); a malformed bag is dropped, never forwarded - and
-            // audited (the frame may be a legitimate extension's one
-            // migration send, lost to version skew), carrying only its size.
+            // Fire-and-forget has no reply contract; a malformed bag is dropped,
+            // never forwarded, and audited with only its size (the frame may be a
+            // legitimate extension's one migration send, lost to version skew).
             _ => FrameDisposition::MalformedLegacySettings {
                 bytes: serde_json::to_vec(frame).map(|b| b.len()).unwrap_or(0),
             },
@@ -900,17 +824,12 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
     }
 }
 
-/// The host-control `type` tag carried by `frame` - any [`EnclaveControl`],
-/// [`AdminControl`], or [`PolicyControl`] tag - or `None` for everything
-/// else. The native host's socket->stdout pump uses this to drop control
-/// frames arriving FROM the MCP server: the ceremony and the admin exchange
-/// run strictly between the extension and the host itself, so the server leg
-/// has no legitimate reason to ever carry one. Zero trust applies to our own
-/// server too - an attested-but-misbehaving server must not be able to
-/// inject an `enclave_error` that burns the extension's outstanding nonce,
-/// an `enclave_revoked` that provokes a false fail-closed "compromised"
-/// mark, a forged `client_list_result` (ADR-0021/0025), or a forged
-/// `policy_current` (ADR-0032).
+/// The host-control `type` tag carried by `frame` (any [`EnclaveControl`], [`AdminControl`], or
+/// [`PolicyControl`] tag), or `None`. The socket->stdout pump uses it to drop control frames arriving FROM
+/// the MCP server: the ceremony and the admin exchange run strictly between the extension and the host, so
+/// zero trust applies to our own server too. An attested-but-misbehaving server must not inject an
+/// `enclave_error` that burns the extension's outstanding nonce, an `enclave_revoked` that provokes a false
+/// fail-closed "compromised" mark, or a forged `client_list_result` / `policy_current` (ADR-0021/0025/0032).
 pub fn host_control_type(frame: &Value) -> Option<&'static str> {
     frame
         .get("type")

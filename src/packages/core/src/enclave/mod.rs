@@ -1,30 +1,12 @@
-//! Secure Enclave enrollment key: mint, look up, sign, revoke.
+//! Secure Enclave enrollment key: mint, look up, sign, revoke (ADR-0021). The host mints a P-256 key inside the Secure
+//! Enclave with every private-key use gated on user presence (Touch ID / password), and the extension pins the PUBLIC
+//! key and verifies `enclave_proof` frames ([`crate::protocol::control::EnclaveControl`]) against it, so only a host
+//! that can drive THIS machine's Enclave with the user physically approving can complete an enrollment.
 //!
-//! The enrollment ceremony (ADR-0021) establishes trust between the extension
-//! and this binary at `claude mcp add` time. The host mints a P-256 key inside
-//! the Secure Enclave; the private key never leaves the Enclave and every use
-//! is gated on user presence (Touch ID / password). The extension pins the
-//! PUBLIC key and later verifies `enclave_proof` frames (see
-//! [`crate::protocol::control::EnclaveControl`]) against it, so only a host that can
-//! drive THIS machine's Enclave - with the user physically approving - can
-//! complete an enrollment.
-//!
-//! Layout (one concern per submodule; the public API is re-exported here):
-//! - [`challenge`]: challenge message construction (shared contract with the
-//!   extension) and its bounds.
-//! - [`der`]: strict-DER ECDSA signature parsing to the raw P1363 form.
-//! - [`encoding`]: base64 (encode for the proof frames, strict decode for
-//!   the signed policy baseline).
-//! - [`pubkey`]: the validated X9.63 public key + fingerprints.
-//! - [`config`]: the on-disk enrollment policy record (policy only, never key
-//!   material).
-//! - [`key`]: the cross-platform [`EnrollmentKey`] handle and the native-host
-//!   challenge responder.
-//! - [`macos`]: the keychain/Secure Enclave backend, built on the vetted
-//!   `security-framework` crate - no hand-rolled Security.framework FFI.
-//!   Other platforms get stubs that fail closed with
-//!   [`EnclaveError::Unsupported`].
-//! - [`cli`]: the `pair` / `revoke` / `enclave-status` subcommand runners.
+//! ```text
+//! macos backend    -> the vetted security-framework crate, never hand-rolled Security.framework FFI
+//! other platforms  -> stubs that fail closed with EnclaveError::Unsupported
+//! ```
 
 mod challenge;
 mod cli;

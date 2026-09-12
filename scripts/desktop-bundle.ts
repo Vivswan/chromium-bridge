@@ -1,38 +1,15 @@
 #!/usr/bin/env bun
 
-// Build and sign the desktop bundle end to end (ADR-0026, extended by the
-// Phase 9 app, ADR-0029). One command: `moon run bundle-app`.
+// Build and sign the desktop bundle end to end (ADR-0026, ADR-0029): `moon run bundle-app`, plus `--dmg` for the
+// disk image. macOS-only by design: the entitlement chain is the thing under test.
 //
-//   1. build the release host binary (the Secure Enclave toucher)
-//   2. build the extension (bundled into the app for "Load unpacked")
-//   3. `tauri build` (builds the UI + app, bundles, signs the .app)
-//   4. wrap the host in a HELPER BUNDLE inside the app
-//      (Contents/Helpers/chromium-bridge.app): macOS honors restricted
-//      entitlements only on a bundle's main executable with an embedded
-//      provisioning profile - a bare nested binary is SIGKILLed at exec.
-//      The helper Info.plist is stamped with the workspace version here, so
-//      it cannot go stale against Cargo.toml.
-//   5. copy the extension dist into Contents/Resources/extension
-//   6. embed the Mac Team provisioning profile (discovered from Xcode's
-//      profile cache, or supplied via PROVISION_PROFILE_PATH in CI) in the
-//      helper and the outer app
-//   7. sign inside-out: the helper with the HOST's own entitlements
-//      (entitlements/host.entitlements), then the outer app with its own
-//      (entitlements/app.entitlements)
-//   8. re-assert the final bundle with scripts/check-desktop-signing.ts,
-//      which fails on entitlement drift, a get-task-allow appearance, or an
-//      expired profile
-//   9. with --dmg, wrap the verified .app in a signed UDZO disk image and
-//      re-verify the copy inside the mounted image (the .dmg is what ships;
-//      hdiutil runs AFTER the re-sign because tauri's own dmg target would
-//      capture the .app before the helper bundle exists). The image gets the
-//      branded install window (background from assets/dmg/background.svg,
-//      fixed icon positions, volume icon) by writing the mounted volume's
-//      .DS_Store deterministically (scripts/dmg-dsstore.ts) - no Finder, no
-//      AppleScript - so it styles identically on a headless CI runner and
-//      locally.
+// The host ships as a helper BUNDLE (Contents/Helpers/chromium-bridge.app), not a bare nested binary: macOS honors
+// restricted entitlements only on a bundle's main executable with an embedded provisioning profile, and a bare
+// nested binary is SIGKILLed at exec.
 //
-// macOS-only by design: the entitlement chain is the thing under test.
+//   codesign inside-out (helper, then app)  -> the outer signature seals the new nested content
+//   dmg built here, not by tauri's target   -> tauri's would capture the .app before the helper bundle exists
+//   .DS_Store via scripts/dmg-dsstore.ts    -> no Finder, no AppleScript: identical styling on a headless CI runner
 
 import {
   copyFileSync,
@@ -69,9 +46,7 @@ if (process.platform !== "darwin") {
 
 const wantDmg = process.argv.includes("--dmg");
 
-// --plain-dmg used to skip the Finder-based styling; the styling is now
-// deterministic and Finder-free (see below), so there is no unstyled path to
-// fall back to. Reject it explicitly rather than silently building no dmg.
+// Only --dmg is read, so an old --plain-dmg invocation would silently build no dmg at all; reject it instead.
 if (process.argv.includes("--plain-dmg")) {
   console.error(
     "error: --plain-dmg was removed; the styled dmg is now built without Finder. Use --dmg.",
@@ -123,19 +98,12 @@ if (typeof identity !== "string" || typeof bundleId !== "string") {
 }
 const appIdentifier = `${TEAM_ID}.${bundleId}`;
 
-// Find a live provisioning profile authorizing our full entitlement chain
-// (fail-closed: identifier, team, keychain group, device, and expiry must
-// all check out). Two sources:
-//
-//   - PROVISION_PROFILE_PATH (CI): an explicit profile file, decoded from a
-//     repository secret. The this-device check is skipped - the runner is
-//     never in a free-tier profile's device list - so the built app runs
-//     only on Macs the supplied profile provisions (AMFI enforces that at
-//     exec regardless of what we check here).
-//   - default (local): the newest usable profile in Xcode's cache. Free-tier
-//     profiles expire after 7 days; when none is usable, Xcode's automatic
-//     signing mints a fresh one (open any Xcode project with this bundle id
-//     and the team selected).
+// A live provisioning profile must authorize the full entitlement chain; any mismatch fails closed.
+//   PROVISION_PROFILE_PATH (CI)  -> an explicit file decoded from a repository secret; the this-device check is
+//                                   skipped (a runner is never in a free-tier device list), so the app runs only on
+//                                   Macs that profile provisions, which AMFI enforces at exec regardless
+//   default (local)              -> the newest usable profile in Xcode's cache; free-tier profiles expire after 7 days,
+//                                   and Xcode's automatic signing mints a fresh one for this bundle id and team
 const envProfilePath = process.env.PROVISION_PROFILE_PATH;
 let profile: ProvisioningProfile;
 if (envProfilePath !== undefined && envProfilePath !== "") {
@@ -261,20 +229,11 @@ run(["ditto", app, appDeliverable]);
 
 run(["bun", resolve(root, "scripts/check-desktop-signing.ts")]);
 
-// --dmg: wrap the verified .app in a distributable disk image. `ditto`
-// preserves the signature (cpSync would not keep every attribute), the
-// /Applications symlink gives the standard drag-to-install layout, and the
-// image itself is codesigned. The copy inside the mounted image is then
-// re-verified so "check-desktop-signing passed" holds for the artifact that
-// ships, not just the build-tree .app.
-//
-// The install window is branded: the stage carries the rendered background
-// (assets/dmg/background.svg -> hidpi TIFF) and the volume icon, and the
-// mounted volume's .DS_Store (window size, icon positions, background) is
-// written DETERMINISTICALLY by scripts/dmg-dsstore.ts - no Finder, no
-// AppleScript - so the styled image is produced identically on a headless CI
-// runner and locally. Styling is cosmetic, not a security gate, but it still
-// fails loudly rather than shipping a half-styled image.
+// --dmg: the image is codesigned and the .app inside the MOUNTED image is re-verified, so the signing check holds
+// for the artifact that ships. Styling is cosmetic, not a security gate, but a half-styled image still fails loudly.
+//   ditto, not cpSync                     -> keeps every attribute the signature covers
+//   /Applications symlink                 -> the standard drag-to-install layout
+//   .DS_Store via scripts/dmg-dsstore.ts  -> deterministic, no Finder: CI and a laptop produce the same window
 if (wantDmg) {
   const arch = process.arch === "arm64" ? "arm64" : process.arch;
   const dmgDir = resolve(root, "build/dmg");

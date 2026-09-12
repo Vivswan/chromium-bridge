@@ -1,31 +1,18 @@
-//! Native-host mode: the `--native-host` subprocess spawned by Chrome.
+//! Native-host mode: the `--native-host` subprocess Chrome spawns. It is intentionally dumb, so all real tool
+//! logic stays in the MCP server on the other side of the socket; EOF on stdin (Chrome disconnected) is the
+//! shutdown signal.
 //!
-//! It is intentionally dumb. Two threads:
-//! - stdin -> socket: read native-messaging frames, forward each JSON value as
-//!   an NDJSON line over the bridge socket.
-//! - socket -> stdout: read NDJSON lines from the bridge socket, frame each as
-//!   a native-messaging message on stdout.
+//! ```text
+//! stdin  -> socket   native-messaging frames forwarded as NDJSON lines, except the host-handled control frames
+//!                    (enrollment ceremony, revocation and client admin, kill switch, presence, policy and
+//!                    language), which are answered HERE and never reach the server
+//! socket -> stdout   NDJSON lines framed for Chrome, except a control frame from the server, which is an
+//!                    injection and is dropped
+//! ```
 //!
-//! The exceptions to "forward everything" are the host-handled control frames:
-//! the enrollment ceremony (ADR-0021) and the revocation/admin exchange
-//! (ADR-0025). Frames whose `type` is one of those control tags are handled
-//! HERE - an `enclave_challenge` is answered locally by signing with the
-//! Secure Enclave key (raising the user-presence prompt), an `enclave_revoke`
-//! deletes the enrollment key, and `client_list`/`client_revoke` manage the
-//! trusted-client allowlist - and are never forwarded to the MCP server;
-//! symmetrically, a control frame arriving FROM the server is an injection
-//! and is dropped, never forwarded to the extension. Everything else forwards
-//! byte-for-byte, so all real tool logic stays in the MCP server on the other
-//! side of the socket. EOF on stdin (Chrome disconnected) is our shutdown
-//! signal.
-//!
-//! One host-originated push exists (ADR-0025): when the enrollment key has
-//! been revoked out-of-band (`chromium-bridge revoke`, `pair --reset`), the
-//! host tells the extension with an `enclave_revoked` frame - at startup when
-//! the key is already gone, and live when the revocation epoch's host-key
-//! marker moves. It is host-originated on purpose: the socket->stdout pump
-//! drops any server-injected control frame, so only this process can put that
-//! frame in front of the extension.
+//! The `enclave_revoked` push (ADR-0025) is host-originated on purpose: the socket->stdout pump drops any
+//! server-injected control frame, so only this process can put that frame in front of the extension. It fires
+//! at startup when the key is already gone and live when the host-key epoch moves.
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -283,18 +270,13 @@ fn malformed_admin_reply(kind: AdminKind) -> AdminControl {
 
 // ---- ADR-0032: host-owned policy and shared-language control frames ----------
 
-/// The current policy state as a `policy_current` frame (ADR-0032 decision 4),
-/// built through the typed [`PolicyStatus`] so the illegal wire mixtures
-/// (`ok: false` carrying a baseline, a `sig` with no baseline) are
-/// unconstructible. The store is passed through byte-for-byte: the host does
-/// not re-parse or canonicalize the baseline (the extension verifies+parses
-/// the exact bytes against its own pin, ADR-0032 decision 3) - but it IS
-/// validated before the push (`effective()`: strict baseline parse plus the
-/// overlay direction check), so a store whose envelope reads but whose
-/// content is damaged or tampered pushes `ok: false`, matching the dispatch
-/// gate's deny-all reading of the same state. Fail closed on absence or an
-/// unreadable/malformed store: `ok: false`, so the extension keeps its deny
-/// baseline rather than trusting bytes nobody vouched for.
+/// The current policy state as a `policy_current` frame (ADR-0032 decision 4). The baseline travels as the stored
+/// bytes, never re-serialized or canonicalized: the extension verifies the exact bytes against its own pin (decision 3).
+///
+/// ```text
+/// store content damaged (effective() fails) -> ok: false, the same deny-all reading the dispatch gate takes of that state
+/// store absent or unreadable                -> ok: false, so the extension keeps its deny baseline
+/// ```
 fn policy_current_reply() -> PolicyControl {
     let status = match crate::policy::PolicyStore::load() {
         Ok(Some(store)) => match store.effective() {
@@ -428,22 +410,11 @@ fn push_revoked(out: &Mutex<BufWriter<io::Stdout>>) {
     }
 }
 
-/// Push the current kill state to the extension as an unsolicited
-/// `kill_status_result` (ADR-0030). Sent when the watch observes a transition,
-/// and at startup only when the news is bad (killed, or unreadable): a
-/// healthy startup pushes NO kill frame, because the extension itself queries
-/// `kill_status` on every port connect (which is what clears a stale killed
-/// mirror after a CLI unkill), and an unconditional kill push would put an
-/// unexpected frame in front of every fresh connection. Best-effort: a failed
-/// write only delays the mirror to the extension's own query.
-///
-/// This healthy-startup-quiet rule is specific to the KILL state. It is NOT
-/// contradicted by the policy and language pushes, which DO fire at every
-/// connect (ADR-0032 decision 4 deliberately reverses the asymmetry for a
-/// policy-capable host: the extension never speaks first on the new frames, so
-/// the host must identify itself by pushing `policy_current`/`lang_current`
-/// unsolicited, and the per-connection dispatch barrier depends on receiving
-/// that policy push).
+/// Push the kill state unsolicited (ADR-0030): on every observed transition, and at startup only when the news is bad
+/// (killed or unreadable). A healthy startup stays quiet because the extension queries `kill_status` on every connect
+/// anyway (that query is what clears a stale killed mirror after a CLI unkill); the policy and language pushes DO fire
+/// at every connect, since the extension never speaks first on those frames and its dispatch barrier waits for the
+/// policy push (ADR-0032 decision 4).
 fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
     if let Err(e) = write_control_reply(out, &kill_status_reply()) {
         log_warn!("native-host", "could not push kill_status_result: {e}");
@@ -478,44 +449,23 @@ impl WatchedEpochs {
     }
 }
 
-/// Watch the revocation record while this host runs, and notify the extension
-/// of out-of-band transitions:
+/// Watch the revocation record while this host runs and push out-of-band transitions (host-key revocation, kill,
+/// policy, language) to the extension. With `unkill_observed` (a killed bridge's control-plane mode) an observed
+/// release is HANDED to the loop via the flag rather than exiting here: exiting would drop control frames still
+/// buffered on stdin, including a `kill_engage` the extension was already told was sent (see [`drain_then_decide`]).
 ///
-/// - **host-key revocations** (`chromium-bridge revoke`, `pair --reset`),
-///   pushed as `enclave_revoked` - both triggers require a RECORDED revocation
-///   (`host_key_epoch > 0`) AND a keychain-confirmed absent key before any
-///   frame is sent (see ADR-0025; the keychain check keeps a scribbled-on
-///   revocation file from faking one);
-/// - **kill-switch transitions** (ADR-0030), pushed as `kill_status_result`
-///   whenever `kill_epoch` moves - plus once at startup when the state is
-///   already killed or unreadable - so the extension's SW-only mirror tracks
-///   CLI-driven kills without polling (the alive direction is pulled by the
-///   extension's own on-connect query).
-///
-/// With `unkill_observed` (the control-plane mode of a killed bridge), an
-/// observed release is pushed and then HANDED to the control-plane loop via
-/// the flag instead of exiting the process from this thread: exiting here
-/// would drop whatever control frames are still buffered on stdin with the
-/// process - including a `kill_engage` the extension was already told was
-/// sent - so the loop drains those and re-checks the state before deciding
-/// to leave killed mode (see [`drain_then_decide`]). The released state is
-/// pushed BEFORE the flag is raised, so the mirror is not left engaged
-/// across the respawn gap.
-///
-/// An unreadable record is pushed once (as `ok: false`, which the extension
-/// treats as unknown and fails closed on) and logged once, not every tick.
+/// ```text
+/// host-key triggers  -> need a RECORDED revocation (host_key_epoch > 0) AND a keychain-confirmed absent key, so a
+///                       scribbled-on revocation file cannot fake one (ADR-0025)
+/// observed release   -> pushed BEFORE the flag is raised, so the mirror is not left engaged across the respawn gap
+/// ```
 fn spawn_revocation_watch(
     out: Arc<Mutex<BufWriter<io::Stdout>>>,
     unkill_observed: Option<Arc<AtomicBool>>,
 ) {
     thread::spawn(move || {
-        // ADR-0032 decision 4: a policy-capable host identifies itself at
-        // every connect by pushing the policy and language state unsolicited
-        // (the extension never speaks first on those frames, and the
-        // per-connection dispatch barrier depends on receiving the policy
-        // push). This reverses the kill state's healthy-startup-quiet rule,
-        // deliberately (see push_kill_status), so it runs unconditionally,
-        // before the revocation-record read below.
+        // A policy-capable host identifies itself at every connect (ADR-0032 decision 4; push_kill_status says
+        // why the kill state stays quiet instead): unconditional, before the revocation-record read below.
         push_policy_current(&out);
         push_lang_current(&out);
         // Startup posture: bad news is announced now (a key revoked or a kill
@@ -643,24 +593,17 @@ impl Drop for PresenceSlotGuard {
     }
 }
 
-/// Handle a `presence_challenge` frame (ADR-0031): sign the per-action
-/// presence statement with the Enclave key, raising the Touch ID prompt.
+/// Handle a `presence_challenge` (ADR-0031): sign the per-action presence statement with the Enclave key,
+/// raising the Touch ID prompt. Unlike the enrollment challenge the signing runs on its OWN thread: presence
+/// rounds happen in steady state, and holding the stdin->socket pump for a tap would head-of-line block every
+/// other in-flight op. `Err` means the immediate promptless reply could not be written; worker-thread write
+/// failures are only logged, and the pump notices stdout going away on its next frame.
 ///
-/// Two promptless refusals come first, fail closed:
-/// - while the kill switch is engaged (or unreadable) nothing may prompt -
-///   no op can proceed anyway, and a killed bridge that still raises Touch ID
-///   sheets would train the user to tap unexplained prompts;
-/// - while another round is in flight (`busy`, above).
-///
-/// The signing itself runs on its OWN thread, unlike the enrollment
-/// challenge: enrollment blocks the pump only during the user-present
-/// ceremony, but presence rounds happen in steady state, and holding the
-/// stdin->socket pump for the duration of a tap would head-of-line block
-/// every other in-flight op's traffic behind the prompt. The reply is
-/// written through the shared stdout mutex, so frames stay whole. An `Err`
-/// from this function means the immediate (promptless) reply could not be
-/// written; worker-thread write failures are logged, and the pump notices
-/// stdout going away on its next frame.
+/// ```text
+/// kill switch engaged or unreadable  -> `bridge_killed`: no op can proceed anyway, and a killed bridge that
+///                                       still raises Touch ID sheets would train the user to tap unexplained prompts
+/// another round in flight            -> `busy` (see PRESENCE_IN_FLIGHT)
+/// ```
 fn handle_presence_challenge(
     nonce: String,
     context: Option<String>,
@@ -849,7 +792,7 @@ fn handle_control_frame(
         }
         FrameDisposition::LegacySettings { bag } => {
             // ADR-0032 decision 8: the snapshotted legacy bag is recorded as a
-            // pending import (first-bag-wins, D-P4-4), never applied. The frame
+            // pending import (first-bag-wins), never applied. The frame
             // owes no reply; the write fails closed (an oversize or unwritable
             // receipt is logged and dropped, never crashes, never forwarded).
             handle_legacy_settings(bag);
@@ -992,24 +935,17 @@ const UNKILL_DRAIN_SETTLE: Duration = Duration::from_millis(200);
 /// How often the loop wakes from an idle channel to check the unkill flag.
 const PLANE_TICK: Duration = Duration::from_millis(100);
 
-/// The unkill transition, taken only by the control-plane loop: before
-/// leaving killed mode, DRAIN the control frames already buffered on stdin,
-/// then re-read the kill state and exit only on an authoritative alive.
+/// The unkill transition, taken only by the control-plane loop: drain the control frames already buffered on
+/// stdin, then re-read the kill state and exit only on an authoritative alive. The extension's panic path is
+/// told ok:true the moment a `kill_engage` is accepted for the pipe, so one that raced an in-flight release may
+/// still be sitting in our stdin when the watch observes the released state.
 ///
-/// This is what keeps an acknowledged engage from being lost across the
-/// transition: the extension's panic path is told ok:true the moment the
-/// `kill_engage` frame is accepted for the pipe, so a frame that raced an
-/// in-flight release may still be sitting in our stdin when the watch
-/// observes the released state. Draining hands it to the normal control
-/// handler (re-engaging the switch and answering the extension), and the
-/// re-check then keeps this host in control-plane mode. An unreadable state
-/// after the drain also stays: leaving killed mode on ambiguity would fail
-/// open. The settle window is a best-effort fast path, not the guarantee: a
-/// frame Chrome accepts but which reaches our stdin only after the window
-/// elapses dies with the process, and what makes that loss non-silent is
-/// the EXTENSION side - its panic latch stays engaged (no refusing frame
-/// ever arrived) and it re-posts the unconfirmed engage on the reconnect
-/// into the fresh host (at-least-once; the engage is idempotent here).
+/// ```text
+/// drained frame re-engaged the switch  -> stay in control-plane mode
+/// state unreadable after the drain     -> stay; leaving killed mode on ambiguity would fail open
+/// frame lands after the settle window  -> dies with the process; the extension's latch stays engaged and it
+///                                         re-posts the engage on reconnect (at-least-once, idempotent here)
+/// ```
 fn drain_then_decide<H, K>(
     frames: &mpsc::Receiver<PlaneEvent>,
     handle: &mut H,
@@ -1103,22 +1039,17 @@ where
     }
 }
 
-/// Control-plane-only mode (ADR-0030): the bridge is killed (or its state is
-/// unreadable), so NOTHING may flow between the browser and a broker -- but
-/// this host must stay up, because the extension's unkill rides a control
-/// frame through this very process, and the SW-only kill mirror is fed by
-/// this host's pushes. So: no socket, no forwarding; host-handled control
-/// frames (kill status/engage/release, enclave ceremony, client admin, audit
-/// events) keep working; a bridge frame that arrives anyway is dropped and
-/// logged. When the watch observes the switch released, the LOOP (never the
-/// watch thread) drains any control frames already buffered on stdin and
-/// re-checks the state before exiting so the extension's reconnect spawns a
-/// normal bridge-mode host -- an exit that raced a buffered, extension-
-/// acknowledged `kill_engage` would silently drop the brake.
-///
-/// stdin is read on a dedicated thread feeding a channel, so the loop can
-/// interleave frame handling with the unkill flag without blocking forever
-/// in a read.
+/// Control-plane-only mode (ADR-0030): the bridge is killed or its state is unreadable, so nothing may flow between
+/// browser and broker, yet this host must stay up because the extension's SW-only kill mirror is fed by its pushes.
+/// stdin is read on its own thread feeding a channel so the loop can interleave frames with the unkill flag
+/// (see [`drain_then_decide`]).
+/// ```text
+/// control frame (kill_engage, kill_status, kill_release)  -> answered; kill_release is the audited refusal
+/// bridge frame                                             -> dropped and logged; no socket is dialed
+/// release (CLI unkill or the app) seen by the revocation watch -> queued frames drained, then exit if the kill is still
+///                                                            released (the extension reconnects into a bridge host);
+///                                                            a queued kill_engage or unreadable kill state stays here
+/// ```
 fn run_control_plane() -> i32 {
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     // The watch raises this flag on an observed release; leaving this mode
@@ -1128,17 +1059,11 @@ fn run_control_plane() -> i32 {
         Arc::clone(&stdout_writer),
         Some(Arc::clone(&unkill_observed)),
     );
-    // Bounded on purpose: the old synchronous loop applied backpressure by
-    // construction (a frame was read only when the previous one was fully
-    // handled), and an unbounded queue would let a faulty or hostile
-    // extension stack multi-megabyte frames in memory while the loop is
-    // blocked on a presence prompt. A full channel simply parks the reader
-    // thread, which parks Chrome's pipe - exactly the old behavior. Bound 1,
-    // not more: native-messaging frames can reach tens of MB each, so the
-    // peak held is about three frames (one being handled by the loop, one
-    // queued, one parsed in the reader blocked on send) - enough for the
-    // reader to stay a frame ahead during the unkill drain, and nothing
-    // like a buffer.
+    // Bound 1, not more: native-messaging frames can reach tens of MB each, and an unbounded queue would let a
+    // faulty or hostile extension stack them in memory while the loop is blocked on a presence prompt. A full
+    // channel parks the reader thread, which parks Chrome's pipe; the peak held is about three frames (one being
+    // handled, one queued, one parsed in the blocked reader), enough for the reader to stay a frame ahead during
+    // the unkill drain.
     let (frame_tx, frame_rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let mut stdin = io::stdin();
@@ -1209,15 +1134,11 @@ pub fn run() -> i32 {
         return 1;
     }
 
-    // Self-heal a stranded mid-consume pending-import record (P4G-4): a
-    // Consuming record whose baseline landed but whose finalize crashed has
-    // no other seam left to finish it (revision-2+ writes never revisit the
-    // store). Best-effort and idempotent - a failed heal changes nothing
-    // that is not already durably safe (the worst partial outcome is a
-    // visible-but-unsynced tombstone over an already-fsynced baseline,
-    // where either roll-forward or roll-back is a correct state) and must
-    // not stop the host - and deliberately BEFORE the kill fork below, so
-    // the control-plane-only mode heals too.
+    // Self-heal a stranded mid-consume pending-import record: a Consuming record whose baseline landed but whose
+    // finalize crashed has no other seam left to finish it (revision-2+ writes never revisit the store). Best-effort
+    // and idempotent, so a failure must not stop the host: the worst partial outcome is a visible-but-unsynced
+    // tombstone over an already-fsynced baseline, where roll-forward and roll-back are both correct states.
+    //   runs BEFORE the kill fork below -> the control-plane-only mode heals too
     if let Err(e) = crate::pending_import::reconcile_consuming() {
         log_warn!(
             "native-host",
@@ -1333,24 +1254,11 @@ pub fn run() -> i32 {
             .map_or(ipc::DEFAULT_LABEL, ipc::BrowserLabel::as_str)
     );
 
-    // Shutdown policy: the native host has no useful work to do if EITHER
-    // direction of the bridge breaks. When Chrome closes the port (stdin EOF)
-    // we must exit; when the MCP server drops our connection (e.g. a new
-    // server instance supplanted the old one) we ALSO must exit promptly, so
-    // that Chrome observes the port closing and the extension reconnects
-    // against the freshly-written lock file.
-    //
-    // Earlier code tried to coordinate the two threads with a channel and
-    // joined both handles. That deadlocks when the socket side dies: the stdin
-    // thread is blocked inside nm_read_frame waiting for a frame that Chrome
-    // (still alive) will never send, so the join never returns. The process
-    // lingers as a zombie holding an open stdin/stdout pair, which means the
-    // extension's onDisconnect never fires and it never reconnects - the
-    // MCP server's tool calls then report "extension not connected".
-    //
-    // Fix: let whichever thread finishes first terminate the whole process.
-    // process::exit runs no destructors, but our writers flush after every
-    // frame, so no buffered data is lost on the normal close paths.
+    // Whichever pump ends first exits the whole process: joining both threads would deadlock when the socket side
+    // dies (the stdin thread sits in nm_read_frame waiting for a frame Chrome, still alive, never sends, the zombie
+    // keeps stdin/stdout open, the extension's onDisconnect never fires, and it never reconnects to the freshly
+    // written lock file). process::exit runs no destructors, but every writer flushes per frame, so no buffered data
+    // is lost on the normal close paths.
 
     // stdout is shared: the socket->stdout pump owns it in steady state, and
     // the stdin->socket thread borrows it briefly to answer host-handled
@@ -1432,26 +1340,17 @@ pub fn run() -> i32 {
     std::process::exit(0);
 }
 
-/// Pump NDJSON lines from the bridge socket to stdout as native-messaging
-/// frames. Reads through [`bridge_read`], so every line is bounded by
-/// `BRIDGE_MAX_LINE`: the server passed attestation, but zero trust means even
-/// an attested peer must not be able to exhaust memory with one newline-less
-/// line. Any read error - an over-cap line included - fails closed: the pump
-/// ends, the process exits, and Chrome tears the port down.
+/// Pump NDJSON lines from the bridge socket to stdout as native-messaging frames. [`bridge_read`] bounds every
+/// line by `BRIDGE_MAX_LINE`: the server passed attestation, but even an attested peer must not exhaust memory
+/// with one newline-less line. The lock on `out` is taken per frame, never across the blocking read, so the
+/// stdin->socket thread's control replies can interleave while this pump waits on the socket.
 ///
-/// Enclave and admin control frames (ADR-0021/0025) are filtered out here:
-/// they legitimately originate only in the extension and in this host itself,
-/// never in the server, so one arriving on the socket leg is an injection
-/// attempt - e.g. a spurious `enclave_error` to burn the extension's
-/// outstanding nonce, an `enclave_revoked` to provoke a false "compromised"
-/// mark, or a forged `client_list_result`. Dropped and logged, and the pump
-/// keeps going: unlike a malformed line this is a recognized, bounded frame,
-/// so discarding it fully contains the harm without taking the bridge down.
-///
-/// `out` is the stdout writer shared with the stdin->socket thread (which
-/// writes enclave control replies). The lock is taken per frame, never across
-/// the blocking `bridge_read`, so a control reply can be interleaved while this
-/// pump is waiting on the socket.
+/// ```text
+/// read error, an over-cap line included  -> fail closed: the pump ends, the process exits, Chrome tears the port down
+/// host control frame on the socket leg   -> an injection (a spurious `enclave_error` to burn the extension's nonce,
+///                                           an `enclave_revoked` to fake a compromise, a forged `client_list_result`):
+///                                           dropped and logged; a recognized, bounded frame, so the pump keeps going
+/// ```
 fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &Mutex<W>) {
     loop {
         let value: Value = match bridge_read(reader) {

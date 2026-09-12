@@ -53,7 +53,7 @@ describe("maskString", () => {
     expect(maskString(HEX32)).toBe("••••[hex]");
   });
   test("full-masks a bare credential-like string", () => {
-    // Matches SENSITIVE_KEY, length >= 8, no whitespace → fully masked.
+    // Matches SENSITIVE_KEY, length >= 8, no whitespace -> fully masked.
     expect(maskString("session_tokenvalue")).toBe("••••[sensitive]");
   });
   test("does NOT full-mask when whitespace is present", () => {

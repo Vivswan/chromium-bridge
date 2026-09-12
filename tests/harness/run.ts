@@ -1,59 +1,23 @@
 #!/usr/bin/env bun
 
-// Agent-harness interop smoke suite (chromium-bridge).
+// Agent-harness interop smoke suite: drives REAL agent-harness CLIs (Claude Code, Codex; HARNESSES is
+// the extension point) headlessly against OUR release binary. Each harness gets an ISOLATED config dir
+// (never the user's real ~/.claude or ~/.codex) with the binary registered as a stdio MCP server behind
+// a tee shim that logs every JSON-RPC frame the harness SENDS (server replies are not captured); no browser
+// is involved anywhere, and the shim's scratch dirs keep this instance from ever attaching to the user's real
+// bridge broker or pairing state.
 //
-// Drives REAL agent-harness CLIs (Claude Code, Codex; the registry below is
-// the extension point) headlessly against OUR release binary: each harness
-// gets an ISOLATED config dir (never the user's real ~/.claude or ~/.codex),
-// our binary is registered there as a stdio MCP server behind a tee shim
-// that logs every JSON-RPC frame the harness sends, and the harness's own
-// health-check command must report the server usable.
+//   connection check   -> the harness's own health check, or a fake-LLM-driven tool call, must report the server usable
+//   ADR-0034 canary    -> prints each harness's OPENING method; once every harness opens with `server/discover`
+//                         instead of the legacy `initialize`, the temporary legacy shim can be deleted
 //
-// Two purposes:
-//   (a) a continuous check that agent harnesses can connect to and drive
-//       the bridge's stdio MCP server;
-//   (b) the ADR-0034 canary: the suite prints the OPENING method each
-//       harness sent (the legacy `initialize` handshake vs the modern
-//       2026-07-28 `server/discover` opening). When every harness opens
-//       with server/discover, the temporary legacy shim can be deleted.
-//
-// No browser is involved anywhere: the server side is the bare binary with
-// no native host attached, and the shim points the server's runtime, config,
-// and home dirs at a throwaway scratch dir, so this instance can never
-// attach to (or become) the user's real bridge broker or read real pairing
-// state.
-//
-// Harnesses whose CLI is not on PATH are skipped with a message. A probe
-// that cannot avoid a model/API call against a REAL backend (codex has no
-// offline health check) runs only behind an explicit opt-in
-// (BB_HARNESS_CODEX_LIVE=1 plus the API key) and is otherwise reported as
-// "configured" - registration verified, live connection not exercised.
-//
-// The *-live-fakellm entries close that gap without credentials: the model
-// is played by tests/harness/fake-llm.ts on 127.0.0.1, so a real
-// `claude -p` / `codex exec` run performs a full model-driven MCP tool call
-// (tab_list) with zero credentials and zero model spend, deterministically.
-// Those probes run whenever the CLI is installed, and assert three points,
-// all fail-closed: the backend saw the bridge's tools advertised, the tee
-// shim captured the tools/call frame (in the right protocol era), and the
-// tool result fed back to the model carried the typed NOT_CONNECTED error
-// (no browser is attached - that IS the expected outcome).
-//
-// Deliberately self-contained (node builtins only, no scripts/lib.ts
-// import) so it runs without a `bun install`.
-//
-// Dual-use: local runs (`moon run harness-smoke`) and CI (the nightly
-// harness-smoke.yml workflow, which uploads build/harness-captures/ as an
-// artifact).
+// Node builtins only (no scripts/lib.ts import), so it runs without a `bun install`. Dual-use: `moon run
+// harness-smoke` locally, and the nightly harness-smoke.yml workflow, which uploads build/harness-captures/.
 //
 // Usage: bun tests/harness/run.ts [--mint-seeds] [--require-any]
-//   --mint-seeds   after the run, copy deduplicated captured frames into
-//                  src/packages/core/fuzz/seeds/mcp_jsonrpc/ (a real-world
-//                  corpus for the fuzzer), one file per distinct frame
-//   --require-any  fail (exit 1) unless at least one harness completed a
-//                  LIVE MCP connection; the nightly workflow passes this so
-//                  a broken harness install (or a run that only verified
-//                  config entries) cannot read as a green night
+//   --mint-seeds   copy deduplicated captured frames into src/packages/core/fuzz/seeds/mcp_jsonrpc/ (a real-world corpus)
+//   --require-any  exit 1 unless at least one harness completed a LIVE MCP connection; the nightly passes this so
+//                  a broken harness install (or a run that only verified config entries) cannot read as a green night
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -403,19 +367,11 @@ async function concludeLiveProbe(
 }
 
 /**
- * The three fail-closed assertions of a live fake-LLM probe; every one must
- * hold or the probe FAILED:
- *
- *  (a) the fake backend saw the bridge's tab_list advertised among the
- *      request's tools and told the harness to call it;
- *  (b) the tee shim captured the resulting tools/call frame, carried in the
- *      same protocol era as the harness's opening method (legacy initialize
- *      frames carry no params._meta revision; modern server/discover frames
- *      must claim MODERN_PROTOCOL_VERSION);
- *  (c) the harness fed the tool result back to the model, and it carried the
- *      bridge's typed NOT_CONNECTED error - no browser is attached, so that
- *      IS the expected outcome; anything else means the result was dropped,
- *      rewritten, or a real browser was reachable.
+ * The three fail-closed assertions of a live fake-LLM probe. NOT_CONNECTED is the EXPECTED tool result:
+ * no browser is attached, so anything else means the result was dropped, rewritten, or a real browser
+ * was reachable.
+ *   legacy `initialize` opening      -> tools/call must carry no params._meta revision
+ *   modern `server/discover` opening -> tools/call must claim MODERN_PROTOCOL_VERSION (a mixed era is a failure)
  */
 function assertLiveToolCall(view: FakeLlmView, capture: string): ProbeOutcome {
   const { requests, dropped } = view;
@@ -746,16 +702,12 @@ function ensureBinary(): void {
 }
 
 /**
- * The tee shim the harness launches instead of the binary: it appends every
- * stdin frame (MCP stdio is NDJSON, so the capture file is NDJSON too) to
- * the capture log while feeding them to the real binary. It also points the
- * server's runtime/config/home dirs at throwaway dirs - the server this
- * suite spawns must never share a lock file, socket, pairing state, or kill
- * switch with the user's real bridge (same isolation the e2e suite's
- * admin-frames test uses). The runtime dir is created SEPARATELY with a
- * short name: the server binds a Unix socket under XDG_RUNTIME_DIR, and a
- * path over the SUN_LEN limit (104 bytes on macOS) makes it fail closed
- * before answering initialize.
+ * The tee shim the harness launches instead of the binary: every stdin frame is appended to the capture
+ * log (NDJSON, like MCP stdio) on its way to the real binary. The server's runtime/config/home dirs
+ * point at throwaway dirs so this server never shares a lock file, socket, pairing state, or kill switch
+ * with the user's real bridge (the e2e suite's admin-frames test isolates the same way).
+ *   runtime dir created SEPARATELY, short name -> the Unix socket path must stay under SUN_LEN (104 bytes
+ *                                                 on macOS) or the server fails closed before answering initialize
  */
 function writeShim(ctx: { scratch: string; runtime: string; capture: string }): string {
   const q = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;

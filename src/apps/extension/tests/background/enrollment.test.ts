@@ -88,7 +88,7 @@ function installBrowserMock(): Record<string, unknown> {
     for (const k of Array.isArray(key) ? key : [key]) delete store[k];
     return Promise.resolve();
   };
-  // #32 storage hardening (readGateState awaits it and fails closed
+  // The storage hardening (readGateState awaits it and fails closed
   // otherwise): fakeBrowser has no setAccessLevel, so stub a success.
   local.setAccessLevel = () => Promise.resolve();
   (fakeBrowser.storage.session as unknown as Record<string, unknown>).setAccessLevel = () =>
@@ -248,7 +248,7 @@ describe("pin store", () => {
   test("readPin is a visible three-way; getPin is its documented collapse", async () => {
     // Absent and corrupt are DISTINCT at the type level (readPin), and the
     // corrupt-routes-like-absent decision is one explicit, greppable
-    // collapse (pinOrNull/getPin) - the Phase-3 unsigned-lane routing, not
+    // collapse (pinOrNull/getPin) - the unsigned-lane routing, not
     // an accident of parsing.
     expect(await pinStore.readPin()).toEqual({ state: "absent" });
     store.enclavePin = { keyId: "a".repeat(64), pubkeyB64: "QUJD", pinnedAt: 1 };
@@ -1058,11 +1058,10 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
   });
 
   test("the barrier refuses BEFORE the dispatch kickoff runs (S4): onAllowed never fires while the snapshot would fall to POLICY_DEFAULTS", async () => {
-    // The Opus-e2 invariant: in awaitingBaseline the snapshot answers
-    // POLICY_DEFAULTS - safe ONLY because port.ts hands the dispatch kickoff
-    // INTO enrollmentGate, which consults policyDispatchGate before invoking
-    // it. So no .effective read can drive a decision in that state: the
-    // kickoff must never run.
+    // In awaitingBaseline the snapshot carries no values, and port.ts hands
+    // the dispatch kickoff INTO enrollmentGate, which consults
+    // policyDispatchGate before invoking it, so no .effective read can drive
+    // a decision in that state: the kickoff must never run.
     const key = await genKey();
     await pairAndPin(key);
     store.bridgePolicyCutover = true; // armed, no record: awaitingBaseline
@@ -1204,7 +1203,7 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
   });
 });
 
-// ---- ADR-0032 Phase 3, Lane S: hostReverifyMs comes from the policy snapshot ----
+// ---- ADR-0032: hostReverifyMs comes from the policy snapshot ----
 
 describe("post-cutover hostReverifyMs reads the policy snapshot, not legacy settings", () => {
   function armCutoverWith(scope: string, hostReverifyMs: number): void {
@@ -1240,7 +1239,7 @@ describe("post-cutover hostReverifyMs reads the policy snapshot, not legacy sett
   });
 
   test("blocked posture (awaitingBaseline): the re-verify check is skipped LOUDLY, not resolved to defaults", async () => {
-    // SFX-1 symptom (b): this runs on the CONNECT path, outside the dispatch
+    // This runs on the CONNECT path, outside the dispatch
     // barrier. Folding a blocked posture into the deny-baseline defaults
     // would read hostReverifyMs 0 = never-re-verify and silently drop the
     // user's opt-in check; the state-typed read skips it with a warning.

@@ -18,7 +18,7 @@ const dbg = vi.hoisted(() => ({
 vi.mock("wxt/browser", () => ({
   browser: {
     debugger: dbg,
-    // registry.get's restriction-only policy recheck (SFX-3) reads storage;
+    // registry.get's restriction-only policy recheck reads storage;
     // answer every read with a legacy cdpMode grant so these lifecycle tests
     // exercise the attach protocol, not the policy gate.
     storage: { local: { get: () => Promise.resolve({ cdpMode: true }) } },

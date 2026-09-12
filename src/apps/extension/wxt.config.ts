@@ -27,42 +27,24 @@ export default defineConfig({
   vite: () => ({
     plugins: [react(), tailwindcss()],
   }),
-  // DEV BROWSER ONLY: webExt configures how `wxt` (serve mode) would launch a
-  // throwaway browser; nothing here reaches a build artifact. We DISABLE WXT's
-  // own launcher and hand browser ownership to the dev orchestrator
-  // (scripts/dev-browser.ts), which drives web-ext-run directly so it can
-  // relaunch the browser from web-ext-run's cleanup callback instead of the
-  // old ps-poll watchdog. The launch config (fresh temp profile, startUrl docs
-  // tab, pinned-extension pref, CDP unpacked-load path) lives there now. WXT
-  // still builds, serves, and reloads the extension over its dev-server
-  // websocket - reload does not depend on who launched Chrome.
-  //
-  // This block is only the DEFAULTS layer of WXT's config resolution - an rc
-  // file (web-ext.config.ts, .webextrc, ~/.webextrc) overrides it, so
-  // `disabled` here does not by itself guarantee WXT stays out of the launch
-  // business. The `config:resolved` hook below enforces both invariants on the
-  // RESOLVED config: disabled must still be true, and no override may hand a
-  // runner a real profile.
+  // DEV BROWSER ONLY: webExt configures how `wxt` (serve mode) would launch a throwaway browser; nothing here
+  // reaches a build artifact. WXT's own launcher is DISABLED because scripts/dev-browser.ts owns the dev
+  // browser (it drives web-ext-run directly so it can relaunch from the cleanup callback); WXT still builds,
+  // serves, and reloads the extension over its dev-server websocket regardless of who launched Chrome.
+  // This block is only the DEFAULTS layer: an rc file (web-ext.config.ts, .webextrc, ~/.webextrc) overrides
+  // it, so the `config:resolved` hook below re-checks the RESOLVED config.
   webExt: {
     disabled: true,
   },
   hooks: {
-    // FAIL CLOSED on dev-profile reuse. WXT resolves the final web-ext
-    // config from rc files too (web-ext.config.ts, .webextrc, including a
-    // global one in $HOME), any of which can override the `webExt` defaults
-    // above. Two override shapes would hand the dev browser a real,
-    // logged-in profile - which the repo's browser-safety red line forbids:
-    //   - chromiumProfile/firefoxProfile (+ keepProfileChanges writes back)
-    //   - chromiumArgs/firefoxArgs smuggling the same thing as raw flags
-    //     (--user-data-dir=..., --profile-directory=..., -profile ...).
-    // This config sets no args, so ANY resolved arg is an rc override;
-    // rejecting the arrays wholesale is simpler and stricter than
-    // deny-listing flag spellings. Refuse to start instead of proceeding
-    // degraded. Scoped to serve mode: only `wxt` (dev) launches a browser.
-    // Named residual: an rc `binaries.chrome` entry or the CHROME_PATH env
-    // var can still swap WHICH browser binary launches. That cannot reach a
-    // real session - web-ext-run always passes its fresh temp profile as an
-    // explicit --user-data-dir - so this hook guards profile reuse only.
+    // FAIL CLOSED on dev-profile reuse: rc files can override the `webExt` defaults above, and two override
+    // shapes would hand the dev browser a real, logged-in profile, which the browser-safety red line forbids.
+    //   chromiumProfile / firefoxProfile (+ keepProfileChanges)  -> reuses or writes back a profile
+    //   chromiumArgs / firefoxArgs                               -> smuggle the same as raw flags (--user-data-dir=...)
+    // This config sets no args, so ANY resolved arg is an rc override; refusing the arrays wholesale is stricter
+    // than deny-listing flag spellings. Serve mode only: only `wxt` (dev) launches a browser.
+    // Residual: an rc `binaries.chrome` entry or CHROME_PATH can still swap WHICH binary launches; it cannot
+    // reach a real session because web-ext-run always passes its fresh temp profile as --user-data-dir.
     "config:resolved": (wxt) => {
       if (wxt.config.command !== "serve") return;
       const resolved = wxt.config.webExt.config ?? {};
@@ -98,12 +80,9 @@ export default defineConfig({
     default_locale: "en",
     description: "__MSG_extDescription__",
     key: EXTENSION_MANIFEST_KEY,
-    // The extension relies on modern MV3 storage + scripting behavior; 116 is
-    // the floor the pre-rehaul build targeted and remains the supported
-    // minimum. The #32 trust-state isolation uses storage.local.setAccessLevel
-    // (available since Chrome 102); if a browser somehow lacks it the call
-    // throws and the enrollment gate fails closed rather than degrading (see
-    // lib/background/trusted-storage.ts), so the floor need not encode it.
+    // 116 is the supported minimum. storage.local.setAccessLevel (Chrome 102+) need not be encoded in the
+    // floor: if a browser lacks it the call throws and the enrollment gate fails closed rather than degrading
+    // (lib/background/trusted-storage.ts).
     minimum_chrome_version: "116",
     permissions: [...MANIFEST_PERMISSIONS],
     host_permissions: [],

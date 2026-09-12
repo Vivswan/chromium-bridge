@@ -13,24 +13,15 @@ import { KillSwitchPanel } from "./KillSwitchPanel";
 import { SiteList } from "./SiteList";
 import { TrustedClientsPanel } from "./TrustedClientsPanel";
 
-// The options page: kill switch, host pairing, the allowlist, trusted
-// clients, and the browser-owned toggles (allow-all-sites, tab grouping,
-// language). Every write is event-driven (useSettings is backed by
-// storage.onChanged), so there is no polling and no manual refresh; a change
-// from any surface reflects here immediately.
+// The options page. Every write is event-driven (useSettings rides storage.onChanged), so a change from any
+// surface reflects here with no polling and no manual refresh.
 //
-// The security policy itself - the 15 host-owned fields (ADR-0032): eval,
-// uploads, dialogs, CDP mode, the confirmation gates, timeouts, and per-tool
-// disables - is NOT edited here. It is set in the Chromium Bridge app (or
-// `chromium-bridge policy`), signed by the paired host key, and enforced by
-// this extension; the Security section below says so where the toggles used
-// to be. Kill RELEASE moved with it (the host refuses `kill_release` from
-// the extension, ADR-0032 decision 6); engaging stays one click away.
+// The security policy itself (the 15 host-owned fields, ADR-0032) is not edited here: it is set in the app or
+// `chromium-bridge policy`, signed by the paired host key, and only enforced by this extension. Kill RELEASE
+// moved with it (the host refuses `kill_release` from the extension, decision 6); engaging stays one click away.
 //
-// Control Tower: flat hairline-separated open sections, ordered by decision
-// weight: kill switch, pairing, then the sites hero (the one choice that
-// scopes what clients can touch). Amber and red stay reserved for pending
-// and kill/deny - consequences are neutral ink.
+// Sections are ordered by decision weight: kill switch, pairing, then the sites hero that scopes everything
+// below. Amber and red stay reserved for pending and kill/deny; consequences are neutral ink.
 export function OptionsApp() {
   const { t } = useI18n();
   const { settings, update } = useSettings();

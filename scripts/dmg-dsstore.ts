@@ -1,38 +1,18 @@
 #!/usr/bin/env bun
 
-// Write a mounted DMG volume's .DS_Store deterministically, so the branded
-// install window (background image, icon positions, window size) is produced
-// with no Finder and no AppleScript - the same styled layout on a headless CI
-// runner and on a developer's Mac. This replaces the old approach of scripting
-// the live Finder over AppleEvents (retry loops, a flush poll, a --plain-dmg
-// escape hatch); see scripts/desktop-bundle.ts.
+// Write a mounted DMG volume's .DS_Store deterministically: the branded install window with no Finder and no
+// AppleScript, so a headless CI runner and a developer's Mac style it identically (see scripts/desktop-bundle.ts).
 //
 //   bun scripts/dmg-dsstore.ts <mountPoint> <volumeName> <appBundleName>
 //
-// This is the appdmg toolchain (ds-store + macos-alias), the widely used
-// standard for headless DMG styling, but driven through those packages'
-// PURE-JS code paths only:
+// This is the appdmg toolchain (ds-store + macos-alias) through its PURE-JS paths only: macos-alias's native addon
+// (a node-gyp/nan binding) cannot load under bun, and ds-store's public Helper hard-codes a call into it.
+//   ds-store/lib/*          -> the .DS_Store writer and record encoders; they take no macos-alias dependency
+//   macos-alias/lib/encode  -> the alias serializer; createAlias() below ports lib/create.js, whose one native call
+//                              read the HFS+ volume name, which we already know because we created the volume
 //
-//   - ds-store's .DS_Store writer and its bwsp/icvp/Iloc/vSrn record encoders
-//     (ds-store/lib/*), reached directly because ds-store's public Helper
-//     hard-codes a call to macos-alias's NATIVE create(), and that native
-//     addon cannot load under bun (it is a node-gyp/nan binding built against
-//     a different runtime ABI). The lib/ modules take no macos-alias
-//     dependency, so using them sidesteps the addon entirely.
-//   - macos-alias's pure-JS alias serializer (macos-alias/lib/encode). The
-//     one thing its native code did was read the HFS+ volume name; we already
-//     know it (we created the volume), so createAlias() below supplies it and
-//     assembles the rest in JS, faithfully porting macos-alias/lib/create.js.
-//
-// macos-alias still ships that native addon, and bun compiles it at install
-// time on macOS (where a C toolchain is a given - this repo also builds Rust
-// and signs with Xcode); it is os-gated to darwin, so non-macOS installs skip
-// it, and either way we never load it. Nothing here requires the addon.
-//
-// The background alias is generated PER BUILD against the MOUNTED volume: a
-// Mac OS alias is path- and inode-specific (it embeds the target/parent/volume
-// inodes and ctimes of this exact mount), so no prebuilt .DS_Store or alias is
-// committed.
+// The background alias is generated PER BUILD against the mounted volume: an alias embeds the target/parent/volume
+// inodes and ctimes of this exact mount, so no prebuilt .DS_Store or alias can be committed.
 
 import { statSync } from "node:fs";
 import { createRequire } from "node:module";

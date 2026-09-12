@@ -1,67 +1,23 @@
-// Structural JSON Schema comparison for the envelope asymmetry gate
-// (scripts/check-envelope-parity.ts).
+// Reduces the Rust (schemars, the contract per ADR-0028) and Zod (z.toJSONSchema) envelope schemas to one canonical
+// form for the asymmetry gate (scripts/check-envelope-parity.ts), so any diff left is the hand-written layer
+// (envelope.ts, enclave.ts) drifting from its generated base; a mismatch is fixed in one of the two parsers, never here.
+// Every deliberate asymmetry is PINNED per origin in RECONCILED_FIELDS, refused loudly when a node does not deep-equal
+// its approved form or a pin goes unvisited (assertPinsConsumed), so drift cannot be compared away.
 //
-// The canonical wire contract is the Rust types in src/packages/core/src/
-// (ADR-0028): the BridgeReq / BridgeResp envelope pair in protocol.rs, and
-// the host-handled control frames in protocol/control.rs (EnclaveControl and
-// AdminControl, the latter embedding allowlist::ClientEntry). The extension
-// enforces two-layer validators: a base GENERATED from the Rust schemas
-// (envelope-wire.gen.ts, via scripts/gen-envelope.ts) wrapped by a
-// hand-written asymmetry layer (envelope.ts for the envelopes, enclave.ts
-// for the control frames). Both sides derive a JSON Schema (schemars on the
-// Rust side, z.toJSONSchema on the wrapped Zod side), and this module
-// reduces the two to one canonical structural form so the diff that remains
-// is a real contract difference - with the base generated, that means the
-// hand-written layer drifted: property sets, base types, required-ness,
-// additionalProperties, bounds, patterns, and formats are compared verbatim,
-// and resolving a mismatch means changing one of the two parsers, not this
-// module.
+//   R1 annotations, everywhere       -> $schema/$id/$comment/title/description/examples stripped; `format` is NOT one
+//                                       (it carries schemars' integer-width claim) and is erased only via an exact R4 form
+//   R2 any-schema, everywhere        -> `true` and `{}` both canonicalize to `{}`
+//   R3 args narrowing, request only  -> rust must be exactly the any-schema (validated per-op downstream); zod an
+//                                       object schema (the OpArgs union, enforced by ops.gen.test.ts); anything else refused
+//   R4 reconciled fields             -> an entry in RECONCILED_FIELDS: exact rust form, exact zod form, canonical replacement
+//   R5 control frames only           -> every rust object node must carry additionalProperties: false (serde's
+//                                       deny_unknown_fields; the host refuses unknown fields on security frames) and every
+//                                       zod node the documented looseObject (decisions come from validated fields plus
+//                                       cryptographic verification, see enclave.ts), except STRICT_ZOD_NODES, which stay
+//                                       strict on both sides (an unknown overlay field is a policy claim nobody owns,
+//                                       ADR-0032 decision 4); each origin's exact form is required, then erased
 //
-// The two parsers DELIBERATELY differ in a few places (each decision is
-// documented on the field in protocol.rs / envelope.ts / enclave.ts). Every
-// such asymmetry is PINNED, per origin: at each reconciled path the node must
-// deep-equal the exact form approved for the schema's own origin (rust or
-// zod) in RECONCILED_FIELDS below, and is refused loudly otherwise. A
-// mismatch there is either real drift or a deliberate contract change that
-// must update this table - it can never be compared away, not even by both
-// sides converging on the canonical form. Pins bind both ways: one whose
-// path the walk never visits (stale after a contract change, or typo'd) is
-// refused too, never left inert (see assertPinsConsumed). The rules:
-//
-//   R1 (annotations, everywhere): $schema/$id/$comment/title/description/
-//      examples constrain nothing and are stripped. `format` is NOT an
-//      annotation here: it carries schemars' integer-width claim, so it is
-//      contract material and only erased via an exact R4 form.
-//   R2 (any-schema, everywhere): the boolean schema `true` and the empty
-//      schema `{}` both mean "anything"; canonicalize to `{}`.
-//   R3 (args narrowing, request only): the Rust envelope carries `args`
-//      free-form (validated per-op downstream); the extension narrows it to
-//      the OpArgs union before per-op validation. The rust side must be
-//      exactly the any-schema, the zod side an object schema (its per-op
-//      content is enforced by ops.gen.test.ts); anything else is refused.
-//   R4 (reconciled fields): each remaining asymmetry is an entry in
-//      RECONCILED_FIELDS naming the exact rust-side form, the exact
-//      zod-side form, and the canonical replacement. See each entry for the
-//      why.
-//   R5 (loose control frames, control-frame kinds only): the Rust side of
-//      every object node must still carry serde's deny_unknown_fields
-//      (additionalProperties: false) - the host refuses unknown fields on
-//      these security frames - while the Zod side is a documented
-//      looseObject (the host may add fields; the extension's decisions come
-//      from the validated fields plus cryptographic verification, never
-//      from a frame merely having the right shape - see enclave.ts). Each
-//      origin's exact form is required and then erased, so a Rust frame
-//      going loose or a Zod frame going strict is refused, not compared
-//      away. One pinned exception list (STRICT_ZOD_NODES): a nested
-//      document payload named there must stay STRICT on the Zod side too -
-//      policy_current's overlay, where an unknown field is a policy claim
-//      nobody owns and must fail the frame, fail closed (ADR-0032
-//      decision 4) - so at those paths the zod origin requires
-//      additionalProperties: false instead, and looseness there is the
-//      drift that is refused.
-//
-// Deliberately NOT exported from the package index: this is contract-check
-// infrastructure, not API.
+// Not exported from the package index: contract-check infrastructure, not API.
 
 // Keys that annotate a schema without constraining instances (R1).
 const ANNOTATION_KEYS = new Set(["$schema", "$id", "$comment", "title", "description", "examples"]);
@@ -235,31 +191,24 @@ const OPTIONAL_NONEMPTY_STRING: Reconciliation = {
   canonical: { type: "string" },
 };
 
-// policy_current.reason (ADR-0032 D-P4-2): the host frame field is
-// Option<String> (any string or absent, the serde null arm), while the
-// extension pins it to the structured {absent,damaged,unreadable} enum - the
-// send-once gates on reason==absent, so a value outside the enum reads as "not
-// the absent signal". The enum is a zod-side-only constraint (the rust field
-// does not constrain the string), so canonical drops it, like NONEMPTY_STRING
-// drops the zod-side minLength.
+// policy_current.reason: Option<String> on the host side (the serde null arm), pinned by the extension to the
+// {absent,damaged,unreadable} enum because the send-once gates on reason==absent, so a value outside the enum reads
+// as "not the absent signal". The enum is zod-side only, so canonical drops it like NONEMPTY_STRING drops minLength.
 const POLICY_REASON_FIELD: Reconciliation = {
   rust: { type: ["string", "null"] },
   zod: { type: "string", enum: ["absent", "damaged", "unreadable"] },
   canonical: { type: "string" },
 };
 
-// policy_current.overlay: Option<policy::PolicyOverlay> on the Rust side (a
-// null arm around the strict all-optional overlay object, uint64 ms fields);
-// the Zod side is the GENERATED PolicyOverlaySchema (policy.gen.ts) - no
-// null arm, JS-safe ms bounds, and the disabledTools caps
-// (DISABLED_TOOL_NAME_MAX_BYTES = 128, DISABLED_TOOLS_MAX_ENTRIES = 256,
-// pinned here as literals). Note the caps' asymmetry: Rust enforces them in
-// PolicyDoc::validate and at the restrict seam, NOT in PolicyOverlay's
-// Deserialize, and Zod's .max(128) counts UTF-16 code units where Rust
-// counts bytes - both differences point the fail-closed direction (Zod
-// refuses first; tool names are ASCII in practice). The overlay object is
-// also the one STRICT_ZOD_NODES exception to R5's looseness: it stays
-// strict on both sides (ADR-0032 decision 4).
+// policy_current.overlay: Option<PolicyOverlay> on the Rust side (a null arm around the strict all-optional object);
+// the Zod side is the GENERATED PolicyOverlaySchema (policy.gen.ts). The overlay is also the one STRICT_ZOD_NODES
+// exception to R5: strict on both sides (ADR-0032 decision 4).
+//
+//   ms fields                    -> Zod adds the JS-safe upper bound; Rust has none in the schema
+//   disabledTools caps           -> pinned here as literals (DISABLED_TOOL_NAME_MAX_BYTES 128, DISABLED_TOOLS_MAX_ENTRIES
+//                                   256); Rust enforces them in PolicyDoc::validate and at the restrict seam, not Deserialize
+//   Zod maxLength 128 vs bytes   -> Zod counts UTF-16 code units, Rust bytes, so Zod is LOOSER on non-ASCII names (128
+//                                   U+00E9 pass Zod, 256 bytes fail Rust); the host validates every doc it stores or loads
 const OVERLAY_BOOL_FIELDS = [
   "cdpMode",
   "fileUploadEnabled",

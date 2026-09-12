@@ -1,34 +1,19 @@
-//! The crate's one private-file idiom: every file or directory that lives in
-//! a user-private location (the 0700 runtime directory, the wrapper install
-//! dir) is created and opened through these helpers, so the symlink/TOCTOU
-//! reasoning is written - and audited - exactly once.
+//! The crate's one private-file idiom: files and directories in a user-private location (the 0700 runtime directory,
+//! the wrapper install dir) are created, and the append/lock handles opened, through these helpers, so the
+//! symlink/TOCTOU reasoning for those opens lives once. These paths sit in directories a same-user process can write
+//! to before we do. Reads (`ipc::read_capped`, `enclave::config`) and the fsync reopens in `pending_import` take
+//! plain opens that follow a symlink at the final component; nothing here covers them.
 //!
-//! ## The threat, once
+//! ```text
+//! pre-planted symlink     -> opens pass `O_NOFOLLOW`; exclusive creates refuse any existing entry; dirs refuse a symlink leaf
+//! pre-planted loose file  -> `OpenOptions::mode` applies only on create, so the mode is re-asserted on the open handle
+//!                            (no path re-traversal); a file that cannot be tightened fails the open
+//! ```
 //!
-//! These paths sit in directories a same-user process can write to before we
-//! do. Two classic games are closed here:
-//!
-//! - **Pre-planted symlink**: a symlink at our path would make us write
-//!   through to (or chmod) an arbitrary file. Opens pass `O_NOFOLLOW`, so a
-//!   symlink at the final component fails the open instead of being followed;
-//!   exclusive creates (`create_new`) refuse any pre-existing entry, symlink
-//!   included; directory creation refuses a symlink at the leaf.
-//! - **Pre-planted loose file**: `OpenOptions::mode` applies only when the
-//!   open CREATES the file, so a pre-planted 0644 file would keep its
-//!   group/other bits. After a non-exclusive open the mode is re-asserted on
-//!   the open handle (no path re-traversal, so no TOCTOU window); a file
-//!   whose mode cannot be asserted fails the open, and every caller already
-//!   fails closed on a failed open.
-//!
-//! What is deliberately NOT here: the atomic-write choreography (temp file +
-//! rename) stays at its two call sites (`ipc::write_private_atomic`,
-//! `registration::write_atomic`) - they share only the create step, and
-//! `registration`'s outputs are deliberately world-readable (0644/0755
-//! wrappers and manifests the browser must read), the opposite contract.
-//!
-//! On non-Unix targets the mode and `O_NOFOLLOW` hardening compiles to plain
-//! opens: Windows has no Unix modes, and the same-user boundary is not
-//! enforced there (see SECURITY.md "Platform support").
+//! The temp-file + rename choreography stays at its call sites (`ipc::write_private_atomic`, `registration::write_atomic`):
+//! `registration`'s outputs are deliberately world-readable wrappers and manifests the browser must read.
+//! On non-Unix targets the hardening compiles to plain opens: no Unix modes, and the same-user boundary is not enforced
+//! there (SECURITY.md "Platform support").
 
 use std::fs;
 use std::io;

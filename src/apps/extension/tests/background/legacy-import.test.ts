@@ -1,4 +1,4 @@
-// The bag-site disabledTools bound (legacy-import.ts, ADR-0032 Phase 5): the
+// The bag-site disabledTools bound (legacy-import.ts, ADR-0032): the
 // host drops a `legacy_settings` bag whose compact serialization exceeds its
 // 64 KiB cap WHOLE, after send-once has latched - so the bag reader bounds
 // the one unbounded legacy field before it rides the wire, measured in
