@@ -162,14 +162,15 @@ export type PolicyValues = {
 export type PolicyStoreState = "none" | "present" | "error";
 
 /**
- * The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json`
- * prints (ADR-0032), which the desktop app parses back and the doctor row renders from.
+ * The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json` prints
+ * (ADR-0032), which the desktop app parses back and the doctor row renders from. A sum tagged on `store` rather than
+ * a flat struct, so a `none` report smuggling an effective policy, or a `present` one missing its revision, cannot
+ * even deserialize.
  *
- * A sum tagged on `store` rather than a flat struct, so a `none` report smuggling an effective policy,
- * or a `present` one missing its revision, cannot even deserialize. The tag serializes to the same
- * `store` field the flat v1 shape carried and every arm's fields are spelled identically, so the wire
- * form stays VALUE-identical to v1 and needs no `v` bump (key order may differ on paths that serialize
- * the struct directly rather than through the sorted-keys `Value` this CLI prints; no consumer reads key order).
+ * ```text
+ * same `store` tag field and field spellings as the flat v1 shape -> wire form VALUE-identical to v1, no `v` bump
+ * serialized directly, not through this CLI's sorted-keys Value   -> key order may differ; no consumer reads key order
+ * ```
  */
 export type PolicyStatusReport =
   | {
@@ -562,12 +563,15 @@ export type AuditRecord = {
    */
   detail?: string;
   /**
-   * Confirmation-correlation id for the extension `confirm_*` kinds (ADR-0030): minted once per
-   * confirmation and stamped on the `confirm_shown` record AND its later verdict, so a reader (the
-   * desktop audit panel) joins a verdict to exactly its own shown row instead of guessing by
-   * tool/origin. A denial that never reached a surface carries a fresh cid matching no `confirm_shown`
-   * row; a cid-less denial would fall to the subject fallback and could close an unrelated row.
-   * Distinct from `req`, the host-side per-tool-call `u64`.
+   * Confirmation-correlation id for the extension `confirm_*` kinds (ADR-0030): minted once per confirmation and
+   * stamped on the `confirm_shown` record AND its later verdict, so a reader (the desktop audit panel) joins a
+   * verdict to exactly its own shown row instead of guessing by tool/origin. Distinct from `req`, the host-side
+   * per-tool-call `u64`.
+   *
+   * ```text
+   * denial that never reached a surface -> a fresh cid matching no confirm_shown row
+   * cid-less denial                     -> would fall to the subject fallback and could close an unrelated row
+   * ```
    */
   cid?: string;
   /**
