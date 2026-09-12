@@ -495,9 +495,8 @@ jobs:
           exit "$status"
 
   # The public web app (src/apps/web: the landing page plus Astro over the
-  # repo's markdown docs) must keep building. Build-only here: deployment to
-  # GitHub Pages happens in the managed pages.yml (root = latest release,
-  # /staging/ = main HEAD).
+  # repo's markdown docs) must keep building. Build-only here: the deploy is
+  # the managed ci.yml's site leg, which runs .github/actions/site-build.
   web:
     name: web app builds
     runs-on: ubuntu-latest

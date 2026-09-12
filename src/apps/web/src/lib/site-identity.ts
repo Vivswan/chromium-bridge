@@ -1,10 +1,8 @@
 // Single source of the site's identity (origin + base path), read from the
-// environment at build time so the deploy workflow can retarget the site
-// without a source edit:
-//   - default            -> project page at https://vivswan.github.io/chromium-bridge/
-//   - ASTRO_BASE=/chromium-bridge/staging/ -> the staging build under /staging/
-//   - CUSTOM_DOMAIN cutover (pages.yml) -> ASTRO_SITE=https://<domain>
-//     ASTRO_BASE=/ and the site moves to the domain root.
+// environment at build time so the deploy hook (.github/actions/site-build, fed
+// by the fleet's site leg) can retarget the site without a source edit:
+//   - default                      -> project page at https://vivswan.github.io/chromium-bridge/
+//   - CUSTOM_DOMAIN set on the repo -> ASTRO_SITE=https://<domain>, ASTRO_BASE=/
 // Consumed only by astro.config.mjs; pages keep reading import.meta.env.BASE_URL.
 
 /** Absolute origin the site is served from. Any trailing slash is stripped so

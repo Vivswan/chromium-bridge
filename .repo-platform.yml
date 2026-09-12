@@ -2,7 +2,7 @@
 modules:
   - bun
   - rust
-  - pages
+  - site
   - release-please
   - issue-templates
   - pr-title
@@ -13,7 +13,6 @@ project:
   slug: chromium-bridge
   description: "Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port"
   copyright_holder: Vivswan Shah (https://github.com/Vivswan)
-pages:
-  setup: bun
-  build: ASTRO_BASE="$PAGES_BASE_PATH" ASTRO_SITE="$PAGES_ORIGIN" bun run --cwd src/apps/web build
-  dist: build/web
+site:
+  # The Astro site renders the docs itself at /docs/; the fleet's docs mount sits beside it until the docs half can be opted out.
+  path: reference
