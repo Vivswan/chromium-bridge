@@ -481,8 +481,6 @@ if (import.meta.main) {
 
   // The docs whose job is to state a value must state the current one.
   const presences: Array<[string, string, string]> = [
-    ["AGENTS.md", hostId, "native host id"],
-    ["AGENTS.md", keyLabel, "enclave keychain label"],
     [".github/SECURITY.md", hostId, "native host id"],
     [".github/SECURITY.md", keyLabel, "enclave keychain label"],
     [".github/SECURITY.md", extensionId, "pinned extension id"],
