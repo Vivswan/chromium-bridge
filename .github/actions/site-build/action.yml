@@ -1,0 +1,37 @@
+# The repo-owned website hook of the fleet's site leg (reusable-site.yml runs
+# it inside the deploy job and publishes the `dist` directory at the site
+# root). The Astro site reads the two inputs as ASTRO_BASE and ASTRO_SITE
+# (src/apps/web/src/lib/site-identity.ts); the docs it renders live under
+# /docs/<slug>/ of that build.
+name: Build the website
+description: Builds the Astro site (src/apps/web) for the fleet's site leg.
+
+inputs:
+  base-path:
+    description: The URL path the site is served under (/<repo>/, or / with a custom domain).
+    required: true
+  origin:
+    description: The site origin (https://<owner>.github.io, or https://<domain>).
+    required: true
+
+outputs:
+  dist:
+    description: The built site directory, relative to the repository root.
+    value: ${{ steps.build.outputs.dist }}
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: .bun-version
+    - run: bun install --frozen-lockfile
+      shell: bash
+    - id: build
+      shell: bash
+      env:
+        ASTRO_BASE: ${{ inputs.base-path }}
+        ASTRO_SITE: ${{ inputs.origin }}
+      run: |
+        bun run --cwd src/apps/web build
+        echo "dist=build/web" >> "$GITHUB_OUTPUT"
