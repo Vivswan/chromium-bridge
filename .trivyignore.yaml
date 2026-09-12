@@ -1,0 +1,12 @@
+# Trivy bypasses, each with a statement and an expiry (the fleet's trivy action refuses any other shape;
+# an expired entry blocks again on its own).
+misconfigurations:
+  - id: DS-0002
+    paths:
+      - scripts/browser-container/Containerfile
+    statement: >-
+      Local developer image only (scripts/run-browser-tests-container.sh), never built or run in CI. It runs as root
+      inside a throwaway container so a read-only host checkout of any file mode stays readable; the container copies
+      the checkout into /work and touches nothing on the host. A non-root USER would fail on owner-only checkouts
+      (rootless podman maps the host user to uid 0, rootful docker to whatever uid the checkout has).
+    expired_at: 2027-03-01
