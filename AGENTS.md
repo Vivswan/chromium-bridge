@@ -35,8 +35,6 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 <!-- Add project-specific instructions below the END marker; they are this repository's own and survive every sync. -->
 <!-- END REPO-PLATFORM MANAGED -->
 
-## Repository-specific guidance
-
 - Chromium Bridge is a Rust MCP server, native-messaging host, and MV3 extension that drives the user's real, logged-in Chromium browser. Correctness and the safety model come first.
 - Adopted from `whg517/browser-bridge` (Apache-2.0; attribution in `LICENSE-APACHE` and `NOTICE`). The identifiers are our own, not upstream's (ADR-0023); there is no upstream remote, so upstream fixes are ported by judgment.
 - `CONTRIBUTING.md` is the authoritative development process. moon is the command interface: `moon run help` lists the tasks, `moon run ci` is the gate.
