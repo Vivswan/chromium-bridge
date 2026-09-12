@@ -1,49 +1,18 @@
 #!/usr/bin/env bun
 
-// Fuzz smoke test for the wire parsers and semantic validators (chromium-bridge).
+// Smoke check for the cargo-fuzz targets: build each one and run it for a short bounded blast, proving the
+// harnesses build and survive hostile bytes. Not a fuzzing campaign: the nightly job stretches this same script
+// over a persistent corpus, and continuous (OSS-Fuzz scale) fuzzing is out of scope.
+// node builtins only, no scripts/lib.ts import, so it runs without a `bun install`.
 //
-// Discovers every cargo-fuzz target, builds it, and runs it for a short,
-// bounded blast of input (seeded from fuzz/seeds/<target> and steered by
-// fuzz/dictionaries/ where those exist), purely to prove the harnesses build
-// and survive hostile bytes. This is a smoke check, NOT a real fuzzing
-// campaign: the nightly job stretches the same script into a longer bounded
-// pass over a persistent corpus, but continuous fuzzing (OSS-Fuzz scale) is
-// out of scope.
-//
-// A crashing target does not stop the pass: the script records the failure,
-// writes a report for it under --failure-dir (one directory per target, in
-// the shape the fleet repository's docs/fuzzer.md defines, so the nightly
-// job's issue-filing action can consume it), and continues with the remaining
-// targets. The exit code is 1 when any target failed, 0 when all survived.
-// (Earlier versions re-raised libFuzzer's
-// signal / propagated cargo's status; with continue-through-targets there is
-// no single status to propagate, and the callers only branch on nonzero.)
-//
-// Requirements: a nightly toolchain and cargo-fuzz (libFuzzer). If either is
-// missing the script SKIPS (exit 0) rather than failing, so it can sit in a
-// stable-only gate harmlessly; the nightly fuzz job makes it load-bearing.
-//
-// Deliberately self-contained (node builtins only, no scripts/lib.ts import)
-// so it runs without a `bun install`.
-//
-// Dual-use: CI (the nightly fuzz job) and local runs (`moon run fuzz-smoke`).
-//
-// Usage: bun scripts/fuzz-smoke.ts [--runs=N] [--max-total-time=SECONDS] [--cmin]
-//                                  [--seed=N] [--failure-dir=PATH] [--require-toolchain]
-//   --runs=N                  iteration cap per target (default 4096)
-//   --max-total-time=SECONDS  wall-clock cap per target (default 30)
-//   --cmin                    minimize each passing target's corpus after the runs
-//   --seed=N                  libFuzzer PRNG seed (best-effort determinism only:
-//                             the corpus contents dominate what gets explored;
-//                             the crashing input file is the real reproducer)
-//   --failure-dir=PATH        failure-report directory, relative to
-//                             src/packages/core and inside fuzz/failures*
-//                             (default fuzz/failures); cleared at startup so
-//                             stale reports never leak
-//   --require-toolchain       fail (exit 1) instead of skipping when nightly
-//                             or cargo-fuzz is missing; the nightly job passes
-//                             this because an exit-0 skip there would read as
-//                             a green night and auto-close the tracking issue
+//   a target crashes                -> recorded, the pass continues, exit 1 at the end
+//   its report                      -> <failure-dir>/<target>/report.md, the shape the fleet repository's
+//                                      docs/fuzzer.md defines; the nightly job's issue-filing action reads it
+//   nightly or cargo-fuzz missing   -> SKIP, exit 0, so the script can sit in a stable-only gate
+//   ... under --require-toolchain   -> exit 1: an exit-0 skip in the nightly job would read as a green night
+//                                      and auto-close the tracking issue
+//   --seed=N                        -> best-effort determinism only; the corpus contents dominate what gets
+//                                      explored, and the crash file is the real reproducer
 
 import { spawnSync } from "node:child_process";
 import {
@@ -72,12 +41,9 @@ export interface Options {
 }
 
 /**
- * A --failure-dir value must stay inside the fuzz/failures* namespace of the
- * core package: the directory is recursively DELETED at startup, so anything
- * looser (an absolute path, a `.`/`..` or empty segment, or a plain name
- * like `src` or `fuzz/seeds`) could point the delete at tracked checkout
- * contents. The flag exists to redirect the OUTPUT, not to name arbitrary
- * directories.
+ * The --failure-dir directory is recursively DELETED at startup, so it must stay inside the core package's
+ * fuzz/failures* namespace: an absolute path, a `.`/`..` or empty segment, or a plain name like `src` or
+ * `fuzz/seeds` could point the delete at tracked checkout contents.
  */
 export function isSafeFailureDir(path: string): boolean {
   const segments = path.split("/");
@@ -130,14 +96,9 @@ export function parseOptions(argv: string[]): Options {
   return options;
 }
 
-// Dictionaries steer mutation toward the target's input grammar. The
-// structured targets (Arbitrary-derived input) get none - a byte dictionary
-// is meaningless against the arbitrary encoding; the DER parser gets DER
-// tag/length bytes; everything else - including any future target absent
-// from these two lists - consumes JSON protocol frames, so the JSON
-// dictionary is the deliberate default (a wrong dictionary only weakens
-// mutation, never correctness). Every path is existence-guarded so the
-// script works before the dictionaries land.
+// Dictionaries steer mutation toward the target's input grammar. A byte dictionary is meaningless against
+// Arbitrary-derived input, and a wrong dictionary only weakens mutation, never correctness, so JSON is the
+// default for any target absent from these two lists (every other target consumes JSON protocol frames).
 const noDictionary = new Set(["handshake_verify", "enclave_challenge"]);
 const dictionaryOverrides = new Map([["enclave_der", "fuzz/dictionaries/der.dict"]]);
 const defaultDictionary = "fuzz/dictionaries/json_protocol.dict";
@@ -341,12 +302,8 @@ function main(): number {
     cwd: core,
     encoding: "utf8",
   });
-  // Skip when rustup is missing, fails, or lists no nightly toolchain (the old
-  // shell pipeline's `rustup ... | grep -q nightly` under pipefail skipped on a
-  // rustup failure too, even if partial output mentioned nightly). Under
-  // --require-toolchain a skip is a FAILURE: the nightly job passes the flag
-  // because an exit-0 skip there would read as a green night and auto-close
-  // the tracking issue without having fuzzed anything.
+  // A missing or failing rustup skips like a missing nightly does. Under --require-toolchain a skip is a
+  // FAILURE: in the nightly job an exit-0 skip would read as a green night and auto-close the tracking issue.
   if (toolchains.error || toolchains.status !== 0 || !toolchains.stdout?.includes("nightly")) {
     if (options.requireToolchain) {
       console.error("error: nightly toolchain required (--require-toolchain) but missing");

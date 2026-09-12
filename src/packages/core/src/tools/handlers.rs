@@ -38,18 +38,10 @@ fn parse<T: serde::de::DeserializeOwned>(tool: &str, args: &Value) -> Result<T, 
     serde_json::from_value(args).map_err(|e| CallError::InvalidArgument(format!("{tool}: {e}")))
 }
 
-/// Deserializer for optional args that refuses an explicit `null`: the
-/// catalogue advertises `string`/`integer`/`boolean`, never a nullable, so
-/// "absent" is spelled by omitting the key (serde's `default` covers that
-/// path) and a present key must carry the declared type. Without this,
-/// `Option<T>` would silently read `null` as absent - a laxer contract than
-/// the schema at a boundary that should refuse ambiguity. The refusal is
-/// deliberate (fail closed on a shape the schema does not describe); the one
-/// documented null-as-absent exception is the shared `browser` routing
-/// argument, which is dispatch's, not any builder's, and carries its own
-/// rule in `extract_browser` (some MCP clients serialize an unset optional
-/// as `null`, and a wrongly-typed browser target has its own dedicated
-/// error).
+/// Deserializer for optional args that refuses an explicit `null`: the catalogue advertises `string`/`integer`/`boolean`,
+/// never a nullable, so "absent" is spelled by omitting the key (serde's `default`) and a present key must carry the
+/// declared type; `Option<T>` alone would read `null` as absent, laxer than the schema. The one null-as-absent exception
+/// is the shared `browser` routing argument, which is dispatch's and carries its own rule in `extract_browser`.
 fn present_and_typed<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,

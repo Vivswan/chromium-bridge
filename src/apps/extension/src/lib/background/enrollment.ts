@@ -1,37 +1,18 @@
-// The enrollment ceremony state machine: the extension half of ADR-0021.
+// The enrollment ceremony state machine, the extension half of ADR-0021. port.ts hands it the port (attachPort)
+// and every enclave control frame, messages.ts routes the options/popup actions; this module never imports
+// port.ts, so there is no cycle. State is derived from storage on every read: nothing survives an MV3
+// service-worker restart in memory.
 //
-// port.ts hands this module the native-messaging port (attachPort) and every
-// enclave control frame; messages.ts routes the options/popup actions here.
-// This module never imports port.ts, so there is no import cycle.
+//   unpaired     no pin; traffic refused. Each connect issues a pairing challenge unless paused: one enclave_error
+//                round trip on an unenrolled machine, the single ceremony Touch ID prompt once a key is minted
+//   pending      a pairing proof verified; the fingerprint awaits approval in the options page. Still refused
+//   pinned       traffic flows. Reconnects are NOT re-challenged (every host signature is a presence prompt and
+//                MV3 respawns the host every few minutes); "Verify now" and the opt-in hostReverifyMs re-verify
+//   compromised  a pinned-key verification failed; refused until the user revokes and re-pairs
 //
-// States, derived from storage on every read (nothing cached across the MV3
-// service-worker restarts):
-//
-//   unpaired    no pin. Bridge traffic is refused (enrollment is required,
-//               ADR-0032: the retired requireEnrollment setting no longer
-//               exists and a stored value is never consulted). Each connect
-//               issues a pairing challenge (unless paused);
-//               on an unenrolled machine that costs one enclave_error round
-//               trip and no prompt, and once `chromium-bridge pair` has minted
-//               a key it raises the single ceremony Touch ID prompt.
-//   pending     a pairing proof verified; the fingerprint awaits the user's
-//               approval in the options page. Still refused.
-//   pinned      the user approved; bridge traffic flows. Session granularity
-//               (ADR-0021): reconnects are NOT re-challenged, because every
-//               host signature raises a presence prompt and MV3 respawns the
-//               host every few minutes. "Verify now" in the options page
-//               challenges on demand, and the opt-in hostReverifyMs setting
-//               re-verifies lazily on connect once the last success is older
-//               than that interval (default 0 = off).
-//   compromised a pinned-key verification failed. Refused until the user
-//               revokes and re-pairs.
-//
-// Platform scoping: on platforms without a Secure Enclave (decided by the
-// browser's own getPlatformInfo probe, never by the host's claim) enrollment
-// is unavailable, so the gate does not block and no challenge is issued; the
-// bridge runs on the base transport authentication.
-//
-// The challenge-on-connect policy lives entirely in onPortConnected below.
+// Enrollment is required wherever the platform can enroll (ADR-0032 retired requireEnrollment; a stored value is
+// never consulted). Where the browser's own probe says no Secure Enclave, the gate does not block and no
+// challenge is issued.
 
 import {
   type EnclaveChallengeWire,
@@ -176,18 +157,11 @@ async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; e
 
 // ---- platform capability ------------------------------------------------------
 
-/** Whether this platform can enroll at all, decided by the BROWSER's own
- * platform probe (browser.runtime.getPlatformInfo), never by the host's
- * unsupported_platform claim. The host is the party being authenticated, so
- * its self-reported platform must not be able to open the gate: a
- * substituted host on macOS could otherwise dodge enrollment by claiming
- * "unsupported". Where the Secure Enclave does not exist (non-mac),
- * enrollment is unavailable rather than unsatisfied: the bridge runs on the
- * base transport authentication and the ceremony is skipped entirely. That
- * is a platform fact, not a disabled security control. If the probe itself
- * fails, ambiguity fails closed: the platform is treated as capable and the
- * gate enforces. Exported for the presence provider (ADR-0031), which uses
- * the same browser-decided capability probe. */
+/** Decided by the browser's own probe, never the host's unsupported_platform claim: the host is the party being
+ * authenticated, and a substituted host on macOS could otherwise dodge enrollment by claiming "unsupported".
+ * Off macOS enrollment is unavailable rather than unsatisfied (the bridge runs on the base transport
+ * authentication); a Mac without a Secure Enclave stays blocked (REASON_HELP.unsupported_platform), and a failed
+ * probe fails closed as capable. Shared with confirm/presence.ts (ADR-0031). */
 export async function platformCanEnroll(): Promise<boolean> {
   try {
     const info = await browser.runtime.getPlatformInfo();
@@ -202,25 +176,14 @@ export async function platformCanEnroll(): Promise<boolean> {
 
 export type Gate = { allowed: true } | { allowed: false; reason: string };
 
-/** Consulted by port.ts before every dispatched bridge request. "Blocked"
- * means exactly this: the request is answered with {ok:false, error:reason}
- * and never reaches dispatch(), so no tab, cookie, or page op runs. The
- * block-until-pinned enforcement applies only where the platform can enroll
- * (macOS); elsewhere enrollment is unavailable and requests proceed on the
- * base authentication.
+/** Consulted by port.ts before every dispatched bridge request; "blocked" means the request is answered
+ * {ok:false, error: reason} and never reaches dispatch(). The state reads are individually async on the hot
+ * path, so an "allowed" first pass is confirmed by a second read INSIDE the serialized transition queue, with
+ * `onAllowed` (the dispatch kickoff) run synchronously in that same critical section. The queue orders, it does
+ * not refuse: the verdict is whatever state the confirming read sees.
  *
- * Fail closed against concurrent transitions: the state reads are
- * individually async and this gate runs on the hot request path, so a
- * transition (a revoke, a compromised mark) can land while a read pass is in
- * flight. A first, unserialized pass answers the cheap refusals; an
- * "allowed" answer must then be confirmed by a second read INSIDE the
- * serialized transition queue, and `onAllowed` (the dispatch kickoff) runs
- * synchronously in that same critical section. That gives every op a strict
- * order against every transition: a transition queued or in flight before
- * the confirming read is fully applied first and honored (the op is
- * blocked); a transition queued after it runs strictly after the op has
- * already begun dispatching, i.e. the op is ordered before the transition by
- * mechanism, not by luck. */
+ *   transition queued or in flight before the confirming read  -> fully applied first; the confirming read sees its result
+ *   transition queued after it                                 -> runs after the op has begun dispatching */
 export async function enrollmentGate(onAllowed?: () => void): Promise<Gate> {
   const first = await readGateState();
   if (!first.allowed) return first;
@@ -234,11 +197,10 @@ export async function enrollmentGate(onAllowed?: () => void): Promise<Gate> {
 /** One unserialized read of the gate state. Callers other than the two-pass
  * enrollmentGate must not use this to grant access. */
 async function readGateState(): Promise<Gate> {
-  // #32 FIRST, unconditionally: every check below reads trust state from
-  // browser.storage, which must be confined to extension contexts before we
-  // can believe any of it. If the restriction is not verifiably applied this
-  // SW life, a content script could have written the very values we are about
-  // to trust (planted a pin, cleared the compromised mark), so refuse.
+  // Storage hardening FIRST, unconditionally (trusted-storage.ts): every check below reads trust state from
+  // browser.storage, which must be confined to extension contexts before any of it is believed. If the restriction
+  // is not verifiably applied this SW life, a content script could have written the very values about to be
+  // trusted (planted a pin, cleared the compromised mark), so refuse.
   const hardened = await hardenStorageAccess();
   if (!hardened.ok) {
     return {
@@ -305,10 +267,9 @@ async function readGateState(): Promise<Gate> {
  * forward. */
 export function onPortConnected(): Promise<void> {
   return serialized(async () => {
-    // Do not read or act on trust state until it is confined to the extension
-    // (#32): the same reasoning as the gate. If hardening failed, do nothing -
-    // the gate is already blocking every request, so there is no ceremony to
-    // drive.
+    // Do not read or act on trust state until it is confined to the extension (trusted-storage.ts): the same
+    // reasoning as the gate. If hardening failed, do nothing - the gate is already blocking every request, so
+    // there is no ceremony to drive.
     if (!(await hardenStorageAccess()).ok) return;
     // ADR-0025: an unpair that could not reach the host yet (port was down,
     // SW died) is retried on every connect until the host acknowledges the
@@ -354,13 +315,12 @@ async function maybeSendPendingHostRevoke(): Promise<void> {
  * closed. Each re-verify raises a Touch ID prompt, which is why it is
  * opt-in. */
 async function maybePeriodicReverify(pin: pinStore.EnclavePin): Promise<void> {
-  // A policy field since ADR-0032 Phase 3; its own decision moment (one read).
+  // A policy field (ADR-0032), read once: its own decision moment.
   const effective = await getEffectivePolicy();
   if (effective.state === "blocked") {
-    // The connect path is NOT behind the dispatch barrier (SFX-1): resolving
-    // a blocked posture to the deny-baseline defaults here would read
-    // hostReverifyMs 0 = never-re-verify and silently skip the user's opt-in
-    // check. Skip LOUDLY instead; the barrier is refusing requests anyway.
+    // The connect path is NOT behind the dispatch barrier: resolving a blocked posture to the deny-baseline
+    // defaults here would read hostReverifyMs 0 = never-re-verify and silently skip the user's opt-in check.
+    // Skip LOUDLY instead; the barrier is refusing requests anyway.
     console.warn("[bb] periodic host re-verification skipped:", effective.reason);
     return;
   }
@@ -382,19 +342,13 @@ async function maybePeriodicReverify(pin: pinStore.EnclavePin): Promise<void> {
 
 type CeremonyMode = "pair" | "verify";
 
-/** Every reason code, classified. "compromise": answering a VERIFY challenge
- * with this reason is evidence of host substitution rather than a transient
- * failure - a key is pinned but the answering host can no longer prove it
- * (the enrollment key was revoked or replaced, or the host now denies
- * Enclave capability on a machine that demonstrably enrolled one - a
- * downgrade claim from a suspect binary) - and it latches the compromised
- * mark. "transient" only surfaces as lastError.
+/** "compromise" answering a VERIFY challenge is evidence of host substitution, not a transient failure: a key is
+ * pinned but the answering host cannot prove it (a revoked or replaced key, or a downgrade claim of no Enclave on
+ * a machine that demonstrably enrolled one), so it latches the compromised mark. "transient" only surfaces as
+ * lastError.
  *
- * Residual risk, named: a host that ADDS a compromise-worthy code ships to
- * an extension that does not know it yet, and the unknown-reason path below
- * does not latch. Bounded by single-archive releases (host and extension
- * ship together), so the skew window is one un-updated install, not a
- * protocol era. */
+ * Residual, named: a newer host adding a compromise-worthy code reaches the unknown-reason path below, which
+ * does not latch. Host and extension ship in one archive, so the skew window is one un-updated install. */
 const REASON_CLASS: Record<EnclaveReasonCode, "compromise" | "transient"> = {
   unsupported_platform: "compromise",
   not_enrolled: "compromise",
@@ -524,11 +478,9 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
   if (res.ok) {
     await pinStore.setLastVerifiedAt(Date.now());
     await pinStore.clearLastError();
-    // A fresh-nonce proof of the PINNED key just verified: per-connection
-    // identity evidence for the decision-8 legacy-settings send-once
-    // (ADR-0032 Phase 4). The token pins it to the connection the challenge
-    // went out on, the generation to the pin epoch at challenge time; if
-    // either has moved, this credits nobody.
+    // A fresh-nonce proof of the PINNED key just verified: per-connection identity evidence for the
+    // legacy-settings send-once (ADR-0032 decision 8). The token pins it to the connection the challenge went
+    // out on, the generation to the pin epoch at challenge time; if either has moved, this credits nobody.
     notePinProvenOnConnection(current.connection, pin.keyId, current.generation);
     console.log("[bb] pinned key verified");
   } else {
@@ -629,10 +581,9 @@ export function approvePending(): Promise<{ ok: boolean; error?: string }> {
     // The pin IS the fresh pairing: a deletion request still pending from
     // before it is stale, and resending it would revoke the key just pinned.
     await pinStore.setHostRevokePending(false);
-    // A (re-)pin decides the policy ratchet scope (ADR-0032 decision 3):
-    // onPinPinned resets the ratchet for a DIFFERENT key but RETAINS it for a
-    // same-key re-pair (so an old permissive baseline cannot replay - finding
-    // 2), drops this connection's verified mark, and keeps the cutover flag.
+    // A (re-)pin decides the policy ratchet scope (ADR-0032 decision 3): onPinPinned resets the ratchet for a
+    // DIFFERENT key but RETAINS it for a same-key re-pair (so an old permissive baseline cannot replay), drops
+    // this connection's verified mark, and keeps the cutover flag.
     await onPinPinned(pending.keyId);
     await updateBadge();
     console.log("[bb] enrollment pinned:", pending.keyId);
@@ -677,15 +628,10 @@ export function revokePin(): Promise<{ ok: boolean }> {
     // fail-closed but strands the revoke-and-re-pair recovery the latched-state
     // messages promise. `null` here means nothing was pinned.
     const revokedKeyId = (await pinStore.getPin())?.keyId ?? null;
-    // Hand the identity over BEFORE clearAll, so no SW death can land in a gap
-    // where both copies are gone: until clearAll runs the pin store still holds
-    // it, and after onPinRevoked returns the durable prior does. Revoke RETAINS
-    // the policy ratchet record (ADR-0032 decision 3, finding 2): a same-key
-    // re-pair must still refuse an old-baseline replay, so the anchor survives;
-    // the record's scope keeps it inert (deny baseline + closed barrier) while
-    // unpinned, and onPinRevoked only drops this connection's verified mark. The
-    // cutover flag deliberately survives too - post-reset means the deny baseline
-    // plus the barrier, never a fall back to legacy policy.
+    // Hand the identity over BEFORE clearAll, so no SW death can land in a gap where both copies are gone.
+    // Revoke RETAINS the policy ratchet record (ADR-0032 decision 3): a same-key re-pair must still refuse an
+    // old-baseline replay, and the record stays inert (deny baseline + closed barrier) while unpinned. The
+    // cutover flag survives too: post-reset means the deny baseline plus the barrier, never legacy policy.
     await onPinRevoked(revokedKeyId);
     await pinStore.clearAll();
     await pinStore.setPaused(true);

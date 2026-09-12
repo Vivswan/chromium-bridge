@@ -26,7 +26,7 @@ import { migrateSettings } from "@/lib/shared/settings-migration";
 //   - allowlist-store.ts  storage-backed allowlist + approval flow
 //   - messages.ts         runtime message router (popup/options/screenshot)
 export default defineBackground(() => {
-  // #32: confine browser.storage to extension contexts as early as possible,
+  // Confine browser.storage to extension contexts as early as possible,
   // so a content script cannot read or write the enrollment pin, the
   // compromised marker, the policy state, or the allowlist. This eager call
   // only STARTS the async restriction; the enrollment gate and
@@ -54,12 +54,12 @@ export default defineBackground(() => {
   // Chrome detaches us, or when the effective cdpMode grant goes away.
   installCdpLifecycleListeners();
 
-  // ADR-0032 Phase 5: ONE startup sweep that deletes the retired legacy
+  // ADR-0032: ONE startup sweep that deletes the retired legacy
   // policy keys (+ requireEnrollment) from storage, only when the one-way
   // cutover has armed AND the legacy bag shipped (legacySettingsSent) - no
   // storage watch, by design (legacy-cleanup.ts: startup-only closes the
-  // read/delete race by construction). Pre-cutover (non-macOS forever, old
-  // hosts indefinitely) and armed-but-never-shipped both delete nothing.
+  // read/delete race by construction). Pre-cutover (no accepted push yet,
+  // e.g. an old host) and armed-but-never-shipped both delete nothing.
   installLegacyCleanup();
 
   // The off-DOM confirmation surface (ADR-0027). Without a provider the
@@ -74,7 +74,7 @@ export default defineBackground(() => {
   installConfirmationProvider(windowProvider);
   installPresenceProvider(new EnclavePresenceProvider(windowProvider));
 
-  // Lane U (ADR-0032 decision 3): on an UNPINNED extension, an unsigned
+  // ADR-0032 decision 3: on an UNPINNED extension, an unsigned
   // policy push that would relax the enforced effective policy is applied
   // only after an explicit approval in the confirmation window above.
   // Registered after the provider so a consultation always has a surface;

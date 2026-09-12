@@ -1,7 +1,7 @@
 // page_snapshot_precise - Chrome's authoritative accessibility tree via the
 // debugger API (CDP). More accurate than the content-script snapshot (shadow
 // DOM, complex ARIA) but briefly shows the "Started debugging this browser"
-// infobar on EVERY tab while attached. We attach → fetch tree → tag elements →
+// infobar on EVERY tab while attached. We attach -> fetch tree -> tag elements ->
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach. See ADR-0009.
 
@@ -121,7 +121,7 @@ export async function snapshotPrecise(
   await injectIfNeeded(tab.id);
   if (warnPrecise) {
     // The toast strings resolve here (the SW has the user's locale); the
-    // content script deliberately reads no extension storage (#32).
+    // content script deliberately reads no extension storage.
     await initI18n();
     let outcome: ToastOutcome = { kind: "proceed" };
     let delivered = true;

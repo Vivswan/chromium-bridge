@@ -133,17 +133,9 @@ type Runner = {
   run(): Promise<void>;
 };
 
-// web-ext-run's cmd.run does NOT return its runner if it rejects (or hangs)
-// AFTER spawning Chrome (e.g. the extension fails to load over CDP), which
-// would leave a browser we could not close. So we capture the runner at
-// CONSTRUCTION through web-ext's own injectable MultiExtensionRunner - a
-// documented extension seam, not a monkeypatch - and publish it to the module
-// `activeBrowser` immediately, BEFORE cmd.run can hang or reject. That single
-// global handle is always reachable by shutdown. This class wraps the single
-// chromium runner web-ext builds and mirrors the parts of its
-// MultiExtensionRunner that cmd.run and we use (run, exit, registerCleanup).
-// Everything it closes is closed by the pid web-ext recorded, so it never
-// signals a process this lane did not spawn.
+// web-ext-run's cmd.run does NOT return its runner when it rejects or hangs AFTER spawning Chrome (e.g. the
+// extension fails to load over CDP), so the runner is captured at CONSTRUCTION through web-ext's injectable
+// MultiExtensionRunner seam and shutdown always holds that one handle, which closes only the pid web-ext recorded.
 let activeBrowser: CapturingRunner | null = null;
 class CapturingRunner {
   #runners: Runner[];
@@ -158,15 +150,10 @@ class CapturingRunner {
     return "chromium-bridge dev runner";
   }
   async run(): Promise<void> {
-    // Force chrome-launcher's handleSIGINT off. By default it installs its own
-    // SIGINT handler that killAll()s (signalling stale registry instances by a
-    // possibly-recycled pid) and process.exit(130)s, bypassing this lane's
-    // orderly teardown. This lane owns its signals. We wrap each chromium
-    // runner's own chromiumLaunch (which IS chrome-launcher's launch), adding
-    // the opt. FAIL CLOSED if web-ext renamed the field: launching anyway
-    // would silently restore the killAll handler and its recycled-pid hazard,
-    // so refuse to launch instead (the throw lands in launch()'s catch, which
-    // closes anything spawned and exits).
+    // chrome-launcher's default SIGINT handler killAll()s (signalling stale registry instances by a
+    // possibly-recycled pid) and process.exit(130)s, bypassing this lane's teardown, so handleSIGINT is forced
+    // off by wrapping each runner's chromiumLaunch (chrome-launcher's launch). FAIL CLOSED if web-ext renamed
+    // the field: launching anyway would silently restore the recycled-pid hazard.
     for (const r of this.#runners) {
       const patchable = r as unknown as {
         chromiumLaunch?: (opts: Record<string, unknown>) => unknown;

@@ -1,9 +1,9 @@
-// The Phase 5 cutover-conditional storage cleanup (legacy-cleanup.ts):
+// The cutover-conditional storage cleanup (legacy-cleanup.ts):
 // deletes the 15 retired policy keys + requireEnrollment ONLY when the
 // one-way cutover reads exactly armed AND the legacy bag has shipped
 // (legacySettingsSent reads exactly true) - the ADR's "after the import path
-// has shipped" condition. Pre-cutover installs (non-macOS forever, old hosts
-// indefinitely) keep their stored values, an armed cutover with an UNSENT
+// has shipped" condition. Pre-cutover installs (no accepted push yet, e.g. an
+// old host) keep their stored values, an armed cutover with an UNSENT
 // bag keeps them too (the only copy of a migration that can no longer
 // ship), and a corrupt flag deletes NOTHING (fail-safe: keep data on
 // ambiguity). Startup-sweep-only by design: no storage watch, so no deletion
@@ -43,7 +43,7 @@ async function storedKeys(): Promise<string[]> {
 beforeEach(() => {
   fakeBrowser.reset();
   resetStorageHardeningForTests();
-  // The #32 hardening gate runs before every sweep; fakeBrowser has no
+  // The storage-hardening gate runs before every sweep; fakeBrowser has no
   // setAccessLevel, so stub a succeeding one (the unhardenable test below
   // overrides it with a failing stub).
   stubAccessLevel(() => Promise.resolve());

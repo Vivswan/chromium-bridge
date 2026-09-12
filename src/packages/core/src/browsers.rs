@@ -205,23 +205,17 @@ pub struct BrowserEntry {
 }
 
 impl BrowserEntry {
-    /// Whether the browser looks present for this user. The only I/O in this
-    /// module's surface, kept on the entry so `resolve` itself stays pure for
-    /// tests.
+    /// Whether the browser looks present for this user: the only I/O in this module, kept on the entry so
+    /// `resolve` stays pure for tests. A display/guidance heuristic, not a security gate: default `doctor --fix`
+    /// uses it to pick which browsers to register (fewer detected means fewer manifests written, never more), and
+    /// the explicit register paths still reach an undetected browser.
     ///
-    /// When `app_paths` is populated (macOS), the application bundle itself
-    /// must exist -- a leftover config root alone must never light the row,
-    /// and a freshly installed app that has not created its config root yet
-    /// still counts. When `app_paths` is empty (Linux/Windows), the config
-    /// root is the best cheap signal we have.
-    ///
-    /// This is a display/guidance heuristic, not a security gate. Default
-    /// `doctor --fix` does use it to pick which browsers to register (fewer
-    /// detected browsers means fewer manifests written, never more), and
-    /// registration into an undetected browser stays possible through the
-    /// explicit register paths. Residual: a macOS app installed outside both
-    /// application folders reads as "not detected"; the user can still
-    /// register it explicitly.
+    /// ```text
+    /// `app_paths` populated (macOS)      -> the bundle must exist; a leftover config root alone never lights the
+    ///                                       row, and a fresh install with no config root yet still counts
+    /// `app_paths` empty (Linux/Windows)  -> the config root is the best cheap signal
+    /// macOS app outside both folders     -> reads "not detected" (residual); the user can register it explicitly
+    /// ```
     pub fn detected(&self) -> bool {
         if self.app_paths.is_empty() {
             return self.config_dir.is_dir();
@@ -243,13 +237,9 @@ fn macos_vendor_dir(browser: Browser) -> &'static str {
     }
 }
 
-/// Each browser's application bundle name on macOS, looked for under
-/// `/Applications` and `~/Applications` (the two standard install roots,
-/// including Homebrew casks). A Launch Services lookup by bundle id would
-/// also catch non-standard locations, but needs shelling out or an
-/// Objective-C bridge; two path checks are the cheap, dependency-free
-/// mechanism, and the non-standard-location gap is a named residual on
-/// [`BrowserEntry::detected`].
+/// Each browser's application bundle name on macOS, looked for under `/Applications` and `~/Applications` (the two
+/// standard install roots, including Homebrew casks). Two path checks are the dependency-free mechanism; the
+/// non-standard-location gap is the named residual on [`BrowserEntry::detected`].
 fn macos_app_bundle(browser: Browser) -> &'static str {
     match browser {
         Browser::Chrome => "Google Chrome.app",

@@ -89,28 +89,20 @@ pub(super) fn authenticate(_reason: &str) -> HardwareOutcome {
     }
 }
 
-/// One policy-signing presence act (ADR-0032): sign the document bytes under
-/// the POLICY domain with the enrollment key, whose user-presence ACL raises
-/// the Touch ID sheet - the tap is the grant approval and the signature,
-/// kept this time, is the artifact the extension verifies.
+/// One policy-signing presence act (ADR-0032): the enrollment key's user-presence ACL raises the Touch ID sheet,
+/// the tap is the grant approval, and the signature (kept, this time) is what the extension verifies.
 ///
-/// The ladder mapping deliberately DIVERGES from [`authenticate`] on lookup
-/// and export errors. There, ambiguity falls to the floor because the floor
-/// gates a one-shot act whose signature is discarded - itself a human check,
-/// minting nothing durable. Here, `Unavailable` is what entitles
-/// `set_signed` + `PolicyGrantFloor::AppConfirm` to write a PERSISTENT
-/// unsigned baseline in place of a signed one, so only genuine absence
-/// (`Ok(None)`: no enrollment key exists) may report it. A lookup `Err` (a
-/// suspect or planted key, a keychain failure) or a key whose public half
-/// will not export is ambiguity, and fail-closed-on-ambiguity plus the
-/// no-downgrade rule make that terminal: `Refused`, never a floor. Do not
-/// "consistency-fix" either mapping to match the other.
+/// DIVERGES from [`authenticate`] on lookup and export errors on purpose: `Unavailable` here entitles `set_signed` +
+/// `PolicyGrantFloor::AppConfirm` to write a PERSISTENT unsigned baseline, so only genuine absence may report it.
+/// Do not "consistency-fix" either mapping to match the other.
 ///
-/// This module is compiled out under `cfg(test)`, so the mapping itself is
-/// exercised only by the `moon run touchid-gates` human runbook; its
-/// consequence - a `Refused` outcome never writes a baseline and never
-/// falls to a floor - is pinned at the seam by
-/// `policy::store_tests::a_refused_signature_never_falls_to_the_floor`.
+/// ```text
+/// `Ok(None)`, no enrollment key                -> `Unavailable`
+/// lookup `Err`, or public half not exportable  -> `Refused`, never a floor (ambiguity fails closed, no downgrade)
+/// ```
+///
+/// Compiled out under `cfg(test)`, so the mapping is exercised only by the `moon run touchid-gates` runbook; its
+/// consequence is pinned at the seam by `policy::store_tests::a_refused_signature_never_falls_to_the_floor`.
 pub(super) fn sign_policy(doc_bytes: &[u8]) -> PolicySignOutcome {
     let key = match EnrollmentKey::lookup() {
         Ok(Some(key)) => key,

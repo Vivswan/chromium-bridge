@@ -198,19 +198,15 @@ impl Outcome {
     }
 }
 
-/// Dispatch a tool call. Returns the MCP result `content` value (an array)
-/// and the isError flag. Errors are tool-level (isError=true), not RPC-level.
+/// Dispatch a tool call into the MCP result `content` array and the isError flag; errors are tool-level, never
+/// RPC-level. `browser` is the routing argument [`crate::mcp::handler`] already parsed once via [`extract_browser`],
+/// so no layer re-reads the raw value under different rules; it is consumed here and never forwarded in the op's own
+/// args.
 ///
-/// `browser` is the tool call's already-parsed routing argument: the caller
-/// (the MCP tool executor in [`crate::mcp::handler`]) extracts it once via [`extract_browser`]
-/// and feeds routing, auditing, and this dispatch from that single parse, so
-/// no layer re-reads the raw value under different rules. It is consumed here
-/// (routing) and never forwarded in the op's own args. `list_browsers` is
-/// answered by the server itself from its connection registry - it is the one
-/// tool that does not translate into a bridge request - but its arguments
-/// still go through its registered builder first, so the server-local branch
-/// enforces the same object-root chokepoint as every bridge tool instead of
-/// silently accepting shapes its schema refuses.
+/// ```text
+/// list_browsers -> answered from the connection registry, but its arguments still pass its registered builder, so
+///                  the server-local branch enforces the same object-root chokepoint as every bridge tool
+/// ```
 pub fn dispatch(session: &Session, name: &str, args: &Value, browser: Option<&str>) -> Outcome {
     let result = match HANDLERS.iter().find(|h| h.name == name) {
         Some(h) => (h.build_payload)(args).and_then(|payload| {

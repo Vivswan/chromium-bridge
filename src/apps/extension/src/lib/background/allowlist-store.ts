@@ -58,7 +58,7 @@ export async function ensureAllowed(url: string | undefined) {
   if ((await getSetting("allowAllSites")) === true) return;
   const list = await getAllowlist();
   if (matchesAny(glob, list)) return;
-  // Not allowlisted → ask the user via the popup. We open the popup by
+  // Not allowlisted -> ask the user via the popup. We open the popup by
   // setting a badge and storing a pending request; the popup, when opened,
   // reads it. If the popup isn't opened within the timeout, we reject.
   const allowed = await promptUserForAllow(glob);

@@ -62,20 +62,17 @@ impl Grant {
     }
 }
 
-/// Every catalogue tool mapped to the capability grants that gate it, `&[]`
-/// when none do (ADR-0032 decision 4). Exhaustive over the catalogue by
-/// [`tool_grant_table_covers_every_catalogue_tool_exactly_once`] - the same
-/// discipline the sibling `capabilities` table keeps, since tool names are
-/// strings and the compiler cannot check string coverage - so a new tool
-/// cannot ship without a deliberate answer to "does a grant gate this", and a
-/// grant listed against a tool the catalogue dropped fails the same test.
+/// Every catalogue tool mapped to the capability grants that gate it, `&[]` when none do (ADR-0032 decision 4); every
+/// one of a tool's grants must be on for it to run. Tool names are strings the compiler cannot check for coverage, so
+/// `tool_grant_table_covers_every_catalogue_tool_exactly_once` pins the table to the catalogue: a new tool cannot ship
+/// without a deliberate answer to "does a grant gate this", and a stale entry fails the same test.
 ///
-/// `cdpMode` gates the whole debugger set (every `Permission::Debugger` tool),
-/// because it is the master grant for using Chrome's debugger at all;
-/// `page_upload` and `page_handle_dialog` carry their own additional grant on
-/// top, so every one of a tool's grants must be on for it to run.
-/// [`cdp_mode_gates_exactly_the_debugger_tools`] pins that set against the
-/// catalogue's own permission column.
+/// ```text
+/// cdpMode                          -> the master grant for using Chrome's debugger at all: gates every
+///                                     Permission::Debugger tool (cdp_mode_gates_exactly_the_debugger_tools pins that
+///                                     against the catalogue's permission column)
+/// page_upload, page_handle_dialog  -> carry their own grant on top
+/// ```
 const TOOL_GRANTS: &[(&str, &[Grant])] = &[
     ("list_browsers", &[]),
     ("tab_list", &[]),
@@ -116,20 +113,16 @@ fn grants_for(name: &str) -> &'static [Grant] {
         .map_or(&[], |(_, grants)| *grants)
 }
 
-/// The host-side dispatch verdict for `name` against the loaded effective
-/// policy (ADR-0032 decision 4). Pure over the load result so the fail-closed
-/// matrix is unit-testable without the runtime directory, exactly as
-/// [`crate::kill::verdict`] is over the revocation read.
+/// The host-side dispatch verdict for `name` against the loaded effective policy (ADR-0032 decision 4). Pure
+/// over the load result so the fail-closed matrix is unit-testable without the runtime directory, exactly as
+/// [`crate::kill::verdict`] is over the revocation read. The three load states carry decision 5's crux:
 ///
-/// The three load states carry the crux distinction of decision 5:
-/// - `Ok(None)` - NO policy store yet (pre-cutover). Allow, matching the
-///   pre-ADR-0032 behavior: the honest-host dispatch check bites only once a
-///   policy exists, never before one is written.
-/// - `Ok(Some(effective))` - a policy exists. Refuse when a gating grant is
-///   off, or the tool is in `disabledTools`; allow otherwise.
-/// - `Err(reason)` - the store is present but UNREADABLE or corrupt. Deny
-///   ALL: fail closed (decision 5), refusing every tool as if all its grants
-///   were off, never a silent default that could mask a tamper.
+/// ```text
+/// `Ok(None)`             -> no policy store yet (pre-cutover): allow; the gate bites only once a policy exists
+/// `Ok(Some(effective))`  -> refuse when a gating grant is off or the tool is in `disabledTools`, else allow
+/// `Err(reason)`          -> store present but UNREADABLE or corrupt: deny ALL, never a silent default that
+///                           could mask a tamper
+/// ```
 pub(crate) fn verdict(
     name: &str,
     effective: Result<Option<PolicyValues>, String>,

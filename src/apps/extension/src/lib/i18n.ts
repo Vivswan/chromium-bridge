@@ -4,18 +4,9 @@ import { browser } from "wxt/browser";
 import type { GeneratedI18nStructure } from "#i18n";
 import { getSetting } from "./shared/settings";
 
-// Runtime i18n with a USER-CHOSEN display language.
-//
-// browser.i18n.getMessage always answers in the BROWSER's UI language and
-// cannot honor the uiLanguage setting, so this module loads the compiled
-// _locales/<locale>/messages.json bundles itself and resolves keys against the
-// chosen locale, falling back to English and finally to getMessage.
-//
-// The message corpus is deliberately simple (flat keys after underscore
-// flattening, positional $1 substitutions, no plurals), so this stays a lookup
-// plus one replace. The #i18n import is TYPE-ONLY (erased at transpile), so
-// this module is safe in the background graph before `wxt prepare` generates
-// the #i18n module. Ported from cloud-speech-for-chrome's i18n-runtime.ts.
+// browser.i18n.getMessage always answers in the BROWSER's UI language and cannot honor the uiLanguage setting, so
+// this module loads the compiled _locales bundles itself. The #i18n import is TYPE-ONLY (erased at transpile), so
+// this module is safe in the background graph before `wxt prepare` generates the #i18n module.
 
 // Derived from the shared canonical UI_LANGUAGES list (settings.ts), so this
 // surface cannot drift from the enum the host and the sync lane enforce.

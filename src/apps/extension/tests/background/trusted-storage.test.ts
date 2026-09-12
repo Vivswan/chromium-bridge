@@ -1,4 +1,4 @@
-// #32: the storage access restriction, and that the enrollment gate fails
+// The storage access restriction, and that the enrollment gate fails
 // closed until it is verifiably applied. What CANNOT be tested here: that
 // Chrome actually blocks a real content script from reading storage.local -
 // that is the isolated-browser proof (tests/README + the ext suite). Here we

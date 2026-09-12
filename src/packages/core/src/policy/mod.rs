@@ -67,32 +67,19 @@ pub const DISABLED_TOOLS_MAX_ENTRIES: usize = 256;
 /// equivalent. Far above any real tool catalogue.
 pub const DISABLED_TOOL_NAME_MAX_BYTES: usize = 128;
 
-/// The shared `disabledTools` bound check: [`PolicyDoc::validate`] applies
-/// it to documents, [`restrict`] to the merged overlay, so neither lane can
-/// persist a list the other side's parser (or the store's own read cap)
-/// would refuse.
+/// The shared `disabledTools` bound check: [`PolicyDoc::validate`] applies it to documents, [`restrict`] to
+/// the merged overlay, so neither lane can persist a list the other side's parser or the store's read cap would refuse.
+/// It also refuses what the comma-joined argv transport (`cli::parse_tool_list` re-splits and trims) cannot
+/// round-trip, which the property test in `cli` pins; the desktop app's editor, import mapping, and set_args join refuse the same shapes.
 ///
-/// Beyond the size bounds it refuses entries the CLI transport cannot carry
-/// FAITHFULLY: the co-equal surfaces ship the list as one comma-joined argv
-/// value that `cli::parse_tool_list` re-splits and trims, so a name holding
-/// a comma would silently become two names, and one with surrounding
-/// whitespace would silently become its trimmed self - a signed document
-/// stating something other than what was written. Refusing them here makes
-/// the join/split round trip provably faithful for every list this
-/// validator accepts (the round-trip property test in `cli`), fail-closed:
-/// refuse, never mangle. The desktop app's editor (policy-edit.ts
-/// draftErrors), its import mapping (import_cmds tools_of), and its set_args
-/// join refuse the same shapes on their side.
+/// ```text
+/// name holding a comma    -> would silently become two names
+/// surrounding whitespace  -> would silently become its trimmed self
+/// ```
 ///
-/// This also runs on the READ path (`PolicyStore::baseline_doc` ->
-/// `PolicyDoc::validate`), which is deliberate wire-safety, not an
-/// oversight: a stored comma entry would corrupt the comma-joined pushes
-/// built from the store (an entry could re-split and silently DROP a tool
-/// from the deny list - the permissive direction), so such a store reads
-/// present-but-UNREADABLE instead. The only conceivable producer was a
-/// historical direct `set_signed` call (the CLI always re-split its input),
-/// and this repo is pre-release - nothing shipped could have stored one -
-/// so no migration exists; re-signing the policy is the repair.
+/// Running on the READ path too (`PolicyStore::baseline_doc` -> validate) is deliberate: a stored comma entry
+/// could re-split in a push built from the store and silently DROP a tool from the deny list (the permissive
+/// direction), so such a store reads present-but-UNREADABLE. No migration: nothing shipped could have stored one; re-sign to repair.
 pub(crate) fn validate_disabled_tools(tools: &[String]) -> Result<(), &'static str> {
     if tools.len() > DISABLED_TOOLS_MAX_ENTRIES {
         return Err("disabledTools carries more than 256 entries");
@@ -220,18 +207,14 @@ pub fn direction(f: PolicyField) -> Direction {
     }
 }
 
-/// The signed policy document (ADR-0032 decision 3): the exact bytes the
-/// enclave signature covers. One flat struct on purpose - `#[serde(flatten)]`
-/// silently disables `deny_unknown_fields`, and this parser must stay
-/// fail-closed - so the two scoping fields (`revision`, `touched`) sit
-/// beside the 15 policy fields inline.
+/// The signed policy document (ADR-0032 decision 3): the exact bytes the enclave signature covers. One flat struct on
+/// purpose: `#[serde(flatten)]` silently disables `deny_unknown_fields`, and this parser must stay fail-closed.
 ///
-/// `touched` is the set of fields the write that produced this document
-/// explicitly edited, named by the editing surface and embedded in the
-/// signed bytes so the tap covers it (a fresh signature warrants relaxation
-/// on exactly these fields, never on the document at large). Vec-encoded on
-/// the wire; membership is set semantics, order and duplication carry no
-/// meaning.
+/// ```text
+/// touched -> the fields the producing write explicitly edited, inside the signed bytes so the tap covers it: a fresh
+///            signature warrants relaxation on exactly these fields, never on the document at large; Vec on the wire,
+///            set semantics (order and duplication carry no meaning)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyDoc {
@@ -295,17 +278,12 @@ fn de_js_safe_opt_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u
     Ok(value)
 }
 
-/// Just the 15 policy field values, detached from a document's version /
-/// revision / touched scoping: the shape the comparisons and the effective
-/// policy work in.
+/// Just the 15 policy field values, detached from a document's version / revision / touched scoping: the
+/// shape the comparisons and the effective policy work in, and the `effective` payload of
+/// [`crate::policy::PolicyStatusReport`] that the CLI emits and the desktop app parses back.
 ///
-/// Serializable in camelCase (the wire field names) so it can be the
-/// `effective` payload of [`crate::policy::PolicyStatusReport`] that the CLI
-/// emits and the desktop app parses back; `ts_rs`-exported under the gen-only
-/// feature, the same posture as the enclave report types. Strict on the way
-/// in: serde does NOT inherit a container attribute from an embedding type,
-/// so without its own `deny_unknown_fields` an unknown field inside a
-/// report's `effective` would parse silently.
+/// Its own `deny_unknown_fields` is load-bearing: serde does NOT inherit a container attribute from an
+/// embedding type, so without it an unknown field inside a report's `effective` would parse silently.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -1,32 +1,25 @@
-//! Emit the enclave signing contract as one JSON document on stdout: the
-//! domain-separation strings, the challenge field bounds, the key/signature
-//! byte lengths, the `enclave_error` reason codes, and golden-vector
-//! fixtures that pin the signed-message encodings across languages - the
-//! challenge/presence vectors and the ADR-0032 policy-baseline vectors.
-//! `scripts/gen-ops.ts` (run via `moon run gen`) consumes this to generate
-//! `src/packages/shared/src/enclave.gen.ts` and `enclave-fixture.gen.ts`;
-//! the emitted JSON itself is never checked in - the Rust sources are the
-//! contract (ADR-0028).
+//! Emit the enclave signing contract as one JSON document on stdout: domains, field bounds, byte lengths,
+//! `enclave_error` reason codes, and golden vectors pinning the signed-message encodings across languages.
+//! `scripts/gen-ops.ts` (`moon run gen`) turns it into `enclave.gen.ts` and `enclave-fixture.gen.ts` under
+//! `src/packages/shared/src`; the JSON itself is never checked in, the Rust sources are the contract (ADR-0028).
 //!
-//! The fixture is signed with the PUBLIC test-vector key (`FIXTURE_KEY_BYTES`
-//! in the enclave module; RFC 6979 via the p256 dev-dependency makes the
-//! signatures deterministic, so regeneration is byte-identical and the
-//! check-gen diff gate stays quiet). Because that scalar is public, the key
-//! is deny-listed as an enrollment identity on both sides
-//! (`ensure_not_fixture_key` host-side, `ENCLAVE_FIXTURE_KEY_ID` in the
-//! extension); this emitter re-derives the fingerprint and fails on a
-//! mismatch, so the deny-list constant cannot drift from the scalar.
+//! The vectors are signed with the PUBLIC fixture key `FIXTURE_KEY_BYTES`, deterministic under RFC 6979 (the
+//! p256 dev-dependency) so regeneration is byte-identical and the check-gen diff gate stays quiet. A public
+//! scalar is deny-listed as an enrollment identity on both sides, so this emitter fails on a fingerprint mismatch
+//! and the deny-list constant cannot drift from the scalar.
+//! ```text
+//! ensure_not_fixture_key  -> host side
+//! ENCLAVE_FIXTURE_KEY_ID  -> extension side
+//! ```
 //!
-//! Every proof still exercises the production formatting code: the message
-//! bytes come from `challenge_message`/`presence_message`, the signature
-//! goes through `der_to_raw_signature` (the same DER -> P1363 conversion the
-//! host applies to Security.framework output), and the public key and
-//! fingerprint come from `EnclavePublicKey`. The extension's test suite
-//! replays the fixture through its WebCrypto verifier, so either side
-//! drifting from the shared byte contract breaks a gate.
+//! Every vector goes through the production code (`challenge_message`/`presence_message`, the same
+//! `der_to_raw_signature` the host applies to Security.framework output, `EnclavePublicKey`) and the
+//! extension's tests replay it through WebCrypto, so either side drifting from the byte contract breaks a gate.
 //!
 //! Run:
-//!   cargo run -q -p chromium-bridge-core --example emit_enclave_contract
+//! ```text
+//! cargo run -q -p chromium-bridge-core --example emit_enclave_contract
+//! ```
 
 use chromium_bridge_core::enclave::{
     challenge_message, der_to_raw_signature, policy_message, presence_message, EnclavePublicKey,
@@ -69,13 +62,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("FIXTURE_KEY_ID does not match the key FIXTURE_KEY_BYTES derives".into());
     }
 
-    // The vector matrix from the SSoT audit: both domains, None-vs-empty
-    // context, realistic ceremony pairs (64-hex nonce, ext-shaped contexts),
-    // a multi-byte UTF-8 pair (the bounds are BYTE lengths - this pins
-    // Rust's str::len against JS TextEncoder), and both bounds at their
-    // maximum. The extension ids in the contexts are FOREIGN on purpose (a
-    // different id than ours), so no checked-in signature ever covers bytes
-    // our real ceremony can construct; the check in the loop enforces it.
+    // The vector matrix: both domains, None-vs-empty context, realistic
+    // ceremony pairs, a multi-byte UTF-8 pair (the bounds are BYTE lengths,
+    // pinning Rust's str::len against JS TextEncoder), and both bounds at
+    // their maximum. The extension ids in the contexts are FOREIGN on purpose,
+    // so no checked-in signature ever covers bytes our real ceremony can
+    // construct; the check in the loop enforces it.
     let max_nonce = "n".repeat(MAX_NONCE_LEN);
     let max_context = "c".repeat(MAX_CONTEXT_LEN);
     let hex_nonce = "9f".repeat(32); // shape of generateNonce(): 64 lowercase hex chars
@@ -140,14 +132,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // The POLICY_DOMAIN vectors (ADR-0032 decision 3): the exact serialized
-    // PolicyDoc bytes the signature covers, signed with the same
-    // deterministic fixture key, so the extension's policy golden test can
-    // replay a full baseline-verify (WebCrypto over `policy_message` bytes,
-    // then strict parse of the same bytes). One deny-baseline revision-1
-    // document with an empty touched set, and one relaxed document whose
-    // touched set names its edits (the scoped-relaxation shape the ratchet
-    // checks). Validated before signing: a malformed fixture document must
-    // fail generation, never ship as a "verified" baseline.
+    // PolicyDoc bytes the signature covers, so the extension's policy golden
+    // test can replay a full baseline-verify (WebCrypto over `policy_message`
+    // bytes, then strict parse of the same bytes). Validated before signing:
+    // a malformed fixture document must fail generation, never ship as a
+    // "verified" baseline.
     let baseline_doc = PolicyDoc {
         revision: 1,
         ..PolicyDoc::default()

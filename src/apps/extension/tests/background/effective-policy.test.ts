@@ -1,9 +1,9 @@
-// ADR-0032 Phase 3, Lane S: the ONE effective-policy resolution
+// ADR-0032: the ONE effective-policy resolution
 // (effective-policy.ts). Pre-cutover it must be byte-for-byte today's legacy
-// settings (same names, same per-field salvage, settings.ts untouched until
-// Phase 5); post-cutover it is the stored ratcheted effective from
+// settings (same names, same per-field salvage); post-cutover it is the
+// stored ratcheted effective from
 // policy-sync while ACTIVE - and a BLOCKED posture (awaitingBaseline /
-// compromised) is state-typed, carrying no values at all (SFX-1): the old
+// compromised) is state-typed, carrying no values at all: the old
 // deny-baseline fold could be consumed outside the dispatch barrier, and
 // POLICY_DEFAULTS is not the restrictive pole on every field. The deliberate
 // behavior flip is pinned below: pageEvalEnabled defaults to true under the
@@ -102,7 +102,7 @@ describe("pre-cutover: the legacy settings, exactly", () => {
 describe("post-cutover: the stored effective, never the legacy bag", () => {
   test("cutover with no stored effective is BLOCKED: no values to consume, and the barrier refuses the same state", async () => {
     // Legacy storage says everything is wide open; post-cutover with no
-    // stored effective there is NOTHING to enforce against (SFX-1) - the
+    // stored effective there is NOTHING to enforce against - the
     // old fold to the deny-baseline defaults was consumable outside the
     // barrier, and POLICY_DEFAULTS is not the restrictive pole on every
     // field (hostReverifyMs 0 is most permissive, disabledTools is empty).

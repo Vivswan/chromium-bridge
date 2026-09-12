@@ -186,7 +186,7 @@ export function handlePresenceFrame(msg: unknown): void {
     }
     // A fresh-nonce proof of the PINNED key verified on this connection:
     // report it as per-connection identity evidence for the decision-8
-    // legacy-settings send-once (ADR-0032 Phase 4), stamped with the pin
+    // legacy-settings send-once (ADR-0032), stamped with the pin
     // epoch this round STARTED under. Evidence only - the confirmation
     // verdict below is unchanged by it.
     notePinProvenOnConnection(round.connection, pin.keyId, round.generation);

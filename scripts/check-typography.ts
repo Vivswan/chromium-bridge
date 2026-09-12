@@ -1,35 +1,17 @@
 #!/usr/bin/env bun
 
-// Typography gate: no typographic look-alike characters (curly quotes,
-// em-dashes, invisible unicode) anywhere in the tree - plain ASCII
-// punctuation only. A look-alike is at best noise and at worst an attack
-// vector (an invisible bidi override or a homoglyph in a security-relevant
-// string reads differently to a human than to a parser).
+// A look-alike (curly quote, em dash, invisible bidi mark) reads differently to a human than to a parser, so only
+// plain ASCII punctuation passes. Local mirror of the fleet's check-typography action (the managed ci.yml runs the
+// action, `moon run ci` runs this); where the two differ this side is stricter, so a pass here is a pass in CI.
 //
-// The local mirror of the fleet's check-typography action:
-// the managed ci.yml runs the action, `moon run ci` runs this, both
-// enforcing the same rules:
-//   - every git-tracked path is scanned - content AND filename (a bidi mark
-//     can hide in a name as well as in a line);
-//   - the FORBIDDEN set below is banned everywhere;
-//   - the four CJK marks it deliberately omits (U+3001 U+3002 U+300C U+300D)
-//     stay usable in CJK prose - whole-script containment is check-cjk.ts's
-//     job, not this one's;
-//   - .typography-allow (managed, replaced on every sync) and .typography-allow.local
-//     (repo-owned) exempt exact repo-relative paths (one per line,
-//     # comments). Exact, not prefix: the action's prefix matching
-//     could silently exempt a whole subtree from a one-file entry, so this
-//     mirror is deliberately the stricter side - what passes here also
-//     passes CI, never the reverse. The allowlists can exempt anything
-//     except themselves.
-//
-// Fail closed: the only silent skips are proven-binary content (a null byte
-// in the leading window) and a path git itself reports as deleted from the
-// worktree (no bytes exist to hide anything). Everything else that cannot be
-// scanned - unreadable, not valid UTF-8, UTF-16, missing without a recorded
-// deletion - is an error, never a pass: a checker that shrugs at unreadable
-// input is a bypass, not a gate. Extensions are deliberately NOT trusted;
-// a text file named payload.png must still be scanned.
+//   filenames                          -> scanned like content (a bidi mark hides in a name too)
+//   U+3001 U+3002 U+300C U+300D        -> not banned; CJK prose keeps them, whole-script containment is check-cjk.ts's job
+//   .typography-allow(.local) entries  -> EXACT repo-relative paths, never prefixes (the action's prefix match
+//                                         could exempt a whole subtree from a one-file entry); never themselves
+//   null byte in the leading window    -> binary, skipped silently
+//   path git reports as deleted        -> skipped silently (no bytes exist to hide anything)
+//   anything else unscannable          -> an error, never a pass (unreadable, invalid UTF-8, UTF-16, missing without
+//                                         a recorded deletion); a file's extension is never trusted
 //
 // Dependency-free (Bun + node builtins), so it runs without a bun install.
 

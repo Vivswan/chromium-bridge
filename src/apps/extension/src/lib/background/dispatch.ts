@@ -68,19 +68,9 @@ function isSwReq(req: BridgeReq): req is SwReq {
 }
 
 /**
- * The disable gate, factored out for testability. Routes through the pure
- * policy `decide()` but preserves dispatch's original behavior exactly:
- *
- * - Only *known* tools (in the generated catalogue) are consulted, because
- *   `decide()` fail-closes unknown ops. Unknown/empty ops pass through
- *   untouched - parseBridgeReq refuses them at the port boundary before
- *   dispatch is ever reached.
- * - A known, disabled tool throws `tool disabled in settings: <op>` - the same
- *   message the old inline check produced.
- *
- * The switch is on the typed refusal cause, exhaustively: a new cause added
- * to policy.ts fails to compile here instead of silently passing through,
- * and rewording a display `reason` cannot change what this gate does.
+ * The disable gate. Unknown or empty ops pass through untouched: parseBridgeReq refuses them at the port
+ * boundary, and that contract stays there. The switch is on the typed refusal cause, exhaustively, so a cause
+ * added to policy.ts fails to compile here and rewording a display `reason` cannot change what this gate does.
  */
 export function assertNotDisabled(op: string | undefined, disabledTools: string[]): void {
   if (!op || !isOpName(op)) return;
@@ -126,12 +116,9 @@ function originOf(url: string | undefined): string {
 }
 
 export async function dispatch(req: BridgeReq): Promise<unknown> {
-  // Decision-start panic-epoch capture (SFX-2), SYNCHRONOUS and before this
-  // request's FIRST await: every confirmation this decision raises carries
-  // this value, threaded exactly like the policy snapshot below, so a
-  // deny-kill that lands AND lifts anywhere across the decision - including
-  // inside the policy read, the tab resolve, or the allowlist check - still
-  // denies the confirmation on the epoch mismatch.
+  // Captured synchronously, before this request's first await: every confirmation this decision raises
+  // carries it, so a deny-kill that lands AND lifts anywhere across the decision (inside the policy read, the
+  // tab resolve, or the allowlist check) still denies the confirmation on the epoch mismatch.
   const panicEpoch = currentPanicEpoch();
   // ONE policy snapshot per request (ADR-0032 decision 4), threaded through
   // the disable gate, the backend choice, the confirmation preflight, the
@@ -141,11 +128,9 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
   // accepted push applies from the next request on.
   const effective = await getEffectivePolicy();
   if (effective.state === "blocked") {
-    // The single read carries the refusal (SFX-1): the enrollment gate's
-    // barrier check and this snapshot are SEPARATE awaits, so a compromise
-    // latching between them must refuse HERE rather than let the request run
-    // under the deny-baseline defaults (whose empty disabledTools is the
-    // permissive pole).
+    // The enrollment gate's barrier check and this snapshot are SEPARATE awaits, so a compromise latching
+    // between them must refuse HERE rather than let the request run under the deny-baseline defaults (whose
+    // empty disabledTools is the permissive pole).
     throw new Error(effective.reason);
   }
   const policy = effective.values;

@@ -74,17 +74,10 @@ export function assertIsolatedBrowserOrSkip(): string {
   return bin;
 }
 
-// ---------------------------------------------------------------------------
-// Suite-ran canary: a green browser step must mean the suite really asserted
-// something. The guard above can exit(0) as a local skip, and BB_REQUIRE_BROWSER
-// only hardens it while BOTH sides keep spelling that variable the same way -
-// if the names ever part, CI's browser job would go silently green on skips.
-// So every suite finishes through finishSuite(): it refuses a zero-pass run
-// (a suite that asserted nothing is a failure, not a pass) and, when CI sets
-// BB_BROWSER_CANARY_DIR, drops a per-suite RAN marker that a final job step
-// requires - a skip anywhere upstream leaves no marker and turns the job red
-// no matter which env var drifted.
-// ---------------------------------------------------------------------------
+// A green browser step must mean the suite really asserted something: the guard above can exit(0) as a local skip, and
+// BB_REQUIRE_BROWSER only hardens it while both sides spell that variable the same way. So every suite finishes through
+// finishSuite(): a zero-pass run fails, and under BB_BROWSER_CANARY_DIR a per-suite RAN marker is dropped that a final
+// CI step requires, so a skip anywhere upstream turns the job red no matter which env var drifted.
 
 /** The exit code a finished suite deserves: nonzero on any failed check AND
  * on a vacuous run that passed zero checks. */

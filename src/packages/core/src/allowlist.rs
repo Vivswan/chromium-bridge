@@ -1,50 +1,22 @@
-//! Host-side trusted-client allowlist: which MCP-client harnesses (Claude
-//! Code, Copilot, Codex, ...) are permitted to drive the browser through this
-//! bridge.
+//! Host-side trusted-client allowlist: which MCP-client harnesses (Claude Code, Copilot, Codex, ...) may drive
+//! the browser through this bridge (ADR-0024).
 //!
-//! ## Why this exists
+//! Peer attestation (ADR-0019/0020) proves a bridge peer is our own binary but says nothing about who drives
+//! the MCP server over its stdio, so the broker checks the harness's kernel-attested identity
+//! ([`ClientIdentity`], measured by [`crate::ipc::attest_parent`]) against this persisted set before serving
+//! its tool calls. Admission keys on the [`Anchor`], never the human-facing `name`: a harness cannot admit
+//! itself by claiming to be `claude-code`.
 //!
-//! ADR-0019/0020 attest that a bridge peer is *our own binary*. That is the
-//! right identity for the browser leg (the native host and the MCP server are
-//! the same `chromium-bridge` binary in two modes). It says nothing about
-//! *who is driving the MCP server* over its stdio: today anything that spawns
-//! the binary in MCP mode owns its stdin and is trusted unconditionally. This
-//! module is the enforcement policy for the harness->stdio admission boundary
-//! (threat-model boundary 1): a persisted set of client identities, keyed on
-//! the harness's **attested code identity**, that the broker checks before it
-//! will serve a harness's tool calls. See ADR-0024.
+//! ```text
+//! Team-ID-signed client        -> Anchor::TeamId, stable across the weekly re-sign of a free Apple
+//!                                 Development certificate (which changes the cdhash)
+//! unsigned / ad-hoc dev build  -> Anchor::Hash, re-pair after every renewal
 //!
-//! ## Authorization keys on the attested hash, never the self-asserted name
-//!
-//! Each entry pairs a human-facing `name` (a validated label like
-//! `claude-code`) with an [`Anchor`] that is the actual authorization key. The
-//! name is for the user and the audit surface only; a harness cannot admit
-//! itself by *claiming* to be `claude-code`. Admission requires that the
-//! harness's kernel-attested identity ([`ClientIdentity`], measured by
-//! [`crate::ipc::attest_parent`]) match an anchor. This is the zero-trust rule
-//! from AGENTS.md applied to the client boundary: a self-reported identity is
-//! not enforcement.
-//!
-//! ## Anchors and re-signing
-//!
-//! A free Apple Development certificate re-signs roughly weekly, which changes
-//! a binary's `cdhash`. Pinning the raw hash would then break admission on
-//! every re-sign and force a re-pair. So where a client is signed with a Team
-//! ID, the anchor pins the **Team ID** ([`Anchor::TeamId`]), which is stable
-//! across re-signs. Unsigned / ad-hoc dev builds have no Team ID, so they fall
-//! back to [`Anchor::Hash`] with an explicit re-pair-on-renewal path. See
-//! ADR-0024 and [`ClientIdentity`].
-//!
-//! ## Enrolled vs. unenrolled (fail-closed once enrolled)
-//!
-//! The allowlist file is absent until the user pairs a first client. Absent
-//! means *unenrolled*: admission is not yet enforced and the bridge keeps the
-//! pre-enrollment posture (the same-user residual of threat #4), logged
-//! loudly. Once the file exists, admission is **enforced**: only a matching
-//! identity is admitted and everything else fails closed -- including an
-//! identity we could not measure. This mirrors the enrollment ceremony
-//! (ADR-0021): opt-in, host-side first, with the residual named honestly until
-//! it is turned on.
+//! file absent, latch clear  -> unenrolled: admission not enforced, logged loudly (the same-user residual stays open)
+//! file absent, latch set    -> tampering: the revocation record's clients_enrolled latch says clients were paired,
+//!                              so admission fails closed (load_enforced)
+//! file present              -> enforced: only a matching identity is admitted; an unmeasurable identity fails closed
+//! ```
 
 use std::io;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -66,20 +38,11 @@ const ALLOWLIST_VERSION: u32 = 1;
 /// than slurped into memory.
 const ALLOWLIST_MAX_BYTES: usize = 256 * 1024;
 
-/// A validated image digest for [`Anchor::Hash`]: non-empty, lowercase ASCII
-/// hex - the canonical form every attested identity is measured in (both
-/// platforms hex-encode with lowercase digits, `ipc::rand::hex_encode`) and
-/// the form [`resolve_anchor`] has always normalized user input into.
-///
-/// Holding the invariant in the type keeps the plain-equality admission match
-/// sound: a digest that could never equal a measured identity (uppercase,
-/// empty, non-hex) cannot be constructed, so it is refused at the parse
-/// boundary instead of becoming a permanent, silent `Refuse`. An on-disk
-/// value that violates the form makes the whole `clients.json` fail to
-/// decode, which callers already treat as a corrupt allowlist and fail
-/// closed on - deliberately NOT silently normalized into a valid digest,
-/// which would mask tampering. Serializes as the plain inner string, so the
-/// on-disk and wire shapes of a valid anchor are unchanged.
+/// A validated image digest for [`Anchor::Hash`]: non-empty lowercase ASCII hex, the form both platforms measure in
+/// (`ipc::rand::hex_encode`) and [`resolve_anchor`] normalizes user input into, so a digest that could never equal a
+/// measurement is refused at the parse boundary instead of becoming a permanent, silent `Refuse`. An on-disk value in
+/// the wrong form is deliberately NOT normalized (that would mask tampering): it fails the whole `clients.json` decode,
+/// which callers already fail closed on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct HashDigest(String);
@@ -206,11 +169,8 @@ pub struct Allowlist {
 /// policy is a pure, exhaustively-tested function ([`decide`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    /// No allowlist exists yet (unenrolled). Admit, but the bridge is in the
-    /// pre-enrollment posture: harness admission is not yet load-bearing and
-    /// the caller must log that loudly. Carries the measured name only if an
-    /// entry happens to match (it cannot, since there is no list) -- always
-    /// `None` here; kept as a unit for symmetry.
+    /// No allowlist exists yet (unenrolled). Admit, but harness admission is not yet load-bearing and the
+    /// caller must log that loudly.
     AdmitUnenrolled,
     /// An allowlist exists and the harness's attested identity matched an
     /// entry. Carries the matched entry's name for logging/audit.
@@ -262,33 +222,18 @@ impl Allowlist {
         })
     }
 
-    /// Add or replace a client. If an entry with the same `name` exists it is
-    /// replaced (re-pair / renewal), so pairing the same client twice does not
-    /// accumulate stale anchors. Persists atomically under the runtime lock.
+    /// Add or replace a client (the same `name` replaces, so a re-pair does not accumulate stale anchors),
+    /// persisted atomically under the runtime lock. Module-private on purpose: the ONLY entry point is
+    /// [`pair_client_with_presence`], which runs the presence ladder and audits every outcome, so no allowlist
+    /// mutation can skip the trail (ADR-0030) and no path can enroll without a [`PresenceAttestation`], which
+    /// only [`presence::require_presence`] mints (pairing GRANTS capability, ADR-0031).
     ///
-    /// Pairing GRANTS capability (the presence symmetry rule, ADR-0031), so
-    /// the write demands a [`PresenceAttestation`]: the only way to obtain
-    /// one is [`presence::require_presence`], which means no code path can
-    /// enroll a client without the user-presence ladder having run - Touch ID
-    /// where the machine has it, an explicit interactive confirmation where
-    /// it does not.
-    ///
-    /// The one-way enrollment latch (ADR-0025) is set BEFORE the allowlist is
-    /// written, so a partial failure fails closed rather than open: if the
-    /// latch write succeeds but the `clients.json` write then fails, the next
-    /// admission sees the latch set and no allowlist and refuses as tampering
-    /// (the user re-runs `pair-client`, which completes the write). The reverse
-    /// order would leave a usable allowlist with no deletion evidence, so a
-    /// later `rm clients.json` would silently revert to open. The bump the
-    /// latch carries also nudges running enforcement points to re-read.
-    ///
-    /// Module-private on purpose: the ONLY entry point is
-    /// [`pair_client_with_presence`], which runs the presence ladder and
-    /// audits every outcome (granted, refused, and write-failed) with the
-    /// rung that decided it. Keeping the audit in that single wrapper - and
-    /// making this function unreachable from outside the module - is what
-    /// makes the ADR-0030 "every allowlist mutation leaves a trail entry"
-    /// property un-bypassable without duplicating records.
+    /// The one-way enrollment latch (ADR-0025) is set BEFORE the list is written, so a partial failure fails closed:
+    /// ```text
+    /// latch ok, clients.json write fails  -> the next admission sees latch + no list and refuses as tampering
+    ///                                        (re-running `pair-client` completes the write)
+    /// the reverse order                    -> a usable list with no deletion evidence: `rm clients.json` reverts to open
+    /// ```
     fn pair(name: &str, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
         // The attestation is structural evidence, consumed here; the audit
         // record that names its path is written by the caller
@@ -315,33 +260,17 @@ impl Allowlist {
         })
     }
 
-    /// Remove the client with `name`. Returns whether an entry was removed.
-    /// The file is left in place even when it becomes empty: an empty file
-    /// still means "enrolled" (admission enforced, nobody admitted), which is
-    /// the fail-closed reading of "the user revoked every client".
+    /// Remove the client with `name`; returns whether an entry was removed. The file stays in place even when
+    /// empty: an empty file still means enrolled (nobody admitted), the fail-closed reading of "revoked every
+    /// client". Audited HERE, not by the caller, so revocation cannot rewrite trust state without a trail entry (ADR-0030).
     ///
-    /// A removal is audited HERE, not by the caller, so revocation cannot
-    /// rewrite trust state without a trail entry (audit completeness as a
-    /// property of the function, ADR-0030 - the same shape as
-    /// [`crate::kill::engage`]). `surface` names the trusted surface that
-    /// acted, for the record. Log-after-decide: the record is written after
-    /// the rewrite and epoch bump, outside the runtime lock (audit I/O never
-    /// runs inside a critical section, see [`crate::audit`]).
-    ///
-    /// The allowlist rewrite is the authoritative act: it is what a re-attach
-    /// reads (refused at once) and what the broker's watcher re-decides every
-    /// tick against. The revocation-epoch bump that follows is a PROMPTNESS
-    /// signal only, accelerating the broker's per-request fast path so a live
-    /// connection is dropped on its next call rather than at the next poll.
-    /// Enforcement therefore does NOT depend on the bump succeeding: if the
-    /// bump write fails, the client is still gone from `clients.json`, so
-    /// re-attach is refused and the watcher (which re-decides unconditionally,
-    /// not on an epoch change) drops the live connection within a poll
-    /// interval. The failure is logged, not swallowed silently. Both writes
-    /// happen under one runtime-lock hold, which serializes them against other
-    /// WRITERS; it does not make them atomic to the broker's lock-free readers,
-    /// which is why the list-first ordering and the unconditional watcher (not
-    /// the lock) are what keep a concurrent reader safe.
+    /// The list rewrite is the authoritative act; the epoch bump only accelerates the broker's per-request fast
+    /// path. The runtime lock serializes the two writes against other WRITERS only, so list-first ordering and
+    /// the broker's unconditional watcher, not the lock, are what keep its lock-free readers safe.
+    /// ```text
+    /// list rewritten  -> re-attach refused at once; the watcher re-decides every poll regardless of the epoch
+    /// bump fails      -> logged; the live connection drops within a poll instead of on its next call
+    /// ```
     pub fn revoke(name: &str, surface: crate::audit::Surface) -> io::Result<bool> {
         let removed = ipc::with_runtime_lock(|lock| {
             let Some(mut list) = Self::load()? else {
@@ -404,17 +333,10 @@ pub fn decide(list: Option<&Allowlist>, identity: Option<&ClientIdentity>) -> De
     }
 }
 
-/// Load the allowlist for an ADMISSION decision, honoring the tamper-evidence
-/// latch (ADR-0025). Takes the whole [`Revocation`] record and reads its
-/// `clients_enrolled` latch itself, so a caller cannot hand-pick the wrong
-/// one of the record's adjacent flags to play the latch -- passing `killed`
-/// here on a latched machine would silently reopen the pre-enrollment
-/// fail-open ADR-0025 closed. With the latch set, an ABSENT
-/// `clients.json` is no longer the bootstrap posture -- a client allowlist
-/// existed on this machine, so its disappearance is a deletion, and deletion
-/// must fail closed instead of silently reverting to the open pre-enrollment
-/// posture (the ADR-0024 residual this closes for the single-file case).
-/// Every other outcome is [`Allowlist::load`] unchanged.
+/// Load the allowlist for an ADMISSION decision, honoring the tamper-evidence latch (ADR-0025): with the latch set,
+/// an ABSENT `clients.json` is a deletion, not the bootstrap posture, and fails closed instead of reverting to open.
+/// Takes the whole [`Revocation`] and reads `clients_enrolled` itself, so a caller cannot hand-pick an adjacent flag
+/// (`killed`) and silently reopen what the latch closed.
 pub fn load_enforced(rev: &Revocation) -> io::Result<Option<Allowlist>> {
     apply_latch(Allowlist::load()?, rev)
 }
@@ -473,26 +395,18 @@ impl std::fmt::Display for PairClientError {
     }
 }
 
-/// Pair a trusted client behind the user-presence gate (ADR-0031): the one
-/// entry point every surface uses to GRANT harness capability. Runs the
-/// presence ladder (Touch ID first; the floor only when hardware is genuinely
-/// unavailable), audits the outcome either way with the rung that decided it,
-/// and only then writes the allowlist. Returns the attesting path so the
-/// surface can tell the user which proof authorized the pairing.
+/// Pair a trusted client behind the user-presence gate (ADR-0031): the one entry point every surface uses to
+/// GRANT harness capability. Runs the presence ladder, then writes the allowlist, and audits each outcome after
+/// the fact (refusal, write, write failure) with the rung that decided it; returns the attesting path so the
+/// surface can tell the user which proof authorized the pairing. Revocation stays friction-free on purpose:
+/// removing capability never needs a human proof (the presence symmetry rule).
 ///
-/// `floor` is the interactive floor the surface is entitled to, or the
-/// precondition failure that kept the surface from constructing it (the CLI
-/// floor demands the [`presence::TerminalStdin`] witness, so a piped stdin
-/// arrives here as an `Err`). Either way the refusal is decided AFTER the
-/// name check - a malformed request never reaches the presence gate - and
-/// audited exactly like any other presence refusal, so the trail keeps one
-/// producer.
-///
-/// Surfaces: the CLI passes `TerminalStdin::require().map(Floor::CliConfirm)`;
-/// the desktop app passes `Ok(Floor::AppConfirm)` after showing its own modal
-/// confirmation (see the `Floor` docs for the obligation that carries).
-/// Revocation stays friction-free on purpose - removing capability never
-/// needs a human proof (the presence symmetry rule).
+/// `floor` is the interactive floor the surface is entitled to, or the precondition failure that kept it from
+/// constructing one; either way the name check runs first, so a malformed request never reaches the gate.
+/// ```text
+/// CLI          -> `TerminalStdin::require().map(Floor::CliConfirm)` (a piped stdin arrives as the `Err`)
+/// desktop app  -> `Ok(Floor::AppConfirm)` after its own modal confirmation (see the `Floor` docs)
+/// ```
 pub fn pair_client_with_presence(
     name: &str,
     anchor: Anchor,
@@ -941,13 +855,10 @@ mod tests {
 
     #[test]
     fn a_malformed_on_disk_hash_anchor_is_rejected_fail_closed() {
-        // Pre-HashDigest, {"value": "DEADBEEF"} parsed fine and simply never
-        // matched the lowercase runtime measurement -- a permanent, silent
-        // Refuse. Now the decode itself fails, so the whole file reads as a
-        // corrupt allowlist and every caller fails closed LOUDLY, the same
-        // policy as any other damaged clients.json. Never silently
-        // normalized: an on-disk value in the wrong form is evidence of a
-        // foreign writer, not input to fix up.
+        // A wrong-form on-disk value (uppercase, empty, non-hex) fails the decode itself, so the whole file
+        // reads as a corrupt allowlist and every caller fails closed LOUDLY, instead of parsing fine and never
+        // matching the lowercase measurement (a permanent, silent Refuse). Never normalized: it is evidence of
+        // a foreign writer, not input to fix up.
         for bad in ["DEADBEEF", "", "zz", "aBc1"] {
             let anchor = serde_json::json!({ "kind": "hash", "value": bad });
             assert!(

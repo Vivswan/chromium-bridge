@@ -7,7 +7,7 @@ import { send } from "@/lib/messages";
 // The ADR-0030 read-only audit panel: the extension's local ring of security
 // decisions (confirmations, pairing approvals, revocations, kill toggles),
 // newest first. Strictly display: there is nothing to click but scroll. The
-// ring lives in the SW-only trusted storage and is fetched through the router
+// ring lives in the extension-context-only trusted storage and is fetched through the router
 // (extension-page senders only); storage.onChanged drives refreshes, so a new
 // decision appears without polling. The durable, host-side trail is
 // `chromium-bridge audit`.

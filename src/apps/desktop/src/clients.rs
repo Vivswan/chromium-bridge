@@ -96,17 +96,9 @@ pub fn revoke(name: &str) -> Result<bool, String> {
     Allowlist::revoke(name, Surface::Core).map_err(|e| e.to_string())
 }
 
-/// Add (or re-pair) a trusted client, behind the user-presence gate: pairing
-/// GRANTS capability, so it demands proof of the user, not just a click in a
-/// window. Goes through `allowlist::pair_client_with_presence` (ADR-0031),
-/// the one entry point every surface uses - it validates the name before any
-/// prompt, runs the presence ladder (a real Touch ID sheet on an enrolled
-/// Mac; the app floor only when hardware is unavailable), audits both
-/// outcomes, and only then writes the allowlist. The caller must have shown
-/// the in-app confirm dialog first (see `crate::presence_seam`). Returns the
-/// presence path that authorized the pairing, for the UI to show. The anchor
-/// is validated by the same core path as the CLI's flags, also before any
-/// prompt.
+/// Add (or re-pair) a trusted client behind the presence gate: pairing GRANTS capability, so it demands proof
+/// of the user, not a click in a window. The caller must have shown the in-app confirm dialog first
+/// (see `crate::presence_seam`); the returned presence path is for the UI to show.
 pub fn pair(
     name: &str,
     anchor_kind: AnchorKind,

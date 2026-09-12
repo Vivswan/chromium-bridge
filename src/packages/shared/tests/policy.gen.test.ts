@@ -223,7 +223,7 @@ describe("PolicyOverlaySchema", () => {
 
 // The POLICY_DOMAIN golden vectors (enclave-fixture.gen.ts): the byte-level
 // proof that the Rust signer and this side's verify-then-parse pipeline
-// agree. Phase 3's extension golden test replays these through its own
+// agree. The extension's golden test replays these through its own
 // verifier; here the fixture's internal consistency and the document parse
 // are pinned at the shared layer.
 describe("POLICY_GOLDEN_FIXTURE", () => {

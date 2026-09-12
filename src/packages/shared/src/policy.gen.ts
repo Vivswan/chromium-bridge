@@ -3,15 +3,10 @@
 // scripts/gen-ops.ts - DO NOT EDIT. Edit the policy module, then run
 // `moon run gen`.
 //
-// The host-owned policy contract, TS side (ADR-0032): the signing domain,
-// the field catalogue with each field's declared permissive direction, the
-// strict Zod validators for the signed document and its detached values,
-// the deny-baseline defaults, the strict stored-policy parser, and the
-// import-bag salvage helper. The
-// extension recomputes every relax/restrict comparison from the direction
-// table itself - it never trusts a host's claim about which way a change
-// points - and verifies signed baselines under POLICY_DOMAIN against its
-// pinned key before strict-parsing the same bytes with PolicyDocSchema.
+// The host-owned policy contract, TS side (ADR-0032). The extension recomputes every relax/restrict
+// comparison from the direction table itself, never trusting a host's claim about which way a change points,
+// and verifies a signed baseline under POLICY_DOMAIN against its pinned key before strict-parsing the same
+// bytes with PolicyDocSchema.
 
 import { z } from "zod";
 
@@ -209,19 +204,13 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032
- * decision 8 / phase 4): the snapshotted chrome.storage bag rides
- * `legacy_settings` to the app's first-run import screen, where a corrupt
- * field falling back to its deny-baseline default is SHOWN to the user and
- * signed under their tap - never silently enforced. A value that fails its
- * own schema falls back to that field's default without discarding the
- * healthy fields around it, and unknown keys are dropped.
+ * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032 decision 8): a corrupt field in the
+ * snapshotted chrome.storage bag falls back to its deny-baseline default, and the app's first-run import
+ * screen SHOWS that fallback to the user, who signs it under their tap; it is never silently enforced.
  *
- * NEVER parse the stored effective policy with this. Per-field default
- * fallback moves a corrupt field toward its permissive pole relative to a
- * user-restricted policy - a relaxation lever made of garbage, exactly the
- * "garbage in, defaults out" behavior ADR-0032 decision 4 forbids. The
- * stored effective policy is read with parseStoredPolicyValues below.
+ * NEVER parse the stored effective policy with this: a per-field default fallback moves a corrupt field
+ * toward its permissive pole relative to a user-restricted policy, the "garbage in, defaults out" relaxation
+ * ADR-0032 decision 4 forbids. The stored effective policy is read with parseStoredPolicyValues below.
  */
 export function salvagePolicyValues(stored: unknown): PolicyValues {
   const bag: Record<string, unknown> =
@@ -235,13 +224,10 @@ export function salvagePolicyValues(stored: unknown): PolicyValues {
 }
 
 /**
- * Strict parse of the extension's stored effective policy - phase 3's
- * ratchet anchor and every stored-effective read use THIS. Returns the
- * exact values on a valid bag and `null` on ANY failure (a corrupt field,
- * a non-object, an extra key). `null` means "no stored effective": the
- * deny baseline applies and there is no ratchet state to anchor on
- * (ADR-0032 decision 4) - never a salvage, which would hand a corrupted
- * store a relaxation.
+ * Strict parse of the extension's stored effective policy: `null` on ANY failure (a corrupt field, a
+ * non-object, an extra key), never a salvage, which would hand a corrupted store a relaxation. Its caller,
+ * policy-sync.ts classifyStored, reads null as CORRUPT, never absent: the state resolves to compromised, every
+ * enforcement read refuses, and no replacement push lands while the record stays corrupt (ADR-0032 decision 4).
  */
 export function parseStoredPolicyValues(stored: unknown): PolicyValues | null {
   const parsed = PolicyValuesSchema.safeParse(stored);

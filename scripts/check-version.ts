@@ -1,25 +1,8 @@
 #!/usr/bin/env bun
-// Verify the version is consistent across the crate, the JS packages that
-// surface it, and the release-please bookkeeping.
-//
-// Cargo.toml is the single source of truth. This checks that:
-//   - every JSON manifest scripts/sync-version.ts writes (versionedJsonFiles
-//     in scripts/lib.ts) agrees with it;
-//   - .release-please-manifest.json["."] agrees with it, or still holds the
-//     0.0.0 pre-first-release bootstrap (commit 0ccad20), in which case
-//     Cargo.toml must equal release-please-config.json's initial-version
-//     instead - during bootstrap the release PR stamps initial-version
-//     everywhere, ignoring Cargo.toml;
-//   - release-please-config.json's extra-files lists Cargo.toml and every
-//     synced JSON manifest, each with the exact updater shape that hits the
-//     version field (a file missing there stays unbumped in the release PR,
-//     and release-please fails soft on a wrong type/jsonpath - it logs "No
-//     entries modified" and leaves the file unchanged - so presence alone is
-//     not enough; either way this check then fails inside that PR's own CI).
-// Any mismatch fails with exit 1. `scripts/sync-version.ts` propagates the
-// Cargo version. The bundled host's helper Info.plist is stamped at bundle
-// time (scripts/desktop-bundle.ts), so it cannot go stale and is not checked
-// here.
+// Verify the version is consistent across the crate, the JS packages that surface it, and the
+// release-please bookkeeping. Cargo.toml is the single source of truth (scripts/sync-version.ts
+// propagates it); the bundled host's helper Info.plist is stamped at bundle time
+// (scripts/desktop-bundle.ts), so it cannot go stale and is not checked here.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -49,18 +32,11 @@ const config = JSON.parse(readFileSync(join(repoRoot, configPath), "utf8")) as {
   >;
 };
 
-// The release-please manifest is the base release-please bumps from. Before
-// the first release it deliberately stays at 0.0.0 (the bootstrap from
-// commit 0ccad20, so the first release PR computes 0.0.0 -> initial-version);
-// from the first release on it must track the Cargo version. No offline
-// marker in a checkout reliably says whether that first release has happened
-// (tags may be absent, and CHANGELOG.md predates release-please with its own
-// 0.1.0 heading), so the 0.0.0 exemption never expires - an accepted
-// residual: a post-release revert of the manifest to 0.0.0 passes here.
-// What the bootstrap case does enforce is the tie that closes the real
-// downgrade path: while the manifest is 0.0.0 the release PR takes its
-// version from initial-version and ignores Cargo.toml, so a Cargo version
-// differing from initial-version would be silently rewritten by that PR.
+// Before the first release the manifest deliberately holds 0.0.0 (the first release PR computes
+// 0.0.0 -> initial-version); from then on it must track Cargo.toml. No offline marker in a checkout
+// says whether that first release has happened (tags may be absent, and CHANGELOG.md predates
+// release-please with its own 0.1.0 heading), so the 0.0.0 exemption never expires and, as an
+// accepted residual, a post-release revert of the manifest to 0.0.0 passes here.
 const bootstrapVersion = "0.0.0";
 const manifestPath = ".release-please-manifest.json";
 const manifest = JSON.parse(readFileSync(join(repoRoot, manifestPath), "utf8")) as Record<

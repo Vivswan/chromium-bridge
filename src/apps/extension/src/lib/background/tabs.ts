@@ -140,7 +140,7 @@ async function addToWorkspaceGroup(
 
 export async function tabClose(tabId: number, policy: PolicyValues, panicEpoch: number) {
   // ONE policy snapshot and ONE decision-start panic epoch for the whole
-  // decision (ADR-0032 decision 4, SFX-2): dispatch captures both at the
+  // decision (ADR-0032 decision 4): dispatch captures both at the
   // decision's true start, before its first await, and threads them in; the
   // REQUIRED parameters are what hold the invariant (tests start their own
   // decisions via withFreshPolicy plus currentPanicEpoch()).

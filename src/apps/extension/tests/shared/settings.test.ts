@@ -6,7 +6,7 @@ describe("DEFAULTS", () => {
   test("has exactly the browser-owned keys and values (ADR-0032 Phase 5)", () => {
     // The 15 policy fields are host-owned (policy.gen.ts) and requireEnrollment
     // is retired; only the browser-owned settings remain here. A key appearing
-    // in this list again means the Phase 5 split regressed.
+    // in this list again means the browser-owned split regressed.
     expect(Object.keys(DEFAULTS).sort()).toEqual(["allowAllSites", "groupTabs", "uiLanguage"]);
     expect(DEFAULTS.allowAllSites).toBe(false);
     expect(DEFAULTS.groupTabs).toBe(true);

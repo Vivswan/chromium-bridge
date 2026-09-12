@@ -1,23 +1,18 @@
 name: Nightly browser and mutation tests
 
-# Runs the browser DOM + smoke tests against a freshly installed, CI-isolated
-# Chrome, plus a full cargo-mutants pass, on a schedule so we catch
-# regressions without gating PRs (nightly fuzzing has its own workflow,
-# nightly-fuzz.yml). The browser job mirrors the `browser` job in ci.yml
-# (same pinned action SHAs, same steps) but is triggered by cron / manual
-# dispatch instead of on push/PR.
+# Scheduled, never PR-gating: the full cargo-mutants pass is too slow for PRs, and the daily DOM + smoke rerun
+# against that day's Chrome `stable` surfaces a Chrome release that breaks them on a day with no PR.
 #
-# The report job is this repository's instance of the fleet's
-# nightly-module machinery (the fleet repository's docs/nightly.md): a red night files
-# or updates one label-deduplicated tracking issue (nightly-failure -
-# distinct from the fuzz stream's fuzz-nightly, a shared label would let
-# one stream's green night close the other's issue), a green night closes
-# it. This file is repo-owned - a sync never updates it - so a
-# breaking change to the fuzz-issue action's inputs needs a manual edit here.
+#   browser job   -> the PR job's subset (checks.yml `browser`, inside all-green): same pinned action SHAs and
+#                    DOM + smoke steps, without the security proofs and the RAN-marker canary
+#   setup-chrome  -> installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser
+#   fuzzing       -> nightly-fuzz.yml
 #
-# It uses browser-actions/setup-chrome to install an isolated Chrome into the
-# runner and points CHROME_BIN at it - it never touches a developer's own
-# browser or any machine outside the ephemeral CI runner.
+# The report job is the fleet's nightly module (repo-platform docs/nightly.md): one label-deduplicated issue.
+#   red night    -> files or updates the `nightly-failure` issue
+#   green night  -> closes it
+#   fuzz stream  -> its own label, fuzz-nightly; a shared label would let one stream's green close the other's issue
+# Repo-owned, so a sync never updates it: a breaking change to the fuzz-issue action's inputs is a manual edit here.
 
 on:
   schedule:
@@ -72,18 +67,13 @@ jobs:
         # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
         run: xvfb-run -a bun tests/browser/ext_test.ts
 
-  # Mutation testing lives here rather than in the PR gate because a full
-  # cargo-mutants pass is far too slow for every PR. Missed mutants (exit 2)
-  # and mutant timeouts (exit 3) are reported, not fatal: they measure test
-  # quality and get fixed deliberately, whereas a baseline build/test failure
-  # is a real break.
+  # Missed mutants (exit 2) and mutant timeouts (exit 3) are reported, not fatal: they measure test quality
+  # and get fixed deliberately, whereas a baseline build/test failure is a real break.
   #
-  # The pass is sharded (--shard) because the serial suite outgrew the job
-  # timeout (issue #19). Each shard lists all mutants and tests only its
-  # slice, so all shards must agree on every argument except the shard
-  # index; --no-shuffle keeps the assignment deterministic across the
-  # independent jobs. fail-fast stays off: a cancelled sibling shard would
-  # be indistinguishable from a hang in the report job's aggregate result.
+  # Sharded because the serial pass outgrew the job timeout. Each shard lists every mutant and tests its slice, so:
+  #   every argument but the shard index  -> identical across shards
+  #   --no-shuffle                        -> the same assignment in every independent job
+  #   fail-fast off                       -> a cancelled sibling would read as a hang in the report job's aggregate
   mutants:
     name: Mutation testing (cargo-mutants, scheduled, shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -144,11 +134,8 @@ jobs:
           mode: report
           label: nightly-failure
           title: Nightly CI failures
-          # No artifacts directory is passed: this stream files the generic
-          # nightly-failure report (workflow, commit, run link) rather than
-          # the fuzzer's failure-report contract. The tuple below is used
-          # only when the label has to be created and matches the
-          # settings.yml declaration.
+          # No artifacts directory: this stream files the generic report (workflow, commit, run link), not
+          # the fuzzer's failure-report contract. Color and description apply only when the label is created.
           label-color: "D93F0B"
           label-description: Automated nightly CI failure
 

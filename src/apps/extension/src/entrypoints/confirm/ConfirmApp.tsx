@@ -63,7 +63,7 @@ const TOOL_NAME = {
   upload: "page_upload",
 } as const satisfies Record<Exclude<ConfirmKind, "policy_relax">, OpName>;
 
-// ADR-0032 Lane U: the policy_relax detail carries the relaxing fields' WIRE
+// ADR-0032: the policy_relax detail carries the relaxing fields' WIRE
 // names, one per line; this map renders each beside its localized label.
 // `satisfies` pins the map to the generated field catalogue, so a policy
 // field added in the Rust core breaks this at compile time instead of
@@ -90,7 +90,7 @@ const POLICY_FIELD_LABEL = {
 // field name from the detail beside its localized label. Two line shapes
 // arrive (policy-approval.ts): a bare field name (the relaxing fields of a
 // later document) or `field = value` (the FULL value set of the first-ever
-// document, U2). An unrecognized line (a field this build does not know)
+// document). An unrecognized line (a field this build does not know)
 // stays verbatim - showing the raw wire name is the honest fallback, never
 // dropping a granted field from what the user approves.
 function policyRelaxLines(detail: string, t: (k: MessageKey) => string): string {
@@ -259,7 +259,7 @@ export function ConfirmApp() {
   // The payload union confines `hardware` to the eval/upload arms; the shared
   // narrowing helper is the one reader.
   const hardware = isHardwareGated(payload);
-  // ADR-0032 Lane U: an unsigned policy relaxation on an unpinned extension.
+  // ADR-0032: an unsigned policy relaxation on an unpinned extension.
   // No page is involved (origin/tabTitle are ""), the chip names the wire
   // frame instead of a tool, and the host segment renders unattested.
   const policyRelax = payload.kind === "policy_relax";
@@ -316,10 +316,10 @@ export function ConfirmApp() {
             breaks are preserved and long lines scroll horizontally, so a
             display wrap can never be mistaken for a source newline. For
             policy_relax the payload is the relaxing fields' wire names - or,
-            for the first-ever document, the full `field = value` set (U2) -
+            for the first-ever document, the full `field = value` set -
             each rendered beside its localized label; the empty-detail
-            fallback is defensive only (U2 makes it unreachable) and its copy
-            tells the user to deny. */}
+            fallback is defensive only (policy-approval.ts never sends an
+            empty detail) and its copy tells the user to deny. */}
         <pre className="code-block m-0 min-h-[60px] shrink whitespace-pre px-3 py-2.5">
           {policyRelax
             ? policyRelaxLines(payload.detail, t) || t("confirm.policy_relax_none")

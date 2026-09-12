@@ -1,62 +1,26 @@
 #!/usr/bin/env bun
 
-// Generate the extension's base wire validators from the Rust core's
-// schemars-derived JSON Schemas (ADR-0028): the BridgeReq/BridgeResp envelope
-// pair, every host->extension control frame the extension validates, and the
-// extension->host writer frames whose inferred types pin the constructor
-// sites (WRITER_FRAMES below).
-// Runs the core's `emit_envelope_schema` example (schemars behind the
-// gen-only `envelope-schema` cargo feature, absent from every binary),
-// reduces each schema to the supported subset below (prepare), emits Zod
-// source for it with the in-repo emitter (emitZod - the schema subset the
-// G-rules admit is small enough that every form maps to exactly one Zod
-// expression, in the style of gen-ops.ts; it replaced the archived
-// json-schema-to-zod dependency), and writes
-// src/packages/shared/src/envelope-wire.gen.ts.
-// Run via `moon run gen`; CI regenerates and fails on a stale diff (check-gen).
+// Generate the extension's base wire validators (src/packages/shared/src/envelope-wire.gen.ts) from the Rust
+// core's schemars-derived JSON Schemas (ADR-0028): the FAITHFUL Rust contract, strict objects, required fields
+// required, no defaults. The deliberate parser asymmetries stay hand-written in envelope.ts / enclave.ts, each
+// pinned by scripts/check-envelope-parity.ts (`moon run check-envelope`).
 //
-// The emitted schemas are the FAITHFUL Rust contract: strict objects
-// (serde's deny_unknown_fields -> Zod's .strict()), required fields
-// required, no defaults. The deliberate parser asymmetries the extension
-// layers on top stay hand-written in envelope.ts / enclave.ts, each pinned
-// by scripts/check-envelope-parity.ts (`moon run check-envelope`) and exercised
-// in tests/envelope-wire.gen.test.ts.
+//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> prepare -> emitZod -> write
+//   check-gen in CI  -> regenerates and fails on a stale diff
 //
-// Fail-closed generation rules (a violation aborts generation; shipping a
-// weaker parser than the Rust contract is never an option). These assert the
-// CONTRACT the emitted validators must uphold, independent of how the
-// emission is implemented:
-//   G1 every object schema must declare type: "object" and carry
-//      additionalProperties: false, and the emitted source must call
-//      .strict() once per z.object( - so neither a Rust type losing
-//      deny_unknown_fields nor an emitter bug dropping strictness can slip
-//      through. Object-shaped keywords (properties/required/
-//      additionalProperties) on a node without the explicit object type
-//      abort: the object claim must be stated, never inferred.
-//   G2 `default` keywords are stripped before emission: serde fills
-//      defaults on the Rust READ side; a Zod validator that invented fields
-//      (.default(...)) would silently hand consumers values the frame never
-//      carried. Stripping never changes required-ness - schemars already
-//      leaves defaulted fields out of `required`.
-//   G3 a oneOf is emitted only when it is a discriminated union (every
-//      branch an object schema with the same required const-tag property,
-//      all tag values distinct - so the branches are mutually exclusive and
-//      oneOf equals anyOf over the same instance set). It is rewritten to
-//      anyOf and emitted as a plain z.union; the mutual exclusivity that
-//      distinguishes oneOf needs no extra runtime check. Anything else
-//      aborts.
-//   G4 $refs must all be inlined before emission (the emitter does not
-//      resolve them); a surviving $ref aborts.
-//   G5 every keyword and type must be on the explicit supported list below,
-//      in a position the emitter models. A keyword it does not model
-//      (minProperties, contains, patternProperties, a format or bound on a
-//      non-numeric node, ...) would have to be silently dropped - weaker
-//      validation than the contract claims - so its appearance aborts until
-//      support is added here AND in the adversarial tests. Same philosophy
-//      as gen-ops.ts's assertSupportedProp. The empty schema {} (accept
-//      anything) is allowed: it is the contract's own free-form claim
-//      (BridgeReq.args, BridgeResp.data), faithfully emitted as z.any() and
-//      still held to the R3 rule by the parity gate.
+// Fail-closed generation rules; a violation aborts, because shipping a weaker parser than the Rust contract is
+// never an option. The error messages cite them by number.
+//   G1  every object declares type: "object" + additionalProperties: false, and the emitted source calls
+//       .strict() once per z.object( - neither a Rust type losing deny_unknown_fields nor an emitter bug slips through
+//   G2  `default` is stripped: serde fills defaults on the Rust READ side; a .default() would hand consumers
+//       values the frame never carried (required-ness is unchanged: schemars already leaves defaulted fields optional)
+//   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
+//       emitted as a plain z.union: the mutual exclusivity needs no extra runtime check
+//   G4  every $ref inlined before emission; the emitter does not resolve them
+//   G5  every keyword and type on the supported list below, in a position the emitter models; an unmodeled
+//       keyword would have to be silently dropped, so it aborts until support lands here AND in the adversarial
+//       tests. The empty schema {} is the contract's own free-form claim (BridgeReq.args, BridgeResp.data),
+//       emitted as z.any() and still held to the parity gate's R3 rule
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -101,13 +65,8 @@ export function assertDiscriminatedUnion(branches: unknown[], path: string): voi
   throw new Error(`gen-envelope: oneOf at ${path} is not a discriminated union (G3)`);
 }
 
-// Reduce one schema to the form the emitter consumes: annotations and
-// `default` stripped, every keyword and type checked against the supported
-// list (G5), object strictness asserted (G1), discriminated oneOf -> anyOf
-// (G3), no $refs (G4). Structure is otherwise preserved verbatim. This is a
-// schema-aware walker: it recurses only through positions that hold
-// subschemas (properties values, items, union branches), so a FIELD merely
-// named like an annotation ("description", "default") is never stripped.
+// prepare (below) recurses only through positions that hold subschemas (property values, items, union
+// branches), so a FIELD merely named like an annotation ("description", "default") is never stripped.
 const SUPPORTED_KEYWORDS = new Set([
   "type",
   "properties",
@@ -390,14 +349,10 @@ const GENERATED_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   },
 };
 
-// The extension->host frames the extension CONSTRUCTS (the writer side). The
-// enforcing reader is the Rust serde parser, so there is no Zod reader to run
-// - these schemas exist for their inferred types: every constructor site in
-// the extension claims conformance with `satisfies`, which makes a drifted
-// field or a typo'd tag a compile error instead of a frame the host silently
-// refuses at runtime. No runtime validation rides on them (no new parser
-// asymmetries). scripts/check-envelope-parity.ts cross-checks this map
-// against its "rust-parsed" plans via GENERATED_WRITER_FRAMES.
+// The extension->host frames the extension CONSTRUCTS; the Rust serde parser is the enforcing reader, so these
+// exist only for their inferred types, and every constructor site claims conformance with `satisfies` (a drifted
+// field or typo'd tag fails to compile instead of being refused by the host at runtime).
+// scripts/check-envelope-parity.ts cross-checks this map against its "rust-parsed" plans via GENERATED_WRITER_FRAMES.
 const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   enclave: {
     enclave_challenge: "EnclaveChallengeWireSchema",

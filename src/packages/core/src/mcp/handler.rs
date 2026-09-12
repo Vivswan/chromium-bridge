@@ -218,15 +218,10 @@ fn execute_tool_call(session: &Session, name: &str, args: &Value) -> tools::Outc
     // structured audit event (tool, outcome, taxonomy code, duration).
     let req_id = next_request_id();
     let started = std::time::Instant::now();
-    // The global kill switch gates EVERY tool call, for every harness,
-    // before any routing or bridge traffic (ADR-0030). Fail closed on an
-    // engaged switch AND on an unreadable record; the harness connection
-    // stays up so the typed refusal is delivered. The host-side policy gate
-    // (ADR-0032 decision 4) runs alongside it, refusing a tool whose grant is
-    // off or that the effective policy disables - defense in depth for the
-    // honest-host path, an unreadable store denying all (decision 5). Both
-    // verdicts are computed here, before dispatch, and injected so the
-    // fail-closed matrix stays pure and unit-testable.
+    // The global kill switch gates EVERY tool call before any routing or bridge traffic (ADR-0030),
+    // failing closed on an engaged switch AND on an unreadable record; the harness connection stays up
+    // so the typed refusal is delivered. The host-side policy gate (ADR-0032 decisions 4/5) runs
+    // alongside it: defense in depth for the honest-host path, an unreadable store denying all.
     let (route, out) = route_and_dispatch(
         session,
         name,
@@ -256,17 +251,15 @@ fn next_request_id() -> u64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Route and dispatch one tool call from a SINGLE parse of its `browser`
-/// argument. `tools::extract_browser` runs exactly once here; the audit
-/// route (browser label + connection generation, best-effort diagnostics)
-/// and the dispatch both consume that one result, so the trail can never
-/// record a default route for a call the strict parse refused. The route is
-/// captured before the dispatch and refreshed after it (a host may connect
-/// during the call's startup wait), and the pre-dispatch verdicts (the kill
-/// switch, ADR-0030; the host policy gate, ADR-0032) arrive injected so the
-/// fail-closed matrix is unit-testable without touching the runtime directory
-/// or the audit sink (both live in [`execute_tool_call`]). The kill switch is
-/// the global brake, so it is checked first; the policy gate is per-tool.
+/// Route and dispatch one tool call from a SINGLE parse of its `browser` argument: the audit route and the dispatch
+/// both consume that one result, so the trail can never record a default route for a call the strict parse refused.
+/// The kill and policy verdicts arrive injected so the fail-closed matrix is unit-testable without the runtime
+/// directory or the audit sink (both live in [`execute_tool_call`]).
+///
+/// ```text
+/// route re-read after the dispatch -> a host may connect during the call's startup wait
+/// kill vs policy                   -> the kill switch is the global brake, so it wins over the per-tool policy gate
+/// ```
 fn route_and_dispatch(
     session: &Session,
     name: &str,

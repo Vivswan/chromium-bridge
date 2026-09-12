@@ -1,34 +1,9 @@
-// The user-confirmation service (ADR-0027): every confirmation the bridge
-// asks for goes through confirmWithUser(), which presents the request on an
-// EXTENSION-OWNED surface the guarded page cannot reach, script, or
-// auto-click. This replaces the in-page toasts of ADR-0006/0008: a page
-// script could observe and click a toast rendered in its own DOM, so consent
-// could be forged exactly where it mattered most. The extension window is a
-// separate chrome-extension:// document in a separate process; the router
-// additionally refuses confirm_* messages from anything but extension pages.
-//
-// Fail-closed properties:
-// - unanswered within the timeout -> denied (and the surface is dismissed);
-// - surface closed by the user -> denied;
-// - the surface failing to open -> denied;
-// - a second resolution for the same id -> ignored (single-use);
-// - no provider installed -> denied;
-// - SW death loses the in-flight request -> the op fails; nothing dangles.
-//
-// Requests are serialized: one confirmation surface at a time, FIFO. A queued
-// request's timeout clock starts when it is SHOWN, not when queued.
-//
-// Phase 8 (ADR-0031): providers implement ConfirmationProvider. The default
-// is the extension popup window (surface.ts). The "eval" and "upload" kinds
-// route to the Enclave user-presence provider (presence.ts) when the
-// request's decision-time routing verdict says so (presenceRouting below,
-// computed by the caller from its per-request policy snapshot, ADR-0032
-// decision 4) - the host raises the Touch ID prompt and the provider
-// resolves its verdict from the host's SIGNED answer, with a display-only
-// window showing WHAT is being approved. Such payloads carry
-// `hardware: true`, and resolveConfirm refuses a window-side approval for
-// them: the tap is the only approval. The queue, deadline, and fail-closed
-// semantics here stay unchanged.
+// The user-confirmation service (ADR-0027): every confirmation the bridge asks for goes through
+// confirmWithUser(), which presents it on an EXTENSION-OWNED surface the guarded page cannot reach,
+// script, or auto-click (an in-page toast could be observed and clicked by the page's own script,
+// forging consent exactly where it mattered most). The router (messages.ts) accepts confirm_*
+// messages only from the confirmation window itself; that gate is what makes the window's verdict count.
+//   service worker dies mid-request -> the in-flight request is lost, the op fails, nothing dangles
 
 import { type ConfirmKind, type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
 import { auditEvent } from "../audit-log";
@@ -36,22 +11,16 @@ import { auditEvent } from "../audit-log";
 /** The fields every confirmation request carries. */
 interface ConfirmRequestBase {
   timeoutMs: number;
-  /** Route this confirmation to the Enclave user-presence provider
-   * (ADR-0031)? Decided by the CALLER at decision time - for the gated ops,
-   * from the SAME per-request policy snapshot as the rest of the decision
-   * (ADR-0032 decision 4), so a policy push landing while the confirmation
-   * waits in the queue cannot re-route it. Kinds the presence provider never
-   * serves pass false. Honored only for the "eval"/"upload" kinds while a
-   * presence provider is installed; false (or no provider) falls back to the
-   * off-DOM window confirmation - still confirmed, not hardware-gated. */
+  /** Route this confirmation to the Enclave user-presence provider (ADR-0031)? Decided by the CALLER
+   * from the SAME per-request policy snapshot as the rest of the decision (ADR-0032 decision 4), so a
+   * policy push landing while the confirmation waits in the queue cannot re-route it. Only the
+   * "eval"/"upload" kinds honor it (providerFor); false, or no presence provider, is the off-DOM window
+   * confirmation: still confirmed, not hardware-gated. */
   presenceRouting: boolean;
-  /** The panic epoch captured at DECISION START (currentPanicEpoch below) -
-   * in dispatch, SYNCHRONOUSLY beside the policy snapshot and BEFORE the
-   * decision's first await, then threaded through the confirmation path as a
-   * required parameter. Every await the decision performs - the policy read,
-   * the tab resolve, the presence routing probe, a click probe - follows the
-   * capture, so a deny-kill that lands AND lifts inside any of them still
-   * denies on the epoch mismatch (SFX-2). */
+  /** The panic epoch captured at DECISION START (currentPanicEpoch), synchronously beside the policy
+   * snapshot and BEFORE the decision's first await. Every await the decision performs (the policy read,
+   * the tab resolve, the routing probe, a click probe) follows the capture, so a deny-kill that lands
+   * AND lifts inside any of them still denies on the epoch mismatch. */
   panicEpoch: number;
 }
 
@@ -141,33 +110,22 @@ function providerFor(req: ConfirmRequest): {
   return { provider: defaultProvider, hardware: false };
 }
 
-// The panic latch (ADR-0030): set by the confirm window's deny-and-kill,
-// lifted by the router only when the kill state authoritatively reads alive
-// again after the engage applied, or when the engage frame never reached
-// the pipe (send failure). While it is on, EVERY confirmation - the active
-// one, the whole queue, and anything newly requested - denies without
-// presenting. This closes the window the queue would otherwise open: a
-// request that passed the kill gate while the mirror still read alive would
-// pop a fresh surface (which the user could approve) while the brake is
-// still in flight to the host. Module state, deliberately: if the engage is
-// lost with a dying host (posted, never answered, host restarts alive) the
-// latch stays on - denying consent is the fail-closed reading of "kill
-// everything" - until the SW's own restart clears it.
+// The panic latch (ADR-0030): while it is on, EVERY confirmation (active, queued, or newly requested)
+// denies without presenting. It closes the window the queue would otherwise open: a request that
+// passed the kill gate while the mirror still read alive would pop a fresh surface the user could
+// approve while the brake is still in flight to the host.
+//   engaged  -> denyAllConfirmations, from the confirm window's deny-and-kill
+//   lifted   -> releasePanicDeny, router-only, on the proofs its doc names; a lost engage (posted, never
+//               answered, host restarts alive) keeps it on until the SW's own restart clears it
 let panicDeny = false;
-// Edge marker beside the level latch: bumped on every panic, and LOAD-BEARING
-// (SFX-2): every request carries the epoch its DECISION captured at its start
-// (currentPanicEpoch below, threaded through ConfirmRequest.panicEpoch). The
-// decision's own awaits - the presence routing probe, a click probe - and the
-// FIFO queue wait all sit between that capture and presentation, so a panic
-// that lands AND lifts anywhere inside that span is invisible to the level
-// check alone. Any mismatch denies: "a panic crossed this decision's
-// lifetime" survives the lift.
+// Edge marker beside the level latch, bumped on every panic. Every request carries the epoch its
+// decision captured at its start (ConfirmRequest.panicEpoch), so a panic that lands AND lifts between
+// that capture and presentation, invisible to the level check alone, still denies on the mismatch.
 let panicEpoch = 0;
 
-/** Capture the panic epoch at the START of a decision, before its first
- * await (SFX-2). Every confirmation the decision raises carries this value,
- * so the service denies it if a deny-kill crossed the decision - even one
- * that lifted again before the confirmation was created. */
+/** Capture the panic epoch at the START of a decision, before its first await. Every confirmation the
+ * decision raises carries this value, so the service denies it if a deny-kill crossed the decision,
+ * even one that lifted again before the confirmation was created. */
 export function currentPanicEpoch(): number {
   return panicEpoch;
 }
@@ -184,18 +142,14 @@ export function denyAllConfirmations(): number {
   return panicEpoch;
 }
 
-/** Router-only: lift the panic latch, scoped to the panic that armed it.
- * Fail closed on every ambiguity:
- * - `epoch` must be the value denyAllConfirmations returned; a stale
- *   release (an earlier panic's kill settling late) is a no-op, so it can
- *   never lift a NEWER panic's latch;
- * - the router calls this only on the two proofs that the brake either
- *   fully settled or never left the station: the kill state authoritatively
- *   reading alive again AFTER the engage applied (an explicit, presence-
- *   gated release), or the engage frame never reaching the pipe at all
- *   (send failure - nothing is in flight, and the mirror tells the user the
- *   truth). A timeout is neither: the posted frame may still apply, so the
- *   latch stays down and confirmations keep denying. */
+/** Router-only: lift the panic latch, scoped to the panic that armed it. `epoch` must be the value
+ * denyAllConfirmations returned, so an earlier panic's kill settling late can never lift a NEWER panic's latch.
+ *
+ * The router calls this only on proof that the brake fully settled or never left the station:
+ *   kill state authoritatively reads alive again AFTER the engage applied            -> lift (an explicit, presence-gated release)
+ *   send failed AND no posted engage is still unconfirmed (kill.ts engageOutstanding) -> lift (nothing is in flight)
+ *   send failed while an earlier engage is unconfirmed, or timeout                    -> no lift: a posted frame may still apply
+ */
 export function releasePanicDeny(epoch: number): void {
   if (epoch === panicEpoch) panicDeny = false;
 }
@@ -210,23 +164,14 @@ export function resetPanicForTests(): void {
  * the extension-owned surface; every other outcome is false. */
 export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    // The DECISION-START epoch the caller captured before its first await
-    // (SFX-2): a panic bumps the epoch, so any request whose decision
-    // predates the panic - active, queued, or still awaiting its caller-side
-    // routing probe when the panic hit - denies on the mismatch even after
-    // the latch lifts.
+    // The decision-start epoch: a panic bumps it, so any request whose decision predates the panic
+    // denies on the mismatch even after the latch lifts.
     const epoch = req.panicEpoch;
-    // One collision-resistant id per confirmation ATTEMPT, minted once here so
-    // EVERY audit event this attempt emits carries the same `cid` (ADR-0030) -
-    // whether it is shown and gets a verdict, or denied before any surface
-    // exists. It doubles as the surface routing handle (payload.id below;
-    // getPendingConfirm/resolveConfirm match on it). A random 128-bit UUID, not
-    // a monotonic counter: the host merges audit records from every browser, so
-    // per-worker counters would collide across browsers, and a random id cannot
-    // be steered to match another attempt's row. The audit panel joins a
-    // verdict to its shown row by this exact id; a pre-surface denial's id
-    // simply matches no shown row (it resolves nothing), which is what makes a
-    // panic-latch denial closing an unrelated confirmation impossible.
+    // One id per confirmation ATTEMPT, minted before any surface exists, so every audit event of the
+    // attempt carries the same `cid` (ADR-0030) and the audit panel joins a verdict to its shown row by
+    // it; it doubles as the surface routing handle (payload.id). Random, not a counter: the host merges
+    // audit records from every browser, so per-worker counters would collide, and a random id cannot be
+    // steered onto another attempt's row.
     const cid = crypto.randomUUID();
     if (panicDeny) {
       // Created while the latch is on: denied at the door. Waiting in the
@@ -332,12 +277,9 @@ async function presentOne(
         // stall the queue.
         console.warn("[bb] confirmation dismiss failed", e);
       }
-      // Log-after-decide (ADR-0030): the verdict is already settled; the
-      // audit ring and the host's audit file record it, never gate it.
-      // `cid` ties this verdict to THIS attempt's confirm_shown row. Only a
-      // shown attempt reaches settle(), so this resolves exactly its own
-      // row; the pre-surface denials above carry the same-shaped cid but no
-      // shown row exists for them, so they resolve nothing.
+      // Log-after-decide (ADR-0030): the verdict is already settled; the audit ring and the host's
+      // audit file record it, never gate it. Only a shown attempt reaches settle(), so this cid
+      // resolves exactly its own confirm_shown row.
       auditEvent(approved ? "confirm_allowed" : "confirm_denied", {
         tool: req.kind,
         name: req.origin,
@@ -372,14 +314,11 @@ export function getPendingConfirm(id: string): ConfirmPayload | null {
   return active && active.payload.id === id ? active.payload : null;
 }
 
-/** Resolve the active confirmation. Single-use; unknown ids are refused.
- * The router routes this ONLY from extension pages - that restriction is the
- * mechanism that makes page-side auto-approval impossible.
- *
- * A hardware-gated payload (ADR-0031) refuses a window-side APPROVAL: the
- * only approval is the verified Enclave user-presence answer, so even the
- * trusted window cannot substitute for the tap. Denial stays accepted -
- * removing capability is always friction-free. */
+/** messages.ts routes this ONLY from the confirmation window; that sender check is what makes page-side
+ * auto-approval impossible. A hardware-gated payload (ADR-0031) is approved only by the verified Enclave
+ * user-presence answer, so even the trusted window cannot stand in for the tap.
+ *   hardware-gated + approve  -> refused; only the Touch ID prompt approves
+ *   any payload + deny        -> accepted; removing capability is always friction-free */
 export function resolveConfirm(id: string, approved: boolean): { ok: boolean; error?: string } {
   if (!active || active.payload.id !== id) {
     return { ok: false, error: "no such pending confirmation" };

@@ -1,24 +1,17 @@
-//! CLI runners for `chromium-bridge policy` (ADR-0032 decision 5), and the
-//! versioned status/history reports the co-equal desktop app parses back.
+//! CLI runners for `chromium-bridge policy` (ADR-0032 decision 5), and the versioned status/history reports the
+//! co-equal desktop app parses back. The reports follow the enclave-status precedent: a versioned, typed struct
+//! serialized through `serde_json::Value` (sorted keys, a frozen wire contract), `deny_unknown_fields` and
+//! `ts_rs`-exported so the host that emits it and the app that parses it share one Rust definition.
 //!
-//! The two write lanes map straight onto the Phase-1 seams: `set` is the
-//! signed GRANT lane ([`set_signed`] with [`PolicyGrantFloor::SignatureOnly`],
-//! refused up front where no enclave key exists), `restrict` is the free lane
-//! ([`restrict`]). `rollback` is neither a new lane nor a replay: it
-//! re-derives a past revision's EFFECTIVE policy and re-applies it as a FRESH
-//! write - the free lane when it only tightens, one signed tap when it relaxes
-//! anything - so the lower revision keeps failing the extension's ratchet
-//! (never the old signed artifact back on the wire).
-//!
-//! The reports mirror the enclave-status precedent: a versioned, typed struct
-//! serialized through `serde_json::Value` (sorted keys, a frozen wire
-//! contract), `deny_unknown_fields` and `ts_rs`-exported so the host that
-//! emits it and the app that parses it share one Rust definition. The doctor
-//! row renders from the same [`PolicyStatusReport`]. The write lanes speak
-//! the same contract: `set --json` and `rollback --json` print the
-//! post-write [`PolicyStatusReport`] on success and the versioned
-//! [`PolicyErrorReport`] on refusal (exit codes unchanged), which is what
-//! the desktop app's subprocess grant lane parses back.
+//! ```text
+//! set       -> the signed GRANT lane (set_signed with PolicyGrantFloor::SignatureOnly), refused up front where no
+//!              enclave key exists
+//! restrict  -> the free lane (restrict)
+//! rollback  -> neither a new lane nor a replay: re-derives a past revision's EFFECTIVE policy and re-applies it as a
+//!              FRESH write (free when it only tightens, one signed tap when it relaxes anything), so the lower revision
+//!              keeps failing the extension's ratchet and the old signed artifact never goes back on the wire
+//! --json    -> set and rollback print the post-write PolicyStatusReport on success, PolicyErrorReport on refusal
+//! ```
 
 use serde::{Deserialize, Serialize};
 
@@ -50,23 +43,15 @@ pub enum PolicyStoreState {
     Error,
 }
 
-/// The versioned, machine-readable policy status: the exact object
-/// `chromium-bridge policy show --json` prints (ADR-0032), the typed mirror
-/// the desktop app parses back, and the shape the doctor row renders from.
+/// The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json` prints
+/// (ADR-0032), which the desktop app parses back and the doctor row renders from. A sum tagged on `store` rather than
+/// a flat struct, so a `none` report smuggling an effective policy, or a `present` one missing its revision, cannot
+/// even deserialize.
 ///
-/// A sum internally tagged on `store` (the [`PendingImportReport`] shape):
-/// each arm carries exactly its own fields, so a `none` report smuggling an
-/// effective policy - or a `present` one missing its revision - cannot even
-/// deserialize. The tag serializes to the same `store` field the v1 flat
-/// shape carried and every arm's fields are spelled identically, so the wire
-/// form is VALUE-identical to v1 (JSON key order may differ on paths that
-/// serialize the struct directly rather than through the sorted-keys `Value`
-/// this CLI prints; no JSON consumer reads key order, so no `v` bump): a
-/// consumer still refuses an unrecognized `v` before it trusts any other
-/// field, and `deny_unknown_fields` still makes an unexpected shape a loud
-/// refusal.
-///
-/// [`PendingImportReport`]: crate::pending_import::PendingImportReport
+/// ```text
+/// same `store` tag field and field spellings as the flat v1 shape -> wire form VALUE-identical to v1, no `v` bump
+/// serialized directly, not through this CLI's sorted-keys Value   -> key order may differ; no consumer reads key order
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(tag = "store", rename_all = "lowercase", deny_unknown_fields)]
@@ -740,21 +725,16 @@ fn run_history(json: bool) -> i32 {
     }
 }
 
-/// `policy pending-import [--json]`: the pending legacy import's state
-/// (ADR-0032 decision 8). The gather is exactly the fail-closed read the
-/// desktop app's first-run import screen consumes; nothing here can record
-/// or consume a live import. The ONE write this command may perform is the
-/// idempotent self-heal ([`crate::pending_import::reconcile_consuming`]):
-/// finalizing a STRANDED mid-consume record whose baseline already landed,
-/// so the desktop app's own probe unsticks a crashed finalize instead of
-/// re-offering an import that can only refuse. Best-effort - a failed heal
-/// never blocks the read (the gather then reports what actually stands).
-/// `--json` emits the versioned
-/// [`crate::pending_import::PendingImportReport`] through `Value` (sorted
-/// keys, the status-report precedent) and is the ONLY mode that prints the
-/// bag: stdout is the payload, and the prose rendering deliberately reports
-/// state without bag content (the bag is reviewed in the app, not dumped on
-/// a terminal).
+/// `policy pending-import [--json]`: the pending legacy import's state (ADR-0032 decision 8), the same
+/// fail-closed read the desktop app's first-run import screen consumes. The ONE write here is the
+/// idempotent self-heal [`crate::pending_import::reconcile_consuming`], finalizing a STRANDED mid-consume
+/// record whose baseline already landed, so a crashed finalize unsticks instead of re-offering an import
+/// that can only refuse; a failed heal never blocks the read.
+///
+/// ```text
+/// --json  -> the versioned `crate::pending_import::PendingImportReport` through `Value`, the ONLY mode that prints the bag
+/// prose   -> state without bag content (the bag is reviewed in the app, not dumped on a terminal)
+/// ```
 fn run_pending_import(json: bool) -> i32 {
     if let Err(e) = crate::pending_import::reconcile_consuming() {
         eprintln!("policy pending-import: reconcile of a stranded mid-consume record failed: {e}");

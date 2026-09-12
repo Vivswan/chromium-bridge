@@ -1,4 +1,4 @@
-// The permanent legacy settings module (ADR-0032 Phase 5): the 15 retired
+// The permanent legacy settings module (ADR-0032): the 15 retired
 // policy fields plus requireEnrollment, byte-identical to the pre-migration
 // settings.ts semantics. These pins are LOAD-BEARING: the pre-cutover
 // enforcement arm (effective-policy.ts) and the migration bag

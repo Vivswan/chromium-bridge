@@ -1,31 +1,21 @@
-//! The seam between the synchronous serve loop and the rmcp services.
+//! The seam between the synchronous serve loop and the rmcp services: one [`Connection`] per harness
+//! connection, an rmcp server service on a small shared tokio runtime fed through in-memory channels.
+//! broker.rs `serve_jsonrpc` keeps owning the wire and every security gate (line caps, parse-error replies,
+//! attestation, per-relay rate limiting, the per-request revocation recheck) before a message reaches
+//! [`Connection::handle`]; this side owns nothing but protocol.
 //!
-//! One [`Connection`] per harness connection: an rmcp server service
-//! running on a small shared tokio runtime, fed typed JSON-RPC messages
-//! through in-memory channels. The synchronous side (broker.rs
-//! `serve_jsonrpc`) keeps owning the wire and every security gate - line
-//! caps, parse-error replies, attestation, per-relay rate limiting, and
-//! the per-request revocation recheck all run BEFORE a message is handed
-//! to [`Connection::handle`] - and this side owns nothing but protocol.
+//! The blocking model rests on one load-bearing invariant: at most one request in flight per connection,
+//! enforced structurally by `handle(&mut self)` inside the serial loop. It holds because the handler never
+//! originates server-side traffic (`assert_quiescent` and `non_tool_surfaces_stay_refused` pin that across
+//! rmcp upgrades), so a `notifications/cancelled` can never slip between a request and its reply.
 //!
-//! The blocking model rests on one LOAD-BEARING invariant: at most one
-//! request is in flight per connection, enforced structurally by
-//! `handle(&mut self)` inside the serial serve loop. Under it, "send one
-//! in, wait for one out" cannot interleave: our handler never originates
-//! server-side traffic (no sampling, no subscriptions, no tasks, no
-//! progress - `assert_quiescent` and `non_tool_surfaces_stay_refused` in
-//! this module's tests pin that an rmcp upgrade does not change this), and
-//! a `notifications/cancelled` can never slip
-//! between a request and its reply, so rmcp's cancellation path can never
-//! swallow a reply we are waiting for. If the service dies instead of
-//! answering - an invalid opener, an internal rmcp task failure - its
-//! channel ends or its runtime task finishes, and [`Connection::handle`]
-//! returns an error: the caller drops the connection, fail closed, never
-//! a hang. rmcp (3.1.4+) answers an invalid opener with a descriptive
-//! error BEFORE failing the service, so the first non-ping exchange reads
-//! the opener verdict before the reply: a refused opener drops with that
-//! flushed refusal unread, and a bare probe gets EOF, never a reply
-//! confirming the bridge exists.
+//! ```text
+//! service dies instead of answering  -> its channel ends or its task finishes; `handle` returns Err and the
+//!                                       caller drops the connection, never a hang
+//! invalid opener                     -> rmcp flushes a descriptive error before failing the service; the opener
+//!                                       verdict is read first and that reply stays unread
+//! bare probe                         -> EOF, never a reply confirming the bridge exists
+//! ```
 
 use std::io;
 use std::sync::OnceLock;
@@ -209,18 +199,16 @@ impl Connection {
         Ok(Some(wire))
     }
 
-    /// Take the reply deciding the opener. rmcp (3.1.4+) answers an invalid
-    /// opener with a descriptive error BEFORE failing the service, and
-    /// delivering it would turn the fail-closed EOF into an oracle
-    /// confirming the bridge to unauthenticated probes - so for a non-ping
-    /// request the opener verdict is read FIRST (rmcp adjudicates the
-    /// opener on the first non-ping frame without needing further input,
-    /// so the verdict cannot hang), and a refusal returns `Err` with the
-    /// flushed reply left unread. A genuine pre-open ping is answered
-    /// WITHOUT resolving the opener (spec-legal), so a ping waits on
-    /// reply-or-verdict instead; the only error reply a pre-open ping can
-    /// draw is the refusal flush for a frame that names ping but is not
-    /// one, so an error there also drops unanswered.
+    /// Take the reply deciding the opener. Delivering rmcp's descriptive pre-open refusal would turn the
+    /// fail-closed EOF into an oracle confirming the bridge to unauthenticated probes, so the reply is gated
+    /// on the verdict.
+    ///
+    /// ```text
+    /// non-ping request  -> wait on the verdict first (rmcp adjudicates the opener on that frame alone, so it
+    ///                      cannot hang); a refusal returns `Err` with the flushed reply left unread
+    /// pre-open ping     -> spec-legal without opening, so wait on reply-or-verdict; the only error reply it
+    ///                      can draw is the refusal flush for a frame that names ping but is not one, dropped
+    /// ```
     fn first_reply(
         &mut self,
         msg: &JsonRpc,

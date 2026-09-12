@@ -5,20 +5,12 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-/// Enrollment policy recorded on disk. This is policy only - the key material
-/// lives exclusively in the Secure Enclave / keychain, never here. The file is
-/// informational for `doctor`/`enclave-status` and for the extension-side
-/// enrollment flow; the security decisions are enforced by the keychain ACL
-/// (presence-gated signing) and the extension's public-key pin, not by these
-/// bits, so a same-user process editing this file gains nothing.
-///
-/// Parsing is fail-closed (`deny_unknown_fields`, ADR-0025): this file is
-/// written and read only by this binary on one machine, with no cross-version
-/// coexistence window (unlike the lock file, which live brokers and
-/// Chrome-spawned hosts of different builds may read concurrently during an
-/// upgrade), so rejecting an unknown shape costs nothing and refuses a
-/// tampered or newer file instead of half-reading it. A future field is a
-/// deliberate schema change: bump [`HOST_CONFIG_VERSION`].
+/// Enrollment policy recorded on disk, policy only: the key material lives in the Secure Enclave / keychain, and the
+/// security decisions are enforced by the keychain ACL (presence-gated signing) and the extension's public-key pin,
+/// so a same-user process editing this file gains nothing. Parsing is fail-closed (`deny_unknown_fields`, ADR-0025)
+/// because only this binary reads and writes the file, with no cross-version coexistence window (unlike the lock file,
+/// which brokers and Chrome-spawned hosts of different builds may read during an upgrade), so a tampered or newer file
+/// is refused instead of half-read, and a new field is a deliberate schema change: bump [`HOST_CONFIG_VERSION`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostConfig {

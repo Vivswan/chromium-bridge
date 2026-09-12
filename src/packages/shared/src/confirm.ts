@@ -8,9 +8,10 @@
 // from extension pages. A content script or page script can therefore
 // neither read a pending confirmation nor answer one.
 //
-// Phase 8 (ADR-0031): ConfirmKind "eval" and "upload" are the two kinds whose
+// ADR-0031: ConfirmKind "eval" and "upload" are the two kinds whose
 // authorization moves to the host's Secure-Enclave user-presence gate
-// (Touch ID) on a capable, enrolled device. The surface stays as a
+// (Touch ID) on a capable, enrolled device with the touchIdConfirm policy
+// on. The surface stays as a
 // display-only window; `hardware: true` marks such a payload, and the
 // service refuses a window-side approval for it - the tap is the approval.
 //
@@ -86,7 +87,7 @@ export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
     origin: z.literal(""),
     tabTitle: z.literal(""),
     /** The relaxing fields' wire names, one per line - or, for the
-     * first-ever document, the full `field = value` set (U2). */
+     * first-ever document, the full `field = value` set. */
     detail: z.string(),
   }),
 ]);

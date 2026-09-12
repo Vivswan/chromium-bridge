@@ -2,18 +2,13 @@
 // src/packages/core/src/enclave/) by scripts/gen-ops.ts - DO NOT EDIT.
 // Run `moon run gen`.
 //
-// Golden vectors pinning the cross-language enclave crypto contract: each
-// message is built by the Rust challenge_message/presence_message and each
-// signature is a deterministic (RFC 6979) software-P256 proof routed through
-// the host's DER -> P1363 converter, over the PUBLIC fixture key. The
-// extension test suite replays these through its WebCrypto verifier
-// (tests/background/enclave-golden.test.ts), so a Rust-side encoding change
-// regenerates this file (check-gen) and a lagging TS verifier fails the
-// replay. The key protects nothing and is deny-listed as an enrollment
-// identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
+// Golden vectors pinning the cross-language enclave crypto contract: Rust-built message bytes signed with
+// deterministic (RFC 6979) software-P256 signatures, replayed by tests/background/enclave-golden.test.ts through
+// the extension's WebCrypto verifier, so a Rust-side encoding change that outruns the TS verifier fails the
+// replay. The key protects nothing and is deny-listed as an enrollment identity on both sides
+// (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
 //
-// Test-only data: import it via "@chromium-bridge/shared/testing", never
-// from the production barrel.
+// Test-only data: import it via "@chromium-bridge/shared/testing", never from the production barrel.
 
 export interface EnclaveGoldenVector {
   /** Which domain-separation prefix the message was built under. */

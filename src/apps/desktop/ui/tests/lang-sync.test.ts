@@ -91,7 +91,7 @@ describe("chooseLanguage (the user-gesture path)", () => {
   });
 
   it("re-asserts the host's truth over a stale read that raced the click", async () => {
-    // The codex-found divergence: a slow startup read (old host state)
+    // The divergence: a slow startup read (old host state)
     // resolves AFTER the user clicked, overwriting the local choice; the
     // set response must then re-apply its own value, not just advance the
     // cursor, or the UI would show the stale value forever (the epoch

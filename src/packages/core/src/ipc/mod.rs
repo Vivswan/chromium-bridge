@@ -1,43 +1,24 @@
-//! IPC between the MCP server (long-lived) and the native-host subprocess
-//! (spawned fresh by Chrome on each connectNative).
+//! IPC between the MCP server (long-lived) and the native-host subprocess (spawned fresh by Chrome on each
+//! connectNative). The public API is re-exported here so callers keep using `ipc::...`; each submodule's own
+//! doc describes its concern.
 //!
-//! - On Unix the MCP server listens on a 0600 Unix-domain socket inside a
-//!   private 0700 runtime directory, and writes the socket path + a per-run
-//!   secret to a lock file next to it. A filesystem socket has no listening
-//!   port for other processes to reach, and its 0600 mode plus the private
-//!   directory keep other users out.
-//! - On Windows (no std Unix-domain sockets) the server keeps a loopback TCP
-//!   socket on an ephemeral port, published the same way in the lock file.
-//! - The native host reads the lock file on startup and connects. Authentication
-//!   is an HMAC-SHA256 challenge-response ([`server_handshake`] /
-//!   [`client_handshake`]): the server sends a random nonce, the client replies
-//!   with HMAC(secret, nonce). The secret never travels on the wire, and a fresh
-//!   nonce per connection makes a captured response useless to replay.
-//! - Before that handshake, each end kernel-attests the other ([`attest_peer`]):
-//!   it asks the kernel who the peer is and requires the peer to be running the
-//!   same executable image as itself. On Linux that identity is the SHA256 of
-//!   `/proc/<pid>/exe`; on macOS it is the code-directory hash of the peer's
-//!   running image, taken from its kernel audit token via the Security framework
-//!   (running-image-bound, so it survives a re-open TOCTOU). Only another
-//!   instance of this exact binary can drive the bridge; a different same-user
-//!   program is rejected at accept, before it can attempt the handshake. See
-//!   ADR-0020.
+//! ```text
+//! Unix     -> 0600 Unix-domain socket in a private 0700 runtime dir: no port to reach, other users kept out
+//! Windows  -> loopback TCP on an ephemeral port (no std Unix-domain sockets)
+//! both     -> socket path + per-run secret published in the lock file, which the host reads on startup
+//! ```
 //!
-//! Layout (one concern per submodule; the public API is re-exported here so
-//! callers keep using `ipc::...`):
-//! - [`socket`]: the bridge transport (Unix-domain socket / loopback TCP).
-//! - [`lockfile`]: the published runtime state (lock file, runtime dir, the
-//!   cross-process [`RuntimeMutex`], bind-and-publish).
-//! - [`peercred`]: kernel-reported peer credentials (uid/pid) and process
-//!   liveness.
-//! - [`attest`]: executable-identity attestation policy (self vs peer vs pid),
-//!   plus harness (parent) attestation for the trusted-client allowlist.
-//! - [`handshake`]: the HMAC challenge-response and browser-label validation.
-//! - [`rand`]: OS-CSPRNG secrets and hex encoding.
-//! - [`platform`]: the per-OS mechanisms (Linux `/proc` hashing + SO_PEERCRED,
-//!   macOS Security-framework code signing + LOCAL_PEERPID, Windows process
-//!   handles + BCrypt), kept in one file per OS so the policy modules above
-//!   stay free of scattered cfg-gates.
+//! Before the handshake, on Linux and macOS, each end kernel-attests the other ([`attest_peer`], ADR-0020): the
+//! peer must run the same executable image, so a different same-user program is rejected at accept. Windows
+//! has no image attestation (see SECURITY.md "Platform support") and relies on the handshake alone.
+//! ```text
+//! Linux  -> SHA256 of `/proc/<pid>/exe`
+//! macOS  -> code-directory hash of the running image via its kernel audit token (survives a re-open TOCTOU)
+//! ```
+//!
+//! The handshake is an HMAC-SHA256 challenge-response ([`server_handshake`] / [`client_handshake`]): a random
+//! nonce per connection, answered with HMAC(secret, nonce), so the secret never travels and a captured reply
+//! cannot replay.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod attest;

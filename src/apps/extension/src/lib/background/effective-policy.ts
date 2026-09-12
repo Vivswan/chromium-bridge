@@ -1,12 +1,12 @@
 // The ONE effective-policy resolution the enforcement sites consume (ADR-0032
-// decision 8, Lane S). Post-cutover: the host-pushed, verified, ratcheted
+// decision 8). Post-cutover: the host-pushed, verified, ratcheted
 // effective policy from policy-sync while ACTIVE. Pre-cutover: the legacy
 // chrome.storage settings, salvaged field-by-field exactly as the
 // pre-migration getSetting always did - the shipped legacy system,
 // byte-for-byte, now read through the permanent legacy-settings module
-// (settings.ts owns only the browser-owned fields since Phase 5).
+// (settings.ts owns only the browser-owned fields).
 //
-// STATE-TYPED (SFX-1): a blocked posture (awaitingBaseline / compromised) is
+// STATE-TYPED: a blocked posture (awaitingBaseline / compromised) is
 // NOT consumable as policy values - the sum type carries a reason instead of
 // a PolicyValues, so no caller can enforce against the deny-baseline
 // defaults outside the dispatch barrier. The invariant "POLICY_DEFAULTS only

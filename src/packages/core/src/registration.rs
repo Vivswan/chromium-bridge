@@ -1,33 +1,19 @@
-//! Native-messaging registration: the write/repair/remove engine behind
-//! `doctor --fix` and `uninstall`, and the API the app's registration
-//! buttons use. Browser locations come from the shared resolver in
-//! [`crate::browsers`], the same one `doctor` diagnoses with.
+//! Native-messaging registration: the write/repair/remove engine behind `doctor --fix` and `uninstall`, and the API
+//! the app's registration buttons use; browser locations come from [`crate::browsers`], the resolver `doctor`
+//! diagnoses with. Fail closed: `uninstall` removes only files this project verifiably wrote and `--fix` refuses to
+//! overwrite a manifest it cannot verify as ours (reported and left in place), which keeps OUR tooling from destroying
+//! someone else's registration but does not stop a same-user attacker who can write the user's config dirs directly
+//! (that boundary is the IPC layer's).
 //!
-//! A registration points at THIS binary (its resolved `current_exe`); nothing
-//! here builds, downloads, or copies anything, and the browser itself is
-//! never touched. Repairing is idempotent re-registration, so on a fresh
-//! machine `doctor --fix` IS the install.
-//!
-//! Fail-closed rules:
-//! - `uninstall` removes only files this project verifiably wrote. A manifest
-//!   that carries our filename but not our content is reported and left in
-//!   place, never deleted; so is one that cannot be read and verified.
-//! - `--fix` refuses to overwrite a manifest it cannot verify as ours.
-//! - Same-user attacker note: these files live in the user's own config dirs,
-//!   so a hostile same-user process could always write them directly; the
-//!   checks here exist to keep OUR tooling from ever destroying someone
-//!   else's registration or executing a swap we did not intend, not to stop
-//!   an attacker who already has the user's filesystem rights (that boundary
-//!   is enforced at the IPC layer, not here).
-//!
-//! Chrome's manifest has no `args` field, so on macOS/Linux each browser gets
-//! a tiny wrapper script baking in `--native-host --label <browser>`; the
-//! label rides the bridge handshake so one MCP server can address several
-//! browsers. On Windows, Chrome appends the extension origin to the command
-//! line (which selects native-host mode), so the manifest points straight at
-//! the binary and registration is an HKCU registry key. The Windows path
-//! compiles and mirrors what the retired `install.ps1` did, but still needs verification on a real
-//! Windows machine (see docs/cli.md).
+//! ```text
+//! target         -> THIS binary (current_exe); nothing is built, downloaded, or copied, and repairing is idempotent
+//!                   re-registration, so on a fresh machine `doctor --fix` IS the install
+//! macOS / Linux  -> Chrome's manifest has no `args` field, so each browser gets a wrapper script baking in
+//!                   `--native-host --label <browser>` (the label rides the bridge handshake, ADR-0022)
+//! Windows        -> Chrome appends the extension origin to the command line, which selects native-host mode, so the
+//!                   manifest points straight at the binary and registration is an HKCU registry key; compiles but is
+//!                   unverified on a real Windows machine (docs/cli.md)
+//! ```
 
 use std::fs;
 use std::io::Write;
@@ -446,8 +432,7 @@ fn split_shell_literal(line: &str) -> Option<Vec<String>> {
 /// bash shebang, optionally comment/blank lines, and exactly ONE payload
 /// line whose literal tokens are exactly
 /// `exec <path> --native-host [--label <valid-label>]` -- the trampoline
-/// shape this engine (and the retired `install.sh`) generates, and nothing that does
-/// more than launch the host.
+/// shape this engine generates, and nothing that does more than launch the host.
 fn wrapper_is_ours(contents: &str) -> bool {
     let mut lines = contents.lines();
     if lines.next() != Some(WRAPPER_SHEBANG) {
@@ -673,9 +658,6 @@ fn resolve_host_exe() -> std::io::Result<PathBuf> {
     Ok(exe)
 }
 
-/// Turn the parsed `--fix` targeting flags into concrete targets.
-/// Auto-detection finding no browser is an error with guidance, not a silent
-/// default.
 /// Resolve the typed `--fix` targeting mode into concrete targets. Unknown
 /// `--browser` keys were already refused at the CLI boundary
 /// ([`crate::cli::doctor_args`] parses them into [`Browser`]s), so the match

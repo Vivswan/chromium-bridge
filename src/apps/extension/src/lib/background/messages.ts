@@ -1,21 +1,12 @@
-// Runtime message router: handles requests from the popup / options page
-// (allowlist approve/add/remove/list, connection + enrollment status,
-// enrollment ceremony) and the confirmation window (confirm_*). The background
-// entrypoint installs the listener via registerRuntimeMessageRouter().
+// Runtime message router for the popup / options page and the confirmation window; the background entrypoint
+// installs it via registerRuntimeMessageRouter(). Every inbound message is parsed against RuntimeMsgSchema
+// first, and a malformed one is answered with a refusal, never interpreted loosely.
 //
-// Every inbound message is parsed against RuntimeMsgSchema before anything
-// acts on it: an unrecognized or malformed message is answered with a refusal
-// (never interpreted loosely), so the router only ever operates on shapes the
-// schema vouches for.
-//
-// SENDER GATING (#32, security-critical): EVERY message is refused unless it
-// comes from an extension page (fromExtensionPage), and confirm_* additionally
-// require the confirmation window specifically (fromConfirmPage). The content
-// script sends the router NOTHING; a content-script sender for any of these
-// would be a compromised renderer trying to reach the trust state, so it is
-// refused. This is what makes the #32 claim true for the MEDIATED path: without
-// it, a content script on an already-approved origin could add_allow{evil.com}
-// to seed the allowlist, or read keyId/fingerprint out of get_enrollment.
+// Sender gating is security-critical: the content script sends the router NOTHING, so a content-script sender
+// is a compromised renderer reaching for trust state. Without the gate a content script on an approved origin
+// could add_allow{evil.com} to seed the allowlist, or read keyId/fingerprint out of get_enrollment.
+//   any message   -> extension page only (fromExtensionPage)
+//   confirm_*     -> the confirmation window only (fromConfirmPage)
 
 import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium-bridge/shared";
 import type { Browser } from "wxt/browser";
@@ -66,15 +57,9 @@ function fromExtensionPage(sender: Browser.runtime.MessageSender): boolean {
   );
 }
 
-// The confirmation verdict may come ONLY from the confirmation window
-// itself - not merely any extension page - shrinking the surface that can
-// approve an action to the one document the service opened. Reuses
-// fromExtensionPage for the origin (a robust prefix check) and adds an EXACT
-// pathname match: a prefix test would also admit /confirm.htmlfoo or
-// /confirm.html/...; the query/hash stay free (the window carries ?id=...).
-// Deliberately does NOT compare url.origin, which is a real tuple origin in
-// Chrome for chrome-extension:// but an opaque "null" in some URL parsers -
-// pathname is scheme-independent and correct in both.
+// The verdict may come ONLY from the confirmation window, not any extension page. Exact pathname, not a prefix
+// (a prefix admits /confirm.htmlfoo and /confirm.html/...), and not url.origin, which some URL parsers render
+// as an opaque "null" for chrome-extension:// while pathname is correct in both; the query/hash stay free (?id=...).
 function fromConfirmPage(sender: Browser.runtime.MessageSender): boolean {
   if (!fromExtensionPage(sender) || typeof sender.url !== "string") return false;
   try {
@@ -98,10 +83,8 @@ export function route(
   sender: Browser.runtime.MessageSender,
   sendResponse: (response?: unknown) => void,
 ): boolean {
-  // #32 gate: refuse EVERY message from a non-extension-page sender. A content
-  // script sends the router nothing, so a content-script sender here is a
-  // compromised renderer reaching for trust state (the allowlist, the pin, the
-  // enrollment status). confirm_* is gated more strictly still, below.
+  // Refuse EVERY message from a non-extension-page sender: a content script sends the router nothing, so one
+  // here is a compromised renderer reaching for trust state. confirm_* is gated more strictly still, below.
   if (!fromExtensionPage(sender)) {
     sendResponse({ ok: false, error: "this action is only accepted from extension pages" });
     return false;
@@ -143,13 +126,9 @@ export function route(
       void requestKillStatus().then((r) => sendResponse(r));
       return true;
     case "set_kill":
-      // ADR-0030: engage the kill switch - ENGAGE-ONLY (ADR-0032 decision 6:
-      // the message schema pins on:true and the host refuses kill_release
-      // from the extension; release lives in the app/CLI). The
-      // page-can-NEVER-engage guarantee is the top-level gate above: only
-      // the extension's own pages reach this line, and the actual
-      // transition happens host-side (this only relays a control frame the
-      // host decides on and audits).
+      // ADR-0030: ENGAGE-ONLY (ADR-0032 decision 6: the schema pins on:true and the host refuses kill_release
+      // from the extension; release lives in the app/CLI). Only the extension's own pages reach this line (the
+      // gate above), and the host decides and audits the actual transition; this only relays a control frame.
       void engageKill().then((r) => sendResponse(r));
       return true;
     case "get_audit":
@@ -197,47 +176,26 @@ export function route(
       sendResponse(resolveConfirm(msg.id, msg.approved));
       return false;
     case "confirm_deny_kill": {
-      // The confirm window's panic exit (ADR-0030): deny everything pending,
-      // then engage the kill switch. One SW-side message, not two window-side
-      // sends, for two reasons that both matter:
-      // (a) ordering is airtight - denyAllConfirmations settles the in-flight
-      //     op false SYNCHRONOUSLY (and latches the queue and new arrivals to
-      //     auto-deny), before the kill frame is even posted, so no action
-      //     can race through while the brake is in flight (a hardware tap
-      //     landing after this line finds the confirmation already settled);
-      // (b) the deny tears the confirm window down (settle -> dismiss), and
-      //     a second message sent from that dying document could be lost -
-      //     here the engage lives in the SW and survives the teardown.
-      // engageKillSwitch (not engageKill) so an in-flight status query
-      // cannot cause the brake to be refused. Deny is always accepted
-      // (capability reduction; hardware payloads refuse only window-side
-      // APPROVALS); a stale id changes nothing - whatever is pending is
-      // denied and the engage still goes out. The host decides and audits
-      // the actual transition; the latch lifts per the rules below.
+      // The confirm window's panic exit (ADR-0030): deny everything pending, then engage the kill switch, as ONE
+      // SW-side message. denyAllConfirmations settles the in-flight op false synchronously and latches new arrivals
+      // to auto-deny before the kill frame is posted, so nothing races through while the brake is in flight; and the
+      // deny tears the confirm window down, so a second send from that dying document could be lost.
+      //   engageKillSwitch, not engageKill  -> an in-flight status query cannot get the brake refused
+      //   stale id                          -> changes nothing; whatever is pending is denied and the engage still goes out
+      //   deny                              -> always accepted (capability reduction); hardware payloads refuse only APPROVALS
       if (!fromConfirmPage(sender)) {
         sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
         return false;
       }
       const panicEpoch = denyAllConfirmations();
-      // The latch lifts on exactly two proofs, epoch-scoped so a stale
-      // release from an EARLIER panic can never lift this one's latch:
-      // - the kill state authoritatively reading alive again AFTER a
-      //   refusing state applied (host frames only, in pipe order): the
-      //   engage - or an equivalent cross-surface kill - landed, and the
-      //   alive that followed can only come from an explicit, presence-
-      //   gated release, which is precisely when confirmations may resume.
-      //   The stored mirror is never consulted directly: at panic time it
-      //   can read a stale "killed" while a pending release is about to
-      //   write "alive" with this engage still queued behind it;
-      // - the engage frame never reaching the pipe at all (port down or the
-      //   post itself failing) AND no other engage still outstanding (an
-      //   earlier panic's, or a reconnect re-post): only then is nothing in
-      //   flight, and the kill mirror (popup, options) tells the user the
-      //   truth. A TIMEOUT is neither proof - the posted frame may still
-      //   apply later - so it leaves the latch down, fail closed. Residual,
-      //   named: a host that stays silent forever leaves confirmations
-      //   denying until the SW restarts; that is the fail-closed reading of
-      //   "kill everything".
+      // The latch lifts on exactly two proofs, epoch-scoped so a stale release from an EARLIER panic cannot lift
+      // this one. The stored kill mirror is never consulted: at panic time it can read a stale "killed" while a
+      // pending release is about to write "alive" with this engage still queued behind it.
+      //   alive AFTER a refusing state applied (host frames, pipe order)  -> this engage, or an equivalent cross-surface kill, landed;
+      //                                                                      only a presence-gated release produces that alive
+      //   engage never reached the pipe AND no other engage outstanding   -> nothing is in flight; the kill mirror tells the user the truth
+      //   timeout                                                         -> neither proof (the frame may still apply); the latch stays down
+      // Residual: a host silent forever leaves confirmations denying until the SW restarts, the fail-closed "kill everything".
       void whenKillRevivesAfterRefusal().then(() => releasePanicDeny(panicEpoch));
       void engageKillSwitch().then((r) => {
         if (!r.ok && r.sent === false && !engageOutstanding()) {

@@ -1,8 +1,7 @@
 # moon workspace registry.
 #
-# moon is the canonical command interface (phase two of the moon adoption;
-# the justfile is gone): `moon run ci` is the gate, `moon query tasks` is the
-# menu, and CI runs moon tasks directly. proto (.prototools) provisions moon
+# moon is the canonical command interface: `moon run ci` is the gate, `moon query tasks`
+# is the menu, and CI runs moon tasks directly. proto (.prototools) provisions moon
 # itself. See docs/development.md ("moon: the canonical command interface").
 $schema: 'https://moonrepo.dev/schemas/workspace.json'
 
@@ -24,22 +23,11 @@ vcs:
   client: 'git'
   defaultBranch: 'main'
 
-# Keep generated/downloaded output out of every task hash. moon's native file
-# walk does not honor .gitignore (observed: the root project's '**/*' inputs
-# enumerated target/, build/, and the generated extension icons, and racing a
-# task that rewrites its own gitignored scratch dir mid-pipeline aborts the
-# run with a git hash error). This list mirrors the build-output entries in
-# .gitignore; every pattern is '**/'-prefixed because moon only reliably
-# matches these patterns with a leading '**'. Getting the list wrong is safe
-# in the direction that matters: a missing pattern can only over-invalidate
-# caches or fail a run loudly, never produce a stale cache hit. The OPPOSITE
-# drift is the dangerous one: a pattern here that matches a TRACKED source
-# file silently drops it from every hash (a real stale-cache hole). The
-# generic '**/build/**' and '**/tmp/**' entries are the risky ones - never
-# name a tracked source directory build/ or tmp/, and when adding a pattern
-# check `git ls-files | grep <pattern-ish>` matches nothing.
-# scripts/check-moon-hasher.ts (`moon run check-hasher`, part of the ci
-# gate) enforces exactly that: no tracked file may match any pattern below.
+# moon's file walk does not honor .gitignore, so build output is kept out of every task hash here;
+# each pattern is '**/'-prefixed because moon only reliably matches with a leading '**'.
+#   missing pattern                  -> over-invalidates or fails a run loudly
+#   pattern matching a TRACKED file  -> silently drops it from every hash (a stale-cache hole);
+#                                       scripts/check-moon-hasher.ts (`moon run check-hasher`, in the ci gate) refuses it
 hasher:
   ignorePatterns:
     - '**/node_modules/**'

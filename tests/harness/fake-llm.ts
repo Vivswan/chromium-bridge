@@ -1,37 +1,26 @@
 #!/usr/bin/env bun
 
-// Deterministic local fake LLM backend for the live tool-call probes in
-// tests/harness/run.ts: real harness CLIs (claude -p, codex exec) are pointed
-// here via their base-URL overrides, so a FULL model-driven MCP tool call
-// runs with zero credentials and zero model spend. The playback-scenario +
-// /_test introspection-route pattern follows the litellm-vscode-chat fake
-// stack; the code is written fresh for this repo.
+// Deterministic fake LLM backend for the live tool-call probes in tests/harness/run.ts: the harness CLIs
+// (claude -p, codex exec) are pointed here through their base-URL overrides, so a full model-driven MCP tool
+// call runs with zero credentials and zero model spend. Node builtins only, like run.ts: the suite must run
+// without a `bun install`.
 //
-// The scenario is content-addressed, not turn-counted, so it stays
-// deterministic across harness retries and auxiliary model calls (topic
-// detection, title generation, token counting):
+// The scenario is content-addressed, not turn-counted, so harness retries and auxiliary calls (topic detection,
+// title generation, token counting) cannot shift it:
+//   messages carry a tool result              -> plain final text, ending the agent run
+//   request advertises the bridge's tab_list  -> a tool call invoking it (the exact advertised name) with {} arguments
+//   anything else                             -> a trivial text reply
 //
-//   1. a request whose messages carry a TOOL RESULT gets plain final text
-//      (ending the agent run);
-//   2. otherwise, a request advertising the bridge's tab_list tool gets a
-//      tool call invoking it (the exact advertised name) with {} arguments;
-//   3. anything else gets a trivial text reply.
-//
-// Routes:
 //   POST /v1/messages                Anthropic Messages API (Claude Code)
 //   POST /v1/messages/count_tokens   fixed count (aux)
 //   GET  /v1/models                  minimal model list (aux)
-//   POST /v1/responses               OpenAI Responses API (codex; its 0.146+
-//                                    config refuses wire_api "chat" outright)
+//   POST /v1/responses               OpenAI Responses API (codex 0.146+ refuses wire_api "chat" outright)
 //   POST /v1/chat/completions        OpenAI Chat Completions (generic clients)
 //   GET  /health                     liveness
 //   GET  /_test/requests             every recorded request, for the driver's asserts
+//   anything else                    recorded and answered 404, so a harness probing a new endpoint shows up here
 //
-// Unknown routes are recorded too (and answer 404): a harness release that
-// starts probing a new endpoint shows up in /_test/requests instead of
-// vanishing. Binds 127.0.0.1 on an ephemeral port; --portfile <path> writes
-// the bound port for the driver. Node builtins only, like run.ts: the suite
-// must run without a `bun install`.
+// Binds 127.0.0.1 on an ephemeral port; --portfile <path> writes the bound port for the driver.
 
 import { renameSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";

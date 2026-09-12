@@ -1,34 +1,10 @@
-// Generate the contract-derived TypeScript from the Rust core, the canonical
-// contract source (ADR-0028). Runs the core's `emit_contract` example to get
-// the contract as JSON, then writes the src/packages/shared *.gen.ts modules.
-// Run `moon run gen` after editing the catalogue/taxonomy in src/packages/core; CI
-// regenerates and fails if the checked-in files are stale.
+// Generate the contract-derived TypeScript from the Rust core, the canonical contract source (ADR-0028), by
+// running the core's emitter examples. Run `moon run gen` after editing the catalogue, taxonomy, enclave, or
+// policy module in src/packages/core; CI regenerates and fails on a stale diff.
 //
-// Outputs:
-//   src/packages/shared/src/ops.gen.ts       - tool catalogue: op names, policy
-//     metadata, per-op Zod arg validators (BridgeCommand is inferred from
-//     them), and the OpArgs union schema for the request envelope.
-//   src/packages/shared/src/errors.gen.ts    - the stable cross-process error
-//     codes and their metadata (category, retryable, default message).
-//   src/packages/shared/src/protocol.gen.ts  - the internal bridge protocol
-//     version and the capability groupings for connection-time negotiation.
-//   src/packages/shared/src/identity.gen.ts  - the pinned extension ID (derived
-//     from the manifest key, Chrome's own id derivation), the manifest key
-//     itself (injected into the manifest by src/apps/extension/wxt.config.ts), and the
-//     native-messaging host id.
-//   src/packages/shared/src/audit.gen.ts     - the extension-owned audit kinds
-//     the host forwards into its on-disk trail (the audit_event whitelist).
-//   src/packages/shared/src/enclave.gen.ts   - the enclave signing contract:
-//     domain-separation strings, challenge field bounds, key/signature byte
-//     lengths, and the enclave_error reason-code union.
-//   src/packages/shared/src/enclave-fixture.gen.ts - golden vectors for the
-//     signed-message encoding: Rust-built message bytes and deterministic
-//     software-P256 proofs the extension's test suite replays through its
-//     WebCrypto verifier.
-//   src/packages/shared/src/policy.gen.ts    - the host-owned policy contract
-//     (ADR-0032): the signing domain, the field catalogue with per-field
-//     permissive directions, the strict document/values validators, the
-//     deny-baseline defaults, and the per-field salvage helper.
+//   emit_contract          -> ops.gen.ts, errors.gen.ts, protocol.gen.ts, identity.gen.ts, audit.gen.ts
+//   emit_enclave_contract  -> enclave.gen.ts, enclave-fixture.gen.ts
+//   emit_policy_contract   -> policy.gen.ts
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -291,15 +267,9 @@ const errorMeta = contract.errors
 const errorsOut = `// GENERATED from the Rust core (src/packages/core/src/error.rs ERROR_SPECS) by
 // scripts/gen-ops.ts - DO NOT EDIT. Edit the taxonomy, then run \`moon run gen\`.
 //
-// The stable error codes of the cross-process taxonomy. Today only the Rust
-// server assigns them, and only a subset: CallError failures map to their
-// codes via CallError::code(). The extension reports its failures as
-// free-form strings (see port.ts sendResponse), which the host surfaces as
-// EXECUTION_FAILED. Of the unassigned codes, PROTOCOL_MISMATCH awaits the
-// version/capability handshake wiring (docs/compatibility.md); the others
-// would need structured error reporting from the extension in place of
-// those free-form strings. These constants exist for TS consumers of the
-// taxonomy and are currently unconsumed.
+// Only the Rust server assigns these codes today: the extension reports its failures as free-form strings
+// (port.ts sendResponse), which the host surfaces as EXECUTION_FAILED, so nothing on the TS side consumes them
+// yet. PROTOCOL_MISMATCH awaits the version/capability handshake wiring (docs/compatibility.md).
 
 export const ERROR_CODES = [
   ${errorCodes},
@@ -691,18 +661,13 @@ const fixtureOut = `// GENERATED from the Rust core (examples/emit_enclave_contr
 // src/packages/core/src/enclave/) by scripts/gen-ops.ts - DO NOT EDIT.
 // Run \`moon run gen\`.
 //
-// Golden vectors pinning the cross-language enclave crypto contract: each
-// message is built by the Rust challenge_message/presence_message and each
-// signature is a deterministic (RFC 6979) software-P256 proof routed through
-// the host's DER -> P1363 converter, over the PUBLIC fixture key. The
-// extension test suite replays these through its WebCrypto verifier
-// (tests/background/enclave-golden.test.ts), so a Rust-side encoding change
-// regenerates this file (check-gen) and a lagging TS verifier fails the
-// replay. The key protects nothing and is deny-listed as an enrollment
-// identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
+// Golden vectors pinning the cross-language enclave crypto contract: Rust-built message bytes signed with
+// deterministic (RFC 6979) software-P256 signatures, replayed by tests/background/enclave-golden.test.ts through
+// the extension's WebCrypto verifier, so a Rust-side encoding change that outruns the TS verifier fails the
+// replay. The key protects nothing and is deny-listed as an enrollment identity on both sides
+// (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
 //
-// Test-only data: import it via "@chromium-bridge/shared/testing", never
-// from the production barrel.
+// Test-only data: import it via "@chromium-bridge/shared/testing", never from the production barrel.
 
 export interface EnclaveGoldenVector {
   /** Which domain-separation prefix the message was built under. */
@@ -935,15 +900,10 @@ const policyOut = `// GENERATED from the Rust core (src/packages/core/src/policy
 // scripts/gen-ops.ts - DO NOT EDIT. Edit the policy module, then run
 // \`moon run gen\`.
 //
-// The host-owned policy contract, TS side (ADR-0032): the signing domain,
-// the field catalogue with each field's declared permissive direction, the
-// strict Zod validators for the signed document and its detached values,
-// the deny-baseline defaults, the strict stored-policy parser, and the
-// import-bag salvage helper. The
-// extension recomputes every relax/restrict comparison from the direction
-// table itself - it never trusts a host's claim about which way a change
-// points - and verifies signed baselines under POLICY_DOMAIN against its
-// pinned key before strict-parsing the same bytes with PolicyDocSchema.
+// The host-owned policy contract, TS side (ADR-0032). The extension recomputes every relax/restrict
+// comparison from the direction table itself, never trusting a host's claim about which way a change points,
+// and verifies a signed baseline under POLICY_DOMAIN against its pinned key before strict-parsing the same
+// bytes with PolicyDocSchema.
 
 import { z } from "zod";
 
@@ -1057,19 +1017,13 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032
- * decision 8 / phase 4): the snapshotted chrome.storage bag rides
- * \`legacy_settings\` to the app's first-run import screen, where a corrupt
- * field falling back to its deny-baseline default is SHOWN to the user and
- * signed under their tap - never silently enforced. A value that fails its
- * own schema falls back to that field's default without discarding the
- * healthy fields around it, and unknown keys are dropped.
+ * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032 decision 8): a corrupt field in the
+ * snapshotted chrome.storage bag falls back to its deny-baseline default, and the app's first-run import
+ * screen SHOWS that fallback to the user, who signs it under their tap; it is never silently enforced.
  *
- * NEVER parse the stored effective policy with this. Per-field default
- * fallback moves a corrupt field toward its permissive pole relative to a
- * user-restricted policy - a relaxation lever made of garbage, exactly the
- * "garbage in, defaults out" behavior ADR-0032 decision 4 forbids. The
- * stored effective policy is read with parseStoredPolicyValues below.
+ * NEVER parse the stored effective policy with this: a per-field default fallback moves a corrupt field
+ * toward its permissive pole relative to a user-restricted policy, the "garbage in, defaults out" relaxation
+ * ADR-0032 decision 4 forbids. The stored effective policy is read with parseStoredPolicyValues below.
  */
 export function salvagePolicyValues(stored: unknown): PolicyValues {
   const bag: Record<string, unknown> =
@@ -1083,13 +1037,10 @@ export function salvagePolicyValues(stored: unknown): PolicyValues {
 }
 
 /**
- * Strict parse of the extension's stored effective policy - phase 3's
- * ratchet anchor and every stored-effective read use THIS. Returns the
- * exact values on a valid bag and \`null\` on ANY failure (a corrupt field,
- * a non-object, an extra key). \`null\` means "no stored effective": the
- * deny baseline applies and there is no ratchet state to anchor on
- * (ADR-0032 decision 4) - never a salvage, which would hand a corrupted
- * store a relaxation.
+ * Strict parse of the extension's stored effective policy: \`null\` on ANY failure (a corrupt field, a
+ * non-object, an extra key), never a salvage, which would hand a corrupted store a relaxation. Its caller,
+ * policy-sync.ts classifyStored, reads null as CORRUPT, never absent: the state resolves to compromised, every
+ * enforcement read refuses, and no replacement push lands while the record stays corrupt (ADR-0032 decision 4).
  */
 export function parseStoredPolicyValues(stored: unknown): PolicyValues | null {
   const parsed = PolicyValuesSchema.safeParse(stored);

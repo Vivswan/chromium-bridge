@@ -52,7 +52,7 @@ const REQ = {
   detail: "return 1;",
   timeoutMs: 5000,
   presenceRouting: false,
-  // The decision-start epoch (SFX-2), captured the way a real caller does.
+  // The decision-start epoch, captured the way a real caller does.
   // This suite never panics, so the module's epoch never moves.
   panicEpoch: currentPanicEpoch(),
 };

@@ -58,9 +58,8 @@ pub fn nm_read_frame<R: Read>(r: &mut R) -> io::Result<Option<Value>> {
     Ok(Some(value))
 }
 
-/// Write one native-messaging frame to `w`: 4-byte LE length prefix + JSON.
-/// Aborts (panic→abort via Cargo profile) if the payload exceeds 1 MB; caller
-/// should check size before serializing large data. Flushes after writing.
+/// Write one native-messaging frame to `w`: 4-byte LE length prefix + JSON, flushed. A payload over
+/// [`NM_MAX_OUTGOING`] is refused as `InvalidData` before anything is written, since Chrome would close the port.
 pub fn nm_write_frame<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
     let json = serde_json::to_vec(value)?;
     if json.len() > NM_MAX_OUTGOING {
@@ -161,7 +160,7 @@ impl JsonRpc {
 pub const MCP_MAX_LINE: usize = 64 * 1024 * 1024;
 
 /// Read one NDJSON line from `r` and parse it as JSON-RPC. Returns `Ok(None)`
-/// on EOF (client gone → shut down). The line is bounded to [`MCP_MAX_LINE`];
+/// on EOF (client gone -> shut down). The line is bounded to [`MCP_MAX_LINE`];
 /// an overrun fails closed with `InvalidData` rather than buffering unbounded.
 pub fn mcp_read<R: io::BufRead>(r: &mut R) -> io::Result<Option<JsonRpc>> {
     mcp_read_capped(r, MCP_MAX_LINE)
@@ -253,23 +252,11 @@ pub const MCP_META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCa
 /// result's `serverInfo` field.
 pub const MCP_META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 
-/// The INTERNAL bridge protocol version (MCP server <-> native host <->
-/// extension). This is NOT the MCP JSON-RPC version (that is the date string
-/// [`MCP_PROTOCOL_VERSION`], see docs/adr/0034) and NOT the extension release version
-/// (Cargo is the release version source). It is a small monotonically
-/// increasing integer, bumped only when the bridge wire contract
-/// ([`BridgeReq`]/[`BridgeResp`] shape, hello handshake, op/capability
-/// semantics) changes incompatibly.
-///
-/// Intended compatibility handshake (design; layered on the hello
-/// authentication of docs/adr/0002): on connect, the native host -> MCP
-/// server exchange carries `{hello, protocolVersion, capabilities[]}` - after
-/// the secret is validated, the extension advertises its available capability
-/// ids (see [`crate::tools::CAPABILITIES`]) and its protocol version. On an
-/// incompatible version the server rejects the connection with the
-/// `PROTOCOL_MISMATCH` error (see `error::ERROR_SPECS`) instead of accepting
-/// it and surfacing a confusing "unknown op" later; a tool whose required
-/// capability is not advertised is rejected up front the same way.
+/// The INTERNAL bridge protocol version (MCP server <-> native host <-> extension): a small integer bumped only
+/// when the bridge wire contract ([`BridgeReq`]/[`BridgeResp`] shape, hello handshake, op/capability semantics)
+/// changes incompatibly. Not the MCP JSON-RPC revision ([`MCP_PROTOCOL_VERSION`]) and not the release version
+/// (Cargo). No connection-time check compares it yet: `PROTOCOL_MISMATCH` (`error::ERROR_SPECS`) awaits the
+/// version/capability handshake wiring (docs/compatibility.md).
 pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;
 
 /// The bridge authentication handshake, exchanged as two NDJSON frames right
@@ -313,17 +300,10 @@ pub struct HarnessId {
     pub name: Option<String>,
 }
 
-/// The role-declaration frame a peer sends over the bridge socket immediately
-/// after the HMAC handshake, before any session traffic. It tells the broker
-/// which kind of peer this is: a Chrome-spawned native host fronting a browser,
-/// or a sibling MCP-server instance relaying its harness's tool calls. Reading
-/// exactly one of these after the handshake is mandatory and fail-closed: an
-/// EOF or a malformed frame drops the connection. See ADR-0024.
-///
-/// `Browser` is an empty struct variant (not a unit variant) because serde
-/// silently skips `deny_unknown_fields` for unit variants of internally
-/// tagged enums; the empty-struct form serializes identically and rejects
-/// extra fields.
+/// The role-declaration frame a peer sends over the bridge socket right after the HMAC handshake (ADR-0024); reading
+/// exactly one is mandatory and fail-closed: EOF or a malformed frame drops the connection. `Browser` is an empty
+/// struct variant, not a unit variant: serde silently skips `deny_unknown_fields` for unit variants of internally
+/// tagged enums, and the empty-struct form serializes identically while rejecting extra fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "attach", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AttachRequest {
@@ -359,32 +339,21 @@ pub enum AttachReply {
     Unavailable { reason: String },
 }
 
-/// A request from the MCP server to the extension, exchanged over the
-/// localhost TCP socket as newline-delimited JSON. Carries an `id` the
-/// extension echoes back so we can correlate (the socket is one-shot per
-/// request/response today, but the id future-proofs multiplexing).
-///
-/// `deny_unknown_fields` guards the envelope only; `args` stays free-form
-/// (it is validated per-op downstream against the tool catalogue). This
-/// makes adding an envelope field a breaking protocol change - an older
-/// peer rejects the frame rather than misreading it - so new per-op data
-/// belongs inside `args`, and a new envelope field needs a protocol-version
-/// bump.
+/// A request from the MCP server to the extension, newline-delimited JSON over the bridge socket. `deny_unknown_fields`
+/// guards the envelope only (`args` stays free-form, validated per-op against the tool catalogue), so adding an
+/// envelope field is a breaking protocol change an older peer rejects rather than misreads: new per-op data belongs
+/// inside `args`, a new envelope field needs a version bump.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct BridgeReq {
-    /// Correlation id, echoed back on the matching [`BridgeResp`]. Assigned
-    /// only by the MCP server (a monotonic `AtomicU64` counter starting at
-    /// 0), so every id that legitimately appears is a small non-negative
-    /// integer - far inside the JS-safe integer bound the extension's Zod
-    /// validator enforces. The extension side stays deliberately wider
-    /// (integer-or-string, for forward compatibility); this side stays
-    /// narrow on purpose: a string id can only come from a misbehaving peer,
-    /// and rejecting it is fail-closed. Widening would also thread a new id
-    /// type through the correlation maps in `session.rs` - if a string id
-    /// ever becomes real, that is a deliberate protocol change, not a parse
-    /// tweak.
+    /// Correlation id, echoed on the matching [`BridgeResp`]. Only the MCP server assigns it (a monotonic `AtomicU64`
+    /// counter in `session.rs`), so a string id can only come from a misbehaving peer and rejecting it is fail-closed.
+    ///
+    /// ```text
+    /// extension's validator -> stays wider (integer-or-string) for forward compatibility
+    /// widening here         -> threads a new id type through the correlation maps: a protocol change, not a parse tweak
+    /// ```
     pub id: u64,
     pub op: String,
     /// Optional target tab, `tabId` on the wire (the contract and the
@@ -443,18 +412,15 @@ impl BridgeResp {
     }
 }
 
-/// A [`BridgeResp`] parsed past its flat wire shape into the two states a
-/// response can actually be in: success with data, or failure with an error.
-/// The flat `{ ok, data?, error? }` triple stays the pinned wire contract
-/// (ADR-0028: the Zod validators and the envelope schema are derived from
-/// [`BridgeResp`]), but it can spell contradictions - `ok: true` with an
-/// `error`, `ok: false` with `data`, or a bare `ok: false` claiming failure
-/// with no error - and the attested-but-untrusted extension must not be able
-/// to hand the session a response it has to re-interpret. Parsing goes
-/// through [`TryFrom<BridgeResp>`] (wired into serde via `try_from`), so a
-/// contradictory frame is refused at the read boundary as `InvalidData` -
-/// the session drops the offending connection, fail closed - and everything
-/// downstream matches on `outcome` with no mixture left to misread.
+/// A [`BridgeResp`] parsed into the two states a response can be in: success with data, or failure with an error.
+/// The flat `{ ok, data?, error? }` triple stays the pinned wire contract (ADR-0028 derives the Zod validators and
+/// the envelope schema from [`BridgeResp`]) but can spell contradictions, and the attested-but-untrusted extension
+/// must not hand the session a response it has to re-interpret.
+///
+/// ```text
+/// contradictory frame -> serde's try_from refuses it at the read boundary as InvalidData; the session drops that
+///                        connection, and everything downstream matches on `outcome` alone
+/// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "BridgeResp")]
 pub struct ParsedResp {
@@ -499,14 +465,10 @@ impl TryFrom<BridgeResp> for ParsedResp {
     }
 }
 
-/// Read/write bridge messages as NDJSON lines over a TCP stream.
-///
-/// The read is bounded to [`BRIDGE_MAX_LINE`] bytes per line (including the
-/// trailing newline), the same 64 MB order of magnitude [`nm_read_frame`]
-/// clamps inbound frames to. `bridge_read` runs only after the peer is
-/// attested, but zero trust means even an attested peer must not be able to
-/// exhaust memory by sending one newline-less line, so the line is capped
-/// rather than trusting the peer to terminate it.
+/// Read/write bridge messages as NDJSON lines over the bridge socket, each read bounded to [`BRIDGE_MAX_LINE`] bytes
+/// (including the trailing newline), the same 64 MB order of magnitude [`nm_read_frame`] clamps inbound frames to.
+/// `bridge_read` runs only after the peer is attested, but zero trust means even an attested peer must not be able to
+/// exhaust memory by sending one newline-less line, so the line is capped rather than trusting the peer to terminate it.
 pub const BRIDGE_MAX_LINE: usize = 64 * 1024 * 1024;
 
 pub fn bridge_read<R: io::BufRead, T: for<'de> Deserialize<'de>>(
@@ -599,12 +561,12 @@ pub fn ignore_sigpipe() {
 #[cfg(test)]
 mod tests;
 
-/// Property-based (`proptest`) coverage of the parsing boundary. Three
-/// families, matching the fuzzing item on the roadmap:
-///   1. Roundtrip - `write` then `read` recovers the original payload.
-///   2. Never-panics - arbitrary bytes fed to a reader return `Ok`/`Err` but
-///      never panic (the key robustness guarantee for a security boundary).
-///   3. Size guard - any length prefix above the cap is always rejected,
-///      before any unbounded allocation or read.
+/// Property-based (`proptest`) coverage of the parsing boundary:
+///
+/// ```text
+/// roundtrip     -> `write` then `read` recovers the original payload
+/// never-panics  -> arbitrary bytes return `Ok`/`Err`, never panic
+/// size guard    -> any length prefix above the cap is rejected before any allocation or read
+/// ```
 #[cfg(test)]
 mod proptests;

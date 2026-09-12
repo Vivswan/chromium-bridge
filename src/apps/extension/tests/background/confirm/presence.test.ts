@@ -444,18 +444,9 @@ describe("EnclavePresenceProvider verdicts", () => {
   });
 });
 
-// The codex-vs-Opus adjudication (stale port after a FAILED re-entrant
-// connect, where port.ts fires no local onDisconnect). teardownLink's
-// presence-facing action on the connected branch is exactly detachPort();
-// this exercises that action and lets the code decide who is right.
-//
-// Verdict: the round DENIES. detachPort cancels the outstanding round
-// synchronously at teardown, so a later cryptographically valid proof finds
-// nothing to approve. Pre-fix, teardownLink did NOT call detachPort, so
-// presence stayed in its happy-path state (module port still the old
-// attachment, round still pending) and the same valid proof APPROVED while
-// the link was down - codex's bug was real; the fix (detachPort in teardown,
-// plus the inbound identity gate in port.ts) is what closes it.
+// The stale-port case: a FAILED re-entrant connect, where port.ts fires no local onDisconnect and teardownLink's
+// only presence-facing action is detachPort(). Without that call the round stayed pending with the old port
+// still attached, and a cryptographically valid proof APPROVED while the link was down.
 describe("adjudication: a valid proof after teardown cannot approve", () => {
   test("detachPort at teardown denies a subsequently delivered valid proof", async () => {
     const key = await genKey();
@@ -574,7 +565,7 @@ describe("service routing and the window-approval refusal", () => {
     await vi.waitFor(() => expect(display.shown.length).toBe(1));
     const shown = first(display.shown);
     expect(isHardwareGated(shown)).toBe(false);
-    // The window Allow works, as before Phase 8.
+    // The window Allow works, as it does without the hardware presence gate.
     expect(resolveConfirm(shown.id, true).ok).toBe(true);
     expect(await result).toBe(true);
   });

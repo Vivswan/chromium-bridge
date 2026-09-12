@@ -57,24 +57,17 @@ type Frame = Record<string, unknown>;
 
 const entry: Frame = { name: "codex", anchor: { kind: "hash", value: "abc123" } };
 
-// One representative valid frame per generated schema, plus which of its
-// fields are required. The generic harness below derives the hostile
-// variants from these. `freeForm` names the fields the CONTRACT leaves
-// unconstrained (BridgeReq.args is validated per-op downstream, and
-// BridgeResp.data varies per op), so type confusion on them is legal at this
-// layer - the args narrowing is the R3 asymmetry, pinned below. `enforced`
-// is the wrapped validator the extension actually runs: it must refuse the
-// same missing-required and type-confused frames as the base (a wrapper
-// override that silently coerces - z.preprocess and friends - is invisible
-// to the schema-derived parity gate, so it is caught HERE, behaviorally).
-// `enforcedStringOk` names the fields where a string is legal on the
-// enforced side only (the id's pinned forward-compat arm). `enforcedStrict`
-// marks the wrapped validators that must ALSO refuse unknown fields (the
-// envelopes; the control frames are R5-loose, pinned below).
-// `enforcedRequired` names fields the WRAPPER requires beyond the wire base
-// (a pinned refinement: policy_current's ok-split requires baseline on the
-// ok:true arm) - the minimal-frame probe keeps them for the enforced parse
-// and proves dropping each fails the enforced side only.
+// One representative valid frame per generated schema; the harness below derives the hostile variants. The
+// wrapped validator runs too: a wrapper that silently coerces (z.preprocess) is invisible to the parity gate
+// and is caught only here, behaviorally.
+//   freeForm          -> fields the CONTRACT leaves unconstrained (BridgeReq.args is validated per-op
+//                        downstream, BridgeResp.data varies per op), so type confusion on them is legal here
+//   enforced          -> the wrapped validator the extension actually runs
+//   enforcedStringOk  -> fields where a string is legal on the enforced side only (the id's forward-compat arm)
+//   enforcedStrict    -> wrapped validators that must ALSO refuse unknown fields (the envelopes; the control
+//                        frames are R5-loose, pinned below)
+//   enforcedRequired  -> fields the WRAPPER requires beyond the base (policy_current's ok:true arm needs
+//                        baseline); the minimal-frame probe keeps them and proves dropping each fails only there
 const WIRE_CASES: ReadonlyArray<{
   name: string;
   schema: z.ZodType;
@@ -278,7 +271,7 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
   }
 
   test("policy_current reason: wire accepts any string, the wrapper pins the enum", () => {
-    // ADR-0032 D-P4-2: the generated wire base is faithful to the host's
+    // The generated wire base is faithful to the host's
     // Option<String>, but the enforced wrapper narrows reason to the
     // {absent,damaged,unreadable} enum the send-once gates on. An out-of-enum
     // string is accepted by the base and refused by the wrapper (fail closed),
@@ -309,7 +302,7 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
     // wire every field is an Option, so the base ACCEPTS these; the wrapper's
     // superRefine refuses everything outside the two shapes into_frame emits
     // - mixtures of the arms, and an arm missing its mandatory field. The
-    // Phase-4 send-once gates on `ok === false && reason === "absent"`, so a
+    // legacy-settings send-once gates on `ok === false && reason === "absent"`, so a
     // reason must never ride a frame that also claims success.
     const outsideTheSplit = [
       // Mixtures: a field from the other arm.

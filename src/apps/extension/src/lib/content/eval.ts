@@ -47,11 +47,11 @@ function serializeResult(value: unknown, seen = new WeakSet<object>(), depth = 0
   if (typeof value === "symbol") return `[Symbol:${value.toString()}]`;
   if (typeof value === "function") return `[function:${value.name || "anonymous"}]`;
   if (typeof value === "object") {
-    // Error → structured
+    // Error -> structured
     if (value instanceof Error) {
       return { __error: true, name: value.name, message: value.message };
     }
-    // DOM node → short tag descriptor
+    // DOM node -> short tag descriptor
     if (value instanceof Element) {
       const id = value.id ? `#${value.id}` : "";
       return `<${value.tagName.toLowerCase()}${id}>`;

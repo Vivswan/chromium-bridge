@@ -8,8 +8,9 @@
 //   2. EVERY call shows a confirmation on the extension-owned surface
 //      (ADR-0027) displaying the exact file path before anything is attached.
 //      There is no grace window - every upload reconfirms, like page_eval.
-//      Phase 8 routes this same confirmation through the host's Secure
-//      Enclave user-presence gate (Touch ID).
+//      On a capable, enrolled device with the touchIdConfirm policy on, this
+//      same confirmation routes through the host's Secure Enclave user-presence
+//      gate (Touch ID).
 //
 // The path is shown UNMASKED in the confirmation on purpose: the user must see
 // exactly which local file would leave their disk.
@@ -37,7 +38,7 @@ export async function pageUpload(
   panicEpoch: number,
 ): Promise<unknown> {
   // ONE policy snapshot and ONE decision-start panic epoch for the whole
-  // decision (ADR-0032 decision 4, SFX-2): dispatch captures both at the
+  // decision (ADR-0032 decision 4): dispatch captures both at the
   // decision's true start, before its first await, and threads them in; the
   // REQUIRED parameters are what hold the invariant (tests start their own
   // decisions via withFreshPolicy plus currentPanicEpoch()).

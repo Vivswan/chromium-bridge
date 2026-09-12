@@ -73,24 +73,14 @@ export function resetClickGraceWindow(): void {
 }
 
 /**
- * Gate a page op before the backend acts. Throws to refuse:
- * - the user denied (or never answered) a confirmation;
- * - a policy gate is off (page_eval disabled).
- * Ops with no gate return an empty preflight immediately. The returned value
- * still has to pass through bindOrigin before any backend accepts it.
+ * Gate a page op before the backend acts; throws to refuse (the user denied or never answered, or a
+ * policy gate is off). Ops with no gate return an empty preflight, and every result still has to pass
+ * through bindOrigin before a backend accepts it.
  *
- * The whole preflight runs under the ONE policy snapshot AND the ONE
- * decision-start panic epoch the caller threads in (ADR-0032 decision 4,
- * SFX-2): dispatch captures both beside each other at the decision's true
- * start, BEFORE its first await; tests start their own decisions via
- * withFreshPolicy plus currentPanicEpoch(). Both parameters are REQUIRED,
- * so the one-snapshot-per-decision invariant is held by the signature, not
- * by convention: a policy push landing mid-confirmation - the prompt can
- * hold this open for tens of seconds - cannot alter this decision's gates,
- * grace window, or timeouts; it applies from the next decision on. And a
- * deny-kill that crossed the decision anywhere - even before this preflight
- * was reached - denies every confirmation raised below on the epoch
- * mismatch.
+ * `policy` and `panicEpoch` are REQUIRED so the one-snapshot-per-decision invariant (ADR-0032 decision 4)
+ * is held by the signature: dispatch captures both at the decision's true start, BEFORE its first await.
+ *   policy push landing mid-confirmation  -> cannot alter this decision's gates, grace window, or timeouts; applies from the next decision
+ *   deny-kill crossing the decision        -> every confirmation raised below denies on the epoch mismatch
  */
 export async function preflightPageOp(
   op: PageOp,

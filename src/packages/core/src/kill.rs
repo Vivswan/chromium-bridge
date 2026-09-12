@@ -1,64 +1,31 @@
-//! The global kill switch (ADR-0030): one fail-closed latch that halts ALL
-//! bridge activity until a trusted surface explicitly releases it.
+//! The global kill switch (ADR-0030): one fail-closed latch that halts ALL bridge activity until a trusted
+//! surface explicitly releases it.
 //!
-//! ## Where the state lives
+//! The latch is the `killed` flag in `runtime_dir()/revocation.json` ([`crate::revocation::Revocation`]), flipped
+//! by [`engage`] / [`release`] in one atomic write with an epoch bump and the `kill_epoch` marker. Unlike the
+//! revocation epoch, the latch IS the authority: every enforcement point that already reads that record
+//! fail-closed reads the kill state the same way, and no reader can observe a kill without the epoch bump.
 //!
-//! The latch is the `killed` flag in `runtime_dir()/revocation.json`
-//! ([`crate::revocation::Revocation`]), flipped by [`engage`] / [`release`]
-//! in one atomic write together with an epoch bump (and the `kill_epoch`
-//! marker observers watch). Unlike the revocation epoch, the latch IS the
-//! authority: there is no second file to re-read. Riding in the atomically
-//! written revocation record buys two things for free: every enforcement
-//! point that already reads that record fail-closed now reads the kill state
-//! the same way, and no reader can ever observe a kill without the epoch bump
-//! that announces it.
+//! Enforcement points, each failing closed on an unreadable record:
 //!
-//! ## Enforcement points
+//! ```text
+//! tool dispatch (`crate::mcp::handler`)       -> `check` first; refused with `BRIDGE_KILLED`, and the harness
+//!                                                connection stays up so the refusal is delivered
+//! the broker's browser leg (`crate::broker`)  -> live connections severed within one watcher tick; attaches refused
+//! the native host (`crate::native_host`)      -> control-plane only: kill/status frames work, release is refused
+//! the extension                               -> mirrors the state in SW-only trusted storage; the host is authoritative
+//! ```
 //!
-//! - **Tool dispatch** ([`crate::mcp::handler`]): every `tools/call`
-//!   from every harness (the broker's own and every relay) passes [`check`]
-//!   first; while killed (or the state is unreadable) the call is answered
-//!   with the stable `BRIDGE_KILLED` taxonomy code, fail closed, and the
-//!   harness connection stays up so the refusal is *delivered* rather than
-//!   the server dying opaquely.
-//! - **The broker's browser leg**: a kill severs every live browser
-//!   connection within one watcher tick ([`crate::broker`]), and browser
-//!   attaches are refused while killed, so no path to a browser exists even
-//!   if a dispatch bug were found.
-//! - **The native host** runs a control-plane-only mode while killed
-//!   ([`crate::native_host`]): no bridge traffic, but the extension's
-//!   kill/status control frames keep working, so its mirror tracks the state
-//!   (release requests are refused there - ADR-0032 decision 6 retired the
-//!   extension release surface).
-//! - **The extension** mirrors the state into its #32 SW-only trusted storage
-//!   and refuses ops locally while killed (defense in depth; the host side is
-//!   authoritative).
+//! Nothing clears the latch on its own: no timeout, restart, or reconnect. Only [`release`], reached from
+//! `chromium-bridge unkill` and the desktop app (ADR-0032 decision 6 retired the extension release surface), and
+//! it demands a [`crate::presence::PresenceAttestation`], so the user-presence ladder must have run
+//! ([`crate::presence`]). Every release, granted or refused, is audited with the auth path that decided it. A corrupt
+//! record refuses BOTH directions ([`crate::revocation::set_killed_locked`]): an unkill from an unknown state would
+//! be a fail-open.
 //!
-//! ## Unkill is explicit, user-present, never automatic
-//!
-//! Nothing in the bridge clears the latch on its own -- no timeout, no
-//! restart, no reconnect. Only [`release`], reached from the CLI
-//! (`chromium-bridge unkill`; ADR-0032 decision 6 made it the ONLY release
-//! surface) -- and `release` demands a
-//! [`crate::presence::PresenceAttestation`], so no path can clear the latch
-//! without the user-presence ladder having run (Touch ID via a Secure Enclave
-//! signing op on an enrolled Mac; the per-surface interactive floors where no
-//! Enclave key exists, see [`crate::presence`]).
-//! Failed or unavailable auth leaves the bridge killed, and every release --
-//! granted or refused -- is audited with the auth path that decided it. A
-//! corrupt record refuses BOTH directions (see
-//! [`crate::revocation::set_killed_locked`]): while the state is unknowable
-//! every enforcement point is already refusing, and an unkill from an unknown
-//! state would be a fail-open.
-//!
-//! ## Residual (same-user writer)
-//!
-//! `revocation.json` is writable by any process of the same user; such a
-//! process can flip the latch off. That is inside the conceded same-user
-//! boundary (threat #4: it could equally substitute the host binary or delete
-//! the trust files), and the kill switch is not a defense against it -- it is
-//! a fail-closed brake reachable from the user's own trusted surfaces. Named
-//! in the threat model rather than implied covered.
+//! Residual: `revocation.json` is writable by any same-user process, which can flip the latch off. That is inside
+//! the conceded same-user boundary (such a process could equally replace the host binary); the kill switch is a
+//! brake reachable from the user's own trusted surfaces, not a defense against it. Named in the threat model.
 
 use std::io;
 
@@ -105,19 +72,15 @@ pub fn engage(surface: Surface) -> io::Result<u64> {
     Ok(epoch)
 }
 
-/// Release the kill switch. Same write shape as [`engage`]; refuses on an
-/// unreadable record (an unkill from an unknown state would fail open). The
-/// attestation parameter is the user-presence gate made structural: the only
-/// way to obtain one is [`presence::require_presence`], so a caller cannot
-/// release without the ladder having run, and the audit record names the
-/// rung that authorized it.
+/// Release the kill switch. Same write shape as [`engage`]; refuses on an unreadable record (an unkill from an
+/// unknown state would fail open). The attestation parameter makes the user-presence gate structural: only
+/// [`presence::require_presence`] produces one, so no caller can release without the ladder having run, and the
+/// audit record names the rung that authorized it.
 ///
-/// BOTH outcomes are audited here, so the trail covers the full release
-/// attempt space: `ok` when the latch cleared, `error` when presence passed
-/// but the record write refused (corrupt record). The error arm changes
-/// nothing about enforcement - the bridge stays killed and the caller still
-/// gets the `Err` - it only makes the attempt durably visible with the auth
-/// rung that vouched for it.
+/// ```text
+/// latch cleared                   -> audited `ok`
+/// presence passed, write refused  -> audited `error`; the bridge stays killed and the caller still gets the `Err`
+/// ```
 pub fn release(surface: Surface, auth: PresenceAttestation) -> io::Result<u64> {
     let result = ipc::with_runtime_lock(|lock| revocation::set_killed_locked(lock, false));
     // Log-after-decide, outside the critical section, on BOTH arms.

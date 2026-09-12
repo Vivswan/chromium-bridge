@@ -15,33 +15,18 @@ function isUnrecognized(line: AuditLine): line is { unrecognized: true } {
 
 const subjectKey = (line: AuditRecord): string => `${line.tool ?? "-"}::${line.name ?? "-"}`;
 
-/** Indices of CONFIRM_SHOWN rows a later verdict resolves. Amber "pending" is
- * reserved for a confirmation genuinely still waiting on the user; a resolved
- * one still claiming to wait is stale-state dishonesty in the ledger. A timeout
- * settles as confirm_denied, so it correlates too.
+/** Indices of confirm_shown rows a later verdict resolves, so amber "pending" means genuinely still waiting on
+ * the user (a timeout settles as confirm_denied, so it resolves too). The join is the per-attempt `cid` the
+ * extension stamps on every event of one confirmation attempt (ADR-0030): a verdict resolves exactly the shown
+ * row carrying its id.
  *
- * Primary join: the per-confirmation `cid` (ADR-0030). The extension mints one
- * collision-resistant id per confirmation attempt and stamps it on EVERY audit
- * event that attempt emits - its confirm_shown, its verdict, and even a denial
- * issued before any surface was shown. A verdict therefore resolves EXACTLY the
- * shown row carrying the same id, and only if one exists. This is what makes
- * the two failure modes of the old subject-only heuristic impossible:
- *   - a panic-latch denial of a confirmation that never reached a surface
- *     carries an id that matches no confirm_shown row, so it resolves nothing -
- *     it cannot close an unrelated open confirmation;
- *   - two browsers raising the identical prompt concurrently mint distinct
- *     random ids, so neither's verdict can close the other's row.
+ *   panic-latch denial, no surface ever shown   -> its cid matches no shown row: closes nothing
+ *   two browsers, identical prompt, concurrent   -> distinct cids: neither verdict closes the other's row
+ *   verdict without a cid (pre-upgrade record)   -> oldest open cid-less shown row with the same tool + name
  *
- * Fallback (pre-upgrade records only): a verdict WITHOUT a cid falls back to
- * the old subject (tool + name) heuristic, closing the oldest still-open
- * cid-less shown row with the same subject. Every record written by the current
- * extension carries a cid, so this lane is reached only by genuinely old data
- * written before the id existed; the two regimes never cross - a cid-carrying
- * verdict only resolves a cid-carrying shown, a cid-less verdict only a cid-less
- * shown - so a trail written across an upgrade still renders, while a new
- * pre-surface denial (which has a cid) can never fall into the fallback and
- * close a legacy row. Unrecognized lines are skipped; when any exist, the page
- * already flags the whole trail as suspect above the table. */
+ * The two regimes never cross (a cid-carrying verdict only resolves a cid-carrying row, a cid-less one only a
+ * cid-less row), so a trail written across an upgrade still renders. Unrecognized lines are skipped; AuditView
+ * flags the whole trail as suspect when any exist. */
 export function resolvedShownRows(lines: AuditLine[]): Set<number> {
   const resolved = new Set<number>();
   // cid -> index of its still-open confirm_shown row (the exact join).

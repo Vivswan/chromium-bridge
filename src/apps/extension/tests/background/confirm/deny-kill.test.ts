@@ -73,8 +73,8 @@ function fakeProvider(install: (p: Parameters<typeof installConfirmationProvider
   return presented;
 }
 
-// Requests are minted per call: panicEpoch is the DECISION-START capture
-// (SFX-2), so a static literal would go stale the moment any test panics.
+// Requests are minted per call: panicEpoch is the DECISION-START capture,
+// so a static literal would go stale the moment any test panics.
 const REQ = () => ({
   kind: "eval" as const,
   origin: "https://example.com",
@@ -246,7 +246,7 @@ describe("confirm_deny_kill", () => {
     await expect(after).resolves.toBe(false);
   });
 
-  // The panic-window awaits moved OUT of the service with SFX-2: provider
+  // The panic-window awaits live outside the service: provider
   // selection is synchronous (providerFor consumes the request's
   // decision-time presenceRouting verdict), but the DECISION's own awaits -
   // the presence routing probe in gate.ts/upload.ts, the click probe -

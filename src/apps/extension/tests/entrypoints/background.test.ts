@@ -1,4 +1,4 @@
-// Entrypoint wiring: the background service worker MUST invoke the #32 storage
+// Entrypoint wiring: the background service worker MUST invoke the storage
 // hardening at startup (and the other one-time setup). This closes the gap the
 // isolated-browser proof cannot observe (Chrome has no getAccessLevel), by
 // asserting the production call site exists and runs. If someone deletes the
@@ -62,14 +62,14 @@ describe("background entrypoint", () => {
     const mod = await import("@/entrypoints/background");
     const def = mod.default as unknown as { main: () => void };
     def.main();
-    // The #32 isolation must be applied at startup - this is the production
+    // The storage isolation must be applied at startup - this is the production
     // call the isolated-browser proof cannot observe.
     expect(harden).toHaveBeenCalledTimes(1);
     // The rest of the one-time wiring must also fire.
     expect(migrate).toHaveBeenCalledTimes(1);
     expect(registerRouter).toHaveBeenCalledTimes(1);
     expect(installCdp).toHaveBeenCalledTimes(1);
-    // The Phase 5 legacy cleanup must be wired at startup: post-cutover the
+    // The legacy cleanup must be wired at startup: post-cutover the
     // retired keys are swept, pre-cutover it deletes nothing.
     expect(installLegacyCleanup).toHaveBeenCalledTimes(1);
     // The startup pending-approval sweep clears a ghost record a prior worker
