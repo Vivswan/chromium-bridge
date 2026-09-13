@@ -129,7 +129,7 @@ jobs:
       - name: File or update the nightly issue
         id: file-issue
         if: contains(fromJSON('["failure", "cancelled"]'), needs.browser.result) || contains(fromJSON('["failure", "cancelled"]'), needs.mutants.result)
-        uses: Vivswan/repo-platform/actions/fuzz-issue@build
+        uses: Vivswan/repo-platform/actions/fuzz-issue@stable
         with:
           mode: report
           label: nightly-failure
@@ -142,7 +142,7 @@ jobs:
 
       - name: Close the nightly issue on a green night
         if: needs.browser.result == 'success' && needs.mutants.result == 'success'
-        uses: Vivswan/repo-platform/actions/fuzz-issue@build
+        uses: Vivswan/repo-platform/actions/fuzz-issue@stable
         with:
           mode: resolve
           label: nightly-failure
