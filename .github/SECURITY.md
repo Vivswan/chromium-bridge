@@ -233,13 +233,14 @@ What this asserts is "no unwaived known advisory and an allowed license", not "a
 
 CI configuration is fleet-managed ([ADR-0033](../docs/adr/0033-adopt-repo-platform-fleet-template.md)):
 
-- The managed ci.yml is a skeleton that calls the fleet's reusable workflows and actions at `@build`, the fleet repository's green-gated delivery branch, which moves on every green commit there.
+- The managed ci.yml is a skeleton that calls the fleet's reusable workflows and actions at `@stable`, a moving tag in the fleet repository that names a green `main` commit. The fleet repository's own post-green job moves it after each push to `main` that passes its gate.
 - Third-party actions are pinned to commit SHAs on both sides.
 
-The moving `@build` ref is a real, accepted widening of the CI supply chain:
+The moving `stable` tag is a real, accepted widening of the CI supply chain:
 
 - A compromise of the fleet repository executes in this repository's CI, in jobs holding security-events, pages, id-token, contents, and pull-requests write.
-- The acceptance rests on a trust assumption, not a technical boundary: the fleet repository stays under the same owner's control.
+- The acceptance rests on a trust assumption, not a technical boundary: the fleet repository stays under the same owner's control. The fleet repository's ruleset blocks deletion of the tag only; a `uses:` here executes whatever the tag names, so an out-of-band move by a push-access holder is caught by nothing at write time.
+- The mover, its gates, and the remaining trusts are recorded in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/build-provenance.md).
 - The rest of the accepted residuals live in ADR-0033.
 
 ## Identifiers (rebrand, 2026-07)
