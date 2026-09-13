@@ -138,6 +138,7 @@ jobs:
           # the fuzzer's failure-report contract. Color and description apply only when the label is created.
           label-color: "D93F0B"
           label-description: Automated nightly CI failure
+          stream: generic
 
       - name: Close the nightly issue on a green night
         if: needs.browser.result == 'success' && needs.mutants.result == 'success'
