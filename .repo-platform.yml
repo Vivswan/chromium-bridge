@@ -4,7 +4,6 @@ modules:
   - rust
   - site
   - release-please
-  - issue-templates
   - pr-title
   - fuzzer
   - nightly
