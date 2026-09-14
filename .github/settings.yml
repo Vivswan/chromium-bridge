@@ -73,6 +73,10 @@ labels:
     - name: release-override
       color: FBCA04
       description: "On a release PR: bypass release-health gates for this release"
+    - name: repo-platform:sync
+      color: "5319e7"
+      description: Sync this pull request's branch from repo-platform (the workflow
+        removes the label)
     - name: rust
       color: "000000"
       description: Pull requests that update rust code
