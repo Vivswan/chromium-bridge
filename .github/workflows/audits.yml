@@ -32,8 +32,10 @@ jobs:
       # The fuzz crate is its own workspace, excluded from the root one, so
       # the root pass above never sees its lockfile - gate it separately with
       # its own config (the shipped gate stays strict; see the fuzz deny.toml).
+      # --locked, as in checks.yml: an audit over a stale fuzz lock would
+      # judge whatever crates.io resolves that day, not the committed graph.
       - name: cargo deny (fuzz workspace)
-        run: cargo deny --manifest-path src/packages/core/fuzz/Cargo.toml --config src/packages/core/fuzz/deny.toml check
+        run: cargo deny --locked --manifest-path src/packages/core/fuzz/Cargo.toml --config src/packages/core/fuzz/deny.toml check
 
   bun-audit:
     name: bun audit (JS workspace)

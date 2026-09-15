@@ -356,7 +356,7 @@ tasks:
     description: >-
       Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets
       cannot rot outside the main build; CI runs the same check in checks.yml's rust job
-    command: 'cargo check --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
+    command: 'cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
     toolchains: ['system']
     options:
       cache: false

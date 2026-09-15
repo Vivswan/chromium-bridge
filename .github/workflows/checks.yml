@@ -62,8 +62,11 @@ jobs:
       # A cargo check on the pinned stable toolchain is enough to catch that
       # class at PR time (verified: the crate compiles on stable; RUNNING the
       # targets still needs nightly + cargo-fuzz and stays in nightly-fuzz.yml).
+      # --locked because nothing else exercises the fuzz workspace's own
+      # Cargo.lock: without it a lock left behind by a root dependency bump
+      # re-resolves here to whatever crates.io serves that day.
       # Locally: `moon run check-fuzz-workspace`.
-      - run: cargo check --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
+      - run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
 
   # The enclave/attestation code is cfg(target_os = "macos") and invisible to
   # the ubuntu jobs; without this job it would only ever be compiled at
