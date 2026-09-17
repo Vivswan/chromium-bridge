@@ -1,4 +1,4 @@
-# chromium-bridge documentation
+# chromium-bridge
 
 This directory is the **single source of truth** for the chromium-bridge project. Code comments answer "what does this code do"; this directory answers "why it is done this way, what it must do, and what the constraints are".
 
