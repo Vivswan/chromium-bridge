@@ -12,7 +12,6 @@ repository:
   description: "Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port"
   # Declared even when empty: the apply manages only declared keys, so
   # this keeps it healing out-of-band edits.
-  homepage: ""
   topics: "brave,browser-automation,chrome-extension,mcp,native-messaging,rust"
   private: false
 
