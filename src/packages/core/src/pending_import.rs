@@ -630,6 +630,24 @@ mod tests {
     }
 
     #[test]
+    fn a_bag_float_survives_the_write_read_round_trip_exactly() {
+        // An integer literal past u64/i64 lands in the bag as an f64. The
+        // store re-serializes it (shortest form) and reads it back; that read
+        // must yield the same f64, which needs serde_json's correctly rounded
+        // float parsing (`float_roundtrip`). The nightly fuzzer found the
+        // one-ulp drift; the first input is its pinned seed.
+        let inputs: [&[u8]; 2] = [
+            include_bytes!("../fuzz/seeds/pending_import/overflowing_integer_bag"),
+            br#"{"state":"pending","version":2,"bag":{"n":-222222222622222222222222222222222}}"#,
+        ];
+        for bytes in inputs {
+            let record = parse_record(bytes).unwrap();
+            let written = serde_json::to_vec(&record).unwrap();
+            assert_eq!(parse_record(&written).unwrap(), record);
+        }
+    }
+
+    #[test]
     fn first_bag_wins_a_later_receipt_is_dropped() {
         let _dir = scratch_runtime_dir("pending-import-first-bag-wins");
         let first = json!({ "pageEvalEnabled": true });

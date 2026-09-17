@@ -92,6 +92,9 @@ extension-ID self-check, restyled confirmations, and dark mode.
   tool or convention).
 
 ### Fixed
+- The pending-import store reads back exactly the JSON number it wrote:
+  serde_json now parses floats correctly rounded (`float_roundtrip`), closing
+  a one-ulp drift the nightly fuzzer found on an integer literal past i64.
 - `page_fill` no longer sends a bogus "masked" copy of the value alongside the
   real one; a single `value` key is sent.
 - The bridge session clears its writer on disconnect so the next tool call
