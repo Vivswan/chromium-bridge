@@ -29,7 +29,7 @@ libc = "0.2.186"
 # per-request version gate, wire model) per ADR-0034 - a many-eyes library
 # replacing our hand-rolled JSON-RPC dispatch, exactly the trade ADR-0023
 # prescribes. `server` only: no HTTP stack, no client, no auth tree.
-rmcp = { version = "3.2.0", default-features = false, features = ["server"] }
+rmcp = { version = "3.4.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: correctly rounded float parsing, so a JSON number the
 # core stores (the pending-import bag is arbitrary JSON) reads back as the
