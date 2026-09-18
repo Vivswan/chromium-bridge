@@ -31,7 +31,11 @@ libc = "0.2.186"
 # prescribes. `server` only: no HTTP stack, no client, no auth tree.
 rmcp = { version = "3.2.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: correctly rounded float parsing, so a JSON number the
+# core stores (the pending-import bag is arbitrary JSON) reads back as the
+# same f64 it wrote. The default best-effort parse drifts by an ulp on some
+# inputs, which breaks the write/read-back identity the store relies on.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = { version = "0.11", default-features = false }
 thiserror = "2.0.18"
 # rmcp's async runtime. The security core itself stays synchronous; tokio
