@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
     DiscoverResult, Implementation, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-    ServerCapabilities, ServerInfo, Tool as McpTool,
+    ServerCapabilities, ServerConfig, Tool as McpTool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, ServerHandler};
@@ -114,8 +114,8 @@ impl ServerHandler for BridgeHandler {
     /// implements - on purpose: pre-2026 harnesses keep negotiating their
     /// own revision via `initialize` until they migrate (ADR-0034 records
     /// the compatibility decision).
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28)
             .with_server_info(implementation())
     }
@@ -325,7 +325,7 @@ mod tests {
 
         let discover = DiscoverResult::from_server_info(
             vec![ProtocolVersion::V_2026_07_28],
-            ServerInfo::new(ServerCapabilities::default()),
+            ServerConfig::new(ServerCapabilities::default()),
         );
         let v = serde_json::to_value(&discover).unwrap();
         assert!(v["_meta"]
