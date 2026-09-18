@@ -48,10 +48,10 @@ tasks:
       runDepsInParallel: false
 
   ci:
-    # THE GATE - the cross-platform steps every change must pass locally,
-    # the same list the old `just ci` ran: rust fmt/clippy/nextest+doctests,
-    # typos/machete, TS typecheck/biome/tests/extension build, protocol e2e,
-    # and the contract + hygiene checks. CI runs MORE on top: the
+    # THE GATE - the cross-platform steps every change must pass locally:
+    # rust fmt/clippy/nextest+doctests, typos/machete, TS typecheck/biome/
+    # tests/extension build, protocol e2e, the excluded fuzz workspace's
+    # locked check, and the contract + hygiene checks. CI runs MORE on top: the
     # macOS/Windows rust matrices, dependency review, linux-install, the
     # adversarial/chaos suites, the browser suites (isolated Chrome), the
     # web build, and the macOS-only desktop gate (check-app-rust needs the
@@ -78,6 +78,7 @@ tasks:
       - '~:check-cjk'
       - '~:check-typography'
       - '~:check-fuzz-smoke'
+      - '~:check-fuzz-workspace'
       - '~:check-gen'
       - '~:check-envelope'
       - '~:check-gen-isolation'
@@ -361,7 +362,6 @@ tasks:
     toolchains: ['system']
     options:
       cache: false
-      runInCI: false # CI runs the identical command directly in checks.yml
 
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
 
