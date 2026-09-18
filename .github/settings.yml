@@ -65,6 +65,9 @@ labels:
     - name: nightly-failure
       color: D93F0B
       description: Automated nightly CI failure
+    - name: python:uv
+      color: 2b67c6
+      description: Pull requests that update python:uv code
     - name: release-blocker
       color: B60205
       description: Blocks releases while open - release-health fails release PRs and

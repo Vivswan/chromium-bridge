@@ -26,6 +26,7 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 
 - bun: `bun install`, `bun test`, `bun run <script>` (scripts in `package.json`)
 - `.bun-version` is managed by sync; pin another version in a repo-owned workflow's version input, not in the dotfile.
+- Python with uv: `uv sync`, `uv run <command>` (metadata and dependencies in `pyproject.toml`)
 - Rust with cargo: `cargo build`, `cargo test`, `cargo clippy` (crate layout and dependencies in `Cargo.toml`)
 
 ## Repository-specific guidance
