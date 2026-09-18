@@ -83,6 +83,7 @@ tasks:
       - '~:check-gen-isolation'
       - '~:check-toolchain'
       - '~:check-hasher'
+      - '~:check-ignored'
       - '~:check-yaml'
       - '~:check-actions'
       - '~:check-docs-literals'
@@ -777,6 +778,13 @@ tasks:
   check-hasher:
     description: 'No tracked file may match a .moon/workspace.yml hasher.ignorePattern (a stale-cache hole)'
     command: 'bun scripts/check-moon-hasher.ts'
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-ignored:
+    description: 'No tracked file may be matched by .gitignore (Biome and knip would skip it silently)'
+    command: 'bun scripts/check-gitignore-tracked.ts'
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached

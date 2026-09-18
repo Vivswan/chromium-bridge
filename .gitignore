@@ -44,9 +44,6 @@ src/apps/extension/.wxt/
 # Agent working notes (audits, handoffs, consolidation scratch) - local only
 /.notes/
 
-# Python bytecode cache from the tests/protocol/ harness (adversarial.py imports e2e.py)
-tests/protocol/__pycache__/
-
 # Isolated browsers downloaded for the browser suites
 # (npx @puppeteer/browsers install ... run from tests/)
 /tests/chrome/
@@ -707,3 +704,8 @@ rustc-ice-*.txt
 /.fuzz-failures/
 
 # END REPO-PLATFORM MANAGED
+
+# Repo-owned overrides of the managed region (last match wins). The Python
+# template's lib/ is a virtualenv layout; here lib/ is a source directory
+# under src/**, and Biome and knip honor this file.
+!lib/
