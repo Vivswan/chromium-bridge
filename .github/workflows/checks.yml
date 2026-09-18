@@ -228,8 +228,11 @@ jobs:
       # rewritten from upstream templates, and Biome and knip honor the file.
       - run: bun scripts/check-gitignore-tracked.ts
 
+  # typos is not here: the managed ci.yml's standard-checks job runs the
+  # fleet's typos action over the same _typos.toml (the local gate keeps its
+  # `moon run typos`).
   tooling:
-    name: Tooling hygiene (typos, cargo-machete)
+    name: Tooling hygiene (cargo-machete)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -238,9 +241,8 @@ jobs:
           fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
-          # Pinned: these tools' verdicts gate the build. Bump deliberately.
-          tool: typos@1.48.0,cargo-machete@0.9.2
-      - run: typos
+          # Pinned: the tool's verdict gates the build. Bump deliberately.
+          tool: cargo-machete@0.9.2
       - run: cargo machete
 
   linux-install:
@@ -428,7 +430,7 @@ jobs:
       # moon's CI mode does not resolve runInCI:false tasks, and the task
       # keeps runInCI:false on purpose (affected-only `moon ci` runs must
       # not trip on a suite that needs the release binary). Same pattern as
-      # harness-smoke.yml invoking its driver directly.
+      # nightly.yml's harness-smoke job invoking its driver directly.
       - run: bun test tests/interop/sdk-client.test.ts
 
   browser:
@@ -545,11 +547,11 @@ jobs:
       - name: Fuzz-smoke driver tests
         run: bun test scripts/fuzz-smoke.test.ts
 
-  # The security audits gate merges: a new advisory lands as a red PR check,
-  # not a silent scheduled failure. security.yml calls the same reusable
-  # workflow weekly for advisories disclosed between pushes. A job calling a
+  # The cargo deny pass gates merges: a new advisory lands as a red PR check,
+  # not a silent scheduled failure. nightly.yml calls the same reusable
+  # workflow daily for advisories disclosed between pushes. A job calling a
   # reusable workflow fails if any called job fails, so this single job
-  # aggregates both audit jobs for all-green.
+  # aggregates the audit legs for all-green.
   audits:
     name: Security audits
     uses: ./.github/workflows/audits.yml

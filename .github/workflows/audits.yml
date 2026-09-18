@@ -1,7 +1,14 @@
-# The security audit jobs, defined once and called from two places: ci.yml
-# runs them inside the all-green merge gate (a new advisory lands as a red PR
-# check, not a silent scheduled failure), and security.yml runs them weekly
-# for advisories disclosed between pushes.
+# The cargo deny pass, defined once and called from two places: checks.yml
+# runs it inside the all-green merge gate (a new advisory lands as a red PR
+# check, not a silent scheduled failure), and nightly.yml reruns it daily for
+# advisories disclosed between pushes.
+#
+# cargo deny is the whole job on purpose. Its advisories check reads the same
+# RustSec database cargo audit does (yanked crates included, `yanked = "deny"`
+# in deny.toml), and the fleet's Trivy step in the managed ci.yml gates
+# Cargo.lock and bun.lock at HIGH/CRITICAL. What the retired bun audit leg
+# gated and Trivy does not (dev-only packages, unfixed advisories) is an
+# accepted cut recorded in SECURITY.md.
 name: Audits
 
 on:
@@ -11,8 +18,8 @@ permissions:
   contents: read
 
 jobs:
-  cargo:
-    name: cargo audit + deny
+  cargo-deny:
+    name: cargo deny (advisories, licenses, bans, sources)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -22,13 +29,10 @@ jobs:
           cache: false
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
-          # Pinned: these tools' verdicts gate the build, so their versions
-          # must not drift underneath us. Bump deliberately.
-          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
-      - name: cargo audit (RustSec advisories)
-        run: cargo audit
-      - name: cargo deny (advisories + licenses + bans + sources)
-        run: cargo deny check
+          # Pinned: the tool's verdict gates the build, so its version must
+          # not drift underneath us. Bump deliberately.
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check
       # The fuzz crate is its own workspace, excluded from the root one, so
       # the root pass above never sees its lockfile - gate it separately with
       # its own config (the shipped gate stays strict; see the fuzz deny.toml).
@@ -36,16 +40,3 @@ jobs:
       # judge whatever crates.io resolves that day, not the committed graph.
       - name: cargo deny (fuzz workspace)
         run: cargo deny --locked --manifest-path src/packages/core/fuzz/Cargo.toml --config src/packages/core/fuzz/deny.toml check
-
-  bun-audit:
-    name: bun audit (JS workspace)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      # Fail only on high/critical; dev-only moderates are reported, not gated.
-      - run: bun audit --audit-level=high

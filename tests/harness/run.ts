@@ -12,7 +12,7 @@
 //                         instead of the legacy `initialize`, the temporary legacy shim can be deleted
 //
 // Node builtins only (no scripts/lib.ts import), so it runs without a `bun install`. Dual-use: `moon run
-// harness-smoke` locally, and the nightly harness-smoke.yml workflow, which uploads build/harness-captures/.
+// harness-smoke` locally, and nightly.yml's harness-smoke job, which uploads build/harness-captures/.
 //
 // Usage: bun tests/harness/run.ts [--mint-seeds] [--require-any]
 //   --mint-seeds   copy deduplicated captured frames into src/packages/core/fuzz/seeds/mcp_jsonrpc/ (a real-world corpus)

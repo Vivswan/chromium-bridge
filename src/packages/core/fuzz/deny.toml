@@ -1,6 +1,6 @@
 # cargo-deny config for the fuzz workspace ONLY.
 # Run: cargo deny --locked --manifest-path src/packages/core/fuzz/Cargo.toml --config
-#      src/packages/core/fuzz/deny.toml check   (CI: audits.yml, via ci.yml's gate and security.yml's weekly run)
+#      src/packages/core/fuzz/deny.toml check   (CI: audits.yml, via ci.yml's gate and nightly.yml's daily rerun)
 #
 # Deliberately separate from the root deny.toml so the two relaxations this
 # never-shipped, nightly-only crate needs (NCSA license, wildcard path dep)

@@ -21,10 +21,10 @@
 #
 # Named residual gap: four gate tools have no first-party proto plugin and
 # are NOT provisioned here - cargo-nextest, typos, cargo-machete, actionlint.
-# Install them once by hand (docs/development.md); CI pins typos +
-# cargo-machete in the tooling job and actionlint in the actionlint job
-# (both by exact version), so a local version skew there can at worst
-# surface findings early, never hide them from CI.
+# Install them once by hand (docs/development.md); CI runs typos and
+# actionlint through the managed ci.yml's fleet actions and pins
+# cargo-machete in checks.yml's tooling job, so a local version skew there
+# can at worst surface findings early, never hide them from CI.
 proto = "0.58.2"
 bun = "1.4.2"
 moon = "2.4.5"

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended: 2026-09-18 (the section at the end)
 
 ## Context
 
@@ -55,3 +56,11 @@ Mitigations that remain are real but partial:
 - the security core's direct dependencies stay restricted to widely-audited crates by policy (ADR-0023).
 
 Given that the prior gate's coverage was mostly exemptions (four delta audits against a 1917-line exemptions file), this is largely the loss of a claim rather than of practiced enforcement - which is exactly why it is recorded here rather than papered over.
+
+## Amendment, 2026-09-18
+
+The body above is the decision as taken; three pieces of it changed later.
+
+- **`cargo audit` dropped.** cargo-deny's advisories check reads the same RustSec database, yanked crates included (`yanked = "deny"` in `deny.toml`).
+- **`bun audit` dropped.** The fleet's Trivy step in the managed ci.yml gates `Cargo.lock` and `bun.lock` at HIGH/CRITICAL. What it does not gate (dev-only packages, unfixed advisories) is an accepted cut recorded in SECURITY.md.
+- **The weekly `security.yml` sweep became a daily rerun** inside nightly.yml, whose report job files the `nightly-failure` issue on a red night.

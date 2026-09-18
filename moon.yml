@@ -247,8 +247,8 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   audit:
-    description: 'Supply-chain checks (needs cargo-deny, cargo-audit)'
-    script: 'set -e; cargo deny check; cargo audit'
+    description: 'Supply-chain checks over the root workspace (needs cargo-deny; CI audits.yml adds the fuzz workspace)'
+    command: 'cargo deny check'
     toolchains: ['system']
     options:
       cache: false # a check task: gates are never cached
@@ -853,7 +853,7 @@ tasks:
   # ----- agent-harness interop smoke (nightly workflow; not in the ci gate) --
 
   harness-smoke:
-    # Needs the claude and codex CLIs on PATH, so the nightly harness-smoke.yml installs them and runs
+    # Needs the claude and codex CLIs on PATH, so nightly.yml's harness-smoke job installs them and runs
     # `bun tests/harness/run.ts` directly: moon does not resolve runInCI:false tasks when CI=true. Each
     # harness's opening method is logged as the ADR-0034 canary for retiring the legacy-initialize shim;
     # extra flags pass through (`moon run harness-smoke -- --mint-seeds`).
@@ -865,4 +865,4 @@ tasks:
     toolchains: ['system']
     options:
       cache: false # a gating suite for the nightly workflow: never cached
-      runInCI: false # needs harness CLIs; harness-smoke.yml provides them
+      runInCI: false # needs harness CLIs; nightly.yml's harness-smoke job provides them

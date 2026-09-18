@@ -1,12 +1,18 @@
-name: Nightly browser and mutation tests
+name: Nightly checks
 
-# Scheduled, never PR-gating: the full cargo-mutants pass is too slow for PRs, and the daily DOM + smoke rerun
-# against that day's Chrome `stable` surfaces a Chrome release that breaks them on a day with no PR.
+# Scheduled, never PR-gating: everything here is too slow for a PR, depends on the outside world, or reruns
+# a PR-time check against that day's world so a quiet repository still learns about a break.
 #
-#   browser job   -> the PR job's subset (checks.yml `browser`, inside all-green): same pinned action SHAs and
-#                    DOM + smoke steps, without the security proofs and the RAN-marker canary
-#   setup-chrome  -> installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser
-#   fuzzing       -> nightly-fuzz.yml
+#   browser        -> the PR job's subset (checks.yml `browser`, inside all-green): same pinned action SHAs and
+#                     DOM + smoke steps, without the security proofs and the RAN-marker canary, against that
+#                     day's Chrome `stable`
+#   mutants        -> the full cargo-mutants pass, sharded
+#   harness-smoke  -> real agent-harness CLIs (Claude Code, Codex) at their CURRENT releases connect to our
+#                     stdio MCP server; frames are captured and the opening method logged (the ADR-0034 canary)
+#   audits         -> the same cargo deny pass that gates every merge (checks.yml -> audits.yml), rerun daily
+#                     so an advisory disclosed between pushes surfaces here instead of at the next PR
+#   setup-chrome   -> installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser
+#   fuzzing        -> nightly-fuzz.yml
 #
 # The report job is the fleet's nightly module (repo-platform docs/nightly.md): one label-deduplicated issue.
 #   red night    -> files or updates the `nightly-failure` issue
@@ -109,13 +115,61 @@ jobs:
             exit "$rc"
           fi
 
+  # The captured frames (uploaded green or red) are the run's real output: `--mint-seeds` turns them into
+  # mcp_jsonrpc fuzz corpus locally. The registry's *-live-fakellm entries additionally drive a full
+  # model-driven tool call per CLI against a local fake LLM backend (tests/harness/fake-llm.ts), so the
+  # whole run needs no secrets.
+  #
+  # The driver is invoked directly (like nightly-fuzz.yml invokes fuzz-smoke.ts): the harness-smoke moon
+  # task is runInCI:false, which moon does not resolve at all when CI=true - the same reason checks.yml's
+  # browser job calls its suites directly.
+  harness-smoke:
+    name: Agent-harness interop smoke (current CLI releases)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The driver is self-contained (node builtins only), so no bun install.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --release
+      # Latest on purpose, not pinned: the whole point of this canary is to
+      # observe what CURRENT harness releases send. Best-effort: a harness
+      # whose install fails is skipped by the driver; --require-any below
+      # keeps an install-failed (or config-entry-only) run from reading green.
+      - name: Install harness CLIs (best-effort, deliberately unpinned)
+        run: |
+          npm install -g @anthropic-ai/claude-code || echo "::warning::@anthropic-ai/claude-code install failed"
+          npm install -g @openai/codex || echo "::warning::@openai/codex install failed"
+      - name: Harness smoke (fails unless a harness completes a live MCP connection)
+        run: bun tests/harness/run.ts --require-any
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: harness-captures-${{ github.run_attempt }}
+          path: build/harness-captures/
+          if-no-files-found: warn
+
+  # A job calling a reusable workflow fails if any called job fails, so this
+  # one job aggregates the audit legs for the report below.
+  audits:
+    name: Supply-chain audits (scheduled)
+    uses: ./.github/workflows/audits.yml
+
   # Runs whatever happened to the check jobs, and treats a CANCELLED job as
   # red: a job that hits its timeout is cancelled, not failed, and a hang is
-  # exactly what a nightly run exists to catch. Neither red nor green matches
-  # 'skipped', so the check jobs must stay unconditional - a skipped sibling
-  # would make this job silently do nothing that night.
+  # exactly what a nightly run exists to catch. Both conditions read every
+  # entry of `needs`, so a sibling added to the list is folded in by itself.
+  # Neither red nor green matches 'skipped', so the check jobs must stay
+  # unconditional - a skipped sibling would make this job silently do
+  # nothing that night.
   report:
-    needs: [browser, mutants]
+    needs: [browser, mutants, harness-smoke, audits]
     if: always()
     runs-on: ubuntu-latest
     # A few gh calls; a hung reporter is the residual silence window, so
@@ -128,7 +182,7 @@ jobs:
     steps:
       - name: File or update the nightly issue
         id: file-issue
-        if: contains(fromJSON('["failure", "cancelled"]'), needs.browser.result) || contains(fromJSON('["failure", "cancelled"]'), needs.mutants.result)
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         uses: Vivswan/repo-platform/actions/fuzz-issue@stable
         with:
           mode: report
@@ -141,7 +195,7 @@ jobs:
           stream: generic
 
       - name: Close the nightly issue on a green night
-        if: needs.browser.result == 'success' && needs.mutants.result == 'success'
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
         uses: Vivswan/repo-platform/actions/fuzz-issue@stable
         with:
           mode: resolve
