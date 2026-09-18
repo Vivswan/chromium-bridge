@@ -11,7 +11,7 @@ proto install    # provisions bun, moon, rust, uv at the pinned versions
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
-Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`). CI pins typos and cargo-machete in checks.yml; the managed ci.yml's actionlint job follows the action's floating tag (a template-sync decision, recorded in ADR-0033), so a local version skew can at worst surface a finding early.
+Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`). CI pins cargo-machete in checks.yml; typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision, recorded in ADR-0033), so a local version skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -21,7 +21,7 @@ Four gate tools have no first-party proto plugin and are installed once by hand:
 | bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned in `.prototools` (and mirrored in `package.json` `packageManager`) |
 | [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. uv itself is pinned only in `.prototools`. The suites are stdlib-only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
-| [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates both |
+| [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates typos in the managed ci.yml and machete in checks.yml |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI runs it in the managed ci.yml's actionlint job |
 
 Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `bun install` wires a pre-commit hook that runs `moon run ci`, so a commit that would fail CI fails at commit time instead.
@@ -54,7 +54,7 @@ src/apps/web/           bun workspace member: minimal Astro site rendering the
 
 All tooling scripts are TypeScript run via bun. Scripts whose only consumer is a GitHub workflow live in `.github/scripts/`; everything with a local consumer (moon tasks, other scripts) stays in `scripts/`. The fuzz smoke moved from the former to the latter when it grew a local moon task, which currently leaves `.github/scripts/` empty. Two scripts (`scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`) are deliberately self-contained on node builtins so they run without a `bun install`: the release workflow builds the binary before installing the workspace, and the nightly fuzz job never installs it at all.
 
-Rust dependencies are gated by automated supply-chain checks ([ADR-0035](./adr/0035-automated-supply-chain-review.md)): `cargo deny` (license allow-list, banned sources, RUSTSEC advisories) and `cargo audit` run in every CI gate and in the weekly security sweep, PRs additionally get the GitHub dependency-review action (an advisory diff, via the platform-managed job in the managed ci.yml), and Dependabot watches cargo, bun, and GitHub Actions. Adding or bumping a crate fails CI on a known advisory or a license outside `deny.toml`'s allow list; there is no manual per-crate audit step. Run `moon run audit` to reproduce the cargo-deny/audit pass locally.
+Rust dependencies are gated by automated supply-chain checks ([ADR-0035](./adr/0035-automated-supply-chain-review.md)): `cargo deny` (license allow-list, banned sources, RUSTSEC advisories) runs in every CI gate and again in the nightly rerun, the managed ci.yml's fleet Trivy step gates `Cargo.lock` and `bun.lock` at HIGH/CRITICAL, PRs additionally get the GitHub dependency-review action (an advisory diff, via the platform-managed job in the managed ci.yml), and Dependabot watches cargo, bun, and GitHub Actions. Adding or bumping a crate fails CI on a known advisory or a license outside `deny.toml`'s allow list; there is no manual per-crate audit step. Run `moon run audit` to reproduce the cargo-deny pass locally.
 
 ## Common tasks
 

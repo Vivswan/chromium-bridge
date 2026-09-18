@@ -10,7 +10,7 @@ bun tests/harness/run.ts --mint-seeds  # also mint captured frames as fuzz seeds
 ```
 
 - Harnesses whose CLI is not on PATH are skipped with a message. `BB_HARNESS_<NAME>_BIN` (e.g. `BB_HARNESS_CLAUDE_BIN`) pins a specific executable; by default the driver skips terminal-mux proxy shims (cmux) on PATH, which break stdio MCP health checks.
-- Captures land in `build/harness-captures/<harness>.ndjson` (gitignored) plus a `summary.json`; CI's nightly `harness-smoke.yml` uploads the directory as an artifact.
+- Captures land in `build/harness-captures/<harness>.ndjson` (gitignored) plus a `summary.json`; CI's nightly.yml `harness-smoke` job uploads the directory as an artifact.
 - `--mint-seeds` copies deduplicated captured frames into `src/packages/core/fuzz/seeds/mcp_jsonrpc/` with descriptive names (`harness-claude-initialize`, ...) - a real-world corpus for the fuzzer. Review and commit the new seeds deliberately.
 
 ## The ADR-0034 canary

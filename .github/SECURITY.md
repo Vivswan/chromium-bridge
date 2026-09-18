@@ -217,15 +217,17 @@ Dependency review is fully automated; there is no manual per-crate audit step ([
 
 | Layer | Runs | Catches |
 |-------|------|---------|
-| cargo-deny + cargo-audit | inside the all-green gate on every PR and push, and again in the weekly security.yml sweep | RUSTSEC advisories, the license allow-list and banned sources in `deny.toml` |
+| cargo-deny | inside the all-green gate on every PR and push, and again in the nightly.yml rerun | RUSTSEC advisories (yanked crates included), the license allow-list and banned sources in `deny.toml` |
+| the fleet's Trivy step | in the managed ci.yml's standard-checks job on every PR and push | HIGH/CRITICAL advisories with a fix in `Cargo.lock` and `bun.lock` |
 | GitHub's dependency-review action | on every PR, through the managed ci.yml's fleet-delivered job | dependencies with known advisories in the PR diff |
 | Dependabot | continuously, over cargo, bun, and GitHub Actions | alerts and bump PRs |
 
 Boundaries of that stack:
 
-- The dependency-review action only has a diff to review on pull_request events; direct pushes stay covered by cargo-deny + cargo-audit in the same gate plus the weekly sweep.
+- The dependency-review action only has a diff to review on pull_request events; direct pushes stay covered by cargo-deny and Trivy in the same gate plus the nightly rerun.
 - License enforcement is cargo-deny's alone; the reason the action does not mirror the allow-list is in ADR-0035.
-- The weekly sweep exists so advisories disclosed between pushes still surface.
+- The nightly rerun exists so advisories disclosed between pushes still surface; a red night files the `nightly-failure` tracking issue.
+- Two JS cases the retired `bun audit --audit-level=high` leg gated and Trivy does not: dev-only packages in `bun.lock` (Trivy runs without `--include-dev-deps`) and HIGH/CRITICAL advisories with no fixed version (Trivy runs with `ignore-unfixed`). Both are accepted cuts: the first because those packages run only in the local and CI toolchain, the second because a bump cannot fix it and a red gate would only block unrelated work. Dependabot alerts still cover both; the fleet's nightly Trivy scan additionally reports the unfixed production advisories.
 
 What this asserts is "no unwaived known advisory and an allowed license", not "a human audited this code". The RUSTSEC exceptions reviewed into `deny.toml`'s ignore list stay waived. The residual risk (a novel malicious crate or undiscovered flaw with no published advisory) is recorded in ADR-0035.
 

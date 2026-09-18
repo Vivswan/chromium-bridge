@@ -1,5 +1,5 @@
 # cargo-deny config - supply-chain gate for the Rust crate.
-# Run: cargo deny check   (CI: audits.yml, via ci.yml's gate and security.yml's weekly run)
+# Run: cargo deny check   (CI: audits.yml, via ci.yml's gate and nightly.yml's daily rerun)
 
 [advisories]
 version = 2
