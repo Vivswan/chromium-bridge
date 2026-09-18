@@ -224,6 +224,9 @@ jobs:
       # No tracked file may match a .moon/workspace.yml hasher.ignorePattern
       # (that would silently drop it from every moon task hash).
       - run: bun scripts/check-moon-hasher.ts
+      # No tracked file may be matched by .gitignore: the managed region is
+      # rewritten from upstream templates, and Biome and knip honor the file.
+      - run: bun scripts/check-gitignore-tracked.ts
 
   tooling:
     name: Tooling hygiene (typos, cargo-machete)

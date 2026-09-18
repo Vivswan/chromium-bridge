@@ -26,6 +26,7 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 
 - bun: `bun install`, `bun test`, `bun run <script>` (scripts in `package.json`)
 - `.bun-version` is managed by sync; pin another version in a repo-owned workflow's version input, not in the dotfile.
+- Python with uv: `uv sync`, `uv run <command>` (metadata and dependencies in `pyproject.toml`)
 - Rust with cargo: `cargo build`, `cargo test`, `cargo clippy` (crate layout and dependencies in `Cargo.toml`)
 
 ## Repository-specific guidance
@@ -36,6 +37,7 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 - Chromium Bridge is a Rust MCP server, native-messaging host, and MV3 extension that drives the user's real, logged-in Chromium browser. Correctness and the safety model come first.
 - Adopted from `whg517/browser-bridge` (Apache-2.0; attribution in `LICENSE-APACHE` and `NOTICE`). The identifiers are our own, not upstream's (ADR-0023); there is no upstream remote, so upstream fixes are ported by judgment.
 - `CONTRIBUTING.md` is the authoritative development process. moon is the command interface: `moon run help` lists the tasks, `moon run ci` is the gate.
+- Python here is stdlib-only with no `pyproject.toml`: the protocol suites run `uv run --no-project --isolated` (moon `test-e2e`, `test-adversarial`, `test-chaos`); `uv sync` does not apply.
 
 ### Safety red lines
 
