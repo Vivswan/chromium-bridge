@@ -1,10 +1,10 @@
 # cargo-fuzz fuzzer-generated corpus and crash reproducers. The fuzz crate
 # (src/packages/core/fuzz/Cargo.toml + fuzz_targets/) and its lockfile ARE
 # tracked; only the machine-generated outputs are ignored (build artifacts
-# land in target/, covered by the managed Rust section below).
+# land in target/ and coverage reports in coverage/, both covered by the
+# managed Rust and Node sections below).
 /src/packages/core/fuzz/corpus/
 /src/packages/core/fuzz/artifacts/
-/src/packages/core/fuzz/coverage/
 # fuzz-smoke.ts failure reports (cleared and rewritten per run, consumed by
 # the nightly job's issue filing)
 /src/packages/core/fuzz/failures/
@@ -16,8 +16,8 @@
 /src/apps/desktop/icons/
 
 # Unified build-output folder: all build deliverables (extension bundle,
-# desktop UI, signed app copy, dmg staging + image) land here
-/build/
+# desktop UI, signed app copy, dmg staging + image) land in /build/, covered
+# by the managed Python section below.
 
 # Extension build staging (WXT codegen; the bundle itself goes to /build/)
 src/apps/extension/.wxt/
@@ -52,17 +52,11 @@ src/apps/extension/.wxt/
 # moon's local task cache and state (.moon/*.yml configs ARE tracked)
 /.moon/cache/
 
-# Development worktrees (see CONTRIBUTING.md - one per branch, never committed)
-/.worktrees/
-
 # Chrome Web Store upload package (built from dist/, never committed)
 /chromium-bridge-extension-cws-*.zip
 
 # Playwright MCP scratch
 /.playwright-mcp/
-
-# Extension signing keys - never commit
-*.pem
 
 # Editor / IDE
 .vscode/
