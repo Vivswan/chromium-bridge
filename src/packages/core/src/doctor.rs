@@ -14,54 +14,64 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::browsers::{self, BaseDirs, Os, HOST_ID};
 use crate::ipc::LockFile;
 use crate::pending_import::PendingImportReport;
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
 use crate::registration::{self, RegState};
 
-/// Plain facts gathered for the report. Kept free of I/O so `render` is pure
-/// and unit-testable.
-#[derive(Debug, Clone)]
-struct Report {
-    version: &'static str,
-    os: &'static str,
-    arch: &'static str,
-    lock_path: PathBuf,
+/// Schema version of the serialized [`Report`]. Like every `--json` report of
+/// this binary, a consumer checks `v` first and refuses a newer value.
+pub const REPORT_VERSION: u32 = 1;
+
+/// Plain facts gathered for the report, free of I/O so every renderer over it is pure. The serialized form is
+/// what `doctor --json` prints and what other readers of the host's health consume.
+#[derive(Debug, Clone, Serialize)]
+pub struct Report {
+    pub v: u32,
+    pub version: &'static str,
+    pub os: &'static str,
+    pub arch: &'static str,
+    pub lock_path: PathBuf,
     /// The lock file, classified once at gather time. Each state carries
     /// exactly the facts it has - contradictory reports (an endpoint without
     /// a lock file, a parse error beside a pid) cannot be constructed.
-    lock: LockState,
+    pub lock: LockState,
     /// Per known browser: detection and manifest registration, in
     /// `Browser::ALL` order - or the reason the check could not run at all
     /// (e.g. no HOME).
-    manifests: Result<Vec<ManifestStatus>, String>,
-    /// The global kill switch (ADR-0030). `Ok(bool)` from a readable
-    /// revocation record; `Err(text)` when the record is unreadable (in which
-    /// case every enforcement point is failing closed).
-    kill: Result<bool, String>,
-    /// The host-owned policy store (ADR-0032). The report's own `store` state
-    /// carries the fail-closed distinctions (`none` is healthy pre-cutover;
-    /// `error` is a present-but-unreadable store), so no outer `Result` is
-    /// needed - `gather_policy_status` never fails.
-    policy: PolicyStatusReport,
-    /// The pending legacy-settings import (ADR-0032 decision 8): the recorded
-    /// receipt. `none` is the ordinary state;
-    /// `error` is a present-but-unreadable receipt (fail closed).
-    pending_import: PendingImportReport,
+    pub manifests: Result<Vec<ManifestStatus>, String>,
+    /// The global kill switch. `Ok(bool)` from a readable revocation record;
+    /// `Err(text)` when the record is unreadable (in which case every
+    /// enforcement point is failing closed).
+    pub kill: Result<bool, String>,
+    /// The host-owned policy store. The report's own `store` state carries
+    /// the fail-closed distinctions (`none` is healthy pre-cutover; `error`
+    /// is a present-but-unreadable store), so no outer `Result` is needed -
+    /// `gather_policy_status` never fails.
+    pub policy: PolicyStatusReport,
+    /// The pending legacy-settings import: the recorded receipt. `none` is
+    /// the ordinary state; `error` is a present-but-unreadable receipt (fail
+    /// closed).
+    pub pending_import: PendingImportReport,
 }
 
 /// The lock file's classification: exactly absent, present-but-unreadable, or
 /// parsed (with the probe result the endpoint allowed). Mirrors the three-way
-/// result of `LockFile::read()`.
-#[derive(Debug, Clone)]
-enum LockState {
+/// result of `LockFile::read()`. A parsed file says nothing about the server
+/// by itself: only `reachable` does, since a server that died without
+/// cleaning up leaves its lock behind.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum LockState {
     /// No lock file: server not running.
     Absent,
     /// The file exists but did not read/parse.
-    Unreadable(String),
+    Unreadable { detail: String },
     /// Parsed; `reachable` is the passive connect probe against `endpoint`.
-    Running {
+    Present {
         endpoint: String,
         pid: u32,
         secret_len: usize,
@@ -73,12 +83,32 @@ enum LockState {
 /// resolver and `registration::assess`. Stores the assessed [`RegState`]
 /// itself; the rendered wording and the health verdict are derived at use,
 /// so they cannot disagree with each other.
-#[derive(Debug, Clone)]
-struct ManifestStatus {
-    key: &'static str,
-    detected: bool,
-    state: RegState,
-    location: String,
+#[derive(Debug, Clone, Serialize)]
+pub struct ManifestStatus {
+    pub key: &'static str,
+    pub detected: bool,
+    pub state: RegState,
+    pub location: String,
+}
+
+/// The wire form of [`RegState`], as a serde derive with `rename_all = "snake_case"` would write it:
+/// `"ok"` for a unit arm, `{"stale": "<why>"}` for one carrying its reason.
+impl Serialize for RegState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RegState::Missing => serializer.serialize_unit_variant("RegState", 0, "missing"),
+            RegState::Ok => serializer.serialize_unit_variant("RegState", 1, "ok"),
+            RegState::Stale(why) => {
+                serializer.serialize_newtype_variant("RegState", 2, "stale", why)
+            }
+            RegState::Foreign(why) => {
+                serializer.serialize_newtype_variant("RegState", 3, "foreign", why)
+            }
+            RegState::Unreadable(why) => {
+                serializer.serialize_newtype_variant("RegState", 4, "unreadable", why)
+            }
+        }
+    }
 }
 
 impl ManifestStatus {
@@ -130,9 +160,9 @@ fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
 }
 
 /// Gather the report by reading (never mutating) local state.
-fn gather() -> Report {
+pub fn gather() -> Report {
     let lock = match LockFile::read() {
-        Ok(Some(lf)) => LockState::Running {
+        Ok(Some(lf)) => LockState::Present {
             reachable: probe(&lf.endpoint),
             secret_len: lf.secret.len(),
             pid: lf.pid,
@@ -140,10 +170,13 @@ fn gather() -> Report {
         },
         Ok(None) => LockState::Absent,
         // File exists but did not read/parse. Present-but-broken.
-        Err(e) => LockState::Unreadable(e.to_string()),
+        Err(e) => LockState::Unreadable {
+            detail: e.to_string(),
+        },
     };
 
     Report {
+        v: REPORT_VERSION,
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
@@ -164,10 +197,10 @@ fn render(r: &Report) -> String {
 
     out.push_str(&format!("lock file:       {}\n", r.lock_path.display()));
     match &r.lock {
-        LockState::Unreadable(err) => {
-            out.push_str(&format!("  present but unreadable: {err}\n"));
+        LockState::Unreadable { detail } => {
+            out.push_str(&format!("  present but unreadable: {detail}\n"));
         }
-        LockState::Running {
+        LockState::Present {
             endpoint,
             pid,
             secret_len,
@@ -185,13 +218,15 @@ fn render(r: &Report) -> String {
 
     out.push_str("mcp server:      ");
     match &r.lock {
-        LockState::Running {
+        LockState::Present {
             reachable: true, ..
         } => out.push_str("reachable (socket connect OK)\n"),
-        LockState::Running {
+        LockState::Present {
             reachable: false, ..
         } => out.push_str("not reachable\n"),
-        LockState::Absent | LockState::Unreadable(_) => out.push_str("not probed (no lock file)\n"),
+        LockState::Absent | LockState::Unreadable { .. } => {
+            out.push_str("not probed (no lock file)\n")
+        }
     }
 
     out.push_str("kill switch:     ");
@@ -325,19 +360,19 @@ fn summary(r: &Report) -> &'static str {
                 policy baseline; see the pending-import row above";
     }
     match &r.lock {
-        LockState::Unreadable(_) => {
+        LockState::Unreadable { .. } => {
             "lock file present but unreadable - try restarting your MCP client"
         }
         LockState::Absent => "server not running - is your MCP client started?",
-        LockState::Running {
+        LockState::Present {
             reachable: true, ..
         } if r.manifest_ok() => "OK",
-        LockState::Running {
+        LockState::Present {
             reachable: true, ..
         } => {
             "server reachable, but no detected browser has a healthy native-host registration - run `chromium-bridge doctor --fix`"
         }
-        LockState::Running { .. } => "server not reachable - is your MCP client running?",
+        LockState::Present { .. } => "server not reachable - is your MCP client running?",
     }
 }
 
@@ -374,8 +409,9 @@ fn run_list() -> i32 {
     0
 }
 
-/// Entry point for the `doctor` / `status` subcommand: report by default,
-/// `--list` for the short listing, `--fix` to repair/register.
+/// Entry point for the `doctor` / `status` subcommand: report by default
+/// (`--json` for its serialized form), `--list` for the short listing,
+/// `--fix` to repair/register.
 pub fn run(argv: &[String]) -> i32 {
     let cmd = match crate::cli::doctor_args(argv) {
         Ok(c) => c,
@@ -387,9 +423,19 @@ pub fn run(argv: &[String]) -> i32 {
     match cmd {
         crate::cli::DoctorCommand::List => run_list(),
         crate::cli::DoctorCommand::Fix(targets) => registration::run_fix(&targets),
-        crate::cli::DoctorCommand::Report => {
+        crate::cli::DoctorCommand::Report { json } => {
             let report = gather();
-            print!("{}", render(&report));
+            if json {
+                match serde_json::to_string(&report) {
+                    Ok(line) => println!("{line}"),
+                    Err(e) => {
+                        eprintln!("doctor: {e}");
+                        return 1;
+                    }
+                }
+            } else {
+                print!("{}", render(&report));
+            }
             exit_code(&report)
         }
     }
@@ -401,11 +447,12 @@ mod tests {
 
     fn healthy_report() -> Report {
         Report {
+            v: REPORT_VERSION,
             version: "1.2.3",
             os: "macos",
             arch: "aarch64",
             lock_path: PathBuf::from("/tmp/run.lock"),
-            lock: LockState::Running {
+            lock: LockState::Present {
                 endpoint: "/tmp/chromium-bridge/run.sock".into(),
                 pid: 4242,
                 secret_len: 32,
@@ -447,6 +494,69 @@ mod tests {
                 detail: "policy store decode: bad".into(),
             },
         }
+    }
+
+    #[test]
+    fn the_report_serializes_to_its_wire_shape() {
+        // A golden shape, kept only because the report is a wire contract: `doctor --json` prints
+        // it and readers outside this binary consume it. Every field and every enum arm appears,
+        // so a renamed or dropped one fails here before it reaches a consumer.
+        assert_eq!(
+            serde_json::to_value(healthy_report()).unwrap(),
+            serde_json::json!({
+                "v": 1,
+                "version": "1.2.3",
+                "os": "macos",
+                "arch": "aarch64",
+                "lock_path": "/tmp/run.lock",
+                "lock": {
+                    "state": "present",
+                    "endpoint": "/tmp/chromium-bridge/run.sock",
+                    "pid": 4242,
+                    "secret_len": 32,
+                    "reachable": true,
+                },
+                "manifests": {"Ok": [
+                    {"key": "chrome", "detected": true, "state": "ok",
+                     "location": "/tmp/com.vivswan.chromium_bridge.host.json"},
+                    {"key": "brave", "detected": false, "state": "missing",
+                     "location": "/tmp/brave/com.vivswan.chromium_bridge.host.json"},
+                ]},
+                "kill": {"Ok": false},
+                "policy": {"store": "none", "v": 1},
+                "pending_import": {"state": "none", "v": 1},
+            })
+        );
+
+        let mut broken = healthy_report();
+        broken.lock = LockState::Unreadable {
+            detail: "lock file: not JSON".into(),
+        };
+        broken.manifests = Ok(vec![ManifestStatus {
+            key: "edge",
+            detected: true,
+            state: RegState::Stale("launch path /old/bin does not exist".into()),
+            location: "/tmp/edge/com.vivswan.chromium_bridge.host.json".into(),
+        }]);
+        broken.kill = Err("revocation record: permission denied".into());
+        broken.policy = policy_report(PolicyStoreState::Error);
+        let value = serde_json::to_value(broken).unwrap();
+        assert_eq!(
+            value["lock"],
+            serde_json::json!({"state": "unreadable", "detail": "lock file: not JSON"})
+        );
+        assert_eq!(
+            value["manifests"]["Ok"][0]["state"],
+            serde_json::json!({"stale": "launch path /old/bin does not exist"})
+        );
+        assert_eq!(
+            value["kill"],
+            serde_json::json!({"Err": "revocation record: permission denied"})
+        );
+        assert_eq!(
+            value["policy"],
+            serde_json::json!({"store": "error", "v": 1, "detail": "policy store decode: bad"})
+        );
     }
 
     #[test]
@@ -567,6 +677,7 @@ mod tests {
     #[test]
     fn render_missing_lock_reports_not_running() {
         let r = Report {
+            v: REPORT_VERSION,
             version: "1.2.3",
             os: "linux",
             arch: "x86_64",

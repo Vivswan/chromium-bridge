@@ -10,7 +10,7 @@
 |------|------|------|
 | `chromium-bridge` (no arguments) | MCP server | Default mode, spawned by the MCP client. The first instance becomes the broker; later instances attach to it ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)). |
 | `chromium-bridge --native-host [--label <browser>]` | native host | Thin bridge, spawned by the browser via the host manifest. Never invoked by hand. |
-| `chromium-bridge doctor` (alias `status`) | read-only diagnostics | Environment and connectivity self-check; changes nothing. |
+| `chromium-bridge doctor [--json]` (alias `status`) | read-only diagnostics | Environment and connectivity self-check; changes nothing. `--json` prints the report as one versioned object. |
 | `chromium-bridge doctor --list` | read-only diagnostics | One line per known browser: detection and registration state. |
 | `chromium-bridge doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host. The only mutating form of doctor. |
 | `chromium-bridge uninstall` | removal | Removes exactly the registrations this project wrote, nothing else. |
@@ -43,6 +43,8 @@ It reports:
 - **Server reachability**: a passive connect-and-drop probe against our own bridge socket (no bytes sent), reporting `reachable` / `not reachable`.
 - **Kill switch**: engaged, clear, or unreadable. `doctor` exits non-zero while the switch is engaged or its state cannot be read.
 - **Native-host registrations**: for each known browser (chrome, chromium, brave, edge, vivaldi, opera), whether it looks present for this user and the state of its registration for `com.vivswan.chromium_bridge.host`: `ok`, `missing`, `stale` (ours, but its launch path dangles), or not ours. The diagnosis comes from the same resolver `--fix` repairs with, so what doctor reports is exactly what `--fix` produces.
+
+`doctor --json` prints the same report as one JSON object on stdout, with the same exit code. Check its `v` field first and refuse a newer value before reading anything else (fail closed), as with every `--json` report of this binary.
 
 ### How to interpret "server not reachable"
 
@@ -161,13 +163,15 @@ Diagnostics in both modes go to **stderr** (stdout carries protocol frames). Two
 | `BB_LOG` | `error` \| `warn` \| `info` (default) \| `debug` | Log threshold. `info` and above print audit lines; set `warn`/`error` to silence auditing. |
 | `BB_LOG_FORMAT` | `text` (default) \| `json` | Format of audit lines. `json` emits one JSON object per line, convenient for machine collection. |
 
-**Audit events (stderr)**: every security decision emits one audit line: tool calls (with `req`, `tool`, `outcome`, and on error the stable `code` from [`ERROR_SPECS`](../src/packages/core/src/error.rs), plus `dur_ms`), harness admissions and refusals, client pairing and revocation, host-key revocations, kill-switch transitions, and the extension's confirmation and enrollment decisions (forwarded over the port). The same events are appended as strict JSON records to a durable, size-capped `audit.log` (0600, in the runtime directory next to the lock file), which survives the short-lived processes that write it.
+**Audit events (stderr)**: every security decision emits one audit line: tool calls (with `req`, `tool`, `outcome`, and on error the stable `code` from [`ERROR_SPECS`](../src/packages/core/src/error.rs), plus `dur_ms`), harness admissions and refusals, client pairing and revocation, host-key revocations, kill-switch transitions, and the extension's confirmation and enrollment decisions (forwarded over the port).
+
+The same events are appended as strict JSON records to a durable, size-capped `audit.log` (0600, in the runtime directory next to the lock file), which survives the short-lived processes that write it. Each record names its event in `event_kind`; the JSON stderr form wraps the record in a `"kind":"audit"` envelope, so a collector keys on `kind` and reads the event from `event_kind`.
 
 ```text
 # BB_LOG_FORMAT default (text)
-[AUDIT] ts=1721000000000 kind=tool_call req=7 tool=page_click outcome=ok dur_ms=12
+[AUDIT] 2026-10-03 23:12:44.302Z  kill_engage     surface=cli outcome=ok
 # BB_LOG_FORMAT=json
-{"kind":"audit","ts":1721000000000,"kind":"tool_call","req":"7","tool":"page_eval","outcome":"error","code":"EXECUTION_FAILED","dur_ms":"8"}
+{"kind":"audit","v":1,"ts_ms":1791069164310,"event_kind":"kill_engage","surface":"cli","outcome":"ok"}
 ```
 
 Read the durable trail with the read-only subcommand:

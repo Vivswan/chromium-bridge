@@ -280,8 +280,9 @@ pub fn revoke_client_name(args: &[String]) -> Result<String, String> {
 /// invocation cannot be represented past this boundary.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DoctorCommand {
-    /// Plain `doctor`: the read-only health report.
-    Report,
+    /// Plain `doctor`: the read-only health report; `--json` prints it as
+    /// one machine-readable object.
+    Report { json: bool },
     /// `--list`: print detection/registration state, change nothing.
     List,
     /// `--fix`: (re-)register the targeted browsers. Idempotent, so this is
@@ -312,6 +313,7 @@ pub enum FixTargets {
 pub fn doctor_args(args: &[String]) -> Result<DoctorCommand, String> {
     let mut fix = false;
     let mut list = false;
+    let mut json = false;
     let mut browsers: Option<Vec<Browser>> = None;
     let mut all = false;
     let mut manifest_dirs: Vec<String> = Vec::new();
@@ -320,6 +322,7 @@ pub fn doctor_args(args: &[String]) -> Result<DoctorCommand, String> {
         match arg.as_str() {
             "--fix" => fix = true,
             "--list" => list = true,
+            argv::JSON_FLAG => json = true,
             "--browser" => {
                 if browsers.is_some() {
                     return Err("--browser given more than once".into());
@@ -364,11 +367,14 @@ pub fn doctor_args(args: &[String]) -> Result<DoctorCommand, String> {
     if list && (fix || selections > 0) {
         return Err("--list is a read-only report and takes no other flags".into());
     }
+    if json && (list || fix || selections > 0) {
+        return Err("--json is the report's own form and takes no other flags".into());
+    }
     if list {
         return Ok(DoctorCommand::List);
     }
     if !fix {
-        return Ok(DoctorCommand::Report);
+        return Ok(DoctorCommand::Report { json });
     }
     Ok(DoctorCommand::Fix(if all {
         FixTargets::All
@@ -738,7 +744,7 @@ pub fn print_help() {
          Bridge an MCP client to a real Chrome via an extension + native host.\n\n\
          USAGE:\n    \
          chromium-bridge                Run as MCP server (for your MCP client)\n    \
-         chromium-bridge doctor         Print a read-only health report (alias: status)\n    \
+         chromium-bridge doctor [--json] Print a read-only health report (alias: status)\n    \
          chromium-bridge doctor --list  List known browsers + registration state (read-only)\n    \
          chromium-bridge doctor --fix [--browser <keys> | --all | --manifest-dir <dir>]\n\
          {pad}Repair (or first-register) the native-messaging\n\
@@ -928,7 +934,11 @@ mod tests {
         use super::{doctor_args, DoctorCommand, FixTargets};
         use crate::browsers::Browser;
         let ok = |list: &[&str]| doctor_args(&args(list)).unwrap();
-        assert_eq!(ok(&["doctor"]), DoctorCommand::Report);
+        assert_eq!(ok(&["doctor"]), DoctorCommand::Report { json: false });
+        assert_eq!(
+            ok(&["doctor", "--json"]),
+            DoctorCommand::Report { json: true }
+        );
         assert_eq!(
             ok(&["doctor", "--fix"]),
             DoctorCommand::Fix(FixTargets::Detected)
@@ -967,6 +977,8 @@ mod tests {
         assert!(err(&["doctor", "--fix", "--all", "--browser", "chrome"])
             .contains("mutually exclusive"));
         assert!(err(&["doctor", "--list", "--fix"]).contains("read-only"));
+        assert!(err(&["doctor", "--json", "--list"]).contains("no other flags"));
+        assert!(err(&["doctor", "--json", "--fix"]).contains("no other flags"));
         // Malformed values.
         assert!(err(&["doctor", "--fix", "--browser"]).contains("requires a value"));
         assert!(err(&["doctor", "--fix", "--browser", ","]).contains("no browser"));

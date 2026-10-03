@@ -6,14 +6,15 @@
 //! ```text
 //! stderr via log::audit             -> hidden below BB_LOG=info; the FILE is the audit surface, not a diagnostic
 //! runtime_dir()/audit.log, 0600     -> one JSON line per record regardless of BB_LOG, rotated once to audit.log.1,
-//!                                      read back by `chromium-bridge audit`
+//!                                      read back by [`read`] (behind `chromium-bridge audit`)
 //! failed write                      -> bumps a process-local counter; the next written record carries dropped: n
 //! rotation                          -> its own NON-BLOCKING sidecar lock (audit.log.lock, see append_at), so it can
 //!                                      never entangle with the runtime lock
-//! read-back                         -> deny_unknown_fields plus a version check; run_audit shows a line that does not
-//!                                      parse as an explicit "unrecognized record" and counts it
+//! read-back                         -> deny_unknown_fields plus a version check; [`read`] keeps a line that does not
+//!                                      parse as an explicit unrecognized entry in its position
 //! ```
 
+use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -276,7 +277,7 @@ pub fn record(mut rec: AuditRecord) {
         rec.dropped = Some(dropped);
     }
 
-    emit_stderr(&rec);
+    crate::log::audit(&rec);
 
     let outcome = serde_json::to_vec(&rec).map(|mut line| {
         line.push(b'\n');
@@ -345,44 +346,6 @@ fn rotate_locked(path: &Path, add: usize, max: u64) {
     // Dropping `lock` releases it.
 }
 
-/// Render the record to stderr through the shared audit formatter (text or
-/// JSON per `BB_LOG_FORMAT`, gated at the `info` threshold like every other
-/// audit line).
-fn emit_stderr(rec: &AuditRecord) {
-    let mut owned: Vec<(&str, String)> = vec![("event_kind", serde_variant_name(&rec.event_kind))];
-    if let Some(s) = &rec.surface {
-        owned.push(("surface", serde_variant_name(s)));
-    }
-    if let Some(r) = rec.req {
-        owned.push(("req", r.to_string()));
-    }
-    if let Some(c) = rec.conn {
-        owned.push(("conn", c.to_string()));
-    }
-    if let Some(c) = &rec.cid {
-        owned.push(("cid", c.to_string()));
-    }
-    for (k, v) in [
-        ("tool", &rec.tool),
-        ("name", &rec.name),
-        ("outcome", &rec.outcome),
-        ("code", &rec.code),
-        ("detail", &rec.detail),
-    ] {
-        if let Some(v) = v.as_deref() {
-            owned.push((k, v.to_string()));
-        }
-    }
-    if let Some(d) = rec.dur_ms {
-        owned.push(("dur_ms", d.to_string()));
-    }
-    if let Some(d) = rec.dropped {
-        owned.push(("dropped", d.to_string()));
-    }
-    let fields: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    crate::log::audit(&fields);
-}
-
 /// A serde-renamed variant's wire name (e.g. `tool_call`), obtained by
 /// serializing the value. Falls back to `?` if serialization somehow fails
 /// (it cannot for these unit enums, but audit code never panics).
@@ -439,7 +402,66 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-// ---- CLI: `chromium-bridge audit` -------------------------------------------
+// ---- Reading the trail, and the `chromium-bridge audit` CLI over it -------
+
+/// The newest records of the on-disk trail, rotated file included, as read
+/// back for the `audit` subcommand and any other reader of the trail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuditPage {
+    /// The live file; the rotated sibling is read before it.
+    pub path: PathBuf,
+    /// Newest first. Every line of the trail is one entry, parsed or not.
+    pub entries: Vec<AuditEntry>,
+    /// Lines older than the page, left unread.
+    pub older: usize,
+}
+
+/// One line of the trail. A line that fails the strict parse (valid JSON, known fields only, supported
+/// version) is reported as unrecognized in its position, never guessed at or skipped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "entry", rename_all = "snake_case")]
+pub enum AuditEntry {
+    Record(Box<AuditRecord>),
+    /// Corrupt, tampered, or a newer schema.
+    Unrecognized,
+}
+
+/// Read the newest `limit` lines of the trail. Only an unreadable file is an
+/// error; a trail that does not exist yet is an empty page.
+pub fn read(limit: usize) -> io::Result<AuditPage> {
+    read_at(&audit_path(), limit)
+}
+
+fn read_at(live: &Path, limit: usize) -> io::Result<AuditPage> {
+    let mut lines: Vec<String> = Vec::new();
+    for path in [rotated_path(live), live.to_path_buf()] {
+        match fs::read_to_string(&path) {
+            Ok(text) => lines.extend(text.lines().map(str::to_string)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!("cannot read {}: {e}", path.display()),
+                ))
+            }
+        }
+    }
+    let older = lines.len().saturating_sub(limit);
+    let entries = lines
+        .iter()
+        .skip(older)
+        .rev()
+        .map(|line| match parse_record(line) {
+            Some(rec) => AuditEntry::Record(Box::new(rec)),
+            None => AuditEntry::Unrecognized,
+        })
+        .collect();
+    Ok(AuditPage {
+        path: live.to_path_buf(),
+        entries,
+        older,
+    })
+}
 
 /// `audit [--limit <n>]`: print the on-disk audit trail, oldest first,
 /// rotated file included. Read-only. Returns a process exit code.
@@ -451,42 +473,43 @@ pub fn run_audit(argv: &[String]) -> i32 {
             return 2;
         }
     };
-    let live = audit_path();
-    let mut lines: Vec<String> = Vec::new();
-    for path in [rotated_path(&live), live.clone()] {
-        match fs::read_to_string(&path) {
-            Ok(text) => lines.extend(text.lines().map(str::to_string)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => {
-                eprintln!("audit: cannot read {}: {e}", path.display());
-                return 1;
-            }
+    let page = match read(limit) {
+        Ok(page) => page,
+        Err(e) => {
+            eprintln!("audit: {e}");
+            return 1;
         }
-    }
-    if lines.is_empty() {
-        println!("no audit records yet (looked in {})", live.display());
-        return 0;
-    }
-    let start = lines.len().saturating_sub(limit);
-    let mut unrecognized = 0usize;
-    for line in lines.iter().skip(start) {
-        match parse_record(line) {
-            Some(rec) => println!("{}", render_line(&rec)),
-            None => {
-                unrecognized = unrecognized.saturating_add(1);
-                println!(
-                    "{:<24} UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)",
-                    "-"
-                );
-            }
-        }
-    }
+    };
+    print!("{}", render(&page));
+    let unrecognized = page
+        .entries
+        .iter()
+        .filter(|e| **e == AuditEntry::Unrecognized)
+        .count();
     if unrecognized > 0 {
         eprintln!(
             "audit: {unrecognized} record(s) could not be parsed; treat the trail as suspect"
         );
     }
     0
+}
+
+/// The page as the subcommand prints it: oldest first, one line per entry.
+fn render(page: &AuditPage) -> String {
+    if page.entries.is_empty() && page.older == 0 {
+        return format!("no audit records yet (looked in {})\n", page.path.display());
+    }
+    let mut out = String::new();
+    for entry in page.entries.iter().rev() {
+        match entry {
+            AuditEntry::Record(rec) => out.push_str(&format!("{rec}\n")),
+            AuditEntry::Unrecognized => out.push_str(&format!(
+                "{:<24} UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)\n",
+                "-"
+            )),
+        }
+    }
+    out
 }
 
 /// Parse one audit line, strictly: valid JSON, known fields only, supported
@@ -496,35 +519,47 @@ fn parse_record(line: &str) -> Option<AuditRecord> {
     (rec.v == AUDIT_VERSION).then_some(rec)
 }
 
-/// One human-facing line per record: UTC timestamp, kind, then the fields the
-/// record actually carries.
-fn render_line(rec: &AuditRecord) -> String {
-    let mut s = format!(
-        "{}  {:<15}",
-        format_utc_ms(rec.ts_ms),
-        serde_variant_name(&rec.event_kind)
-    );
-    if let Some(surface) = &rec.surface {
-        s.push_str(&format!(" surface={}", serde_variant_name(surface)));
-    }
-    for (k, v) in [
-        ("tool", &rec.tool),
-        ("name", &rec.name),
-        ("outcome", &rec.outcome),
-        ("code", &rec.code),
-        ("detail", &rec.detail),
-    ] {
-        if let Some(v) = v.as_deref() {
-            s.push_str(&format!(" {k}={v}"));
+/// One human-facing line per record: UTC timestamp, kind, then the fields the record carries. The same
+/// line serves the `audit` subcommand and the `BB_LOG_FORMAT=text` stderr line.
+impl fmt::Display for AuditRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}  {:<15}",
+            format_utc_ms(self.ts_ms),
+            serde_variant_name(&self.event_kind)
+        )?;
+        if let Some(surface) = &self.surface {
+            write!(f, " surface={}", serde_variant_name(surface))?;
         }
+        if let Some(r) = self.req {
+            write!(f, " req={r}")?;
+        }
+        if let Some(c) = self.conn {
+            write!(f, " conn={c}")?;
+        }
+        if let Some(c) = &self.cid {
+            write!(f, " cid={c}")?;
+        }
+        for (k, v) in [
+            ("tool", &self.tool),
+            ("name", &self.name),
+            ("outcome", &self.outcome),
+            ("code", &self.code),
+            ("detail", &self.detail),
+        ] {
+            if let Some(v) = v.as_deref() {
+                write!(f, " {k}={v}")?;
+            }
+        }
+        if let Some(d) = self.dur_ms {
+            write!(f, " dur_ms={d}")?;
+        }
+        if let Some(d) = self.dropped {
+            write!(f, " dropped={d}")?;
+        }
+        Ok(())
     }
-    if let Some(d) = rec.dur_ms {
-        s.push_str(&format!(" dur_ms={d}"));
-    }
-    if let Some(d) = rec.dropped {
-        s.push_str(&format!(" dropped={d}"));
-    }
-    s
 }
 
 /// The `--limit <n>` of `audit` (default [`DEFAULT_AUDIT_LIMIT`]), parsed
@@ -802,16 +837,107 @@ mod tests {
     }
 
     #[test]
-    fn render_line_shows_the_carried_fields() {
-        let mut rec = AuditRecord::new(AuditKind::ToolCall);
+    fn stderr_json_line_has_one_kind_key_and_the_event_kind() {
+        // Incident: the record's own `kind` field collided with the `"kind":"audit"` envelope, so
+        // every JSON audit line carried two `kind` keys and a parser kept the last one, losing
+        // the discriminator. Counted on the raw bytes, since a JSON parser hides the duplicate.
+        let mut rec = AuditRecord::new(AuditKind::ToolCall).outcome("error");
         rec.v = AUDIT_VERSION;
         rec.ts_ms = 0;
+        rec.req = Some(7);
+        rec.conn = Some(3);
         rec.tool = Some("page_eval".into());
-        rec.outcome = Some("error".into());
         rec.code = Some("BRIDGE_KILLED".into());
-        let line = render_line(&rec);
-        assert!(line.contains("tool_call"));
-        assert!(line.contains("tool=page_eval"));
-        assert!(line.contains("code=BRIDGE_KILLED"));
+        rec.dur_ms = Some(8);
+        let line = crate::log::render_audit(crate::log::Format::Json, &rec).unwrap();
+        assert_eq!(line.matches("\"kind\":").count(), 1, "{line}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&line).unwrap(),
+            serde_json::json!({
+                "kind": "audit", "v": 1, "ts_ms": 0, "event_kind": "tool_call", "outcome": "error",
+                "tool": "page_eval", "code": "BRIDGE_KILLED", "req": 7, "conn": 3, "dur_ms": 8,
+            })
+        );
+        // The text line keeps the correlation ids (req, conn) a reader joins on.
+        assert_eq!(
+            crate::log::render_audit(crate::log::Format::Text, &rec).unwrap(),
+            "[AUDIT] 1970-01-01 00:00:00.000Z  tool_call       req=7 conn=3 tool=page_eval outcome=error code=BRIDGE_KILLED dur_ms=8"
+        );
+    }
+
+    #[test]
+    fn read_pages_the_trail_newest_first_across_the_rotation() {
+        // The reader must agree with the writer's layout (audit.log.1 holds the older half) and
+        // keep an unparsable line in its position, so a tampered or truncated line shows up where
+        // it sits instead of silently shrinking the page. The serialized page and the printed
+        // text are both asserted whole: the page is a wire contract for other readers.
+        let live = tmp("read");
+        let record = |ts_ms: u64, kind: &str| {
+            format!("{{\"v\":1,\"ts_ms\":{ts_ms},\"event_kind\":\"{kind}\",\"surface\":\"cli\",\"outcome\":\"ok\"}}\n")
+        };
+        fs::write(
+            rotated_path(&live),
+            record(1_000, "kill_engage") + &record(2_000, "kill_release"),
+        )
+        .unwrap();
+        fs::write(
+            &live,
+            "{not json\n".to_string() + &record(3_000, "pair_client"),
+        )
+        .unwrap();
+
+        let page = read_at(&live, 3).unwrap();
+        let mut release = AuditRecord::new(AuditKind::KillRelease)
+            .surface(Surface::Cli)
+            .outcome("ok");
+        release.v = AUDIT_VERSION;
+        release.ts_ms = 2_000;
+        let mut pair = AuditRecord::new(AuditKind::PairClient)
+            .surface(Surface::Cli)
+            .outcome("ok");
+        pair.v = AUDIT_VERSION;
+        pair.ts_ms = 3_000;
+        assert_eq!(
+            page,
+            AuditPage {
+                path: live.clone(),
+                entries: vec![
+                    AuditEntry::Record(Box::new(pair)),
+                    AuditEntry::Unrecognized,
+                    AuditEntry::Record(Box::new(release)),
+                ],
+                older: 1,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&page).unwrap(),
+            serde_json::json!({
+                "path": live.to_str().unwrap(),
+                "entries": [
+                    {"entry": "record", "v": 1, "ts_ms": 3000, "event_kind": "pair_client",
+                     "surface": "cli", "outcome": "ok"},
+                    {"entry": "unrecognized"},
+                    {"entry": "record", "v": 1, "ts_ms": 2000, "event_kind": "kill_release",
+                     "surface": "cli", "outcome": "ok"},
+                ],
+                "older": 1,
+            })
+        );
+        assert_eq!(
+            render(&page),
+            "1970-01-01 00:00:02.000Z  kill_release    surface=cli outcome=ok\n\
+             -                        UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)\n\
+             1970-01-01 00:00:03.000Z  pair_client     surface=cli outcome=ok\n"
+        );
+
+        let dir = live.parent().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        let empty = read_at(&live, 3).unwrap();
+        assert_eq!(empty.entries, []);
+        assert_eq!(empty.older, 0);
+        assert_eq!(
+            render(&empty),
+            format!("no audit records yet (looked in {})\n", live.display())
+        );
     }
 }
