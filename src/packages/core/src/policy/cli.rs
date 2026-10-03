@@ -595,7 +595,7 @@ fn wire_names(fields: &[PolicyField]) -> String {
 // ---- The subcommand runners -------------------------------------------------
 
 /// Whether a raw `policy` argv names `--json`, decided WITHOUT the parser
-/// (argv[0] is the binary and argv[1] "policy", so the scan starts after
+/// (`argv[0]` is the binary and `argv[1]` "policy", so the scan starts after
 /// them). [`run_policy`] consults this when [`policy_args`] itself refused,
 /// so the documented `--json` contract - a versioned report on stdout -
 /// holds even for an argv that never parsed.

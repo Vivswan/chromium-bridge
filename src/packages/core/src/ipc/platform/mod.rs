@@ -2,11 +2,11 @@
 //! platform-specific code (and its unsafe FFI) is not scattered through the
 //! policy logic as cfg-gates:
 //!
-//! - [`linux`]: `/proc/<pid>/exe` SHA256 image identity + SO_PEERCRED peer
+//! - `linux`: `/proc/<pid>/exe` SHA256 image identity + SO_PEERCRED peer
 //!   credentials.
-//! - [`macos`]: Security-framework code-signing identity (cdhash via the
+//! - `macos`: Security-framework code-signing identity (cdhash via the
 //!   kernel audit token) + LOCAL_PEERPID peer credentials.
-//! - [`windows`]: process handles (liveness/terminate) + BCrypt randomness.
+//! - `windows`: process handles (liveness/terminate) + BCrypt randomness.
 //!   Windows has no image attestation (see SECURITY.md "Platform support").
 //!
 //! Selection is at compile time via cfg (there is exactly one implementation
