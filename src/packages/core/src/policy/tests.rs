@@ -46,10 +46,9 @@ fn poles(field: PolicyField) -> (PolicyValues, PolicyValues) {
 
 #[test]
 fn every_field_relaxes_exactly_toward_its_declared_pole() {
-    // The grant condition under each pole, checked over the whole catalogue:
-    // a field's permissive pole relaxes its restrictive pole, no other field
-    // moves, and the reverse never relaxes. Red when a comparison arm stops
-    // following the catalogue (the old per-field arms did not read it).
+    // The direction table is the only owner of what relaxes: a field's
+    // permissive pole relaxes its restrictive pole, no other field moves, and
+    // the reverse never relaxes, for every catalogue field.
     for field in PolicyField::ALL {
         let (lax, tight) = poles(*field);
         let relaxed: Vec<PolicyField> = PolicyField::ALL
@@ -150,8 +149,7 @@ fn the_orders_a_naive_comparator_gets_wrong() {
 fn serialized_bytes_are_the_signed_wire_contract() {
     // The signature covers these exact bytes and the extension strict-parses
     // them, so key spelling, key order, and value encoding are an external
-    // contract. Captured before the carriers became macro-generated; the
-    // bytes must never move.
+    // contract: the bytes must never move.
     let values = PolicyValues {
         cdp_mode: true,
         file_upload_enabled: false,

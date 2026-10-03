@@ -527,7 +527,6 @@ impl Default for PolicyValues {
 }
 
 impl PolicyValues {
-    /// Copy `field` from `from`, whatever its kind.
     pub fn copy_field(&mut self, field: PolicyField, from: &PolicyValues) {
         match field.kind() {
             FieldKind::Bool(f) => *self.bool_mut(f) = from.get_bool(f),
@@ -538,7 +537,6 @@ impl PolicyValues {
 }
 
 impl PolicyOverlay {
-    /// Whether the overlay carries an entry for `field`.
     pub fn has(&self, field: PolicyField) -> bool {
         match field.kind() {
             FieldKind::Bool(f) => self.get_bool(f).is_some(),
@@ -547,7 +545,6 @@ impl PolicyOverlay {
         }
     }
 
-    /// Drop the entry for `field`.
     pub fn clear(&mut self, field: PolicyField) {
         match field.kind() {
             FieldKind::Bool(f) => *self.bool_mut(f) = None,
@@ -556,7 +553,6 @@ impl PolicyOverlay {
         }
     }
 
-    /// Set the entry for `field` to its value in `values`.
     pub fn set_from(&mut self, field: PolicyField, values: &PolicyValues) {
         match field.kind() {
             FieldKind::Bool(f) => *self.bool_mut(f) = Some(values.get_bool(f)),
@@ -565,7 +561,6 @@ impl PolicyOverlay {
         }
     }
 
-    /// Copy the entry (present or absent) for `field` from `from`.
     pub fn copy_entry(&mut self, field: PolicyField, from: &PolicyOverlay) {
         match field.kind() {
             FieldKind::Bool(f) => *self.bool_mut(f) = from.get_bool(f),
