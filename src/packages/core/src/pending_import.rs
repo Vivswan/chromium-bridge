@@ -664,10 +664,11 @@ mod tests {
         let _dir = scratch_runtime_dir("pending-import-oversize");
         let huge = "x".repeat(LEGACY_BAG_MAX_BYTES + 1);
         let bag = json!({ "blob": huge });
-        match record_if_absent(bag).unwrap() {
-            RecordOutcome::Oversize { bytes } => assert!(bytes > LEGACY_BAG_MAX_BYTES),
-            other => panic!("expected Oversize, got {other:?}"),
-        }
+        let outcome = record_if_absent(bag).unwrap();
+        let RecordOutcome::Oversize { bytes } = outcome else {
+            panic!("expected Oversize, got {outcome:?}");
+        };
+        assert!(bytes > LEGACY_BAG_MAX_BYTES);
         // Nothing was written: the store stays absent, never a truncated bag.
         assert_eq!(load().unwrap(), StoreState::Absent);
     }

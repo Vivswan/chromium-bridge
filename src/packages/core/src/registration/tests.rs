@@ -127,10 +127,11 @@ fn assess_flags_a_dangling_launch_path_as_stale() {
     reg.register(&target).unwrap();
     // Simulate the binary/wrapper disappearing (moved binary, wiped dir).
     fs::remove_file(tree.path("install/run-host-chrome.sh")).unwrap();
-    match assess(&target.registration) {
-        RegState::Stale(why) => assert!(why.contains("launch path missing"), "{why}"),
-        other => panic!("expected Stale, got {other:?}"),
-    }
+    let state = assess(&target.registration);
+    let RegState::Stale(why) = state else {
+        panic!("expected Stale, got {state:?}");
+    };
+    assert!(why.contains("launch path missing"), "{why}");
     // --fix's engine repairs it in place.
     reg.register(&target).unwrap();
     assert_eq!(assess(&target.registration), RegState::Ok);

@@ -254,15 +254,14 @@ fn a_tightening_rollback_uses_the_free_lane() {
         ..PolicyValues::default()
     };
     let target = PolicyValues::default();
-    match plan_rollback(&target, &current, &current) {
-        RollbackPlan::Tighten { overlay, fields } => {
-            assert_eq!(fields, vec![PolicyField::PageEvalEnabled]);
-            assert_eq!(overlay.page_eval_enabled, Some(false));
-            // Folding the diff overlay over current lands exactly on target.
-            assert_eq!(fold(&current, &overlay), target);
-        }
-        other => panic!("expected Tighten, got {other:?}"),
-    }
+    let plan = plan_rollback(&target, &current, &current);
+    let RollbackPlan::Tighten { overlay, fields } = plan else {
+        panic!("expected Tighten, got {plan:?}");
+    };
+    assert_eq!(fields, vec![PolicyField::PageEvalEnabled]);
+    assert_eq!(overlay.page_eval_enabled, Some(false));
+    // Folding the diff overlay over current lands exactly on target.
+    assert_eq!(fold(&current, &overlay), target);
 }
 
 #[test]
@@ -290,26 +289,26 @@ fn a_relaxing_rollback_takes_the_signed_lane_with_the_changed_fields_touched() {
         eval_mask: false,         // also relax a second field
         ..PolicyValues::default()
     };
-    match plan_rollback(&target, &current, &baseline) {
-        RollbackPlan::Relax {
-            values,
-            touched,
-            fields,
-        } => {
-            // Changed fields carry the target value; untouched fields
-            // carry the BASELINE value (decision 3), so the overlay entry
-            // on confirmGraceMs survives the write instead of being
-            // silently folded into the signed baseline.
-            assert!(values.page_eval_enabled);
-            assert!(!values.eval_mask);
-            assert_eq!(values.confirm_grace_ms, 45_000);
-            assert!(touched.contains(&PolicyField::PageEvalEnabled));
-            assert!(touched.contains(&PolicyField::EvalMask));
-            assert!(!touched.contains(&PolicyField::ConfirmGraceMs));
-            assert_eq!(touched, fields);
-        }
-        other => panic!("expected Relax, got {other:?}"),
-    }
+    let plan = plan_rollback(&target, &current, &baseline);
+    let RollbackPlan::Relax {
+        values,
+        touched,
+        fields,
+    } = plan
+    else {
+        panic!("expected Relax, got {plan:?}");
+    };
+    // Changed fields carry the target value; untouched fields
+    // carry the BASELINE value (decision 3), so the overlay entry
+    // on confirmGraceMs survives the write instead of being
+    // silently folded into the signed baseline.
+    assert!(values.page_eval_enabled);
+    assert!(!values.eval_mask);
+    assert_eq!(values.confirm_grace_ms, 45_000);
+    assert!(touched.contains(&PolicyField::PageEvalEnabled));
+    assert!(touched.contains(&PolicyField::EvalMask));
+    assert!(!touched.contains(&PolicyField::ConfirmGraceMs));
+    assert_eq!(touched, fields);
 }
 
 #[test]

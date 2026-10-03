@@ -217,38 +217,34 @@ mod tests {
         ));
         // And the challenge paths report the stable reason code, each in its
         // own frame family.
-        match respond_to_challenge("nonce", None) {
-            EnclaveControl::EnclaveError { reason } => {
-                assert_eq!(reason, "unsupported_platform");
-            }
-            other => panic!("expected enclave_error, got {other:?}"),
-        }
-        match respond_to_presence_challenge("nonce", None) {
-            EnclaveControl::PresenceError { reason } => {
-                assert_eq!(reason, "unsupported_platform");
-            }
-            other => panic!("expected presence_error, got {other:?}"),
-        }
+        let reply = respond_to_challenge("nonce", None);
+        let EnclaveControl::EnclaveError { reason } = reply else {
+            panic!("expected enclave_error, got {reply:?}");
+        };
+        assert_eq!(reason, "unsupported_platform");
+        let reply = respond_to_presence_challenge("nonce", None);
+        let EnclaveControl::PresenceError { reason } = reply else {
+            panic!("expected presence_error, got {reply:?}");
+        };
+        assert_eq!(reason, "unsupported_platform");
     }
 
     #[test]
     fn malformed_challenge_yields_invalid_challenge_before_any_keychain_io() {
         // NUL in the nonce: rejected by validation, so the reply is
         // invalid_challenge on every platform (no keychain lookup happens).
-        match respond_to_challenge("a\0b", None) {
-            EnclaveControl::EnclaveError { reason } => {
-                assert_eq!(reason, "invalid_challenge");
-            }
-            other => panic!("expected enclave_error, got {other:?}"),
-        }
+        let reply = respond_to_challenge("a\0b", None);
+        let EnclaveControl::EnclaveError { reason } = reply else {
+            panic!("expected enclave_error, got {reply:?}");
+        };
+        assert_eq!(reason, "invalid_challenge");
         // The presence responder validates identically, in its own frame
         // family - and on macOS this must refuse BEFORE the keychain, or the
         // test itself would raise a presence prompt.
-        match respond_to_presence_challenge("a\0b", None) {
-            EnclaveControl::PresenceError { reason } => {
-                assert_eq!(reason, "invalid_challenge");
-            }
-            other => panic!("expected presence_error, got {other:?}"),
-        }
+        let reply = respond_to_presence_challenge("a\0b", None);
+        let EnclaveControl::PresenceError { reason } = reply else {
+            panic!("expected presence_error, got {reply:?}");
+        };
+        assert_eq!(reason, "invalid_challenge");
     }
 }

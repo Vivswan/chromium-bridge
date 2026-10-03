@@ -283,17 +283,19 @@ fn policy_get_answers_ok_false_when_no_store_exists() {
     // ok:false with an error and no baseline claim, so the extension keeps
     // its deny baseline rather than trusting bytes nobody vouched for.
     let _dir = scratch_runtime_dir("native-host-policy-get-absent");
-    match policy_current_reply() {
-        PolicyControl::PolicyCurrent {
-            ok: false,
-            baseline: None,
-            sig: None,
-            reason: Some(reason),
-            error: Some(_),
-            ..
-        } => assert_eq!(reason, "absent"),
-        other => panic!("absent store must answer ok:false with no baseline: {other:?}"),
-    }
+    let reply = policy_current_reply();
+    let PolicyControl::PolicyCurrent {
+        ok: false,
+        baseline: None,
+        sig: None,
+        reason: Some(reason),
+        error: Some(_),
+        ..
+    } = reply
+    else {
+        panic!("absent store must answer ok:false with no baseline: {reply:?}");
+    };
+    assert_eq!(reason, "absent");
 }
 
 #[test]
@@ -316,16 +318,18 @@ fn policy_get_answers_the_signed_baseline_from_the_store() {
         crate::audit::Surface::Core,
     )
     .unwrap();
-    match policy_current_reply() {
-        PolicyControl::PolicyCurrent {
-            ok: true,
-            baseline: Some(baseline),
-            sig: Some(_),
-            error: None,
-            ..
-        } => assert!(!baseline.is_empty()),
-        other => panic!("a present store must answer ok:true with a baseline: {other:?}"),
-    }
+    let reply = policy_current_reply();
+    let PolicyControl::PolicyCurrent {
+        ok: true,
+        baseline: Some(baseline),
+        sig: Some(_),
+        error: None,
+        ..
+    } = reply
+    else {
+        panic!("a present store must answer ok:true with a baseline: {reply:?}");
+    };
+    assert!(!baseline.is_empty());
 }
 
 #[test]
@@ -348,17 +352,19 @@ fn policy_get_answers_ok_false_on_a_damaged_or_tampered_store() {
         serde_json::to_vec(&garbage).unwrap(),
     )
     .unwrap();
-    match policy_current_reply() {
-        PolicyControl::PolicyCurrent {
-            ok: false,
-            baseline: None,
-            sig: None,
-            reason: Some(reason),
-            error: Some(_),
-            ..
-        } => assert_eq!(reason, "damaged"),
-        other => panic!("a damaged baseline must answer ok:false: {other:?}"),
-    }
+    let reply = policy_current_reply();
+    let PolicyControl::PolicyCurrent {
+        ok: false,
+        baseline: None,
+        sig: None,
+        reason: Some(reason),
+        error: Some(_),
+        ..
+    } = reply
+    else {
+        panic!("a damaged baseline must answer ok:false: {reply:?}");
+    };
+    assert_eq!(reason, "damaged");
     // Valid baseline, tampered overlay relaxing it (direction-invalid).
     let doc = crate::policy::PolicyDoc::default();
     let tampered = crate::policy::PolicyStore {
@@ -376,20 +382,20 @@ fn policy_get_answers_ok_false_on_a_damaged_or_tampered_store() {
         serde_json::to_vec(&tampered).unwrap(),
     )
     .unwrap();
-    match policy_current_reply() {
-        PolicyControl::PolicyCurrent {
-            ok: false,
-            baseline: None,
-            sig: None,
-            reason: Some(reason),
-            error: Some(e),
-            ..
-        } => {
-            assert!(e.contains("damaged"));
-            assert_eq!(reason, "damaged");
-        }
-        other => panic!("a tampered overlay must answer ok:false: {other:?}"),
-    }
+    let reply = policy_current_reply();
+    let PolicyControl::PolicyCurrent {
+        ok: false,
+        baseline: None,
+        sig: None,
+        reason: Some(reason),
+        error: Some(e),
+        ..
+    } = reply
+    else {
+        panic!("a tampered overlay must answer ok:false: {reply:?}");
+    };
+    assert!(e.contains("damaged"));
+    assert_eq!(reason, "damaged");
 }
 
 #[test]
@@ -405,40 +411,40 @@ fn policy_get_answers_ok_false_unreadable_on_a_damaged_store_envelope() {
         br#"{"version":99,"baseline_b64":"e30="}"#,
     )
     .unwrap();
-    match policy_current_reply() {
-        PolicyControl::PolicyCurrent {
-            ok: false,
-            reason: Some(reason),
-            error: Some(_),
-            ..
-        } => assert_eq!(reason, "unreadable"),
-        other => panic!("an unreadable store envelope must answer ok:false: {other:?}"),
-    }
+    let reply = policy_current_reply();
+    let PolicyControl::PolicyCurrent {
+        ok: false,
+        reason: Some(reason),
+        error: Some(_),
+        ..
+    } = reply
+    else {
+        panic!("an unreadable store envelope must answer ok:false: {reply:?}");
+    };
+    assert_eq!(reason, "unreadable");
 }
 
 #[test]
 fn lang_get_answers_the_current_language() {
     let _dir = scratch_runtime_dir("native-host-lang-get");
     crate::lang::set("zh_TW").unwrap();
-    match lang_current_frame().unwrap() {
-        PolicyControl::LangCurrent { value, seq } => {
-            assert_eq!(value, "zh_TW");
-            assert_eq!(seq, 1);
-        }
-        other => panic!("lang_get must answer lang_current: {other:?}"),
-    }
+    let reply = lang_current_frame().unwrap();
+    let PolicyControl::LangCurrent { value, seq } = reply else {
+        panic!("lang_get must answer lang_current: {reply:?}");
+    };
+    assert_eq!(value, "zh_TW");
+    assert_eq!(seq, 1);
 }
 
 #[test]
 fn lang_set_applies_a_valid_value_and_bumps_the_sequence() {
     let _dir = scratch_runtime_dir("native-host-lang-set-valid");
-    match handle_lang_set("zh_CN".into()).unwrap() {
-        PolicyControl::LangCurrent { value, seq } => {
-            assert_eq!(value, "zh_CN");
-            assert_eq!(seq, 1);
-        }
-        other => panic!("lang_set must answer the applied lang_current: {other:?}"),
-    }
+    let reply = handle_lang_set("zh_CN".into()).unwrap();
+    let PolicyControl::LangCurrent { value, seq } = reply else {
+        panic!("lang_set must answer the applied lang_current: {reply:?}");
+    };
+    assert_eq!(value, "zh_CN");
+    assert_eq!(seq, 1);
     assert_eq!(
         crate::lang::load_current().unwrap(),
         ("zh_CN".to_string(), 1)
@@ -452,13 +458,12 @@ fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
     // UNCHANGED value+seq, and the store is untouched.
     let _dir = scratch_runtime_dir("native-host-lang-set-invalid");
     crate::lang::set("zh_CN").unwrap();
-    match handle_lang_set("fr".into()).unwrap() {
-        PolicyControl::LangCurrent { value, seq } => {
-            assert_eq!(value, "zh_CN");
-            assert_eq!(seq, 1);
-        }
-        other => panic!("a refused lang_set must reply the unchanged current: {other:?}"),
-    }
+    let reply = handle_lang_set("fr".into()).unwrap();
+    let PolicyControl::LangCurrent { value, seq } = reply else {
+        panic!("a refused lang_set must reply the unchanged current: {reply:?}");
+    };
+    assert_eq!(value, "zh_CN");
+    assert_eq!(seq, 1);
     assert_eq!(
         crate::lang::load_current().unwrap(),
         ("zh_CN".to_string(), 1)
@@ -473,14 +478,18 @@ fn extension_kill_release_is_refused_audited_and_does_not_release() {
     // the bridge stays killed - the refusal never calls kill::release.
     let _dir = scratch_runtime_dir("native-host-kill-release-refused");
     crate::kill::engage(crate::audit::Surface::Cli).unwrap();
-    match handle_kill_release_refused() {
-        AdminControl::KillStatusResult {
-            ok: false,
-            killed: None,
-            error: Some(_),
-        } => {}
-        other => panic!("extension release must be refused with no killed claim: {other:?}"),
-    }
+    let reply = handle_kill_release_refused();
+    assert!(
+        matches!(
+            reply,
+            AdminControl::KillStatusResult {
+                ok: false,
+                killed: None,
+                error: Some(_),
+            }
+        ),
+        "extension release must be refused with no killed claim: {reply:?}"
+    );
     assert!(
         crate::kill::is_killed().unwrap(),
         "the refusal must NOT release the kill switch"
@@ -543,21 +552,22 @@ fn kill_status_reply_never_claims_a_state_it_cannot_read() {
     // environment), the reply is ok with an explicit killed flag; the
     // ok:false shape is pinned by the malformed test above and the
     // adversarial suite (corrupt record).
-    match kill_status_reply() {
-        AdminControl::KillStatusResult {
-            ok: true,
-            killed: Some(_),
-            error: None,
-        } => {}
-        AdminControl::KillStatusResult {
-            ok: false,
-            killed: None,
-            error: Some(_),
-        } => {}
-        other => {
-            panic!("kill_status_result must never pair ok:false with a killed claim: {other:?}")
-        }
-    }
+    let reply = kill_status_reply();
+    assert!(
+        matches!(
+            reply,
+            AdminControl::KillStatusResult {
+                ok: true,
+                killed: Some(_),
+                error: None,
+            } | AdminControl::KillStatusResult {
+                ok: false,
+                killed: None,
+                error: Some(_),
+            }
+        ),
+        "kill_status_result must never pair ok:false with a killed claim: {reply:?}"
+    );
 }
 
 #[test]
@@ -583,12 +593,11 @@ fn audit_events_with_host_side_kinds_are_dropped() {
 fn revoke_on_an_unsupported_platform_reports_the_stable_reason() {
     // Non-macOS: EnrollmentKey::revoke fails closed with Unsupported and
     // the reply carries the stable reason code, never a panic.
-    match revoke_host_key() {
-        EnclaveControl::EnclaveError { reason } => {
-            assert_eq!(reason, "unsupported_platform");
-        }
-        other => panic!("expected enclave_error, got {other:?}"),
-    }
+    let reply = revoke_host_key();
+    let EnclaveControl::EnclaveError { reason } = reply else {
+        panic!("expected enclave_error, got {reply:?}");
+    };
+    assert_eq!(reason, "unsupported_platform");
 }
 
 // ---- ADR-0030: the control-plane unkill drain -----------------------------

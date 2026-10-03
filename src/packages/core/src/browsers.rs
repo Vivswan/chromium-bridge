@@ -458,21 +458,17 @@ mod tests {
         d.local_app_data = Some(PathBuf::from("/fix/local"));
         d.roaming_app_data = Some(PathBuf::from("/fix/roaming"));
         let e = entry(Os::Windows, &d, Browser::Chrome);
-        match &e.registration {
-            Registration::Registry { key, manifest_path } => {
-                assert_eq!(
-                    key,
-                    r"Software\Google\Chrome\NativeMessagingHosts\com.vivswan.chromium_bridge.host"
-                );
-                assert_eq!(
-                    manifest_path,
-                    &PathBuf::from(
-                        "/fix/local/chromium-bridge/com.vivswan.chromium_bridge.host.json"
-                    )
-                );
-            }
-            other => panic!("expected a registry registration, got {other:?}"),
-        }
+        let Registration::Registry { key, manifest_path } = &e.registration else {
+            panic!("expected a registry registration, got {:?}", e.registration);
+        };
+        assert_eq!(
+            key,
+            r"Software\Google\Chrome\NativeMessagingHosts\com.vivswan.chromium_bridge.host"
+        );
+        assert_eq!(
+            manifest_path,
+            &PathBuf::from("/fix/local/chromium-bridge/com.vivswan.chromium_bridge.host.json")
+        );
         assert_eq!(
             e.config_dir,
             PathBuf::from("/fix/local/Google/Chrome/User Data")

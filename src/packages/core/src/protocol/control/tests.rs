@@ -87,13 +87,13 @@ fn classify_forwards_ordinary_frames() {
 
 #[test]
 fn classify_handles_challenge_locally_and_never_forwards_control_types() {
-    match classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n", "context": "c" })) {
-        FrameDisposition::Challenge { nonce, context } => {
-            assert_eq!(nonce, "n");
-            assert_eq!(context.as_deref(), Some("c"));
-        }
-        other => panic!("expected Challenge, got {other:?}"),
-    }
+    let disposition =
+        classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n", "context": "c" }));
+    let FrameDisposition::Challenge { nonce, context } = disposition else {
+        panic!("expected Challenge, got {disposition:?}");
+    };
+    assert_eq!(nonce, "n");
+    assert_eq!(context.as_deref(), Some("c"));
     // Context is optional.
     assert!(matches!(
         classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n" })),
@@ -124,15 +124,13 @@ fn classify_handles_challenge_locally_and_never_forwards_control_types() {
 fn classify_handles_presence_frames_locally() {
     // A well-formed presence_challenge is handled by the host (ADR-0031),
     // never forwarded.
-    match classify_nm_frame(&json!({ "type": "presence_challenge", "nonce": "n",
-                                     "context": "c" }))
-    {
-        FrameDisposition::PresenceChallenge { nonce, context } => {
-            assert_eq!(nonce, "n");
-            assert_eq!(context.as_deref(), Some("c"));
-        }
-        other => panic!("expected PresenceChallenge, got {other:?}"),
-    }
+    let disposition =
+        classify_nm_frame(&json!({ "type": "presence_challenge", "nonce": "n", "context": "c" }));
+    let FrameDisposition::PresenceChallenge { nonce, context } = disposition else {
+        panic!("expected PresenceChallenge, got {disposition:?}");
+    };
+    assert_eq!(nonce, "n");
+    assert_eq!(context.as_deref(), Some("c"));
     assert!(matches!(
         classify_nm_frame(&json!({ "type": "presence_challenge", "nonce": "n" })),
         FrameDisposition::PresenceChallenge { context: None, .. }
@@ -197,10 +195,11 @@ fn classify_handles_revoke_and_admin_frames_locally() {
         classify_nm_frame(&json!({ "type": "client_list" })),
         FrameDisposition::ClientList
     ));
-    match classify_nm_frame(&json!({ "type": "client_revoke", "name": "codex" })) {
-        FrameDisposition::ClientRevoke { name } => assert_eq!(name, "codex"),
-        other => panic!("expected ClientRevoke, got {other:?}"),
-    }
+    let disposition = classify_nm_frame(&json!({ "type": "client_revoke", "name": "codex" }));
+    let FrameDisposition::ClientRevoke { name } = disposition else {
+        panic!("expected ClientRevoke, got {disposition:?}");
+    };
+    assert_eq!(name, "codex");
     // ...malformed admin requests get the matching {ok:false} reply,
     // carried as the typed AdminKind so the reply builder cannot
     // misroute one...
@@ -294,18 +293,17 @@ fn classify_handles_kill_and_audit_frames_locally() {
     ));
     // ...an audit event carries its fields BY NAME to the handler, with
     // the kind already typed as extension-owned...
-    match classify_nm_frame(&json!({
+    let disposition = classify_nm_frame(&json!({
         "type": "audit_event", "kind": "confirm_denied", "tool": "eval", "cid": "c-42"
-    })) {
-        FrameDisposition::AuditEvent(fields) => {
-            assert_eq!(fields.kind, crate::audit::AuditKind::ConfirmDenied);
-            assert_eq!(fields.tool.as_deref(), Some("eval"));
-            // The per-confirmation correlation id survives parsing so the
-            // host writes it into the audit record for the panel to join on.
-            assert_eq!(fields.cid.as_deref(), Some("c-42"));
-        }
-        other => panic!("expected AuditEvent, got {other:?}"),
-    }
+    }));
+    let FrameDisposition::AuditEvent(fields) = disposition else {
+        panic!("expected AuditEvent, got {disposition:?}");
+    };
+    assert_eq!(fields.kind, crate::audit::AuditKind::ConfirmDenied);
+    assert_eq!(fields.tool.as_deref(), Some("eval"));
+    // The per-confirmation correlation id survives parsing so the
+    // host writes it into the audit record for the panel to join on.
+    assert_eq!(fields.cid.as_deref(), Some("c-42"));
     // ...and a malformed one is dropped (fire-and-forget: no reply
     // contract to honor, and nothing may be recorded from garbage).
     assert!(matches!(
@@ -332,10 +330,11 @@ fn audit_events_with_host_owned_kinds_are_dropped_at_classification() {
         "admission",
         "",
     ] {
-        match classify_nm_frame(&json!({ "type": "audit_event", "kind": kind })) {
-            FrameDisposition::DropForeignAuditKind { kind: k } => assert_eq!(k, kind),
-            other => panic!("expected DropForeignAuditKind for {kind:?}, got {other:?}"),
-        }
+        let disposition = classify_nm_frame(&json!({ "type": "audit_event", "kind": kind }));
+        let FrameDisposition::DropForeignAuditKind { kind: k } = disposition else {
+            panic!("expected DropForeignAuditKind for {kind:?}, got {disposition:?}");
+        };
+        assert_eq!(k, kind);
     }
     // Positive control: an extension-owned kind still classifies to a
     // typed, recordable AuditEvent.
@@ -355,12 +354,11 @@ fn admin_kind_tags_match_their_classification() {
     // so wire_tag and classify_nm_frame agree on the mapping (the const
     // assertion above only ties the tags to the derived SET).
     for &kind in AdminKind::ALL {
-        match classify_nm_frame(&json!({ "type": kind.wire_tag(), "unexpected": 1 })) {
-            FrameDisposition::MalformedAdmin(k) => {
-                assert_eq!(k, kind, "{}", kind.wire_tag());
-            }
-            other => panic!("expected MalformedAdmin({kind:?}), got {other:?}"),
-        }
+        let disposition = classify_nm_frame(&json!({ "type": kind.wire_tag(), "unexpected": 1 }));
+        let FrameDisposition::MalformedAdmin(k) = disposition else {
+            panic!("expected MalformedAdmin({kind:?}), got {disposition:?}");
+        };
+        assert_eq!(k, kind, "{}", kind.wire_tag());
     }
 }
 
@@ -625,55 +623,62 @@ fn policy_status_into_frame_forbids_illegal_mixtures() {
     // intermediate emits only the two flat shapes the contract means, so a
     // sig without a baseline, a baseline on an ok:false, or an ok:true
     // with an error is unconstructible past this point.
-    match (PolicyStatus::Present {
+    let signed = (PolicyStatus::Present {
         baseline_b64: "YmFzZQ==".into(),
         sig_b64: Some("c2ln".into()),
         overlay: None,
     })
-    .into_frame()
-    {
-        PolicyControl::PolicyCurrent {
-            ok: true,
-            baseline: Some(_),
-            sig: Some(_),
-            error: None,
-            ..
-        } => {}
-        other => panic!("present must be ok:true with baseline and no error: {other:?}"),
-    }
+    .into_frame();
+    assert!(
+        matches!(
+            signed,
+            PolicyControl::PolicyCurrent {
+                ok: true,
+                baseline: Some(_),
+                sig: Some(_),
+                error: None,
+                ..
+            }
+        ),
+        "present must be ok:true with baseline and no error: {signed:?}"
+    );
     // An unsigned baseline: still ok:true with a baseline, sig
     // absent - never a sig without its baseline.
-    match (PolicyStatus::Present {
+    let unsigned = (PolicyStatus::Present {
         baseline_b64: "YmFzZQ==".into(),
         sig_b64: None,
         overlay: None,
     })
-    .into_frame()
-    {
-        PolicyControl::PolicyCurrent {
-            ok: true,
-            baseline: Some(_),
-            sig: None,
-            ..
-        } => {}
-        other => panic!("unsigned present must carry the baseline and no sig: {other:?}"),
-    }
-    match (PolicyStatus::Unavailable {
+    .into_frame();
+    assert!(
+        matches!(
+            unsigned,
+            PolicyControl::PolicyCurrent {
+                ok: true,
+                baseline: Some(_),
+                sig: None,
+                ..
+            }
+        ),
+        "unsigned present must carry the baseline and no sig: {unsigned:?}"
+    );
+    let unavailable = (PolicyStatus::Unavailable {
         reason: Some(PolicyUnavailableReason::Absent),
         error: "no policy baseline".into(),
     })
-    .into_frame()
-    {
-        PolicyControl::PolicyCurrent {
-            ok: false,
-            baseline: None,
-            sig: None,
-            overlay: None,
-            reason: Some(r),
-            error: Some(_),
-        } => assert_eq!(r, "absent"),
-        other => panic!("unavailable must be ok:false with no baseline claim: {other:?}"),
-    }
+    .into_frame();
+    let PolicyControl::PolicyCurrent {
+        ok: false,
+        baseline: None,
+        sig: None,
+        overlay: None,
+        reason: Some(r),
+        error: Some(_),
+    } = unavailable
+    else {
+        panic!("unavailable must be ok:false with no baseline claim: {unavailable:?}");
+    };
+    assert_eq!(r, "absent");
 }
 
 #[test]

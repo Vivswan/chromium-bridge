@@ -175,7 +175,8 @@ pub fn assess(reg: &Registration) -> RegState {
             RegistryKeyState::Error(e) => {
                 return RegState::Unreadable(format!("registry key HKCU\\{key}: {e}"));
             }
-            other => Some((key, matches!(other, RegistryKeyState::PointsAtManifest))),
+            RegistryKeyState::PointsAtManifest => Some((key, true)),
+            RegistryKeyState::Missing => Some((key, false)),
         },
     };
 
@@ -831,7 +832,13 @@ fn set_registry_key(key: &str, _manifest_path: &Path) -> Result<(), String> {
 /// What a registration's HKCU key says, checked against the manifest path we
 /// manage. Anything but `PointsAtManifest` blocks deletion. Off Windows only
 /// the `Error` stub is ever built, so the other variants are cfg-dead there.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(
+    not(windows),
+    expect(
+        dead_code,
+        reason = "off Windows only the Error stub is built, so the other variants are never constructed"
+    )
+)]
 enum RegistryKeyState {
     Missing,
     PointsAtManifest,
