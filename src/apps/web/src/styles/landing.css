@@ -152,7 +152,7 @@ img { display: block; max-width: 100%; height: auto; }
 }
 .sec-sub { font-size: 16px; color: var(--text-2); max-width: 620px; }
 
-/* deck divider: the dmg motif - solid deck, chevron, dormant dots */
+/* deck divider: solid deck, chevron, dormant dots */
 .deck-divider {
   display: flex; align-items: center; gap: 10px;
   max-width: 1080px; margin: 0 auto; padding: 0 32px;

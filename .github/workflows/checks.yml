@@ -200,7 +200,7 @@ jobs:
         run: moon run check-gen
       - name: Envelope asymmetry gate (schemars vs z.toJSONSchema)
         run: moon run check-envelope
-      - name: Gen-only tooling (schemars, ts-rs) stays out of every shipped binary's graph
+      - name: Gen-only tooling (schemars, p256) stays out of the shipped binary's graph
         run: moon run check-gen-isolation
 
   version-consistency:

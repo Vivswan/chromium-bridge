@@ -276,7 +276,10 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
               run <span class="mono-inline">chromium-bridge pair</span> (a Touch
               ID prompt) and approve the printed key fingerprint on the
               extension's options page. Until the fingerprints match, the
-              extension refuses to act.</p>
+              extension refuses to act. Pairing on macOS today needs a build
+              codesigned with an application identifier: the plain release
+              binary cannot mint the Enclave key. The WebAuthn presence track
+              removes that requirement.</p>
           </div>
         </li>
         <li class="step">

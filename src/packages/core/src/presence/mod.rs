@@ -391,18 +391,9 @@ pub(crate) mod policy_test_hook {
 
 /// Attest user presence for `reason`, hardware first, the CLI floor (a typed
 /// confirmation on `terminal`) only when hardware is unavailable. See the
-/// module docs for the no-downgrade rule.
-///
-/// The CLI floor is the only floor: adding another is a security change
-/// (SECURITY.md), and a floor no live surface selects is a latent grant
-/// primitive, which is why the retired extension and desktop floors are
-/// gone rather than kept as variants of a floor type.
-///
-/// The floor's precondition (stdin is a terminal) has necessarily already
-/// run: the [`TerminalStdin`] witness has no other constructor, so a
-/// script-driven invocation was refused promptless before this function -
-/// and its hardware prompt - was reachable (tap phishing, see the module
-/// docs).
+/// module docs for the no-downgrade rule. The CLI floor is the only floor;
+/// adding another is a security change (SECURITY.md). The terminal
+/// precondition is [`TerminalStdin`]'s.
 pub fn require_presence(
     reason: &str,
     terminal: TerminalStdin,
