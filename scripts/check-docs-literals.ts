@@ -392,15 +392,6 @@ if (import.meta.main) {
   const logFormats = envValueSet(logRs, "BB_LOG_FORMAT");
   const auditLimit = auditDefaultLimit(rust("audit.rs"));
   const keys = browserKeys(rust("browsers.rs"));
-  // The desktop app's bundle id, canonical in the Tauri config.
-  const bundleId = (
-    JSON.parse(readFileSync(resolve(root, "src/apps/desktop/tauri.conf.json"), "utf8")) as {
-      identifier?: unknown;
-    }
-  ).identifier;
-  if (typeof bundleId !== "string" || !bundleId.startsWith("com.vivswan.")) {
-    throw new Error("cannot find the bundle identifier in src/apps/desktop/tauri.conf.json");
-  }
 
   // Scope: living markdown only. ADRs are point-in-time records; CHANGELOG.md
   // is release history; sources and tests have their own gates. The security
@@ -428,12 +419,11 @@ if (import.meta.main) {
     {
       // Any reverse-DNS identifier in our namespace must be one of the
       // current canonical values: the host id (and its manifest filename
-      // form), the enclave keychain label, and the desktop app's bundle id
-      // (canonical in tauri.conf.json). Anything else fails by design until
-      // it is added here alongside its own canonical source.
+      // form) and the enclave keychain label. Anything else fails by design
+      // until it is added here alongside its own canonical source.
       label: "bridge identifier",
       family: /com\.vivswan\.[a-z0-9_](?:[a-z0-9._-]*[a-z0-9_])?/g,
-      allowed: new Set([hostId, `${hostId}.json`, keyLabel, bundleId]),
+      allowed: new Set([hostId, `${hostId}.json`, keyLabel]),
     },
     {
       label: "extension id",

@@ -13,14 +13,11 @@ taskOptions:
   runFromWorkspaceRoot: true
 
 fileGroups:
-  # Everything a workspace-level cargo verb can read: every member's sources
-  # (cargo fmt formats ALL members, including the non-default desktop crate),
+  # Everything a workspace-level cargo verb can read: every member's sources,
   # the workspace manifests, and the toolchain/lint pins.
   workspace-rust:
     - '/src/packages/core/**/*'
     - '/src/apps/host/**/*'
-    - '/src/apps/desktop/**/*.rs'
-    - '/src/apps/desktop/Cargo.toml'
     - '/Cargo.toml'
     - '/Cargo.lock'
     - '/rust-toolchain.toml'

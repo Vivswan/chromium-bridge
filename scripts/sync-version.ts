@@ -2,8 +2,7 @@
 // Propagate the crate version (Cargo.toml, the source of truth) into every
 // JSON manifest that carries a copy of it (versionedJsonFiles in
 // scripts/lib.ts: the extension package.json the WXT-generated manifest reads
-// its version from, and the desktop UI package.json), then verify
-// consistency.
+// its version from), then verify consistency.
 //
 // Usage: bump the version in Cargo.toml, then run `moon run sync-version`
 // (or `bun scripts/sync-version.ts`) and commit the result.
