@@ -140,7 +140,7 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 
 ## 8. Acceptance criteria (v0.1)
 
-1. Registration runs through (the desktop app's first launch, or `chromium-bridge doctor --fix`), the extension loads, and the host manifest is registered
+1. Registration runs through (`chromium-bridge doctor --fix`), the extension loads, and the host manifest is registered
 2. The MCP client shows `chromium-bridge` as connected
 3. The AI says "list my tabs" in a conversation -> sees the real tab list
 4. The AI says "screenshot the current page" -> the AI can analyze the screenshot

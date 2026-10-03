@@ -23,46 +23,17 @@ update-release.yml builds the `binaries` job on a matrix (currently `macos-14/ar
 1. `bun scripts/build-repro.ts` produces the deterministic release binary.
 2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` produces the extension bundle.
 3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (`.zip` on Windows), containing the binary, `extension/dist`, `RELEASE.txt`, `LICENSE.md`, and `README.md`.
-4. A `.sha256` for the archive and a separate `.binary.sha256` for the binary inside it are generated, and a build-provenance attestation covers both; its Sigstore bundle becomes the `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` asset. The standalone extension zip, the `.dmg`, and the SBOM ship `<asset>.attestation.jsonl` bundles the same way; `--bundle` verification is documented in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).
+4. A `.sha256` for the archive and a separate `.binary.sha256` for the binary inside it are generated, and a build-provenance attestation covers both; its Sigstore bundle becomes the `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` asset. The standalone extension zip and the SBOM ship `<asset>.attestation.jsonl` bundles the same way; `--bundle` verification is documented in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).
 5. `gh release upload` attaches the assets to the draft release; the fleet's `publish-release` stage then attests every asset on the draft into the release-level `attestation.json` and publishes it once every hook job is done.
 
-Users therefore **do not need a Rust/bun toolchain** to install: registration is the binary's own `chromium-bridge doctor --fix` (or the desktop app), see [quickstart.md](./quickstart.md). Third-party Actions are pinned to commit SHAs in this repository's workflows and in the fleet's release legs alike; the platform's own actions and reusable workflows are taken at `@stable`, a moving tag that names a green `main` commit of the platform (the residual recorded in [ADR-0033](./adr/0033-adopt-repo-platform-fleet-template.md); the trust model in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/build-provenance.md)).
-
-## The desktop app job (macOS)
-
-update-release.yml has a second macOS job, `desktop-app`, that builds the signed desktop bundle (the helper-bundle host with its own entitlements, [ADR-0026](./adr/0026-tauri-signing-and-entitlement-chain.md)), wraps it in a disk image, and attaches `chromium-bridge-app-<tag>-macos-arm64.dmg` plus its `.sha256` and its provenance attestation's `.attestation.jsonl` bundle to the same release. It is the CI equivalent of `moon run dmg-app`, including the re-verification of the app inside the mounted image by `scripts/check-desktop-signing.ts`.
-
-The job needs signing material that forks and secretless checkouts do not have, so it is gated: a small `desktop-signing-secrets` job checks whether the secrets are configured and the `desktop-app` job skips cleanly (it does not fail) when they are absent. That intended skip never blocks the binary and extension release: the fleet's `publish-release` stage publishes without the dmg. A desktop job that *fails*, though, deliberately holds publication - the hook workflow fails, the publish stage never runs, and the release stays an unpublished draft rather than shipping half of its assets (finish by hand per the recovery commands above, or rerun). The hook's `release-ready` job enforces this fail-closed: it always runs and fails unless every job landed in an allowed state, so an unexpected skip can never slip through to publication.
-
-Required repository secrets:
-
-| Secret | Content |
-|--------|---------|
-| `MACOS_CERT_P12_BASE64` | base64 of the signing certificate and its private key, exported from Keychain Access as a `.p12`. Must contain the identity named in `tauri.conf.json`'s `bundle.macOS.signingIdentity` |
-| `MACOS_CERT_PASSWORD` | the passphrase chosen for that `.p12` export |
-| `MACOS_PROVISION_PROFILE_BASE64` | base64 of a provisioning profile that authorizes the full entitlement chain (identifier, team, keychain group) |
-
-The certificate is imported into an ephemeral keychain that is deleted when the job ends, and the profile is passed to the build via `PROVISION_PROFILE_PATH` (locally, `scripts/desktop-bundle.ts` instead discovers the newest usable profile in Xcode's cache). The build validates the supplied profile fail-closed with one exception: the this-device check is skipped, because a CI runner is never in the profile's device list. That check is packaging validation, not enforcement; macOS itself refuses to run the app on any Mac the profile does not provision.
-
-**Free-tier churn:** a free Apple Development profile expires seven days after Xcode mints it, so `MACOS_PROVISION_PROFILE_BASE64` has to be refreshed shortly before merging a release PR:
-
-```sh
-base64 -i ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/<uuid>.provisionprofile \
-  | gh secret set MACOS_PROVISION_PROFILE_BASE64
-```
-
-A free-tier profile also only provisions the enrolled Macs it lists, so a `.dmg` signed this way runs on those machines and nowhere else. The profile additionally has to authorize the exact certificate in the `.p12`: `check-desktop-signing.ts` compares the signer's leaf certificate against the profile's `DeveloperCertificates` and fails the build on a mismatch, so a renewed certificate means re-minting the profile and refreshing both secrets together. A paid Developer ID removes these limits.
-
-### Notarization (optional, needs a paid Developer ID)
-
-The job notarizes and staples the `.dmg` (`xcrun notarytool submit --wait`, then `xcrun stapler staple`) only when all three notarization secrets are configured: `APPLE_ID`, `APPLE_APP_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`. The free Apple Development certificate **cannot notarize**; these secrets can only exist once a paid Developer ID membership does. Without them the step is skipped and the job logs it plainly: the `.dmg` is dev-signed, not notarized, and Gatekeeper will warn on other Macs. Stapling runs before the checksum and attestation steps so the published digest matches the exact bytes users download.
+Users therefore **do not need a Rust/bun toolchain** to install: registration is the binary's own `chromium-bridge doctor --fix`, see [quickstart.md](./quickstart.md). Third-party Actions are pinned to commit SHAs in this repository's workflows and in the fleet's release legs alike; the platform's own actions and reusable workflows are taken at `@stable`, a moving tag that names a green `main` commit of the platform (the residual recorded in [ADR-0033](./adr/0033-adopt-repo-platform-fleet-template.md); the trust model in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/build-provenance.md)).
 
 ## SBOM: CycloneDX onto the draft
 
 The `sbom` job in update-release.yml runs alongside the packaging jobs (it used to be a decoupled `release: published` workflow, but a published release is immutable, so the SBOM has to land on the draft):
 
 - It uses `anchore/sbom-action` to generate CycloneDX JSON (`chromium-bridge.cdx.json`) from the **committed lock files** (`Cargo.lock` + `bun.lock`), scanning declared dependencies rather than an installed tree (a fresh checkout has no `node_modules`/`target`).
-- It attests the SBOM's build provenance (same `actions/attest-build-provenance` step as the binaries and the `.dmg`), so `gh attestation verify chromium-bridge.cdx.json --repo <repo>` works on the downloaded asset.
+- It attests the SBOM's build provenance (same `actions/attest-build-provenance` step as the binaries), so `gh attestation verify chromium-bridge.cdx.json --repo <repo>` works on the downloaded asset.
 - It attaches the SBOM and its `.attestation.jsonl` bundle to the draft release for the tag.
 
 An SBOM tooling failure still **never blocks** a binary release: the job is `continue-on-error`, so the fleet's publish stage (which waits for every hook job) still runs - the release goes out without an SBOM and the annotated failure on the run flags it. Because the attest step runs before the upload (an asset nobody can verify must not ship), an attestation outage costs the SBOM asset the same way. The loss is permanent for that tag - the published release is immutable, so the SBOM cannot be attached afterwards; the next release carries one again.
@@ -78,8 +49,6 @@ Compatibility discipline holds before 1.0 too; `0.x` is not treated as a license
 ## Not yet in place (honest statement)
 
 - macOS **real integration tests in the release gate**: they need a real browser and are not part of the release gate yet.
-- **Desktop app signing secrets**: none are configured yet, so the `desktop-app` job currently skips on every run. Wiring exists; the secrets (and a decision to publish) do not.
-- **Notarization**: needs a paid Apple Developer ID membership. Until then any published `.dmg` would be dev-signed only, and device-limited by the free-tier profile.
 
 ## Related
 

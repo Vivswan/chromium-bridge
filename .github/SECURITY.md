@@ -35,8 +35,7 @@ In scope:
 - the revocation epoch,
 - the MV3 extension (background/content/confirmation window),
 - the site allowlist and confirmation model,
-- masking,
-- the desktop app's write paths into the core.
+- masking.
 
 Examples of in-scope issues:
 
@@ -127,7 +126,7 @@ These are host-owned POLICY defaults (ADR-0032): the table shows the signed poli
 
 How relaxing works:
 
-- **Two write surfaces, one cost.** The desktop app's Security view shows a confirmation dialog naming each relaxed field, then signs the policy document with Touch ID. The CLI's `chromium-bridge policy` grant path raises the same Touch ID user-presence prompt through its enclave signature.
+- **One write surface, one cost.** The CLI's `chromium-bridge policy` grant path signs the policy document with the enclave key, which raises the Touch ID user-presence prompt.
 - **Never silent.** The extension's options page no longer carries these toggles.
 - **Always in force.** The site allowlist (per-origin) and the global kill switch apply regardless of the policy.
 
@@ -171,7 +170,7 @@ Each release publishes:
 | Asset | Integrity data |
 |-------|----------------|
 | `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` | its SHA-256, a separate SHA-256 of the binary inside it (`<name>.binary.sha256`), a build provenance attestation covering both, and that attestation's Sigstore bundle as `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` |
-| the extension zip, the `.dmg`, the CycloneDX SBOM | their own attestations and `<asset>.attestation.jsonl` bundles, verifiable the same way |
+| the extension zip, the CycloneDX SBOM | their own attestations and `<asset>.attestation.jsonl` bundles, verifiable the same way |
 | the whole release | `attestation.json`: one Sigstore bundle whose single attestation lists every asset as a subject, written by the managed publish stage before the draft flips live |
 
 Verification is yours to run, before you execute anything from an archive:
@@ -189,7 +188,7 @@ Offline variants of the `gh attestation verify` calls:
 - `--bundle chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` reads the attestation from the downloaded release asset instead of GitHub's attestations API. The one bundle covers the archive and the bare binary alike; verification picks the entry matching the asset's digest.
 - `gh attestation verify <asset> -R Vivswan/chromium-bridge --bundle attestation.json` works for any downloaded asset, through the release-level bundle.
 
-Verifying the whole archive also covers the bundled `extension/dist`. Registration (`doctor --fix`, or the app) points browsers at the binary as it sits on disk; it downloads nothing and adds no verification step of its own. Verify first, then register.
+Verifying the whole archive also covers the bundled `extension/dist`. Registration (`doctor --fix`) points browsers at the binary as it sits on disk; it downloads nothing and adds no verification step of its own. Verify first, then register.
 
 Building it yourself skips the release pipeline entirely:
 
@@ -207,7 +206,7 @@ Known gaps, stated plainly:
 
 - **Reproducibility is one-machine so far.** Byte-identical rebuilds are verified across clean builds and checkout paths on the same machine. Matching a published hash from another machine requires the same rustup toolchain and platform SDK, and independent cross-machine rebuilds have not been demonstrated yet.
 - **Archives are not bit-reproducible.** tar and gzip embed metadata, which is why the release publishes the binary's hash separately.
-- **No notarization or Authenticode yet.** Binaries are not Apple-notarized for standalone distribution, and the Windows exe is not Authenticode-signed; macOS verification today is the SHA-256 and attestation above. The desktop app bundle is codesigned with its entitlement chain verified at build time ([ADR-0026](../docs/adr/0026-tauri-signing-and-entitlement-chain.md)).
+- **No notarization or Authenticode yet.** Binaries are not Apple-notarized for standalone distribution, and the Windows exe is not Authenticode-signed; macOS verification today is the SHA-256 and attestation above.
 - **Signing will change the check.** Once a distribution signing identity lands, released binaries will no longer be byte-identical to local rebuilds and verification will move to comparing cdhashes.
 - **Install-time hostility is out of scope.** A hostile process already running as the same user during install is handled at runtime by the bridge's peer attestation and harness admission, not at install time.
 

@@ -17,7 +17,7 @@ Mitigations that must be planned:
 ## What it solves, and what it does not
 
 - Solves: removes "wall 1". No more developer mode "Load unpacked"; one-click "Add to Chrome" that survives Chrome restarts, and far friendlier to managed/enterprise Chrome.
-- Does not solve: the host install stays. The store only distributes the extension. Users still need the native host binary + manifest, via the desktop app or `chromium-bridge doctor --fix`. So this tears down one wall, not all of them.
+- Does not solve: the host install stays. The store only distributes the extension. Users still need the native host binary + manifest, via `chromium-bridge doctor --fix`. So this tears down one wall, not all of them.
 
 ## Prerequisites
 
