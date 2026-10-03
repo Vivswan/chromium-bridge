@@ -18,7 +18,8 @@
 // (confirm/gate.ts + egress.ts). The content script reads NOTHING from
 // extension storage (trusted-storage.ts confines it to extension contexts).
 
-import { ContentMsgSchema, unreachable } from "@chromium-bridge/shared";
+import { ContentMsgSchema } from "@chromium-bridge/shared/content-msg";
+import { unreachable } from "@chromium-bridge/shared/util";
 import { createPageApi, REF_ATTR } from "../dom/page-api";
 import { runEval } from "./eval";
 import { showInfoToast } from "./info-toast";

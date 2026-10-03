@@ -7,9 +7,7 @@
 // and asserts every copy (generated TS, built manifest) agrees. If you
 // rotate the key (e.g. to adopt a Chrome Web Store-assigned id), regenerate
 // everything together - the gates fail otherwise.
-import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared";
-
-export { PINNED_EXTENSION_ID };
+import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/identity.gen";
 
 export interface IdDiagnosis {
   ok: boolean;

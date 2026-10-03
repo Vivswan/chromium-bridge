@@ -18,11 +18,10 @@ import {
   type AdminInboundFrame,
   AdminInboundFrameSchema,
   ClientListResultSchema,
-  type ClientListWire,
   ClientRevokeResultSchema,
-  type ClientRevokeWire,
   type TrustedClient,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave";
+import type { ClientListWire, ClientRevokeWire } from "@chromium-bridge/shared/envelope-wire.gen";
 
 export type { TrustedClient };
 

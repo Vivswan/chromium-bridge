@@ -3,10 +3,9 @@ import {
   type ConfirmPayload,
   ConfirmPayloadSchema,
   isHardwareGated,
-  isPolicyFieldName,
-  type OpName,
-  type PolicyFieldName,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/confirm";
+import type { OpName } from "@chromium-bridge/shared/ops.gen";
+import { isPolicyFieldName, type PolicyFieldName } from "@chromium-bridge/shared/policy.gen";
 import { useEffect, useRef, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";

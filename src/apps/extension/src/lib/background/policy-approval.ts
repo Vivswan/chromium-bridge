@@ -10,7 +10,8 @@
 // One approval per push, never blanket: nothing here caches a verdict or opens a grace window, and every
 // round trip is audit-visible through the service's confirm_shown/confirm_denied events (ADR-0030).
 
-import { POLICY_FIELDS, relaxedPolicyFields } from "@chromium-bridge/shared";
+import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
+import { relaxedPolicyFields } from "@chromium-bridge/shared/policy-compare";
 import { confirmWithUser, currentPanicEpoch } from "./confirm/service";
 import { setUnpinnedRelaxationApprover, type UnpinnedRelaxation } from "./policy-sync";
 

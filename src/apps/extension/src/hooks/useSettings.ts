@@ -1,7 +1,6 @@
-import { type Settings, salvageSettings } from "@chromium-bridge/shared";
+import { DEFAULTS, type Settings, salvageSettings } from "@chromium-bridge/shared/settings";
 import { useEffect, useRef, useState } from "react";
 import { browser } from "wxt/browser";
-import { DEFAULTS } from "@/lib/shared/settings";
 
 async function readAll(): Promise<Settings> {
   const bag = await browser.storage.local.get(Object.keys(DEFAULTS));

@@ -9,7 +9,7 @@
 // ambiguity). Startup-sweep-only by design: no storage watch, so no deletion
 // can ever interleave with a mid-life legacy enforcement read.
 
-import { POLICY_FIELDS } from "@chromium-bridge/shared";
+import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import {

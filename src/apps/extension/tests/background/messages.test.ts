@@ -5,8 +5,7 @@
 // (allowlist, pin, enrollment status) and must be refused. Without this gate a
 // content script on an approved origin could add_allow{evil.com}.
 
-import type { RuntimeMsg } from "@chromium-bridge/shared";
-import { RuntimeMsgSchema } from "@chromium-bridge/shared";
+import { type RuntimeMsg, RuntimeMsgSchema } from "@chromium-bridge/shared/runtime-msg";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";

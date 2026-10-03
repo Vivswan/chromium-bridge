@@ -22,11 +22,11 @@ import {
   ENCLAVE_FIXTURE_KEY_ID,
   MAX_CONTEXT_BYTES,
   MAX_NONCE_BYTES,
-  POLICY_DOMAIN,
   PRESENCE_DOMAIN,
   PUBKEY_LEN,
   SIG_LEN,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave.gen";
+import { POLICY_DOMAIN } from "@chromium-bridge/shared/policy.gen";
 
 const utf8 = new TextEncoder();
 

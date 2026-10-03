@@ -1,5 +1,6 @@
+import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/identity.gen";
 import { describe, expect, test } from "vitest";
-import { diagnoseExtensionId, PINNED_EXTENSION_ID } from "@/lib/shared/extension-id";
+import { diagnoseExtensionId } from "@/lib/shared/extension-id";
 
 describe("diagnoseExtensionId", () => {
   test("matching id → ok, no error", () => {

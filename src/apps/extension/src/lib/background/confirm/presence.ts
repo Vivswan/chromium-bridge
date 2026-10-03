@@ -24,13 +24,14 @@
 // the bridge compromised: only a substituted host or a corrupted channel can
 // produce one.
 
-import type { ConfirmPayload, PolicyValues } from "@chromium-bridge/shared";
+import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
 import {
-  type PresenceChallengeWire,
   PresenceErrorFrameSchema,
   PresenceInboundFrameSchema,
   PresenceProofFrameSchema,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave";
+import type { PresenceChallengeWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { browser } from "wxt/browser";
 import { getCompromised, getPin, setCompromised } from "../enclave-pin";
 import { generateNonce, hexEncode, verifyPresenceProofAgainstPin } from "../enclave-verify";

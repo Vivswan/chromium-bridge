@@ -24,7 +24,7 @@
 // keys linger, inert. Removing `cdpMode` fires the cdp teardown listener (cdp/registry.ts) once; teardown
 // is restriction-only.
 
-import { POLICY_FIELDS } from "@chromium-bridge/shared";
+import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
 import { browser } from "wxt/browser";
 import { LEGACY_SETTINGS_SENT_KEY } from "./legacy-import";
 import { POLICY_CUTOVER_KEY } from "./policy-sync";

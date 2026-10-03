@@ -1,4 +1,4 @@
-import { PendingApprovalsSchema } from "@chromium-bridge/shared";
+import { PendingApprovalsSchema } from "@chromium-bridge/shared/storage";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
@@ -6,8 +6,9 @@ import { useI18n } from "@/hooks/useI18n";
 // Type-only: the SW's own KillView declaration (lib/background/kill.ts), so
 // this popup cannot re-declare a drifted mirror of it.
 import type { KillView } from "@/lib/background/kill";
+import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import type { MessageKey } from "@/lib/i18n";
-import { type EnrollmentStatusView, send } from "@/lib/messages";
+import { send } from "@/lib/messages";
 
 interface Pending {
   id: string;
@@ -86,7 +87,7 @@ function displayOrigin(glob: string): string {
 export function PopupApp() {
   const { t } = useI18n();
   const [connected, setConnected] = useState(false);
-  const [enroll, setEnroll] = useState<EnrollmentStatusView | undefined>();
+  const [enroll, setEnroll] = useState<EnrollmentStatus | undefined>();
   const [list, setList] = useState<string[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [kill, setKill] = useState<KillView | null>(null);
@@ -96,7 +97,7 @@ export function PopupApp() {
   const refresh = useCallback(async () => {
     const status = await send<{ nativeConnected?: boolean }>({ type: "get_status" });
     setConnected(Boolean(status?.nativeConnected));
-    setEnroll(await send<EnrollmentStatusView>({ type: "get_enrollment" }));
+    setEnroll(await send<EnrollmentStatus>({ type: "get_enrollment" }));
     const al = await send<{ list?: string[] }>({ type: "get_allowlist" });
     setList(al?.list ?? []);
     const { pendingAllow } = await browser.storage.local.get("pendingAllow");

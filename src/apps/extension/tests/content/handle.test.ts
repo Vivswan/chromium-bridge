@@ -4,7 +4,7 @@
 // _info_toast reports cancellation as structured data (so a cancel survives
 // the reply envelope instead of collapsing into a falsy value).
 
-import type { ClickProbeWire } from "@chromium-bridge/shared";
+import type { ClickProbeWire } from "@chromium-bridge/shared/content-msg";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { handle } from "@/lib/content/handle";
 import type { ClickProbe } from "@/lib/dom/page-api";

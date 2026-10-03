@@ -11,9 +11,9 @@
 import {
   ClickProbeSchema,
   ContentMsgSchema,
-  type OpArgs,
   PageReplySchema,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/content-msg";
+import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
 import { browser } from "wxt/browser";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";

@@ -3,8 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
+import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import type { MessageKey } from "@/lib/i18n";
-import { type EnrollmentStatusView, send } from "@/lib/messages";
+import { send } from "@/lib/messages";
 
 // The ADR-0021 pairing ceremony panel. Event-driven: the enclave-* storage
 // keys change when a proof/error frame lands in the background, so this
@@ -16,10 +17,10 @@ import { type EnrollmentStatusView, send } from "@/lib/messages";
 // printed - with the extension's side marked in amber (waiting on you).
 export function EnrollmentPanel() {
   const { t } = useI18n();
-  const [st, setSt] = useState<EnrollmentStatusView | undefined | null>(null);
+  const [st, setSt] = useState<EnrollmentStatus | undefined | null>(null);
 
   const refresh = useCallback(async () => {
-    setSt((await send<EnrollmentStatusView>({ type: "get_enrollment" })) ?? undefined);
+    setSt((await send<EnrollmentStatus>({ type: "get_enrollment" })) ?? undefined);
   }, []);
 
   useEffect(() => {

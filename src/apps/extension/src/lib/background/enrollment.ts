@@ -15,15 +15,16 @@
 // challenge is issued.
 
 import {
-  type EnclaveChallengeWire,
   EnclaveErrorFrameSchema,
   type EnclaveInboundFrame,
   EnclaveInboundFrameSchema,
   EnclaveProofFrameSchema,
-  type EnclaveReasonCode,
-  type EnclaveRevokeWire,
-  isEnclaveReasonCode,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave";
+import { type EnclaveReasonCode, isEnclaveReasonCode } from "@chromium-bridge/shared/enclave.gen";
+import type {
+  EnclaveChallengeWire,
+  EnclaveRevokeWire,
+} from "@chromium-bridge/shared/envelope-wire.gen";
 import { browser } from "wxt/browser";
 import type { EnrollmentStatus } from "../enrollment-status";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";

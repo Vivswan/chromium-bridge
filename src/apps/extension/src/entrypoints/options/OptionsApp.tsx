@@ -1,4 +1,5 @@
-import { BRIDGE_PROTOCOL_VERSION, NATIVE_HOST_ID } from "@chromium-bridge/shared";
+import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
+import { BRIDGE_PROTOCOL_VERSION } from "@chromium-bridge/shared/protocol.gen";
 import { useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { LanguagePicker } from "@/components/app/LanguagePicker";

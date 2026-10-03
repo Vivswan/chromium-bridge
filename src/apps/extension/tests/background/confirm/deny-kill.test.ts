@@ -7,7 +7,7 @@
 // (queued or newly arriving) is presented for approval. Sender gating rides
 // the same confirm-window-only rule as the other confirm_* messages.
 
-import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
+import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";

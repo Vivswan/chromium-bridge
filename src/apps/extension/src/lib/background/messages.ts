@@ -8,7 +8,11 @@
 //   any message   -> extension page only (fromExtensionPage)
 //   confirm_*     -> the confirmation window only (fromConfirmPage)
 
-import { isEnrollmentAction, type RuntimeMsg, RuntimeMsgSchema } from "@chromium-bridge/shared";
+import {
+  isEnrollmentAction,
+  type RuntimeMsg,
+  RuntimeMsgSchema,
+} from "@chromium-bridge/shared/runtime-msg";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import {

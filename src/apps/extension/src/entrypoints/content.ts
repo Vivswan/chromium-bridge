@@ -1,4 +1,4 @@
-import type { PageReply } from "@chromium-bridge/shared";
+import type { PageReply } from "@chromium-bridge/shared/content-msg";
 import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { handle } from "@/lib/content/handle";

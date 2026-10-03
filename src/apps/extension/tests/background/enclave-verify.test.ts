@@ -1,4 +1,8 @@
-import { CHALLENGE_DOMAIN, MAX_CONTEXT_BYTES, MAX_NONCE_BYTES } from "@chromium-bridge/shared";
+import {
+  CHALLENGE_DOMAIN,
+  MAX_CONTEXT_BYTES,
+  MAX_NONCE_BYTES,
+} from "@chromium-bridge/shared/enclave.gen";
 import { describe, expect, test } from "vitest";
 import {
   base64Decode,

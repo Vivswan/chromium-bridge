@@ -9,7 +9,8 @@
 // (BooleanPolicyField below, so enforcement's `=== true` reads stay
 // type-honest and a gate can never point at a numeric or list field).
 
-import type { OpName, PolicyFieldName, PolicyValues } from "@chromium-bridge/shared";
+import type { OpName } from "@chromium-bridge/shared/ops.gen";
+import type { PolicyFieldName, PolicyValues } from "@chromium-bridge/shared/policy.gen";
 
 /** The policy fields whose value is a plain boolean: the only shape a master
  * gate may have. Derived from the generated PolicyValues, so the constraint

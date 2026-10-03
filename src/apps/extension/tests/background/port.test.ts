@@ -36,7 +36,6 @@ const clients = {
 const kill = {
   attachPort: vi.fn(),
   detachPort: vi.fn(),
-  isKillStatusFrame: vi.fn(() => false),
   handleKillFrame: vi.fn(() => Promise.resolve()),
   requestKillStatus: vi.fn(() => Promise.resolve()),
 };

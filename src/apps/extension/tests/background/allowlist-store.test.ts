@@ -9,7 +9,7 @@
 // orphan another prompt's record. What only an isolated browser can prove:
 // the real badge rendering and the popup surface (checks.yml browser job).
 
-import type { PendingApproval } from "@chromium-bridge/shared";
+import type { PendingApproval } from "@chromium-bridge/shared/storage";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import {

@@ -6,10 +6,8 @@
 // field's schema is replaced by that field's default, so a corrupted or
 // tampered record can never smuggle an unexpected shape into the callers.
 
-import { DEFAULTS, type Settings, salvageSetting } from "@chromium-bridge/shared";
+import { type Settings, salvageSetting } from "@chromium-bridge/shared/settings";
 import { browser } from "wxt/browser";
-
-export { DEFAULTS };
 
 // Not cached: settings are read once per action and storage reads are cheap.
 export async function getSetting<K extends keyof Settings>(key: K): Promise<Settings[K]> {

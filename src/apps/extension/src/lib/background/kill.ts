@@ -18,17 +18,14 @@
 // options-page actions here. Unsolicited results update the mirror; solicited ones also resolve the pending request.
 
 import {
-  type KillEngageWire,
   type KillMirror,
   KillMirrorSchema,
   type KillStatusResult,
-  type KillStatusWire,
-  unreachable,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave";
+import type { KillEngageWire, KillStatusWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
-
-export { isKillStatusFrame } from "@chromium-bridge/shared";
 
 const KILL_MIRROR_KEY = "bridgeKillMirror";
 

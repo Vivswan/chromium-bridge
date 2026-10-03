@@ -17,7 +17,7 @@ import {
   EnclavePinSchema,
   type PendingPairing,
   PendingPairingSchema,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave";
 import { browser } from "wxt/browser";
 import { computeKeyId, parsePubkey } from "./enclave-verify";
 

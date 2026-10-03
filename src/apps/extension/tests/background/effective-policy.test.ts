@@ -10,7 +10,7 @@
 // legacy schema and the whole posture blocks post-cutover until a baseline
 // verifies.
 
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getEffectivePolicy, withFreshPolicy } from "@/lib/background/effective-policy";

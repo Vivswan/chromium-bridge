@@ -5,7 +5,8 @@
 // extension - or a home that quietly stops matching the catalogue - fails
 // here instead of surfacing as a runtime "unknown op".
 
-import { ContentMsgSchema, OP_NAMES, TOOL_META } from "@chromium-bridge/shared";
+import { ContentMsgSchema } from "@chromium-bridge/shared/content-msg";
+import { OP_NAMES, TOOL_META } from "@chromium-bridge/shared/ops.gen";
 import { describe, expect, test } from "vitest";
 import { SW_OPS } from "@/lib/background/dispatch";
 import { MANIFEST_PERMISSIONS } from "@/lib/shared/manifest-permissions";

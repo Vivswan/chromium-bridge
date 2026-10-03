@@ -1,4 +1,4 @@
-import type { AuditEntry } from "@chromium-bridge/shared";
+import type { AuditEntry } from "@chromium-bridge/shared/enclave";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { useI18n } from "@/hooks/useI18n";

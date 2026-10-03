@@ -5,12 +5,9 @@
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach. See ADR-0009.
 
-import {
-  InfoToastResultSchema,
-  type OpArgs,
-  PageReplySchema,
-  type PolicyValues,
-} from "@chromium-bridge/shared";
+import { InfoToastResultSchema, PageReplySchema } from "@chromium-bridge/shared/content-msg";
+import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { browser } from "wxt/browser";
 import { initI18n, t } from "../i18n";
 import { ensureAllowed } from "./allowlist-store";

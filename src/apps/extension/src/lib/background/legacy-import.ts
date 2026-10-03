@@ -12,13 +12,13 @@
 // cold-start window before setAccessLevel resolves, and the send gate re-awaits hardenStorageAccess before reading
 // the flag), and the resend still faces policy-sync.ts's pinned+proven gate and the host's first-bag-wins tombstone.
 
+import { salvageLegacySetting } from "@chromium-bridge/shared/legacy-settings";
 import {
   DISABLED_TOOL_NAME_MAX_BYTES,
   DISABLED_TOOLS_MAX_ENTRIES,
   POLICY_FIELDS,
   type PolicyValues,
-  salvageLegacySetting,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/policy.gen";
 import { browser } from "wxt/browser";
 
 /** Exported only for legacy-cleanup.ts, which reads it as a deletion precondition (bag shipped) and never

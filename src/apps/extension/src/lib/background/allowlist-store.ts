@@ -3,7 +3,7 @@
 // The allowlist lives in browser.storage.local (survives SW restarts). A new
 // origin surfaces a badge + pending request that the popup resolves.
 
-import { AllowlistSchema, type PendingApproval } from "@chromium-bridge/shared";
+import { AllowlistSchema, type PendingApproval } from "@chromium-bridge/shared/storage";
 import { browser } from "wxt/browser";
 import {
   globToPermissionPattern,
