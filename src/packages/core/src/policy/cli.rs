@@ -1,11 +1,9 @@
-//! CLI runners for `chromium-bridge policy` (ADR-0032 decision 5), and the versioned status/history reports the
-//! co-equal desktop app parses back. The reports follow the enclave-status precedent: a versioned, typed struct
-//! serialized through `serde_json::Value` (sorted keys, a frozen wire contract), `deny_unknown_fields` and
-//! `ts_rs`-exported so the host that emits it and the app that parses it share one Rust definition.
+//! CLI runners for `chromium-bridge policy` (ADR-0032 decision 5), and the versioned status/history reports
+//! `--json` prints. The reports follow the enclave-status precedent: a versioned, typed struct serialized
+//! through `serde_json::Value` (sorted keys, a frozen wire contract) with `deny_unknown_fields`.
 //!
 //! ```text
-//! set       -> the signed GRANT lane (set_signed with PolicyGrantFloor::SignatureOnly), refused up front where no
-//!              enclave key exists
+//! set       -> the signed GRANT lane (set_signed), refused up front where no enclave key exists
 //! restrict  -> the free lane (restrict)
 //! rollback  -> neither a new lane nor a replay: re-derives a past revision's EFFECTIVE policy and re-applies it as a
 //!              FRESH write (free when it only tightens, one signed tap when it relaxes anything), so the lower revision
@@ -17,20 +15,19 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     fold, load_history, restrict, restricts_or_equal, set_signed, PolicyDoc, PolicyField,
-    PolicyGrantFloor, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
+    PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
 };
 use crate::audit::Surface;
 use crate::cli::{argv, policy_args, PolicyCommand};
 use crate::enclave::{base64_decode, EnclaveError, EnrollmentKey};
 
-// ---- The reports (typed, versioned, ts_rs-exported) -------------------------
+// ---- The reports (typed, versioned) ------------------------------------------
 
 /// The store state a status report distinguishes. `none` is the pre-cutover
 /// state and is HEALTHY - it is not an error (the extension enforces the deny
 /// baseline until a first policy signs). `error` is a present-but-unreadable
 /// store, which fails closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyStoreState {
     /// No policy baseline on this machine yet (pre-cutover; the extension
@@ -44,7 +41,7 @@ pub enum PolicyStoreState {
 }
 
 /// The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json` prints
-/// (ADR-0032), which the desktop app parses back and the doctor row renders from. A sum tagged on `store` rather than
+/// (ADR-0032), which the doctor row renders from. A sum tagged on `store` rather than
 /// a flat struct, so a `none` report smuggling an effective policy, or a `present` one missing its revision, cannot
 /// even deserialize.
 ///
@@ -53,7 +50,6 @@ pub enum PolicyStoreState {
 /// serialized directly, not through this CLI's sorted-keys Value   -> key order may differ; no consumer reads key order
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(tag = "store", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PolicyStatusReport {
     /// No policy baseline on this machine yet (pre-cutover, healthy; the
@@ -70,7 +66,7 @@ pub enum PolicyStatusReport {
         /// The signed baseline's monotonic revision.
         revision: u64,
         /// Whether the stored baseline carries an enclave signature (`true`)
-        /// or is an app-floor UNSIGNED baseline (`false`). Host-side this is
+        /// or not (`false`). Host-side this is
         /// only "a signature is stored" - the host never self-certifies; the
         /// extension verifies it against its pinned key.
         signed: bool,
@@ -103,8 +99,8 @@ impl PolicyStatusReport {
     }
 
     /// The store state this report describes: the tag, as the shared
-    /// [`PolicyStoreState`] the doctor verdict and the desktop app's adopt
-    /// gate branch on without caring about the arm's payload.
+    /// [`PolicyStoreState`] the doctor verdict branches on without caring
+    /// about the arm's payload.
     pub fn store(&self) -> PolicyStoreState {
         match self {
             PolicyStatusReport::None { .. } => PolicyStoreState::None,
@@ -117,7 +113,6 @@ impl PolicyStatusReport {
 /// The versioned policy-history report: the superseded-revision ring, oldest
 /// first, as `chromium-bridge policy history --json` prints it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistoryReport {
     /// Schema version.
@@ -127,7 +122,6 @@ pub struct PolicyHistoryReport {
 
 /// One superseded record, reduced to what a rollback surface needs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistoryEntryReport {
     /// The record's baseline revision, or `null` if that historical baseline
@@ -191,9 +185,7 @@ fn status_from_store(store: &PolicyStore) -> PolicyStatusReport {
 }
 
 /// The history report, read fail-closed. `Err` only when the ring itself is
-/// unreadable; an absent ring is the empty report. Public for the same
-/// reason as [`gather_policy_status`]: the desktop app's read surface is
-/// this exact read, in-process (no keychain, no subprocess).
+/// unreadable; an absent ring is the empty report.
 pub fn gather_history_report() -> Result<PolicyHistoryReport, String> {
     match load_history().map_err(|e| e.to_string())? {
         None => Ok(PolicyHistoryReport {
@@ -241,7 +233,7 @@ fn render_status(r: &PolicyStatusReport) -> String {
         PolicyStatusReport::None { .. } => {
             out.push_str(
                 "store:      none yet (pre-cutover; the extension keeps enforcing its legacy\n            \
-                 local settings until a baseline is signed via the app or\n            \
+                 local settings until a baseline is signed via\n            \
                  `chromium-bridge policy set`)\n",
             );
         }
@@ -280,7 +272,7 @@ fn signed_line(signed: bool) -> &'static str {
     if signed {
         "signed (the extension verifies it against its pinned key; not verifiable here)"
     } else {
-        "unsigned (app-floor baseline)"
+        "unsigned"
     }
 }
 
@@ -726,14 +718,14 @@ fn run_history(json: bool) -> i32 {
 }
 
 /// `policy pending-import [--json]`: the pending legacy import's state (ADR-0032 decision 8), the same
-/// fail-closed read the desktop app's first-run import screen consumes. The ONE write here is the
+/// fail-closed read `doctor` consumes. The ONE write here is the
 /// idempotent self-heal [`crate::pending_import::reconcile_consuming`], finalizing a STRANDED mid-consume
 /// record whose baseline already landed, so a crashed finalize unsticks instead of re-offering an import
 /// that can only refuse; a failed heal never blocks the read.
 ///
 /// ```text
 /// --json  -> the versioned `crate::pending_import::PendingImportReport` through `Value`, the ONLY mode that prints the bag
-/// prose   -> state without bag content (the bag is reviewed in the app, not dumped on a terminal)
+/// prose   -> state without bag content (the bag is reviewed from the --json form, not dumped on a terminal)
 /// ```
 fn run_pending_import(json: bool) -> i32 {
     if let Err(e) = crate::pending_import::reconcile_consuming() {
@@ -769,16 +761,15 @@ fn render_pending_import(r: &crate::pending_import::PendingImportReport) -> Stri
         PendingImportReport::Present { bag, .. } => {
             let bytes = serde_json::to_vec(bag).map(|b| b.len()).unwrap_or(0);
             out.push_str(&format!(
-                "state:      present ({bytes} bytes recorded; review and adopt it in the \
-                 desktop app, or re-run with --json)\n"
+                "state:      present ({bytes} bytes recorded; re-run with --json to review it)\n"
             ));
         }
         PendingImportReport::Consuming { bag, .. } => {
             let bytes = serde_json::to_vec(bag).map(|b| b.len()).unwrap_or(0);
             out.push_str(&format!(
                 "state:      consuming ({bytes} bytes retained; a first signed baseline began \
-                 the one-time\n            import, so the window is closed to new bags - review \
-                 what was recorded in\n            the desktop app, or re-run with --json)\n"
+                 the one-time\n            import, so the window is closed to new bags - re-run \
+                 with --json to\n            review what was recorded)\n"
             ));
         }
         PendingImportReport::Consumed { .. } => {
@@ -835,13 +826,7 @@ fn do_set(
         Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
     };
     let values = fold(&base, &overlay);
-    set_signed(
-        values,
-        touched,
-        Surface::Cli,
-        PolicyGrantFloor::SignatureOnly,
-    )
-    .map_err(|e| e.to_string())
+    set_signed(values, touched, Surface::Cli).map_err(|e| e.to_string())
 }
 
 /// `policy restrict <field flags>`: the FREE lane. Never prompts; the seam's
@@ -920,12 +905,7 @@ fn run_rollback(revision: u64, json: bool) -> i32 {
             if let Err(msg) = require_grant_key() {
                 return refuse_write("policy rollback", json, msg);
             }
-            match set_signed(
-                values,
-                touched,
-                Surface::Cli,
-                PolicyGrantFloor::SignatureOnly,
-            ) {
+            match set_signed(values, touched, Surface::Cli) {
                 Ok(rung) => {
                     if json {
                         emit_status_json("policy rollback")

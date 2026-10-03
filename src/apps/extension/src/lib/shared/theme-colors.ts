@@ -1,10 +1,8 @@
 // Control Tower color constants for the contexts that cannot read CSS custom
 // properties: browser.action badges and the inline-styled content-script
-// toast. These hexes MIRROR the token layer in src/assets/styles.css, itself
-// a copy of the canonical desktop stylesheet
-// (src/apps/desktop/ui/src/styles.css); the parity test in
-// tests/shared/theme-tokens.test.ts fails CI if these constants drift from
-// the tokens.
+// toast. These hexes MIRROR the token layer in src/assets/styles.css (the
+// canonical one); the parity test in tests/shared/theme-tokens.test.ts fails
+// CI if these constants drift from the tokens.
 
 /* Action badges float over the browser chrome, whose color we cannot know,
  * so they use the dark-scheme signal hexes (the saturated variants) in both

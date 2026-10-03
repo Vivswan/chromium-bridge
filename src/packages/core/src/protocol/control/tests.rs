@@ -641,7 +641,7 @@ fn policy_status_into_frame_forbids_illegal_mixtures() {
         } => {}
         other => panic!("present must be ok:true with baseline and no error: {other:?}"),
     }
-    // An unsigned (app-floor) baseline: still ok:true with a baseline, sig
+    // An unsigned baseline: still ok:true with a baseline, sig
     // absent - never a sig without its baseline.
     match (PolicyStatus::Present {
         baseline_b64: "YmFzZQ==".into(),

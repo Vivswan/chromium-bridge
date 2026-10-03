@@ -92,9 +92,9 @@ pub(super) fn authenticate(_reason: &str) -> HardwareOutcome {
 /// One policy-signing presence act (ADR-0032): the enrollment key's user-presence ACL raises the Touch ID sheet,
 /// the tap is the grant approval, and the signature (kept, this time) is what the extension verifies.
 ///
-/// DIVERGES from [`authenticate`] on lookup and export errors on purpose: `Unavailable` here entitles `set_signed` +
-/// `PolicyGrantFloor::AppConfirm` to write a PERSISTENT unsigned baseline, so only genuine absence may report it.
-/// Do not "consistency-fix" either mapping to match the other.
+/// DIVERGES from [`authenticate`] on lookup and export errors on purpose: `Unavailable` here is reported to the
+/// user as "no signing key" (`set_signed` refuses up front on it), so only genuine absence may report it; a lookup
+/// or export failure must surface as the refusal it is. Do not "consistency-fix" either mapping to match the other.
 ///
 /// ```text
 /// `Ok(None)`, no enrollment key                -> `Unavailable`

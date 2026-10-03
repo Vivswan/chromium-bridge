@@ -401,17 +401,14 @@ impl std::fmt::Display for PairClientError {
 /// surface can tell the user which proof authorized the pairing. Revocation stays friction-free on purpose:
 /// removing capability never needs a human proof (the presence symmetry rule).
 ///
-/// `floor` is the interactive floor the surface is entitled to, or the precondition failure that kept it from
-/// constructing one; either way the name check runs first, so a malformed request never reaches the gate.
-/// ```text
-/// CLI          -> `TerminalStdin::require().map(Floor::CliConfirm)` (a piped stdin arrives as the `Err`)
-/// desktop app  -> `Ok(Floor::AppConfirm)` after its own modal confirmation (see the `Floor` docs)
-/// ```
+/// `terminal` is the CLI floor's witness, or the precondition failure that kept the surface from constructing one
+/// (`TerminalStdin::require()`: a piped stdin arrives as the `Err`); either way the name check runs first, so a
+/// malformed request never reaches the gate.
 pub fn pair_client_with_presence(
     name: &str,
     anchor: Anchor,
     surface: crate::audit::Surface,
-    floor: Result<presence::Floor, presence::PresenceError>,
+    terminal: Result<presence::TerminalStdin, presence::PresenceError>,
 ) -> Result<presence::PresencePath, PairClientError> {
     use crate::audit::{self, AuditKind, AuditRecord};
     // Validate before prompting: a malformed request must not be able to put
@@ -423,7 +420,7 @@ pub fn pair_client_with_presence(
         "Pair '{name}' as a trusted client of chromium-bridge? A trusted \
          client can drive your browser through this bridge."
     );
-    let auth = match floor.and_then(|floor| presence::require_presence(&reason, floor)) {
+    let auth = match terminal.and_then(|terminal| presence::require_presence(&reason, terminal)) {
         Ok(auth) => auth,
         Err(e) => {
             // Log-after-decide: the refusal has already happened; make the
@@ -504,7 +501,7 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
         // The terminal witness comes first, by construction: a piped stdin
         // arrives at the gate as the precondition failure, refused (and
         // audited) after the name check, promptless.
-        presence::TerminalStdin::require().map(presence::Floor::CliConfirm),
+        presence::TerminalStdin::require(),
     ) {
         Ok(path) => {
             println!(
@@ -528,10 +525,9 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
 }
 
 /// Turn a CLI anchor spec into a concrete [`Anchor`], measuring this
-/// invocation's parent when asked (`--this-parent`). Public because it is the
-/// one validation path for user-supplied anchors, shared by the CLI and the
-/// desktop app's pairing form (ADR-0029): a malformed hash must be refused
-/// identically on every surface.
+/// invocation's parent when asked (`--this-parent`). The one validation path
+/// for user-supplied anchors, so a malformed hash is refused identically
+/// wherever one arrives.
 pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
     use crate::cli::AnchorSpec;
     match spec {

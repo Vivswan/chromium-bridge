@@ -8,8 +8,7 @@
 //! `crate::browsers`. `doctor --list` is the short, resolver-only form of
 //! that report. `doctor --fix` hands the diagnosis to
 //! `crate::registration` for an idempotent repair; on a fresh machine that
-//! repair IS the registration. The app registers through the same
-//! engine; app and CLI are co-equal surfaces (see docs/cli.md).
+//! repair IS the registration (see docs/cli.md).
 
 use std::path::PathBuf;
 #[cfg(windows)]
@@ -46,8 +45,8 @@ struct Report {
     /// `error` is a present-but-unreadable store), so no outer `Result` is
     /// needed - `gather_policy_status` never fails.
     policy: PolicyStatusReport,
-    /// The pending legacy-settings import (ADR-0032 decision 8): the receipt
-    /// the app's first-run screen consumes. `none` is the ordinary state;
+    /// The pending legacy-settings import (ADR-0032 decision 8): the recorded
+    /// receipt. `none` is the ordinary state;
     /// `error` is a present-but-unreadable receipt (fail closed).
     pending_import: PendingImportReport,
 }
@@ -99,10 +98,8 @@ impl Report {
 }
 
 /// Passive reachability probe: connect to our own bridge socket and drop the
-/// connection immediately. No command bytes are ever sent. Public so the
-/// desktop app's status view (ADR-0029) shares the exact probe `doctor`
-/// reports with.
-pub fn probe(endpoint: &str) -> bool {
+/// connection immediately. No command bytes are ever sent.
+fn probe(endpoint: &str) -> bool {
     #[cfg(unix)]
     {
         std::os::unix::net::UnixStream::connect(endpoint).is_ok()
@@ -216,7 +213,7 @@ fn render(r: &Report) -> String {
         // policy). It must not read as broken.
         PolicyStatusReport::None { .. } => out.push_str(
             "none yet (pre-cutover; the extension keeps enforcing its legacy local\n  \
-             settings until the app or `chromium-bridge policy set` signs a baseline)\n",
+             settings until `chromium-bridge policy set` signs a baseline)\n",
         ),
         PolicyStatusReport::Present {
             revision,
@@ -230,7 +227,7 @@ fn render(r: &Report) -> String {
             let signed = if *signed {
                 "signed (the extension verifies it against its pinned key, not here)"
             } else {
-                "unsigned (app-floor baseline)"
+                "unsigned"
             };
             out.push_str(&format!("revision {revision}, {signed}\n"));
             if *overlay_active {
@@ -247,11 +244,11 @@ fn render(r: &Report) -> String {
         // No receipt is the ordinary state: nothing waiting to import.
         PendingImportReport::None { .. } => out.push_str("none\n"),
         PendingImportReport::Present { .. } => {
-            out.push_str("recorded (the app's first-run screen imports it, signing revision 1)\n")
+            out.push_str("recorded (consumed when the first baseline signs, as revision 1)\n")
         }
         PendingImportReport::Consuming { .. } => out.push_str(
             "consuming (a first signed baseline began the one-time import; the window is\n  \
-             closed to new bags and the recorded settings are retained for the app)\n",
+             closed to new bags and the recorded settings are retained)\n",
         ),
         PendingImportReport::Consumed { .. } => {
             out.push_str("consumed (imported at the first signed baseline; the window is closed)\n")

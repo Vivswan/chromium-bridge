@@ -1,5 +1,5 @@
-//! Native-messaging registration: the write/repair/remove engine behind `doctor --fix` and `uninstall`, and the API
-//! the app's registration buttons use; browser locations come from [`crate::browsers`], the resolver `doctor`
+//! Native-messaging registration: the write/repair/remove engine behind `doctor --fix` and `uninstall`; browser
+//! locations come from [`crate::browsers`], the resolver `doctor`
 //! diagnoses with. Fail closed: `uninstall` removes only files this project verifiably wrote and `--fix` refuses to
 //! overwrite a manifest it cannot verify as ours (reported and left in place), which keeps OUR tooling from destroying
 //! someone else's registration but does not stop a same-user attacker who can write the user's config dirs directly
@@ -27,8 +27,7 @@ use crate::cli::{FixTargets, UninstallArgs};
 /// The `description` the legacy `install.sh` / `install.ps1` wrote, verbatim.
 const MANIFEST_DESCRIPTION_LEGACY: &str = "Chromium Bridge native messaging host";
 
-/// The `description` this engine writes: the ownership marker. Writer-neutral
-/// (`doctor --fix` and the app's registration write the same bytes).
+/// The `description` this engine writes: the ownership marker.
 const MANIFEST_DESCRIPTION: &str =
     "Chromium Bridge native messaging host (managed by chromium-bridge)";
 
@@ -286,7 +285,7 @@ impl Registrar {
         let launch_path = match &target.registration {
             Registration::ManifestDir(dir) => {
                 // Unix: wrapper first, then the manifest that points at it.
-                ensure_private_dir(&self.install_dir)
+                crate::fsguard::ensure_private_dir(&self.install_dir)
                     .map_err(|e| format!("could not create {}: {e}", self.install_dir.display()))?;
                 let label = target.label();
                 let wrapper = self.wrapper_path(label);
@@ -304,7 +303,7 @@ impl Registrar {
             Registration::Registry { key, .. } => {
                 // Windows: manifest in our own store dir, registry key points
                 // at it, binary launched directly (origin argv selects mode).
-                ensure_private_dir(&self.install_dir)
+                crate::fsguard::ensure_private_dir(&self.install_dir)
                     .map_err(|e| format!("could not create {}: {e}", self.install_dir.display()))?;
                 lines.push(format!("  registry key HKCU\\{key}"));
                 self.host_exe.clone()
@@ -719,17 +718,6 @@ pub(crate) fn known_keys() -> String {
 /// single quotes, embedded single quotes escaped as `'\''`.
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
-}
-
-/// Create `dir` (and parents) and force owner-only permissions on it: it
-/// holds executable wrapper content the browser launches, so group/world
-/// write would let another account swap them. Refuses a symlink at the leaf
-/// (our namespace must not be redirected elsewhere). One vetted
-/// implementation for the whole crate ([`crate::fsguard`]), shared with the
-/// IPC layer's runtime directory. `pub` because the desktop app prepares the
-/// same install dir for its first-run marker and must apply the same rules.
-pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
-    crate::fsguard::ensure_private_dir(dir)
 }
 
 /// Write `bytes` to `path` atomically: exclusive-create a temp file beside it

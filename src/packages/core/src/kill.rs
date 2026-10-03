@@ -17,7 +17,7 @@
 //! ```
 //!
 //! Nothing clears the latch on its own: no timeout, restart, or reconnect. Only [`release`], reached from
-//! `chromium-bridge unkill` and the desktop app (ADR-0032 decision 6 retired the extension release surface), and
+//! `chromium-bridge unkill` only (ADR-0032 decision 6 retired the extension release surface), and
 //! it demands a [`crate::presence::PresenceAttestation`], so the user-presence ladder must have run
 //! ([`crate::presence`]). Every attempt is audited: an attestation's grant or refusal with its auth path, a presence-gate
 //! refusal with its error ([`audit_refused_release`]). A corrupt
@@ -33,7 +33,7 @@ use std::io;
 use crate::audit::{self, AuditKind, AuditRecord, Surface};
 use crate::error::CallError;
 use crate::ipc;
-use crate::presence::{self, Floor, PresenceAttestation};
+use crate::presence::{self, PresenceAttestation};
 use crate::revocation::{self, Revocation};
 
 /// Whether the kill switch is engaged. An unreadable record is an error the
@@ -147,17 +147,15 @@ pub fn run_kill() -> i32 {
 /// leaves the switch exactly as engaged as it was, audited as a refused
 /// release. Returns a process exit code.
 pub fn run_unkill() -> i32 {
-    // The terminal witness comes first, by construction: `Floor::CliConfirm`
-    // cannot exist without it, so a piped stdin is refused before
-    // require_presence - and any hardware prompt - is reachable.
-    let auth = match presence::TerminalStdin::require()
-        .map(Floor::CliConfirm)
-        .and_then(|floor| {
-            presence::require_presence(
-                "Releasing the kill switch lets MCP clients drive your browser again.",
-                floor,
-            )
-        }) {
+    // The terminal witness comes first, by construction: require_presence
+    // demands it, so a piped stdin is refused before the presence request -
+    // and any hardware prompt - is reachable.
+    let auth = match presence::TerminalStdin::require().and_then(|terminal| {
+        presence::require_presence(
+            "Releasing the kill switch lets MCP clients drive your browser again.",
+            terminal,
+        )
+    }) {
         Ok(auth) => auth,
         Err(e) => {
             audit_refused_release(Surface::Cli, &e);

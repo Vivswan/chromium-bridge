@@ -3,8 +3,8 @@
 // settings.ts semantics. These pins are LOAD-BEARING: the pre-cutover
 // enforcement arm (effective-policy.ts) and the migration bag
 // (legacy-import.ts) both read through this module, so a drifted default here
-// silently changes what a pre-cutover install enforces and what the app's
-// first-run import screen shows.
+// silently changes what a pre-cutover install enforces and what the import
+// review shows.
 
 import { describe, expect, test } from "bun:test";
 import {

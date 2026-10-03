@@ -343,17 +343,17 @@ pub fn run_presence_selftest() -> i32 {
 }
 
 /// `chromium-bridge enclave-status --json`: the machine-readable form of
-/// [`run_status`], for co-equal surfaces that drive this binary as a
-/// subprocess (the desktop app, ADR-0029) instead of scraping the human
-/// report. One JSON object on stdout; the shape is versioned (`v`) so a
+/// [`run_status`], for scripts that drive this binary as a subprocess
+/// instead of scraping the human report. One JSON object on stdout; the
+/// shape is versioned (`v`) so a
 /// consumer can refuse a report it does not understand instead of guessing.
 pub fn run_status_json() -> i32 {
     let key = match EnrollmentKey::lookup() {
         Ok(Some(key)) => match key.public_key() {
             Ok(public) => KeyReport::Present(public),
-            // Same REJECTED state as a lookup-time KeyInvalid: the desktop
-            // UI branches on it (EnclaveKeyState), and the deny-list
-            // surfaces here, on export.
+            // Same REJECTED state as a lookup-time KeyInvalid: a consumer
+            // branches on it (EnclaveKeyState), and the deny-list surfaces
+            // here, on export.
             Err(e @ EnclaveError::KeyInvalid(_)) => KeyReport::Invalid(e.to_string()),
             Err(e) => KeyReport::Error(format!("public key unreadable: {e}")),
         },
@@ -366,9 +366,9 @@ pub fn run_status_json() -> i32 {
     let report = build_status_report(&key, &policy);
     // Serialize through `Value` so the object keys stay sorted (serde_json's
     // default `Map` ordering), byte-for-byte as the previous ad-hoc `json!`
-    // rendering emitted them: this JSON is a frozen wire contract the desktop
-    // app parses, and routing through `to_value` keeps the emitted bytes
-    // identical regardless of the struct's field declaration order.
+    // rendering emitted them: this JSON is a frozen wire contract, and
+    // routing through `to_value` keeps the emitted bytes identical
+    // regardless of the struct's field declaration order.
     match serde_json::to_value(&report) {
         Ok(value) => {
             println!("{value}");
@@ -396,16 +396,15 @@ enum KeyReport {
 
 /// The versioned, machine-readable enclave status: the exact object
 /// `chromium-bridge enclave-status --json` prints (ADR-0029). It is a typed
-/// mirror of what used to be an ad-hoc `serde_json::json!`, so the host that
-/// emits it and the desktop app that parses it back (`src/apps/desktop`) share
-/// one Rust definition instead of two hand-kept shapes.
+/// mirror of what used to be an ad-hoc `serde_json::json!`, so the emitting
+/// and the parsing side share one Rust definition instead of two hand-kept
+/// shapes.
 ///
 /// The wire form is frozen: a consumer refuses an unrecognized `v` BEFORE it
 /// trusts any other field, so field names and `v` must not change without a
 /// version bump. `deny_unknown_fields` makes an unexpected shape a loud
 /// refusal on the parsing side.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct EnclaveStatusReport {
     /// Schema version. `1` today; a newer value must be refused before any
@@ -419,22 +418,18 @@ pub struct EnclaveStatusReport {
     pub key: EnclaveKeyState,
     /// Base64 X9.63 public key; present only when `key == present`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub public_key_b64: Option<String>,
     /// The public key's SHA-256 fingerprint; present only when `key == present`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub fingerprint: Option<String>,
     /// Human detail for a `key == invalid` or `key == error` state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub detail: Option<String>,
     /// The recorded enrollment policy, or `null` when there is no readable
     /// config. Always present on the wire (as `null`), never omitted.
     pub policy: Option<EnclavePolicyReport>,
     /// Set only when the policy read itself failed; `policy` is then `null`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub policy_error: Option<String>,
 }
 
@@ -442,7 +437,6 @@ pub struct EnclaveStatusReport {
 /// exists under our label but must be treated as untrusted (planted or
 /// malformed), which a consumer surfaces as loudly as the human report does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum EnclaveKeyState {
     /// A key is present and its public half is readable.
@@ -459,7 +453,6 @@ pub enum EnclaveKeyState {
 
 /// The enrollment policy carried in the report, mirrored from [`HostConfig`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct EnclavePolicyReport {
     pub enrolled: bool,
@@ -638,8 +631,8 @@ mod tests {
 
     /// Byte-for-byte wire compatibility: the typed struct must serialize to
     /// exactly the JSON string the old ad-hoc `json!` renderer produced, for
-    /// every key/policy combination. This is the contract the desktop app and
-    /// any older host binary depend on.
+    /// every key/policy combination. This is the contract every consumer of
+    /// the report depends on.
     #[test]
     fn typed_report_is_byte_identical_to_the_legacy_json() {
         let enrolled = Ok(Some(HostConfig {
@@ -710,8 +703,8 @@ mod tests {
         );
     }
 
-    /// The typed report round-trips through serde: what the host emits, the
-    /// desktop app deserializes back into the same struct (its parse path).
+    /// The typed report round-trips through serde: what the host emits, a
+    /// consumer deserializes back into the same struct.
     #[test]
     fn typed_report_round_trips_through_serde() {
         let report = build_status_report(
@@ -727,8 +720,8 @@ mod tests {
     }
 
     /// The parse side rejects an unexpected field rather than silently
-    /// coercing it: `deny_unknown_fields` is the fail-closed guard the desktop
-    /// app relies on when a host emits a shape it does not understand.
+    /// coercing it: `deny_unknown_fields` is the fail-closed guard a consumer
+    /// relies on when a host emits a shape it does not understand.
     #[test]
     fn typed_report_rejects_unknown_fields() {
         let with_extra =

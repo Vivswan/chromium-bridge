@@ -443,7 +443,7 @@ pub fn consume() -> io::Result<bool> {
 /// Self-heal a STRANDED mid-consume record: a `Consuming` record whose baseline DID land (the finalize crashed
 /// or its fsync failed, and revision-2+ writes never revisit this store) would otherwise persist forever,
 /// re-offering an import the app can only refuse and retaining a bag disposal meant to shed. Runs idempotently
-/// at native-host startup and in the `policy pending-import` read command (the desktop app's own probe).
+/// at native-host startup and in the `policy pending-import` read command.
 ///
 /// ```text
 /// Consuming, no baseline                     -> left alone: the legitimate crash-before-baseline state
@@ -502,12 +502,10 @@ fn reconcile_consuming_locked(lock: &ipc::RuntimeLockToken) -> io::Result<bool> 
 /// value before reading any other field (fail closed).
 pub const PENDING_IMPORT_REPORT_VERSION: u32 = 1;
 
-/// The typed, versioned pending-import status for the desktop app's first-run import screen: the exact object
-/// `chromium-bridge policy pending-import --json` prints, one Rust definition ts_rs-exported and parsed back by
-/// the app (the [`crate::policy::PolicyStatusReport`] pattern). A tagged sum like the on-disk record, so an
+/// The typed, versioned pending-import status: the exact object `chromium-bridge policy pending-import --json`
+/// prints (the [`crate::policy::PolicyStatusReport`] pattern). A tagged sum like the on-disk record, so an
 /// impossible combination (a `consumed` answer smuggling a bag, an `error` with no detail) cannot deserialize.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(tag = "state", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PendingImportReport {
     /// No pending import recorded.
@@ -522,13 +520,12 @@ pub enum PendingImportReport {
         /// The recorded legacy settings bag. Untrusted free-form JSON
         /// (`unknown` on the TS side): a suggestion the user reviews, never
         /// applied as policy.
-        #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
         bag: Value,
     },
     /// Mid-consume: a first-baseline write durably closed the import
     /// window but its baseline commit has not been observed to finish. New
     /// bags are refused exactly like `consumed`, and the retained bag is
-    /// still readable - the app re-offers it for review, so a crash between
+    /// still readable - the read surfaces re-offer it for review, so a crash between
     /// the window-close and the baseline commit preserves the import instead
     /// of losing it.
     Consuming {
@@ -536,7 +533,6 @@ pub enum PendingImportReport {
         v: u32,
         /// The retained legacy settings bag, same trust posture as
         /// `present`'s.
-        #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
         bag: Value,
     },
     /// The consumed tombstone: the import already happened; the window is
@@ -557,10 +553,9 @@ pub enum PendingImportReport {
 
 /// The current pending-import status, read fail-closed from the store.
 /// Infallible: an unreadable receipt becomes the `error` state, never a panic
-/// or a silent default. Two read surfaces consume exactly this state:
-/// `chromium-bridge policy pending-import [--json]` (the subprocess the
-/// desktop app shells out to) and the app's first-run import screen behind
-/// it. READ-ONLY by construction - it calls [`load`], never a writer.
+/// or a silent default. `chromium-bridge policy pending-import [--json]` and
+/// `doctor` consume exactly this state. READ-ONLY by construction - it calls
+/// [`load`], never a writer.
 pub fn gather_pending_import() -> PendingImportReport {
     const V: u32 = PENDING_IMPORT_REPORT_VERSION;
     match load() {
