@@ -78,6 +78,7 @@ tasks:
       - '~:check-cjk'
       - '~:check-typography'
       - '~:check-fuzz-smoke'
+      - '~:check-harness-driver'
       - '~:check-fuzz-workspace'
       - '~:check-gen'
       - '~:check-envelope'
@@ -298,6 +299,7 @@ tasks:
       - 'shared:test'
       - 'extension:test'
       - 'web:test'
+      - '~:check-harness-driver'
     toolchains: ['system']
     options:
       cache: false
@@ -353,6 +355,13 @@ tasks:
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
+
+  check-harness-driver:
+    description: 'Unit test for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository)'
+    command: 'bun test tests/harness/run.test.ts'
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached
 
   check-fuzz-workspace:
     description: >-
