@@ -62,7 +62,7 @@ pub mod argv {
     pub const POLICY_F_DISABLED_TOOLS: &str = "--disabled-tools";
 }
 
-use crate::policy::{PolicyField, PolicyOverlay};
+use crate::policy::{FieldKind, Ms, PolicyField, PolicyOverlay};
 
 use crate::browsers::Browser;
 
@@ -581,48 +581,17 @@ fn policy_field_of_flag(flag: &str) -> Option<PolicyField> {
 }
 
 /// Set the overlay entry for `field` from a flag value, parsing per the
-/// field's type. Exhaustive with no wildcard, like the direction table: a new
-/// policy field fails to compile here until it says how its CLI value parses.
+/// field's value kind.
 fn set_overlay_field(
     overlay: &mut PolicyOverlay,
     field: PolicyField,
     flag: &str,
     value: &str,
 ) -> Result<(), String> {
-    match field {
-        PolicyField::CdpMode => overlay.cdp_mode = Some(parse_on_off(flag, value)?),
-        PolicyField::FileUploadEnabled => {
-            overlay.file_upload_enabled = Some(parse_on_off(flag, value)?)
-        }
-        PolicyField::HandleDialogEnabled => {
-            overlay.handle_dialog_enabled = Some(parse_on_off(flag, value)?)
-        }
-        PolicyField::PageEvalEnabled => {
-            overlay.page_eval_enabled = Some(parse_on_off(flag, value)?)
-        }
-        PolicyField::ConfirmHighRiskClick => {
-            overlay.confirm_high_risk_click = Some(parse_on_off(flag, value)?)
-        }
-        PolicyField::ConfirmPageEval => {
-            overlay.confirm_page_eval = Some(parse_on_off(flag, value)?)
-        }
-        PolicyField::TouchIdConfirm => overlay.touch_id_confirm = Some(parse_on_off(flag, value)?),
-        PolicyField::ConfirmTabClose => {
-            overlay.confirm_tab_close = Some(parse_on_off(flag, value)?)
-        }
-        PolicyField::WarnPreciseSnapshot => {
-            overlay.warn_precise_snapshot = Some(parse_on_off(flag, value)?)
-        }
-        PolicyField::EvalMask => overlay.eval_mask = Some(parse_on_off(flag, value)?),
-        PolicyField::HostReverifyMs => overlay.host_reverify_ms = Some(parse_ms(flag, value)?),
-        PolicyField::ConfirmGraceMs => overlay.confirm_grace_ms = Some(parse_ms(flag, value)?),
-        PolicyField::ClickToastTimeoutMs => {
-            overlay.click_toast_timeout_ms = Some(parse_ms(flag, value)?)
-        }
-        PolicyField::EvalToastTimeoutMs => {
-            overlay.eval_toast_timeout_ms = Some(parse_ms(flag, value)?)
-        }
-        PolicyField::DisabledTools => overlay.disabled_tools = Some(parse_tool_list(value)),
+    match field.kind() {
+        FieldKind::Bool(f) => *overlay.bool_mut(f) = Some(parse_on_off(flag, value)?),
+        FieldKind::Ms(f) => *overlay.ms_mut(f) = Some(parse_ms(flag, value)?),
+        FieldKind::ToolSet(f) => *overlay.tools_mut(f) = Some(parse_tool_list(value)),
     }
     Ok(())
 }
@@ -636,13 +605,13 @@ fn parse_on_off(flag: &str, value: &str) -> Result<bool, String> {
     }
 }
 
-/// A millisecond policy flag: a non-negative integer. The JS-safe bound is
-/// enforced by the write seam (`PolicyDoc::validate`), so a friendly parse
-/// error here covers only the non-numeric case.
-fn parse_ms(flag: &str, value: &str) -> Result<u64, String> {
-    value
-        .parse::<u64>()
-        .map_err(|_| format!("{flag} takes a non-negative integer (milliseconds), got {value:?}"))
+/// A millisecond policy flag: a non-negative integer inside the JS-safe
+/// bound, refused here with the flag named rather than at the write seam.
+fn parse_ms(flag: &str, value: &str) -> Result<Ms, String> {
+    let ms = value.parse::<u64>().map_err(|_| {
+        format!("{flag} takes a non-negative integer (milliseconds), got {value:?}")
+    })?;
+    Ms::try_from(ms).map_err(|e| format!("{flag}: {e}"))
 }
 
 /// The `--disabled-tools` value: a comma-separated list. Empty entries are
@@ -1023,7 +992,7 @@ mod tests {
     #[test]
     fn policy_args_parse_reads_and_writes() {
         use super::{policy_args, PolicyCommand};
-        use crate::policy::{PolicyField, PolicyOverlay};
+        use crate::policy::{Ms, PolicyField, PolicyOverlay};
         let ok = |list: &[&str]| policy_args(&args(list)).unwrap();
 
         assert_eq!(ok(&["policy", "show"]), PolicyCommand::Show { json: false });
@@ -1075,7 +1044,7 @@ mod tests {
             PolicyCommand::Set {
                 overlay: PolicyOverlay {
                     page_eval_enabled: Some(true),
-                    host_reverify_ms: Some(60_000),
+                    host_reverify_ms: Some(Ms::from(60_000u32)),
                     disabled_tools: Some(vec!["page_upload".into(), "tab_close".into()]),
                     ..PolicyOverlay::default()
                 },

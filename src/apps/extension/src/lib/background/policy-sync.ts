@@ -41,7 +41,7 @@ import {
 import {
   foldPolicyOverlay,
   policyValuesEqual,
-  policyValuesFromDoc,
+  policyValuesFrom,
   relaxedPolicyFields,
 } from "@chromium-bridge/shared/policy-compare";
 import { UI_LANGUAGES, type UiLanguageValue } from "@chromium-bridge/shared/settings";
@@ -907,7 +907,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
   }
   const doc = PolicyDocSchema.safeParse(docJson);
   if (!doc.success) return refuse("baseline document failed the strict schema");
-  const baselineValues = policyValuesFromDoc(doc.data);
+  const baselineValues = policyValuesFrom(doc.data);
 
   // The unsigned overlay may only restrict the verified baseline. Its SHAPE
   // was strict-parsed by the frame schema; its DIRECTION is recomputed here

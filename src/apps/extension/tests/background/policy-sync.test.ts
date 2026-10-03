@@ -16,7 +16,7 @@ import {
   PolicyDocSchema,
   type PolicyValues,
 } from "@chromium-bridge/shared/policy.gen";
-import { policyValuesFromDoc } from "@chromium-bridge/shared/policy-compare";
+import { policyValuesFrom } from "@chromium-bridge/shared/policy-compare";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import {
@@ -103,7 +103,7 @@ function goldenValues(i: 0 | 1): PolicyValues {
   const v = fixture.vectors[i];
   if (!v) throw new Error("missing golden vector");
   const doc = PolicyDocSchema.parse(JSON.parse(new TextDecoder().decode(base64Decode(v.docB64))));
-  return policyValuesFromDoc(doc);
+  return policyValuesFrom(doc);
 }
 
 // ---- in-test signer (plays the pinned Enclave key for crafted documents) -------

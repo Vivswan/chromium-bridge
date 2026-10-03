@@ -14,8 +14,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    fold, load_history, restrict, restricts_or_equal, set_signed, PolicyDoc, PolicyField,
-    PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
+    field_differs, fold, load_history, restrict, restricts_or_equal, set_signed, FieldKind,
+    PolicyDoc, PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
 };
 use crate::audit::Surface;
 use crate::cli::{argv, policy_args, PolicyCommand};
@@ -279,47 +279,21 @@ fn signed_line(signed: bool) -> &'static str {
 /// The effective values, one field per line in catalogue order.
 fn render_values(v: &PolicyValues) -> String {
     let mut out = String::new();
-    let mut bool_row = |name: &str, value: bool| {
-        out.push_str(&format!(
-            "  {name:<22} {}\n",
-            if value { "on" } else { "off" }
-        ));
-    };
-    bool_row("cdpMode", v.cdp_mode);
-    bool_row("fileUploadEnabled", v.file_upload_enabled);
-    bool_row("handleDialogEnabled", v.handle_dialog_enabled);
-    bool_row("pageEvalEnabled", v.page_eval_enabled);
-    bool_row("confirmHighRiskClick", v.confirm_high_risk_click);
-    bool_row("confirmPageEval", v.confirm_page_eval);
-    bool_row("touchIdConfirm", v.touch_id_confirm);
-    bool_row("confirmTabClose", v.confirm_tab_close);
-    bool_row("warnPreciseSnapshot", v.warn_precise_snapshot);
-    bool_row("evalMask", v.eval_mask);
-    out.push_str(&format!(
-        "  {:<22} {}\n",
-        "hostReverifyMs", v.host_reverify_ms
-    ));
-    out.push_str(&format!(
-        "  {:<22} {}\n",
-        "confirmGraceMs", v.confirm_grace_ms
-    ));
-    out.push_str(&format!(
-        "  {:<22} {}\n",
-        "clickToastTimeoutMs", v.click_toast_timeout_ms
-    ));
-    out.push_str(&format!(
-        "  {:<22} {}\n",
-        "evalToastTimeoutMs", v.eval_toast_timeout_ms
-    ));
-    out.push_str(&format!(
-        "  {:<22} {}\n",
-        "disabledTools",
-        if v.disabled_tools.is_empty() {
-            "(none)".to_string()
-        } else {
-            v.disabled_tools.join(",")
-        }
-    ));
+    for field in PolicyField::ALL {
+        let value = match field.kind() {
+            FieldKind::Bool(f) => if v.get_bool(f) { "on" } else { "off" }.to_string(),
+            FieldKind::Ms(f) => v.get_ms(f).to_string(),
+            FieldKind::ToolSet(f) => {
+                let tools = v.get_tools(f);
+                if tools.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    tools.join(",")
+                }
+            }
+        };
+        out.push_str(&format!("  {:<22} {value}\n", field.wire_name()));
+    }
     out
 }
 
@@ -450,7 +424,7 @@ fn plan_rollback(
     } else {
         let mut values = baseline.clone();
         for field in fields.iter().copied() {
-            set_value_to_target(&mut values, field, target);
+            values.copy_field(field, target);
         }
         RollbackPlan::Relax {
             values,
@@ -461,126 +435,25 @@ fn plan_rollback(
 }
 
 /// An overlay carrying `target`'s value on exactly the fields where it differs
-/// from `current`, plus those fields in catalogue order. Folding this overlay
-/// (free lane) or minting a baseline of `target` (signed lane) both land the
-/// effective policy on `target`. Exhaustive with no wildcard: a new policy
-/// field fails to compile until it says how it diffs.
+/// from `current` (under the lattice, so the tool list differs as a set),
+/// plus those fields in catalogue order. Folding this overlay (free lane) or
+/// minting a baseline of `target` (signed lane) both land the effective
+/// policy on `target`.
 fn diff_overlay(
     target: &PolicyValues,
     current: &PolicyValues,
 ) -> (PolicyOverlay, Vec<PolicyField>) {
     let mut overlay = PolicyOverlay::default();
     let mut fields = Vec::new();
-    for field in PolicyField::ALL.iter().copied() {
-        let differs = match field {
-            PolicyField::CdpMode => target.cdp_mode != current.cdp_mode,
-            PolicyField::FileUploadEnabled => {
-                target.file_upload_enabled != current.file_upload_enabled
-            }
-            PolicyField::HandleDialogEnabled => {
-                target.handle_dialog_enabled != current.handle_dialog_enabled
-            }
-            PolicyField::PageEvalEnabled => target.page_eval_enabled != current.page_eval_enabled,
-            PolicyField::ConfirmHighRiskClick => {
-                target.confirm_high_risk_click != current.confirm_high_risk_click
-            }
-            PolicyField::ConfirmPageEval => target.confirm_page_eval != current.confirm_page_eval,
-            PolicyField::TouchIdConfirm => target.touch_id_confirm != current.touch_id_confirm,
-            PolicyField::ConfirmTabClose => target.confirm_tab_close != current.confirm_tab_close,
-            PolicyField::WarnPreciseSnapshot => {
-                target.warn_precise_snapshot != current.warn_precise_snapshot
-            }
-            PolicyField::EvalMask => target.eval_mask != current.eval_mask,
-            PolicyField::HostReverifyMs => target.host_reverify_ms != current.host_reverify_ms,
-            PolicyField::ConfirmGraceMs => target.confirm_grace_ms != current.confirm_grace_ms,
-            PolicyField::ClickToastTimeoutMs => {
-                target.click_toast_timeout_ms != current.click_toast_timeout_ms
-            }
-            PolicyField::EvalToastTimeoutMs => {
-                target.eval_toast_timeout_ms != current.eval_toast_timeout_ms
-            }
-            PolicyField::DisabledTools => {
-                tools_differ(&target.disabled_tools, &current.disabled_tools)
-            }
-        };
-        if differs {
-            set_overlay_to_target(&mut overlay, field, target);
-            fields.push(field);
-        }
+    for field in PolicyField::ALL
+        .iter()
+        .copied()
+        .filter(|f| field_differs(*f, target, current))
+    {
+        overlay.set_from(field, target);
+        fields.push(field);
     }
     (overlay, fields)
-}
-
-/// Whether two disabled-tool lists differ as SETS (order and duplicates carry
-/// no meaning, matching the direction table's set semantics).
-fn tools_differ(a: &[String], b: &[String]) -> bool {
-    !(a.iter().all(|t| b.contains(t)) && b.iter().all(|t| a.contains(t)))
-}
-
-/// Copy `target`'s value for `field` into `values`. Exhaustive, same reason
-/// as [`diff_overlay`].
-fn set_value_to_target(values: &mut PolicyValues, field: PolicyField, target: &PolicyValues) {
-    match field {
-        PolicyField::CdpMode => values.cdp_mode = target.cdp_mode,
-        PolicyField::FileUploadEnabled => values.file_upload_enabled = target.file_upload_enabled,
-        PolicyField::HandleDialogEnabled => {
-            values.handle_dialog_enabled = target.handle_dialog_enabled
-        }
-        PolicyField::PageEvalEnabled => values.page_eval_enabled = target.page_eval_enabled,
-        PolicyField::ConfirmHighRiskClick => {
-            values.confirm_high_risk_click = target.confirm_high_risk_click
-        }
-        PolicyField::ConfirmPageEval => values.confirm_page_eval = target.confirm_page_eval,
-        PolicyField::TouchIdConfirm => values.touch_id_confirm = target.touch_id_confirm,
-        PolicyField::ConfirmTabClose => values.confirm_tab_close = target.confirm_tab_close,
-        PolicyField::WarnPreciseSnapshot => {
-            values.warn_precise_snapshot = target.warn_precise_snapshot
-        }
-        PolicyField::EvalMask => values.eval_mask = target.eval_mask,
-        PolicyField::HostReverifyMs => values.host_reverify_ms = target.host_reverify_ms,
-        PolicyField::ConfirmGraceMs => values.confirm_grace_ms = target.confirm_grace_ms,
-        PolicyField::ClickToastTimeoutMs => {
-            values.click_toast_timeout_ms = target.click_toast_timeout_ms
-        }
-        PolicyField::EvalToastTimeoutMs => {
-            values.eval_toast_timeout_ms = target.eval_toast_timeout_ms
-        }
-        PolicyField::DisabledTools => values.disabled_tools = target.disabled_tools.clone(),
-    }
-}
-
-/// Copy `target`'s value for `field` into the overlay. Exhaustive, same
-/// reason as [`diff_overlay`].
-fn set_overlay_to_target(overlay: &mut PolicyOverlay, field: PolicyField, target: &PolicyValues) {
-    match field {
-        PolicyField::CdpMode => overlay.cdp_mode = Some(target.cdp_mode),
-        PolicyField::FileUploadEnabled => {
-            overlay.file_upload_enabled = Some(target.file_upload_enabled)
-        }
-        PolicyField::HandleDialogEnabled => {
-            overlay.handle_dialog_enabled = Some(target.handle_dialog_enabled)
-        }
-        PolicyField::PageEvalEnabled => overlay.page_eval_enabled = Some(target.page_eval_enabled),
-        PolicyField::ConfirmHighRiskClick => {
-            overlay.confirm_high_risk_click = Some(target.confirm_high_risk_click)
-        }
-        PolicyField::ConfirmPageEval => overlay.confirm_page_eval = Some(target.confirm_page_eval),
-        PolicyField::TouchIdConfirm => overlay.touch_id_confirm = Some(target.touch_id_confirm),
-        PolicyField::ConfirmTabClose => overlay.confirm_tab_close = Some(target.confirm_tab_close),
-        PolicyField::WarnPreciseSnapshot => {
-            overlay.warn_precise_snapshot = Some(target.warn_precise_snapshot)
-        }
-        PolicyField::EvalMask => overlay.eval_mask = Some(target.eval_mask),
-        PolicyField::HostReverifyMs => overlay.host_reverify_ms = Some(target.host_reverify_ms),
-        PolicyField::ConfirmGraceMs => overlay.confirm_grace_ms = Some(target.confirm_grace_ms),
-        PolicyField::ClickToastTimeoutMs => {
-            overlay.click_toast_timeout_ms = Some(target.click_toast_timeout_ms)
-        }
-        PolicyField::EvalToastTimeoutMs => {
-            overlay.eval_toast_timeout_ms = Some(target.eval_toast_timeout_ms)
-        }
-        PolicyField::DisabledTools => overlay.disabled_tools = Some(target.disabled_tools.clone()),
-    }
 }
 
 /// Comma-joined wire names, for the plan description.

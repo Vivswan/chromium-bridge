@@ -1,5 +1,6 @@
 use super::*;
 use crate::enclave::base64_encode;
+use crate::policy::Ms;
 
 /// A `PolicyStore` seeded in memory (no disk): a baseline document over
 /// `values` at `revision`, optionally signed, with `overlay`.
@@ -9,25 +10,7 @@ fn store(
     signed: bool,
     overlay: Option<PolicyOverlay>,
 ) -> PolicyStore {
-    let doc = PolicyDoc {
-        revision,
-        page_eval_enabled: values.page_eval_enabled,
-        cdp_mode: values.cdp_mode,
-        file_upload_enabled: values.file_upload_enabled,
-        handle_dialog_enabled: values.handle_dialog_enabled,
-        confirm_high_risk_click: values.confirm_high_risk_click,
-        confirm_page_eval: values.confirm_page_eval,
-        touch_id_confirm: values.touch_id_confirm,
-        confirm_tab_close: values.confirm_tab_close,
-        warn_precise_snapshot: values.warn_precise_snapshot,
-        eval_mask: values.eval_mask,
-        host_reverify_ms: values.host_reverify_ms,
-        confirm_grace_ms: values.confirm_grace_ms,
-        click_toast_timeout_ms: values.click_toast_timeout_ms,
-        eval_toast_timeout_ms: values.eval_toast_timeout_ms,
-        disabled_tools: values.disabled_tools.clone(),
-        ..PolicyDoc::default()
-    };
+    let doc = PolicyDoc::from_values(values, revision, Vec::new());
     let bytes = serde_json::to_vec(&doc).unwrap();
     PolicyStore {
         version: super::super::POLICY_STORE_VERSION,
@@ -274,19 +257,19 @@ fn a_relaxing_rollback_takes_the_signed_lane_with_the_changed_fields_touched() {
     // historical effective wholesale - with only the changed fields
     // touched.
     let baseline = PolicyValues {
-        confirm_grace_ms: 45_000,
+        confirm_grace_ms: Ms::from(45_000u32),
         ..PolicyValues::default()
     };
     // The overlay restricts confirmGraceMs to 30000, so effective differs
     // from baseline on a field the rollback does NOT change.
     let current = PolicyValues {
-        confirm_grace_ms: 30_000,
+        confirm_grace_ms: Ms::from(30_000u32),
         ..PolicyValues::default()
     };
     let target = PolicyValues {
         page_eval_enabled: true,
-        confirm_grace_ms: 30_000, // unchanged vs current effective
-        eval_mask: false,         // also relax a second field
+        confirm_grace_ms: Ms::from(30_000u32), // unchanged vs current effective
+        eval_mask: false,                      // also relax a second field
         ..PolicyValues::default()
     };
     let plan = plan_rollback(&target, &current, &baseline);
@@ -304,7 +287,7 @@ fn a_relaxing_rollback_takes_the_signed_lane_with_the_changed_fields_touched() {
     // silently folded into the signed baseline.
     assert!(values.page_eval_enabled);
     assert!(!values.eval_mask);
-    assert_eq!(values.confirm_grace_ms, 45_000);
+    assert_eq!(values.confirm_grace_ms, Ms::from(45_000u32));
     assert!(touched.contains(&PolicyField::PageEvalEnabled));
     assert!(touched.contains(&PolicyField::EvalMask));
     assert!(!touched.contains(&PolicyField::ConfirmGraceMs));
