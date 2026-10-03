@@ -47,26 +47,26 @@ The ranking is this project's judgment of real-world frequency, not a measuremen
 
 ## Where the bar holds today, per OS
 
-On macOS and Linux, harness admission is enforced only once one client is paired; before that the server serves whatever spawned it and logs that posture at error level. Windows has no attestation to key admission on.
+On macOS and Linux, harness admission is enforced only once one client is paired; before that the server serves whatever spawned it. Windows has no attestation to key admission on.
 
 | OS | Client attestation | User presence | Where the bar holds |
 | --- | --- | --- | --- |
-| macOS | the parent harness's running image, a validated cdhash plus its signing Team ID, checked against the paired-client allowlist | Secure Enclave Touch ID on an enrolled Mac; the software fallback otherwise | holds: a private socket gated on a kernel peer-UID check, mutual executable attestation, and an HMAC handshake |
-| Linux | the SHA256 of the parent's `/proc/<pid>/exe`, checked against the allowlist | the software fallback only | holds for the bridge, on the same socket gates; presence is software-attested |
-| Windows | none: there is no executable attestation, so harness admission is unenforced | the software fallback only | does not hold against same-user software today: the bridge is a loopback TCP socket, and the only gate is the HMAC secret in a lock file with no explicit restrictive mode, so any same-user process that reads the file can drive the bridge |
+| macOS | the spawning harness's code identity, checked against the paired-client allowlist ([boundary 1](trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20)) | hardware presence on an enrolled Mac; the software fallback otherwise | holds: the bridge admits only this binary, run by this user, holding the run secret ([boundary 2](trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson)) |
+| Linux | the spawning harness's code identity, checked against the allowlist ([boundary 1](trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20)) | the software fallback only | holds for the bridge, on the same gates; presence is software-attested |
+| Windows | none; harness admission is unenforced | the software fallback only | does not hold against same-user software today: any local process can reach the bridge, and the run secret is the only gate ([platform table](../../.github/SECURITY.md#platform-support)) |
 
 Planned, not done: named pipes with an attested client on Windows. The Windows row changes only when that lands; until then the server warns at startup, and the [platform table in the security policy](../../.github/SECURITY.md#platform-support) owns the exact state.
 
 ## Against the convenience-first design class
 
-A common design for browser automation puts convenience first. The left column describes that design class by the choices that define it; it names no product and claims nothing about any particular one.
+A common design for browser automation puts convenience first. The left column describes that design class by the choices that define it, and what the browser does in response is a claim about other software; it names no product.
 
 | Point | Convenience-first design class | This project |
 | --- | --- | --- |
-| Who can reach the bridge | a localhost port open to any local process | macOS and Linux: a private socket gated on peer UID, executable identity, and a secret; Windows today: a loopback port gated on the secret alone (the table above) |
-| The debugging banner | a remote-debugging banner always on, because the browser runs with a debug port | no debug port; the browser's debugging banner shows only while a debugger-backed tool or the opt-in CDP mode holds an attach (the [tool risk matrix](tool-risk-matrix.md) marks which tools) |
-| Default access | full access to every site from the first call | nothing runs on a site the user has not approved; `page_eval` and `page_upload` are off by default under host-owned policy |
-| Per-action confirmation | none | by default, submit and link clicks, key presses, selects, tab close, uploads, and every `page_eval` confirm on a window the page cannot reach; hardware presence for the two riskiest tools on an enrolled Mac; relaxing a gate is a presence-gated policy change |
+| Who can reach the bridge | a localhost port open to any local process | macOS and Linux: only this binary, run by this user, holding the run secret ([boundary 2](trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson)); Windows today: any local process, gated on the secret alone ([platform table](../../.github/SECURITY.md#platform-support)) |
+| The debug port and its banner | a debug port open to any local process at all times; the browser's debugging banner shows only while a client is attached, so the user sees nothing between attachments | no debug port; the banner shows only while a debugger-backed tool or the opt-in CDP mode holds an attach (the [tool risk matrix](tool-risk-matrix.md) marks which tools) |
+| Default access | full access to every site from the first call | nothing runs on a site the user has not approved, and the riskiest tools are off by default under host-owned policy ([tool risk matrix](tool-risk-matrix.md)) |
+| Per-action confirmation | none | by default, the confirmation-gated actions confirm on a window the page cannot reach (the [tool risk matrix](tool-risk-matrix.md) lists them), and the two riskiest take hardware presence on an enrolled Mac; relaxing a gate is a presence-gated policy change ([confirmation defaults](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)) |
 | Local malware | declared out of scope, and nothing is done about it | out of scope too, but the bridge refuses to be the cheapest door: on macOS and Linux a different same-user program is rejected at the socket, and once one client is paired every harness must match the allowlist, where pairing needs user presence |
 
 ## The rule for future changes
