@@ -14,10 +14,13 @@
 // Node builtins only (no scripts/lib.ts import), so it runs without a `bun install`. Dual-use: `moon run
 // harness-smoke` locally, and nightly.yml's harness-smoke job, which uploads build/harness-captures/.
 //
-// Usage: bun tests/harness/run.ts [--mint-seeds] [--require-any]
-//   --mint-seeds   copy deduplicated captured frames into src/packages/core/fuzz/seeds/mcp_jsonrpc/ (a real-world corpus)
-//   --require-any  exit 1 unless at least one harness completed a LIVE MCP connection; the nightly passes this so
-//                  a broken harness install (or a run that only verified config entries) cannot read as a green night
+// Usage: bun tests/harness/run.ts [--mint-seeds <dir>] [--require-any]
+//   --mint-seeds <dir>  copy deduplicated captured frames into <dir> as mcp_jsonrpc fuzz seeds; <dir> must lie
+//                       outside this repository (a capture is measured from a real client, so it is reference
+//                       material for hand-authoring the committed corpus, never the corpus itself)
+//   --require-any       exit 1 unless at least one harness completed a LIVE MCP connection; the nightly passes this
+//                       so a broken harness install (or a run that only verified config entries) cannot read as a
+//                       green night
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -36,7 +39,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 // fake-llm.ts is builtins-only like this file, and its main() is guarded by
 // import.meta.main, so this value import keeps the suite zero-install.
@@ -47,13 +50,12 @@ import {
   type RecordedRequest,
 } from "./fake-llm";
 
-const usage = "usage: bun tests/harness/run.ts [--mint-seeds] [--require-any]";
+const usage = "usage: bun tests/harness/run.ts [--mint-seeds <dir>] [--require-any]";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BIN = resolve(REPO, "target", "release", "chromium-bridge");
 const FAKE_LLM = resolve(REPO, "tests", "harness", "fake-llm.ts");
 const CAPTURE_DIR = resolve(REPO, "build", "harness-captures");
-const SEEDS_DIR = resolve(REPO, "src", "packages", "core", "fuzz", "seeds", "mcp_jsonrpc");
 // The name the bridge is registered under in each harness's isolated config.
 const SERVER_NAME = "chromium-bridge";
 // The bridge-side tool the live fake-LLM probes drive end to end.
@@ -75,19 +77,45 @@ const PROXY_VARS = [
 ];
 
 interface Options {
-  mintSeeds: boolean;
+  /** Resolved --mint-seeds target, already verified to lie outside the repository; undefined = no minting. */
+  seedsDir: string | undefined;
   requireAny: boolean;
 }
 
+/**
+ * A capture is measured from a real client, so minted seeds never land inside the repository: the
+ * committed corpus is hand-authored from them, never copied. Throws on a path inside `repoRoot`.
+ */
+export function seedsDirOutsideRepo(dir: string, repoRoot: string = REPO): string {
+  const out = resolve(dir);
+  const rel = relative(repoRoot, out);
+  // A bare startsWith("..") would admit "<repo>/..seeds".
+  const outside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  if (!outside) throw new Error(`refusing to write captured frames inside the repository: ${out}`);
+  return out;
+}
+
 function parseOptions(argv: string[]): Options {
-  const options: Options = { mintSeeds: false, requireAny: false };
-  for (const arg of argv) {
-    if (arg === "--mint-seeds") options.mintSeeds = true;
-    else if (arg === "--require-any") options.requireAny = true;
-    else {
-      console.error(`error: invalid argument: ${arg}\n${usage}`);
-      process.exit(2);
-    }
+  const options: Options = { seedsDir: undefined, requireAny: false };
+  const fail = (message: string): never => {
+    console.error(`error: ${message}\n${usage}`);
+    process.exit(2);
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i] as string;
+    if (arg === "--mint-seeds") {
+      i += 1;
+      const dir = argv[i];
+      if (dir === undefined || dir.startsWith("--")) fail("--mint-seeds needs <dir>");
+      else {
+        try {
+          options.seedsDir = seedsDirOutsideRepo(dir);
+        } catch (e) {
+          fail((e as Error).message);
+        }
+      }
+    } else if (arg === "--require-any") options.requireAny = true;
+    else fail(`invalid argument: ${arg}`);
   }
   return options;
 }
@@ -784,14 +812,9 @@ const slug = (method: string): string =>
     .replace(/^-+|-+$/g, "");
 
 /**
- * Copy deduplicated captured frames into the mcp_jsonrpc fuzz seed corpus.
- * Raw captured lines are written (the real-world bytes are the point);
- * dedup compares re-serialized JSON, so whitespace variants collapse while
- * key-order variants stay distinct (deliberate: those are different
- * real-world byte sequences). Names are descriptive
- * (harness-claude-initialize, harness-claude-tools-list, ...); a name
- * collision with different content gets a short hash suffix. Returns the
- * number of seeds written.
+ * `seedsDir` is a path `seedsDirOutsideRepo` already vetted. Dedup compares re-serialized JSON, so
+ * whitespace variants collapse while key-order variants stay distinct: those are different real-world
+ * byte sequences, which is what a fuzz corpus wants.
  */
 export function mintSeeds(captureDir: string, seedsDir: string): number {
   mkdirSync(seedsDir, { recursive: true });
@@ -974,9 +997,9 @@ async function main(): Promise<number> {
     `${JSON.stringify({ generatedAt: new Date().toISOString(), reports }, null, 2)}\n`,
   );
 
-  if (options.mintSeeds) {
-    const minted = mintSeeds(CAPTURE_DIR, SEEDS_DIR);
-    console.log(`[harness-smoke] minted ${minted} new seed(s) into ${SEEDS_DIR}`);
+  if (options.seedsDir !== undefined) {
+    const minted = mintSeeds(CAPTURE_DIR, options.seedsDir);
+    console.log(`[harness-smoke] minted ${minted} new seed(s) into ${options.seedsDir}`);
   }
 
   const failed = reports.filter((report) => report.outcome === "failed");

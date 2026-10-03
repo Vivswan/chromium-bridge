@@ -45,6 +45,8 @@ bun run --cwd browser test:smoke            # smoke   - bun + Chrome (BB_EXT_DIR
 
 The browser suites read the **built** bundle, so build the extension first (`bun run --cwd ../src/apps/extension build`); `run_all.ts` and `moon run test-browser` do this for you.
 
+`harness/run.ts --mint-seeds <dir>` mints captured client frames as fuzz seeds; the [harness README](harness/README.md#run) owns where `<dir>` may lie and why the committed corpus is hand-authored.
+
 ## Types
 
 The `.ts` suites are type-checked (`bun`, `chrome`, and DOM types):
