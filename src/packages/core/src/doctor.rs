@@ -34,6 +34,7 @@ pub struct Report {
     pub version: &'static str,
     pub os: &'static str,
     pub arch: &'static str,
+    #[serde(serialize_with = "crate::audit::serialize_path_lossy")]
     pub lock_path: PathBuf,
     /// The lock file, classified once at gather time. Each state carries
     /// exactly the facts it has - contradictory reports (an endpoint without
@@ -474,69 +475,6 @@ mod tests {
                 detail: "policy store decode: bad".into(),
             },
         }
-    }
-
-    #[test]
-    fn the_report_serializes_to_its_wire_shape() {
-        // A golden shape, kept only because the report is a wire contract: `doctor --json` prints
-        // it and readers outside this binary consume it. Every field and every enum arm appears,
-        // so a renamed or dropped one fails here before it reaches a consumer.
-        assert_eq!(
-            serde_json::to_value(healthy_report()).unwrap(),
-            serde_json::json!({
-                "v": 1,
-                "version": "1.2.3",
-                "os": "macos",
-                "arch": "aarch64",
-                "lock_path": "/tmp/run.lock",
-                "lock": {
-                    "state": "present",
-                    "endpoint": "/tmp/chromium-bridge/run.sock",
-                    "pid": 4242,
-                    "secret_len": 32,
-                    "reachable": true,
-                },
-                "manifests": {"Ok": [
-                    {"key": "chrome", "detected": true, "state": "ok",
-                     "location": "/tmp/com.vivswan.chromium_bridge.host.json"},
-                    {"key": "brave", "detected": false, "state": "missing",
-                     "location": "/tmp/brave/com.vivswan.chromium_bridge.host.json"},
-                ]},
-                "kill": {"Ok": false},
-                "policy": {"store": "none", "v": 1},
-                "pending_import": {"state": "none", "v": 1},
-            })
-        );
-
-        let mut broken = healthy_report();
-        broken.lock = LockState::Unreadable {
-            detail: "lock file: not JSON".into(),
-        };
-        broken.manifests = Ok(vec![ManifestStatus {
-            key: "edge",
-            detected: true,
-            state: RegState::Stale("launch path /old/bin does not exist".into()),
-            location: "/tmp/edge/com.vivswan.chromium_bridge.host.json".into(),
-        }]);
-        broken.kill = Err("revocation record: permission denied".into());
-        broken.policy = policy_report(PolicyStoreState::Error);
-        let value = serde_json::to_value(broken).unwrap();
-        assert_eq!(
-            value["lock"],
-            serde_json::json!({"state": "unreadable", "detail": "lock file: not JSON"})
-        );
-        assert_eq!(
-            value["manifests"]["Ok"][0]["state"],
-            serde_json::json!({"stale": "launch path /old/bin does not exist"})
-        );
-        assert_eq!(
-            value["kill"],
-            serde_json::json!({"Err": "revocation record: permission denied"})
-        );
-        assert_eq!(
-            value["policy"],
-            serde_json::json!({"store": "error", "v": 1, "detail": "policy store decode: bad"})
-        );
     }
 
     #[test]

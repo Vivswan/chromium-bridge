@@ -409,11 +409,22 @@ fn now_ms() -> u64 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditPage {
     /// The live file; the rotated sibling is read before it.
+    #[serde(serialize_with = "serialize_path_lossy")]
     pub path: PathBuf,
     /// Newest first. Every line of the trail is one entry, parsed or not.
     pub entries: Vec<AuditEntry>,
-    /// Lines older than the page, left unread.
+    /// Lines of the trail older than the page, excluded from it.
     pub older: usize,
+}
+
+/// A path as display text, lossy for non-UTF-8 bytes. serde's own `PathBuf` serializer refuses those
+/// outright, and a runtime dir taken from `XDG_RUNTIME_DIR` can hold them, so a report over such a
+/// path would otherwise fail to serialize as a whole.
+pub(crate) fn serialize_path_lossy<S: serde::Serializer>(
+    path: &Path,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.to_string_lossy())
 }
 
 /// One line of the trail. A line that fails the strict parse (valid JSON, known fields only, supported
@@ -838,9 +849,7 @@ mod tests {
 
     #[test]
     fn stderr_json_line_has_one_kind_key_and_the_event_kind() {
-        // Incident: the record's own `kind` field collided with the `"kind":"audit"` envelope, so
-        // every JSON audit line carried two `kind` keys and a parser kept the last one, losing
-        // the discriminator. Counted on the raw bytes, since a JSON parser hides the duplicate.
+        // Counted on the raw bytes: a JSON parser keeps only the last of two equal keys.
         let mut rec = AuditRecord::new(AuditKind::ToolCall).outcome("error");
         rec.v = AUDIT_VERSION;
         rec.ts_ms = 0;
@@ -869,8 +878,7 @@ mod tests {
     fn read_pages_the_trail_newest_first_across_the_rotation() {
         // The reader must agree with the writer's layout (audit.log.1 holds the older half) and
         // keep an unparsable line in its position, so a tampered or truncated line shows up where
-        // it sits instead of silently shrinking the page. The serialized page and the printed
-        // text are both asserted whole: the page is a wire contract for other readers.
+        // it sits instead of silently shrinking the page.
         let live = tmp("read");
         let record = |ts_ms: u64, kind: &str| {
             format!("{{\"v\":1,\"ts_ms\":{ts_ms},\"event_kind\":\"{kind}\",\"surface\":\"cli\",\"outcome\":\"ok\"}}\n")
@@ -938,6 +946,23 @@ mod tests {
         assert_eq!(
             render(&empty),
             format!("no audit records yet (looked in {})\n", live.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_trail_path_still_serializes() {
+        // serde's own PathBuf serializer refuses non-UTF-8 bytes, which XDG_RUNTIME_DIR can carry.
+        use std::os::unix::ffi::OsStrExt;
+        let live = PathBuf::from(std::ffi::OsStr::from_bytes(b"/nonexistent/\xff/audit.log"));
+        let page = read_at(&live, 3).unwrap();
+        assert_eq!(
+            serde_json::to_value(&page).unwrap(),
+            serde_json::json!({
+                "path": "/nonexistent/\u{fffd}/audit.log",
+                "entries": [],
+                "older": 0,
+            })
         );
     }
 }

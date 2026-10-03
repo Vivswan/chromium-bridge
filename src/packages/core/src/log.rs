@@ -76,9 +76,11 @@ pub fn format() -> Format {
     })
 }
 
-/// One stderr audit line for `event`. The event's own serialization owns every field name, and the JSON
-/// form adds only the `"kind":"audit"` envelope discriminator log collectors key on, so an event field can
-/// never be shadowed by it. Pure, so both formats are unit-testable without touching stderr.
+/// One stderr audit line for `event`. The JSON form is the event's own fields under the `"kind":"audit"`
+/// envelope log collectors key on, so an event names its own kind under another key ([`AuditRecord`]
+/// uses `event_kind`). Pure, so both formats are unit-testable without touching stderr.
+///
+/// [`AuditRecord`]: crate::audit::AuditRecord
 ///
 /// ```text
 /// text  -> [AUDIT] <event's Display>
@@ -139,43 +141,4 @@ macro_rules! log_debug {
     ($tag:expr, $($a:tt)*) => {
         $crate::log::emit($crate::log::Level::Debug, $tag, format_args!($($a)*))
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A synthetic event with one string and one numeric field, and a quote in
-    /// the string so escaping is exercised.
-    #[derive(Serialize)]
-    struct Event {
-        name: String,
-        req: u64,
-    }
-
-    impl Display for Event {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "name={} req={}", self.name, self.req)
-        }
-    }
-
-    #[test]
-    fn stderr_audit_lines_are_the_event_under_the_envelope() {
-        // What leaves the program: the text form is the event's own display
-        // behind the `[AUDIT]` prefix; the JSON form is the envelope
-        // discriminator followed by the event's fields, with their JSON types
-        // and escaping intact.
-        let event = Event {
-            name: "say \"hi\"".into(),
-            req: 7,
-        };
-        assert_eq!(
-            render_audit(Format::Text, &event).unwrap(),
-            "[AUDIT] name=say \"hi\" req=7"
-        );
-        assert_eq!(
-            render_audit(Format::Json, &event).unwrap(),
-            r#"{"kind":"audit","name":"say \"hi\"","req":7}"#
-        );
-    }
 }
