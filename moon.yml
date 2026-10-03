@@ -856,7 +856,7 @@ tasks:
     # Needs the claude and codex CLIs on PATH, so nightly.yml's harness-smoke job installs them and runs
     # `bun tests/harness/run.ts` directly: moon does not resolve runInCI:false tasks when CI=true. Each
     # harness's opening method is logged as the ADR-0034 canary for retiring the legacy-initialize shim;
-    # extra flags pass through (`moon run harness-smoke -- --mint-seeds`).
+    # extra flags pass through (`moon run harness-smoke -- --mint-seeds <dir outside the repo>`).
     description: >-
       Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server and run a
       fake-LLM live tool call (logs the ADR-0034 opening-method canary)

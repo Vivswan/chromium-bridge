@@ -115,8 +115,8 @@ jobs:
             exit "$rc"
           fi
 
-  # The captured frames (uploaded green or red) are the run's real output: `--mint-seeds` turns them into
-  # mcp_jsonrpc fuzz corpus locally. The registry's *-live-fakellm entries additionally drive a full
+  # The captured frames (uploaded green or red) are the run's real output: `--mint-seeds <dir>` turns them into
+  # mcp_jsonrpc fuzz seeds outside the repo. The registry's *-live-fakellm entries additionally drive a full
   # model-driven tool call per CLI against a local fake LLM backend (tests/harness/fake-llm.ts), so the
   # whole run needs no secrets.
   #
