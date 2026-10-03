@@ -38,31 +38,6 @@ import {
 } from "./envelope-wire.gen";
 import { POLICY_REVISION_MAX, PolicyOverlaySchema, PolicyValuesSchema } from "./policy.gen";
 
-// ---- extension->host writer frames (generated, compile-time only) ------------
-
-// The frames the extension CONSTRUCTS. The enforcing reader is the Rust
-// serde parser (deny_unknown_fields); these generated types give every
-// constructor site compile-time conformance (`satisfies`), so a drifted
-// field or a typo'd tag is a compile error, not a frame the host silently
-// refuses (or forwards to its death) at runtime. Types only - the outbound
-// path gains no runtime validation, so no new parser asymmetries; writer
-// coverage is pinned by scripts/check-envelope-parity.ts.
-export type {
-  AuditEventWire,
-  ClientListWire,
-  ClientRevokeWire,
-  EnclaveChallengeWire,
-  EnclaveRevokeWire,
-  KillEngageWire,
-  KillReleaseWire,
-  KillStatusWire,
-  LangGetWire,
-  LangSetWire,
-  LegacySettingsWire,
-  PolicyGetWire,
-  PresenceChallengeWire,
-} from "./envelope-wire.gen";
-
 export const ENCLAVE_FRAME_TYPES = [
   "enclave_challenge",
   "enclave_proof",
