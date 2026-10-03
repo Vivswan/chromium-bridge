@@ -81,6 +81,7 @@ tasks:
       - '~:check-actions'
       - '~:check-docs-literals'
       - '~:check-docs-policy'
+      - '~:check-compose'
     toolchains: ['system']
     options:
       cache: false
@@ -296,13 +297,35 @@ tasks:
       cache: false # a gating suite (CI's browser job): gates are never cached
       runInCI: false # needs an isolated Chrome; CI's browser job provides its own
 
+  # ----- container test environment (compose.yaml; never in CI) --------------
+  # The container is the isolation: no host browser, toolchain, or process is in its reach, and the
+  # engine (docker, or podman via CONTAINER_ENGINE=podman) is the only host dependency. The first run
+  # builds the image from Containerfile. scripts/compose-run.ts supplies what only the host knows.
+
+  ci-container:
+    description: 'THE GATE inside the container test environment (docker; CONTAINER_ENGINE=podman switches)'
+    command: 'bun scripts/compose-run.ts ci'
+    toolchains: ['system']
+    options:
+      cache: false # a gate run: gates are never cached
+      runInCI: false # CI runs the gate natively; the container is the local isolation
+
   test-browser-container:
-    description: 'Browser suites inside a Linux container (podman/docker) - no test Chrome on the host; mirrors the CI browser job'
-    command: 'bash scripts/run-browser-tests-container.sh'
+    description: 'Browser suites inside the container under xvfb with BB_REQUIRE_BROWSER=1 (a skipped suite fails as in CI); no test Chrome on the host'
+    command: 'bun scripts/compose-run.ts browser'
     toolchains: ['system']
     options:
       cache: false # a gating suite run: gates are never cached
       runInCI: false # local-verification convenience; CI's browser job is canonical
+
+  shell-container:
+    description: 'Interactive bash inside the container test environment, the checkout bind-mounted at /work'
+    command: 'bun scripts/compose-run.ts shell'
+    toolchains: ['system']
+    options:
+      cache: false # interactive: must really run
+      runInCI: false
+      interactive: true
 
   test-integration:
     description: 'Real E2E integration (opt-in; real binary + isolated Chrome + extension)'
@@ -685,6 +708,16 @@ tasks:
       set -e
       bun scripts/check-docs-policy.ts
       bun test scripts/check-docs-policy.test.ts
+    toolchains: ['system']
+    options:
+      cache: false # in the ci gate: gates are never cached
+
+  check-compose:
+    description: 'compose.yaml + compose.podman.yaml stay within the Compose Specification subset both docker compose and podman compose implement'
+    script: |
+      set -e
+      bun scripts/check-compose-compat.ts
+      bun test scripts/check-compose-compat.test.ts
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
