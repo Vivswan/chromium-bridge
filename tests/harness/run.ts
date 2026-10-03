@@ -15,7 +15,7 @@
 // harness-smoke` locally, and nightly.yml's harness-smoke job, which uploads build/harness-captures/.
 //
 // Usage: bun tests/harness/run.ts [--mint-seeds <dir>] [--require-any]
-//   --mint-seeds <dir>  copy deduplicated captured frames into <dir>, outside this repository, as mcp_jsonrpc fuzz seeds
+//   --mint-seeds <dir>  copy deduplicated captured frames into <dir> as mcp_jsonrpc fuzz seeds (tests/harness/README.md, "Run")
 //   --require-any       exit 1 unless at least one harness completed a LIVE MCP connection; the nightly passes this
 //                       so a broken harness install (or a run that only verified config entries) cannot read as a
 //                       green night
@@ -81,7 +81,7 @@ interface Options {
   requireAny: boolean;
 }
 
-/** `<dir>` must lie outside the repository (tests/harness/README.md, "Run", says why); throws otherwise. */
+/** Where `<dir>` may lie is tests/harness/README.md's "Run" rule; throws when it is violated. */
 export function seedsDirOutsideRepo(dir: string, repoRoot: string = REPO): string {
   const out = resolve(dir);
   const rel = relative(realpathSync(repoRoot), realpathOfDeepestExistingAncestor(out));
