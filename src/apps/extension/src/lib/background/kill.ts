@@ -57,7 +57,7 @@ export function killGateFromStored(value: unknown): KillGate {
         allowed: false,
         reason:
           "the bridge kill switch is engaged; all bridge activity is refused until " +
-          "it is explicitly released (the Chromium Bridge app, or `chromium-bridge unkill`)",
+          "it is explicitly released (`chromium-bridge unkill`)",
       };
     case "unknown":
       return {
@@ -104,7 +104,7 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
  * compile error rather than an op the engage-arming switch in request() silently misses. Inbound kill_status_result
  * frames are parsed in port.ts with KillStatusResultSchema; nothing malformed reaches handleKillFrame.
  *   kill_release  -> deliberately absent: the host refuses it from the extension (ADR-0032 decision 6);
- *                    release lives in the desktop app and the CLI */
+ *                    release lives in the CLI */
 export type KillControlFrame = KillStatusWire | KillEngageWire;
 
 let postFrame: ((frame: KillControlFrame) => boolean) | null = null;
@@ -308,8 +308,8 @@ function advancePanicWaiter(state: KillMirror["state"], seq: number): void {
 
 /** Engage the switch - the ONLY transition this extension can request
  * (ADR-0032 decision 6: the host refuses kill_release from the extension,
- * so no release lane exists here; release lives behind the desktop app's
- * presence gate or `chromium-bridge unkill`). The host performs the
+ * so no release lane exists here; release lives behind `chromium-bridge
+ * unkill`'s presence gate). The host performs the
  * transition (and audits it, surface=extension); the mirror adopts the
  * host's answer. The caller was already gated: the router accepts set_kill
  * only from extension pages, and its schema pins `on` to `true`, so a page
@@ -324,7 +324,7 @@ export function engageKill(): Promise<KillView> {
  * (the startup status query, an options-page read) holds the single request slot. With the slot free this is
  * engageKill(); with it occupied the engage is posted anyway, uncorrelated, which is safe because the control frames
  * carry no ids and the host applies them in arrival order on one pipe: the pending exchange settles with equally
- * authoritative state, and an engage racing a host-side release (app/CLI) still lands AFTER it (final state: killed).
+ * authoritative state, and an engage racing a host-side release (CLI unkill) still lands AFTER it (final state: killed).
  *
  *   returned view    -> the SEND outcome plus the last-known mirror, never the engage's result (the mirror carries that)
  *   successful post  -> arms the at-least-once re-post (attachPort); only a killed frame arriving after it disarms

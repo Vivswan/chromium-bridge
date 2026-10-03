@@ -9,8 +9,8 @@ import { send } from "@/lib/messages";
 
 // The ADR-0030 kill-switch panel: one prominent, explicit switch that halts
 // all bridge activity everywhere. ENGAGE-ONLY (ADR-0032 decision 6): the
-// host refuses `kill_release` from the extension, so releasing lives in the
-// Chromium Bridge app and `chromium-bridge unkill` - this panel engages and
+// host refuses `kill_release` from the extension, so releasing lives in
+// `chromium-bridge unkill` - this panel engages and
 // shows the state, never releases. Everything here goes through the SW
 // router (extension-page senders only) and is RELAYED to the native host,
 // which performs the transition and answers with the resulting state - this
@@ -49,8 +49,8 @@ export function KillSwitchPanel() {
     // Engaging is deliberately zero-friction (ADR-0030): the brake must be
     // one action from every surface. Releasing restores capability, so it is
     // not offered here at all: the host refuses kill_release from the
-    // extension (ADR-0032 decision 6), and release lives behind the app's
-    // presence gate or `chromium-bridge unkill`.
+    // extension (ADR-0032 decision 6), and release lives behind
+    // `chromium-bridge unkill`'s presence gate.
     setBusy(true);
     setActionError(null);
     try {

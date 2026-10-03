@@ -131,7 +131,7 @@ export function route(
       return true;
     case "set_kill":
       // ADR-0030: ENGAGE-ONLY (ADR-0032 decision 6: the schema pins on:true and the host refuses kill_release
-      // from the extension; release lives in the app/CLI). Only the extension's own pages reach this line (the
+      // from the extension; release lives in the CLI). Only the extension's own pages reach this line (the
       // gate above), and the host decides and audits the actual transition; this only relays a control frame.
       void engageKill().then((r) => sendResponse(r));
       return true;

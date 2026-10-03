@@ -214,9 +214,9 @@ async function main(): Promise<void> {
     // in the locale bundles), proving the page body reads the locale bundle
     // (the original leak was the retired grid showing zh on en).
     const POLICY_MANAGED_TITLE = {
-      en: "Managed in the Chromium Bridge app",
-      zh_CN: "\u5728 Chromium Bridge \u5E94\u7528\u4E2D\u7BA1\u7406",
-      zh_TW: "\u5728 Chromium Bridge \u61C9\u7528\u7A0B\u5F0F\u4E2D\u7BA1\u7406",
+      en: "Set with chromium-bridge policy",
+      zh_CN: "\u7528 chromium-bridge policy \u8BBE\u7F6E",
+      zh_TW: "\u7528 chromium-bridge policy \u8A2D\u5B9A",
     };
 
     const page = await browser.newPage();

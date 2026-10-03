@@ -17,7 +17,7 @@ import { TrustedClientsPanel } from "./TrustedClientsPanel";
 // The options page. Every write is event-driven (useSettings rides storage.onChanged), so a change from any
 // surface reflects here with no polling and no manual refresh.
 //
-// The security policy itself (the 15 host-owned fields, ADR-0032) is not edited here: it is set in the app or
+// The security policy itself (the 15 host-owned fields, ADR-0032) is not edited here: it is set with
 // `chromium-bridge policy`, signed by the paired host key, and only enforced by this extension. Kill RELEASE
 // moved with it (the host refuses `kill_release` from the extension, decision 6); engaging stays one click away.
 //
@@ -124,8 +124,8 @@ export function OptionsApp() {
 
       <Section title={t("options.section_security")}>
         {/* The ADR-0032 pointer where the 15 policy toggles used to be: the
-            security policy is host-owned - edited in the app, signed by the
-            paired key, enforced here - so this page shows where it lives
+            security policy is host-owned - set with `chromium-bridge policy`,
+            signed by the paired key, enforced here - so this page shows where it lives
             instead of pretending to control it. */}
         <div className="py-1">
           <div className="text-[13px] font-medium">{t("settings.policy_managed_title")}</div>

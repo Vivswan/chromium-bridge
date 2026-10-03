@@ -1085,7 +1085,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
 // ---- the legacy-settings send-once (ADR-0032 decision 8) ------------------------------
 //
 // `legacy_settings { bag }` offers the snapshotted legacy settings to a host that attests it has no policy store, so
-// the app's first-run import can show them and the user can sign revision 1; the host only records it and sends no
+// the import review can show them and the user can sign revision 1; the host only records it and sends no
 // reply. Decision 8's "a policy-capable host has identified itself" is read as fresh-nonce proof of the pinned key on
 // THIS connection, not as a well-formed frame; trySendLegacyBag carries each gate condition with its reason.
 //
