@@ -21,8 +21,6 @@ import {
 import { browser } from "wxt/browser";
 import { computeKeyId, parsePubkey } from "./enclave-verify";
 
-export type { CompromisedMark, EnclavePin, PendingPairing };
-
 const PIN_KEY = "enclavePin";
 const PENDING_KEY = "enclavePending";
 const COMPROMISED_KEY = "enclaveCompromised";

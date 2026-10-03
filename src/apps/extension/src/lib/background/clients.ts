@@ -23,8 +23,6 @@ import {
 } from "@chromium-bridge/shared/enclave";
 import type { ClientListWire, ClientRevokeWire } from "@chromium-bridge/shared/envelope-wire.gen";
 
-export type { TrustedClient };
-
 /** How long the host has to answer an admin control frame before the request
  * fails closed. Generous for a local round-trip; nothing here can raise a
  * presence prompt (deletion and listing are deliberately not presence-gated,

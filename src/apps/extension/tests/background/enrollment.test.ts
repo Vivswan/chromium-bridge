@@ -15,7 +15,6 @@ import {
   approvePending,
   attachPort,
   detachPort,
-  type EnrollmentStatus,
   enrollmentGate,
   getEnrollmentStatus,
   handleEnclaveFrame,
@@ -28,6 +27,7 @@ import {
 } from "@/lib/background/enrollment";
 import * as policySync from "@/lib/background/policy-sync";
 import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
+import type { EnrollmentStatus } from "@/lib/enrollment-status";
 
 /** Assert the status is in `state` and narrow to that arm's fields. */
 function inState<S extends EnrollmentStatus["state"]>(

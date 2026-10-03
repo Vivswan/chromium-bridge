@@ -47,6 +47,10 @@
       "nursery": {
         "noFloatingPromises": "error"
       },
+      "performance": {
+        "noBarrelFile": "error",
+        "noReExportAll": "error"
+      },
       "style": {
         "noParameterAssign": "off",
         "noNonNullAssertion": "off",
