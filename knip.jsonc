@@ -7,8 +7,9 @@
   "ignoreBinaries": ["moon", "rustup", "rustc", "iconutil", "reg.exe"],
   "workspaces": {
     ".": {
-      // Launched by name from a moon task as well as imported by run.ts.
-      "entry": ["tests/harness/fake-llm.ts"],
+      // fake-llm.ts is launched by name from a moon task as well as imported by run.ts; the
+      // driver test is launched by the check-harness-driver task and a checks.yml step.
+      "entry": ["tests/harness/fake-llm.ts", "tests/harness/*.test.ts"],
       "project": ["tests/harness/**/*.ts"]
     },
     // Launch points knip cannot see for itself: moon task commands (it reads
