@@ -76,17 +76,21 @@ schemars = "1"
 chromium-bridge-core = { path = "src/packages/core", version = "0" }
 
 # Workspace-wide lint tables; every member opts in via `[lints] workspace =
-# true`, and the fuzz crate (its own workspace) re-declares the fleet floor
-# entries, so a change to those is made in both files. CI
-# promotes warn to deny (`cargo clippy -- -D warnings`), so "warn" here is a
-# hard gate. A lint exception is `#[expect(lint, reason = "...")]`: it says
-# why, and it fails once the lint no longer fires there. The set is curated
-# rather than `clippy::pedantic` wholesale: the pedantic group is dominated by
-# doc/naming noise, and its useful cast lints are subsumed by `as_conversions`
-# below. Test code is exempted from the panic-family bans by clippy.toml's
-# `allow-*-in-tests` settings; `arithmetic_side_effects` and `as_conversions`
-# have no such config, so the core crate exempts its test build with
-# `#![cfg_attr(test, expect(...))]`.
+# true`. The fuzz crate is its own workspace and re-declares the fleet floor
+# entries, so a change to those is made in both files.
+#
+# Every gating entry is deny, matching CI's `cargo clippy -- -D warnings`, so
+# no lint listed here passes locally and fails CI. The one allow (rustdoc's
+# private_intra_doc_links) is a deliberate exception, explained at its entry.
+# In code, an exception is `#[expect(lint, reason = "...")]`: it says why and
+# fails once the lint no longer fires there.
+#
+# Curated rather than `clippy::pedantic` wholesale: the pedantic group is
+# dominated by doc/naming noise, and its useful cast lints are subsumed by
+# `as_conversions` below. clippy.toml's `allow-*-in-tests` settings exempt
+# test code from the panic-family bans; `arithmetic_side_effects` and
+# `as_conversions` have no such setting, so the core crate exempts its test
+# build with `#![cfg_attr(test, expect(...))]`.
 [workspace.lints.rust]
 # Unsafe is quarantined: denied everywhere, re-admitted at the top of an
 # audited FFI module (ipc/platform/*, ipc/peercred.rs, enclave/macos.rs,
@@ -100,13 +104,13 @@ unsafe_op_in_unsafe_fn = "deny"
 non_ascii_idents = "deny"
 # `loom` is an explicit, self-set cfg (see the loom dev-dependency in
 # src/packages/core), not a typo; teach check-cfg about it workspace-wide.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
-unused_lifetimes = "warn"
+unexpected_cfgs = { level = "deny", check-cfg = ["cfg(loom)"] }
+unused_lifetimes = "deny"
 
 [workspace.lints.clippy]
-# Ours on top of the fleet starter: the default lint set at deny, so a bare
-# local `cargo clippy` fails on the same lints CI's `-D warnings` fails on.
-# priority -1 lets the specific entries below override the group.
+# Ours on top of the fleet starter: the default lint group at deny, so a bare
+# local `cargo clippy` fails on it like CI's `-D warnings` does. priority -1
+# lets the specific entries below override the group.
 all = { level = "deny", priority = -1 }
 # `// SAFETY:` above every unsafe block, stating the invariant it depends on.
 undocumented_unsafe_blocks = "deny"
@@ -135,14 +139,14 @@ match_wildcard_for_single_variants = "deny"
 # marks a deliberate skip.
 rest_pat_in_fully_bound_structs = "deny"
 # Leftover-debug and stub markers must never ship.
-dbg_macro = "warn"
+dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
 # mem::forget on a guard silently skips Drop-based cleanup (lockfiles,
 # sockets); there is no legitimate use in this codebase.
-mem_forget = "warn"
+mem_forget = "deny"
 # Casting a function pointer to an integer of a different size truncates it.
-fn_to_numeric_cast_any = "warn"
+fn_to_numeric_cast_any = "deny"
 # No-panic policy: the bridge must fail closed with a typed error on stderr,
 # never abort mid-handshake. Applies to every crate; test code is exempt via
 # clippy.toml's allow-*-in-tests.
