@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { seedsDirOutsideRepo } from "./run";
@@ -8,12 +8,14 @@ import { seedsDirOutsideRepo } from "./run";
 const REPO = resolve(import.meta.dir, "..", "..");
 const RUN = resolve(import.meta.dir, "run.ts");
 
-// Incident: --mint-seeds wrote captured client frames straight into the committed corpus, and that
-// corpus carried the client's identity. A capture is measured data, so its output dir must lie
-// outside the repository and the CLI must refuse before any harness runs.
 test("--mint-seeds refuses an output dir inside the repository (the captured-corpus incident)", () => {
   const outside = mkdtempSync(join(tmpdir(), "harness-seeds-"));
   try {
+    // Symlinks defeat a lexical comparison: a link outside the repo that points inside must still
+    // be refused, and one that points elsewhere outside must still be accepted.
+    symlinkSync(join(REPO, "src"), join(outside, "into-repo"));
+    mkdirSync(join(outside, "real"));
+    symlinkSync(join(outside, "real"), join(outside, "elsewhere"));
     const cases: [reason: string, dir: string, expected: "accepted" | "refused"][] = [
       [
         "the former in-repo corpus dir",
@@ -27,7 +29,17 @@ test("--mint-seeds refuses an output dir inside the repository (the captured-cor
         relative(process.cwd(), join(REPO, "build", "seeds")),
         "refused",
       ],
+      [
+        "a not-yet-existing dir under a symlink into the repo",
+        join(outside, "into-repo", "seeds"),
+        "refused",
+      ],
       ["a temp dir", outside, "accepted"],
+      [
+        "a dir under a symlink to another outside dir",
+        join(outside, "elsewhere", "seeds"),
+        "accepted",
+      ],
       ["the repository's parent", resolve(REPO, ".."), "accepted"],
     ];
     const verdicts = cases.map(([reason, dir]) => {

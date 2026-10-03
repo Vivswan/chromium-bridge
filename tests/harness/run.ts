@@ -15,9 +15,7 @@
 // harness-smoke` locally, and nightly.yml's harness-smoke job, which uploads build/harness-captures/.
 //
 // Usage: bun tests/harness/run.ts [--mint-seeds <dir>] [--require-any]
-//   --mint-seeds <dir>  copy deduplicated captured frames into <dir> as mcp_jsonrpc fuzz seeds; <dir> must lie
-//                       outside this repository (a capture is measured from a real client, so it is reference
-//                       material for hand-authoring the committed corpus, never the corpus itself)
+//   --mint-seeds <dir>  copy deduplicated captured frames into <dir>, outside this repository, as mcp_jsonrpc fuzz seeds
 //   --require-any       exit 1 unless at least one harness completed a LIVE MCP connection; the nightly passes this
 //                       so a broken harness install (or a run that only verified config entries) cannot read as a
 //                       green night
@@ -35,6 +33,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -77,22 +76,31 @@ const PROXY_VARS = [
 ];
 
 interface Options {
-  /** Resolved --mint-seeds target, already verified to lie outside the repository; undefined = no minting. */
+  /** Resolved --mint-seeds target; undefined = no minting. */
   seedsDir: string | undefined;
   requireAny: boolean;
 }
 
-/**
- * A capture is measured from a real client, so minted seeds never land inside the repository: the
- * committed corpus is hand-authored from them, never copied. Throws on a path inside `repoRoot`.
- */
+/** `<dir>` must lie outside the repository (tests/harness/README.md, "Run", says why); throws otherwise. */
 export function seedsDirOutsideRepo(dir: string, repoRoot: string = REPO): string {
   const out = resolve(dir);
-  const rel = relative(repoRoot, out);
-  // A bare startsWith("..") would admit "<repo>/..seeds".
+  const rel = relative(realpathSync(repoRoot), realpathOfDeepestExistingAncestor(out));
   const outside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
   if (!outside) throw new Error(`refusing to write captured frames inside the repository: ${out}`);
   return out;
+}
+
+/** The output dir may not exist yet, so symlinks are resolved on the deepest ancestor that does. */
+function realpathOfDeepestExistingAncestor(path: string): string {
+  const missing: string[] = [];
+  let probe = path;
+  while (!existsSync(probe)) {
+    missing.unshift(basename(probe));
+    const parent = dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  return join(realpathSync(probe), ...missing);
 }
 
 function parseOptions(argv: string[]): Options {
