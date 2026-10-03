@@ -220,14 +220,14 @@ fn attach_frames_roundtrip_and_are_tagged() {
     let client = AttachRequest::Client {
         harness: Some(HarnessId {
             hash: "abc123".into(),
-            team_id: Some("3ZMH96L4V9".into()),
+            team_id: Some("TEAMID0001".into()),
             name: Some("claude-code".into()),
         }),
     };
     let v = serde_json::to_value(&client).unwrap();
     assert_eq!(v["attach"], "client");
     assert_eq!(v["harness"]["hash"], "abc123");
-    assert_eq!(v["harness"]["team_id"], "3ZMH96L4V9");
+    assert_eq!(v["harness"]["team_id"], "TEAMID0001");
     let back: AttachRequest = serde_json::from_value(v).unwrap();
     assert!(matches!(back, AttachRequest::Client { harness: Some(h) } if h.hash == "abc123"));
 

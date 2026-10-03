@@ -34,7 +34,7 @@ const listResult = {
   ok: true,
   enrolled: true,
   clients: [
-    { name: "claude-code", anchor: { kind: "team_id", value: "3ZMH96L4V9" }, added_unix: 42 },
+    { name: "claude-code", anchor: { kind: "team_id", value: "TEAMID0001" }, added_unix: 42 },
   ],
 };
 
