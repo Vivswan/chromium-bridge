@@ -1,8 +1,8 @@
 //! macOS keychain / Secure Enclave backend (vetted crate, no bespoke FFI).
-// Quarantined unsafe: CoreFoundation constant access for the Secure Enclave
-// token-id check (the wrapper crate does not re-export it). unsafe_code is
-// denied workspace-wide; this module is one of the audited exceptions.
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "audited quarantine: reads the Secure Enclave token-id constants the wrapper crate does not re-export"
+)]
 
 use core_foundation::base::{CFType, TCFType, ToVoid};
 use core_foundation::string::CFString;
@@ -74,6 +74,8 @@ pub(super) fn generate() -> Result<SecKey, EnclaveError> {
 /// trusts a pre-existing key at ceremony time.)
 pub(super) fn is_secure_enclave_key(key: &SecKey) -> bool {
     let attrs = key.attributes();
+    // SAFETY: kSecAttrTokenID is a Security.framework constant, initialized by
+    // the framework before any Rust code runs and never released.
     let Some(v) = attrs.find(unsafe { kSecAttrTokenID }.to_void()) else {
         return false;
     };
@@ -87,8 +89,12 @@ pub(super) fn is_secure_enclave_key(key: &SecKey) -> bool {
     let Some(token) = token.downcast::<CFString>() else {
         return false;
     };
-    // SAFETY: get-rule wrap of a non-null framework constant CFString.
-    let expected = unsafe { CFString::wrap_under_get_rule(kSecAttrTokenIDSecureEnclave) };
+    // SAFETY: kSecAttrTokenIDSecureEnclave is a Security.framework constant,
+    // initialized before any Rust code runs and never released.
+    let expected_ref = unsafe { kSecAttrTokenIDSecureEnclave };
+    // SAFETY: a framework constant CFString is non-null and lives for the
+    // process, so a get-rule wrap (CFRetain, released on drop) balances.
+    let expected = unsafe { CFString::wrap_under_get_rule(expected_ref) };
     token == expected
 }
 
@@ -118,7 +124,10 @@ pub(super) fn lookup() -> Result<Option<SecKey>, EnclaveError> {
         .into_iter()
         .filter_map(|r| match r {
             SearchResult::Ref(Reference::Key(k)) => Some(k),
-            _ => None,
+            SearchResult::Ref(_)
+            | SearchResult::Dict(_)
+            | SearchResult::Data(_)
+            | SearchResult::Other => None,
         })
         .collect();
     if keys.len() > 1 {
