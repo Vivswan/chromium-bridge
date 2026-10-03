@@ -35,7 +35,7 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 <!-- END REPO-PLATFORM MANAGED -->
 
 - Chromium Bridge is a Rust MCP server, native-messaging host, and MV3 extension that drives the user's real, logged-in Chromium browser. Correctness and the safety model come first.
-- Adopted from `whg517/browser-bridge` (Apache-2.0; attribution in `LICENSE-APACHE` and `NOTICE`). The identifiers are our own, not upstream's (ADR-0023); there is no upstream remote, so upstream fixes are ported by judgment.
+- Adopted from `whg517/browser-bridge` (Apache-2.0; attribution in `LICENSE-APACHE` and `NOTICE`). The identifiers are our own, not upstream's; there is no upstream remote, so upstream fixes are ported by judgment.
 - `CONTRIBUTING.md` is the authoritative development process. moon is the command interface: `moon run help` lists the tasks, `moon run ci` is the gate.
 - Python here is stdlib-only with no `pyproject.toml`: the protocol suites run `uv run --no-project --isolated` (moon `test-e2e`, `test-adversarial`, `test-chaos`); `uv sync` does not apply.
 
@@ -49,15 +49,15 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 ### Decisions to keep
 
 - stdout is protocol in both binary modes; diagnostics go to stderr (`src/packages/core/src/log.rs`).
-- The Rust core is the single cross-process contract and generates the TypeScript side (ADR-0028); never hand-edit a `*.gen.ts`.
+- The Rust core is the single cross-process contract and generates the TypeScript side; never hand-edit a `*.gen.ts`.
 - Never develop on `main`: one branch per change, landed by squash-merge PR. The surfaces that get extra security review are listed in `.github/SECURITY.md`.
 
 ### Security principle: zero trust
 
 - Trust no party by default, our own components included; enforce every boundary with a mechanism, never an assumption.
-- Fail closed. No flag, default, env var, or grace window bypasses a gate without a reviewed decision in `.github/SECURITY.md` or an ADR. Confirmations the user sees are a feature.
+- Fail closed. No flag, default, env var, or grace window bypasses a gate without a reviewed decision in `.github/SECURITY.md` or `docs/security/rationale.md`. Confirmations the user sees are a feature.
 - Name residual risk honestly in the threat model.
-- Rigor goes to the enforcement core (`src/packages/core`); elsewhere rely on well-adopted libraries. Prefer audited crates over homegrown code even in the core (ADR-0035).
+- Rigor goes to the enforcement core (`src/packages/core`); elsewhere rely on well-adopted libraries. Prefer audited crates over homegrown code even in the core.
 
 ### Pointers
 
