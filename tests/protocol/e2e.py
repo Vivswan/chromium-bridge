@@ -1771,10 +1771,10 @@ def test_kill_switch_round_trip():
                         records.append(json.loads(line))
             except FileNotFoundError:
                 pass
-        kinds = [rec.get("kind") for rec in records]
+        kinds = [rec.get("event_kind") for rec in records]
         check("kill_engage" in kinds, "the kill is in the audit file")
         check("kill_release" in kinds, "the release is in the audit file")
-        releases = [rec for rec in records if rec.get("kind") == "kill_release"]
+        releases = [rec for rec in records if rec.get("event_kind") == "kill_release"]
         # The extension's retired release attempt is audited as a refusal
         # (ADR-0032 decision 6): surface=extension, outcome=refused, no auth.
         check(any(r.get("surface") == "extension" and r.get("outcome") == "refused"
@@ -1792,7 +1792,7 @@ def test_kill_switch_round_trip():
         check("auth=cli_confirm" in detail or "auth=touch_id" in detail,
               "the CLI release names the presence rung that authorized it")
         killed_calls = [rec for rec in records
-                        if rec.get("kind") == "tool_call"
+                        if rec.get("event_kind") == "tool_call"
                         and rec.get("code") == "BRIDGE_KILLED"]
         check(bool(killed_calls), "the refused tool call is audited with its code")
         shown = subprocess.run([BIN, "audit"], capture_output=True, text=True)

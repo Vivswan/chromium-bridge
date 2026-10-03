@@ -1029,7 +1029,7 @@ def c13_audit_sink_failure_never_fails_the_decision():
                 pass
             time.sleep(0.2)
         check(bool(records), "C13 the healed sink receives records again")
-        kinds = [rec.get("kind") for rec in records]
+        kinds = [rec.get("event_kind") for rec in records]
         check("kill_engage" in kinds and "kill_release" in kinds,
               "C13 post-heal decisions are in the trail")
         dropped = [rec for rec in records if rec.get("dropped")]

@@ -1222,7 +1222,7 @@ def a21_corrupt_kill_marker_fails_closed():
         records = []
         with open(audit_path) as f:
             records = [json.loads(ln) for ln in f if ln.strip()]
-        errored = [r for r in records if r.get("kind") == "kill_release"
+        errored = [r for r in records if r.get("event_kind") == "kill_release"
                    and r.get("outcome") == "error"]
         check(bool(errored),
               "A21 the errored-after-presence release attempt is audited")
@@ -1281,7 +1281,7 @@ def a22_unkill_requires_interactive_user_presence():
         # (3) Both refusals are visible in the trail, with their reasons.
         with open(audit_path) as f:
             records = [json.loads(ln) for ln in f if ln.strip()]
-        refused = [r for r in records if r.get("kind") == "kill_release"
+        refused = [r for r in records if r.get("event_kind") == "kill_release"
                    and r.get("outcome") == "refused"]
         check(len(refused) == 2, "A22 both refused releases are audited")
         details = " | ".join(r.get("detail", "") for r in refused)
@@ -1295,7 +1295,7 @@ def a22_unkill_requires_interactive_user_presence():
         check(_read_revocation()["killed"] is False, "A22 the switch is off")
         with open(audit_path) as f:
             records = [json.loads(ln) for ln in f if ln.strip()]
-        released = [r for r in records if r.get("kind") == "kill_release"
+        released = [r for r in records if r.get("event_kind") == "kill_release"
                     and r.get("outcome") == "ok"]
         check(bool(released) and "auth=cli_confirm" in released[-1].get("detail", ""),
               "A22 the release is audited with auth=cli_confirm")

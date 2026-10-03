@@ -136,7 +136,9 @@ pub struct AuditRecord {
     /// Milliseconds since the Unix epoch. Stamped by [`record`].
     #[serde(default)]
     pub ts_ms: u64,
-    pub kind: AuditKind,
+    /// Named `event_kind` on the wire: the stderr JSON line wraps this record in log.rs's
+    /// `"kind":"audit"` envelope, and a field named `kind` here would be shadowed by it.
+    pub event_kind: AuditKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface: Option<Surface>,
     /// Short outcome word: `ok`, `refused`, `error`, `unenrolled`, ...
@@ -182,11 +184,11 @@ pub struct AuditRecord {
 impl AuditRecord {
     /// A record with only the kind set; callers fill the relevant fields.
     /// `v` and `ts_ms` are stamped by [`record`].
-    pub fn new(kind: AuditKind) -> Self {
+    pub fn new(event_kind: AuditKind) -> Self {
         AuditRecord {
             v: 0,
             ts_ms: 0,
-            kind,
+            event_kind,
             surface: None,
             outcome: None,
             tool: None,
@@ -347,7 +349,7 @@ fn rotate_locked(path: &Path, add: usize, max: u64) {
 /// JSON per `BB_LOG_FORMAT`, gated at the `info` threshold like every other
 /// audit line).
 fn emit_stderr(rec: &AuditRecord) {
-    let mut owned: Vec<(&str, String)> = vec![("kind", serde_variant_name(&rec.kind))];
+    let mut owned: Vec<(&str, String)> = vec![("event_kind", serde_variant_name(&rec.event_kind))];
     if let Some(s) = &rec.surface {
         owned.push(("surface", serde_variant_name(s)));
     }
@@ -500,7 +502,7 @@ fn render_line(rec: &AuditRecord) -> String {
     let mut s = format!(
         "{}  {:<15}",
         format_utc_ms(rec.ts_ms),
-        serde_variant_name(&rec.kind)
+        serde_variant_name(&rec.event_kind)
     );
     if let Some(surface) = &rec.surface {
         s.push_str(&format!(" surface={}", serde_variant_name(surface)));
@@ -632,10 +634,10 @@ mod tests {
     #[test]
     fn parse_record_refuses_bad_versions_and_garbage() {
         assert!(parse_record("not json").is_none());
-        assert!(parse_record(r#"{"v":99,"ts_ms":1,"kind":"tool_call"}"#).is_none());
-        assert!(parse_record(r#"{"v":1,"ts_ms":1,"kind":"tool_call"}"#).is_some());
+        assert!(parse_record(r#"{"v":99,"ts_ms":1,"event_kind":"tool_call"}"#).is_none());
+        assert!(parse_record(r#"{"v":1,"ts_ms":1,"event_kind":"tool_call"}"#).is_some());
         assert!(
-            parse_record(r#"{"v":1,"ts_ms":1,"kind":"made_up_kind"}"#).is_none(),
+            parse_record(r#"{"v":1,"ts_ms":1,"event_kind":"made_up_kind"}"#).is_none(),
             "an unknown kind must not parse"
         );
     }
