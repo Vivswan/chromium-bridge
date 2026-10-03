@@ -58,6 +58,7 @@ Out of scope:
 
 See [docs/security/](../docs/security/) for the full picture:
 
+- [security-bar.md](../docs/security/security-bar.md): the bar in one line, the attackers it answers, where it stops, and the per-OS status. Read it first.
 - [threat-model.md](../docs/security/threat-model.md): actors, assets, what's trusted vs not, residual risks.
 - [trust-boundaries.md](../docs/security/trust-boundaries.md): the process/protocol boundaries and how each is enforced.
 - [tool-risk-matrix.md](../docs/security/tool-risk-matrix.md): every tool's blast radius and protections.

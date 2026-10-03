@@ -2,6 +2,8 @@
 
 What chromium-bridge protects, from whom, and what it explicitly does not defend against. Pairs with [trust-boundaries.md](trust-boundaries.md) and the [tool risk matrix](tool-risk-matrix.md).
 
+Read [the security bar](security-bar.md) first: it states what these mechanisms promise, and this page owns how each is enforced.
+
 ## Assets
 
 - The user's **authenticated browser sessions** (cookies incl. httpOnly, web storage tokens) - i.e. the ability to act *as the user* on sites they're logged into.
