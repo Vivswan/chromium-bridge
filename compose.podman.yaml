@@ -1,0 +1,10 @@
+# Podman rootless override (`podman compose -f compose.yaml -f compose.podman.yaml ...`; compose-run.ts
+# adds it when CONTAINER_ENGINE=podman). Rootless podman maps the host user to container root by
+# default, so the image's user could not write the bind mount; keep-id maps the host user onto uid
+# 1000, the image's user, which also owns the tool homes.
+services:
+  ci: &podman
+    user: "1000:1000"
+    userns_mode: "keep-id:uid=1000,gid=1000"
+  browser: *podman
+  shell: *podman

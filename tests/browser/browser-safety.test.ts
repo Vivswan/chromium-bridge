@@ -8,7 +8,63 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ranMarkerBody, suiteExitCode, writeRanMarker } from "./browser-safety";
+import { isolatedBrowser, ranMarkerBody, suiteExitCode, writeRanMarker } from "./browser-safety";
+
+describe("isolatedBrowser", () => {
+  // External facts the guard rests on: Chrome for Testing reports "Google Chrome for Testing <ver>",
+  // Debian's chromium reports "Chromium <ver> built on Debian ...", and the engines leave a marker
+  // file in every container (/.dockerenv for Docker, /run/.containerenv for Podman). Each case runs a
+  // stub browser that prints one such line, with the marker present or absent.
+  const dir = mkdtempSync(join(tmpdir(), "bb-isolated-"));
+  const marker = join(dir, "containerenv");
+  writeFileSync(marker, "");
+  const absentMarker = join(dir, "no-such-marker");
+  const stubBrowser = (name: string, versionLine: string): string => {
+    const bin = join(dir, name);
+    writeFileSync(bin, `#!/bin/sh\necho ${JSON.stringify(versionLine)}\n`, { mode: 0o755 });
+    return bin;
+  };
+
+  test.each([
+    [
+      "Chrome for Testing on the host",
+      "cft",
+      "Google Chrome for Testing 140.0.7339.80",
+      absentMarker,
+      true,
+    ],
+    ["the headless shell on the host", "shell", "HeadlessShell 140.0.7339.80", absentMarker, true],
+    [
+      "a distro Chromium inside a container",
+      "chromium",
+      "Chromium 140.0.7339.80 built on Debian 13.1, running on Debian 13.1",
+      marker,
+      true,
+    ],
+    [
+      "the same distro Chromium on the host",
+      "chromium",
+      "Chromium 140.0.7339.80 built on Debian 13.1, running on Debian 13.1",
+      absentMarker,
+      false,
+    ],
+    [
+      "a daily Chrome even inside a container",
+      "chrome",
+      "Google Chrome 140.0.7339.80",
+      marker,
+      false,
+    ],
+    ["a daily Brave on the host", "brave", "Brave Browser 140.1.83.109", absentMarker, false],
+  ])("%s: isolated=%p", (_name, binName, versionLine, containerMarker, isolated) => {
+    const bin = stubBrowser(binName, versionLine);
+    expect(isolatedBrowser(bin, [containerMarker])).toBe(isolated ? bin : null);
+  });
+
+  test("a binary that does not run is refused, not treated as isolated", () => {
+    expect(isolatedBrowser(join(dir, "missing"), [marker])).toBeNull();
+  });
+});
 
 describe("suiteExitCode", () => {
   test("a suite with passing checks and no failures is green", () => {
