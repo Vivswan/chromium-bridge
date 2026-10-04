@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Per-user MSI, built by WiX 3 (candle + light) in scripts/release-package.ts: no elevation, the binary under
+  %LOCALAPPDATA%\Programs\chromium-bridge (added to the user's PATH), and the binary's own doctor repair as
+  the post-install of an install or upgrade (a repair runs neither action). The custom actions impersonate
+  the installing user, so the HKCU keys and the manifest store they write are that user's. Register returns
+  check: no detected browser fails the install instead of leaving a silent half-install. On a FIRST install
+  the rollback action unregisters whatever a partial run wrote; on an upgrade it does not run, and the old
+  product is removed inside the transaction, so a failed upgrade rolls back to the working setup it found.
+  Variables: Version (MAJOR.MINOR.PATCH, the tag's core) and Binary (the built chromium-bridge.exe).
+  XML comments cannot carry a double hyphen, so the flags are spelled out in words here.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Chromium Bridge"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="Chromium Bridge"
+           UpgradeCode="BAE1B6DF-4B84-4C66-B614-04752E474E59">
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perUser"
+             Description="Chromium Bridge: an authenticated MCP bridge to your Chromium browser" />
+    <!-- A prerelease and its final release share the core version, so same-version installs upgrade too.
+         The old product goes inside the new transaction, so a failed upgrade restores it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer Chromium Bridge is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="chromium-bridge">
+            <Component Id="HostBinary" Guid="3AE5CD5C-67D9-4089-BFFA-EED89AD5437F">
+              <File Id="HostExe" Source="$(var.Binary)" Name="chromium-bridge.exe" />
+              <!-- A component under the user profile keys on a registry value (ICE38), and every directory
+                   it creates there is removed on uninstall (ICE64). -->
+              <RegistryValue Root="HKCU" Key="Software\chromium-bridge" Name="InstallFolder"
+                             Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+              <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last"
+                           Action="set" Permanent="no" System="no" />
+              <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+              <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="HostBinary" />
+    </Feature>
+
+    <CustomAction Id="Register" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]chromium-bridge.exe&quot; doctor --fix"
+                  Execute="deferred" Impersonate="yes" Return="check" />
+    <!-- Registrations are not MSI resources: when a first install's Register fails on a later browser after
+         an earlier one was written, this rollback action removes the earlier one before the binary goes. It
+         never runs on an upgrade: the registrations it would remove are the working ones the restored old
+         product still needs. -->
+    <CustomAction Id="RollbackRegister" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]chromium-bridge.exe&quot; uninstall"
+                  Execute="rollback" Impersonate="yes" Return="ignore" />
+    <CustomAction Id="Unregister" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]chromium-bridge.exe&quot; uninstall"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <!-- A rollback action must precede the action it reverses, and siblings with the same anchor are
+           ordered by name, so Register anchors on RollbackRegister, whose false condition on an upgrade
+           keeps its sequence entry. -->
+      <Custom Action="RollbackRegister" After="InstallFiles">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="Register" After="RollbackRegister">NOT Installed</Custom>
+      <!-- A major upgrade removes the old product first; its registrations are rewritten by the new
+           Register, so only a real uninstall unregisters. -->
+      <Custom Action="Unregister" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>

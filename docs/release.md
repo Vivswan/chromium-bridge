@@ -1,6 +1,6 @@
 # Releasing: the release-please pipeline
 
-> This doc explains how chromium-bridge is released: merging the release PR cuts a draft release and, in the same CI run, builds prebuilt artifacts, checksums, provenance attestations, and an SBOM onto the draft, then publishes it. Version discipline is in [compatibility.md](./compatibility.md); on-disk registration paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
+> This doc explains how chromium-bridge is released: merging the release PR cuts a draft release and, in the same CI run, builds prebuilt artifacts, installers, checksums, provenance attestations, and an SBOM onto the draft, then publishes it and opens the Homebrew tap's bump pull request. Version discipline is in [compatibility.md](./compatibility.md); on-disk registration paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
 
 ## Trigger: merge the release PR
 
@@ -36,10 +36,41 @@ update-release.yml builds the `binaries` job on a matrix (currently `macos-14/ar
 1. `bun scripts/build-repro.ts` produces the deterministic release binary.
 2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` produces the extension bundle.
 3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (`.zip` on Windows), containing the binary, `extension/dist`, `RELEASE.txt`, `LICENSE.md`, and `README.md`.
-4. A `.sha256` for the archive and a separate `.binary.sha256` for the binary inside it are generated, and a build-provenance attestation covers both; its Sigstore bundle becomes the `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` asset. The standalone extension zip and the SBOM ship `<asset>.attestation.jsonl` bundles the same way; `--bundle` verification is documented in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).
-5. `gh release upload` attaches the assets to the draft release; the fleet's `publish-release` stage then attests every asset on the draft into the release-level `attestation.json` and publishes it once every hook job is done.
+4. The same binary is wrapped into the platform's installer (next section).
+5. A `.sha256` for the archive, a separate `.binary.sha256` for the binary inside it, and a `.sha256` for the installer are generated, and one build-provenance attestation covers all three files; its Sigstore bundle becomes the `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` asset. The standalone extension zip and the SBOM ship `<asset>.attestation.jsonl` bundles the same way; `--bundle` verification is documented in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).
+6. `gh release upload` attaches the assets to the draft release; the fleet's `publish-release` stage then attests every asset on the draft into the release-level `attestation.json` and publishes it once every hook job is done.
 
 Users therefore **do not need a Rust/bun toolchain** to install: registration is the binary's own `chromium-bridge doctor --fix`, see [quickstart.md](./quickstart.md). Third-party Actions are pinned to commit SHAs in this repository's workflows and in the fleet's release legs alike; the platform's own actions and reusable workflows are taken at `@stable`, a moving tag that names a green `main` commit of the platform (the trust model in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/platform/build-provenance.md)).
+
+## Installers: .pkg, .deb and .msi
+
+Each leg wraps its binary unchanged into the platform's installer. The post-install is the binary's own `doctor --fix`, never a second implementation; what it writes is in [cli.md](./cli.md#doctor---fix--uninstall-native-messaging-registration).
+
+| Leg | Asset | Installs to | Post-install |
+| --- | --- | --- | --- |
+| macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | `doctor --fix` as the account that opened the package (Installer's `USER`, or `SUDO_USER` under `sudo installer`) |
+| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | none: the user runs `chromium-bridge doctor --fix` once |
+| windows-x64 | `chromium-bridge-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\chromium-bridge\` (per user, no elevation, on the user's PATH) | `doctor --fix` as the installing user; a first install that fails rolls its registrations back with `uninstall`, a failed upgrade restores the previous setup; uninstalling runs `chromium-bridge uninstall` |
+
+- **The .deb has no post-install** because a Debian maintainer script runs as root with no user context and must not write into home directories. A system-wide scope for it is a follow-up.
+- **No detected browser fails the .pkg and .msi install**, with `doctor --fix`'s reason in the installer log. Install a Chromium browser first, or use the archive.
+- **Sources:** `packaging/pkg/scripts/postinstall`, `packaging/msi/chromium-bridge.wxs`, and the `[package.metadata.deb]` table in `src/apps/host/Cargo.toml`. `scripts/release-package.ts installer` runs pkgbuild, cargo-deb (`--no-build --no-strip`, so the .deb carries the attested bytes), and WiX 3's candle and light.
+- **Proof on every pull request that touches the installers' sources** (the `paths` filter in `.github/workflows/installers.yml`): it builds all three from the branch and installs each on its runner through `scripts/installer-smoke.ts`. The Windows leg is where the HKCU registration runs for real, and so far the only place it has.
+
+**Unsigned, for now.** Gatekeeper asks the user to right-click and Open the .pkg, and SmartScreen warns on the .msi. Signing is a switch of two repository secrets and the steps that use them, none of which exist yet:
+
+| Platform | Secrets to add | Steps to add to that leg |
+| --- | --- | --- |
+| macOS | a Developer ID Installer certificate (`.p12` and its password) and an App Store Connect API key | `productsign` the .pkg, then `xcrun notarytool submit --wait` and `xcrun stapler staple` |
+| Windows | an Authenticode certificate | `signtool sign /fd SHA256 /tr <timestamp url>` on the binary before candle and on the .msi after light |
+
+## Homebrew tap
+
+The `homebrew` job renders `Formula/chromium-bridge.rb` from the two `.tar.gz.sha256` assets (`scripts/release-package.ts brew-formula`) and opens a pull request on `Vivswan/homebrew-tap` with `REPO_PLATFORM_TOKEN`.
+
+- **The tap repository is the owner's to create, and the pull request theirs to merge.** Until it exists the job fails, and `continue-on-error` keeps that from blocking the release, as with the SBOM; until the merge, the tap serves the previous formula.
+- **The formula's version keeps the tag's suffix** (`1.2.3-rc.1`), so a prerelease formula upgrades to the final one.
+- **The formula's `post_install` is `doctor --fix`.** A failure there leaves the install in place with brew's warning; `brew postinstall chromium-bridge` retries it.
 
 ## SBOM: CycloneDX onto the draft
 
@@ -65,6 +96,7 @@ Compatibility discipline holds before 1.0 too; `0.x` is not treated as a license
 ## Not yet in place (honest statement)
 
 - macOS **real integration tests in the release gate**: they need a real browser and are not part of the release gate yet.
+- **The Web Store listing**: the pointer the post-install writes names the extension's Web Store copy, which is not published yet ([chrome-web-store.md](./chrome-web-store.md)); until it is, the browser has nothing to offer and the extension is loaded unpacked.
 
 ## Related
 

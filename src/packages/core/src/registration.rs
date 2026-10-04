@@ -13,6 +13,9 @@
 //! Windows        -> Chrome appends the extension origin to the command line, which selects native-host mode, so the
 //!                   manifest points straight at the binary and registration is an HKCU registry key; compiles but is
 //!                   unverified on a real Windows machine (docs/cli.md)
+//! pointer        -> beside the manifest, the external-extension pointer the browser reads on its next start and
+//!                   answers with "Enable Chromium Bridge?" (macOS a file, Windows a key, Linux none: see
+//!                   [`ExtensionPointer`]); removing it makes the browser drop the extension it installed from it
 //! ```
 
 use std::fmt;
@@ -20,7 +23,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::browsers::{self, BaseDirs, Browser, BrowserEntry, Os, Registration};
+use crate::browsers::{self, BaseDirs, Browser, BrowserEntry, ExtensionPointer, Os, Registration};
 use crate::cli::{FixTargets, UninstallArgs};
 use crate::identity::{NATIVE_HOST_ID, PINNED_EXTENSION_ID};
 use serde::Serialize;
@@ -34,6 +37,13 @@ const MANIFEST_DESCRIPTION: &str =
 
 /// First line of every wrapper this project writes.
 const WRAPPER_SHEBANG: &str = "#!/usr/bin/env bash";
+
+/// The only update source Chrome accepts for an externally installed extension on macOS and Windows: the
+/// Web Store, which serves the extension under [`PINNED_EXTENSION_ID`].
+const WEB_STORE_UPDATE_URL: &str = "https://clients2.google.com/service/update2/crx";
+
+/// The Windows pointer key's value name, the one Chrome's registry loader reads before any other.
+const POINTER_VALUE_NAME: &str = "update_url";
 
 /// Fuzz-only aliases of the two ownership markers and the manifest writer, for the
 /// cargo-fuzz workspace's [`manifest_ownership`] oracle and seed generator (see the
@@ -74,6 +84,9 @@ pub struct Target {
     /// for explicit dirs, whose browser we cannot name.
     pub browser: Option<Browser>,
     pub registration: Registration,
+    /// The browser's external-extension pointer; `None` where none is written
+    /// (Linux, and explicit dirs, whose browser we cannot name).
+    pub pointer: Option<ExtensionPointer>,
 }
 
 impl Target {
@@ -81,6 +94,7 @@ impl Target {
         Target {
             browser: Some(entry.browser),
             registration: entry.registration.clone(),
+            pointer: entry.pointer.clone(),
         }
     }
 
@@ -88,6 +102,7 @@ impl Target {
         Target {
             browser: None,
             registration: browsers::explicit_dir_registration(dir),
+            pointer: None,
         }
     }
 
@@ -141,6 +156,169 @@ impl RegState {
     }
 }
 
+/// The diagnosed state of one external-extension pointer, as reported by
+/// `doctor` and repaired by `--fix`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerState {
+    /// No pointer file (and no registry key on Windows).
+    Missing,
+    /// Ours: it names the Web Store, and nothing else.
+    Ok,
+    /// Present but not written by this project.
+    Foreign(String),
+    /// Could not be read/verified (permissions, not a file, ...).
+    Unreadable(String),
+}
+
+impl PointerState {
+    /// Short human word(s) for reports.
+    pub fn describe(&self) -> String {
+        match self {
+            PointerState::Missing => "missing".into(),
+            PointerState::Ok => "ok".into(),
+            PointerState::Foreign(why) => format!("NOT OURS ({why})"),
+            PointerState::Unreadable(why) => format!("unreadable ({why})"),
+        }
+    }
+}
+
+fn pointer_json() -> String {
+    format!("{{\n  \"external_update_url\": \"{WEB_STORE_UPDATE_URL}\"\n}}\n")
+}
+
+/// What a location this engine may own holds. `register` writes only into
+/// `Absent` or `Ours`, `uninstall` deletes only `Ours`; the other two are
+/// reported and left in place, whichever command met them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Slot {
+    Absent,
+    /// Ours, with what was read (the file's bytes, or the key's value).
+    Ours(String),
+    Foreign(String),
+    Unreadable(String),
+}
+
+impl Slot {
+    /// `Ok` when `register` may write here; the refusal names `what`.
+    fn writable(&self, what: &str) -> Result<(), String> {
+        match self {
+            Slot::Absent | Slot::Ours(_) => Ok(()),
+            Slot::Foreign(why) => Err(format!(
+                "refusing to overwrite {what}: {why}. Inspect and remove it yourself if it is stale."
+            )),
+            Slot::Unreadable(why) => Err(format!(
+                "cannot verify the existing {what}: {why} (left untouched)"
+            )),
+        }
+    }
+
+    /// `Ok(true)` when `uninstall` must delete here, `Ok(false)` when there is
+    /// nothing of ours; the refusal names `what`.
+    fn removable(&self, what: &str) -> Result<bool, String> {
+        match self {
+            Slot::Absent => Ok(false),
+            Slot::Ours(_) => Ok(true),
+            Slot::Foreign(why) => Err(format!(
+                "refusing to remove {what}: {why}. Not written by chromium-bridge; remove it yourself if you are sure."
+            )),
+            Slot::Unreadable(why) => Err(format!(
+                "could not read {what} to verify it is ours: {why} (left in place)"
+            )),
+        }
+    }
+}
+
+/// Read a file this engine may own. `Ok(None)` only when no directory entry
+/// exists at all: a dangling symlink reads as NotFound too, and replacing it
+/// would destroy an entry nobody verified, so it is an error like any other
+/// read failure.
+fn read_slot(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("could not look for an entry at this path: {e}")),
+            Ok(_) => Err("a dangling symlink sits at this path".into()),
+        },
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn file_slot(path: &Path, ownership: fn(&str) -> Ownership) -> Slot {
+    match read_slot(path) {
+        Err(why) => Slot::Unreadable(why),
+        Ok(None) => Slot::Absent,
+        Ok(Some(contents)) => match ownership(&contents) {
+            Ownership::Ours => Slot::Ours(contents),
+            Ownership::Foreign(why) => Slot::Foreign(why),
+        },
+    }
+}
+
+/// A registry key this engine may own holds exactly one REG_SZ value, the one
+/// it wrote, and no child key; `expected` judges that value. Any other shape
+/// is someone else's key.
+fn registry_slot(key: &str, name: &str, expected: impl Fn(&str) -> bool) -> Slot {
+    match registry_key(key) {
+        Err(why) => Slot::Unreadable(format!("registry key HKCU\\{key}: {why}")),
+        Ok(None) => Slot::Absent,
+        Ok(Some(RegistryKey { children, .. })) if children > 0 => Slot::Foreign(format!(
+            "registry key HKCU\\{key} carries child keys this project never writes"
+        )),
+        Ok(Some(RegistryKey { values, .. })) => match values.as_slice() {
+            [(only, value)] if only == name && expected(value) => Slot::Ours(value.clone()),
+            [(only, value)] if only == name => Slot::Foreign(format!(
+                "registry key HKCU\\{key} points at {value:?}, not ours"
+            )),
+            _ => Slot::Foreign(format!(
+                "registry key HKCU\\{key} carries values this project never writes"
+            )),
+        },
+    }
+}
+
+/// Decide whether pointer file `contents` were written by this project: a JSON
+/// object whose only key is `external_update_url` naming the Web Store. A
+/// pointer at a different source, or carrying any other key (`external_crx`,
+/// `supported_locales`), is foreign and must never be deleted.
+pub fn pointer_ownership(contents: &str) -> Ownership {
+    let parsed: serde_json::Value = match serde_json::from_str(contents) {
+        Ok(v) => v,
+        Err(e) => return Ownership::Foreign(format!("not a JSON pointer ({e})")),
+    };
+    let Some(object) = parsed.as_object() else {
+        return Ownership::Foreign("pointer is not a JSON object".into());
+    };
+    if object.len() != 1 {
+        return Ownership::Foreign("pointer carries keys this project never writes".into());
+    }
+    match object.get("external_update_url").and_then(|v| v.as_str()) {
+        Some(WEB_STORE_UPDATE_URL) => Ownership::Ours,
+        other => Ownership::Foreign(format!(
+            "pointer update url is {other:?}, expected {WEB_STORE_UPDATE_URL:?}"
+        )),
+    }
+}
+
+fn pointer_slot(pointer: &ExtensionPointer) -> Slot {
+    match pointer {
+        ExtensionPointer::File(path) => file_slot(path, pointer_ownership),
+        ExtensionPointer::Registry { key } => {
+            registry_slot(key, POINTER_VALUE_NAME, |url| url == WEB_STORE_UPDATE_URL)
+        }
+    }
+}
+
+pub fn assess_pointer(pointer: &ExtensionPointer) -> PointerState {
+    match pointer_slot(pointer) {
+        Slot::Absent => PointerState::Missing,
+        Slot::Ours(_) => PointerState::Ok,
+        Slot::Foreign(why) => PointerState::Foreign(why),
+        Slot::Unreadable(why) => PointerState::Unreadable(why),
+    }
+}
+
 /// Decide whether manifest `contents` were written by this project. Ours
 /// means: valid JSON whose `name` is our host id and whose `description` is
 /// EXACTLY one of the two strings this project has ever written (the legacy
@@ -167,47 +345,56 @@ pub fn manifest_ownership(contents: &str) -> Ownership {
     }
 }
 
+/// The two locations a registration occupies, each judged once: the manifest
+/// file and, on Windows, the key whose default value must name that file.
+struct ManifestSlots {
+    file: Slot,
+    /// `None` for a directory registration, which has no key.
+    key: Option<Slot>,
+}
+
+fn manifest_slots(reg: &Registration) -> ManifestSlots {
+    let manifest_path = reg.manifest_path();
+    ManifestSlots {
+        file: file_slot(&manifest_path, manifest_ownership),
+        key: match reg {
+            Registration::ManifestDir(_) => None,
+            Registration::Registry { key, .. } => Some(registry_slot(key, "", |v| {
+                same_windows_path(v, &manifest_path)
+            })),
+        },
+    }
+}
+
 /// Diagnose one registration (read-only). This is what `doctor` prints per
 /// browser and what decides whether `--fix` has anything to repair.
 pub fn assess(reg: &Registration) -> RegState {
-    let manifest_path = reg.manifest_path();
-
-    // On Windows the key is half the registration; a surviving key must be
+    let slots = manifest_slots(reg);
+    let key_name = match reg {
+        Registration::ManifestDir(_) => "",
+        Registration::Registry { key, .. } => key.as_str(),
+    };
+    // On Windows the key is half the registration: a surviving key must be
     // reported even when the manifest file is gone, and a re-pointed or
     // unreadable key must never be summarized as merely "missing".
-    let key_state = match reg {
-        Registration::ManifestDir(_) => None,
-        Registration::Registry { key, .. } => match registry_key_state(key, &manifest_path) {
-            RegistryKeyState::PointsElsewhere(v) => {
-                return RegState::Foreign(format!(
-                    "registry key HKCU\\{key} points at {v:?}, not our manifest"
-                ));
-            }
-            RegistryKeyState::Error(e) => {
-                return RegState::Unreadable(format!("registry key HKCU\\{key}: {e}"));
-            }
-            RegistryKeyState::PointsAtManifest => Some((key, true)),
-            RegistryKeyState::Missing => Some((key, false)),
-        },
-    };
-
-    let contents = match fs::read_to_string(&manifest_path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return match key_state {
-                // Key still installed but its manifest file is gone.
-                Some((key, true)) => RegState::Stale(format!(
-                    "manifest file missing but registry key HKCU\\{key} present"
+    match &slots.key {
+        Some(Slot::Foreign(why)) => return RegState::Foreign(why.clone()),
+        Some(Slot::Unreadable(why)) => return RegState::Unreadable(why.clone()),
+        Some(Slot::Absent | Slot::Ours(_)) | None => {}
+    }
+    let contents = match slots.file {
+        Slot::Absent => {
+            return match slots.key {
+                Some(Slot::Ours(_)) => RegState::Stale(format!(
+                    "manifest file missing but registry key HKCU\\{key_name} present"
                 )),
                 _ => RegState::Missing,
             };
         }
-        Err(e) => return RegState::Unreadable(e.to_string()),
-        Ok(c) => c,
+        Slot::Unreadable(why) => return RegState::Unreadable(why),
+        Slot::Foreign(why) => return RegState::Foreign(why),
+        Slot::Ours(contents) => contents,
     };
-    match manifest_ownership(&contents) {
-        Ownership::Foreign(why) => return RegState::Foreign(why),
-        Ownership::Ours => {}
-    }
     // Ours: the registration is healthy only if what it launches exists.
     let launch = serde_json::from_str::<serde_json::Value>(&contents)
         .ok()
@@ -217,8 +404,8 @@ pub fn assess(reg: &Registration) -> RegState {
         Some(p) => return RegState::Stale(format!("launch path missing: {}", p.display())),
         None => return RegState::Stale("manifest has no launch path".into()),
     }
-    if let Some((key, false)) = key_state {
-        return RegState::Stale(format!("registry key HKCU\\{key} missing"));
+    if let Some(Slot::Absent) = slots.key {
+        return RegState::Stale(format!("registry key HKCU\\{key_name} missing"));
     }
     RegState::Ok
 }
@@ -263,9 +450,10 @@ impl Registrar {
     }
 
     /// Write one registration. Returns the human report lines for stdout.
-    /// Idempotent: re-running overwrites our own artifacts in place. An
-    /// existing manifest that is not verifiably ours fails this target (fail
-    /// closed), and so does one that cannot be read.
+    /// Idempotent: re-running overwrites our own artifacts in place. Every
+    /// slot the target occupies (manifest file, its Windows key, the pointer)
+    /// is verified before the first write, so a foreign or unreadable one
+    /// fails the target with nothing changed.
     pub fn register(&self, target: &Target) -> Result<Vec<String>, String> {
         // A registry registration is impossible from a non-Windows build;
         // refuse before writing anything at all.
@@ -273,24 +461,15 @@ impl Registrar {
             registry_supported(key)?;
         }
         let manifest_path = target.registration.manifest_path();
-        match fs::read_to_string(&manifest_path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                // Unreadable is NOT absent: a permission error or a directory
-                // at this path must never be silently replaced.
-                return Err(format!(
-                    "cannot verify the existing {}: {e} (left untouched)",
-                    manifest_path.display()
-                ));
-            }
-            Ok(existing) => {
-                if let Ownership::Foreign(why) = manifest_ownership(&existing) {
-                    return Err(format!(
-                        "refusing to overwrite {}: {why}. Inspect and remove it yourself if it is stale.",
-                        manifest_path.display()
-                    ));
-                }
-            }
+        let slots = manifest_slots(&target.registration);
+        slots.file.writable(&manifest_path.display().to_string())?;
+        if let (Some(key), Registration::Registry { key: name, .. }) =
+            (&slots.key, &target.registration)
+        {
+            key.writable(&format!("registry key HKCU\\{name}"))?;
+        }
+        if let Some(pointer) = &target.pointer {
+            pointer_slot(pointer).writable(&format!("extension pointer {}", pointer.location()))?;
         }
 
         let mut lines = Vec::new();
@@ -338,54 +517,88 @@ impl Registrar {
         );
 
         if let Registration::Registry { key, .. } = &target.registration {
-            set_registry_key(key, &manifest_path)?;
+            set_registry_value(key, "", &manifest_path.to_string_lossy())?;
+        }
+        if let Some(pointer) = &target.pointer {
+            match pointer {
+                ExtensionPointer::File(path) => {
+                    let dir = path
+                        .parent()
+                        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+                    fs::create_dir_all(dir)
+                        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+                    write_atomic(path, pointer_json().as_bytes(), false)
+                        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+                }
+                ExtensionPointer::Registry { key } => {
+                    set_registry_value(key, POINTER_VALUE_NAME, WEB_STORE_UPDATE_URL)?;
+                }
+            }
+            lines.push(format!("  extension pointer {}", pointer.location()));
         }
         Ok(lines)
     }
 
-    /// Reverse one registration. Returns a report line; `Ok` covers both
-    /// "removed" and "was not present". Ownership is verified BEFORE anything
-    /// is deleted (manifest file and, on Windows, the registry key): a
-    /// foreign or unverifiable manifest leaves everything in place.
-    pub fn uninstall(target: &Target) -> Result<String, String> {
+    /// Reverse one registration: (report lines, refusals). Each slot (the
+    /// Windows key, the manifest file, the pointer) is verified and then
+    /// removed on its own, so a foreign or unreadable one is refused and left
+    /// while the others of ours still go; a refusal never leaves an artifact
+    /// of ours behind that the wrapper cleanup would then orphan. The browser
+    /// drops the extension the pointer installed on its next start; an
+    /// unpacked extension is untouched.
+    pub fn uninstall(target: &Target) -> (Vec<String>, Vec<String>) {
+        let mut lines = Vec::new();
+        let mut errors = Vec::new();
         let manifest_path = target.registration.manifest_path();
+        let slots = manifest_slots(&target.registration);
 
-        let file_present = match fs::read_to_string(&manifest_path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => {
-                return Err(format!(
-                    "could not read {} to verify it is ours: {e} (left in place)",
-                    manifest_path.display()
-                ));
+        if let (Some(key), Registration::Registry { key: name, .. }) =
+            (&slots.key, &target.registration)
+        {
+            match key
+                .removable(&format!("registry key HKCU\\{name}"))
+                .and_then(|remove| {
+                    if remove {
+                        delete_registry_key(name)
+                    } else {
+                        Ok(())
+                    }
+                }) {
+                Ok(()) => {}
+                Err(e) => errors.push(e),
             }
-            Ok(contents) => match manifest_ownership(&contents) {
-                Ownership::Ours => true,
-                Ownership::Foreign(why) => {
-                    return Err(format!(
-                        "refusing to remove {}: {why}. Not written by chromium-bridge; remove it yourself if you are sure.",
-                        manifest_path.display()
-                    ));
-                }
+        }
+        match slots.file.removable(&manifest_path.display().to_string()) {
+            Ok(true) => match fs::remove_file(&manifest_path) {
+                Ok(()) => lines.push(format!(
+                    "{}: removed manifest {}",
+                    target.describe(),
+                    manifest_path.display()
+                )),
+                Err(e) => errors.push(format!("could not remove {}: {e}", manifest_path.display())),
             },
-        };
-
-        // Only after the content check: drop the registry key and then the
-        // verified file. The key's final segment is our host id, but its
-        // value must also point at OUR manifest store path -- a key someone
-        // re-pointed at their own manifest is refused, not deleted.
-        if let Registration::Registry { key, .. } = &target.registration {
-            remove_registry_key(key, &manifest_path)?;
+            Ok(false) => lines.push(format!("{}: not registered", target.describe())),
+            Err(e) => errors.push(e),
         }
-        if !file_present {
-            return Ok(format!("{}: not registered", target.describe()));
+        if let Some(pointer) = &target.pointer {
+            let what = format!("extension pointer {}", pointer.location());
+            match pointer_slot(pointer).removable(&what) {
+                Ok(false) => {}
+                Ok(true) => {
+                    let removed = match pointer {
+                        ExtensionPointer::File(path) => fs::remove_file(path)
+                            .map_err(|e| format!("could not remove {}: {e}", path.display())),
+                        ExtensionPointer::Registry { key } => delete_registry_key(key),
+                    };
+                    match removed {
+                        Ok(()) => lines.push(format!("  removed {what}")),
+                        Err(e) => errors.push(e),
+                    }
+                }
+                Err(e) => errors.push(e),
+            }
         }
-        fs::remove_file(&manifest_path)
-            .map_err(|e| format!("could not remove {}: {e}", manifest_path.display()))?;
-        Ok(format!(
-            "{}: removed manifest {}",
-            target.describe(),
-            manifest_path.display()
-        ))
+        (lines, errors)
     }
 }
 
@@ -547,8 +760,11 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
     }
     println!("allowed origin: chrome-extension://{PINNED_EXTENSION_ID}/");
     println!(
-        "next: load the extension (chrome://extensions -> Load unpacked), then restart the\n\
-         browser so it re-reads its NativeMessagingHosts registrations. Re-check with\n\
+        "next: restart the browser so it re-reads its registrations. Until the extension's Web Store\n\
+         listing is published, load the extension unpacked (chrome://extensions, Developer mode:\n\
+         extension/dist from the release archive, build/extension/chrome-mv3 from a source build);\n\
+         once it is, browsers registered by name on macOS and Windows offer to enable Chromium\n\
+         Bridge (no pointer is written on Linux or for --manifest-dir). Re-check with\n\
          `chromium-bridge doctor`."
     );
     if failures > 0 {
@@ -637,13 +853,14 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
     println!("chromium-bridge uninstall (host id {NATIVE_HOST_ID})");
     let mut failed = false;
     for target in &targets {
-        match Registrar::uninstall(target) {
-            Ok(line) => println!("{line}"),
-            Err(e) => {
-                log_error!("uninstall", "{}: {e}", target.describe());
-                failed = true;
-            }
+        let (lines, errors) = Registrar::uninstall(target);
+        for line in lines {
+            println!("{line}");
         }
+        for e in &errors {
+            log_error!("uninstall", "{}: {e}", target.describe());
+        }
+        failed = failed || !errors.is_empty();
     }
     let (removed, errors) = remove_wrappers(&browsers::install_dir(os, &dirs));
     for line in removed {
@@ -654,8 +871,8 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
     }
     failed = failed || !errors.is_empty();
     println!(
-        "left untouched: this binary, your browsers, and the loaded extension\n\
-         (remove the unpacked extension yourself via chrome://extensions)."
+        "left untouched: this binary and your browsers. A browser drops the extension its pointer\n\
+         installed on its next start; remove an unpacked extension yourself via chrome://extensions."
     );
     if failed {
         1
@@ -786,9 +1003,17 @@ fn write_atomic(path: &Path, bytes: &[u8], executable: bool) -> std::io::Result<
     Ok(())
 }
 
-// ---- Windows registry (compiles cross-OS; the real writes are cfg(windows)).
-// The non-Windows stubs fail closed: a Registry registration cannot be
+// ---- Windows registry (compiles cross-OS; the real reads and writes are cfg(windows)).
+// The non-Windows stubs fail closed: a registry registration or pointer cannot be
 // performed or observed from a Unix build.
+
+/// Whether registry `v` names our manifest. Windows paths are case-insensitive and accept either
+/// separator; we wrote the value ourselves, but normalize before comparing so a round-tripped
+/// registration is never misreported as re-pointed.
+fn same_windows_path(v: &str, manifest_path: &Path) -> bool {
+    let normalize = |p: &str| p.replace('/', "\\").to_ascii_lowercase();
+    normalize(v) == normalize(&manifest_path.to_string_lossy())
+}
 
 #[cfg(windows)]
 fn registry_supported(_key: &str) -> Result<(), String> {
@@ -802,89 +1027,72 @@ fn registry_supported(key: &str) -> Result<(), String> {
     ))
 }
 
+/// One registry key, read whole so ownership is judged on all of it.
+struct RegistryKey {
+    /// Every value as (name, text), `""` naming the default value.
+    values: Vec<(String, String)>,
+    /// How many child keys hang under it.
+    children: u32,
+}
+
+/// `HKCU\{key}` whole, or `None` when the key is absent. A value that is not
+/// REG_SZ is an error rather than a lossy conversion: this engine writes
+/// REG_SZ alone, so anything else was never ours.
 #[cfg(windows)]
-fn set_registry_key(key: &str, manifest_path: &Path) -> Result<(), String> {
+fn registry_key(key: &str) -> Result<Option<RegistryKey>, String> {
+    use winreg::types::FromRegValue;
+    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+    let subkey = match hkcu.open_subkey(key) {
+        Ok(k) => k,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut values = Vec::new();
+    for entry in subkey.enum_values() {
+        let (name, value) = entry.map_err(|e| format!("could not list its values: {e}"))?;
+        if value.vtype != winreg::enums::RegType::REG_SZ {
+            return Err(format!("value {name:?} is not a REG_SZ string"));
+        }
+        let text = String::from_reg_value(&value)
+            .map_err(|e| format!("value {name:?} is not readable text: {e}"))?;
+        values.push((name, text));
+    }
+    let children = subkey
+        .query_info()
+        .map_err(|e| format!("could not count its child keys: {e}"))?
+        .sub_keys;
+    Ok(Some(RegistryKey { values, children }))
+}
+
+#[cfg(not(windows))]
+fn registry_key(_key: &str) -> Result<Option<RegistryKey>, String> {
+    Err("registry access requires a Windows build of chromium-bridge".into())
+}
+
+#[cfg(windows)]
+fn set_registry_value(key: &str, name: &str, value: &str) -> Result<(), String> {
     let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
     let (subkey, _) = hkcu
         .create_subkey(key)
         .map_err(|e| format!("could not create HKCU\\{key}: {e}"))?;
     subkey
-        .set_value("", &manifest_path.as_os_str())
+        .set_value(name, &value)
         .map_err(|e| format!("could not set HKCU\\{key}: {e}"))
 }
 
 #[cfg(not(windows))]
-fn set_registry_key(key: &str, _manifest_path: &Path) -> Result<(), String> {
+fn set_registry_value(key: &str, _name: &str, _value: &str) -> Result<(), String> {
     Err(format!(
         "registry registration (HKCU\\{key}) requires a Windows build of chromium-bridge"
     ))
 }
 
-/// What a registration's HKCU key says, checked against the manifest path we
-/// manage. Anything but `PointsAtManifest` blocks deletion. Off Windows only
-/// the `Error` stub is ever built, so the other variants are cfg-dead there.
-#[cfg_attr(
-    not(windows),
-    expect(
-        dead_code,
-        reason = "off Windows only the Error stub is built, so the other variants are never constructed"
-    )
-)]
-enum RegistryKeyState {
-    Missing,
-    PointsAtManifest,
-    PointsElsewhere(String),
-    Error(String),
-}
-
+/// Delete `HKCU\{key}` once its slot was judged ours. delete_subkey (not _all):
+/// our keys have no children, and failing on an unexpected child is the
+/// fail-closed behavior we want.
 #[cfg(windows)]
-fn registry_key_state(key: &str, manifest_path: &Path) -> RegistryKeyState {
+fn delete_registry_key(key: &str) -> Result<(), String> {
     let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-    let subkey = match hkcu.open_subkey(key) {
-        Ok(k) => k,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RegistryKeyState::Missing,
-        Err(e) => return RegistryKeyState::Error(e.to_string()),
-    };
-    // Windows paths are case-insensitive and accept either separator; we
-    // wrote the value ourselves, but normalize before comparing so a
-    // round-tripped registration is never misreported as re-pointed.
-    let normalize = |p: &str| p.replace('/', "\\").to_ascii_lowercase();
-    match subkey.get_value::<String, _>("") {
-        Ok(v) if normalize(&v) == normalize(&manifest_path.to_string_lossy()) => {
-            RegistryKeyState::PointsAtManifest
-        }
-        Ok(v) => RegistryKeyState::PointsElsewhere(v),
-        Err(e) => RegistryKeyState::Error(format!("no readable default value: {e}")),
-    }
-}
-
-#[cfg(not(windows))]
-fn registry_key_state(_key: &str, _manifest_path: &Path) -> RegistryKeyState {
-    RegistryKeyState::Error("registry access requires a Windows build of chromium-bridge".into())
-}
-
-/// Delete a registration key, but only when it is verifiably ours: missing is
-/// fine (idempotent), pointing at our manifest is deleted, anything else --
-/// re-pointed at another manifest, or unreadable -- is refused (fail closed).
-#[cfg(windows)]
-fn remove_registry_key(key: &str, manifest_path: &Path) -> Result<(), String> {
-    match registry_key_state(key, manifest_path) {
-        RegistryKeyState::Missing => return Ok(()),
-        RegistryKeyState::PointsAtManifest => {}
-        RegistryKeyState::PointsElsewhere(v) => {
-            return Err(format!(
-                "refusing to delete HKCU\\{key}: it points at {v:?}, not our manifest (left in place)"
-            ));
-        }
-        RegistryKeyState::Error(e) => {
-            return Err(format!(
-                "could not verify HKCU\\{key} before deleting it: {e} (left in place)"
-            ));
-        }
-    }
-    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-    // delete_subkey (not _all): our key has no children, and failing on an
-    // unexpected child is the fail-closed behavior we want.
     match hkcu.delete_subkey(key) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -893,7 +1101,7 @@ fn remove_registry_key(key: &str, manifest_path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn remove_registry_key(key: &str, _manifest_path: &Path) -> Result<(), String> {
+fn delete_registry_key(key: &str) -> Result<(), String> {
     Err(format!(
         "registry removal (HKCU\\{key}) requires a Windows build of chromium-bridge"
     ))

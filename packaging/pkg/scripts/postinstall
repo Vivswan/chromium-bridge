@@ -1,0 +1,6 @@
+#!/bin/bash
+# Installer runs this as root. The account to register is the one that opened the package: Installer.app
+# puts it in USER, and a command-line `sudo installer` puts it in SUDO_USER with USER set to root. A nonzero
+# exit fails the install on purpose: no detected browser is reported in the installer log, never swallowed.
+set -eu
+exec sudo -u "${SUDO_USER:-$USER}" -H /usr/local/bin/chromium-bridge doctor --fix

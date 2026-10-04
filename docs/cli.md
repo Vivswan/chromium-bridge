@@ -50,7 +50,7 @@ It reports:
 
 "Server not reachable" means `doctor` read the endpoint from the lock file, but the probe failed. Common causes:
 
-1. **No MCP server is running.** The server is spawned by the MCP client (such as Claude Code) inside its session. If no client session is up, nothing is listening, and "not reachable" is the expected state. Confirm the client has the chromium-bridge server configured and a session open.
+1. **No MCP server is running.** The server is spawned by the MCP client (such as Claude Code) inside its session, so with no client session up nothing is listening and "not reachable" is the expected state. Confirm the client has the chromium-bridge server configured and a session open.
 2. **Stale lock file.** A previous broker exited abnormally and left the lock file behind. The next server instance detects and replaces a stale lock at startup; just start a new client session.
 
 > `doctor` only probes; it does not repair. It will not kill processes, delete the lock file, or restart the server. When you see "not reachable", re-establish the session from the MCP client side rather than intervening in processes by hand.
@@ -61,12 +61,12 @@ If a registration is missing or stale for a browser you use, that browser cannot
 
 The CLI below registers the native-messaging host from a terminal through one engine (`registration.rs`). It needs nothing but the host binary itself, on desktops, headless machines, and CI alike.
 
-`chromium-bridge doctor --fix` (re-)registers the binary you invoke it from as the native-messaging host: for each targeted browser it writes the `com.vivswan.chromium_bridge.host.json` manifest where that browser looks for it.
+`chromium-bridge doctor --fix` (re-)registers the binary you invoke it from as the native-messaging host: for each targeted browser it writes the `com.vivswan.chromium_bridge.host.json` manifest where that browser looks for it, and beside it the extension pointer (below).
 
 - **Idempotent re-registration:** on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one.
 - **Nothing built, downloaded, or copied:** the manifest points at this binary's own resolved path, through a small per-browser wrapper script on macOS/Linux.
 - **That wrapper** bakes in `--native-host --label <browser>`, because Chrome's manifest format has no `args` field.
-- **Refuses to overwrite** a manifest it cannot verify this project wrote.
+- **Refuses to overwrite** a manifest or pointer it cannot verify this project wrote.
 
 Selecting browsers:
 
@@ -91,7 +91,25 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 - **Plain `doctor` counts only detected browsers,** so a healthy explicit registration for a non-standard install keeps the summary below "OK" even though the bridge works - the per-browser lines tell the real story.
 - **Nothing detected:** `--fix` refuses and asks for an explicit selection instead of guessing.
 
-`chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`): the per-browser manifests and the wrapper scripts. Re-pass any `--manifest-dir` you registered. Before deleting a manifest it verifies the file's content is ours (our host id and description marker); anything else is reported and left in place, and so is anything it cannot read and verify. It never touches this binary, your browsers, or the loaded extension.
+`chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`): the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered.
+
+Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place; the other artifacts of ours beside it still go.
+
+It never touches this binary or your browsers. A browser drops the extension it installed from the pointer on its next start; an unpacked extension is yours to remove.
+
+The extension pointer, beside each manifest:
+
+| OS | Where `--fix` writes it | What the browser does with it |
+| --- | --- | --- |
+| macOS | `<user data dir>/External Extensions/<extension id>.json`, naming the Web Store | asks "Enable Chromium Bridge?" on its next start |
+| Windows | `HKCU\<vendor>\Extensions\<extension id>`, value `update_url` | the same prompt |
+| Linux | nothing; `doctor` prints `pointer n/a` | it would install from a pointer silently, which the threat model refuses: add the extension from the Web Store yourself |
+
+Chrome's own locations come from its documentation. The other vendors are derived from the same user-data root and registry root they keep their manifests under, and Edge is pointed at the Chrome Web Store too (a residual: unverified on those browsers).
+
+The pointer informs `doctor` and never decides its verdict: the bridge works with an unpacked extension and no pointer. It is written for the browsers `--fix` names or detects; a `--manifest-dir` registration gets none, since its browser cannot be named.
+
+**Not yet:** the listing the pointer names is unpublished, so until it exists the browser has nothing to offer and the extension is loaded unpacked; [quickstart.md](./quickstart.md#the-cli-macos-linux-windows) step 4 owns that caveat.
 
 Platform notes:
 

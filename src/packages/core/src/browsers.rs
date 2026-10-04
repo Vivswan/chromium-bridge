@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::identity::NATIVE_HOST_ID;
+use crate::identity::{NATIVE_HOST_ID, PINNED_EXTENSION_ID};
 
 /// The Chromium-family browsers we know how to register with by name. Any
 /// other Chromium build is reachable through `doctor --fix`'s explicit
@@ -179,6 +179,32 @@ impl Registration {
     }
 }
 
+/// Where a browser reads the external-extension pointer that makes it offer
+/// "Enable Chromium Bridge?" on its next start (the Web Store copy under
+/// [`PINNED_EXTENSION_ID`]). Linux has none: Chrome there installs an external
+/// extension without asking, which the threat model refuses, so Linux users add
+/// the extension from the Web Store themselves. Derived like the manifest
+/// location: Chrome's own paths from its documentation, the other vendors from
+/// the same user-data root and registry root they keep their manifests under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtensionPointer {
+    /// macOS: `<user data dir>/External Extensions/<PINNED_EXTENSION_ID>.json`.
+    File(PathBuf),
+    /// Windows: `HKCU\<vendor>\Extensions\<PINNED_EXTENSION_ID>` (path relative
+    /// to `HKEY_CURRENT_USER`), string value `update_url`.
+    Registry { key: String },
+}
+
+impl ExtensionPointer {
+    /// Human-oriented description of where the pointer lives, for reports.
+    pub fn location(&self) -> String {
+        match self {
+            ExtensionPointer::File(path) => path.display().to_string(),
+            ExtensionPointer::Registry { key } => format!("HKCU\\{key}"),
+        }
+    }
+}
+
 /// One known browser on one OS: how to detect it and how to register with it.
 #[derive(Debug, Clone)]
 pub struct BrowserEntry {
@@ -197,6 +223,9 @@ pub struct BrowserEntry {
     /// paths; the caller checks existence.
     pub app_paths: Vec<PathBuf>,
     pub registration: Registration,
+    /// The external-extension pointer the browser reads on its next start, or
+    /// `None` on Linux, where none is written (see [`ExtensionPointer`]).
+    pub pointer: Option<ExtensionPointer>,
 }
 
 impl BrowserEntry {
@@ -329,6 +358,10 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
             BrowserEntry {
                 browser,
                 registration: Registration::ManifestDir(root.join("NativeMessagingHosts")),
+                pointer: Some(ExtensionPointer::File(
+                    root.join("External Extensions")
+                        .join(format!("{PINNED_EXTENSION_ID}.json")),
+                )),
                 config_dir: root,
                 app_paths: vec![
                     dirs.system_applications.join(bundle),
@@ -341,6 +374,7 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
             BrowserEntry {
                 browser,
                 registration: Registration::ManifestDir(root.join("NativeMessagingHosts")),
+                pointer: None,
                 config_dir: root,
                 app_paths: Vec::new(),
             }
@@ -356,6 +390,12 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
                 ),
                 manifest_path: install_dir(os, dirs).join(format!("{NATIVE_HOST_ID}.json")),
             },
+            pointer: Some(ExtensionPointer::Registry {
+                key: format!(
+                    r"{}\Extensions\{PINNED_EXTENSION_ID}",
+                    windows_vendor_key(browser)
+                ),
+            }),
         },
     }
 }
@@ -419,6 +459,13 @@ mod tests {
                 PathBuf::from("/fix/home/Applications/Brave Browser.app"),
             ]
         );
+        // The pointer file sits beside the manifest dir, under the same user data root.
+        assert_eq!(
+            e.pointer,
+            Some(ExtensionPointer::File(PathBuf::from(
+                "/fix/home/Library/Application Support/BraveSoftware/Brave-Browser/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json"
+            )))
+        );
         // Opera's macOS dir is the bundle-id one, not "Opera".
         let opera = entry(Os::MacOs, &dirs(), Browser::Opera);
         assert!(opera
@@ -438,6 +485,8 @@ mod tests {
                 "/fix/home/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
             )
         );
+        // No pointer on Linux: Chrome would install from it without asking.
+        assert_eq!(e.pointer, None);
 
         let mut with_xdg = dirs();
         with_xdg.xdg_config_home = Some(PathBuf::from("/fix/xdg-config"));
@@ -464,6 +513,12 @@ mod tests {
         assert_eq!(
             manifest_path,
             &PathBuf::from("/fix/local/chromium-bridge/com.vivswan.chromium_bridge.host.json")
+        );
+        assert_eq!(
+            e.pointer,
+            Some(ExtensionPointer::Registry {
+                key: r"Software\Google\Chrome\Extensions\mkjjlmjbcljpcfkfadfmhblmmddkdihf".into()
+            })
         );
         assert_eq!(
             e.config_dir,

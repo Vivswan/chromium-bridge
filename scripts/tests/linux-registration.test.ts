@@ -7,6 +7,7 @@ import {
   allowedOrigin,
   type Browser,
   browserConfigDirs,
+  chromeRegistered,
   freshMachine,
   Machine,
   manifestFile,
@@ -24,7 +25,11 @@ afterAll(() => scratch.remove());
 
 const accepting: RunBinary = () => ({ exitCode: 0, stdout: "", stderr: "" });
 const refusing: RunBinary = () => ({ exitCode: 1, stdout: "", stderr: "refused\n" });
-const listing: RunBinary = () => ({ exitCode: 0, stdout: "chrome   detected   ok\n", stderr: "" });
+const listing: RunBinary = () => ({
+  exitCode: 0,
+  stdout: "  chrome    detected      manifest ok         pointer n/a        /x\n",
+  stderr: "",
+});
 
 function machine(binary: RunBinary): Machine {
   return new Machine(scratch.dir("linux-registration-machine"), binary, () => {});
@@ -73,7 +78,7 @@ const cases: Case[] = [
   {
     name: "outputMatches: the row shape doctor --list prints passes",
     binary: listing,
-    check: (m) => m.outputMatches(/chrome\s+detected\s+ok/, "doctor", "--list"),
+    check: (m) => m.outputMatches(chromeRegistered, "doctor", "--list"),
     outcome: "passes",
   },
   {
@@ -224,7 +229,8 @@ function conforming(tamper = false): RunBinary {
     if (command === "--help") return ok("usage\n");
     if (command === "doctor" && verb === "--list") {
       const list = detected.map(
-        ([browser]) => `${browser}  detected  ${existsSync(wrapperOf(browser)) ? "ok" : "stale"}`,
+        ([browser]) =>
+          `  ${browser}  detected  manifest ${existsSync(wrapperOf(browser)) ? "ok" : "stale"}  pointer n/a  /x`,
       );
       return ok(`${list.join("\n")}\n`);
     }
