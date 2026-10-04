@@ -1,9 +1,10 @@
 //! Executable-identity attestation: policy for accepting a peer or a pid, and
 //! for measuring the harness (parent) that spawned an MCP-server instance. The
 //! per-OS identity measurement (Linux `/proc/<pid>/exe` SHA256, macOS
-//! code-directory hash + Team ID) lives in [`super::platform`]; this module
-//! owns the trust decision - the same-binary allowlist is exactly `{our own
-//! binary}` for a bridge peer, and every ambiguity fails closed.
+//! code-directory hash + Team ID, Windows image-file SHA256 + Authenticode
+//! publisher) lives in [`super::platform`]; this module owns the trust
+//! decision - the same-binary allowlist is exactly `{our own binary}` for a
+//! bridge peer, and every ambiguity fails closed.
 
 use std::io;
 
@@ -51,23 +52,33 @@ pub fn ensure_own_identity() -> io::Result<&'static str> {
 
 /// Measure our **parent process**, the harness (MCP client) that spawned this MCP-server-mode instance: the input to
 /// the trusted-client allowlist ([`crate::allowlist`]). stdin is an anonymous pipe with no kernel peer credentials, so
-/// the attestable peer is the spawner `getppid` names, not the pipe's writer.
+/// the attestable peer is the spawner the OS recorded as our parent, not the pipe's writer.
 ///
 /// ```text
-/// real parent already dead  -> measures the reaper (commonly pid 1): refused by an enforced allowlist unless it names
-///                              that binary; unenrolled admission ignores the identity (allowlist::decide)
+/// real parent already dead  -> Unix: measures the reaper (commonly pid 1); Windows: the recorded pid, gone or reused.
+///                              Refused by an enforced allowlist unless it names that binary; unenrolled admission
+///                              ignores the identity (allowlist::decide)
 /// who writes our stdin      -> unproven: the pipe's write end can be inherited or passed on, and no user-space
 ///                              mechanism attests an anonymous pipe
 /// pid-keyed measurement     -> the same pid-reuse race as attest_pid; on macOS pid_client_identity still validates
 ///                              the running image via SecCodeCheckValidity
 /// ```
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn attest_parent() -> io::Result<ClientIdentity> {
-    // getppid cannot fail and returns the current parent's pid.
-    let ppid = crate::sys::parent_pid();
-    let ppid = u32::try_from(ppid)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "parent pid out of range"))?;
-    os::pid_client_identity(ppid)
+    os::pid_client_identity(parent_pid()?)
+}
+
+/// The pid the OS records as this process's parent: `getppid`, which cannot
+/// fail, on Unix; a process-snapshot lookup on Windows.
+fn parent_pid() -> io::Result<u32> {
+    #[cfg(unix)]
+    {
+        u32::try_from(crate::sys::parent_pid())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "parent pid out of range"))
+    }
+    #[cfg(windows)]
+    {
+        os::parent_pid()
+    }
 }
 
 /// Verify the peer on `stream` runs the same executable image as us; the trusted-identity allowlist is exactly
@@ -104,8 +115,8 @@ pub fn attest_pid(pid: u32) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::socket::loopback_pair;
     use super::*;
-    use std::os::unix::net::UnixStream;
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -119,11 +130,54 @@ mod tests {
 
     #[test]
     fn attest_peer_accepts_our_own_process() {
-        // The peer of a local socketpair is this very process, so attestation must accept it; on macOS this
-        // exercises the real audit-token -> SecCode -> cdhash path end to end. The foreign-binary rejection
-        // lives in tests/protocol/e2e.py: a single process cannot become a different binary.
-        let (a, _b) = UnixStream::pair().unwrap();
+        // The peer of a local pair is this very process, so attestation must accept it; on macOS this exercises
+        // the real audit-token -> SecCode -> cdhash path end to end, on Windows the pipe pid -> image path -> hash
+        // path. The foreign-binary rejection lives in tests/protocol/e2e.py: a single process cannot become a
+        // different binary.
+        let (a, _b) = loopback_pair();
         assert!(attest_peer(&a).is_ok());
+    }
+
+    /// A child of ours running a different binary, blocked until killed. On
+    /// Unix the byte the shell echoes is read before returning: spawn() can
+    /// return while the child is still a pre-exec clone of US (its
+    /// /proc/<pid>/exe naming our own binary), and measuring in that window
+    /// attested it as self on GitHub's ubuntu runners. Windows has no such
+    /// window: the image is cmd.exe from creation.
+    fn foreign_child() -> std::process::Child {
+        #[cfg(unix)]
+        {
+            use std::io::Read;
+
+            let mut child = std::process::Command::new("sh")
+                .args(["-c", "echo r; exec sleep 30"])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn sh");
+            let mut byte = [0u8; 1];
+            let signalled = child
+                .stdout
+                .as_mut()
+                .expect("child stdout is piped")
+                .read_exact(&mut byte);
+            // Reap before a failed expectation can leave the sleeper running.
+            if signalled.is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            signalled.expect("child signals it has exec'd");
+            child
+        }
+        #[cfg(windows)]
+        {
+            // `pause` blocks on stdin, which nothing writes.
+            std::process::Command::new("cmd")
+                .args(["/C", "pause"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn cmd")
+        }
     }
 
     #[test]
@@ -133,32 +187,17 @@ mod tests {
         assert!(attest_pid(std::process::id()).is_ok());
 
         // Foreign: a child WE spawned (a specific, verified pid, never a pattern match) running a different binary
-        // must be rejected with PermissionDenied. The byte the shell echoes is read before measuring: spawn() can
-        // return while the child is still a pre-exec clone of US (its /proc/<pid>/exe naming our own binary), and
-        // measuring in that window attested it as self on GitHub's ubuntu runners.
-        use std::io::Read;
-        let mut child = std::process::Command::new("sh")
-            .args(["-c", "echo r; exec sleep 30"])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn sh");
-        let mut byte = [0u8; 1];
-        let handshake = child
-            .stdout
-            .as_mut()
-            .expect("child stdout is piped")
-            .read_exact(&mut byte);
+        // must be rejected with PermissionDenied.
+        let mut child = foreign_child();
         let attested = attest_pid(child.id());
         // Reap the child BEFORE asserting: a failed assertion must not leave
-        // the 30-second sleeper running.
+        // the blocked child running.
         let _ = child.kill();
         let _ = child.wait();
-        handshake.expect("child signals it has exec'd");
         let err = attested.expect_err("a foreign binary must not attest");
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attest_parent_measures_the_spawning_process() {
         // The parent here is the test runner (cargo / a shell), a real signed or ad-hoc-signed image: an external
