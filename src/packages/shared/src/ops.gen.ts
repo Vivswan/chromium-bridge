@@ -376,3 +376,9 @@ export const OpArgsSchema = z
   .strict();
 
 export type OpArgs = z.infer<typeof OpArgsSchema>;
+
+// The page_wait_for timeout the host fills in when the caller sends none
+// (the serde default of PageWaitForArgs.timeout_ms in tools/args.rs). The
+// in-page waitFor keeps the same literal as its own fallback, because the
+// page API factory is self-contained; its test pins that literal to this.
+export const DEFAULT_WAIT_TIMEOUT_MS = 30000;

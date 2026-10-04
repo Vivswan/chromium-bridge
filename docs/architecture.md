@@ -139,7 +139,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chrom
 | `session.rs` | Connection registry keyed by browser label; request/response pairing by id; per-connection generation guard; 120s timeout |
 | `mcp_server.rs` | Default mode: harness admission, JSON-RPC loop, dispatch into the shared session |
 | `native_host.rs` | `--native-host` mode: NM frames <-> socket NDJSON, control-plane frame handling, graceful exit on EOF |
-| `tools/` | The tool catalogue (26 tools; the cross-process contract source), capabilities, and the `HANDLERS` registry |
+| `tools/` | The tool catalogue (26 tools; the cross-process contract source): one `catalogue!` row per tool emits the `BridgeCommand` enum, the `ToolId` index, and the `Tool` record (metadata, grants, dispatch, typed args schema); capabilities are read off the records |
 | `runtime_record.rs` | The one loader and writer for every JSON record in the runtime directory: capped read, version envelope, strict parse, atomic 0600 write under the runtime lock |
 | `migrations/` | One migration ladder per record; a record's schema version is its ladder's length, and the ladders are the only home for compatibility code |
 | `allowlist.rs` | The trusted-client allowlist: `pair-client` / `revoke-client` / `list-clients` and the admission decision |
