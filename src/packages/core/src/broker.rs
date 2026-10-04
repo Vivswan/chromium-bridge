@@ -15,8 +15,8 @@
 //!                            parent identity, checked against the trusted-client allowlist (crate::allowlist)
 //! ```
 //!
-//! The broker trusts a relay's harness hash/Team-ID because the relay passed `attest_peer`: it is our binary,
-//! which measures its parent honestly. The harness *name* is a log label only; authorization keys on the hash/Team-ID.
+//! The broker trusts a relay's harness hash/signer because the relay passed `attest_peer`: it is our binary,
+//! which measures its parent honestly. The harness *name* is a log label only; authorization keys on the hash/signer.
 //!
 //! Residual: `getppid` names who spawned the relay, not who writes its stdin, and it is measured ONCE at process
 //! start (mcp_server's `admit_own_harness`); the identity is then re-decided against the trust record on every

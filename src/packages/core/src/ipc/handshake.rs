@@ -66,8 +66,9 @@ pub const DEFAULT_LABEL: &str = "default";
 /// connection registry, the broker's attach path, audit records -- takes this
 /// type instead of a raw `String`, so "was this string ever validated?" is
 /// answered by the type, not by re-checking at every hop. The label domain
-/// only; harness/client names share the charset rule but are validated at
-/// their own trust boundaries per the zero-trust posture.
+/// only; the trusted-client name shares the rule through its own newtype
+/// ([`crate::allowlist::ClientName`]), and the harness label validates where
+/// it is read.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BrowserLabel(String);
 
@@ -117,9 +118,9 @@ impl std::borrow::Borrow<str> for BrowserLabel {
 /// a tame charset; the leading-alphanumeric rule also keeps a label from ever
 /// looking like a command-line flag. Anything else fails the handshake (fail
 /// closed) rather than being sanitized. Shared by the other self-asserted
-/// name domains (harness/client names), which validate at their own
-/// boundaries; the browser-label domain itself carries the proof in
-/// [`BrowserLabel`].
+/// name domains: the browser label carries its proof in [`BrowserLabel`], the
+/// trusted-client name in [`crate::allowlist::ClientName`], and the harness
+/// label validates where it is read.
 pub fn validate_label(label: &str) -> bool {
     let bytes = label.as_bytes();
     (1..=32).contains(&bytes.len())

@@ -2,7 +2,7 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::ipc::{HashDigest, TeamId};
+use chromium_bridge_core::ipc::{HashDigest, SignerId};
 use chromium_bridge_core::protocol::{bridge_read, AttachRequest, HarnessId};
 use serde_json::json;
 
@@ -19,7 +19,7 @@ fn reads(bytes: &[u8]) -> bool {
 pub(super) fn directory() -> Directory {
     let harness = HarnessId {
         hash: HashDigest::try_from(&[0x11u8; 32][..]).expect("32 bytes is a digest width"),
-        team_id: Some(TeamId::try_from("EXAMPLE123").expect("non-empty")),
+        signer: Some(SignerId::try_from("EXAMPLE123").expect("non-empty")),
         name: Some("example-harness".into()),
     };
     let browser = json_of!(AttachRequest::Browser {});
@@ -51,8 +51,8 @@ pub(super) fn directory() -> Directory {
                 reads,
             ),
             Seed::refused(
-                "client_empty_team_id",
-                ndjson(&edited(&client, |v| v["harness"]["team_id"] = json!(""))),
+                "client_empty_signer",
+                ndjson(&edited(&client, |v| v["harness"]["signer"] = json!(""))),
                 reads,
             ),
             Seed::refused(

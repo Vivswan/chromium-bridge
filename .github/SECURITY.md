@@ -94,7 +94,7 @@ The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind ea
 | Same-user check | The server rejects any peer whose UID differs from its own | The kernel enforces the pipe's descriptor at open, before the connection exists |
 | Executable attestation | Both ends kernel-attest that the other side is running this exact binary, before the HMAC handshake (Linux: SHA256 of `/proc/<pid>/exe`; macOS: the running image's code-directory hash) | Both ends attest the other side before the HMAC handshake: the pid the kernel recorded for the pipe peer, then the SHA256 of the image file that pid runs (re-opened by path; see the residual below) |
 | HMAC challenge-response | One gate of four | One gate of four |
-| Harness admission | Enforced on the attested identity | Enforced on the attested identity: the image hash plus the Authenticode publisher (the signer's X.500 subject) in the Team ID slot |
+| Harness admission | Enforced on the attested identity | Enforced on the attested identity: the image hash plus the Authenticode publisher (the signer's X.500 subject) as the signer anchor |
 | Lock file (the per-run secret) | 0600 | No explicit restrictive mode; confidentiality rests on the default permissions of the per-user runtime directory |
 
 What differs on Windows:

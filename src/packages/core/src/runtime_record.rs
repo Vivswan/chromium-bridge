@@ -202,7 +202,7 @@ mod tests {
     use syn::visit::Visit;
 
     use super::*;
-    use crate::allowlist::{Anchor, ClientEntry};
+    use crate::allowlist::{Anchor, ClientEntry, ClientName};
     use crate::enclave::{base64_encode, HostConfig};
     use crate::ipc::HashDigest;
     use crate::lang::LangStore;
@@ -553,7 +553,7 @@ mod tests {
                 5,
                 true,
                 Clients::Paired(vec![ClientEntry {
-                    name: "codex".into(),
+                    name: ClientName::try_from("codex").unwrap(),
                     anchor: Anchor::Hash(HashDigest::try_from("ab".repeat(20)).unwrap()),
                     added_unix: 7,
                 }]),

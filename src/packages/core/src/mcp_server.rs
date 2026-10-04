@@ -185,23 +185,23 @@ fn admit_own_harness() -> Option<Harness> {
                  turn on enforcement. See SECURITY.md."
             );
             // The measured anchors, so the operator can pair this harness with
-            // `--hash` or `--team-id` where `--this-parent` cannot measure it
+            // `--hash` or `--signer` where `--this-parent` cannot measure it
             // (Windows, or any harness that spawns the server over a pipe).
             // The subject is printed bare, not as a shell argument: an X.500
             // subject can carry quotes and commas, and quoting differs per shell.
             if let Some(id) = &identity {
-                let team = id
-                    .team_id
+                let signer = id
+                    .signer
                     .as_ref()
-                    .map(|t| format!(", team id / publisher subject [{t}]"))
+                    .map(|s| format!(", signer [{s}]"))
                     .unwrap_or_default();
                 log_error!(
                     "mcp",
-                    "this harness measured as hash {}{team}; pair it with `pair-client --hash {}`{}",
+                    "this harness measured as hash {}{signer}; pair it with `pair-client --hash {}`{}",
                     id.hash,
                     id.hash,
-                    if id.team_id.is_some() {
-                        " or `--team-id` with that subject, quoted for your shell"
+                    if id.signer.is_some() {
+                        " or `--signer` with that value, quoted for your shell"
                     } else {
                         ""
                     }
@@ -229,7 +229,7 @@ fn admit_own_harness() -> Option<Harness> {
 
     let id = identity.map(|id| HarnessId {
         hash: id.hash,
-        team_id: id.team_id,
+        signer: id.signer,
         name,
     });
     Some(Harness { id, posture })

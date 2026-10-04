@@ -184,7 +184,7 @@ clients:
   revoke_confirm: "撤銷受信任用戶端「$1」? 其目前連線會被立即中斷。"
   revoke_failed: "撤銷失敗: $1"
   anchor_hash: "雜湊"
-  anchor_team: "Team ID"
+  anchor_signer: "簽署者"
 
 kill:
   desc: "啟用後, 所有用戶端與所有瀏覽器的連線會被立即切斷, 進行中的操作也不例外。該狀態在重新啟動後仍然保持。"

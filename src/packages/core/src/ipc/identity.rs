@@ -1,5 +1,5 @@
 //! The kernel-attested client identity and its two typed values, parsed once
-//! where a value enters (a measurement, a `clients.json` entry, a relayed attach
+//! where a value enters (a measurement, a `trust.json` entry, a relayed attach
 //! frame, a CLI flag) so no compare site re-validates. A wrong-form on-disk
 //! value is never normalized: it fails the whole decode, which every caller
 //! fails closed on.
@@ -110,10 +110,10 @@ impl std::fmt::Display for HashDigest {
     }
 }
 
-/// A publisher identity read off a validated code signature: the macOS signing
-/// Team ID, or on Windows the Authenticode signer's X.500 subject. Non-empty:
-/// an unsigned or ad-hoc image measures no publisher at all, so an empty anchor
-/// could never match.
+/// The code signer read off a validated signature: the Apple Team ID on macOS,
+/// the Authenticode signer's X.500 subject on Windows. Non-empty: an unsigned
+/// or ad-hoc image measures no signer at all, so an empty anchor could never
+/// match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "envelope-schema",
@@ -121,55 +121,54 @@ impl std::fmt::Display for HashDigest {
     schemars(with = "String")
 )]
 #[serde(try_from = "String")]
-pub struct TeamId(String);
+pub struct SignerId(String);
 
-impl TeamId {
-    /// The Team ID as its string.
+impl SignerId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-impl TryFrom<String> for TeamId {
+impl TryFrom<String> for SignerId {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         if value.is_empty() {
-            Err("team id must be non-empty".to_string())
+            Err("signer anchor must be non-empty".to_string())
         } else {
-            Ok(TeamId(value))
+            Ok(SignerId(value))
         }
     }
 }
 
-impl TryFrom<&str> for TeamId {
+impl TryFrom<&str> for SignerId {
     type Error = String;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        TeamId::try_from(value.to_string())
+        SignerId::try_from(value.to_string())
     }
 }
 
-impl From<TeamId> for String {
-    fn from(team_id: TeamId) -> String {
-        team_id.0
+impl From<SignerId> for String {
+    fn from(signer: SignerId) -> String {
+        signer.0
     }
 }
 
-impl std::fmt::Display for TeamId {
+impl std::fmt::Display for SignerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
 
 /// A harness's kernel-attested code identity, the input to the trusted-client
-/// allowlist decision ([`crate::allowlist`]). `team_id` is present only for an
+/// allowlist decision ([`crate::allowlist`]). `signer` is present only for an
 /// image whose signature names a publisher (always `None` on Linux and for
 /// ad-hoc / unsigned builds).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientIdentity {
     pub hash: HashDigest,
-    pub team_id: Option<TeamId>,
+    pub signer: Option<SignerId>,
 }
 
 impl From<&crate::protocol::HarnessId> for ClientIdentity {
@@ -179,7 +178,7 @@ impl From<&crate::protocol::HarnessId> for ClientIdentity {
     fn from(h: &crate::protocol::HarnessId) -> Self {
         ClientIdentity {
             hash: h.hash.clone(),
-            team_id: h.team_id.clone(),
+            signer: h.signer.clone(),
         }
     }
 }
@@ -192,7 +191,7 @@ mod tests {
     fn a_measured_digest_parses_back_equal_to_itself() {
         // The two constructors meet: what the measurement boundary produces
         // from bytes is exactly what the parse boundary accepts from text, so
-        // a measured hash written to clients.json always reads back and
+        // a measured hash written to trust.json always reads back and
         // matches. Pins the encoder's lowercase output (an external fact of
         // the hex crate), which a parse of uppercase hex would silently reject.
         for (bytes, hex) in [

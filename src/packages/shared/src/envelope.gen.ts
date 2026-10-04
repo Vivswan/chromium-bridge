@@ -68,7 +68,7 @@ export const ClientEntryWireSchema = z
     "added_unix": z.number().int().gte(0),
     "anchor": z.union([
       z.object({ "kind": z.literal("hash"), "value": z.string() }).strict(),
-      z.object({ "kind": z.literal("team_id"), "value": z.string() }).strict(),
+      z.object({ "kind": z.literal("signer"), "value": z.string() }).strict(),
     ]),
     "name": z.string(),
   })
@@ -78,7 +78,7 @@ export const TrustedClientSchema = z
   .object({
     "added_unix": z.number().int().gte(0),
     "anchor": z
-      .object({ "kind": z.enum(["hash", "team_id"]), "value": z.string().min(1) })
+      .object({ "kind": z.enum(["hash", "signer"]), "value": z.string().min(1) })
       .catchall(z.unknown()),
     "name": z.string().min(1),
   })

@@ -31,7 +31,7 @@ use security_framework::os::macos::code_signing::{Flags, GuestAttributes, SecCod
 use security_framework_sys::base::errSecSuccess;
 use security_framework_sys::code_signing::{SecCSFlags, SecCodeCheckValidity, SecStaticCodeRef};
 
-use super::super::identity::{ClientIdentity, HashDigest, TeamId};
+use super::super::identity::{ClientIdentity, HashDigest, SignerId};
 use super::super::socket::BridgeStream;
 
 /// Error message for an unmeasurable self identity, used by
@@ -193,7 +193,7 @@ fn validated_identity(code: &SecCode, what: &str) -> io::Result<ClientIdentity> 
 /// Read a validated `SecCode`'s signing identity: its `cdhash` (required) and
 /// its Team ID (optional). `kSecCSSigningInformation` makes the dictionary
 /// carry the Team ID; `kSecCodeInfoUnique` (the cdhash) is present regardless.
-/// An unsigned / ad-hoc image has no Team ID, so `team_id` is `None` and the
+/// An unsigned / ad-hoc image has no Team ID, so `signer` is `None` and the
 /// allowlist must anchor it on the hash instead.
 fn signing_identity(code: &SecCode) -> io::Result<ClientIdentity> {
     let info = signing_information(code)?;
@@ -216,10 +216,10 @@ fn signing_identity(code: &SecCode) -> io::Result<ClientIdentity> {
     // SAFETY: a Security.framework constant, initialized before any Rust code
     // runs and never released.
     let team = unsafe { kSecCodeInfoTeamIdentifier };
-    let team_id =
-        info_value::<CFString>(&info, team).and_then(|s| TeamId::try_from(s.to_string()).ok());
+    let signer =
+        info_value::<CFString>(&info, team).and_then(|s| SignerId::try_from(s.to_string()).ok());
 
-    Ok(ClientIdentity { hash, team_id })
+    Ok(ClientIdentity { hash, signer })
 }
 
 const SIGNING_INFORMATION_FLAGS: SecCSFlags = 0x2; // kSecCSSigningInformation

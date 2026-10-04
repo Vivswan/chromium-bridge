@@ -547,20 +547,20 @@ fn enclave_control_serde_roundtrip() {
 
 #[test]
 fn admin_control_serde_roundtrips() {
-    use crate::allowlist::{Anchor, ClientEntry};
+    use crate::allowlist::{Anchor, ClientEntry, ClientName};
     let result = AdminControl::ClientListResult {
         ok: true,
         enrolled: true,
         clients: vec![ClientEntry {
-            name: "claude-code".into(),
-            anchor: Anchor::TeamId(crate::ipc::TeamId::try_from("TEAMID0001").unwrap()),
+            name: ClientName::try_from("claude-code").unwrap(),
+            anchor: Anchor::Signer(crate::ipc::SignerId::try_from("SIGNER0001").unwrap()),
             added_unix: 42,
         }],
         error: None,
     };
     let v = serde_json::to_value(&result).unwrap();
     assert_eq!(v["type"], "client_list_result");
-    assert_eq!(v["clients"][0]["anchor"]["kind"], "team_id");
+    assert_eq!(v["clients"][0]["anchor"]["kind"], "signer");
     // `error: None` is omitted on the wire.
     assert!(v.get("error").is_none());
     let back: AdminControl = serde_json::from_value(v).unwrap();

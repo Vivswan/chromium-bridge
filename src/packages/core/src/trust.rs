@@ -139,7 +139,7 @@ impl Trust {
     /// Remove the entry named `name`; the list stays `Paired` even when it empties (nobody admitted).
     pub(crate) fn revoke(&mut self, name: &str) {
         if let Clients::Paired(clients) = &mut self.clients {
-            clients.retain(|c| c.name != name);
+            clients.retain(|c| c.name.as_str() != name);
         }
     }
 }
@@ -271,7 +271,7 @@ impl TrustState {
             .find(|c| anchor_matches(&c.anchor, identity))
             .map_or(Admission::Refused, |c| {
                 Admission::Admit(Posture::Trusted {
-                    name: c.name.clone(),
+                    name: c.name.to_string(),
                 })
             })
     }
@@ -282,7 +282,7 @@ impl TrustState {
 fn anchor_matches(anchor: &Anchor, identity: &ClientIdentity) -> bool {
     match anchor {
         Anchor::Hash(h) => *h == identity.hash,
-        Anchor::TeamId(t) => identity.team_id.as_ref() == Some(t),
+        Anchor::Signer(t) => identity.signer.as_ref() == Some(t),
     }
 }
 
@@ -296,7 +296,7 @@ impl From<Trust> for TrustState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::{HashDigest, TeamId};
+    use crate::ipc::{HashDigest, SignerId};
     use crate::test_support::scratch_runtime_dir;
     use proptest::prelude::*;
 
@@ -304,15 +304,15 @@ mod tests {
         HashDigest::try_from(seed.chars().cycle().take(40).collect::<String>()).unwrap()
     }
 
-    fn id(hash: &str, team: Option<&str>) -> ClientIdentity {
+    fn id(hash: &str, signer: Option<&str>) -> ClientIdentity {
         ClientIdentity {
             hash: hd(hash),
-            team_id: team.map(|t| TeamId::try_from(t).unwrap()),
+            signer: signer.map(|s| SignerId::try_from(s).unwrap()),
         }
     }
 
     /// The pairing contract docs/security/rationale.md documents, pinned where the bytes enter and leave: a hash anchor
-    /// needs a re-pair after a re-sign while a Team ID anchor survives it, the name never admits, `null`
+    /// needs a re-pair after a re-sign while a signer anchor survives it, the name never admits, `null`
     /// clients is the open bootstrap, `[]` is every client revoked, and a missing `clients` key is refused
     /// like any other missing field instead of reading as the bootstrap.
     #[test]
@@ -330,8 +330,8 @@ mod tests {
             r#"{{"name":"codex","anchor":{{"kind":"hash","value":"{}"}},"added_unix":0}}"#,
             hd("deadbeef")
         );
-        let team_entry = r#"{"name":"claude-code","anchor":{"kind":"team_id","value":"TEAMID0001"},"added_unix":0}"#;
-        let paired = format!(r#","clients":[{hash_entry},{team_entry}]"#);
+        let signer_entry = r#"{"name":"claude-code","anchor":{"kind":"signer","value":"SIGNER0001"},"added_unix":0}"#;
+        let paired = format!(r#","clients":[{hash_entry},{signer_entry}]"#);
         let trusted = |name: &str| Admission::Admit(Posture::Trusted { name: name.into() });
         let cases = [
             (
@@ -349,7 +349,7 @@ mod tests {
             (
                 "every client revoked",
                 r#","clients":[]"#.to_string(),
-                Some(id("abc", Some("TEAMID0001"))),
+                Some(id("abc", Some("SIGNER0001"))),
                 Admission::Refused,
             ),
             (
@@ -371,15 +371,15 @@ mod tests {
                 Admission::Refused,
             ),
             (
-                "team anchor, re-signed hash",
+                "signer anchor, re-signed hash",
                 paired.clone(),
-                Some(id("0e51a", Some("TEAMID0001"))),
+                Some(id("0e51a", Some("SIGNER0001"))),
                 trusted("claude-code"),
             ),
             (
-                "team anchor, other team",
+                "signer anchor, other signer",
                 paired.clone(),
-                Some(id("0e51a", Some("OTHERTEAM"))),
+                Some(id("0e51a", Some("OTHERSIGNER"))),
                 Admission::Refused,
             ),
         ];

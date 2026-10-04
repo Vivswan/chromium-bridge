@@ -18,7 +18,7 @@
 | `chromium-bridge revoke` | enrollment | Deletes the enrollment key; a pinning extension then fails closed. |
 | `chromium-bridge enclave-status [--json]` | read-only | Prints the enrollment state and key fingerprint. |
 | `chromium-bridge presence-selftest` | diagnostic | Raises one user-presence prompt and reports the result, without a browser. |
-| `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --team-id <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
+| `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
 | `chromium-bridge revoke-client --name <label>` | trusted clients | Removes a client; a live broker drops it immediately. |
 | `chromium-bridge list-clients` | read-only | Prints the trusted-client allowlist. |
 | `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release. |
@@ -101,17 +101,17 @@ By default (unenrolled), any process that spawns the server is served, and every
 ```text
 chromium-bridge pair-client --name claude-code --this-parent
 chromium-bridge pair-client --name codex --hash <sha256-hex>
-chromium-bridge pair-client --name claude-desktop --team-id <apple-team-id>
+chromium-bridge pair-client --name claude-desktop --signer <signer-id>
 chromium-bridge list-clients
 chromium-bridge revoke-client --name codex
 ```
 
-- `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust). Unix only: on Windows the server keys a harness on the creator of its stdin pipe, which a console command has none of, so pair with `--hash` or `--team-id` using the values the server logs at startup while unenrolled.
-- Authorization keys on the attested anchor (a signing Team ID where the client is signed, an image hash otherwise); the `--name` is a label for logs and revocation, never the authorization key.
+- `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust). Unix only: on Windows the server keys a harness on the creator of its stdin pipe, which a console command has none of, so pair with `--hash` or `--signer` using the values the server logs at startup while unenrolled.
+- Authorization keys on the attested anchor, never the `--name` label. What each platform measures is on the [trust boundaries page](security/trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20).
 - Hash anchors change when the client updates; re-run `pair-client` with the same name to replace the entry (the re-pair path).
 - Adding a client is a capability grant, so it is presence-gated: Touch ID on an enrolled Mac, an interactive terminal confirmation otherwise. Revoking is friction-free by design; a live broker drops the revoked client and refuses its re-attach.
 
-Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. On Windows the measured identity is the image file's hash plus its Authenticode publisher, which fills the Team ID slot (see [SECURITY.md](../.github/SECURITY.md#platform-support)).
+Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. The Windows measurement is in [SECURITY.md](../.github/SECURITY.md#platform-support).
 
 ## Kill switch (kill / unkill)
 

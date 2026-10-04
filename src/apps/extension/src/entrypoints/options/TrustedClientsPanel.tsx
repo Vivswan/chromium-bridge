@@ -1,3 +1,4 @@
+import type { TrustedClient } from "@chromium-bridge/shared/envelope.gen";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -35,8 +36,8 @@ export function TrustedClientsPanel() {
     setBusy(false);
   };
 
-  const anchorLabel = (kind: "hash" | "team_id") =>
-    kind === "team_id" ? t("clients.anchor_team") : t("clients.anchor_hash");
+  const anchorLabel = (kind: TrustedClient["anchor"]["kind"]) =>
+    kind === "signer" ? t("clients.anchor_signer") : t("clients.anchor_hash");
 
   return (
     <div className="py-1">

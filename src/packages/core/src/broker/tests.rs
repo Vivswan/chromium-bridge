@@ -1,12 +1,12 @@
 use super::*;
 
-use crate::allowlist::{Anchor, ClientEntry};
+use crate::allowlist::{Anchor, ClientEntry, ClientName};
 use crate::trust::{Clients, Posture, Trust};
 
 fn ident(hash: &str) -> ClientIdentity {
     ClientIdentity {
         hash: ipc::HashDigest::try_from(hash).unwrap(),
-        team_id: None,
+        signer: None,
     }
 }
 
@@ -29,7 +29,7 @@ fn paired(hashes: &[&str]) -> Clients {
         hashes
             .iter()
             .map(|h| ClientEntry {
-                name: "c".into(),
+                name: ClientName::try_from("c").unwrap(),
                 anchor: Anchor::Hash((*h).try_into().unwrap()),
                 added_unix: 0,
             })

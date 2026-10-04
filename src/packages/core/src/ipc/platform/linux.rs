@@ -34,14 +34,14 @@ pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
 }
 
 /// The full client identity of an arbitrary process named by pid: its image
-/// hash plus its signing Team ID. Linux code signing is not part of the base
-/// system, so there is no Team ID to read here and the anchor is always the
-/// hash; `team_id` is therefore always `None`. Carries the same pid-reuse race
+/// hash plus its code signer. Linux code signing is not part of the base
+/// system, so there is no signer to read here and the anchor is always the
+/// hash; `signer` is therefore always `None`. Carries the same pid-reuse race
 /// as [`pid_identity`].
 pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     Ok(ClientIdentity {
         hash: exe_hash_of_pid(pid)?,
-        team_id: None,
+        signer: None,
     })
 }
 
