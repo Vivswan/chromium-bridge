@@ -1,10 +1,7 @@
-# The one toolchain setup every job runs: proto, then whatever .prototools pins (moon, bun, node, uv,
-# rust), then the Rust toolchain from rust-toolchain.toml with a cargo cache when asked. Inside the CI
+# proto's own version is the one pin moonrepo/setup-toolchain cannot read from .prototools (it looks in
+# .moon/toolchains.yml), so it is parsed here; every other version is proto's to resolve. Inside the CI
 # image (Containerfile) proto and moon already exist, so the download is skipped and `proto install` only
 # catches a pin that moved after the image was published.
-#
-# proto's own version is the one pin moonrepo/setup-toolchain cannot read from .prototools (it looks in
-# .moon/toolchains.yml), so it is parsed here; every other version is proto's to resolve.
 name: Set up moon
 description: Installs proto, moon, and the tools pinned in .prototools; optionally the pinned Rust toolchain with a cargo cache.
 

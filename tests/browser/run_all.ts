@@ -4,8 +4,8 @@
 // extension bundle, runs the three suites against CHROME_BIN, then requires each suite's RAN marker.
 //
 // SAFETY: the suites launch CHROME_BIN non-headless with --load-extension, which can capture and close a
-// real browser session, so CHROME_BIN must identify as an isolated browser (tests/README.md -> Safety).
-// Without one the run SKIPs; BB_REQUIRE_BROWSER=1 (CI, the container) turns that skip into a failure.
+// real browser session, so the shared guard decides once here: an isolated browser or a SKIP, which
+// BB_REQUIRE_BROWSER=1 (CI, the container) turns into a failure.
 //
 // The canary: each suite exits 0 only after finishSuite() wrote "<suite>: N passed, M failed" into
 // BB_BROWSER_CANARY_DIR. A missing marker means the suite finished no real browser run (a guard skip
@@ -16,13 +16,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isolatedBrowserOrNull } from "./browser-safety";
+import { assertIsolatedBrowserOrSkip } from "./browser-safety";
 
 const SUITES = ["dom_test", "ext_test", "security_browser_test"] as const;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
-const strict = process.env.BB_REQUIRE_BROWSER === "1";
 
 function run(cmd: string[], env: Record<string, string>): boolean {
   const proc = Bun.spawnSync(cmd, {
@@ -43,26 +42,14 @@ if (!run(["bun", "run", "--cwd", join(repo, "src/apps/extension"), "build"], {})
 
 console.log("");
 console.log("(2/3) isolated browser");
-const chromeBin = isolatedBrowserOrNull();
-if (!chromeBin) {
-  const reason = process.env.CHROME_BIN
-    ? `CHROME_BIN (${process.env.CHROME_BIN}) does not identify as an isolated Chrome for Testing`
-    : "CHROME_BIN is unset";
-  if (strict) {
-    console.error(`FAIL (BB_REQUIRE_BROWSER=1, the suites must run): ${reason}`);
-    process.exit(1);
-  }
-  console.log(`  SKIP  ${reason}; point it at an isolated browser, never your daily Chrome`);
-  console.log("        (see tests/README.md -> Safety)");
-  process.exit(0);
-}
+const chromeBin = assertIsolatedBrowserOrSkip();
 console.log(`  ${chromeBin}`);
 
-// A caller may name the canary dir to read the markers afterwards (compose.yaml does); the dir is cleared
-// first so a marker from an earlier run cannot vouch for this one.
-const canaryDir =
-  process.env.BB_BROWSER_CANARY_DIR ?? mkdtempSync(join(tmpdir(), "browser-canary-"));
-rmSync(canaryDir, { recursive: true, force: true });
+// A caller may name the canary dir to read the markers afterwards (compose.yaml does), so only this run's
+// markers are cleared there: a marker from an earlier run must not vouch for this one.
+const callerDir = process.env.BB_BROWSER_CANARY_DIR;
+const canaryDir = callerDir ?? mkdtempSync(join(tmpdir(), "browser-canary-"));
+for (const suite of SUITES) rmSync(join(canaryDir, suite), { force: true });
 
 console.log("");
 console.log("(3/3) suites");
@@ -96,7 +83,7 @@ for (const suite of SUITES) {
   }
   console.log(`  ${body}`);
 }
-if (!process.env.BB_BROWSER_CANARY_DIR) rmSync(canaryDir, { recursive: true, force: true });
+if (!callerDir) rmSync(canaryDir, { recursive: true, force: true });
 
 console.log("");
 console.log(failed ? "=== SOME BROWSER SUITES FAILED ===" : "=== ALL BROWSER SUITES PASSED ===");

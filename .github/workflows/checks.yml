@@ -79,12 +79,12 @@ jobs:
       - if: runner.os == 'Linux'
         run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
 
-  # Built once; the suites that drive the binary download it (.github/actions/release-binary).
+  # Built once; the suites that drive the binary download it (.github/actions/release-binary). On the bare
+  # runner rather than in the image: a binary linked against the runner's older glibc runs inside the newer
+  # image and on the runner alike, while the reverse direction is not guaranteed.
   build-release:
     name: Release binary (Linux)
-    needs: image
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -289,12 +289,12 @@ jobs:
 
   # The suites hardcode target/release/chromium-bridge and build it only when missing, so the downloaded
   # binary is the one they drive. --upstream none skips the task's build-release dep (the artifact stands in
-  # for it) and check-uv (a missing uv fails the run loudly anyway).
+  # for it) and check-uv (a missing uv fails the run loudly anyway). On the bare runner, not in the image:
+  # adversarial.py's A11 enumerates listeners with `ss`, which the image does not carry (no iproute2).
   protocol:
     name: Protocol suite (${{ matrix.suite }}, Python)
-    needs: [image, build-release]
+    needs: build-release
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

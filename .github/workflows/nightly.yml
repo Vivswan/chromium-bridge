@@ -6,7 +6,8 @@ name: Nightly checks
 #   browser        -> the PR job's suites (browser.yml, the one definition), against that day's Chrome `stable`
 #   mutants        -> the full cargo-mutants pass, sharded
 #   harness-smoke  -> real agent-harness CLIs (Claude Code, Codex) at their CURRENT releases connect to our
-#                     stdio MCP server; frames are captured and the opening method logged (the ADR-0034 canary)
+#                     stdio MCP server; frames are captured and the opening method logged (the canary for
+#                     retiring the legacy-initialize shim)
 #   audits         -> the same cargo deny pass that gates every merge (checks.yml -> audits.yml), rerun daily
 #                     so an advisory disclosed between pushes surfaces here instead of at the next PR
 #   setup-chrome   -> installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser
