@@ -10,12 +10,12 @@
 //   not listed -> not scanned yet; widen COVERED when a tree is clean
 //
 // Usage: bun scripts/check-planning-refs.ts [repo-root]   (the root defaults to this checkout)
-// Dependency-free (Bun + node builtins), so it runs without a bun install.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "@babel/parser";
 
 export const COVERED: readonly string[] = [
   "src/apps/extension/**",
@@ -28,11 +28,7 @@ export const COVERED: readonly string[] = [
   "CONTRIBUTING.md",
 ];
 
-export const WAITING: readonly string[] = [
-  "src/packages/shared/src/json-schema-normalize.ts",
-  "src/packages/shared/tests/json-schema-normalize.test.ts",
-  "docs/security/threat-model.md",
-];
+export const WAITING: readonly string[] = ["docs/security/threat-model.md"];
 
 /** Line patterns, one per artifact kind. Each is written so this file's own text never matches it (the
  * record prefix goes through a character class, the examples carry no digit), which its test pins. A tag
@@ -50,11 +46,64 @@ export const PATTERNS: ReadonlyArray<readonly [name: string, re: RegExp]> = [
 ];
 
 /** A test title is where the bare codes were used as names, so there a code counts anywhere in the title.
- * The title is matched across lines, inside whichever quote opened it, so a wrapped call or an apostrophe
- * in a double-quoted title hides nothing. */
-const TITLE = /\b(?:test|describe|it)\(\s*(["'`])((?:(?!\1)[\s\S])*)\1/g;
+ * Titles come from the parsed AST, never a regex: the call may carry modifiers (`test.each(cases)(`,
+ * `it.skip(`), `.each`'s argument may hold calls, comments, and parentheses, a title may be a template
+ * with nested templates in its holes, and the word `it` appears in prose. A file the parser rejects
+ * fails the gate instead of being skipped. */
+const TITLE_CALLS = new Set(["test", "describe", "it"]);
 const TITLE_CODE = /\b(?:CS|SFX|[HFUS])-?\d[a-z]?\b/;
 const TITLE_CODE_NAME = "audit code in a test title";
+const SCRIPT_EXTENSIONS = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+type Node = { type: string; loc?: { start: { line: number } } } & Record<string, unknown>;
+
+function titleOf(arg: Node | undefined): string | null {
+  if (arg?.type === "StringLiteral") return arg.value as string;
+  if (arg?.type === "TemplateLiteral") {
+    const quasis = arg.quasis as Array<{ value: { cooked: string | null; raw: string } }>;
+    return quasis.map((q) => q.value.cooked ?? q.value.raw).join(" ");
+  }
+  return null;
+}
+
+/** The leftmost identifier of a callee chain: `test.each(x)` and `it.skip` both resolve to the name. */
+function calleeName(node: Node): string | null {
+  let e = node;
+  while (e.type === "MemberExpression" || e.type === "CallExpression") {
+    e = (e.type === "MemberExpression" ? e.object : e.callee) as Node;
+  }
+  return e.type === "Identifier" ? (e.name as string) : null;
+}
+
+/** Every test/describe/it title in a script, with the 1-based line its title starts on. */
+export function testTitles(path: string, text: string): Array<{ line: number; title: string }> {
+  if (!SCRIPT_EXTENSIONS.test(path)) return [];
+  let ast: Node;
+  try {
+    ast = parse(text, { sourceType: "module", plugins: ["typescript", "jsx"] }) as unknown as Node;
+  } catch (e) {
+    throw new Error(`${path}: cannot parse as TypeScript: ${(e as Error).message}`);
+  }
+  const found: Array<{ line: number; title: string }> = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const n = node as Node;
+    if (n.type === "CallExpression" && TITLE_CALLS.has(calleeName(n.callee as Node) ?? "")) {
+      const [first] = n.arguments as Node[];
+      const title = titleOf(first);
+      if (title !== null && first?.loc) found.push({ line: first.loc.start.line, title });
+    }
+    for (const [key, value] of Object.entries(n)) {
+      if (key !== "loc" && key !== "start" && key !== "end") walk(value);
+    }
+  };
+  walk(ast);
+  return found;
+}
 
 export interface Hit {
   path: string;
@@ -73,9 +122,9 @@ export function findPlanningRefs(path: string, text: string): Hit[] {
     const match = PATTERNS.find(([, re]) => re.test(raw));
     if (match) flagged.set(index, match[0]);
   });
-  for (const title of text.matchAll(TITLE)) {
-    if (!TITLE_CODE.test(title[2] ?? "")) continue;
-    const index = text.slice(0, title.index).split("\n").length - 1;
+  for (const { line, title } of testTitles(path, text)) {
+    if (!TITLE_CODE.test(title)) continue;
+    const index = line - 1;
     if (!flagged.has(index)) flagged.set(index, TITLE_CODE_NAME);
   }
   return [...flagged.entries()]

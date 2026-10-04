@@ -545,10 +545,9 @@ const LATCHED_REASON =
   "is tampering evidence).";
 
 const COMPROMISED_LIFE_REASON =
-  "policy state latched closed: a policy baseline failed signature verification against the " +
-  "pinned key this session (host-substitution evidence: the signature did not verify against the " +
-  "pinned key). Every bridge request is refused for the rest of this browser session; revoke the " +
-  "pin and re-pair with a fresh key to recover.";
+  "policy state latched closed: a policy baseline's signature did not verify against the pinned " +
+  "key this session (host-substitution evidence). Every bridge request is refused for the rest of " +
+  "this browser session; revoke the pin and re-pair with a fresh key to recover.";
 
 /** The per-connection dispatch barrier. Post-cutover, bridge requests are
  * refused until a policy push has verified and applied on the CURRENT host

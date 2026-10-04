@@ -9,7 +9,7 @@
 //
 //   connection check   -> the harness's own health check, or a fake-LLM-driven tool call, must report the server usable
 //   opening canary     -> prints each harness's OPENING method; once every harness opens with `server/discover`
-//                         instead of the legacy `initialize`, the temporary legacy era can be disabled
+//                         instead of the legacy `initialize` opener, that opener can be dropped
 //
 // Node builtins only (no scripts/lib.ts import), so it runs without a `bun install`. Dual-use: `moon run
 // harness-smoke` locally, and nightly.yml's harness-smoke job, which uploads build/harness-captures/.
@@ -766,7 +766,7 @@ function writeShim(ctx: { scratch: string; runtime: string; capture: string }): 
 
 interface CaptureAnalysis {
   frames: number;
-  /** Method of the first frame carrying one: the legacy-era removal canary. */
+  /** Method of the first frame carrying one: the legacy `initialize` opener canary. */
   opening: string | undefined;
   methods: string[];
 }
@@ -795,7 +795,7 @@ function analyzeCapture(capture: string): CaptureAnalysis {
   return { frames: frames.length, opening: methods[0], methods };
 }
 
-/** The legacy-era removal canary, printed prominently per harness. */
+/** The legacy `initialize` opener canary, printed prominently per harness. */
 function printCanary(name: string, analysis: CaptureAnalysis): void {
   const prefix = `[harness-smoke] CANARY ${name}: opening method =`;
   if (analysis.opening === undefined) {
@@ -803,10 +803,12 @@ function printCanary(name: string, analysis: CaptureAnalysis): void {
       `[harness-smoke] CANARY ${name}: no frames captured (the server was never launched)`,
     );
   } else if (analysis.opening === "initialize") {
-    console.log(`${prefix} initialize (LEGACY handshake; the legacy era is still required)`);
+    console.log(
+      `${prefix} initialize (LEGACY handshake; the legacy initialize opener is still required)`,
+    );
   } else if (analysis.opening === "server/discover") {
     console.log(
-      `${prefix} server/discover (MODERN ${MODERN_PROTOCOL_VERSION} opening; once every harness reports this, disable the legacy era)`,
+      `${prefix} server/discover (MODERN ${MODERN_PROTOCOL_VERSION} opening; once every harness reports this, drop the legacy initialize opener)`,
     );
   } else {
     console.log(`${prefix} ${analysis.opening} (unexpected - inspect the capture)`);

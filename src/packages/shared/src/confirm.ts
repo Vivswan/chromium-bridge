@@ -33,9 +33,10 @@ export const ConfirmKindSchema = z.enum([
   "upload", // page_upload - detail carries the exact local file path
   // The unpinned lane: an UNSIGNED host policy push that would relax the
   // enforced effective policy on an extension with no pinned key.
-  // origin/tabTitle are "" (no page is involved); detail carries the relaxing
-  // fields' wire names, one per line (possibly none: the first-ever document
-  // always rides this lane even when it grants nothing over the deny baseline).
+  // origin/tabTitle are "" (no page is involved). detail carries the relaxing
+  // fields' wire names, one per line; the first-ever document (nothing stored
+  // to compare against) rides this lane too, and its detail lists every field
+  // as `name = value`.
   // Never presented on a pinned extension.
   "policy_relax",
 ]);
