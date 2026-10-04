@@ -58,6 +58,7 @@ tasks:
       - '~:check-typography'
       - '~:check-fuzz-smoke'
       - '~:check-harness-driver'
+      - '~:check-refresh-lockfiles'
       - '~:check-fuzz-workspace'
       - '~:test-fuzz'
       - '~:check-gen'
@@ -281,6 +282,10 @@ tasks:
   check-harness-driver:
     description: 'Unit test for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository)'
     command: 'bun test tests/harness/run.test.ts'
+
+  check-refresh-lockfiles:
+    description: 'Unit test for the release-PR lockfile refresh (a bumped scratch workspace re-locks into one commit; needs cargo, git, bun)'
+    command: 'bun test scripts/refresh-lockfiles.test.ts'
 
   check-fuzz-workspace:
     description: >-
