@@ -18,7 +18,7 @@ use super::{
     PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
 };
 use crate::audit::Surface;
-use crate::cli::{argv, policy_args, PolicyCommand};
+use crate::cli::PolicyCommand;
 use crate::enclave::{base64_decode, EnclaveError, EnrollmentKey};
 use crate::runtime_record::RuntimeRecord as _;
 
@@ -468,45 +468,13 @@ fn wire_names(fields: &[PolicyField]) -> String {
 
 // ---- The subcommand runners -------------------------------------------------
 
-/// Whether a raw `policy` argv names `--json`, decided WITHOUT the parser
-/// (`argv[0]` is the binary and `argv[1]` "policy", so the scan starts after
-/// them). [`run_policy`] consults this when [`policy_args`] itself refused,
-/// so the documented `--json` contract - a versioned report on stdout -
-/// holds even for an argv that never parsed.
-fn argv_wants_json(args: &[String]) -> bool {
-    args.iter().skip(2).any(|a| a == argv::JSON_FLAG)
-}
-
-/// Dispatch `chromium-bridge policy <sub>` (ADR-0032 decision 5). Parses via
-/// [`policy_args`] for a rich error, then runs the selected lane. A parse
-/// error under `--json` still emits the versioned error object on stdout
-/// (exit code 2 unchanged), so a `--json` caller never has to fall back to
-/// scraping stderr prose.
-pub fn run_policy(args: &[String]) -> i32 {
-    let cmd = match policy_args(args) {
-        Ok(c) => c,
-        Err(error) => {
-            if argv_wants_json(args) {
-                match serde_json::to_value(&PolicyErrorReport { v: 1, error }) {
-                    Ok(value) => println!("{value}"),
-                    Err(e) => {
-                        eprintln!("policy --json failed to serialize the error report: {e}");
-                    }
-                }
-            } else {
-                eprintln!("policy: {error}");
-            }
-            return 2;
-        }
-    };
-    match cmd {
+/// Dispatch `chromium-bridge policy <sub>` to its lane. Returns the process
+/// exit code.
+pub fn run_policy(command: PolicyCommand) -> i32 {
+    match command {
         PolicyCommand::Show { json } => run_show(json),
         PolicyCommand::History { json } => run_history(json),
-        PolicyCommand::Set {
-            overlay,
-            touched,
-            json,
-        } => run_set(overlay, touched, json),
+        PolicyCommand::Set { overlay, json } => run_set(overlay, json),
         PolicyCommand::Restrict { overlay } => run_restrict(overlay),
         PolicyCommand::Rollback { revision, json } => run_rollback(revision, json),
     }
@@ -596,8 +564,8 @@ fn run_history(json: bool) -> i32 {
 /// values (decision 3), so the edits fold over the baseline, never the
 /// effective policy. Under `--json`, success prints the post-write status
 /// report and any refusal the versioned error object.
-fn run_set(overlay: PolicyOverlay, touched: Vec<PolicyField>, json: bool) -> i32 {
-    match do_set(overlay, touched) {
+fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {
+    match do_set(overlay) {
         Ok(rung) => {
             if json {
                 emit_status_json("policy set")
@@ -614,12 +582,16 @@ fn run_set(overlay: PolicyOverlay, touched: Vec<PolicyField>, json: bool) -> i32
 }
 
 /// The set lane's work, output-free so the prose and `--json` renderings
-/// share one path: gate, fold over the baseline, sign.
-fn do_set(
-    overlay: PolicyOverlay,
-    touched: Vec<PolicyField>,
-) -> Result<crate::presence::PresencePath, String> {
+/// share one path: gate, fold over the baseline, sign. The touched set is the
+/// fields the overlay names, in catalogue order (order carries no meaning in
+/// the signed document).
+fn do_set(overlay: PolicyOverlay) -> Result<crate::presence::PresencePath, String> {
     require_grant_key()?;
+    let touched: Vec<PolicyField> = PolicyField::ALL
+        .iter()
+        .copied()
+        .filter(|field| overlay.has(*field))
+        .collect();
     let base = match PolicyStore::load() {
         Ok(Some(store)) => store
             .baseline_doc()

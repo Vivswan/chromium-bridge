@@ -17,6 +17,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::browsers::{self, BaseDirs, Os, HOST_ID};
+use crate::cli::DoctorCommand;
 use crate::ipc::LockFile;
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
 use crate::registration::{self, RegState};
@@ -348,21 +349,13 @@ fn run_list() -> i32 {
     0
 }
 
-/// Entry point for the `doctor` / `status` subcommand: report by default
-/// (`--json` for its serialized form), `--list` for the short listing,
-/// `--fix` to repair/register.
-pub fn run(argv: &[String]) -> i32 {
-    let cmd = match crate::cli::doctor_args(argv) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("doctor: {e}");
-            return 2;
-        }
-    };
-    match cmd {
-        crate::cli::DoctorCommand::List => run_list(),
-        crate::cli::DoctorCommand::Fix(targets) => registration::run_fix(&targets),
-        crate::cli::DoctorCommand::Report { json } => {
+/// Entry point for the `doctor` / `status` subcommand. Returns the process
+/// exit code.
+pub fn run(command: DoctorCommand) -> i32 {
+    match command {
+        DoctorCommand::List => run_list(),
+        DoctorCommand::Fix(targets) => registration::run_fix(&targets),
+        DoctorCommand::Report { json } => {
             let report = gather();
             if json {
                 match serde_json::to_string(&report) {

@@ -465,16 +465,10 @@ fn read_at(live: &Path, limit: usize) -> io::Result<AuditPage> {
     })
 }
 
-/// `audit [--limit <n>]`: print the on-disk audit trail, oldest first,
-/// rotated file included. Read-only. Returns a process exit code.
-pub fn run_audit(argv: &[String]) -> i32 {
-    let limit = match audit_args(argv) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("audit: {e}");
-            return 2;
-        }
-    };
+/// `audit [--limit <n>]`: print the newest `limit` records of the on-disk
+/// audit trail, oldest first, rotated file included. Read-only. Returns a
+/// process exit code.
+pub fn run_audit(limit: usize) -> i32 {
     let page = match read(limit) {
         Ok(page) => page,
         Err(e) => {
@@ -562,29 +556,6 @@ impl fmt::Display for AuditRecord {
         }
         Ok(())
     }
-}
-
-/// The `--limit <n>` of `audit` (default [`DEFAULT_AUDIT_LIMIT`]), parsed
-/// with the same strictness as the other subcommands.
-fn audit_args(argv: &[String]) -> Result<usize, String> {
-    let mut limit: Option<usize> = None;
-    let mut it = argv.iter().skip(2);
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--limit" => {
-                if limit.is_some() {
-                    return Err("--limit given more than once".into());
-                }
-                let v = it.next().ok_or("--limit requires a value")?;
-                limit = Some(
-                    v.parse::<usize>()
-                        .map_err(|_| format!("--limit wants a number, got {v:?}"))?,
-                );
-            }
-            other => return Err(format!("unexpected argument {other:?}")),
-        }
-    }
-    Ok(limit.unwrap_or(DEFAULT_AUDIT_LIMIT))
 }
 
 /// Format Unix milliseconds as `YYYY-MM-DD HH:MM:SS.mmm` UTC, without a date
@@ -808,24 +779,6 @@ mod tests {
         ] {
             assert_eq!(extension_kind(host_only), None, "{host_only}");
         }
-    }
-
-    #[test]
-    fn audit_args_parse_and_reject() {
-        let argv = |rest: &[&str]| -> Vec<String> {
-            ["chromium-bridge", "audit"]
-                .iter()
-                .copied()
-                .chain(rest.iter().copied())
-                .map(String::from)
-                .collect()
-        };
-        assert_eq!(audit_args(&argv(&[])), Ok(DEFAULT_AUDIT_LIMIT));
-        assert_eq!(audit_args(&argv(&["--limit", "5"])), Ok(5));
-        assert!(audit_args(&argv(&["--limit"])).is_err());
-        assert!(audit_args(&argv(&["--limit", "x"])).is_err());
-        assert!(audit_args(&argv(&["--limit", "1", "--limit", "2"])).is_err());
-        assert!(audit_args(&argv(&["extra"])).is_err());
     }
 
     #[test]

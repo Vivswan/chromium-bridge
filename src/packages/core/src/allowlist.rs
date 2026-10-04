@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cli::{AnchorSpec, PairClientArgs};
 use crate::ipc::{self, ClientIdentity, HashDigest, TeamId};
 use crate::presence::{self, PresenceAttestation};
 use crate::revocation::Revocation;
@@ -354,15 +355,8 @@ pub fn pair_client_with_presence(
 /// the user-presence gate (Touch ID where the machine has it; the typed
 /// terminal confirmation otherwise). Prints a confirmation and the resolved
 /// anchor. Returns a process exit code.
-pub fn run_pair_client(argv: &[String]) -> i32 {
-    let parsed = match crate::cli::pair_client_args(argv) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("pair-client: {e}");
-            return 2;
-        }
-    };
-    let anchor = match resolve_anchor(&parsed.anchor) {
+pub fn run_pair_client(client: PairClientArgs) -> i32 {
+    let anchor = match resolve_anchor(client.anchor) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("pair-client: {e}");
@@ -374,7 +368,7 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
         Anchor::TeamId(t) => format!("Team ID {t}"),
     };
     match pair_client_with_presence(
-        &parsed.name,
+        &client.name,
         anchor,
         crate::audit::Surface::Cli,
         // The terminal witness comes first, by construction: a piped stdin
@@ -385,7 +379,7 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
         Ok(path) => {
             println!(
                 "paired trusted client '{}' on {shown} (user presence: {})",
-                parsed.name,
+                client.name,
                 path.wire_name()
             );
             println!("harness admission is now ENFORCED (fail closed for anything else)");
@@ -403,24 +397,13 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
     }
 }
 
-/// Turn a CLI anchor spec into a concrete [`Anchor`], measuring this
-/// invocation's parent when asked (`--this-parent`). The one validation path
-/// for user-supplied anchors, so a malformed value is refused identically
-/// wherever one arrives.
-pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
-    use crate::cli::AnchorSpec;
+/// Turn the CLI's anchor choice into a concrete [`Anchor`], measuring this
+/// invocation's parent when asked (`--this-parent`). Explicit anchors were
+/// validated at the argv boundary and pass straight through.
+fn resolve_anchor(spec: AnchorSpec) -> Result<Anchor, String> {
     match spec {
-        AnchorSpec::Hash(h) => {
-            // Normalizing user INPUT to lowercase is the legitimate-entry
-            // convenience this path has always offered; only the persisted
-            // form is held strictly canonical (see [`HashDigest`]).
-            HashDigest::try_from(h.to_ascii_lowercase())
-                .map(Anchor::Hash)
-                .map_err(|e| format!("--hash: {e}"))
-        }
-        AnchorSpec::TeamId(t) => TeamId::try_from(t.clone())
-            .map(Anchor::TeamId)
-            .map_err(|e| format!("--team-id: {e}")),
+        AnchorSpec::Hash(hash) => Ok(Anchor::Hash(hash)),
+        AnchorSpec::TeamId(team_id) => Ok(Anchor::TeamId(team_id)),
         AnchorSpec::ThisParent => {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
@@ -437,15 +420,8 @@ pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
 }
 
 /// `revoke-client`: remove a trusted client. Returns a process exit code.
-pub fn run_revoke_client(argv: &[String]) -> i32 {
-    let name = match crate::cli::revoke_client_name(argv) {
-        Ok(n) => n,
-        Err(e) => {
-            eprintln!("revoke-client: {e}");
-            return 2;
-        }
-    };
-    match Allowlist::revoke(&name, crate::audit::Surface::Cli) {
+pub fn run_revoke_client(name: &str) -> i32 {
+    match Allowlist::revoke(name, crate::audit::Surface::Cli) {
         Ok(true) => {
             println!("revoked trusted client '{name}'");
             println!(
@@ -732,27 +708,6 @@ mod tests {
             assert!(
                 err.to_string().starts_with("clients.json: ") && err.to_string().contains(rule),
                 "{kind} {bad:?}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn resolve_anchor_normalizes_cli_input_but_refuses_non_hex() {
-        use crate::cli::AnchorSpec;
-        // User INPUT keeps its historical convenience: uppercase hex is
-        // normalized to the canonical lowercase form.
-        assert_eq!(
-            resolve_anchor(&AnchorSpec::Hash("DEADBEEF".repeat(5))).unwrap(),
-            Anchor::Hash(hd("deadbeef"))
-        );
-        // Non-hex, empty, and wrong-width input are refused with the digest's
-        // own rule, so the user is never told a value fails a rule it meets
-        // (`--hash deadbeef` used to be reported as not lowercase hex).
-        for bad in ["", "not-hex", "dead beef", "deadbeef"] {
-            let err = resolve_anchor(&AnchorSpec::Hash(bad.into())).unwrap_err();
-            assert_eq!(
-                err, "--hash: hash anchor must be 40 or 64 lowercase hex characters",
-                "{bad:?}"
             );
         }
     }
