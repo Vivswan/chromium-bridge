@@ -175,6 +175,30 @@ describe("presence exchange", () => {
     await expect(p).resolves.toEqual({ ok: true });
   });
 
+  test("a failed post keeps the request pending, and the retry posts it", async () => {
+    // Observed in review: consuming the request before the post lost the tap when the port refused the
+    // frame, and the retry found nothing pending on a connection that then accepted sends.
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    let accept = false;
+    attach(collaborator, (frame) => {
+      if (!accept) return false;
+      posted.push(frame as Record<string, unknown>);
+      return true;
+    });
+    handleWebAuthnFrame(presenceRequest as never);
+    await expect(assertPresence(answer)).resolves.toEqual({
+      ok: false,
+      error: "failed to send the request to the native host",
+    });
+    expect(pendingPresenceRequest()).toEqual(presenceRequest);
+    accept = true;
+    const p = assertPresence(answer);
+    expect(pendingPresenceRequest()).toBeNull();
+    expect(posted).toEqual([{ type: "presence_assert", ...assertion }]);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    await expect(p).resolves.toEqual({ ok: true });
+  });
+
   test("an assertion with no request pending is refused without posting", async () => {
     await expect(assertPresence(answer)).resolves.toEqual({
       ok: false,

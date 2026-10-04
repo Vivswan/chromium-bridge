@@ -93,11 +93,13 @@ function slotRefusal(): Refused | null {
   return null;
 }
 
-/** Post `frame` and await a reply wearing one of `replies`, interpreted by `onReply`. */
+/** Post `frame` and await a reply wearing one of `replies`, interpreted by `onReply`. `onPosted` runs once
+ * the frame is on the pipe, so state that must change only for a frame the host can see changes there. */
 function exchange<T>(
   frame: EnrollBeginWire | EnrollFinishWire | PresenceAssertWire,
   replies: readonly ReplyTag[],
   onReply: (frame: WebAuthnInboundFrame) => T | Refused,
+  onPosted: () => void = () => {},
 ): Promise<T | Refused> {
   const live = conn;
   const refused = slotRefusal();
@@ -118,7 +120,9 @@ function exchange<T>(
       clearTimeout(timer);
       outstanding = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });
+      return;
     }
+    onPosted();
   });
 }
 
@@ -163,7 +167,7 @@ export function pendingPresenceRequest(): PresenceRequestFrame | null {
 /** Hand the host the `navigator.credentials.get` response the page produced for the pending request. The
  * answer names the request's nonce: a tap made for a request the host has since replaced answers nothing,
  * and the newer request stays pending for the page to read. The request is consumed only once the answer
- * can be posted, so a busy worker never loses a tap the user already made. */
+ * is on the pipe, so neither a busy worker nor a failed post loses a tap the user already made. */
 export function assertPresence(answer: PresenceAnswer): Promise<PresenceAssertView> {
   if (!pendingRequest) {
     return Promise.resolve({ ok: false, error: "no presence request is pending" });
@@ -171,9 +175,6 @@ export function assertPresence(answer: PresenceAnswer): Promise<PresenceAssertVi
   if (pendingRequest.nonce !== answer.nonce) {
     return Promise.resolve({ ok: false, error: "the presence request was superseded" });
   }
-  const refused = slotRefusal();
-  if (refused) return Promise.resolve(refused);
-  pendingRequest = null;
   const { nonce: _answered, ...response } = answer;
   return exchange(
     { type: "presence_assert", ...response } satisfies PresenceAssertWire,
@@ -182,6 +183,9 @@ export function assertPresence(answer: PresenceAnswer): Promise<PresenceAssertVi
       const verdict = parsePresenceResult(frame);
       if (!verdict) return { ok: false, error: "malformed presence_result from host" };
       return verdict.ok ? verdict : { ok: false, error: verdict.reason };
+    },
+    () => {
+      pendingRequest = null;
     },
   );
 }
