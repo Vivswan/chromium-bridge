@@ -611,14 +611,11 @@ fn civil_from_days(days: u64) -> Option<(u64, u64, u64)> {
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "chromium-bridge-audit-test-{}-{name}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir.join("audit.log")
+    /// A scratch trail path; the guard removes the directory when the test ends.
+    fn scratch_trail() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.log");
+        (dir, path)
     }
 
     #[test]
@@ -674,7 +671,7 @@ mod tests {
 
     #[test]
     fn append_rotates_at_the_cap_and_keeps_one_history_file() {
-        let path = tmp("rotate");
+        let (_dir, path) = scratch_trail();
         let line = vec![b'x'; 100];
         // 100-byte lines with a 250-byte cap: rotation after every 2-3 lines.
         for _ in 0..10 {
@@ -700,7 +697,7 @@ mod tests {
     fn a_preplanted_symlink_is_refused_not_followed() {
         // A symlink where the audit file should be must fail the append
         // (dropped record), never write through to the target.
-        let path = tmp("symlink");
+        let (_dir, path) = scratch_trail();
         let target = path.with_file_name("target.log");
         fs::write(&target, b"").unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
@@ -716,7 +713,7 @@ mod tests {
     #[test]
     fn audit_file_is_private_even_when_preplanted_loose() {
         use std::os::unix::fs::PermissionsExt;
-        let path = tmp("mode");
+        let (_dir, path) = scratch_trail();
         fs::write(&path, b"planted\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         append_at(&path, b"{}\n", AUDIT_MAX_BYTES).unwrap();
@@ -844,7 +841,7 @@ mod tests {
         // The reader must agree with the writer's layout (audit.log.1 holds the older half) and
         // keep an unparsable line in its position, so a tampered or truncated line shows up where
         // it sits instead of silently shrinking the page.
-        let live = tmp("read");
+        let (_dir, live) = scratch_trail();
         let record = |ts_ms: u64, kind: &str| {
             format!("{{\"v\":1,\"ts_ms\":{ts_ms},\"event_kind\":\"{kind}\",\"surface\":\"cli\",\"outcome\":\"ok\"}}\n")
         };

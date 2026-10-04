@@ -72,7 +72,7 @@ chromium-bridge-core = { path = ".", features = ["envelope-schema"] }
 p256.workspace = true
 proc-macro2.workspace = true
 proptest.workspace = true
-syn.workspace = true
+syn = { workspace = true, features = ["visit"] }
 
 [lints]
 workspace = true

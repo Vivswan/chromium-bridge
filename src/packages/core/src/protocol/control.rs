@@ -42,7 +42,7 @@ use serde_json::Value;
 pub enum EnclaveControl {
     EnclaveChallenge {
         nonce: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
     EnclaveProof {
@@ -60,7 +60,7 @@ pub enum EnclaveControl {
     /// Extension -> host: ask for one per-action user-presence approval.
     PresenceChallenge {
         nonce: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
     /// Host -> extension: the signed presence approval.
@@ -109,7 +109,7 @@ pub enum AdminControl {
         /// `ok: true` is the unenrolled bootstrap posture.
         enrolled: bool,
         clients: Vec<crate::allowlist::ClientEntry>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     /// Extension -> host: revoke one trusted client by name.
@@ -117,7 +117,7 @@ pub enum AdminControl {
     /// Host -> extension: the revocation outcome.
     ClientRevokeResult {
         ok: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     /// Extension -> host: report the kill-switch state.
@@ -132,25 +132,25 @@ pub enum AdminControl {
     /// fails closed on unknown).
     KillStatusResult {
         ok: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         killed: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     /// Extension -> host: one extension-side decision for the audit trail.
     /// Fire-and-forget; no reply frame.
     AuditEvent {
         kind: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         outcome: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         tool: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
         /// Per-confirmation correlation id; see the module docs.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
 }
@@ -257,16 +257,16 @@ pub enum PolicyControl {
     /// reply to `policy_get`).
     PolicyCurrent {
         ok: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         baseline: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         sig: Option<String>,
         /// The unsigned restriction overlay, strict-parsed at the frame
         /// boundary: an overlay carrying a field this catalogue does not own
         /// fails the whole frame parse, fail closed.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         overlay: Option<crate::policy::PolicyOverlay>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     /// Extension -> host: request the current shared language.
@@ -503,7 +503,7 @@ pub enum HostRequest {
     /// accepted because a challenge only arrives during the user-present enrollment ceremony.
     EnclaveChallenge {
         nonce: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
     /// Delete the enrollment key; not presence-gated (it only reduces capability).
@@ -511,7 +511,7 @@ pub enum HostRequest {
     /// Sign one per-action presence statement, on its own thread so a tap never head-of-line blocks the pump.
     PresenceChallenge {
         nonce: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
     ClientList {},
@@ -527,15 +527,15 @@ pub enum HostRequest {
     AuditEvent {
         #[cfg_attr(feature = "envelope-schema", schemars(with = "String"))]
         kind: ExtensionAuditKind,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         outcome: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         tool: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
     PolicyGet {},

@@ -196,8 +196,8 @@ mod tests {
     }
 
     // The bridge payload is the args struct serialized through: optional
-    // fields stay off the wire when absent, the one host-filled default
-    // (page_wait_for's timeoutMs) is always present, and the `browser`
+    // fields stay off the wire when absent (the extension fills its own
+    // defaults, page_wait_for's timeoutMs among them), and the `browser`
     // routing key never rides inside args. The extension's handlers read
     // exactly these shapes.
     #[test]
@@ -212,7 +212,7 @@ mod tests {
         );
         assert_eq!(
             payload("page_wait_for", json!({ "selector": "#x" })),
-            json!({ "selector": "#x", "timeoutMs": args::DEFAULT_WAIT_TIMEOUT_MS })
+            json!({ "selector": "#x" })
         );
         assert_eq!(
             payload("tab_focus", json!({ "tabId": 7 })),

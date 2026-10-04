@@ -219,8 +219,7 @@
           "type": "string"
         },
         "timeoutMs": {
-          "default": 30000,
-          "description": "Max wait in ms",
+          "description": "Max wait in ms (default 30000)",
           "maximum": 9007199254740991,
           "minimum": -9007199254740991,
           "type": "integer"

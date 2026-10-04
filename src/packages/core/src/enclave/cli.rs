@@ -415,19 +415,19 @@ pub struct EnclaveStatusReport {
     /// The keychain lookup outcome.
     pub key: EnclaveKeyState,
     /// Base64 X9.63 public key; present only when `key == present`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub public_key_b64: Option<String>,
     /// The public key's SHA-256 fingerprint; present only when `key == present`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
     /// Human detail for a `key == invalid` or `key == error` state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// The recorded enrollment policy, or `null` when there is no readable
     /// config. Always present on the wire (as `null`), never omitted.
     pub policy: Option<EnclavePolicyReport>,
     /// Set only when the policy read itself failed; `policy` is then `null`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_error: Option<String>,
 }
 

@@ -92,7 +92,9 @@ impl JsonSchema for JsInt {
 
 /// Deserializer for an optional argument that refuses an explicit `null`.
 /// `Option<T>` alone would read `null` as absent, laxer than the schema and
-/// than the extension's validator.
+/// than the extension's validator. The `default` beside it on every field is
+/// what reads an absent key as `None`: under a `deserialize_with`, serde
+/// refuses a missing field outright instead of asking the type.
 fn present_and_typed<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -133,13 +135,12 @@ pub struct TabOpenArgs {
 pub struct ElementTargetArgs {
     /// Element ref from page_snapshot, e.g. "e3"
     #[serde(
-        rename = "ref",
         default,
         deserialize_with = "present_and_typed",
         skip_serializing_if = "Option::is_none"
     )]
     #[schemars(with = "String")]
-    pub element_ref: Option<String>,
+    pub r#ref: Option<String>,
     /// CSS selector fallback
     #[serde(
         default,
@@ -156,13 +157,12 @@ pub struct ElementTargetArgs {
 pub struct PageFillArgs {
     /// Element ref from page_snapshot
     #[serde(
-        rename = "ref",
         default,
         deserialize_with = "present_and_typed",
         skip_serializing_if = "Option::is_none"
     )]
     #[schemars(with = "String")]
-    pub element_ref: Option<String>,
+    pub r#ref: Option<String>,
     /// CSS selector fallback
     #[serde(
         default,
@@ -197,17 +197,6 @@ pub struct PageScrollArgs {
     pub pixels: Option<JsInt>,
 }
 
-/// The `page_wait_for` timeout applied when the caller sends none: the one
-/// default the host fills in before the request goes over the bridge, so
-/// the extension always receives an explicit `timeoutMs`. The extension's
-/// own waitFor keeps the same literal as a fallback for its tests, pinned
-/// to this const by a source-text test there.
-pub const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-
-const fn default_wait_timeout_ms() -> JsInt {
-    JsInt(DEFAULT_WAIT_TIMEOUT_MS)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[schemars(crate = "rmcp::schemars")]
@@ -236,9 +225,14 @@ pub struct PageWaitForArgs {
     )]
     #[schemars(with = "bool")]
     pub nav: Option<bool>,
-    /// Max wait in ms
-    #[serde(default = "default_wait_timeout_ms")]
-    pub timeout_ms: JsInt,
+    /// Max wait in ms (default 30000)
+    #[serde(
+        default,
+        deserialize_with = "present_and_typed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "JsInt")]
+    pub timeout_ms: Option<JsInt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -299,13 +293,12 @@ pub struct CookieGetArgs {
 pub struct StorageGetArgs {
     /// "local" (default) or "session"
     #[serde(
-        rename = "type",
         default,
         deserialize_with = "present_and_typed",
         skip_serializing_if = "Option::is_none"
     )]
     #[schemars(with = "String")]
-    pub storage_type: Option<String>,
+    pub r#type: Option<String>,
     /// Specific key to read; omit for all entries
     #[serde(
         default,
@@ -338,13 +331,12 @@ pub struct PagePressArgs {
 pub struct PageSelectArgs {
     /// Element ref from page_snapshot for the `<select>`
     #[serde(
-        rename = "ref",
         default,
         deserialize_with = "present_and_typed",
         skip_serializing_if = "Option::is_none"
     )]
     #[schemars(with = "String")]
-    pub element_ref: Option<String>,
+    pub r#ref: Option<String>,
     /// CSS selector fallback for the `<select>`
     #[serde(
         default,

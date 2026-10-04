@@ -47,8 +47,8 @@ fn arb_js_int() -> impl Strategy<Value = JsInt> {
 }
 
 /// A sample of the typed commands, each args shape the structs spell:
-/// no fields, a required integer, a required string, optional strings, and
-/// the one host-filled default.
+/// no fields, a required integer, a required string, optional strings, an
+/// optional integer and an optional bool.
 fn arb_command() -> impl Strategy<Value = BridgeCommand> {
     prop_oneof![
         Just(BridgeCommand::TabList(NoArgs {})),
@@ -58,17 +58,14 @@ fn arb_command() -> impl Strategy<Value = BridgeCommand> {
             prop::option::of(arb_string()),
             prop::option::of(arb_string())
         )
-            .prop_map(|(element_ref, selector)| BridgeCommand::PageClick(
-                ElementTargetArgs {
-                    element_ref,
-                    selector,
-                }
-            )),
+            .prop_map(
+                |(r#ref, selector)| BridgeCommand::PageClick(ElementTargetArgs { r#ref, selector })
+            ),
         (
             prop::option::of(arb_string()),
             prop::option::of(arb_string()),
             prop::option::of(any::<bool>()),
-            arb_js_int(),
+            prop::option::of(arb_js_int()),
         )
             .prop_map(|(selector, text, nav, timeout_ms)| {
                 BridgeCommand::PageWaitFor(PageWaitForArgs {

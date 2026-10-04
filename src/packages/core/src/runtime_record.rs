@@ -194,12 +194,12 @@ fn invalid(file: &str, e: impl Display) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fmt::Debug;
     use std::path::Path;
 
     use syn::ext::IdentExt;
     use syn::spanned::Spanned;
+    use syn::visit::Visit;
 
     use super::*;
     use crate::allowlist::{Allowlist, Anchor, ClientEntry};
@@ -303,21 +303,29 @@ mod tests {
     }
 
     /// What one module's source says to the ladder rule, from a `syn` parse. The trait cannot enumerate
-    /// its implementors, so this is what ties the matrix to them.
+    /// its implementors, so this is what ties the matrix to them. The visitor reaches items anywhere in
+    /// the file, fn bodies and `const _` blocks included; a `macro_rules!` body is tokens to it.
     ///
     /// ```text
-    /// impl Record for T                  -> record: T joins the set the matrix must exercise
-    /// inherent fn load, const VERSION    -> shadow: hides the shared loader at a `T::load()` call site
-    /// serde(default), serde(alias)       -> compat: a value for an absent field, a second accepted name
-    /// serde(rename = ..)                 -> compat: fixes the wire name outside the type's own spelling
-    /// serde(rename_all = ..)             -> allowed: the one spelling of every field
-    /// serde(deserialize_with = ..)       -> allowed: serde still refuses an absent field without `default`,
-    ///                                       and whether the fn refuses a malformed value is in its body
+    /// impl Record for T                    -> record: T joins the set the matrix must exercise
+    /// inherent fn load, const VERSION      -> shadow: hides the shared loader at a `T::load()` call site
+    /// serde(default = "f"), serde(alias)   -> compat: a value for an absent field, a second accepted name
+    /// serde(default) on a non-Option field -> compat: the type's Default fills the absent field; a genuine
+    ///                                         default lives in the type's constructor or on the consuming
+    ///                                         side (as `timeoutMs` does in the extension), never in serde
+    /// serde(default) on an Option field    -> compat: serde reads an absent Option as None by itself, so
+    ///                                         the attribute only reads as a compat hint
+    ///   .. in one list with deserialize_with -> allowed: under a custom parse serde refuses an absent field
+    ///                                         outright, so the pair is the one spelling of such a field
+    /// serde(rename = ..)                   -> compat: a wire name outside the type's own spelling; a raw
+    ///                                         identifier (`r#ref`) spells a keyword without it
+    /// serde(rename_all = ..)               -> allowed: the one spelling of every field
     /// ```
     ///
     /// Compat counts on types that derive `Deserialize`: on a Serialize-only type the same attributes name
-    /// output and read nothing. Items a `macro_rules!` emits (PolicyOverlay's arms in `policy/mod.rs`,
-    /// BridgeCommand's in `tools/catalogue.rs`) are opaque to the parse.
+    /// output and read nothing. The two macros that emit wire types, `policy_fields!` (policy/mod.rs) and
+    /// `catalogue!` (tools/catalogue.rs), take one literal per row and feed it to every carrier's `rename`
+    /// and to the name lookups, so that `rename` is the type's own spelling; the parse never sees it.
     #[derive(Debug, Default, PartialEq)]
     struct ModuleScan {
         records: Vec<String>,
@@ -325,142 +333,182 @@ mod tests {
         shadows: Vec<String>,
     }
 
-    fn scan_module(source: &str) -> ModuleScan {
-        const METHODS: [&str; 6] = ["load", "decode", "encode", "write", "remove", "path"];
-        const COMPAT: [&str; 3] = ["default", "alias", "rename"];
-        type Item<'a> = &'a mut dyn FnMut(&syn::meta::ParseNestedMeta<'_>) -> syn::Result<()>;
-        // Every name goes through here: `r#load`, `impl r#Record` and `#[r#cfg_attr]` spell the same items.
-        fn name(path: &syn::Path) -> String {
-            path.segments
-                .last()
-                .map(|s| s.ident.unraw().to_string())
-                .unwrap_or_default()
+    // Every name goes through here: `r#load`, `impl r#Record` and `#[r#cfg_attr]` spell the same items.
+    fn name(path: &syn::Path) -> String {
+        path.segments
+            .last()
+            .map(|s| s.ident.unraw().to_string())
+            .unwrap_or_default()
+    }
+
+    fn skip_value(meta: &syn::meta::ParseNestedMeta) -> syn::Result<()> {
+        if meta.input.peek(syn::Token![=]) {
+            meta.value()?.parse::<syn::Expr>()?;
+        } else if meta.input.peek(syn::token::Paren) {
+            // A whole group, not nested metas: `all()` and `rename(serialize = ..)` carry no key of ours.
+            meta.input.parse::<proc_macro2::TokenTree>()?;
         }
-        fn skip_value(meta: &syn::meta::ParseNestedMeta) -> syn::Result<()> {
-            if meta.input.peek(syn::Token![=]) {
-                meta.value()?.parse::<syn::Expr>()?;
-            } else if meta.input.peek(syn::token::Paren) {
-                // A whole group, not nested metas: `all()` and `rename(serialize = ..)` carry no key of ours.
-                meta.input.parse::<proc_macro2::TokenTree>()?;
-            }
-            Ok(())
-        }
-        fn each_item(attrs: &[syn::Attribute], tag: &str, item: Item) {
-            fn under_cfg_attr(
-                meta: &syn::meta::ParseNestedMeta,
-                tag: &str,
-                item: Item,
-            ) -> syn::Result<()> {
-                let key = name(&meta.path);
-                if key == tag {
-                    meta.parse_nested_meta(|inner| item(&inner))
-                } else if key == "cfg_attr" {
-                    meta.parse_nested_meta(|inner| under_cfg_attr(&inner, tag, item))
-                } else {
-                    skip_value(meta)
-                }
-            }
-            for attr in attrs {
-                if name(attr.path()) == tag {
-                    attr.parse_nested_meta(|meta| item(&meta)).unwrap();
-                } else if name(attr.path()) == "cfg_attr" {
-                    attr.parse_nested_meta(|meta| under_cfg_attr(&meta, tag, item))
-                        .unwrap();
-                }
-            }
-        }
-        fn derives_deserialize(attrs: &[syn::Attribute]) -> bool {
-            let mut found = false;
-            each_item(attrs, "derive", &mut |meta| {
-                found |= name(&meta.path) == "Deserialize";
+        Ok(())
+    }
+
+    /// One entry of an attribute's nested list: its key, whether a `= value` follows, and its line.
+    struct Entry {
+        key: String,
+        has_value: bool,
+        line: usize,
+    }
+
+    fn entry(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Entry> {
+        let entry = Entry {
+            key: name(&meta.path),
+            has_value: meta.input.peek(syn::Token![=]),
+            line: meta.path.span().start().line,
+        };
+        skip_value(meta)?;
+        Ok(entry)
+    }
+
+    /// Every `tag(..)` list among `attrs`, through any depth of `cfg_attr`, one call per list. A list under
+    /// a `cfg_attr` is its own: its condition gates it apart from its siblings, so a judgment that spans two
+    /// lists would read an inactive one.
+    fn each_list(attrs: &[syn::Attribute], tag: &str, list: &mut dyn FnMut(Vec<Entry>)) {
+        fn under_cfg_attr(
+            meta: &syn::meta::ParseNestedMeta,
+            tag: &str,
+            list: &mut dyn FnMut(Vec<Entry>),
+        ) -> syn::Result<()> {
+            let key = name(&meta.path);
+            if key == tag {
+                let mut entries = Vec::new();
+                meta.parse_nested_meta(|inner| {
+                    entries.push(entry(&inner)?);
+                    Ok(())
+                })?;
+                list(entries);
                 Ok(())
-            });
-            found
-        }
-        fn compat_attrs(attrs: &[syn::Attribute], compat: &mut Vec<String>) {
-            each_item(attrs, "serde", &mut |meta| {
-                let key = name(&meta.path);
-                if COMPAT.contains(&key.as_str()) {
-                    compat.push(format!(
-                        "{}: #[serde({key})]",
-                        meta.path.span().start().line
-                    ));
-                }
+            } else if key == "cfg_attr" {
+                meta.parse_nested_meta(|inner| under_cfg_attr(&inner, tag, list))
+            } else {
                 skip_value(meta)
+            }
+        }
+        for attr in attrs {
+            if name(attr.path()) == tag {
+                let mut entries = Vec::new();
+                attr.parse_nested_meta(|inner| {
+                    entries.push(entry(&inner)?);
+                    Ok(())
+                })
+                .unwrap();
+                list(entries);
+            } else if name(attr.path()) == "cfg_attr" {
+                attr.parse_nested_meta(|meta| under_cfg_attr(&meta, tag, list))
+                    .unwrap();
+            }
+        }
+    }
+
+    fn derives_deserialize(attrs: &[syn::Attribute]) -> bool {
+        let mut found = false;
+        each_list(attrs, "derive", &mut |entries| {
+            found |= entries.iter().any(|e| e.key == "Deserialize");
+        });
+        found
+    }
+
+    fn is_option(ty: &syn::Type) -> bool {
+        matches!(ty, syn::Type::Path(p) if name(&p.path) == "Option")
+    }
+
+    impl ModuleScan {
+        /// The compat attributes of one container or field (`ty` is the field's type, `None` for the
+        /// container), by the rule in the type docs. The pair is judged within one `serde(..)` list.
+        fn compat_attrs(&mut self, attrs: &[syn::Attribute], ty: Option<&syn::Type>) {
+            each_list(attrs, "serde", &mut |entries| {
+                let required_pair = ty.is_some_and(is_option)
+                    && entries.iter().any(|e| e.key == "deserialize_with");
+                for e in entries {
+                    let compat = match e.key.as_str() {
+                        "alias" | "rename" => true,
+                        "default" => e.has_value || !required_pair,
+                        _ => false,
+                    };
+                    if compat {
+                        self.compat.push(format!("{}: #[serde({})]", e.line, e.key));
+                    }
+                }
             });
         }
-        fn walk(items: &[syn::Item], scan: &mut ModuleScan) {
-            for item in items {
-                if let syn::Item::Mod(module) = item {
-                    if let Some((_, items)) = &module.content {
-                        walk(items, scan);
+
+        fn fields(&mut self, fields: &syn::Fields) {
+            for field in fields {
+                self.compat_attrs(&field.attrs, Some(&field.ty));
+            }
+        }
+    }
+
+    impl<'ast> syn::visit::Visit<'ast> for ModuleScan {
+        fn visit_item_struct(&mut self, s: &'ast syn::ItemStruct) {
+            if derives_deserialize(&s.attrs) {
+                self.compat_attrs(&s.attrs, None);
+                self.fields(&s.fields);
+            }
+            syn::visit::visit_item_struct(self, s);
+        }
+
+        fn visit_item_enum(&mut self, e: &'ast syn::ItemEnum) {
+            if derives_deserialize(&e.attrs) {
+                self.compat_attrs(&e.attrs, None);
+                for variant in &e.variants {
+                    self.compat_attrs(&variant.attrs, None);
+                    self.fields(&variant.fields);
+                }
+            }
+            syn::visit::visit_item_enum(self, e);
+        }
+
+        fn visit_item_impl(&mut self, imp: &'ast syn::ItemImpl) {
+            match &imp.trait_ {
+                Some((_, path, _)) => {
+                    if let (true, syn::Type::Path(ty)) = (name(path) == "Record", &*imp.self_ty) {
+                        self.records.push(name(&ty.path));
                     }
-                } else if let syn::Item::Struct(s) = item {
-                    if derives_deserialize(&s.attrs) {
-                        compat_attrs(&s.attrs, &mut scan.compat);
-                        for field in &s.fields {
-                            compat_attrs(&field.attrs, &mut scan.compat);
-                        }
-                    }
-                } else if let syn::Item::Enum(e) = item {
-                    if derives_deserialize(&e.attrs) {
-                        compat_attrs(&e.attrs, &mut scan.compat);
-                        for variant in &e.variants {
-                            compat_attrs(&variant.attrs, &mut scan.compat);
-                            for field in &variant.fields {
-                                compat_attrs(&field.attrs, &mut scan.compat);
+                }
+                None => {
+                    const METHODS: [&str; 6] =
+                        ["load", "decode", "encode", "write", "remove", "path"];
+                    for item in &imp.items {
+                        if let syn::ImplItem::Fn(f) = item {
+                            let name = f.sig.ident.unraw();
+                            if METHODS.contains(&name.to_string().as_str()) {
+                                self.shadows.push(format!(
+                                    "{}: inherent fn {name}",
+                                    name.span().start().line
+                                ));
+                            }
+                        } else if let syn::ImplItem::Const(c) = item {
+                            if c.ident.unraw() == "VERSION" {
+                                self.shadows.push(format!(
+                                    "{}: inherent const VERSION",
+                                    c.ident.span().start().line
+                                ));
                             }
                         }
                     }
-                } else if let syn::Item::Impl(imp) = item {
-                    match &imp.trait_ {
-                        Some((_, path, _)) => {
-                            if let (true, syn::Type::Path(ty)) =
-                                (name(path) == "Record", &*imp.self_ty)
-                            {
-                                scan.records.push(name(&ty.path));
-                            }
-                        }
-                        None => inherent_items(&imp.items, &mut scan.shadows),
-                    }
                 }
             }
+            syn::visit::visit_item_impl(self, imp);
         }
-        fn inherent_items(items: &[syn::ImplItem], shadows: &mut Vec<String>) {
-            for item in items {
-                if let syn::ImplItem::Fn(f) = item {
-                    let name = f.sig.ident.unraw();
-                    if METHODS.contains(&name.to_string().as_str()) {
-                        shadows.push(format!("{}: inherent fn {name}", name.span().start().line));
-                    }
-                } else if let syn::ImplItem::Const(c) = item {
-                    if c.ident.unraw() == "VERSION" {
-                        shadows.push(format!(
-                            "{}: inherent const VERSION",
-                            c.ident.span().start().line
-                        ));
-                    }
-                }
-            }
-        }
+    }
+
+    fn scan_module(source: &str) -> ModuleScan {
         let mut scan = ModuleScan::default();
-        walk(&syn::parse_file(source).unwrap().items, &mut scan);
+        scan.visit_file(&syn::parse_file(source).unwrap());
         scan
     }
 
-    /// The modules whose `Deserialize` types carry compat attributes today, by path under `src/`: the wire
-    /// frames, whose generated TypeScript side reads the same spelling. The list only shrinks, and a scan
-    /// that reaches no attribute cannot stay green. `crate::migrations` is the one home for compat code
-    /// and is not scanned.
-    const WIRE_SHAPE_MODULES: [&str; 4] = [
-        "enclave/cli.rs",
-        "protocol.rs",
-        "protocol/control.rs",
-        "tools/args.rs",
-    ];
-
     /// Every `Record` implementor in the crate, and everything the ladder rule refuses outside
-    /// `crate::migrations`.
+    /// `crate::migrations`, the one home for compat code.
     fn scan_crate() -> (BTreeSet<String>, Vec<String>) {
         fn walk(src: &Path, dir: &Path, found: &mut Vec<(PathBuf, ModuleScan)>) {
             for entry in fs::read_dir(dir).unwrap() {
@@ -479,29 +527,10 @@ mod tests {
         let mut found = Vec::new();
         walk(&src, &src, &mut found);
         let (mut records, mut refused) = (BTreeSet::new(), Vec::new());
-        let mut wire_hits: BTreeMap<&str, usize> =
-            WIRE_SHAPE_MODULES.iter().map(|m| (*m, 0)).collect();
         for (rel, scan) in found {
             let is_record = !scan.records.is_empty();
             records.extend(scan.records);
-            let wire = WIRE_SHAPE_MODULES
-                .iter()
-                .find(|m| Path::new(m) == rel)
-                .copied();
-            let mut items = Vec::new();
-            match wire {
-                Some(module) => {
-                    *wire_hits.get_mut(module).unwrap() = scan.compat.len();
-                    if is_record {
-                        items.push("a record module cannot be in WIRE_SHAPE_MODULES".to_string());
-                    }
-                }
-                None => items.extend(
-                    scan.compat
-                        .into_iter()
-                        .map(|item| format!("{item}, in a module not in WIRE_SHAPE_MODULES")),
-                ),
-            }
+            let mut items = scan.compat;
             if is_record {
                 items.extend(scan.shadows);
             }
@@ -510,13 +539,6 @@ mod tests {
                     .into_iter()
                     .map(|item| format!("{}:{item}", rel.display())),
             );
-        }
-        for (module, hits) in wire_hits {
-            if hits == 0 {
-                refused.push(format!(
-                    "{module}: stale WIRE_SHAPE_MODULES entry, no compat attribute left"
-                ));
-            }
         }
         (records, refused)
     }
@@ -593,7 +615,7 @@ mod tests {
         );
         assert!(
             refused.is_empty(),
-            "outside crate::migrations no module reads a second spelling beyond the wire shapes, and no record module shadows the shared loader: {refused:#?}"
+            "outside crate::migrations no module reads a second spelling or fills an absent field, and no record module shadows the shared loader: {refused:#?}"
         );
     }
 
@@ -609,7 +631,7 @@ mod tests {
                 shadows: owned(shadows),
             }
         }
-        let cases: [(&str, &str, ModuleScan); 13] = [
+        let cases: [(&str, &str, ModuleScan); 20] = [
             (
                 "field default",
                 "#[derive(Deserialize)]\nstruct R {\n    #[serde(default)]\n    a: u64,\n}",
@@ -669,6 +691,41 @@ mod tests {
                 "record impls by any path, in nested modules too",
                 "mod inner {\n    impl crate::runtime_record::Record for A {}\n    impl Record for B<'static> {}\n}",
                 scan(&["A", "B"], &[], &[]),
+            ),
+            (
+                "bare default beside deserialize_with on an Option is the pair serde needs, not compat",
+                "#[derive(Deserialize)]\nstruct R {\n    #[serde(default, deserialize_with = \"de\")]\n    a: Option<u64>,\n}",
+                scan(&[], &[], &[]),
+            ),
+            (
+                "a deserialize_with in another attribute may be cfg-gated off, so it makes no pair",
+                "#[derive(Deserialize)]\nstruct R {\n    #[serde(default)]\n    #[cfg_attr(any(), serde(deserialize_with = \"de\"))]\n    a: Option<u64>,\n}",
+                scan(&[], &["3: #[serde(default)]"], &[]),
+            ),
+            (
+                "a deserialize_with in a sibling list of one cfg_attr is gated apart, so it makes no pair",
+                "#[derive(Deserialize)]\nstruct R {\n    #[cfg_attr(all(), serde(default), cfg_attr(any(), serde(deserialize_with = \"de\")))]\n    a: Option<u64>,\n}",
+                scan(&[], &["3: #[serde(default)]"], &[]),
+            ),
+            (
+                "bare default beside deserialize_with on a non-Option fills the absent field",
+                "#[derive(Deserialize)]\nstruct R {\n    #[serde(default, deserialize_with = \"de\")]\n    a: u64,\n}",
+                scan(&[], &["3: #[serde(default)]"], &[]),
+            ),
+            (
+                "a provider fn beside deserialize_with is a value for the absent field",
+                "#[derive(Deserialize)]\nstruct R {\n    #[serde(default = \"f\", deserialize_with = \"de\")]\n    a: Option<u64>,\n}",
+                scan(&[], &["3: #[serde(default)]"], &[]),
+            ),
+            (
+                "bare default on an Option without deserialize_with is what serde does alone: a compat hint",
+                "#[derive(Deserialize)]\nstruct R {\n    #[serde(default)]\n    a: Option<u64>,\n}",
+                scan(&[], &["3: #[serde(default)]"], &[]),
+            ),
+            (
+                "items inside a fn body and a const block are reached",
+                "fn f() {\n    #[derive(Deserialize)]\n    struct R {\n        #[serde(default)]\n        a: u64,\n    }\n}\nconst _: () = {\n    impl Record for A {}\n};",
+                scan(&["A"], &["4: #[serde(default)]"], &[]),
             ),
             (
                 "attribute text in a comment or a string is not an attribute",
