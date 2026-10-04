@@ -217,9 +217,10 @@ Named volumes keep the Linux artifacts out of the host checkout and make reruns 
 | `node-modules` | `/work/node_modules` | the Linux install (the entrypoint runs `bun install --frozen-lockfile`) |
 | `moon-cache` | `/work/.moon/cache` | moon state for the container's runs |
 
-Podman rootless maps the host user to container root, so `compose.podman.yaml` adds `userns_mode: keep-id:uid=1000,gid=1000`, mapping the host user onto the image's user instead; the tasks pass that file when `CONTAINER_ENGINE=podman`. Running compose by hand needs the same facts the task supplies (`scripts/compose-run.ts`):
+Podman rootless maps the host user to container root, so `compose.podman.yaml` adds `userns_mode: keep-id:uid=1000,gid=1000`, mapping the host user onto the image's user instead; the tasks pass that file when `CONTAINER_ENGINE=podman`. Running compose by hand needs the same facts the task supplies (`scripts/compose-run.ts`), the image's one build arg included:
 
 ```sh
+env UID="$(id -u)" GID="$(id -g)" docker compose build --build-arg "PROTO_VERSION=$(bun scripts/pin.ts proto)" shell
 env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
 # from a linked worktree, use the launcher instead: bun scripts/compose-run.ts shell
 ```

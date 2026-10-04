@@ -35,7 +35,9 @@ function prototoolsPins(text: string, tool: string): string[] {
   }
   if (!(tool in parsed)) return [];
   const value = parsed[tool];
-  if (typeof value !== "string") throw new Error(`pin: .prototools pins ${tool} to a non-string`);
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`pin: .prototools pins ${tool} to an empty or non-string value`);
+  }
   return [value];
 }
 

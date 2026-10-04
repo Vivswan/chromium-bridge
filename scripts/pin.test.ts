@@ -62,6 +62,12 @@ const cases: Case[] = [
     outcome: { error: /pinned in neither/ },
   },
   {
+    name: "a tool-named key under an indented [settings] header is not a pin either",
+    prototools: ['proto = "0.58.2"', "  [settings]", 'bun = "9.9.9"'],
+    tool: "bun",
+    outcome: { error: /pinned in neither/ },
+  },
+  {
     name: "a tool pinned in both files has two owners",
     containerfile: [...containerfile, "ARG BUN_VERSION=9.9.9"],
     tool: "bun",
@@ -89,7 +95,13 @@ const cases: Case[] = [
     name: "a key pinned to a non-string is refused",
     prototools: ["proto = 1"],
     tool: "proto",
-    outcome: { error: /non-string/ },
+    outcome: { error: /empty or non-string/ },
+  },
+  {
+    name: "a key pinned to an empty string is refused, not printed as an empty pin",
+    prototools: ['proto = ""'],
+    tool: "proto",
+    outcome: { error: /empty or non-string/ },
   },
   { name: "a tool pinned nowhere", tool: "node", outcome: { error: /pinned in neither/ } },
   {
