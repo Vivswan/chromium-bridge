@@ -244,7 +244,7 @@ The moving `stable` tag is a real, accepted widening of the CI supply chain:
 
 - A compromise of the fleet repository executes in this repository's CI, in jobs holding security-events, pages, id-token, contents, and pull-requests write.
 - The acceptance rests on a trust assumption, not a technical boundary: the fleet repository stays under the same owner's control. The fleet repository's ruleset blocks deletion of the tag only; a `uses:` here executes whatever the tag names, so an out-of-band move by a push-access holder is caught by nothing at write time.
-- The mover, its gates, and the remaining trusts are recorded in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/build-provenance.md).
+- The mover, its gates, and the remaining trusts are recorded in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/platform/build-provenance.md).
 - auto-format.yml pushes with `GITHUB_TOKEN`, whose commits trigger no CI, so a formatted PR head has no all-green result until someone re-runs CI. Fail-safe: the merge stays blocked.
 
 ## Identifiers (rebrand, 2026-07)
