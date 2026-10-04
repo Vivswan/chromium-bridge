@@ -62,6 +62,10 @@ pub(super) fn directory() -> Directory {
         disabled_tools: Some(vec![first_tool.to_string()]),
         ..PolicyOverlay::default()
     };
+    let relaxation = PolicyOverlay {
+        page_eval_enabled: Some(true),
+        ..PolicyOverlay::default()
+    };
     let doc = json_of!(PolicyDoc::default());
     let store = PolicyStore {
         baseline_b64: base64_encode(&compact(&doc)),
@@ -73,6 +77,11 @@ pub(super) fn directory() -> Directory {
         sig_b64: None,
         key_id: None,
         overlay: None,
+        ..store.clone()
+    };
+    // A valid baseline under an overlay that grants: effective() refuses the store by design.
+    let relaxed = PolicyStore {
+        overlay: Some(relaxation),
         ..store.clone()
     };
     let history = PolicyHistory {
@@ -138,6 +147,11 @@ pub(super) fn directory() -> Directory {
             Seed::refused(
                 "store_repeated_key",
                 repeated_key(&store_json, "baseline_b64"),
+                reads_store,
+            ),
+            Seed::refused(
+                "store_overlay_relaxes_baseline",
+                relaxed.encode().expect("a seed store is under the cap"),
                 reads_store,
             ),
             Seed::refused(

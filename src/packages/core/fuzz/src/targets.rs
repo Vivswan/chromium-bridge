@@ -311,13 +311,18 @@ pub fn policy_doc(data: &[u8]) {
             let baseline = doc.values();
             let overlay = store.overlay.clone().unwrap_or_default();
             let effective = check_fold(&baseline, &overlay);
-            assert_eq!(
-                store
-                    .effective()
-                    .expect("a store with a valid baseline must fold"),
-                effective,
-                "effective() must be the fold of the baseline and the stored overlay"
-            );
+            // effective() refuses a valid baseline whose overlay relaxes it; that refusal is production's
+            // direction check, not a crash, so the oracle splits on it.
+            match store.effective() {
+                Ok(from_store) => assert_eq!(
+                    from_store, effective,
+                    "effective() must be the fold of the baseline and the stored overlay"
+                ),
+                Err(_) => assert!(
+                    relaxes(&effective, &baseline),
+                    "effective() may refuse a valid baseline only for an overlay that relaxes it"
+                ),
+            }
             values.push(baseline);
             values.push(effective);
         } else {
