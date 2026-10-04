@@ -37,14 +37,14 @@ pub struct PolicyStore {
     pub baseline_b64: String,
     /// The enclave signature over the policy-domain message, base64. `None`
     /// is an unsigned baseline, which no host write path produces anymore.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sig_b64: Option<String>,
     /// The signing key id, host bookkeeping only: the extension verifies
     /// against its own pinned key and never trusts this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
     /// The current unsigned restriction overlay, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay: Option<PolicyOverlay>,
 }
 
@@ -113,11 +113,11 @@ impl Record for PolicyHistory {
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistoryEntry {
     pub baseline_b64: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sig_b64: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay: Option<PolicyOverlay>,
     /// Unix seconds when the record stopped being the current store.
     pub superseded_unix: u64,

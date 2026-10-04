@@ -299,11 +299,19 @@ mod tests {
     }
 
     /// The record types the crate's sources implement `Record` for (any path prefix or generics on the
-    /// impl), and every inherent item in those modules that would shadow a [`RuntimeRecord`] method or
-    /// `VERSION` at a `Type::load()` call site. The trait cannot enumerate its implementors, so this is
-    /// what ties the matrix to them.
+    /// impl), and every item in those modules the ladder rule refuses. The trait cannot enumerate its
+    /// implementors, so this is what ties the matrix to them.
+    ///
+    /// ```text
+    /// fn load, const VERSION, ...     -> shadows the shared loader at a `Type::load()` call site
+    /// serde(default | alias | rename) -> reads a second on-disk spelling: compat outside crate::migrations
+    /// serde(rename_all = ...)         -> allowed: the one wire spelling, not a second one
+    /// serde(deserialize_with = ...)   -> allowed: serde still refuses an absent field without `default`,
+    ///                                    and whether the function refuses a malformed value is in its body
+    /// ```
     fn record_impls_in_source() -> (BTreeSet<String>, Vec<String>) {
         const METHODS: [&str; 6] = ["load", "decode", "encode", "write", "remove", "path"];
+        const COMPAT: [&str; 3] = ["default", "alias", "rename"];
         // Token-level, so `pub fn load<'a>()` and `const r#VERSION` count like the plain spellings.
         fn shadowing_items(source: &str) -> Vec<String> {
             let tokens: Vec<&str> = source.split_whitespace().collect();
@@ -323,18 +331,107 @@ mod tests {
                 })
                 .collect()
         }
-        fn walk(dir: &Path, types: &mut BTreeSet<String>, shadows: &mut Vec<String>) {
+        // `//` comments and string contents blanked: a comment inside a multi-line attribute would otherwise
+        // hide the key behind it, and a doc comment or fixture quoting `#[serde(default)]` would be flagged.
+        fn code_only(source: &str) -> String {
+            let mut code = String::with_capacity(source.len());
+            let mut chars = source.chars().peekable();
+            while let Some(c) = chars.next() {
+                match c {
+                    '"' => {
+                        code.push('"');
+                        let mut escaped = false;
+                        for c in chars.by_ref() {
+                            if c == '"' && !escaped {
+                                code.push('"');
+                                break;
+                            }
+                            if c == '\n' {
+                                code.push('\n');
+                            }
+                            escaped = c == '\\' && !escaped;
+                        }
+                    }
+                    '/' if chars.peek() == Some(&'/') => {
+                        for c in chars.by_ref() {
+                            if c == '\n' {
+                                code.push('\n');
+                                break;
+                            }
+                        }
+                    }
+                    _ => code.push(c),
+                }
+            }
+            code
+        }
+        // `serde` on a word boundary, then any whitespace, then `(`: `#[serde // note\n (default)]` is the
+        // attribute and `consume_serde(default)` is not. Paren depth is tracked so
+        // `rename(serialize = "a", deserialize = "b")` is one item keyed `rename`.
+        fn compat_attributes(source: &str) -> Vec<String> {
+            let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+            let mut pieces = source.split("serde");
+            let first = pieces.next().unwrap_or_default();
+            let mut line = 1 + first.matches('\n').count();
+            let mut glued = first.chars().last().is_some_and(is_ident);
+            pieces
+                .flat_map(|after| {
+                    let at_line = line;
+                    line += after.matches('\n').count();
+                    let open = (!glued)
+                        .then(|| after.trim_start().strip_prefix('('))
+                        .flatten();
+                    glued = after.chars().last().is_some_and(is_ident);
+                    let Some(opened) = open else {
+                        return Vec::new();
+                    };
+                    let mut depth = 0usize;
+                    let close = opened
+                        .find(|c| match c {
+                            '(' => {
+                                depth += 1;
+                                false
+                            }
+                            ')' if depth == 0 => true,
+                            ')' => {
+                                depth -= 1;
+                                false
+                            }
+                            _ => false,
+                        })
+                        .unwrap_or(opened.len());
+                    let (body, _) = opened.split_at(close);
+                    let mut depth = 0usize;
+                    body.split(|c| {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            _ => {}
+                        }
+                        c == ',' && depth == 0
+                    })
+                    .map(str::trim)
+                    .filter(|item| {
+                        let key = item.split(['=', '(']).next().unwrap_or_default().trim();
+                        COMPAT.contains(&key)
+                    })
+                    .map(|item| format!("{at_line}: #[serde({item})]"))
+                    .collect::<Vec<_>>()
+                })
+                .collect()
+        }
+        fn walk(dir: &Path, types: &mut BTreeSet<String>, refused: &mut Vec<String>) {
             for entry in fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
-                    walk(&path, types, shadows);
+                    walk(&path, types, refused);
                     continue;
                 }
                 if path.extension().is_none_or(|e| e != "rs") || path.ends_with("runtime_record.rs")
                 {
                     continue;
                 }
-                let source = fs::read_to_string(&path).unwrap();
+                let source = code_only(&fs::read_to_string(&path).unwrap());
                 let impls: Vec<String> = source
                     .lines()
                     .filter_map(|line| {
@@ -355,20 +452,25 @@ mod tests {
                     continue;
                 }
                 types.extend(impls);
-                shadows.extend(
+                refused.extend(
                     shadowing_items(&source)
                         .into_iter()
                         .map(|item| format!("{}: {item}", path.display())),
                 );
+                refused.extend(
+                    compat_attributes(&source)
+                        .into_iter()
+                        .map(|item| format!("{}:{item}", path.display())),
+                );
             }
         }
-        let (mut types, mut shadows) = (BTreeSet::new(), Vec::new());
+        let (mut types, mut refused) = (BTreeSet::new(), Vec::new());
         walk(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
             &mut types,
-            &mut shadows,
+            &mut refused,
         );
-        (types, shadows)
+        (types, refused)
     }
 
     #[test]
@@ -436,14 +538,14 @@ mod tests {
                 seq: 3,
             },
         );
-        let (implemented, shadows) = record_impls_in_source();
+        let (implemented, refused) = record_impls_in_source();
         assert_eq!(
             implemented, exercised,
             "every Record impl is exercised here, and only those"
         );
         assert!(
-            shadows.is_empty(),
-            "an inherent item would shadow the shared loader at call sites: {shadows:?}"
+            refused.is_empty(),
+            "outside crate::migrations a record module neither shadows the shared loader nor reads a second spelling: {refused:#?}"
         );
     }
 }
