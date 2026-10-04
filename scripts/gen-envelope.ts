@@ -31,18 +31,16 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { splitTaggedUnionSchema } from "../src/packages/shared/src/json-schema-normalize";
+import {
+  ANNOTATION_KEYS,
+  splitTaggedUnionSchema,
+} from "../src/packages/shared/src/json-schema-normalize";
 
 type JsonObject = Record<string, unknown>;
 
 function isObject(v: unknown): v is JsonObject {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
-
-// Annotation keys that constrain nothing (same list as the R1 rule in
-// src/packages/shared/src/json-schema-normalize.ts); stripped so the
-// generated source stays readable and free of Rust doc comments.
-const ANNOTATION_KEYS = new Set(["$schema", "$id", "$comment", "title", "description", "examples"]);
 
 // G3: accept the branch list only if some property is a required string
 // const in every branch with all values distinct; the union is then
@@ -601,7 +599,7 @@ function main(): void {
 //
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
 // .strict()), required fields required, no defaults (see the fail-closed
-// generation rules G1-G5 in scripts/gen-envelope.ts). The extension never
+// generation rules G1-G6 in scripts/gen-envelope.ts). The extension never
 // runs the host->extension bases directly: envelope.ts and enclave.ts layer
 // the deliberate parser asymmetries on top - each pinned by
 // scripts/check-envelope-parity.ts (\`moon run check-envelope\`) and exercised

@@ -19,8 +19,16 @@
 //
 // Not exported from the package index: contract-check infrastructure, not API.
 
-// Keys that annotate a schema without constraining instances (R1).
-const ANNOTATION_KEYS = new Set(["$schema", "$id", "$comment", "title", "description", "examples"]);
+/** Keys that annotate a schema without constraining instances (R1). The one
+ * inventory: the envelope generator and the parity gate strip the same set. */
+export const ANNOTATION_KEYS: ReadonlySet<string> = new Set([
+  "$schema",
+  "$id",
+  "$comment",
+  "title",
+  "description",
+  "examples",
+]);
 
 // The subset of those that are also harmless BESIDE a $ref: $id and $schema
 // are excluded because they alter $ref resolution (base URI / dialect).

@@ -27,13 +27,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct JsInt(i64);
 
-const JS_SAFE_INT: i64 = 9_007_199_254_740_991;
-// One owner for the bound: the policy module's, which the generated policy
-// validators mirror.
-const _: () = assert!(
-    JS_SAFE_INT.unsigned_abs() == crate::policy::JS_SAFE_INT_MAX,
-    "the args integer bound must be the policy module's JS-safe bound"
-);
+// The policy module owns the bound (its generated validators mirror it); the
+// signed copy is a bit-exact reinterpretation, the only const-context
+// conversion u64 -> i64 offers, so the assert pins the precondition.
+const JS_SAFE_INT: i64 = {
+    assert!(
+        crate::policy::JS_SAFE_INT_MAX <= i64::MAX.unsigned_abs(),
+        "the JS-safe bound must fit a signed 64-bit integer"
+    );
+    i64::from_ne_bytes(crate::policy::JS_SAFE_INT_MAX.to_ne_bytes())
+};
 
 /// An integer outside JavaScript's safe range, which the extension's parser
 /// would refuse.

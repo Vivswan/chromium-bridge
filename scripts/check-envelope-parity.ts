@@ -43,6 +43,7 @@ import {
   GENERATED_WRITER_FRAMES,
 } from "../src/packages/shared/src/envelope-wire.gen";
 import {
+  ANNOTATION_KEYS,
   type ControlFrameKind,
   diffSchemas,
   normalizeEnvelopeSchema,
@@ -265,8 +266,6 @@ export function refinementProblems(
 //   objects                  -> strict on both sides (deny_unknown_fields / .strict()); compared verbatim,
 //                               `properties` and `required` materialized so an empty struct and z.object({})
 //                               read alike
-
-const ANNOTATION_KEYS = new Set(["$schema", "$id", "$comment", "title", "description", "examples"]);
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);

@@ -6,7 +6,7 @@
 //
 // The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
 // .strict()), required fields required, no defaults (see the fail-closed
-// generation rules G1-G5 in scripts/gen-envelope.ts). The extension never
+// generation rules G1-G6 in scripts/gen-envelope.ts). The extension never
 // runs the host->extension bases directly: envelope.ts and enclave.ts layer
 // the deliberate parser asymmetries on top - each pinned by
 // scripts/check-envelope-parity.ts (`moon run check-envelope`) and exercised

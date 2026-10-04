@@ -1,12 +1,8 @@
-//! The tool catalogue: ONE record per tool, written once in the `catalogue!`
-//! invocation below, from which everything else is derived. The row names the tool's
-//! wire `op`, its [`BridgeCommand`] variant and typed args struct, its policy
-//! metadata, the grants that gate it, and how it is dispatched; the macro
-//! emits the enum, the [`ToolId`] index, and the [`Tool`] record for each, so
-//! no second table (a handler map, a grant table, a capability roster) can
-//! drift from the catalogue. The TypeScript side is generated from it
-//! (`moon run gen` runs the `emit_contract` example and feeds
-//! `scripts/gen-ops.ts`).
+//! The tool catalogue. One `catalogue!` row per tool is the only place a
+//! tool's wire name, variant, args type, and record meet, so no second table
+//! (a handler map, a grant table, a capability roster) can drift from it. The
+//! TypeScript side is generated from the records (`moon run gen` runs the
+//! `emit_contract` example and feeds `scripts/gen-ops.ts`).
 
 use std::sync::Arc;
 
@@ -221,9 +217,6 @@ pub fn all() -> impl Iterator<Item = Tool> {
     ToolId::ALL.iter().map(|id| id.tool())
 }
 
-/// One row per tool. The row is the only place a tool's wire name, variant,
-/// args type, and record meet, so the derived enum, index, and record cannot
-/// disagree.
 macro_rules! catalogue {
     ($(
         $name:literal => $Variant:ident($Args:ty) {
@@ -235,12 +228,10 @@ macro_rules! catalogue {
             description: $description:literal $(,)?
         }
     )+) => {
-        /// One bridge request body: the tool `op` and its typed `args`, as the
-        /// extension receives them. Adjacently tagged, so the wire form is
-        /// `{"op": <name>, "args": {...}}`; an op outside the catalogue or an
-        /// args object outside its struct fails the parse, on both ends of the
-        /// bridge (the extension's generated `strictObject` validators are
-        /// derived from the same structs).
+        /// One bridge request body, `{"op": <name>, "args": {...}}` on the wire.
+        /// The extension's generated `strictObject` validators derive from the
+        /// same args structs, so both ends share one field inventory,
+        /// required-ness, and integer range.
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
         #[serde(tag = "op", content = "args", deny_unknown_fields)]
         #[schemars(crate = "rmcp::schemars")]

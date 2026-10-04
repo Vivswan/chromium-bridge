@@ -17,11 +17,8 @@ pub use catalogue::{
     all, BridgeCommand, Confirmation, Dispatch, Permission, ResultKind, Risk, Scope, Tool, ToolId,
 };
 
-/// One MCP `tools/call`, parsed: the typed command the bridge will carry and
-/// the `browser` routing argument the server consumes. The only way to build
-/// one is [`ToolCall::parse`], so a command reaching [`dispatch`] is already
-/// a catalogue tool with schema-valid arguments, and a server-local call
-/// never carries a browser.
+/// One MCP `tools/call` after [`ToolCall::parse`], the only constructor:
+/// what reaches [`dispatch`] is a catalogue tool with schema-valid arguments.
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     command: BridgeCommand,
@@ -34,8 +31,7 @@ impl ToolCall {
         self.command.id().tool()
     }
 
-    /// The addressed browser label; `None` when unaddressed, and always for a
-    /// server-local tool, which takes no routing argument.
+    /// The addressed browser label; `None` when unaddressed.
     pub fn browser(&self) -> Option<&str> {
         self.browser.as_deref()
     }
