@@ -705,7 +705,7 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   check-docs-literals:
-    description: 'Living docs state the canonical identifiers, paths, and protocol versions exactly (docs/adr excluded)'
+    description: 'Living docs state the canonical identifiers, paths, and protocol versions exactly'
     script: |
       set -e
       bun scripts/check-docs-literals.ts
