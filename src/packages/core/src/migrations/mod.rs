@@ -1,6 +1,6 @@
-//! The only home for on-disk compatibility code: one ladder per runtime record, each rung a
-//! [`Rung`](crate::runtime_record::Rung) lifting a body from version `i` to `i + 1`.
-//! [`crate::runtime_record`] derives each record's version from its ladder.
+//! The only home for on-disk compatibility code: one [`Ladder`](crate::runtime_record::Ladder) per
+//! runtime record, each rung lifting a body from version `i` to `i + 1`. The floor rule, and how a
+//! record's version derives from its ladder, is stated once on that type.
 
 pub(crate) mod config;
 pub(crate) mod lang;

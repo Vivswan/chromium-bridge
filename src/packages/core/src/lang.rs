@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ipc;
 use crate::policy::JS_SAFE_INT_MAX;
-use crate::runtime_record::{Record, Rung, RuntimeRecord};
+use crate::runtime_record::{Ladder, Record, RuntimeRecord};
 
 /// The accepted `uiLanguage` values. This mirrors the browser-owned
 /// canonical list in `src/packages/shared/src/settings.ts` (`UI_LANGUAGES`):
@@ -61,7 +61,7 @@ pub struct LangStore {
 impl Record for LangStore {
     const FILE: &'static str = "lang.json";
     const MAX_BYTES: usize = 4 * 1024;
-    const MIGRATIONS: &'static [Rung] = crate::migrations::lang::LADDER;
+    const LADDER: Ladder = crate::migrations::lang::LADDER;
 }
 
 fn de_ui_language<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
