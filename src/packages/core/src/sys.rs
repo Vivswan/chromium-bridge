@@ -75,7 +75,7 @@ pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) -> std::io::R
 mod tests {
     use std::os::unix::process::CommandExt;
     use std::path::Path;
-    use std::process::{Command, Stdio};
+    use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
 
     use nix::sys::signal::{kill, SigSet, Signal};
@@ -88,6 +88,18 @@ mod tests {
     /// readiness, and waits to be signalled.
     const CHILD_ENV: &str = "CHROMIUM_BRIDGE_TEST_SIGNAL_CHILD";
     const TEST_NAME: &str = "sys::tests::signal_cleanup_runs_even_when_the_signal_arrives_blocked";
+
+    /// Kills and reaps the child on every exit path of the test, a failed
+    /// assertion included, so a failing run never leaves a sleeping child
+    /// behind.
+    struct Reaped(Child);
+
+    impl Drop for Reaped {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
 
     fn wait_for(path: &Path, limit: Duration) -> bool {
         let deadline = Instant::now() + limit;
@@ -151,26 +163,25 @@ mod tests {
                     });
                 }
             }
-            let mut child = cmd.spawn().expect("spawn the child");
+            let mut child = Reaped(cmd.spawn().expect("spawn the child"));
             assert!(
                 wait_for(&dir.path().join("ready"), Duration::from_secs(10)),
                 "{case}: child never reported ready"
             );
             kill(
-                Pid::from_raw(i32::try_from(child.id()).expect("pid fits")),
+                Pid::from_raw(i32::try_from(child.0.id()).expect("pid fits")),
                 signal,
             )
             .expect("signal the child");
             let deadline = Instant::now() + Duration::from_secs(5);
             let status = loop {
-                if let Some(status) = child.try_wait().expect("poll the child") {
+                if let Some(status) = child.0.try_wait().expect("poll the child") {
                     break status;
                 }
-                if Instant::now() > deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!("{case}: child hung with the signal pending");
-                }
+                assert!(
+                    Instant::now() <= deadline,
+                    "{case}: child hung with the signal pending"
+                );
                 std::thread::sleep(Duration::from_millis(10));
             };
             assert!(status.success(), "{case}: exit status {status}");
