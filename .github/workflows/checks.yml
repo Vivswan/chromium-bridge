@@ -289,12 +289,12 @@ jobs:
 
   # The suites hardcode target/release/chromium-bridge and build it only when missing, so the downloaded
   # binary is the one they drive. --upstream none skips the task's build-release dep (the artifact stands in
-  # for it) and check-uv (a missing uv fails the run loudly anyway). On the bare runner, not in the image:
-  # adversarial.py's A11 enumerates listeners with `ss`, which the image does not carry (no iproute2).
+  # for it) and check-uv (a missing uv fails the run loudly anyway).
   protocol:
     name: Protocol suite (${{ matrix.suite }}, Python)
-    needs: build-release
+    needs: [image, build-release]
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

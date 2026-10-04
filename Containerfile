@@ -9,13 +9,12 @@ ARG CARGO_BINSTALL_VERSION=1.25.1
 ARG CARGO_NEXTEST_VERSION=0.9.146
 ARG TYPOS_VERSION=1.50.3
 ARG ACTIONLINT_VERSION=1.7.12
-ARG NODE_VERSION=24.21.0
 
 # Chrome for Testing ships no Linux arm64 build; Debian's chromium does, and the isolation guard
 # accepts it inside a container. build-essential: cargo needs a C linker. xvfb + xauth: the
-# non-headless browser suites. The snapshot is reached over http because the slim image has no CA
-# bundle yet (apt verifies the archive signatures regardless), and its Release files are past their
-# Valid-Until by design.
+# non-headless browser suites. iproute2: the adversarial suite enumerates listeners with `ss`. The
+# snapshot is reached over http because the slim image has no CA bundle yet (apt verifies the archive
+# signatures regardless), and its Release files are past their Valid-Until by design.
 RUN sed -i \
         -e "s|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
         -e "s|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \
@@ -24,15 +23,9 @@ RUN sed -i \
     && apt-get -o Acquire::Check-Valid-Until=false update \
     && apt-get -o Acquire::Check-Valid-Until=false install -y --no-install-recommends \
         bash ca-certificates curl git unzip xz-utils \
-        build-essential pkg-config \
+        build-essential pkg-config iproute2 \
         chromium xvfb xauth fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
-
-# Node runs the vitest suites (`vitest run` scripts); no pin file provisions it, and Debian's package
-# is too old for them.
-RUN case "$(dpkg --print-architecture)" in amd64) node_arch=x64 ;; arm64) node_arch=arm64 ;; *) exit 1 ;; esac \
-    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
-    | tar -xJ -C /usr/local --strip-components=1 --exclude='*/CHANGELOG.md' --exclude='*/LICENSE' --exclude='*/README.md'
 
 # actionlint's release assets use Debian's architecture names (amd64, arm64).
 RUN curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
