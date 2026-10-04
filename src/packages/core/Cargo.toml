@@ -10,6 +10,7 @@ publish.workspace = true
 base64.workspace = true
 futures.workspace = true
 getrandom.workspace = true
+hex.workspace = true
 hmac.workspace = true
 libc.workspace = true
 rmcp.workspace = true

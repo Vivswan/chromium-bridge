@@ -32,10 +32,6 @@ use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 #[derive(Clone, Copy)]
 enum Domain {
     Challenge,
@@ -126,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "domain": domain.as_str(),
             "nonce": nonce,
             "context": context,
-            "messageHex": hex(&message),
+            "messageHex": hex::encode(&message),
             "sigB64": chromium_bridge_core::enclave::base64_encode(&raw),
         }));
     }
@@ -166,7 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         policy_vectors.push(json!({
             "docB64": chromium_bridge_core::enclave::base64_encode(&doc_bytes),
-            "messageHex": hex(&message),
+            "messageHex": hex::encode(&message),
             "sigB64": chromium_bridge_core::enclave::base64_encode(&raw),
         }));
     }

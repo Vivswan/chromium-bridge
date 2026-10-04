@@ -25,6 +25,9 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 # macOS, the getrandom syscall on Linux, ProcessPrng on Windows. `std` for
 # the conversion into io::Error.
 getrandom = { version = "0.4", features = ["std"] }
+# Lowercase hex for MACs, nonces, and image/key fingerprints; strict decode
+# (odd length and non-hex bytes refused) for the handshake MAC.
+hex = "0.4"
 hmac = "0.13"
 libc = "0.2.186"
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,

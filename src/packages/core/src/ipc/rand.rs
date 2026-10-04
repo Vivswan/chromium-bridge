@@ -1,6 +1,5 @@
-//! OS-CSPRNG-backed secrets and hex encoding, shared by the lock file's
-//! per-run secret, the handshake nonces, and the enclave module's
-//! fingerprints.
+//! The per-run secret and the handshake nonces: 128 bits from the OS CSPRNG,
+//! hex-encoded.
 
 use std::io;
 
@@ -12,15 +11,14 @@ use std::io;
 pub(crate) fn generate_secret() -> io::Result<String> {
     let mut buf = [0u8; 16];
     getrandom::fill(&mut buf)?;
-    Ok(hex_encode(&buf))
+    Ok(hex::encode(buf))
 }
 
+/// The image-identity measurements in `ipc::platform` reach the hex encoder
+/// through this name; they are owned by another change and move to
+/// `hex::encode` directly with it.
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len().saturating_mul(2));
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    hex::encode(bytes)
 }
 
 #[cfg(test)]

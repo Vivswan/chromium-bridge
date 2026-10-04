@@ -9,7 +9,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use super::lockfile::read_lock_or_err;
-use super::rand::{generate_secret, hex_encode};
+use super::rand::generate_secret;
 use crate::protocol::{bridge_read, bridge_write, Handshake};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -22,7 +22,7 @@ fn compute_mac(key: &[u8], msg: &[u8]) -> io::Result<String> {
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "unusable hmac key"))?;
     mac.update(msg);
-    Ok(hex_encode(&mac.finalize().into_bytes()))
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
 /// The exact bytes the handshake MAC covers: the server's nonce and, when the
@@ -45,46 +45,13 @@ fn handshake_mac_message(nonce: &str, label: Option<&str>) -> Vec<u8> {
 /// Uses `Mac::verify_slice`, whose comparison does not short-circuit, so a
 /// caller cannot recover the expected tag byte-by-byte via timing.
 fn verify_mac(key: &[u8], msg: &[u8], provided_hex: &str) -> io::Result<()> {
-    let provided = hex_decode(provided_hex)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "mac is not valid hex"))?;
+    let provided = hex::decode(provided_hex)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "mac is not valid hex"))?;
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "unusable hmac key"))?;
     mac.update(msg);
     mac.verify_slice(&provided)
         .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "hmac mismatch"))
-}
-
-/// Decode a hex string to bytes, or `None` on any odd length or non-hex
-/// character. Operates on raw bytes via [`slice::chunks_exact`] rather than
-/// `str` slicing: the input is an attacker-controlled handshake field, and
-/// `&s[i..i + 2]` would panic when a multi-byte UTF-8 character straddles the
-/// two-byte boundary. Under `panic = "abort"` that panic would take down the
-/// whole MCP server, so this must reject bad input rather than trust it.
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    let bytes = s.as_bytes();
-    if !bytes.len().is_multiple_of(2) {
-        return None;
-    }
-    bytes
-        .chunks_exact(2)
-        .map(|pair| match pair {
-            [hi, lo] => Some(hex_nibble(*hi)? << 4 | hex_nibble(*lo)?),
-            // chunks_exact(2) yields two-byte windows only.
-            _ => None,
-        })
-        .collect()
-}
-
-/// Value of a single ASCII hex digit, or `None` for any other byte. Notably a
-/// leading `+`, which `u8::from_str_radix` accepts (so the old decoder took
-/// "+f" as 0x0f), is rejected here: the handshake MAC is strict two-digit hex.
-fn hex_nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => b.checked_sub(b'0'),
-        b'a'..=b'f' => b.checked_sub(b'a').and_then(|v| v.checked_add(10)),
-        b'A'..=b'F' => b.checked_sub(b'A').and_then(|v| v.checked_add(10)),
-        _ => None,
-    }
 }
 
 /// The label assigned to a connection whose handshake carried no label
@@ -291,10 +258,6 @@ pub mod fuzz_api {
         super::verify_mac(key, msg, provided_hex)
     }
 
-    pub fn hex_decode(s: &str) -> Option<Vec<u8>> {
-        super::hex_decode(s)
-    }
-
     pub fn server_handshake_with_secret<R: BufRead, W: Write>(
         reader: &mut R,
         writer: &mut W,
@@ -351,55 +314,6 @@ mod tests {
         let default = BrowserLabel::default_label();
         assert!(validate_label(default.as_str()));
         assert_eq!(default.as_str(), DEFAULT_LABEL);
-    }
-
-    #[test]
-    fn hex_decode_roundtrips_and_rejects_bad_input() {
-        assert_eq!(hex_decode("00ff10"), Some(vec![0x00, 0xff, 0x10]));
-        // Odd length and non-hex digits are rejected, not silently truncated.
-        assert_eq!(hex_decode("abc"), None);
-        assert_eq!(hex_decode("zz"), None);
-        // A signed nibble is not hex: `u8::from_str_radix` would have accepted
-        // "+f" as 0x0f, but the handshake MAC is strict two-digit hex only.
-        assert_eq!(hex_decode("+f"), None);
-        // A multi-byte UTF-8 character makes the byte length even while landing
-        // a chunk boundary mid-codepoint. The old `&s[i..i + 2]` slicing
-        // panicked here (aborting the server under panic=abort); now it is a
-        // clean rejection. "é" is two UTF-8 bytes, so "aé" has byte length 3
-        // (odd) and "ééf" (5 bytes) is odd too; use a 4-byte even case.
-        assert_eq!(hex_decode("éé"), None); // 4 bytes, none of them ASCII hex
-        assert_eq!(hex_decode("aé"), None); // 3 bytes: odd length
-        assert_eq!(hex_decode("a\u{00e9}b"), None); // 4 bytes, non-hex middle
-                                                    // A 4-byte emoji is even-length but not hex.
-        assert_eq!(hex_decode("😀"), None);
-    }
-
-    /// Fuzz the handshake MAC decoder. It runs on an attacker-controlled field
-    /// in the accept path, so it must reject or decode every input without
-    /// panicking -- including multi-byte UTF-8 that lands mid-codepoint on a
-    /// two-byte chunk boundary, the abort-the-server bug this guards against.
-    /// Arbitrary strings are built from `any::<char>()` to avoid pulling in
-    /// proptest's `regex-syntax` feature (see `protocol.rs` proptests).
-    mod hex_fuzz {
-        use super::super::hex_decode;
-        use crate::ipc::hex_encode;
-        use proptest::prelude::*;
-
-        fn arb_string() -> impl Strategy<Value = String> {
-            prop::collection::vec(any::<char>(), 0..16).prop_map(|cs| cs.into_iter().collect())
-        }
-
-        proptest! {
-            #[test]
-            fn never_panics(s in arb_string()) {
-                let _ = hex_decode(&s);
-            }
-
-            #[test]
-            fn encode_decode_roundtrips(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
-                prop_assert_eq!(hex_decode(&hex_encode(&bytes)), Some(bytes));
-            }
-        }
     }
 
     #[test]

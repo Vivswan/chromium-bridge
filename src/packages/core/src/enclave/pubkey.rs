@@ -50,7 +50,7 @@ impl EnclavePublicKey {
     /// in `enclave_proof` frames and the fingerprint the user compares between
     /// the `pair` terminal output and the extension's enrollment UI.
     pub fn fingerprint_hex(&self) -> String {
-        crate::ipc::hex_encode(Sha256::digest(&self.sec1).as_slice())
+        hex::encode(Sha256::digest(&self.sec1))
     }
 
     /// Fingerprint grouped in 4-char blocks for human comparison.
