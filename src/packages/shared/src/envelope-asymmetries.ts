@@ -274,6 +274,42 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
       },
     ),
   },
+  registration_status_result: {
+    $: okSplit(
+      "registration_status_result",
+      { required: ["browsers"], forbidden: ["error"] },
+      { required: ["error"], forbidden: ["browsers"] },
+      {
+        refuses: [
+          { type: "registration_status_result", ok: true },
+          { type: "registration_status_result", ok: true, browsers: [], error: "e" },
+          { type: "registration_status_result", ok: false },
+          { type: "registration_status_result", ok: false, browsers: [], error: "e" },
+        ],
+        accepts: [
+          { type: "registration_status_result", ok: true, browsers: [] },
+          { type: "registration_status_result", ok: false, error: "HOME is not set" },
+        ],
+      },
+    ),
+  },
+  policy_restrict_result: {
+    $: okSplit(
+      "policy_restrict_result",
+      { required: [], forbidden: ["error"] },
+      { required: ["error"], forbidden: [] },
+      {
+        refuses: [
+          { type: "policy_restrict_result", ok: true, error: "restriction failed" },
+          { type: "policy_restrict_result", ok: false },
+        ],
+        accepts: [
+          { type: "policy_restrict_result", ok: true },
+          { type: "policy_restrict_result", ok: false, error: "relaxes the effective policy" },
+        ],
+      },
+    ),
+  },
   presence_request: {
     "$.properties.challenge": HOST_MINTED,
     "$.properties.action": HOST_MINTED,

@@ -51,7 +51,7 @@ MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
 |------|---------|------|---------|
 | MCP server (broker) | The first MCP client to spawn one | Owns the socket and the lock, admits harnesses, holds session state, dispatches tools | Until the last attached harness detaches |
 | MCP server (relay) | Each further MCP client | Attests itself to the broker and forwards its harness's calls | Follows its client session |
-| native host | Each browser (via the host manifest) | Thin bridge between stdin/stdout NM frames and socket NDJSON; answers control frames (enrollment, kill, client admin) itself | Follows the browser extension's Port |
+| native host | Each browser (via the host manifest) | Thin bridge between stdin/stdout NM frames and socket NDJSON; answers control frames (enrollment, kill, client admin, registration repair, policy restriction) itself | Follows the browser extension's Port |
 | extension (SW + content) | The browser | Page operations, allowlist, confirmations, masking | The SW restarts about every 5 minutes; the extension follows the browser |
 
 Why separate server and host processes: the browser spawns the native host itself (via the manifest) and the MCP client spawns the MCP server itself. The two are not parent and child, cannot share stdin/stdout, and so need an IPC channel between them.
@@ -132,7 +132,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chrom
 | Module | Responsibility |
 |------|------|
 | `protocol.rs` | Message types and read/write for the three protocols; the wire-envelope contract; stderr panic hook; SIGPIPE ignore |
-| `protocol/control.rs` | The host-handled control frames (enclave, admin, kill switch, audit, policy, language) and `classify_nm_frame`, the router that answers them locally and forwards everything else |
+| `protocol/control.rs` | The host-handled control frames (enclave, admin, kill switch, audit, browser registration status and repair, policy and its restriction lane, language, WebAuthn) and `classify_nm_frame`, the router that answers them locally and forwards everything else |
 | `ipc/` | The bridge socket: platform socket + lockfile + peer credentials + attestation + HMAC handshake, split per concern with platform impls |
 | `broker.rs` | Broker ownership, relay attach/detach ref-counting, DoS caps, the kill-switch watcher |
 | `session.rs` | Connection registry keyed by browser label; request/response pairing by id; per-connection generation guard; an in-flight guard that cancels an abandoned request at the tool call's deadline |
@@ -381,12 +381,15 @@ Note the three distinct "versions": the MCP JSON-RPC version `2026-07-28` (secti
 
 ### 11.3 Host-owned policy and language sync
 
-The host owns the security policy: the four capability grants, the confirmation policy, `disabledTools`, and the confirmation timeouts. The host persists at most one signed baseline plus an unsigned restriction overlay in `runtime_dir()/policy.json`, and the state travels over five additive host-handled control frames (`PolicyControl` in `protocol/control.rs`), classified and terminated exactly like the enclave and admin frames: answered by the host, never forwarded to the MCP server, and dropped when the server leg tries to inject one.
+The host owns the security policy: the four capability grants, the confirmation policy, `disabledTools`, and the confirmation timeouts.
+
+The host persists at most one signed baseline plus an unsigned restriction overlay in `runtime_dir()/policy.json`. The state travels over seven additive host-handled control frames (`PolicyControl` in `protocol/control.rs`), classified and terminated exactly like the enclave and admin frames: answered by the host, never forwarded to the MCP server, and dropped when the server leg tries to inject one.
 
 - `policy_get {}` (extension -> host): on-demand refresh. Like every extension-originated frame in this family, it is sent only on a connection where the host has already pushed a frame on the same lane (`policy_current` for the policy frames, `lang_current` for the language ones - the never-speak-first rule: an old host would classify an unknown frame as forwardable and the MCP server's strict parse would tear the browser leg down, so against an old host the new frames simply never flow).
 - `policy_current { ok, baseline?, sig?, overlay?, error? }` (host -> extension): the policy state, pushed unsolicited at every connect and on every observed store change, and the reply to `policy_get`. The host builds it only through a typed intermediate, so the mixtures the extension must never see cannot be constructed:
   - `ok: true` carries the exact signed baseline bytes (base64, so the signed artifact survives the JSON hop byte-for-byte), the optional signature, and the optional overlay.
   - `ok: false` carries `error` (naming the absent, damaged, or unreadable store, or a malformed `policy_get`) and never a baseline, so the extension fails closed rather than trusting bytes nobody vouched for.
+- `policy_restrict { overlay }` (extension -> host) and `policy_restrict_result { ok, error? }` (host -> extension): the options page's policy editor tightening the effective policy through the unsigned restriction seam, which refuses anything that relaxes it; the written state reaches the extension as the next `policy_current` push, so the result carries the verdict alone. Loosening stays a signed write (`chromium-bridge policy set`).
 - `lang_get {}` / `lang_set { value }` (extension -> host) and `lang_current { value, seq }` (host -> extension): the shared `uiLanguage` preference (`runtime_dir()/lang.json`), deliberately outside the signed policy document - not signed, not ratcheted, unable to affect any security decision - with echo suppression by sequence number.
 
 The enforcement contract is asymmetric by design: policy that grants capability must carry proof no same-user process can forge - on an enrolled Mac, a Secure Enclave signature by the enrollment key, whose user-presence ACL makes the Touch ID tap and the signature one act - while policy that only removes capability travels free as the unsigned overlay.

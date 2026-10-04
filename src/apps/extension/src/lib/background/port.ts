@@ -15,6 +15,7 @@ import * as presence from "./confirm/presence";
 import type { Connection, PortCollaborator } from "./connection";
 import { collaborator as cancelSignals, dispatch } from "./dispatch";
 import * as enrollment from "./enrollment";
+import * as hostAdmin from "./host-admin";
 import { inLife } from "./in-life";
 import * as kill from "./kill";
 import * as policySync from "./policy-sync";
@@ -22,6 +23,7 @@ import * as policySync from "./policy-sync";
 export const collaborators: readonly PortCollaborator[] = [
   enrollment.collaborator,
   clients.collaborator,
+  hostAdmin.collaborator,
   kill.collaborator,
   auditLog.collaborator,
   presence.collaborator,

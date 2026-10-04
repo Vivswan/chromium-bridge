@@ -10,8 +10,10 @@ import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
 import {
   EnrollOptionsFrameSchema,
   PresenceRequestFrameSchema,
+  RegistrationRowSchema,
   TrustedClientSchema,
 } from "./envelope.gen";
+import { PolicyOverlaySchema, PolicyValuesSchema } from "./policy.gen";
 import { UI_LANGUAGES } from "./settings";
 import { PresenceAnswerSchema, RegistrationResponseSchema } from "./webauthn";
 
@@ -89,6 +91,22 @@ export const KillViewSchema = z.object({
 });
 
 export type KillView = z.infer<typeof KillViewSchema>;
+
+// The browser-registration rows the host reports (its registration_status_result), one per known browser.
+const RegistrationViewSchema = z.object({
+  ok: z.literal(true),
+  browsers: z.array(RegistrationRowSchema),
+});
+
+/** The policy posture the worker enforces (policy-sync.ts), as the editor renders it: only `active`
+ * carries values, so a blocked or pre-cutover page can never show a policy as editable. */
+export const PolicyPostureSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("preCutover") }),
+  z.strictObject({ kind: z.literal("active"), effective: PolicyValuesSchema }),
+  z.strictObject({ kind: z.literal("blocked"), reason: z.string() }),
+]);
+
+export type PolicyPosture = z.infer<typeof PolicyPostureSchema>;
 
 interface ContractEntry<K extends string> {
   gate: RuntimeGate;
@@ -263,6 +281,31 @@ export const RUNTIME_CONTRACT = contract({
       type: z.literal("webauthn_presence_assert"),
       ...PresenceAnswerSchema.shape,
     }),
+    res: Acknowledged,
+  },
+  // The host-registration panel: the per-browser manifest rows the host's doctor diagnoses, and the repair
+  // `doctor --fix` runs, both answered with the fresh rows (a repair that failed is a refusal; the panel re-asks).
+  get_registration: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_registration") }),
+    res: RegistrationViewSchema,
+  },
+  repair_registration: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("repair_registration") }),
+    res: RegistrationViewSchema,
+  },
+  // The policy editor reads the posture the worker enforces and tightens it through the host's unsigned
+  // restriction lane. The overlay is strict-parsed here, at the trust boundary, so a field the catalogue does
+  // not own never reaches the wire; the host's seam decides the direction and refuses a relaxation.
+  get_policy: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_policy") }),
+    res: z.object({ ok: z.literal(true), posture: PolicyPostureSchema }),
+  },
+  restrict_policy: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("restrict_policy"), overlay: PolicyOverlaySchema }),
     res: Acknowledged,
   },
   // Enum-pinned here, at the trust boundary, so the relay can never put an

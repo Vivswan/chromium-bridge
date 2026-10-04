@@ -94,6 +94,17 @@ impl ManifestStatus {
     }
 }
 
+impl From<&ManifestStatus> for crate::protocol::control::RegistrationRow {
+    fn from(status: &ManifestStatus) -> Self {
+        crate::protocol::control::RegistrationRow {
+            browser: status.key.to_string(),
+            detected: status.detected,
+            state: (&status.state).into(),
+            location: status.location.clone(),
+        }
+    }
+}
+
 impl Report {
     /// Whether any browser this user actually has picks up a healthy
     /// registration.
@@ -105,8 +116,9 @@ impl Report {
 }
 
 /// Gather the per-browser manifest states (read-only), or the reason the
-/// check could not run.
-fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
+/// check could not run. The native host answers `registration_status` from
+/// this same read.
+pub(crate) fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
     let dirs = BaseDirs::from_env()?;
     Ok(browsers::resolve(Os::current(), &dirs)
         .iter()

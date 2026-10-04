@@ -124,6 +124,7 @@ options:
   subtitle: "更改会立即保存。"
   section_security: "安全策略"
   section_pairing: "主机配对 (Secure Enclave)"
+  section_registration: "主机注册"
   section_clients: "受信任的 MCP 客户端"
   section_tabs: "标签页"
   section_sites: "站点"
@@ -132,8 +133,6 @@ options:
 
 settings:
   more_label: "详情"
-  policy_managed_title: "用 chromium-bridge policy 设置"
-  policy_managed_desc: "安全策略 (page_eval、上传、对话框、CDP 模式、各项确认、超时和逐工具禁用) 用 `chromium-bridge policy` 设置, 由已配对的主机密钥签名, 并由此扩展强制执行。本页不再编辑这些设置。"
   group_tabs_title: "归组桥接标签页"
   group_tabs_desc: "客户端打开的标签页会收进「Chromium Bridge」标签组, 让机器驱动的标签页保持可见。"
   allow_all_title: "允许所有站点"
@@ -189,6 +188,41 @@ clients:
   revoke_failed: "撤销失败: $1"
   anchor_hash: "哈希"
   anchor_signer: "签名者"
+
+registration:
+  desc: "每个浏览器在哪里查找此主机。修复会为每个检测到的浏览器重写清单, 与 `chromium-bridge doctor --fix` 相同。"
+  refresh: "刷新"
+  repair: "修复注册"
+  loading: "加载中..."
+  error: "无法读取注册状态: $1"
+  repair_failed: "修复失败: $1"
+  detected: "已检测到"
+  not_detected: "未检测到"
+  state_missing: "缺失"
+  state_ok: "正常"
+  state_stale: "过期"
+  state_foreign: "非本项目"
+  state_unreadable: "不可读"
+  empty: "主机在此平台上不认识任何浏览器。"
+  restart_note: "修复后请重启浏览器, 让它重新读取注册信息。"
+
+policy:
+  desc: "主机允许客户端在此浏览器中做什么。收紧立即生效; 放宽需要一次在场确认, 本页暂时无法提供, 请用 `chromium-bridge policy set`。"
+  loading: "加载中..."
+  error: "无法读取策略: $1"
+  none_title: "尚未应用主机策略"
+  none_desc: "在主机签署策略 (`chromium-bridge policy set`) 之前, 此浏览器执行内置的拒绝基线。在那之前这里没有可收紧的内容。"
+  blocked_title: "策略执行已被阻止"
+  needs_presence: "放宽需要在场确认"
+  apply: "应用"
+  apply_failed: "无法应用该限制: $1"
+  ms_unit: "毫秒"
+  ms_note: "窗口越短越严格。"
+  zero_top_note: "0 表示永不重新验证, 是最宽松的设置; 任何正的间隔都更严格。"
+  tools_none: "未禁用任何工具"
+  disable_tool: "禁用"
+  pick_tool: "选择工具"
+  effective_note: "显示的是此浏览器当前执行的值: 已签名基线叠加主机的限制。"
 
 kill:
   desc: "启用后, 所有客户端与所有浏览器的连接会被立即切断, 进行中的操作也不例外。该状态在重启后仍然保持。"

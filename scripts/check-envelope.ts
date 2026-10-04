@@ -33,6 +33,10 @@ import {
   type Asymmetry,
   READER_RULES,
 } from "../src/packages/shared/src/envelope-asymmetries";
+import {
+  POLICY_RESTRICT_FRAME_TYPES,
+  REGISTRATION_FRAME_TYPES,
+} from "../src/packages/shared/src/host-admin";
 import { WEBAUTHN_FRAME_TYPES } from "../src/packages/shared/src/webauthn";
 import {
   BARE_TAG_FRAMES,
@@ -89,6 +93,25 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
   ],
   client_revoke_result: [{ type: "client_revoke_result", ok: true, error: "e" }],
   kill_status_result: [{ type: "kill_status_result", ok: true, killed: false, error: "e" }],
+  registration_status_result: [
+    {
+      type: "registration_status_result",
+      ok: true,
+      browsers: [
+        {
+          browser: "chrome",
+          detected: true,
+          state: { kind: "stale", detail: "launch path missing" },
+          location: "/home/user/.config/google-chrome/NativeMessagingHosts/host.json",
+        },
+      ],
+    },
+    { type: "registration_status_result", ok: false, error: "HOME (or USERPROFILE) is not set" },
+  ],
+  policy_restrict_result: [
+    { type: "policy_restrict_result", ok: true },
+    { type: "policy_restrict_result", ok: false, error: "relaxes the effective policy" },
+  ],
   policy_current: [
     {
       type: "policy_current",
@@ -400,8 +423,8 @@ export function readerRuleProblems(kind: string, pair: ReaderPair): string[] {
 // kill_status_result has no classification array: isKillStatusFrame (enclave.ts) classifies by full parse.
 export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
   enclave: new Set([...ENCLAVE_FRAME_TYPES, ...PRESENCE_FRAME_TYPES]),
-  admin: new Set([...ADMIN_RESULT_FRAME_TYPES, "kill_status_result"]),
-  policy: new Set(POLICY_FRAME_TYPES),
+  admin: new Set([...ADMIN_RESULT_FRAME_TYPES, "kill_status_result", ...REGISTRATION_FRAME_TYPES]),
+  policy: new Set([...POLICY_FRAME_TYPES, ...POLICY_RESTRICT_FRAME_TYPES]),
   webauthn: new Set(WEBAUTHN_FRAME_TYPES),
 };
 

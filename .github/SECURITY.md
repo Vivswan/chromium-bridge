@@ -315,6 +315,7 @@ Extra review care applies to these security-critical surfaces:
 - `src/packages/core/src/registration.rs`
 - `src/packages/core/src/mcp/` (the rmcp seam)
 - the extension's allowlist/eval/confirmation code
+- `src/apps/extension/src/entrypoints/options/PolicyEditor.tsx` and `src/apps/extension/src/lib/background/host-admin.ts` (the options page's policy restriction lane and registration repair)
 - `src/apps/extension/wxt.config.ts`
 
 ### The host-owned policy residual ledger

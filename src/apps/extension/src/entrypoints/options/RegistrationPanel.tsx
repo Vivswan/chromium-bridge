@@ -1,0 +1,111 @@
+import type { RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
+import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useI18n } from "@/hooks/useI18n";
+import { send } from "@/lib/messages";
+
+// The host-registration panel over the SW router's two registration messages. A failed repair re-asks for the
+// rows instead of keeping the pre-repair table: the host answers a failure with no rows, so the rows on screen
+// must come from a read the host vouched for.
+export function RegistrationPanel() {
+  const { t } = useI18n();
+  const [view, setView] = useState<RuntimeResponse<"get_registration"> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setView(await send({ type: "get_registration" }));
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const repair = async () => {
+    setBusy(true);
+    setActionError(null);
+    const r = await send({ type: "repair_registration" });
+    if (r.ok) {
+      setView(r);
+    } else {
+      setActionError(t("registration.repair_failed", [r.error]));
+      await refresh();
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="py-1">
+      <div className="flex items-start justify-between gap-3">
+        <p className="consequence m-0">{t("registration.desc")}</p>
+        <Button variant="ghost" onClick={() => void refresh()} disabled={busy}>
+          {t("registration.refresh")}
+        </Button>
+      </div>
+
+      {view === null && <div className="mt-2 text-xs text-text-3">{t("registration.loading")}</div>}
+
+      {/* A read failure is unknown/degraded, not a denial: pending ink, fail-closed wording. */}
+      {view && !view.ok && (
+        <div role="status" className="mt-2 text-xs font-semibold text-pending">
+          {t("registration.error", [view.error])}
+        </div>
+      )}
+
+      {view?.ok && view.browsers.length === 0 && (
+        <div className="mt-2 text-xs text-text-3">{t("registration.empty")}</div>
+      )}
+
+      {view?.ok && view.browsers.length > 0 && (
+        <ul className="m-0 mt-1 list-none p-0">
+          {view.browsers.map((row) => (
+            <RegistrationLine key={row.browser} row={row} />
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button onClick={() => void repair()} disabled={busy || view === null || !view.ok}>
+          {t("registration.repair")}
+        </Button>
+        <span className="text-[11px] text-text-3">{t("registration.restart_note")}</span>
+      </div>
+
+      <div
+        role="alert"
+        className={actionError ? "mt-2 text-xs font-semibold text-danger" : "sr-only"}
+      >
+        {actionError}
+      </div>
+    </div>
+  );
+}
+
+function RegistrationLine({ row }: { row: RegistrationRow }) {
+  const { t } = useI18n();
+  const healthy = row.state.kind === "ok";
+  const detail = row.state.kind === "ok" || row.state.kind === "missing" ? null : row.state.detail;
+  return (
+    <li className="flex items-start gap-3 border-b border-edge py-2 last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className={`status-dot ${healthy ? "live" : row.detected ? "down" : ""}`} />
+          <span className="font-mono text-xs font-semibold text-text-1">{row.browser}</span>
+          <span className="text-[11px] text-text-3">
+            {row.detected ? t("registration.detected") : t("registration.not_detected")}
+          </span>
+          <span
+            className={`text-[11px] font-semibold ${healthy ? "text-text-2" : row.detected ? "text-danger" : "text-text-3"}`}
+          >
+            {t(`registration.state_${row.state.kind}`)}
+          </span>
+        </div>
+        {detail && <div className="mt-0.5 font-mono text-[11px] text-text-3">{detail}</div>}
+        <div className="truncate font-mono text-[11px] text-text-4" title={row.location}>
+          {row.location}
+        </div>
+      </div>
+    </li>
+  );
+}

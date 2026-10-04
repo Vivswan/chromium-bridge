@@ -331,6 +331,41 @@ fn classification_matrix() {
             Malformed(Tag::PolicyGet),
         ),
         (
+            json!({ "type": "registration_status" }),
+            Handle(HostRequest::RegistrationStatus {}),
+        ),
+        (
+            json!({ "type": "registration_status", "extra": 1 }),
+            Malformed(Tag::RegistrationStatus),
+        ),
+        (
+            json!({ "type": "registration_repair" }),
+            Handle(HostRequest::RegistrationRepair {}),
+        ),
+        (
+            json!({ "type": "registration_repair", "browser": "chrome" }),
+            Malformed(Tag::RegistrationRepair),
+        ),
+        (
+            json!({ "type": "policy_restrict", "overlay": { "pageEvalEnabled": false, "disabledTools": ["page_eval"] } }),
+            Handle(HostRequest::PolicyRestrict {
+                overlay: crate::policy::PolicyOverlay {
+                    page_eval_enabled: Some(false),
+                    disabled_tools: Some(vec!["page_eval".into()]),
+                    ..Default::default()
+                },
+            }),
+        ),
+        (
+            json!({ "type": "policy_restrict" }),
+            Malformed(Tag::PolicyRestrict),
+        ),
+        // An overlay field the catalogue does not own is a policy claim nobody owns: the whole frame fails.
+        (
+            json!({ "type": "policy_restrict", "overlay": { "requireEnrollment": false } }),
+            Malformed(Tag::PolicyRestrict),
+        ),
+        (
             json!({ "type": "lang_get" }),
             Handle(HostRequest::LangGet {}),
         ),
@@ -410,8 +445,16 @@ fn classification_matrix() {
             Malformed(Tag::KillStatusResult),
         ),
         (
+            json!({ "type": "registration_status_result", "ok": true, "browsers": [] }),
+            Malformed(Tag::RegistrationStatusResult),
+        ),
+        (
             json!({ "type": "policy_current", "ok": true }),
             Malformed(Tag::PolicyCurrent),
+        ),
+        (
+            json!({ "type": "policy_restrict_result", "ok": true }),
+            Malformed(Tag::PolicyRestrictResult),
         ),
         (
             json!({ "type": "lang_current", "value": "en", "seq": 1 }),
@@ -503,6 +546,23 @@ fn malformed_replies_match_the_request_type() {
             Frame(json!({ "type": "policy_current", "ok": false,
                           "error": "malformed policy_get frame" })),
         ),
+        (
+            Tag::RegistrationStatus,
+            Frame(
+                json!({ "type": "registration_status_result", "ok": false, "error": "malformed registration_status frame" }),
+            ),
+        ),
+        (
+            Tag::RegistrationRepair,
+            Frame(
+                json!({ "type": "registration_status_result", "ok": false, "error": "malformed registration_repair frame" }),
+            ),
+        ),
+        (
+            Tag::PolicyRestrict,
+            Frame(json!({ "type": "policy_restrict_result", "ok": false,
+                          "error": "malformed policy_restrict frame" })),
+        ),
         (Tag::LangGet, LangCurrent),
         (Tag::LangSet, LangCurrent),
         (
@@ -534,7 +594,9 @@ fn malformed_replies_match_the_request_type() {
         (Tag::ClientListResult, Nothing),
         (Tag::ClientRevokeResult, Nothing),
         (Tag::KillStatusResult, Nothing),
+        (Tag::RegistrationStatusResult, Nothing),
         (Tag::PolicyCurrent, Nothing),
+        (Tag::PolicyRestrictResult, Nothing),
         (Tag::LangCurrent, Nothing),
     ];
     let covered: BTreeSet<HostControlTag> = table.iter().map(|(tag, _)| *tag).collect();
@@ -549,6 +611,83 @@ fn malformed_replies_match_the_request_type() {
             (got, Frame(_) | LangCurrent | Nothing) => panic!("{tag}: unexpected reply {got:?}"),
         }
     }
+}
+
+#[test]
+fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
+    // The wire contract the extension's readers consume: rows travel exactly when `ok`, the restriction
+    // error exactly when not, and a RegState reaches the wire as its internally tagged projection with the
+    // reason text only on the states that carry one.
+    use crate::registration::RegState;
+    let rows = vec![
+        RegistrationRow {
+            browser: "chrome".into(),
+            detected: true,
+            state: (&RegState::Ok).into(),
+            location: "/home/user/chrome/host.json".into(),
+        },
+        RegistrationRow {
+            browser: "brave".into(),
+            detected: false,
+            state: (&RegState::Stale("launch path missing".into())).into(),
+            location: "/home/user/brave/host.json".into(),
+        },
+    ];
+    assert_eq!(
+        serde_json::to_value(RegistrationReport::Rows(rows).into_frame()).unwrap(),
+        json!({
+            "type": "registration_status_result",
+            "ok": true,
+            "browsers": [
+                { "browser": "chrome", "detected": true, "state": { "kind": "ok" },
+                  "location": "/home/user/chrome/host.json" },
+                { "browser": "brave", "detected": false,
+                  "state": { "kind": "stale", "detail": "launch path missing" },
+                  "location": "/home/user/brave/host.json" },
+            ],
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            RegistrationReport::Unavailable {
+                error: "HOME is not set".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "registration_status_result", "ok": false, "error": "HOME is not set" })
+    );
+    for (state, want) in [
+        (RegState::Missing, json!({ "kind": "missing" })),
+        (
+            RegState::Foreign("another host".into()),
+            json!({ "kind": "foreign", "detail": "another host" }),
+        ),
+        (
+            RegState::Unreadable("permission denied".into()),
+            json!({ "kind": "unreadable", "detail": "permission denied" }),
+        ),
+    ] {
+        assert_eq!(
+            serde_json::to_value(RegistrationState::from(&state)).unwrap(),
+            want
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(RestrictOutcome::Applied.into_frame()).unwrap(),
+        json!({ "type": "policy_restrict_result", "ok": true })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            RestrictOutcome::Refused {
+                error: "relaxes the effective policy".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "policy_restrict_result", "ok": false,
+                "error": "relaxes the effective policy" })
+    );
 }
 
 #[test]

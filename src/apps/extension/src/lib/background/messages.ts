@@ -47,8 +47,9 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
+import { repairRegistration, requestRegistrationStatus, restrictPolicy } from "./host-admin";
 import { engageKill, panicEngage, requestKillStatus } from "./kill";
-import { chooseLanguage } from "./policy-sync";
+import { chooseLanguage, getPolicyPosture } from "./policy-sync";
 import { isNativeConnected } from "./port";
 
 // True only for a sender that is one of the extension's OWN pages (popup /
@@ -123,6 +124,11 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
     client_data_json,
     signature,
   }) => assertPresence({ nonce, credential_id, authenticator_data, client_data_json, signature }),
+  get_registration: requestRegistrationStatus,
+  repair_registration: repairRegistration,
+  get_policy: async () => ({ ok: true, posture: await getPolicyPosture() }),
+  // The host's restriction seam decides the direction and audits the verdict; this only relays.
+  restrict_policy: (msg) => restrictPolicy(msg.overlay),
   confirm_ready: (msg) => ({ ok: true, payload: getPendingConfirm(msg.id) }),
   confirm_resolve: (msg) => resolveConfirm(msg.id, msg.approved),
   confirm_deny_kill: denyAndKill,

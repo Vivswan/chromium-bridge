@@ -79,23 +79,27 @@ pub enum EnclaveControl {
 
 /// Host-admin frames, answered by the native host itself exactly like [`EnclaveControl`]: never forwarded
 /// to the MCP server, and dropped if the server leg tries to inject one. They give the options UI the
-/// trusted-client allowlist, the global kill switch, and the audit trail, and arrive only from the extension
-/// Chrome connected to this host (`allowed_origins`). List/revoke and `kill_engage` only reduce capability;
-/// `kill_release` would RESTORE it, so the host refuses it but keeps it parsed, so a shipped extension gets
-/// an audited refusal, never a silent drop.
+/// trusted-client allowlist, the global kill switch, the audit trail, and the host's own browser
+/// registrations, and arrive only from the extension Chrome connected to this host (`allowed_origins`).
+/// List/revoke and `kill_engage` only reduce capability; `kill_release` would RESTORE it, so the host refuses
+/// it but keeps it parsed, so a shipped extension gets an audited refusal, never a silent drop.
 ///
 /// ```text
-/// client_list         -> client_list_result { ok, enrolled, clients, error? }; a load failure (including the
-///                        tamper case) is ok: false with the error text, the UI shows it and guesses nothing
-/// client_revoke       -> client_revoke_result { ok, error? }; the revocation-epoch bump shares the critical
-///                        section, so a live broker drops that client's connections
-/// kill_status/engage  -> kill_status_result { ok, killed?, error? }; also PUSHED unsolicited when the host's
-///                        revocation watch sees the kill marker move, and at startup only when killed or unreadable
-///                        (a healthy host waits for the extension's kill_status query), so the SW-only mirror
-///                        never polls; ok: false carries no killed claim (fail closed on unknown)
-/// audit_event         -> no reply; the host accepts only the extension-owned kinds (crate::audit::extension_kind)
-///                        and stamps the surface itself, so the frame cannot forge host-side events like
-///                        admissions or kills; cid joins a confirm_shown to its verdict
+/// client_list                -> client_list_result { ok, enrolled, clients, error? }; a load failure (including
+///                               the tamper case) is ok: false with the error text, the UI shows it and guesses nothing
+/// client_revoke              -> client_revoke_result { ok, error? }; the revocation-epoch bump shares the critical
+///                               section, so a live broker drops that client's connections
+/// kill_status/engage         -> kill_status_result { ok, killed?, error? }; also PUSHED unsolicited when the host's
+///                               revocation watch sees the kill marker move, and at startup only when killed or
+///                               unreadable (a healthy host waits for the extension's kill_status query), so the
+///                               SW-only mirror never polls; ok: false carries no killed claim (fail closed on unknown)
+/// audit_event                -> no reply; the host accepts only the extension-owned kinds
+///                               (crate::audit::extension_kind) and stamps the surface itself, so the frame cannot
+///                               forge host-side events like admissions or kills; cid joins a confirm_shown to its verdict
+/// registration_status/repair -> registration_status_result { ok, browsers, error? }: the per-browser manifest rows
+///                               `doctor` diagnoses, after `doctor --fix`'s repair for the repair frame; rows travel
+///                               exactly when ok (a repair that failed on any target answers ok: false and the
+///                               extension re-asks for the rows)
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
@@ -154,6 +158,95 @@ pub enum AdminControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
+    /// Extension -> host: report every known browser's native-messaging registration.
+    RegistrationStatus {},
+    /// Extension -> host: re-register the detected browsers (what `doctor --fix` does), then report.
+    RegistrationRepair {},
+    /// Host -> extension: the registration rows (the reply to both registration frames). `browsers`
+    /// travels exactly when `ok`, `error` exactly when not ([`RegistrationReport::into_frame`]).
+    RegistrationStatusResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        browsers: Option<Vec<RegistrationRow>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+}
+
+/// One browser's registration as the options page shows it: the browser key, whether this user has the
+/// browser, the manifest state, and where the registration lives. The wire projection of
+/// `doctor::ManifestStatus`, whose `RegState` serializes externally tagged (a shape the generated
+/// validators do not model), so the state travels as the internally tagged [`RegistrationState`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RegistrationRow {
+    pub browser: String,
+    pub detected: bool,
+    pub state: RegistrationState,
+    pub location: String,
+}
+
+/// A registration's diagnosed state on the wire, one variant per [`crate::registration::RegState`]
+/// variant; `detail` is that state's reason text and travels exactly on the states that carry one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RegistrationState {
+    Missing {},
+    Ok {},
+    Stale { detail: String },
+    Foreign { detail: String },
+    Unreadable { detail: String },
+}
+
+impl From<&crate::registration::RegState> for RegistrationState {
+    fn from(state: &crate::registration::RegState) -> Self {
+        use crate::registration::RegState;
+        match state {
+            RegState::Missing => RegistrationState::Missing {},
+            RegState::Ok => RegistrationState::Ok {},
+            RegState::Stale(detail) => RegistrationState::Stale {
+                detail: detail.clone(),
+            },
+            RegState::Foreign(detail) => RegistrationState::Foreign {
+                detail: detail.clone(),
+            },
+            RegState::Unreadable(detail) => RegistrationState::Unreadable {
+                detail: detail.clone(),
+            },
+        }
+    }
+}
+
+/// The registration rows as the host reports them, the [`KillStatus`] discipline applied: rows travel
+/// exactly when the resolver could run, an error exactly when not, so an `ok: false` carrying rows or an
+/// `ok: true` with an error is unconstructible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistrationReport {
+    Rows(Vec<RegistrationRow>),
+    /// The environment could not name the browser roots (no HOME), or the repair failed on a target: no
+    /// rows travel, the extension shows the error and asks again.
+    Unavailable {
+        error: String,
+    },
+}
+
+impl RegistrationReport {
+    pub fn into_frame(self) -> AdminControl {
+        match self {
+            RegistrationReport::Rows(browsers) => AdminControl::RegistrationStatusResult {
+                ok: true,
+                browsers: Some(browsers),
+                error: None,
+            },
+            RegistrationReport::Unavailable { error } => AdminControl::RegistrationStatusResult {
+                ok: false,
+                browsers: None,
+                error: Some(error),
+            },
+        }
+    }
 }
 
 /// The kill-switch state as the host reports it: exactly readable-with-verdict or unreadable-with-error.
@@ -246,6 +339,10 @@ impl PolicyStatus {
 ///                       already pushed a policy frame (never speak first): a host that does not know the
 ///                       frame would forward it, and the MCP server's strict `BridgeResp` parse would tear
 ///                       the browser leg down
+/// policy_restrict    -> policy_restrict_result { ok, error? }: the unsigned restriction lane
+///                       (`crate::policy::restrict`), which refuses anything that relaxes the effective policy;
+///                       the written state reaches the extension as the watch's next policy_current push, so
+///                       the result frame carries the verdict alone
 /// lang_get/lang_set  -> lang_current { value, seq }; `seq` suppresses the sender's own echo
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,6 +367,17 @@ pub enum PolicyControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Extension -> host: tighten the effective policy by this overlay (merged entry-wise over the stored one).
+    PolicyRestrict {
+        overlay: crate::policy::PolicyOverlay,
+    },
+    /// Host -> extension: the restriction verdict. `error` travels exactly when not `ok`
+    /// ([`RestrictOutcome::into_frame`]).
+    PolicyRestrictResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// Extension -> host: request the current shared language.
     LangGet {},
     /// Extension -> host: a user-gesture language change.
@@ -277,6 +385,28 @@ pub enum PolicyControl {
     /// Host -> extension: the shared language and its echo-suppression
     /// sequence (the reply to both `lang_*` requests, and pushed on change).
     LangCurrent { value: String, seq: u64 },
+}
+
+/// The restriction verdict as the host decides it; same discipline as [`PresenceOutcome`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestrictOutcome {
+    Applied,
+    Refused { error: String },
+}
+
+impl RestrictOutcome {
+    pub fn into_frame(self) -> PolicyControl {
+        match self {
+            RestrictOutcome::Applied => PolicyControl::PolicyRestrictResult {
+                ok: true,
+                error: None,
+            },
+            RestrictOutcome::Refused { error } => PolicyControl::PolicyRestrictResult {
+                ok: false,
+                error: Some(error),
+            },
+        }
+    }
 }
 
 /// WebAuthn enrollment and presence frames, host-handled exactly like the three enums above. The host is
@@ -418,8 +548,13 @@ pub enum HostControlTag {
     KillRelease,
     KillStatusResult,
     AuditEvent,
+    RegistrationStatus,
+    RegistrationRepair,
+    RegistrationStatusResult,
     PolicyGet,
     PolicyCurrent,
+    PolicyRestrict,
+    PolicyRestrictResult,
     LangGet,
     LangSet,
     LangCurrent,
@@ -454,7 +589,10 @@ impl HostControlTag {
             | HostControlTag::KillEngage
             | HostControlTag::KillRelease
             | HostControlTag::AuditEvent
+            | HostControlTag::RegistrationStatus
+            | HostControlTag::RegistrationRepair
             | HostControlTag::PolicyGet
+            | HostControlTag::PolicyRestrict
             | HostControlTag::LangGet
             | HostControlTag::LangSet
             | HostControlTag::EnrollBegin
@@ -468,7 +606,9 @@ impl HostControlTag {
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
+            | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
+            | HostControlTag::PolicyRestrictResult
             | HostControlTag::LangCurrent
             | HostControlTag::EnrollOptions
             | HostControlTag::EnrollResult
@@ -527,6 +667,22 @@ impl HostControlTag {
                 .into_frame()
                 .into(),
             )),
+            HostControlTag::RegistrationStatus | HostControlTag::RegistrationRepair => {
+                MalformedReply::Send(Box::new(
+                    RegistrationReport::Unavailable {
+                        error: format!("malformed {self} frame"),
+                    }
+                    .into_frame()
+                    .into(),
+                ))
+            }
+            HostControlTag::PolicyRestrict => MalformedReply::Send(Box::new(
+                RestrictOutcome::Refused {
+                    error: "malformed policy_restrict frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
             HostControlTag::LangGet | HostControlTag::LangSet => MalformedReply::LangCurrent,
             HostControlTag::EnrollBegin | HostControlTag::EnrollFinish => {
                 MalformedReply::Send(Box::new(
@@ -556,7 +712,9 @@ impl HostControlTag {
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
+            | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
+            | HostControlTag::PolicyRestrictResult
             | HostControlTag::LangCurrent
             | HostControlTag::EnrollOptions
             | HostControlTag::EnrollResult
@@ -695,7 +853,15 @@ pub enum HostRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
+    RegistrationStatus {},
+    /// Re-registers the detected browsers through the same path as `doctor --fix`; idempotent, and
+    /// capability-neutral toward MCP clients (it points browsers at this binary and nothing else).
+    RegistrationRepair {},
     PolicyGet {},
+    /// The free restriction lane; the seam refuses a relaxation, so no presence gate stands here.
+    PolicyRestrict {
+        overlay: crate::policy::PolicyOverlay,
+    },
     LangGet {},
     LangSet {
         value: String,
