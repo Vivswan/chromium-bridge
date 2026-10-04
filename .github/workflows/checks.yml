@@ -28,7 +28,9 @@ env:
   CI_IMAGE_TAG: latest
 
 jobs:
-  # The image's own user cannot write the runner-owned workspace, hence root.
+  # The image's own user cannot write the runner-owned workspace, hence root. Every consumer carries a
+  # zizmor unpinned-images ignore: the audit is static and cannot follow the expression to the digest
+  # resolved here, which is the pin.
   image:
     name: CI image
     runs-on: ubuntu-latest
@@ -58,7 +60,7 @@ jobs:
     name: Rust (${{ matrix.os }})
     needs: image
     runs-on: ${{ matrix.os }}
-    container: ${{ fromJSON(matrix.container || '""') }}
+    container: ${{ fromJSON(matrix.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -115,7 +117,7 @@ jobs:
     name: Coverage (cargo-llvm-cov, informational)
     needs: image
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 20
     continue-on-error: true
     steps:
@@ -133,7 +135,7 @@ jobs:
     name: Extension (typecheck, lint, format, test, build)
     needs: image
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -154,7 +156,7 @@ jobs:
     name: Contract (gen idempotency, envelope asymmetry gate)
     needs: image
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -174,7 +176,7 @@ jobs:
     name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
     needs: image
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -193,7 +195,7 @@ jobs:
     name: Tooling hygiene (cargo-machete)
     needs: image
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -337,7 +339,7 @@ jobs:
     name: MCP SDK v2 client interop (bun)
     needs: [image, build-release]
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -363,7 +365,7 @@ jobs:
     name: web app builds
     needs: image
     runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

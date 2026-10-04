@@ -497,7 +497,7 @@ tasks:
       bun test scripts/check-typography.test.ts
 
   check-toolchain:
-    description: 'The duplicated toolchain pins (.prototools vs rust-toolchain.toml, package.json, .bun-version) must agree'
+    description: 'The bun pin copies (.prototools, package.json, .bun-version) must agree, and .prototools must leave rust to rustup and python to uv'
     command: 'bun scripts/check-toolchain.ts'
 
   check-hasher:
