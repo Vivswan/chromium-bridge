@@ -1,5 +1,4 @@
 use super::*;
-use crate::tools::args::NoArgs;
 
 /// A test generation; panics on 0, which is exactly the point -- a real
 /// [`Generation`] cannot be zero.
@@ -164,6 +163,7 @@ fn kill_drain_drops_every_entry_including_replaced_generations() {
 #[cfg(unix)]
 mod registry {
     use super::*;
+    use crate::tools::args::NoArgs;
     use std::os::unix::net::UnixStream;
     use std::time::Instant;
 
