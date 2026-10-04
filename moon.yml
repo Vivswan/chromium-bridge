@@ -662,7 +662,7 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   check-toolchain:
-    description: 'The duplicated toolchain pins (.prototools vs rust-toolchain.toml, package.json, checks.yml) must agree'
+    description: 'The duplicated toolchain pins (.prototools vs rust-toolchain.toml, package.json, .bun-version) must agree'
     command: 'bun scripts/check-toolchain.ts'
     toolchains: ['system']
     options:

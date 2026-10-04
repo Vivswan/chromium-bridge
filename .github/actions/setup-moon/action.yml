@@ -1,0 +1,52 @@
+# The one toolchain setup every job runs: proto, then whatever .prototools pins (moon, bun, node, uv,
+# rust), then the Rust toolchain from rust-toolchain.toml with a cargo cache when asked. Inside the CI
+# image (Containerfile) proto and moon already exist, so the download is skipped and `proto install` only
+# catches a pin that moved after the image was published.
+#
+# proto's own version is the one pin moonrepo/setup-toolchain cannot read from .prototools (it looks in
+# .moon/toolchains.yml), so it is parsed here; every other version is proto's to resolve.
+name: Set up moon
+description: Installs proto, moon, and the tools pinned in .prototools; optionally the pinned Rust toolchain with a cargo cache.
+
+inputs:
+  rust:
+    description: Also install the Rust toolchain pinned in rust-toolchain.toml and restore the cargo cache.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - id: present
+      shell: bash
+      run: |
+        if command -v proto >/dev/null && command -v moon >/dev/null; then
+          echo "toolchain=preinstalled" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        proto="$(sed -nE 's/^proto[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' .prototools)"
+        if [ "$(printf '%s\n' "$proto" | grep -c .)" != 1 ]; then
+          echo "::error::.prototools must pin proto exactly once"
+          exit 1
+        fi
+        echo "toolchain=missing" >> "$GITHUB_OUTPUT"
+        echo "proto=$proto" >> "$GITHUB_OUTPUT"
+    - if: steps.present.outputs.toolchain == 'missing'
+      uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+      with:
+        proto-version: ${{ steps.present.outputs.proto }}
+        auto-install: "true"
+    - if: steps.present.outputs.toolchain == 'preinstalled'
+      shell: bash
+      run: proto install
+    - if: inputs.rust == 'true'
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      with:
+        cache: false
+    - if: inputs.rust == 'true'
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        # The fuzz crate is its own cargo workspace with its own target/ (root [workspace].exclude).
+        workspaces: |
+          .
+          src/packages/core/fuzz
