@@ -35,7 +35,7 @@ Full details: [SECURITY.md](./.github/SECURITY.md), [threat model](./docs/securi
 
 ## Quickstart with the CLI (macOS, Linux, Windows)
 
-The CLI needs nothing beyond the binary itself, on desktops, headless machines, and CI alike.
+The CLI needs nothing beyond the binary itself, on desktops, headless machines, and CI alike. The one exception today is pairing on macOS, which needs a build codesigned with an application identifier; the WebAuthn presence track removes that requirement.
 
 1. Download the archive for your platform from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest) and extract it. Optionally verify it first; on macOS/Linux (Windows archives are `.zip`, checked with your own sha256 tooling):
 

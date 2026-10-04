@@ -11,7 +11,8 @@
 
 ## CLI (macOS、Linux、Windows)
 
-CLI 只需要二進位檔本身, 在桌面機器、無介面機器和 CI 上都一樣。
+CLI 只需要二進位檔本身, 在桌面機器、無介面機器和 CI 上都一樣。目前唯一的例
+外是 macOS 上的配對 (第 5 步), 它需要一個帶應用程式識別碼簽署的建置。
 
 1. **取得二進位檔。** 從[最新發布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下載對應平台的壓縮檔並解壓。想先驗證的話, 核對發布的 SHA-256 和建置來源

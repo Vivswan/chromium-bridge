@@ -11,7 +11,8 @@
 
 ## CLI (macOS、Linux、Windows)
 
-CLI 只需要二进制本身, 在桌面机器、无界面机器和 CI 上都一样。
+CLI 只需要二进制本身, 在桌面机器、无界面机器和 CI 上都一样。目前唯一的例外
+是 macOS 上的配对 (第 5 步), 它需要一个带应用标识符签名的构建。
 
 1. **获取二进制。** 从[最新发布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下载对应平台的压缩包并解压。想先校验的话, 核对发布的 SHA-256 和构建来源

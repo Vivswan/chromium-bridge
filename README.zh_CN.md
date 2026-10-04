@@ -53,7 +53,9 @@ TCP 套接字, 服务器启动时会对此发出警告。Windows 支持是尽力
 
 ## 使用 CLI 快速上手 (macOS、Linux、Windows)
 
-CLI 只依赖二进制本身, 在桌面机器、无界面机器和 CI 上都一样。
+CLI 只依赖二进制本身, 在桌面机器、无界面机器和 CI 上都一样。目前唯一的例外
+是 macOS 上的配对, 它需要一个带应用标识符签名的构建; WebAuthn 在场验证轨道
+将取消这一要求。
 
 1. 从[最新发布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下载对应平台的压缩包并解压。建议先校验; macOS/Linux 示例如下 (Windows

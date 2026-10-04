@@ -53,7 +53,9 @@ TCP 通訊端, 伺服器啟動時會對此發出警告。Windows 支援是盡力
 
 ## 使用 CLI 快速上手 (macOS、Linux、Windows)
 
-CLI 只依賴二進位檔本身, 在桌面機器、無介面機器和 CI 上都一樣。
+CLI 只依賴二進位檔本身, 在桌面機器、無介面機器和 CI 上都一樣。目前唯一的例
+外是 macOS 上的配對, 它需要一個帶應用程式識別碼簽署的建置; WebAuthn 在場驗
+證軌道將取消這一要求。
 
 1. 從[最新發布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下載對應平台的壓縮檔並解壓。建議先驗證; macOS/Linux 範例如下 (Windows

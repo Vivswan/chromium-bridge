@@ -8,7 +8,7 @@ Before you start, read the security summary in the [README](../README.md#securit
 
 ## The CLI (macOS, Linux, Windows)
 
-The CLI needs nothing but the binary, on desktops, headless machines, and CI alike.
+The CLI needs nothing but the binary, on desktops, headless machines, and CI alike. The one exception today is pairing on macOS (step 5), which needs a build codesigned with an application identifier.
 
 1. **Get the binary.** Download and extract the archive for your platform from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest). To verify it first, check the published SHA-256 and provenance attestation; commands are in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity). Or build from source with `cargo build --release`.
 2. **Put it somewhere stable.** Registrations point at the binary in place, so a path that will not disappear matters. On Linux, `~/.local/lib/chromium-bridge/` works well; anywhere under your home is fine on macOS. (An AppImage mount or a temp directory is not stable, and `doctor --fix` warns if you try.)
