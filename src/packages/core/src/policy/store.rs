@@ -445,9 +445,8 @@ fn commit_signed_baseline(
         Ok(inner) => inner,
         Err(e) => Err(PolicyWriteError::Io(e)),
     };
-    // Log-after-decide: the write is done (or refused) and the
-    // lock is released. Fifteen wire names fit well inside audit.rs's
-    // per-field truncation bound.
+    // Fifteen wire names fit well inside audit.rs's per-field truncation
+    // bound.
     let record = crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
         .surface(surface)
         .detail(&format!(

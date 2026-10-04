@@ -11,11 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-// The identity constants this resolver stamps into every registration.
-// `crate::identity` is the single definition site; re-exported
-// here under the resolver's vocabulary so registration/doctor keep one
-// import for "which host, which extension, which paths".
-pub use crate::identity::{NATIVE_HOST_ID as HOST_ID, PINNED_EXTENSION_ID};
+use crate::identity::NATIVE_HOST_ID;
 
 /// The Chromium-family browsers we know how to register with by name. Any
 /// other Chromium build is reachable through `doctor --fix`'s explicit
@@ -156,7 +152,7 @@ impl BaseDirs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Registration {
     /// macOS / Linux: the browser scans this `NativeMessagingHosts` directory
-    /// for `<HOST_ID>.json`.
+    /// for `<NATIVE_HOST_ID>.json`.
     ManifestDir(PathBuf),
     /// Windows: the browser reads this HKCU registry key (path relative to
     /// `HKEY_CURRENT_USER`); its default value must point at the manifest
@@ -168,7 +164,7 @@ impl Registration {
     /// The manifest file this registration writes/reads.
     pub fn manifest_path(&self) -> PathBuf {
         match self {
-            Registration::ManifestDir(dir) => dir.join(format!("{HOST_ID}.json")),
+            Registration::ManifestDir(dir) => dir.join(format!("{NATIVE_HOST_ID}.json")),
             Registration::Registry { manifest_path, .. } => manifest_path.clone(),
         }
     }
@@ -355,10 +351,10 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
             app_paths: Vec::new(),
             registration: Registration::Registry {
                 key: format!(
-                    r"{}\NativeMessagingHosts\{HOST_ID}",
+                    r"{}\NativeMessagingHosts\{NATIVE_HOST_ID}",
                     windows_vendor_key(browser)
                 ),
-                manifest_path: install_dir(os, dirs).join(format!("{HOST_ID}.json")),
+                manifest_path: install_dir(os, dirs).join(format!("{NATIVE_HOST_ID}.json")),
             },
         },
     }

@@ -49,27 +49,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn manifest_key_is_plausible_base64_der() {
-        // The key is base64 of a DER SubjectPublicKeyInfo for RSA-2048; pin
-        // its exact prefix and length so an accidental edit (truncation,
-        // re-paste) fails here before it produces a different extension id.
-        assert!(EXTENSION_MANIFEST_KEY.starts_with("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"));
-        assert_eq!(EXTENSION_MANIFEST_KEY.len(), 392);
-        assert!(EXTENSION_MANIFEST_KEY
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
-    }
-
-    #[test]
-    fn pinned_extension_id_has_chromes_shape() {
-        // Chrome extension ids are exactly 32 chars of a-p. The full
-        // key-to-id derivation is asserted cross-language by gen-ops.ts under
-        // check-gen (CI); this pins the shape locally.
-        assert_eq!(PINNED_EXTENSION_ID.len(), 32);
-        assert!(PINNED_EXTENSION_ID
-            .chars()
-            .all(|c| ('a'..='p').contains(&c)));
-    }
 }

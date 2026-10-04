@@ -203,12 +203,12 @@ fn unreadable_manifest_path_fails_closed() {
 fn ownership_is_exact_description_match() {
     // install.sh wrote this exact description (no marker suffix).
     let legacy = format!(
-        r#"{{"name":"{HOST_ID}","description":"Chromium Bridge native messaging host","path":"/x/run-host.sh","type":"stdio","allowed_origins":["chrome-extension://{PINNED_EXTENSION_ID}/"]}}"#
+        r#"{{"name":"{NATIVE_HOST_ID}","description":"Chromium Bridge native messaging host","path":"/x/run-host.sh","type":"stdio","allowed_origins":["chrome-extension://{PINNED_EXTENSION_ID}/"]}}"#
     );
     assert_eq!(manifest_ownership(&legacy), Ownership::Ours);
     // Same shape under another host id is foreign.
     assert!(matches!(
-        manifest_ownership(&legacy.replace(HOST_ID, "com.other.host")),
+        manifest_ownership(&legacy.replace(NATIVE_HOST_ID, "com.other.host")),
         Ownership::Foreign(_)
     ));
     // A description that merely STARTS with our prefix is not ours.
