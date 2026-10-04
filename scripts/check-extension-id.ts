@@ -64,8 +64,8 @@ const identityNames = [
   "PINNED_EXTENSION_ID",
   "EXTENSION_MANIFEST_KEY",
 ];
-const identityValues = [NATIVE_HOST_ID, PINNED_EXTENSION_ID, EXTENSION_MANIFEST_KEY].map((v) =>
-  v.replace(/[.+/]/g, "\\$&"),
+const identityValues = [NATIVE_HOST_ID, PINNED_EXTENSION_ID, EXTENSION_MANIFEST_KEY].map(
+  RegExp.escape,
 );
 const definesIdentity = new RegExp(
   `^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:const|static)\\s+(?:r#)?(?:(?:${identityNames.join("|")})\\s*:|\\w+\\s*:\\s*&str\\s*=\\s*"(?:${identityValues.join("|")})")`,
