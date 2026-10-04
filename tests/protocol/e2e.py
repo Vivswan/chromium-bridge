@@ -251,6 +251,7 @@ class ControlFrames(E2ECase):
         """client_list and client_revoke are answered by the host from the
         trusted-client store, never forwarded; a stray result frame is dropped."""
         self.skip_if_enrolled()
+        self.skip_unless_unix("the pty-driven pairing")
         env = self.private_runtime("bb-e2e-admin-")
         h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"], env=env)
         h.run_with_cli_presence(["pair-client", "--name", "codex", "--hash", "aa" * 32], env=env)
@@ -297,6 +298,7 @@ class KillSwitch(E2ECase):
         the extension's retired release frame; `unkill` restores everything,
         and the 0600 audit trail records each step with its surface."""
         self.skip_if_enrolled()
+        self.skip_unless_unix("the pty-driven release")
         for name in ("revocation.json", "audit.log", "audit.log.1", "audit.log.lock"):
             self.addCleanup(self._remove, h.runtime_file(name))
         already = len(h.audit_records())
@@ -360,6 +362,24 @@ class KillSwitch(E2ECase):
             os.remove(path)
         except FileNotFoundError:
             pass
+
+
+class Isolation(unittest.TestCase):
+    def test_windows_children_are_isolated_through_localappdata(self):
+        """lockfile.rs reads LOCALAPPDATA on Windows and ignores XDG_RUNTIME_DIR,
+        so a child pointed only at XDG there would run against the real
+        per-user dir; the spawn guard must judge the variable the binary reads."""
+        rundir = h.new_runtime_dir("bb-e2e-nt-")
+        env = h.runtime_env(rundir, platform="nt")
+        self.assertEqual(env["LOCALAPPDATA"], rundir)
+        saved = h.LOCK
+        h.LOCK = h.lock_path(rundir)
+        try:
+            h.require_isolated(env, platform="nt")
+            with self.assertRaises(RuntimeError):
+                h.require_isolated({"XDG_RUNTIME_DIR": rundir}, platform="nt")
+        finally:
+            h.LOCK = saved
 
 
 class Broker(E2ECase):

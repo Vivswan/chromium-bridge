@@ -57,6 +57,23 @@ def lock_path(rundir):
     return os.path.join(rundir, "chromium-bridge", "run.lock")
 
 
+def runtime_dir_var(platform=os.name):
+    """The variable the binary's runtime_dir() reads (lockfile.rs): LOCALAPPDATA
+    on Windows, where XDG_RUNTIME_DIR is ignored, so a child pointed only at
+    XDG there would run against the real per-user dir."""
+    return "LOCALAPPDATA" if platform == "nt" else "XDG_RUNTIME_DIR"
+
+
+def runtime_env(rundir, platform=os.name):
+    """The variables a child must see to run inside `rundir`."""
+    env = {"XDG_RUNTIME_DIR": rundir, "XDG_CONFIG_HOME": os.path.join(rundir, "config")}
+    if platform == "nt":
+        env["LOCALAPPDATA"] = rundir
+    if sys.platform == "darwin":
+        env["HOME"] = rundir
+    return env
+
+
 def new_runtime_dir(prefix):
     """A fresh private runtime dir directly under the OS temp dir (a nested
     one overruns the Unix socket path limit), removed at interpreter exit
@@ -72,15 +89,12 @@ def isolate(prefix):
     it took; refuse to run otherwise."""
     global RUNDIR, LOCK
     rundir = new_runtime_dir(prefix)
-    os.environ["XDG_RUNTIME_DIR"] = rundir
-    os.environ["XDG_CONFIG_HOME"] = os.path.join(rundir, "config")
-    if sys.platform == "darwin":
-        os.environ["HOME"] = rundir
+    os.environ.update(runtime_env(rundir))
     lock = lock_path(rundir)
     if not (os.path.isdir(rundir) and within(rundir, tempfile.gettempdir())):
         sys.exit("REFUSING TO RUN: isolation dir is not a fresh temp dir")
-    if os.environ.get("XDG_RUNTIME_DIR") != rundir:
-        sys.exit("REFUSING TO RUN: XDG_RUNTIME_DIR is not the isolation dir")
+    if os.environ.get(runtime_dir_var()) != rundir:
+        sys.exit(f"REFUSING TO RUN: {runtime_dir_var()} is not the isolation dir")
     if not within(lock, rundir):
         sys.exit("REFUSING TO RUN: lock path escaped the isolation dir")
     RUNDIR, LOCK = rundir, lock
@@ -89,10 +103,11 @@ def isolate(prefix):
     return rundir
 
 
-def require_isolated(env=None):
-    """The runtime dir a child would see (`env`, else this process's) is one
-    this harness created, and LOCK points inside it."""
-    runtime = (os.environ if env is None else env).get("XDG_RUNTIME_DIR")
+def require_isolated(env=None, platform=os.name):
+    """The runtime dir a child would see (`env`, else this process's, read
+    from the variable the binary honors on `platform`) is one this harness
+    created, and LOCK points inside it."""
+    runtime = (os.environ if env is None else env).get(runtime_dir_var(platform))
     if not (runtime in OWNED_RUNTIME_DIRS and within(LOCK, runtime)):
         raise RuntimeError("REFUSING TO SPAWN: runtime-dir isolation precondition not met")
 
@@ -776,10 +791,7 @@ class BridgeCase(unittest.TestCase):
         the test's duration. Returns the child env."""
         global LOCK
         rundir = new_runtime_dir(prefix)
-        env = dict(os.environ, XDG_RUNTIME_DIR=rundir,
-                   XDG_CONFIG_HOME=os.path.join(rundir, "config"))
-        if sys.platform == "darwin":
-            env["HOME"] = rundir
+        env = dict(os.environ, **runtime_env(rundir))
         saved = LOCK
         LOCK = lock_path(rundir)
 
