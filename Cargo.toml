@@ -128,7 +128,6 @@ unnecessary_safety_doc = "deny"
 # when the cause is gone.
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
-# Every assert says what broke.
 missing_assert_message = "deny"
 # A match on an enum lists every variant, so a new one is a compile error at
 # each site, never a silent fallthrough. A foreign `#[non_exhaustive]` enum

@@ -56,8 +56,6 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --release
-      # Rustdoc's own lints (broken intra-doc links, bare URLs, invalid HTML)
-      # only run under cargo doc; -D warnings makes them a gate like clippy's.
       - run: cargo doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings

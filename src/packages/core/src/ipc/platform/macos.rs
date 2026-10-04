@@ -228,8 +228,6 @@ mod cf {
 
 use cf::Cf;
 
-/// The default CoreFoundation allocator, read once through a safe function so
-/// the creation sites hold one unsafe operation each.
 fn default_allocator() -> CFAllocatorRef {
     // SAFETY: kCFAllocatorDefault is a CoreFoundation constant, initialized by
     // the framework before any Rust code runs and never released.
