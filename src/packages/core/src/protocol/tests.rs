@@ -378,57 +378,56 @@ fn wire_types_reject_unknown_fields() {
         serde_json::from_value::<BridgeResp>(json!({ "id": 1, "ok": true, "data": {} })).is_ok()
     );
 
-    // Enclave control frames: all five variants reject an unexpected
-    // field, and a challenge carrying one is classified Malformed
-    // (answered with an error), never signed.
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "enclave_proof", "sig": "s", "key_id": "k", "pubkey": "p", "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "enclave_error", "reason": "r", "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "enclave_revoke", "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "enclave_revoked", "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(json!({ "type": "enclave_revoke" })).is_ok());
-    assert!(serde_json::from_value::<EnclaveControl>(json!({ "type": "enclave_revoked" })).is_ok());
-    // The presence frames (ADR-0031) reject unknown fields the same way,
-    // with positive controls.
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p",
-                "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "presence_error", "reason": "r", "extra": 1 })
-    )
-    .is_err());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "presence_challenge", "nonce": "n", "context": "c" })
-    )
-    .is_ok());
-    assert!(serde_json::from_value::<EnclaveControl>(
-        json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p" })
-    )
-    .is_ok());
+    // Enclave control frames: every variant rejects an unexpected field,
+    // with positive controls, and a challenge carrying one is classified
+    // malformed under its tag (answered with an error), never signed.
+    for (bad, good) in [
+        (
+            json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 }),
+            json!({ "type": "enclave_challenge", "nonce": "n", "context": "c" }),
+        ),
+        (
+            json!({ "type": "enclave_proof", "sig": "s", "key_id": "k", "pubkey": "p", "extra": 1 }),
+            json!({ "type": "enclave_proof", "sig": "s", "key_id": "k", "pubkey": "p" }),
+        ),
+        (
+            json!({ "type": "enclave_error", "reason": "r", "extra": 1 }),
+            json!({ "type": "enclave_error", "reason": "r" }),
+        ),
+        (
+            json!({ "type": "enclave_revoke", "extra": 1 }),
+            json!({ "type": "enclave_revoke" }),
+        ),
+        (
+            json!({ "type": "enclave_revoked", "extra": 1 }),
+            json!({ "type": "enclave_revoked" }),
+        ),
+        (
+            json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 }),
+            json!({ "type": "presence_challenge", "nonce": "n", "context": "c" }),
+        ),
+        (
+            json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p",
+                    "extra": 1 }),
+            json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p" }),
+        ),
+        (
+            json!({ "type": "presence_error", "reason": "r", "extra": 1 }),
+            json!({ "type": "presence_error", "reason": "r" }),
+        ),
+    ] {
+        assert!(
+            serde_json::from_value::<EnclaveControl>(bad.clone()).is_err(),
+            "should reject: {bad}"
+        );
+        assert!(serde_json::from_value::<EnclaveControl>(good).is_ok());
+    }
     assert!(matches!(
         classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 })),
-        FrameDisposition::Malformed
+        FrameDisposition::Malformed {
+            tag: HostControlTag::EnclaveChallenge,
+            ..
+        }
     ));
 
     // Admin control frames (ADR-0025): every variant rejects an

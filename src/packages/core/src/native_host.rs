@@ -23,9 +23,8 @@ use std::time::Duration;
 use crate::enclave::EnrollmentKey;
 use crate::ipc;
 use crate::protocol::control::{
-    classify_nm_frame, host_control_type, AdminControl, AdminKind, AuditEventFields,
-    EnclaveControl, FrameDisposition, KillStatus, PolicyControl, PolicyKind, PolicyStatus,
-    PolicyUnavailableReason,
+    classify_nm_frame, host_control_type, AdminControl, EnclaveControl, FrameDisposition,
+    HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus, PolicyUnavailableReason,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::revocation::{Revocation, REVOCATION_POLL};
@@ -217,55 +216,6 @@ fn handle_kill_release_refused() -> AdminControl {
     .into_frame()
 }
 
-/// Record one extension-side decision in the audit trail (ADR-0030). The
-/// fields arrive by name, and the kind is already the typed, extension-owned
-/// [`crate::audit::AuditKind`]: [`crate::protocol::control::classify_nm_frame`] mapped it through
-/// [`crate::audit::extension_kind`] and the surface is stamped HERE, so the
-/// browser leg cannot forge host-side events (an admission, a kill) into the
-/// trail. Fire-and-forget: no reply.
-fn handle_audit_event(fields: AuditEventFields) {
-    let AuditEventFields {
-        kind,
-        outcome,
-        tool,
-        name,
-        detail,
-        cid,
-    } = fields;
-    let mut rec = crate::audit::AuditRecord::new(kind).surface(crate::audit::Surface::Extension);
-    rec.outcome = outcome;
-    rec.tool = tool;
-    rec.name = name;
-    rec.detail = detail;
-    rec.cid = cid;
-    crate::audit::record(rec);
-}
-
-/// The reply for a malformed admin request frame: the matching result frame
-/// with `ok: false`, so the extension's pending request resolves instead of
-/// timing out. Exhaustive over [`AdminKind`] with no catch-all: the compiler
-/// holds every request kind to a reply of its own type.
-fn malformed_admin_reply(kind: AdminKind) -> AdminControl {
-    match kind {
-        AdminKind::ClientList => AdminControl::ClientListResult {
-            ok: false,
-            enrolled: false,
-            clients: Vec::new(),
-            error: Some("malformed client_list frame".into()),
-        },
-        AdminKind::ClientRevoke => AdminControl::ClientRevokeResult {
-            ok: false,
-            error: Some("malformed client_revoke frame".into()),
-        },
-        AdminKind::KillStatus | AdminKind::KillEngage | AdminKind::KillRelease => {
-            KillStatus::Unreadable {
-                error: format!("malformed {} frame", kind.wire_tag()),
-            }
-            .into_frame()
-        }
-    }
-}
-
 // ---- ADR-0032: host-owned policy and shared-language control frames ----------
 
 /// The current policy state as a `policy_current` frame (ADR-0032 decision 4). The baseline travels as the stored
@@ -340,27 +290,6 @@ fn handle_lang_set(value: String) -> Option<PolicyControl> {
             );
             lang_current_frame()
         }
-    }
-}
-
-/// The reply for a malformed policy/language REQUEST frame, mirroring
-/// [`malformed_admin_reply`]: exhaustive over [`PolicyKind`], so the reply
-/// type provably matches the request. A malformed `policy_get` answers
-/// `policy_current { ok: false }`; a malformed `lang_get`/`lang_set` answers
-/// `lang_current` with the UNCHANGED value+seq (decision 7). `None` only when
-/// the language store is unreadable.
-fn malformed_policy_reply(kind: PolicyKind) -> Option<PolicyControl> {
-    match kind {
-        PolicyKind::PolicyGet => Some(
-            PolicyStatus::Unavailable {
-                // A malformed REQUEST is not a store-availability state, so it
-                // carries no structured reason.
-                reason: None,
-                error: "malformed policy_get frame".into(),
-            }
-            .into_frame(),
-        ),
-        PolicyKind::LangGet | PolicyKind::LangSet => lang_current_frame(),
     }
 }
 
@@ -680,139 +609,81 @@ enum Inbound {
     Forward(Value),
 }
 
-/// Handle one frame from Chrome against the host-handled control surface
-/// (ADR-0021/0025/0030/0031). Shared by the normal stdin->socket pump and the
-/// control-plane-only loop, so the two modes cannot drift in what they answer.
-/// An `Err` means a control REPLY could not be written (stdout gone), which
-/// ends the calling loop.
+/// Handle one frame from Chrome against the host-handled control surface. Shared by the normal
+/// stdin->socket pump and the control-plane-only loop, so the two modes cannot drift in what they answer.
+/// An `Err` means a control REPLY could not be written (stdout gone), which ends the calling loop.
 fn handle_control_frame(
     frame: Value,
     out: &Arc<Mutex<BufWriter<io::Stdout>>>,
 ) -> io::Result<Inbound> {
     match classify_nm_frame(&frame) {
         FrameDisposition::Forward => Ok(Inbound::Forward(frame)),
-        FrameDisposition::Challenge { nonce, context } => {
+        FrameDisposition::Handle(request) => {
+            handle_request(request, out)?;
+            Ok(Inbound::Handled)
+        }
+        FrameDisposition::Malformed { tag, error } => {
+            log_warn!("native-host", "malformed {tag} frame from browser: {error}");
+            match tag.malformed_reply() {
+                MalformedReply::Drop => {}
+                MalformedReply::Send(reply) => write_control_reply(out, &reply)?,
+                MalformedReply::LangCurrent => {
+                    if let Some(reply) = lang_current_frame() {
+                        write_control_reply(out, &reply)?;
+                    }
+                }
+            }
+            Ok(Inbound::Handled)
+        }
+    }
+}
+
+/// Answer one parsed request. Exhaustive on purpose: a [`HostRequest`] variant without an arm here does
+/// not compile, so no inbound frame type can ship unhandled.
+fn handle_request(request: HostRequest, out: &Arc<Mutex<BufWriter<io::Stdout>>>) -> io::Result<()> {
+    match request {
+        HostRequest::EnclaveChallenge { nonce, context } => {
             log_info!("native-host", "answering enclave challenge locally");
-            // Signing blocks this pump until the user answers the
-            // presence prompt, so extension->server traffic is
-            // head-of-line blocked for the duration (server->extension
-            // still flows). Accepted: challenges only occur during the
-            // user-present enrollment ceremony, not in steady state (the
-            // steady-state presence rounds run on their own thread, see
-            // handle_presence_challenge).
             let reply = crate::enclave::respond_to_challenge(&nonce, context.as_deref());
-            write_control_reply(out, &reply)?;
-            Ok(Inbound::Handled)
+            write_control_reply(out, &reply)
         }
-        FrameDisposition::PresenceChallenge { nonce, context } => {
+        HostRequest::PresenceChallenge { nonce, context } => {
             log_info!("native-host", "answering presence challenge locally");
-            handle_presence_challenge(nonce, context, out)?;
-            Ok(Inbound::Handled)
+            handle_presence_challenge(nonce, context, out)
         }
-        FrameDisposition::RevokeHostKey => {
-            write_control_reply(out, &revoke_host_key())?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::ClientList => {
-            write_control_reply(out, &admin_client_list())?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::ClientRevoke { name } => {
-            write_control_reply(out, &admin_client_revoke(&name))?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::KillStatus => {
-            write_control_reply(out, &kill_status_reply())?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::KillEngage => {
-            write_control_reply(out, &handle_kill_engage())?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::KillRelease => {
-            // ADR-0032 decision 6: extension release is retired; refuse it,
-            // audited, rather than running the (now removed) extension floor.
-            write_control_reply(out, &handle_kill_release_refused())?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::PolicyGet => {
-            write_control_reply(out, &policy_current_reply())?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::LangGet => {
-            if let Some(reply) = lang_current_frame() {
-                write_control_reply(out, &reply)?;
-            }
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::LangSet { value } => {
-            if let Some(reply) = handle_lang_set(value) {
-                write_control_reply(out, &reply)?;
-            }
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::MalformedPolicy(kind) => {
-            log_warn!(
-                "native-host",
-                "malformed {} frame from browser",
-                kind.wire_tag()
-            );
-            if let Some(reply) = malformed_policy_reply(kind) {
-                write_control_reply(out, &reply)?;
-            }
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::AuditEvent(fields) => {
-            // Fire-and-forget by contract: no reply frame.
-            handle_audit_event(fields);
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::DropForeignAuditKind { kind } => {
-            // Refused at classification (the kind is host-owned); the
-            // offending value is logged here for forensics, nothing recorded.
-            log_warn!(
-                "native-host",
-                "dropping audit_event with a non-extension kind {kind:?}"
-            );
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::MalformedAdmin(kind) => {
-            log_warn!(
-                "native-host",
-                "malformed {} frame from browser",
-                kind.wire_tag()
-            );
-            write_control_reply(out, &malformed_admin_reply(kind))?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::Drop(kind) => {
-            log_warn!(
-                "native-host",
-                "dropping unexpected {kind} frame from browser"
-            );
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::Malformed => {
-            log_warn!(
-                "native-host",
-                "malformed enclave control frame from browser"
-            );
-            let reply = EnclaveControl::EnclaveError {
-                reason: "invalid_challenge".into(),
-            };
-            write_control_reply(out, &reply)?;
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::MalformedPresence => {
-            log_warn!(
-                "native-host",
-                "malformed presence control frame from browser"
-            );
-            let reply = EnclaveControl::PresenceError {
-                reason: "invalid_challenge".into(),
-            };
-            write_control_reply(out, &reply)?;
-            Ok(Inbound::Handled)
+        HostRequest::EnclaveRevoke {} => write_control_reply(out, &revoke_host_key()),
+        HostRequest::ClientList {} => write_control_reply(out, &admin_client_list()),
+        HostRequest::ClientRevoke { name } => write_control_reply(out, &admin_client_revoke(&name)),
+        HostRequest::KillStatus {} => write_control_reply(out, &kill_status_reply()),
+        HostRequest::KillEngage {} => write_control_reply(out, &handle_kill_engage()),
+        HostRequest::KillRelease {} => write_control_reply(out, &handle_kill_release_refused()),
+        HostRequest::PolicyGet {} => write_control_reply(out, &policy_current_reply()),
+        HostRequest::LangGet {} => match lang_current_frame() {
+            Some(reply) => write_control_reply(out, &reply),
+            None => Ok(()),
+        },
+        HostRequest::LangSet { value } => match handle_lang_set(value) {
+            Some(reply) => write_control_reply(out, &reply),
+            None => Ok(()),
+        },
+        HostRequest::AuditEvent {
+            kind,
+            outcome,
+            tool,
+            name,
+            detail,
+            cid,
+        } => {
+            // The surface is stamped HERE, so the browser leg records only its own decisions.
+            let mut rec = crate::audit::AuditRecord::new(kind.into())
+                .surface(crate::audit::Surface::Extension);
+            rec.outcome = outcome;
+            rec.tool = tool;
+            rec.name = name;
+            rec.detail = detail;
+            rec.cid = cid;
+            crate::audit::record(rec);
+            Ok(())
         }
     }
 }

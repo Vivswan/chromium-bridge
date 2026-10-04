@@ -105,6 +105,7 @@ name = "chromium-bridge-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chromium-bridge-core",
  "core-foundation",
  "futures",
  "getrandom 0.4.3",

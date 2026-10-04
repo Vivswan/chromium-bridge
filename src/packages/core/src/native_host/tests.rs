@@ -148,17 +148,14 @@ fn audit_text() -> String {
 
 #[test]
 fn policy_frames_from_the_browser_are_answered_or_dropped() {
-    // The three extension-originated frames are ANSWERED by the host
-    // (policy_get, lang_get, lang_set) - each classifies to its own
-    // disposition, never Drop, never Forward (an
-    // old-style forward would tear the browser leg down on the MCP
-    // server's strict BridgeResp parse). The two host->extension pushes
-    // (policy_current, lang_current) arriving FROM the browser stay
-    // DROPPED (host->extension only). All are Handled, never forwarded. A
-    // scratch runtime dir isolates the store reads/writes the answers do.
+    // The three extension-originated frames are ANSWERED by the host (policy_get, lang_get, lang_set):
+    // each parses as a request, never Forward (a forward would tear the browser leg down on the MCP
+    // server's strict BridgeResp parse). The two host->extension pushes (policy_current, lang_current)
+    // arriving FROM the browser are malformed under their tag with nothing owed. All are Handled, never
+    // forwarded. A scratch runtime dir isolates the store reads/writes the answers do.
     let _dir = scratch_runtime_dir("native-host-answered-or-dropped");
     let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
-    for (frame, is_drop) in [
+    for (frame, is_push) in [
         (serde_json::json!({ "type": "policy_get" }), false),
         (serde_json::json!({ "type": "lang_get" }), false),
         (
@@ -174,20 +171,24 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
             true,
         ),
     ] {
-        let disposition = classify_nm_frame(&frame);
-        if is_drop {
-            assert!(
-                matches!(disposition, FrameDisposition::Drop(_)),
-                "host->extension push must Drop from the browser leg: {frame}"
-            );
-        } else {
-            assert!(
-                !matches!(
-                    disposition,
-                    FrameDisposition::Drop(_) | FrameDisposition::Forward
-                ),
-                "extension-originated frame must be answered, not dropped/forwarded: {frame}"
-            );
+        match classify_nm_frame(&frame) {
+            FrameDisposition::Handle(_) => {
+                assert!(
+                    !is_push,
+                    "a host->extension push must not parse as a request: {frame}"
+                );
+            }
+            FrameDisposition::Malformed { tag, .. } => {
+                assert!(
+                    is_push,
+                    "an extension-originated frame must be answered: {frame}"
+                );
+                assert!(
+                    matches!(tag.malformed_reply(), MalformedReply::Drop),
+                    "a bounced push owes nothing: {frame}"
+                );
+            }
+            FrameDisposition::Forward => panic!("host control must never forward: {frame}"),
         }
         let verdict = handle_control_frame(frame, &out).unwrap();
         assert!(matches!(verdict, Inbound::Handled));
@@ -417,53 +418,6 @@ fn extension_kill_release_is_refused_audited_and_does_not_release() {
 }
 
 #[test]
-fn malformed_admin_frames_get_a_matching_ok_false_reply() {
-    // The reply frame type must match the request so the extension's
-    // pending request resolves instead of timing out. Every AdminKind is
-    // exercised; the builder itself is exhaustive, so a new kind fails to
-    // compile until it gets a reply of its own type.
-    for kind in [
-        AdminKind::ClientList,
-        AdminKind::ClientRevoke,
-        AdminKind::KillStatus,
-        AdminKind::KillEngage,
-        AdminKind::KillRelease,
-    ] {
-        match (kind, malformed_admin_reply(kind)) {
-            (
-                AdminKind::ClientList,
-                AdminControl::ClientListResult {
-                    ok: false,
-                    error: Some(_),
-                    ..
-                },
-            ) => {}
-            (
-                AdminKind::ClientRevoke,
-                AdminControl::ClientRevokeResult {
-                    ok: false,
-                    error: Some(_),
-                },
-            ) => {}
-            // The kill frames all resolve to a kill_status_result whose
-            // ok:false carries NO killed claim (unknown fails closed on
-            // the extension side).
-            (
-                AdminKind::KillStatus | AdminKind::KillEngage | AdminKind::KillRelease,
-                AdminControl::KillStatusResult {
-                    ok: false,
-                    killed: None,
-                    error: Some(_),
-                },
-            ) => {}
-            (kind, other) => {
-                panic!("reply type does not match request kind {kind:?}: {other:?}")
-            }
-        }
-    }
-}
-
-#[test]
 fn kill_status_reply_never_claims_a_state_it_cannot_read() {
     // On a machine whose revocation record is absent (the unit-test
     // environment), the reply is ok with an explicit killed flag; the
@@ -489,11 +443,9 @@ fn kill_status_reply_never_claims_a_state_it_cannot_read() {
 
 #[test]
 fn audit_events_with_host_side_kinds_are_dropped() {
-    // The forgery gate now lives in classification (protocol/control.rs pins the
-    // DropForeignAuditKind mapping); this exercises the host wiring: the
-    // frame is Handled (never forwarded), no reply is written, and
-    // nothing recordable is ever constructed - handle_audit_event only
-    // accepts the typed AuditEventFields classification can produce.
+    // The forgery gate lives in the parse (protocol/control.rs: a host-owned kind is not an
+    // ExtensionAuditKind); this exercises the host wiring: the frame is Handled (never forwarded), no
+    // reply is written, and nothing recordable is ever constructed.
     let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     for kind in ["kill_engage", "harness_admit"] {
         let verdict = handle_control_frame(

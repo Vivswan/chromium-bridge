@@ -1,5 +1,451 @@
 use super::*;
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Every variant's `type` tag of an internally tagged wire enum, read from the schema the contract
+/// emitter derives, so no hand-written sample list has to stay complete.
+fn variant_tags<T: schemars::JsonSchema>() -> BTreeMap<String, Value> {
+    let schema = serde_json::to_value(schemars::schema_for!(T)).unwrap();
+    schema["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|variant| {
+            let tag = variant["properties"]["type"]["const"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            (tag, variant.clone())
+        })
+        .collect()
+}
+
+/// Every [`HostControlTag`], from its schema: the single derived enumeration of the tag set.
+fn all_host_control_tags() -> Vec<HostControlTag> {
+    let schema = serde_json::to_value(schemars::schema_for!(HostControlTag)).unwrap();
+    schema["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tag| serde_json::from_value(tag.clone()).unwrap())
+        .collect()
+}
+
+fn without_descriptions(mut schema: Value) -> Value {
+    fn strip(v: &mut Value) {
+        match v {
+            Value::Object(map) => {
+                map.remove("description");
+                map.values_mut().for_each(strip);
+            }
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+    strip(&mut schema);
+    schema
+}
+
+#[test]
+fn host_control_tags_mirror_the_wire_enums() {
+    // Cross-type consistency Rust cannot express: HostControlTag is a separate enum, and a variant added to
+    // EnclaveControl / AdminControl / PolicyControl without it would classify as Forward (relayed to the MCP
+    // server) instead of being answered or dropped. The tag strings are read from each enum's own schema.
+    let mut wire: Vec<String> = Vec::new();
+    wire.extend(variant_tags::<EnclaveControl>().into_keys());
+    wire.extend(variant_tags::<AdminControl>().into_keys());
+    wire.extend(variant_tags::<PolicyControl>().into_keys());
+    let distinct: BTreeSet<&str> = wire.iter().map(String::as_str).collect();
+    assert_eq!(
+        distinct.len(),
+        wire.len(),
+        "a tag appears in more than one wire enum: {wire:?}"
+    );
+    let tags: BTreeSet<String> = all_host_control_tags()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        tags,
+        distinct.iter().map(ToString::to_string).collect(),
+        "HostControlTag must name exactly the wire enums' variants"
+    );
+    // Both classifiers recognize every tag: the socket->stdout pump drops a server-injected one, and the
+    // stdin->socket pump never forwards one.
+    for tag in all_host_control_tags() {
+        let frame = json!({ "type": tag.to_string() });
+        assert_eq!(host_control_type(&frame), Some(tag), "{tag}");
+        assert!(
+            !matches!(classify_nm_frame(&frame), FrameDisposition::Forward),
+            "{tag} must never classify as Forward"
+        );
+    }
+}
+
+#[test]
+fn host_request_variants_match_their_wire_enum_variants() {
+    // Cross-type consistency: the extension's generated writer types come from the wire enums, while the
+    // host parses HostRequest; a field present on one side only would make the genuine extension's frame
+    // malformed (or let a field travel unparsed). Compared as schemas, docs aside.
+    let mut wire = variant_tags::<EnclaveControl>();
+    wire.extend(variant_tags::<AdminControl>());
+    wire.extend(variant_tags::<PolicyControl>());
+    let requests = variant_tags::<HostRequest>();
+    assert!(!requests.is_empty(), "HostRequest has variants");
+    for (tag, request) in requests {
+        let counterpart = wire
+            .get(&tag)
+            .unwrap_or_else(|| panic!("HostRequest::{tag} has no wire-enum variant"));
+        assert_eq!(
+            without_descriptions(request),
+            without_descriptions(counterpart.clone()),
+            "HostRequest {tag} drifted from its wire-enum variant"
+        );
+    }
+}
+
+/// The classifier's answer for one frame, with serde's error text (not part of the contract) left out.
+#[derive(Debug)]
+enum Expect {
+    Forward,
+    Handle(HostRequest),
+    Malformed(HostControlTag),
+}
+
+fn audit(kind: crate::audit::AuditKind) -> HostRequest {
+    HostRequest::AuditEvent {
+        kind: ExtensionAuditKind(kind),
+        outcome: None,
+        tool: None,
+        name: None,
+        detail: None,
+        cid: None,
+    }
+}
+
+#[test]
+fn classification_matrix() {
+    // The wire contract with the extension: relay traffic and near-misses forward untouched (a swallowed
+    // relay frame desynchronizes the bridge), a well-formed request is handled, and anything else wearing a
+    // control tag is malformed under that tag. The forgery gate for audit kinds lives in the parse: a
+    // host-owned kind never becomes a request.
+    use crate::audit::AuditKind;
+    use Expect::{Forward, Handle, Malformed};
+    use HostControlTag as Tag;
+    let cases = [
+        (json!({ "op": "tab_list", "id": 1 }), Forward),
+        (json!({ "id": 7, "ok": true, "data": {} }), Forward),
+        (
+            json!({ "type": "challenge", "nonce": "socket-handshake-shape" }),
+            Forward,
+        ),
+        (json!({ "type": "response", "mac": "aa" }), Forward),
+        (json!({ "type": "enclave_other" }), Forward),
+        (json!({ "type": 42 }), Forward),
+        // Regression (review of this refactor): the externally tagged spelling of a unit variant
+        // parses as HostControlTag from a Value; only a string `type` is a control tag.
+        (json!({ "type": { "kill_status": null } }), Forward),
+        (json!("enclave_error"), Forward),
+        (json!(null), Forward),
+        (
+            json!({ "type": "enclave_challenge", "nonce": "n", "context": "c" }),
+            Handle(HostRequest::EnclaveChallenge {
+                nonce: "n".into(),
+                context: Some("c".into()),
+            }),
+        ),
+        (
+            json!({ "type": "enclave_challenge", "nonce": "n" }),
+            Handle(HostRequest::EnclaveChallenge {
+                nonce: "n".into(),
+                context: None,
+            }),
+        ),
+        (
+            json!({ "type": "enclave_challenge" }),
+            Malformed(Tag::EnclaveChallenge),
+        ),
+        (
+            json!({ "type": "enclave_challenge", "nonce": 5 }),
+            Malformed(Tag::EnclaveChallenge),
+        ),
+        (
+            json!({ "type": "enclave_challenge", "nonce": "n", "extra": 1 }),
+            Malformed(Tag::EnclaveChallenge),
+        ),
+        (
+            json!({ "type": "enclave_revoke" }),
+            Handle(HostRequest::EnclaveRevoke {}),
+        ),
+        (
+            json!({ "type": "enclave_revoke", "extra": 1 }),
+            Malformed(Tag::EnclaveRevoke),
+        ),
+        (
+            json!({ "type": "presence_challenge", "nonce": "n", "context": "c" }),
+            Handle(HostRequest::PresenceChallenge {
+                nonce: "n".into(),
+                context: Some("c".into()),
+            }),
+        ),
+        (
+            json!({ "type": "presence_challenge" }),
+            Malformed(Tag::PresenceChallenge),
+        ),
+        (
+            json!({ "type": "presence_challenge", "nonce": 5 }),
+            Malformed(Tag::PresenceChallenge),
+        ),
+        (
+            json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 }),
+            Malformed(Tag::PresenceChallenge),
+        ),
+        (
+            json!({ "type": "client_list" }),
+            Handle(HostRequest::ClientList {}),
+        ),
+        (
+            json!({ "type": "client_list", "extra": 1 }),
+            Malformed(Tag::ClientList),
+        ),
+        (
+            json!({ "type": "client_revoke", "name": "codex" }),
+            Handle(HostRequest::ClientRevoke {
+                name: "codex".into(),
+            }),
+        ),
+        (
+            json!({ "type": "client_revoke" }),
+            Malformed(Tag::ClientRevoke),
+        ),
+        (
+            json!({ "type": "kill_status" }),
+            Handle(HostRequest::KillStatus {}),
+        ),
+        (
+            json!({ "type": "kill_engage" }),
+            Handle(HostRequest::KillEngage {}),
+        ),
+        (
+            json!({ "type": "kill_release" }),
+            Handle(HostRequest::KillRelease {}),
+        ),
+        (
+            json!({ "type": "kill_status", "extra": 1 }),
+            Malformed(Tag::KillStatus),
+        ),
+        (
+            json!({ "type": "kill_engage", "extra": 1 }),
+            Malformed(Tag::KillEngage),
+        ),
+        (
+            json!({ "type": "kill_release", "extra": 1 }),
+            Malformed(Tag::KillRelease),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "confirm_denied", "tool": "eval", "cid": "c-42" }),
+            Handle(HostRequest::AuditEvent {
+                kind: ExtensionAuditKind(AuditKind::ConfirmDenied),
+                outcome: None,
+                tool: Some("eval".into()),
+                name: None,
+                detail: None,
+                cid: Some("c-42".into()),
+            }),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "confirm_shown" }),
+            Handle(audit(AuditKind::ConfirmShown)),
+        ),
+        (json!({ "type": "audit_event" }), Malformed(Tag::AuditEvent)),
+        (
+            json!({ "type": "audit_event", "kind": 5 }),
+            Malformed(Tag::AuditEvent),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "kill_engage" }),
+            Malformed(Tag::AuditEvent),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "harness_admit" }),
+            Malformed(Tag::AuditEvent),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "tool_call" }),
+            Malformed(Tag::AuditEvent),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "presence_sign" }),
+            Malformed(Tag::AuditEvent),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "admission" }),
+            Malformed(Tag::AuditEvent),
+        ),
+        (
+            json!({ "type": "audit_event", "kind": "" }),
+            Malformed(Tag::AuditEvent),
+        ),
+        (
+            json!({ "type": "policy_get" }),
+            Handle(HostRequest::PolicyGet {}),
+        ),
+        (
+            json!({ "type": "policy_get", "extra": 1 }),
+            Malformed(Tag::PolicyGet),
+        ),
+        (
+            json!({ "type": "lang_get" }),
+            Handle(HostRequest::LangGet {}),
+        ),
+        (
+            json!({ "type": "lang_get", "extra": 1 }),
+            Malformed(Tag::LangGet),
+        ),
+        (
+            json!({ "type": "lang_set", "value": "en" }),
+            Handle(HostRequest::LangSet { value: "en".into() }),
+        ),
+        (json!({ "type": "lang_set" }), Malformed(Tag::LangSet)),
+        // Host->extension frames bounced back by the browser leg.
+        (
+            json!({ "type": "enclave_proof", "sig": "s" }),
+            Malformed(Tag::EnclaveProof),
+        ),
+        (
+            json!({ "type": "enclave_error", "reason": "r" }),
+            Malformed(Tag::EnclaveError),
+        ),
+        (
+            json!({ "type": "enclave_revoked" }),
+            Malformed(Tag::EnclaveRevoked),
+        ),
+        (
+            json!({ "type": "presence_proof", "sig": "s" }),
+            Malformed(Tag::PresenceProof),
+        ),
+        (
+            json!({ "type": "presence_error", "reason": "r" }),
+            Malformed(Tag::PresenceError),
+        ),
+        (
+            json!({ "type": "client_list_result", "ok": true }),
+            Malformed(Tag::ClientListResult),
+        ),
+        (
+            json!({ "type": "client_revoke_result", "ok": true }),
+            Malformed(Tag::ClientRevokeResult),
+        ),
+        (
+            json!({ "type": "kill_status_result", "ok": true }),
+            Malformed(Tag::KillStatusResult),
+        ),
+        (
+            json!({ "type": "policy_current", "ok": true }),
+            Malformed(Tag::PolicyCurrent),
+        ),
+        (
+            json!({ "type": "lang_current", "value": "en", "seq": 1 }),
+            Malformed(Tag::LangCurrent),
+        ),
+    ];
+    for (frame, expect) in cases {
+        let got = classify_nm_frame(&frame);
+        let matched = match (&got, &expect) {
+            (FrameDisposition::Forward, Forward) => true,
+            (FrameDisposition::Handle(got), Handle(want)) => got == want,
+            (FrameDisposition::Malformed { tag, .. }, Malformed(want)) => tag == want,
+            (
+                FrameDisposition::Forward
+                | FrameDisposition::Handle(_)
+                | FrameDisposition::Malformed { .. },
+                Forward | Handle(_) | Malformed(_),
+            ) => false,
+        };
+        assert!(matched, "{frame}: expected {expect:?}, got {got:?}");
+    }
+}
+
+#[test]
+fn malformed_replies_match_the_request_type() {
+    // The reply frame type must match the request so the extension's pending request resolves instead of
+    // timing out; the table covers every tag (checked against the derived set), so a new tag lands here too.
+    use HostControlTag as Tag;
+    enum Owed {
+        Frame(Value),
+        LangCurrent,
+        Nothing,
+    }
+    use Owed::{Frame, LangCurrent, Nothing};
+    let table = [
+        (
+            Tag::EnclaveChallenge,
+            Frame(json!({ "type": "enclave_error", "reason": "invalid_challenge" })),
+        ),
+        (
+            Tag::PresenceChallenge,
+            Frame(json!({ "type": "presence_error", "reason": "invalid_challenge" })),
+        ),
+        (
+            Tag::ClientList,
+            Frame(
+                json!({ "type": "client_list_result", "ok": false, "enrolled": false,
+                          "clients": [], "error": "malformed client_list frame" }),
+            ),
+        ),
+        (
+            Tag::ClientRevoke,
+            Frame(json!({ "type": "client_revoke_result", "ok": false,
+                          "error": "malformed client_revoke frame" })),
+        ),
+        (
+            Tag::KillStatus,
+            Frame(json!({ "type": "kill_status_result", "ok": false,
+                          "error": "malformed kill_status frame" })),
+        ),
+        (
+            Tag::KillEngage,
+            Frame(json!({ "type": "kill_status_result", "ok": false,
+                          "error": "malformed kill_engage frame" })),
+        ),
+        (
+            Tag::KillRelease,
+            Frame(json!({ "type": "kill_status_result", "ok": false,
+                          "error": "malformed kill_release frame" })),
+        ),
+        (
+            Tag::PolicyGet,
+            Frame(json!({ "type": "policy_current", "ok": false,
+                          "error": "malformed policy_get frame" })),
+        ),
+        (Tag::LangGet, LangCurrent),
+        (Tag::LangSet, LangCurrent),
+        (Tag::EnclaveRevoke, Nothing),
+        (Tag::AuditEvent, Nothing),
+        (Tag::EnclaveProof, Nothing),
+        (Tag::EnclaveError, Nothing),
+        (Tag::EnclaveRevoked, Nothing),
+        (Tag::PresenceProof, Nothing),
+        (Tag::PresenceError, Nothing),
+        (Tag::ClientListResult, Nothing),
+        (Tag::ClientRevokeResult, Nothing),
+        (Tag::KillStatusResult, Nothing),
+        (Tag::PolicyCurrent, Nothing),
+        (Tag::LangCurrent, Nothing),
+    ];
+    let covered: BTreeSet<HostControlTag> = table.iter().map(|(tag, _)| *tag).collect();
+    let all: BTreeSet<HostControlTag> = all_host_control_tags().into_iter().collect();
+    assert_eq!(covered, all, "every tag has a row above");
+    for (tag, owed) in table {
+        match (tag.malformed_reply(), owed) {
+            (MalformedReply::Send(reply), Frame(want)) => {
+                assert_eq!(serde_json::to_value(&reply).unwrap(), want, "{tag}");
+            }
+            (MalformedReply::LangCurrent, LangCurrent) | (MalformedReply::Drop, Nothing) => {}
+            (got, Frame(_) | LangCurrent | Nothing) => panic!("{tag}: unexpected reply {got:?}"),
+        }
+    }
+}
 
 #[test]
 fn kill_status_maps_onto_the_pinned_wire_shapes() {
@@ -67,162 +513,6 @@ fn enclave_control_serde_roundtrip() {
 }
 
 #[test]
-fn classify_forwards_ordinary_frames() {
-    // Bridge requests (op, no type) and arbitrary JSON forward untouched.
-    for frame in [
-        json!({ "op": "tab_list", "id": 1 }),
-        json!({ "id": 7, "ok": true, "data": {} }),
-        json!({ "type": "challenge", "nonce": "socket-handshake-shape" }),
-        json!({ "type": "response", "mac": "aa" }),
-        json!({ "type": 42 }),
-        json!("just a string"),
-        json!(null),
-    ] {
-        assert!(
-            matches!(classify_nm_frame(&frame), FrameDisposition::Forward),
-            "should forward: {frame}"
-        );
-    }
-}
-
-#[test]
-fn classify_handles_challenge_locally_and_never_forwards_control_types() {
-    let disposition =
-        classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n", "context": "c" }));
-    let FrameDisposition::Challenge { nonce, context } = disposition else {
-        panic!("expected Challenge, got {disposition:?}");
-    };
-    assert_eq!(nonce, "n");
-    assert_eq!(context.as_deref(), Some("c"));
-    // Context is optional.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": "n" })),
-        FrameDisposition::Challenge { context: None, .. }
-    ));
-    // A challenge missing its nonce is malformed - answered with an
-    // error, never forwarded.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_challenge" })),
-        FrameDisposition::Malformed
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_challenge", "nonce": 5 })),
-        FrameDisposition::Malformed
-    ));
-    // Stray proof/error frames are dropped, not forwarded.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_proof", "sig": "s" })),
-        FrameDisposition::Drop("enclave_proof")
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_error", "reason": "r" })),
-        FrameDisposition::Drop("enclave_error")
-    ));
-}
-
-#[test]
-fn classify_handles_presence_frames_locally() {
-    // A well-formed presence_challenge is handled by the host (ADR-0031),
-    // never forwarded.
-    let disposition =
-        classify_nm_frame(&json!({ "type": "presence_challenge", "nonce": "n", "context": "c" }));
-    let FrameDisposition::PresenceChallenge { nonce, context } = disposition else {
-        panic!("expected PresenceChallenge, got {disposition:?}");
-    };
-    assert_eq!(nonce, "n");
-    assert_eq!(context.as_deref(), Some("c"));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "presence_challenge", "nonce": "n" })),
-        FrameDisposition::PresenceChallenge { context: None, .. }
-    ));
-    // Malformed presence challenges are answered with a presence_error,
-    // never signed and never forwarded.
-    for bad in [
-        json!({ "type": "presence_challenge" }),
-        json!({ "type": "presence_challenge", "nonce": 5 }),
-        json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 }),
-    ] {
-        assert!(
-            matches!(classify_nm_frame(&bad), FrameDisposition::MalformedPresence),
-            "{bad}"
-        );
-    }
-    // Stray presence proof/error frames from the browser leg are dropped:
-    // they are host-originated frames only.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "presence_proof", "sig": "s" })),
-        FrameDisposition::Drop("presence_proof")
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "presence_error", "reason": "r" })),
-        FrameDisposition::Drop("presence_error")
-    ));
-    // And the socket->stdout pump recognizes all three as host control
-    // types, so a misbehaving server cannot inject a forged presence
-    // verdict (the signature check would catch it, but it must not even
-    // reach the extension).
-    for tag in ["presence_challenge", "presence_proof", "presence_error"] {
-        assert_eq!(
-            host_control_type(&json!({ "type": tag })),
-            Some(tag),
-            "{tag}"
-        );
-    }
-}
-
-#[test]
-fn classify_handles_revoke_and_admin_frames_locally() {
-    // A well-formed enclave_revoke is handled by the host (ADR-0025).
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_revoke" })),
-        FrameDisposition::RevokeHostKey
-    ));
-    // A malformed one is dropped: no error-reply contract exists for it,
-    // and dropping fails closed without a misleading reason code.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_revoke", "extra": 1 })),
-        FrameDisposition::Drop(_)
-    ));
-    // A stray enclave_revoked from the extension is dropped (it is a
-    // host-originated frame only).
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "enclave_revoked" })),
-        FrameDisposition::Drop("enclave_revoked")
-    ));
-
-    // Admin requests classify to their handlers...
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "client_list" })),
-        FrameDisposition::ClientList
-    ));
-    let disposition = classify_nm_frame(&json!({ "type": "client_revoke", "name": "codex" }));
-    let FrameDisposition::ClientRevoke { name } = disposition else {
-        panic!("expected ClientRevoke, got {disposition:?}");
-    };
-    assert_eq!(name, "codex");
-    // ...malformed admin requests get the matching {ok:false} reply,
-    // carried as the typed AdminKind so the reply builder cannot
-    // misroute one...
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "client_list", "extra": 1 })),
-        FrameDisposition::MalformedAdmin(AdminKind::ClientList)
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "client_revoke" })),
-        FrameDisposition::MalformedAdmin(AdminKind::ClientRevoke)
-    ));
-    // ...and stray result frames from the browser side are dropped.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "client_list_result", "ok": true })),
-        FrameDisposition::Drop("client_list_result")
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "client_revoke_result", "ok": true })),
-        FrameDisposition::Drop("client_revoke_result")
-    ));
-}
-
-#[test]
 fn admin_control_serde_roundtrips() {
     use crate::allowlist::{Anchor, ClientEntry};
     let result = AdminControl::ClientListResult {
@@ -261,327 +551,10 @@ fn admin_control_serde_roundtrips() {
 }
 
 #[test]
-fn classify_handles_kill_and_audit_frames_locally() {
-    // ADR-0030: the three kill requests classify to their handlers...
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "kill_status" })),
-        FrameDisposition::KillStatus
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "kill_engage" })),
-        FrameDisposition::KillEngage
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "kill_release" })),
-        FrameDisposition::KillRelease
-    ));
-    // ...malformed variants get the matching ok:false reply path...
-    for (tag, kind) in [
-        ("kill_status", AdminKind::KillStatus),
-        ("kill_engage", AdminKind::KillEngage),
-        ("kill_release", AdminKind::KillRelease),
-    ] {
-        assert!(matches!(
-            classify_nm_frame(&json!({ "type": tag, "extra": 1 })),
-            FrameDisposition::MalformedAdmin(k) if k == kind
-        ));
-    }
-    // ...a result frame never legitimately arrives inbound...
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "kill_status_result", "ok": true })),
-        FrameDisposition::Drop(_)
-    ));
-    // ...an audit event carries its fields BY NAME to the handler, with
-    // the kind already typed as extension-owned...
-    let disposition = classify_nm_frame(&json!({
-        "type": "audit_event", "kind": "confirm_denied", "tool": "eval", "cid": "c-42"
-    }));
-    let FrameDisposition::AuditEvent(fields) = disposition else {
-        panic!("expected AuditEvent, got {disposition:?}");
-    };
-    assert_eq!(fields.kind, crate::audit::AuditKind::ConfirmDenied);
-    assert_eq!(fields.tool.as_deref(), Some("eval"));
-    // The per-confirmation correlation id survives parsing so the
-    // host writes it into the audit record for the panel to join on.
-    assert_eq!(fields.cid.as_deref(), Some("c-42"));
-    // ...and a malformed one is dropped (fire-and-forget: no reply
-    // contract to honor, and nothing may be recorded from garbage).
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "audit_event" })),
-        FrameDisposition::Drop(_)
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "audit_event", "kind": 5 })),
-        FrameDisposition::Drop(_)
-    ));
-}
-
-#[test]
-fn audit_events_with_host_owned_kinds_are_dropped_at_classification() {
-    // The forgery gate lives IN classification: a frame claiming a
-    // host-owned kind (an admission, a kill, a presence sign) never
-    // becomes an AuditEvent disposition at all, so no downstream consumer
-    // can record it. The offending value rides the drop for the log.
-    for kind in [
-        "kill_engage",
-        "harness_admit",
-        "tool_call",
-        "presence_sign",
-        "admission",
-        "",
-    ] {
-        let disposition = classify_nm_frame(&json!({ "type": "audit_event", "kind": kind }));
-        let FrameDisposition::DropForeignAuditKind { kind: k } = disposition else {
-            panic!("expected DropForeignAuditKind for {kind:?}, got {disposition:?}");
-        };
-        assert_eq!(k, kind);
-    }
-    // Positive control: an extension-owned kind still classifies to a
-    // typed, recordable AuditEvent.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "audit_event", "kind": "confirm_shown" })),
-        FrameDisposition::AuditEvent(AuditEventFields {
-            kind: crate::audit::AuditKind::ConfirmShown,
-            ..
-        })
-    ));
-}
-
-#[test]
-fn admin_kind_tags_match_their_classification() {
-    // The kind<->tag pairing, end to end: a malformed frame carrying each
-    // kind's wire tag classifies to MalformedAdmin of exactly that kind,
-    // so wire_tag and classify_nm_frame agree on the mapping (the const
-    // assertion above only ties the tags to the derived SET).
-    for &kind in AdminKind::ALL {
-        let disposition = classify_nm_frame(&json!({ "type": kind.wire_tag(), "unexpected": 1 }));
-        let FrameDisposition::MalformedAdmin(k) = disposition else {
-            panic!("expected MalformedAdmin({kind:?}), got {disposition:?}");
-        };
-        assert_eq!(k, kind, "{}", kind.wire_tag());
-    }
-}
-
-#[test]
-fn every_control_variant_tag_is_derived_and_recognized() {
-    use std::collections::BTreeSet;
-
-    // One sample of EVERY variant of the three control enums.
-    // Completeness of this list is enforced below (its tag set must equal
-    // the derived tag set), and the derived set itself cannot miss a
-    // variant: wire_tag's match has no wildcard arm, so a new variant
-    // fails to compile until its tag joins the control_wire_tags! list
-    // feeding both.
-    let enclave: Vec<EnclaveControl> = vec![
-        EnclaveControl::EnclaveChallenge {
-            nonce: "n".into(),
-            context: None,
-        },
-        EnclaveControl::EnclaveProof {
-            sig: "s".into(),
-            key_id: "k".into(),
-            pubkey: "p".into(),
-        },
-        EnclaveControl::EnclaveError { reason: "r".into() },
-        EnclaveControl::EnclaveRevoke {},
-        EnclaveControl::EnclaveRevoked {},
-        EnclaveControl::PresenceChallenge {
-            nonce: "n".into(),
-            context: None,
-        },
-        EnclaveControl::PresenceProof {
-            sig: "s".into(),
-            key_id: "k".into(),
-            pubkey: "p".into(),
-        },
-        EnclaveControl::PresenceError { reason: "r".into() },
-    ];
-    let admin: Vec<AdminControl> = vec![
-        AdminControl::ClientList {},
-        AdminControl::ClientListResult {
-            ok: true,
-            enrolled: false,
-            clients: Vec::new(),
-            error: None,
-        },
-        AdminControl::ClientRevoke { name: "x".into() },
-        AdminControl::ClientRevokeResult {
-            ok: true,
-            error: None,
-        },
-        AdminControl::KillStatus {},
-        AdminControl::KillEngage {},
-        AdminControl::KillRelease {},
-        AdminControl::KillStatusResult {
-            ok: true,
-            killed: Some(false),
-            error: None,
-        },
-        AdminControl::AuditEvent {
-            kind: "confirm_shown".into(),
-            outcome: None,
-            tool: None,
-            name: None,
-            detail: None,
-            cid: None,
-        },
-    ];
-    let policy: Vec<PolicyControl> = vec![
-        PolicyControl::PolicyGet {},
-        PolicyControl::PolicyCurrent {
-            ok: true,
-            baseline: Some("YmFzZQ==".into()),
-            sig: Some("c2ln".into()),
-            overlay: Some(crate::policy::PolicyOverlay::default()),
-            reason: None,
-            error: None,
-        },
-        PolicyControl::LangGet {},
-        PolicyControl::LangSet { value: "en".into() },
-        PolicyControl::LangCurrent {
-            value: "en".into(),
-            seq: 1,
-        },
-    ];
-
-    // Serde round-trip per variant: the tag serde actually emits is the
-    // tag the derived set claims, in both directions.
-    let mut seen: BTreeSet<&'static str> = BTreeSet::new();
-    for frame in &enclave {
-        let v = serde_json::to_value(frame).unwrap();
-        let tag = v.get("type").and_then(Value::as_str).unwrap();
-        assert_eq!(tag, frame.wire_tag(), "serde tag drifted for {frame:?}");
-        let back: EnclaveControl = serde_json::from_value(v).unwrap();
-        assert_eq!(back.wire_tag(), frame.wire_tag());
-        seen.insert(frame.wire_tag());
-    }
-    for frame in &admin {
-        let v = serde_json::to_value(frame).unwrap();
-        let tag = v.get("type").and_then(Value::as_str).unwrap();
-        assert_eq!(tag, frame.wire_tag(), "serde tag drifted for {frame:?}");
-        let back: AdminControl = serde_json::from_value(v).unwrap();
-        assert_eq!(back.wire_tag(), frame.wire_tag());
-        seen.insert(frame.wire_tag());
-    }
-    for frame in &policy {
-        let v = serde_json::to_value(frame).unwrap();
-        let tag = v.get("type").and_then(Value::as_str).unwrap();
-        assert_eq!(tag, frame.wire_tag(), "serde tag drifted for {frame:?}");
-        let back: PolicyControl = serde_json::from_value(v).unwrap();
-        assert_eq!(back.wire_tag(), frame.wire_tag());
-        seen.insert(frame.wire_tag());
-    }
-    let derived: BTreeSet<&'static str> = ENCLAVE_CONTROL_TAGS
-        .iter()
-        .chain(ADMIN_CONTROL_TAGS)
-        .chain(POLICY_CONTROL_TAGS)
-        .copied()
-        .collect();
-    assert_eq!(
-        seen, derived,
-        "the sample lists above must cover every control variant"
-    );
-    assert_eq!(
-        derived.len(),
-        ENCLAVE_CONTROL_TAGS.len() + ADMIN_CONTROL_TAGS.len() + POLICY_CONTROL_TAGS.len(),
-        "a tag is duplicated across the control enums"
-    );
-
-    // Every derived tag is recognized by BOTH pumps' classifiers: the
-    // socket->stdout pump drops a server-injected one, and the
-    // stdin->socket pump never forwards one to the MCP server.
-    for tag in &derived {
-        assert_eq!(
-            host_control_type(&json!({ "type": tag })),
-            Some(*tag),
-            "tag {tag} must be recognized as host control"
-        );
-        assert!(
-            !matches!(
-                classify_nm_frame(&json!({ "type": tag })),
-                FrameDisposition::Forward
-            ),
-            "tag {tag} must never classify as Forward"
-        );
-    }
-    // ...while bridge traffic and near-misses pass through untouched.
-    assert_eq!(
-        host_control_type(&json!({ "id": 1, "op": "tab_list" })),
-        None
-    );
-    assert_eq!(host_control_type(&json!({ "type": "enclave_other" })), None);
-    assert_eq!(host_control_type(&json!({ "type": 5 })), None);
-    assert_eq!(host_control_type(&json!("enclave_error")), None);
-}
-
-#[test]
-fn policy_frames_are_answered_or_dropped_and_recognized_as_host_control() {
-    // The three extension-originated frames are ANSWERED by the host
-    // (policy_get, lang_get, lang_set), so they classify to their own
-    // dispositions - never Drop, never Forward
-    // (an old-style forward would tear the browser leg down on the MCP
-    // server's strict BridgeResp parse). The two host->extension pushes
-    // (policy_current, lang_current) arriving FROM the browser stay
-    // DROPPED (host->extension only). Every one is still recognized as
-    // host control by both pumps' classifiers.
-    for tag in POLICY_CONTROL_TAGS {
-        assert_eq!(
-            host_control_type(&json!({ "type": tag })),
-            Some(*tag),
-            "tag {tag} must be recognized as host control"
-        );
-        assert!(
-            !matches!(
-                classify_nm_frame(&json!({ "type": tag })),
-                FrameDisposition::Forward
-            ),
-            "tag {tag} must never classify as Forward"
-        );
-    }
-    // The three answered frames map to their own dispositions.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "policy_get" })),
-        FrameDisposition::PolicyGet
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "lang_get" })),
-        FrameDisposition::LangGet
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "lang_set", "value": "en" })),
-        FrameDisposition::LangSet { .. }
-    ));
-    // The two host->extension pushes are dropped when they arrive from the
-    // browser: they are host-originated only.
-    for tag in ["policy_current", "lang_current"] {
-        assert!(
-            matches!(classify_nm_frame(&json!({ "type": tag })), FrameDisposition::Drop(t) if t == tag),
-            "tag {tag} must classify as Drop from the browser leg"
-        );
-    }
-    // Malformed extension-originated frames take their typed malformed arm
-    // (a reply is owed) rather than Forward.
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "policy_get", "extra": 1 })),
-        FrameDisposition::MalformedPolicy(PolicyKind::PolicyGet)
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "lang_get", "extra": 1 })),
-        FrameDisposition::MalformedPolicy(PolicyKind::LangGet)
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "lang_set" })),
-        FrameDisposition::MalformedPolicy(PolicyKind::LangSet)
-    ));
-}
-
-#[test]
 fn policy_current_serializes_exactly_its_pinned_key_set() {
-    // ADR-0032 decision 3: verification and the ratchet key on the
-    // extension's own pin and nothing else - a frame-supplied key id
-    // would hand a substituted host a ratchet-reset lever. Pin the
-    // fully-populated frame's serialized keys so no key-identity field
-    // (or anything else) can ever join it unnoticed.
+    // Verification and the ratchet key on the extension's own pin and nothing else - a frame-supplied key
+    // id would hand a substituted host a ratchet-reset lever. Pin the fully-populated frame's serialized
+    // keys so no key-identity field (or anything else) can ever join it unnoticed.
     let frame = PolicyControl::PolicyCurrent {
         ok: true,
         baseline: Some("YmFzZQ==".into()),
@@ -591,13 +564,13 @@ fn policy_current_serializes_exactly_its_pinned_key_set() {
         error: Some("e".into()),
     };
     let value = serde_json::to_value(&frame).unwrap();
-    let keys: std::collections::BTreeSet<&str> = value
+    let keys: BTreeSet<&str> = value
         .as_object()
         .unwrap()
         .keys()
         .map(String::as_str)
         .collect();
-    let expected: std::collections::BTreeSet<&str> = [
+    let expected: BTreeSet<&str> = [
         "type", "ok", "baseline", "sig", "overlay", "reason", "error",
     ]
     .into_iter()
@@ -607,10 +580,9 @@ fn policy_current_serializes_exactly_its_pinned_key_set() {
 
 #[test]
 fn policy_status_into_frame_forbids_illegal_mixtures() {
-    // The KillStatus discipline for policy_current (ADR-0032): the typed
-    // intermediate emits only the two flat shapes the contract means, so a
-    // sig without a baseline, a baseline on an ok:false, or an ok:true
-    // with an error is unconstructible past this point.
+    // The KillStatus discipline for policy_current: the typed intermediate emits only the two flat shapes
+    // the contract means, so a sig without a baseline, a baseline on an ok:false, or an ok:true with an
+    // error is unconstructible past this point.
     let signed = (PolicyStatus::Present {
         baseline_b64: "YmFzZQ==".into(),
         sig_b64: Some("c2ln".into()),
@@ -667,57 +639,4 @@ fn policy_status_into_frame_forbids_illegal_mixtures() {
         panic!("unavailable must be ok:false with no baseline claim: {unavailable:?}");
     };
     assert_eq!(r, "absent");
-}
-
-#[test]
-fn envelope_schema_inputs_are_pinned_and_pairwise_disjoint() {
-    // emit_envelope_schema.rs - the input to the asymmetry gate
-    // (`moon run check-envelope`) - derives from exactly EnclaveControl,
-    // AdminControl, and PolicyControl (ADR-0032 phase 3 added the policy
-    // group). Pin all three tag lists literally, pairwise disjoint, so a
-    // frame can never silently join or leave the enums the gate derives,
-    // and no tag can classify under two groups.
-    let enclave: &[&str] = &[
-        "enclave_challenge",
-        "enclave_proof",
-        "enclave_error",
-        "enclave_revoke",
-        "enclave_revoked",
-        "presence_challenge",
-        "presence_proof",
-        "presence_error",
-    ];
-    assert_eq!(ENCLAVE_CONTROL_TAGS, enclave);
-    let admin: &[&str] = &[
-        "client_list",
-        "client_list_result",
-        "client_revoke",
-        "client_revoke_result",
-        "kill_status",
-        "kill_engage",
-        "kill_release",
-        "kill_status_result",
-        "audit_event",
-    ];
-    assert_eq!(ADMIN_CONTROL_TAGS, admin);
-    let policy: &[&str] = &[
-        "policy_get",
-        "policy_current",
-        "lang_get",
-        "lang_set",
-        "lang_current",
-    ];
-    assert_eq!(POLICY_CONTROL_TAGS, policy);
-    let all: Vec<&str> = [
-        ENCLAVE_CONTROL_TAGS,
-        ADMIN_CONTROL_TAGS,
-        POLICY_CONTROL_TAGS,
-    ]
-    .concat();
-    let distinct: std::collections::BTreeSet<&str> = all.iter().copied().collect();
-    assert_eq!(
-        distinct.len(),
-        all.len(),
-        "a control tag appears in more than one emitted enum"
-    );
 }
