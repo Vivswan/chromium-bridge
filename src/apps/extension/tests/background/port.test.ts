@@ -44,6 +44,7 @@ const kill = {
 const auditLog = { collaborator: mockCollaborator() };
 const presence = { collaborator: mockCollaborator() };
 const policySync = { collaborator: mockCollaborator() };
+const webauthn = { collaborator: mockCollaborator() };
 const dispatch = vi.fn((_req: unknown) => Promise.resolve({}));
 const runtime = {
   connectNative: vi.fn<() => FakePort>(),
@@ -56,6 +57,7 @@ vi.mock("@/lib/background/kill", () => kill);
 vi.mock("@/lib/background/audit-log", () => auditLog);
 vi.mock("@/lib/background/confirm/presence", () => presence);
 vi.mock("@/lib/background/policy-sync", () => policySync);
+vi.mock("@/lib/webauthn/exchange", () => webauthn);
 vi.mock("@/lib/background/dispatch", () => ({ dispatch }));
 vi.mock("wxt/browser", () => ({ browser: { runtime } }));
 

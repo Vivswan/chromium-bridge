@@ -1,6 +1,7 @@
 //! Host-handled control frames on the native-messaging channel: enclave enrollment and presence,
-//! client-allowlist admin, kill switch and audit, policy and shared language. [`classify_nm_frame`]
-//! routes each inbound frame; [`FrameDisposition`] states what reaches the MCP server.
+//! client-allowlist admin, kill switch and audit, policy and shared language, WebAuthn enrollment and
+//! presence. [`classify_nm_frame`] routes each inbound frame; [`FrameDisposition`] states what reaches the
+//! MCP server.
 
 use std::fmt;
 
@@ -278,10 +279,124 @@ pub enum PolicyControl {
     LangCurrent { value: String, seq: u64 },
 }
 
+/// WebAuthn enrollment and presence frames, host-handled exactly like the three enums above. The host is
+/// the relying party ([`crate::webauthn`]): it mints the statement and verifies the assertion; the extension
+/// is the WebAuthn client, running `navigator.credentials.create` / `.get` with RP ID = the extension id.
+/// Byte fields travel base64url, unpadded, as `PublicKeyCredential.toJSON()` spells them.
+///
+/// ```text
+/// enroll_begin      -> enroll_options { challenge, nonce, user_id, user_name, exclude_credential_ids } or
+///                      enroll_result { ok: false, reason }; the host binds the connection's browser label
+///                      into the statement, so the frame carries none
+/// enroll_finish     -> enroll_result { ok, credential_id?, reason? }: attestation "none" only, ES256 only
+/// presence_request  -> PUSHED by the host when a capability-granting act needs a tap: challenge =
+///                      base64url(sha256(statement)), the action the user is approving, the nonce, and the
+///                      credential ids enrolled from this browser (the allowCredentials list)
+/// presence_assert   -> presence_result { ok, reason? }; every refusal is a webauthn::Refusal code
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WebAuthnControl {
+    /// Extension -> host: start enrolling a credential for this browser.
+    EnrollBegin {},
+    /// Host -> extension: the `PublicKeyCredentialCreationOptions` the host decides.
+    EnrollOptions {
+        challenge: String,
+        nonce: String,
+        user_id: String,
+        user_name: String,
+        exclude_credential_ids: Vec<String>,
+    },
+    /// Extension -> host: the `navigator.credentials.create` response.
+    EnrollFinish {
+        attestation_object: String,
+        client_data_json: String,
+    },
+    /// Host -> extension: the enrollment verdict. `credential_id` travels exactly when `ok`, `reason`
+    /// exactly when not ([`EnrollOutcome::into_frame`]).
+    EnrollResult {
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credential_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Host -> extension: one capability-granting act awaits a tap.
+    PresenceRequest {
+        challenge: String,
+        nonce: String,
+        action: String,
+        allowed_credential_ids: Vec<String>,
+    },
+    /// Extension -> host: the `navigator.credentials.get` response.
+    PresenceAssert {
+        credential_id: String,
+        authenticator_data: String,
+        client_data_json: String,
+        signature: String,
+    },
+    /// Host -> extension: the presence verdict. `reason` travels exactly when not `ok`
+    /// ([`PresenceOutcome::into_frame`]).
+    PresenceResult {
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+}
+
+/// The enrollment verdict as the host decides it, the [`KillStatus`] discipline applied: one typed value
+/// per producer, flattened onto the wire triple by [`into_frame`](Self::into_frame), so an `ok: true` with
+/// no credential or an `ok: false` naming one is unconstructible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnrollOutcome {
+    Enrolled { credential_id: String },
+    Refused { reason: String },
+}
+
+impl EnrollOutcome {
+    pub fn into_frame(self) -> WebAuthnControl {
+        match self {
+            EnrollOutcome::Enrolled { credential_id } => WebAuthnControl::EnrollResult {
+                ok: true,
+                credential_id: Some(credential_id),
+                reason: None,
+            },
+            EnrollOutcome::Refused { reason } => WebAuthnControl::EnrollResult {
+                ok: false,
+                credential_id: None,
+                reason: Some(reason),
+            },
+        }
+    }
+}
+
+/// The presence verdict as the host decides it; same discipline as [`EnrollOutcome`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresenceOutcome {
+    Approved,
+    Refused { reason: String },
+}
+
+impl PresenceOutcome {
+    pub fn into_frame(self) -> WebAuthnControl {
+        match self {
+            PresenceOutcome::Approved => WebAuthnControl::PresenceResult {
+                ok: true,
+                reason: None,
+            },
+            PresenceOutcome::Refused { reason } => WebAuthnControl::PresenceResult {
+                ok: false,
+                reason: Some(reason),
+            },
+        }
+    }
+}
+
 /// The wire `type` tag of every host-handled control frame: the variants of [`EnclaveControl`],
-/// [`AdminControl`], and [`PolicyControl`], spelled by serde. Both pumps key on this one set
-/// ([`FrameDisposition`], [`host_control_type`]); the `host_control_tags_mirror_the_wire_enums` test
-/// holds this list to those three enums.
+/// [`AdminControl`], [`PolicyControl`], and [`WebAuthnControl`], spelled by serde. Both pumps key on this
+/// one set ([`FrameDisposition`], [`host_control_type`]); the `host_control_tags_mirror_the_wire_enums`
+/// test holds this list to those four enums.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -308,6 +423,13 @@ pub enum HostControlTag {
     LangGet,
     LangSet,
     LangCurrent,
+    EnrollBegin,
+    EnrollOptions,
+    EnrollFinish,
+    EnrollResult,
+    PresenceRequest,
+    PresenceAssert,
+    PresenceResult,
 }
 
 /// Which way a control frame travels. The browser->host set is the [`HostRequest`] roster; the
@@ -334,7 +456,10 @@ impl HostControlTag {
             | HostControlTag::AuditEvent
             | HostControlTag::PolicyGet
             | HostControlTag::LangGet
-            | HostControlTag::LangSet => Direction::BrowserToHost,
+            | HostControlTag::LangSet
+            | HostControlTag::EnrollBegin
+            | HostControlTag::EnrollFinish
+            | HostControlTag::PresenceAssert => Direction::BrowserToHost,
             HostControlTag::EnclaveProof
             | HostControlTag::EnclaveError
             | HostControlTag::EnclaveRevoked
@@ -344,7 +469,11 @@ impl HostControlTag {
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
             | HostControlTag::PolicyCurrent
-            | HostControlTag::LangCurrent => Direction::HostToBrowser,
+            | HostControlTag::LangCurrent
+            | HostControlTag::EnrollOptions
+            | HostControlTag::EnrollResult
+            | HostControlTag::PresenceRequest
+            | HostControlTag::PresenceResult => Direction::HostToBrowser,
         }
     }
 
@@ -399,6 +528,22 @@ impl HostControlTag {
                 .into(),
             )),
             HostControlTag::LangGet | HostControlTag::LangSet => MalformedReply::LangCurrent,
+            HostControlTag::EnrollBegin | HostControlTag::EnrollFinish => {
+                MalformedReply::Send(Box::new(
+                    EnrollOutcome::Refused {
+                        reason: format!("malformed {self} frame"),
+                    }
+                    .into_frame()
+                    .into(),
+                ))
+            }
+            HostControlTag::PresenceAssert => MalformedReply::Send(Box::new(
+                PresenceOutcome::Refused {
+                    reason: "malformed presence_assert frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
             // No error-reply contract: the genuine extension sends the exact empty revoke shape, and an audit
             // event is fire-and-forget. Dropping fails closed without inventing a misleading reason code.
             HostControlTag::EnclaveRevoke | HostControlTag::AuditEvent => MalformedReply::Drop,
@@ -412,7 +557,11 @@ impl HostControlTag {
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
             | HostControlTag::PolicyCurrent
-            | HostControlTag::LangCurrent => MalformedReply::Drop,
+            | HostControlTag::LangCurrent
+            | HostControlTag::EnrollOptions
+            | HostControlTag::EnrollResult
+            | HostControlTag::PresenceRequest
+            | HostControlTag::PresenceResult => MalformedReply::Drop,
         }
     }
 }
@@ -439,13 +588,14 @@ pub enum MalformedReply {
     LangCurrent,
 }
 
-/// A host->extension control frame of any of the three wire enums, serialized as that frame.
+/// A host->extension control frame of any of the four wire enums, serialized as that frame.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum HostReply {
     Enclave(EnclaveControl),
     Admin(AdminControl),
     Policy(PolicyControl),
+    WebAuthn(WebAuthnControl),
 }
 
 impl From<EnclaveControl> for HostReply {
@@ -463,6 +613,12 @@ impl From<AdminControl> for HostReply {
 impl From<PolicyControl> for HostReply {
     fn from(frame: PolicyControl) -> Self {
         HostReply::Policy(frame)
+    }
+}
+
+impl From<WebAuthnControl> for HostReply {
+    fn from(frame: WebAuthnControl) -> Self {
+        HostReply::WebAuthn(frame)
     }
 }
 
@@ -491,7 +647,8 @@ impl<'de> Deserialize<'de> for ExtensionAuditKind {
 }
 
 /// The browser->host frames the host answers itself, parsed once by [`classify_nm_frame`]. Each variant is
-/// the request shape of the same-named [`EnclaveControl`] / [`AdminControl`] / [`PolicyControl`] variant
+/// the request shape of the same-named [`EnclaveControl`] / [`AdminControl`] / [`PolicyControl`] /
+/// [`WebAuthnControl`] variant
 /// (the extension's generated writer types come from those); the
 /// `host_request_variants_match_their_wire_enum_variants` test holds them equal. Empty variants are
 /// struct variants (`{}`) because `deny_unknown_fields` skips unit variants of an internally tagged enum.
@@ -542,6 +699,17 @@ pub enum HostRequest {
     LangGet {},
     LangSet {
         value: String,
+    },
+    EnrollBegin {},
+    EnrollFinish {
+        attestation_object: String,
+        client_data_json: String,
+    },
+    PresenceAssert {
+        credential_id: String,
+        authenticator_data: String,
+        client_data_json: String,
+        signature: String,
     },
 }
 

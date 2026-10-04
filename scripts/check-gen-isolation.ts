@@ -4,12 +4,15 @@
 // graph: the core's self dev-dependency switches the envelope-schema feature on workspace-wide, so
 // cargo-deny (even with dev-dependencies excluded) sees a core -> schemars edge that never links.
 //
-//   p256, ts-rs  -> refused anywhere in the graph
-//   schemars     -> allowed only through rmcp (its runtime tool-schema model)
+//   ts-rs     -> refused anywhere in the graph
+//   schemars  -> allowed only through rmcp (its runtime tool-schema model)
+//
+// p256 is not gen-only: the WebAuthn assertion verifier ships it (src/packages/core/src/webauthn), with
+// the decision in docs/security/rationale.md.
 
 import { die, repoRoot } from "./lib.ts";
 
-export const refusedCrates = ["p256", "ts-rs"] as const;
+export const refusedCrates = ["ts-rs"] as const;
 const binary = "chromium-bridge";
 
 /** A crate's row in `cargo tree` is `<prefix> name vX.Y.Z`, one space before the name. */

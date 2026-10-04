@@ -33,6 +33,7 @@ This page keeps the security rules whose reason the code cannot show: for each t
 | --- | --- | --- |
 | The CLI ceremonies that restore or grant capability (`unkill`, `pair-client`) refuse a non-terminal stdin before any hardware prompt is raised | Prompt first, then check the terminal | A background script must not be able to flash an unexplained Touch ID sheet at the user (tap phishing); `echo release \| chromium-bridge unkill` cannot reopen the bridge |
 | A presence proof that fails verification marks the bridge compromised | Treat it as a plain denial | It is evidence that the signer is not the pinned host |
+| The WebAuthn verifier accepts `attestation: "none"` only, ES256 (COSE alg -7, P-256) only, and refuses an assertion whose `signCount` has not advanced when either side counts | Parse attestation formats and trust an authenticator's certificate chain; accept every COSE algorithm the key offers | The host's trust anchor is the credential key it recorded at enrollment on this machine, so an attestation chain adds parsing surface and no trust; one algorithm keeps the shipped crypto to the pure-Rust `p256` verifier already in the graph (the same crate also compiles the signing half, which stays unreachable because the host holds no private key); a stalled counter is a cloned authenticator or a replay |
 
 ## Policy signing
 

@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedBrowserOrSkip, isolatedBrowserOrNull } from "./browser-safety";
 
-const SUITES = ["dom_test", "ext_test", "security_browser_test"] as const;
+const SUITES = ["dom_test", "ext_test", "security_browser_test", "webauthn_test"] as const;
 
 /** The caller-named canary dir, if any. An empty value is the shell's way of unsetting a variable
  * (`BB_BROWSER_CANARY_DIR= bun ...`), so it means "none", never a dir named "". A relative path is made

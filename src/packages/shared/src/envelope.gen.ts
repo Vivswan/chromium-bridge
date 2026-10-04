@@ -1,6 +1,7 @@
 // GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
 // protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
-// policy::PolicyOverlay) by scripts/gen-envelope.ts - DO NOT EDIT. Edit the Rust types or
+// policy::PolicyOverlay, WebAuthnControl carries the WebAuthn ceremonies) by scripts/gen-envelope.ts -
+// DO NOT EDIT. Edit the Rust types or
 // src/packages/shared/src/envelope-asymmetries.ts, then run `moon run gen`.
 //
 // Per envelope and per host->extension control frame: the FAITHFUL base (*WireSchema: strict objects,
@@ -273,18 +274,104 @@ export const LangCurrentFrameSchema = z
 
 export type LangCurrentFrame = z.infer<typeof LangCurrentFrameSchema>;
 
+export const EnrollOptionsWireSchema = z
+  .object({
+    "challenge": z.string(),
+    "exclude_credential_ids": z.array(z.string()),
+    "nonce": z.string(),
+    "type": z.literal("enroll_options"),
+    "user_id": z.string(),
+    "user_name": z.string(),
+  })
+  .strict();
+
+export const EnrollOptionsFrameSchema = z
+  .object({
+    "challenge": z.string().min(1),
+    "exclude_credential_ids": z.array(z.string()),
+    "nonce": z.string(),
+    "type": z.literal("enroll_options"),
+    "user_id": z.string(),
+    "user_name": z.string(),
+  })
+  .catchall(z.unknown());
+
+export type EnrollOptionsFrame = z.infer<typeof EnrollOptionsFrameSchema>;
+
+export const EnrollResultWireSchema = z
+  .object({
+    "credential_id": z.union([z.string(), z.null()]).optional(),
+    "ok": z.boolean(),
+    "reason": z.union([z.string(), z.null()]).optional(),
+    "type": z.literal("enroll_result"),
+  })
+  .strict();
+
+export const EnrollResultFrameSchema = z
+  .object({
+    "credential_id": z.string().min(1).optional(),
+    "ok": z.boolean(),
+    "reason": z.string().optional(),
+    "type": z.literal("enroll_result"),
+  })
+  .catchall(z.unknown());
+
+export type EnrollResultFrame = z.infer<typeof EnrollResultFrameSchema>;
+
+export const PresenceRequestWireSchema = z
+  .object({
+    "action": z.string(),
+    "allowed_credential_ids": z.array(z.string()),
+    "challenge": z.string(),
+    "nonce": z.string(),
+    "type": z.literal("presence_request"),
+  })
+  .strict();
+
+export const PresenceRequestFrameSchema = z
+  .object({
+    "action": z.string().min(1),
+    "allowed_credential_ids": z.array(z.string()),
+    "challenge": z.string().min(1),
+    "nonce": z.string(),
+    "type": z.literal("presence_request"),
+  })
+  .catchall(z.unknown());
+
+export type PresenceRequestFrame = z.infer<typeof PresenceRequestFrameSchema>;
+
+export const PresenceResultWireSchema = z
+  .object({
+    "ok": z.boolean(),
+    "reason": z.union([z.string(), z.null()]).optional(),
+    "type": z.literal("presence_result"),
+  })
+  .strict();
+
+export const PresenceResultFrameSchema = z
+  .object({
+    "ok": z.boolean(),
+    "reason": z.string().optional(),
+    "type": z.literal("presence_result"),
+  })
+  .catchall(z.unknown());
+
+export type PresenceResultFrame = z.infer<typeof PresenceResultFrameSchema>;
+
 // Which control-frame tags have a generated reader above, and which are bare classification tags.
 // scripts/check-envelope.ts holds the extension's inbound classifiers to these.
 export const GENERATED_WIRE_FRAMES = {
   enclave: ["enclave_proof", "enclave_error", "presence_proof", "presence_error"],
   admin: ["client_list_result", "client_revoke_result", "kill_status_result"],
   policy: ["policy_current", "lang_current"],
+  webauthn: ["enroll_options", "enroll_result", "presence_request", "presence_result"],
 } as const;
 
 export const BARE_TAG_FRAMES = {
   enclave: ["enclave_revoked"],
   admin: [],
   policy: [],
+  webauthn: [],
 } as const;
 
 // The extension->host writer frames (the extension constructs these; the enforcing reader is the Rust
@@ -364,6 +451,32 @@ export const LangGetWireSchema = z.object({ "type": z.literal("lang_get") }).str
 
 export type LangGetWire = z.infer<typeof LangGetWireSchema>;
 
+export const EnrollBeginWireSchema = z.object({ "type": z.literal("enroll_begin") }).strict();
+
+export type EnrollBeginWire = z.infer<typeof EnrollBeginWireSchema>;
+
+export const EnrollFinishWireSchema = z
+  .object({
+    "attestation_object": z.string(),
+    "client_data_json": z.string(),
+    "type": z.literal("enroll_finish"),
+  })
+  .strict();
+
+export type EnrollFinishWire = z.infer<typeof EnrollFinishWireSchema>;
+
+export const PresenceAssertWireSchema = z
+  .object({
+    "authenticator_data": z.string(),
+    "client_data_json": z.string(),
+    "credential_id": z.string(),
+    "signature": z.string(),
+    "type": z.literal("presence_assert"),
+  })
+  .strict();
+
+export type PresenceAssertWire = z.infer<typeof PresenceAssertWireSchema>;
+
 // Which extension->host frames have a generated writer schema above.
 export const GENERATED_WRITER_FRAMES = {
   enclave: ["enclave_challenge", "enclave_revoke", "presence_challenge"],
@@ -376,4 +489,5 @@ export const GENERATED_WRITER_FRAMES = {
     "audit_event",
   ],
   policy: ["policy_get", "lang_set", "lang_get"],
+  webauthn: ["enroll_begin", "enroll_finish", "presence_assert"],
 } as const;

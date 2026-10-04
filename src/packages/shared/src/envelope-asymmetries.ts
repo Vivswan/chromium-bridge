@@ -100,6 +100,15 @@ const SIGNED_ARTIFACT: Asymmetry = {
   probes: { refuses: [""] },
 };
 
+const HOST_MINTED: Asymmetry = {
+  direction: "narrow",
+  reason:
+    "The empty string is refused early on a value the host mints itself (a WebAuthn challenge, the action " +
+    "a tap approves, an enrolled credential id); the host never sends one.",
+  changes: [{ change: "string", minLength: 1 }],
+  probes: { refuses: [""] },
+};
+
 /** Keyed by reader: the two envelopes by name, every host->extension control frame by its `type` tag. */
 export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymmetry>>>> = {
   request: {
@@ -173,6 +182,16 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
       changes: [{ change: "string", minLength: 1 }],
       probes: { refuses: [""] },
     },
+  },
+  enroll_options: {
+    "$.properties.challenge": HOST_MINTED,
+  },
+  enroll_result: {
+    "$.properties.credential_id": HOST_MINTED,
+  },
+  presence_request: {
+    "$.properties.challenge": HOST_MINTED,
+    "$.properties.action": HOST_MINTED,
   },
   policy_current: {
     "$.properties.baseline": SIGNED_ARTIFACT,

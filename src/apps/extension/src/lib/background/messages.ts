@@ -24,6 +24,12 @@ import {
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import {
+  assertPresence,
+  beginEnrollment,
+  finishEnrollment,
+  pendingPresenceRequest,
+} from "../webauthn/exchange";
+import {
   addAllow,
   getAllowlist,
   removeAllow,
@@ -106,6 +112,17 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   enroll_approve: approvePending,
   enroll_reject: rejectPending,
   enroll_revoke: revokePin,
+  webauthn_enroll_begin: beginEnrollment,
+  webauthn_enroll_finish: ({ attestation_object, client_data_json }) =>
+    finishEnrollment({ attestation_object, client_data_json }),
+  webauthn_presence_pending: () => ({ ok: true, request: pendingPresenceRequest() }),
+  webauthn_presence_assert: ({
+    nonce,
+    credential_id,
+    authenticator_data,
+    client_data_json,
+    signature,
+  }) => assertPresence({ nonce, credential_id, authenticator_data, client_data_json, signature }),
   confirm_ready: (msg) => ({ ok: true, payload: getPendingConfirm(msg.id) }),
   confirm_resolve: (msg) => resolveConfirm(msg.id, msg.approved),
   confirm_deny_kill: denyAndKill,

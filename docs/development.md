@@ -231,7 +231,7 @@ The isolation guard's container exception is stated once, in the Safety section 
 
 ## Fuzzing
 
-`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with eleven targets. Where a correctness property exists, a target asserts it instead of only checking for panics.
+`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with twelve targets. Where a correctness property exists, a target asserts it instead of only checking for panics.
 
 | Targets | What they fuzz | Oracle beyond no-panic |
 |---------|----------------|------------------------|
@@ -243,6 +243,7 @@ The isolation guard's container exception is stated once, in the Safety section 
 | `enclave_der` | the strict-DER signature parser | none (reject-or-decode) |
 | `registration_manifest` | the ours/foreign manifest decision | anything not provably ours is `Foreign` |
 | `policy_doc` | the policy store parse surface | serde round trip, the comparison lattice partitions every pair |
+| `webauthn_authdata` | the WebAuthn authenticatorData layout parser, with the attestation object and the assertion verifier fed the same bytes | a credential key parsed from attested data round-trips through its storage spelling |
 
 `handshake_verify` drives the full server handshake over in-memory I/O. The server binds a fresh nonce per handshake, so a static fuzzed response only reaches the fail-closed rejection path there; the accept path is the same target's MAC oracle plus the socketpair unit tests in `handshake.rs`.
 

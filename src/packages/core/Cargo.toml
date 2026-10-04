@@ -8,13 +8,16 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
+ciborium.workspace = true
 clap.workspace = true
+coset.workspace = true
 futures.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 hmac.workspace = true
 libc.workspace = true
 loom = { workspace = true, optional = true }
+p256.workspace = true
 rmcp.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
@@ -58,9 +61,8 @@ name = "emit_contract"
 
 # Emits the enclave signing contract (domains, bounds, key/sig lengths, reason
 # codes) plus the golden-vector fixture for scripts/gen-ops.ts (`moon run
-# gen`). Signs with the software-P256 dev-dependency (RFC 6979 deterministic,
-# so regeneration is byte-identical); examples never ship, so the release
-# binary stays free of it.
+# gen`). Signs with software P-256 (RFC 6979 deterministic, so regeneration is
+# byte-identical).
 [[example]]
 name = "emit_enclave_contract"
 
@@ -69,7 +71,6 @@ name = "emit_enclave_contract"
 # and the request shapes from the same JSON Schemas the contract emitter uses. A dev-dependency never
 # reaches `cargo tree -e normal`, so check-gen-isolation still keeps schemars out of the shipped binary.
 chromium-bridge-core = { path = ".", features = ["envelope-schema"] }
-p256.workspace = true
 proc-macro2.workspace = true
 proptest.workspace = true
 syn = { workspace = true, features = ["visit"] }

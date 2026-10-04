@@ -12,7 +12,8 @@
 //   both reader rules                        -> null at every Option field refused (optional-only); an added field
 //                                              admitted on every control frame and refused on the envelopes
 //                                              (loose-frames)
-//   the inbound classifiers (enclave.ts)     -> equal to the generated reader plan plus the pinned outbound tags
+//   the inbound classifiers (enclave.ts,     -> equal to the generated reader plan plus the pinned outbound tags
+//   webauthn.ts)
 //   refinements, in no derived schema        -> pinned in FRAME_REFINEMENTS by count and by probe
 //   the approved asymmetries                 -> printed as a table (scope, direction, reason, proof) for the reviewer
 //
@@ -33,6 +34,11 @@ import {
   type Asymmetry,
   READER_RULES,
 } from "../src/packages/shared/src/envelope-asymmetries";
+import {
+  EnrollResultSchema,
+  PresenceResultSchema,
+  WEBAUTHN_FRAME_TYPES,
+} from "../src/packages/shared/src/webauthn";
 import { BARE_TAG_FRAMES, GROUPS, type Group, READER_FRAMES, WRITER_FRAMES } from "./gen-envelope";
 
 type Frame = Record<string, unknown>;
@@ -43,7 +49,7 @@ type Frame = Record<string, unknown>;
 export type FrameArms = readonly [Frame, ...Frame[]];
 
 /** One reader kind: its base, its enforced validator (the generated one, or the hand-written refinement over
- * it for policy_current), its valid frame arms to place probes in, and whether the loose-frames rule applies. */
+ * it in HAND_REFINED), its valid frame arms to place probes in, and whether the loose-frames rule applies. */
 export interface ReaderPair {
   base: z.ZodType;
   enforced: z.ZodType;
@@ -110,6 +116,41 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
     { type: "policy_current", ok: false, error: "no policy baseline" },
   ],
   lang_current: [{ type: "lang_current", value: "en", seq: 3 }],
+  enroll_options: [
+    {
+      type: "enroll_options",
+      challenge: "Y2hhbGxlbmdl",
+      nonce: "nonce-0001",
+      user_id: "dXNlci1pZA",
+      user_name: "brave",
+      exclude_credential_ids: ["Y3JlZC1h"],
+    },
+  ],
+  enroll_result: [
+    { type: "enroll_result", ok: true, credential_id: "Y3JlZC1h" },
+    { type: "enroll_result", ok: false, reason: "attestation_format" },
+  ],
+  presence_request: [
+    {
+      type: "presence_request",
+      challenge: "cHJlc2VuY2U",
+      nonce: "nonce-0002",
+      action: "pair_client:codex",
+      allowed_credential_ids: ["Y3JlZC1h"],
+    },
+  ],
+  presence_result: [
+    { type: "presence_result", ok: true },
+    { type: "presence_result", ok: false, reason: "sign_count_not_increased" },
+  ],
+};
+
+/** The hand-written ok-split refinements over generated readers: the enforced validator the extension runs
+ * for these tags, each pinned in FRAME_REFINEMENTS. */
+const HAND_REFINED: Readonly<Record<string, z.ZodType>> = {
+  policy_current: PolicyCurrentFrameSchema,
+  enroll_result: EnrollResultSchema,
+  presence_result: PresenceResultSchema,
 };
 
 /** Every reader the gate proves, keyed like the asymmetry table. */
@@ -135,8 +176,7 @@ export function readerPairs(): Readonly<Record<string, ReaderPair>> {
         throw new Error(`check-envelope: no representative frame for ${tag}`);
       pairs[tag] = {
         base: exported(names.wire),
-        // The one hand-written layer over a generated reader: the policy_current ok-split (enclave.ts).
-        enforced: tag === "policy_current" ? PolicyCurrentFrameSchema : exported(names.enforced),
+        enforced: HAND_REFINED[tag] ?? exported(names.enforced),
         frames,
         loose: true,
       };
@@ -352,6 +392,7 @@ export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
   enclave: new Set([...ENCLAVE_FRAME_TYPES, ...PRESENCE_FRAME_TYPES]),
   admin: new Set([...ADMIN_RESULT_FRAME_TYPES, "kill_status_result"]),
   policy: new Set(POLICY_FRAME_TYPES),
+  webauthn: new Set(WEBAUTHN_FRAME_TYPES),
 };
 
 // Ceremony tags classified WITHOUT a reader, deliberately: these are extension->host (writer) frames, and
@@ -363,6 +404,7 @@ const CLASSIFIED_OUTBOUND_TAGS: Record<Group, ReadonlySet<string>> = {
   enclave: new Set(["enclave_challenge", "enclave_revoke"]),
   admin: new Set(),
   policy: new Set(),
+  webauthn: new Set(),
 };
 
 /** The classifier-coverage rule: pure over its inputs so the test file can prove the refusals fire; the running
@@ -440,6 +482,38 @@ export const FRAME_REFINEMENTS: Readonly<Partial<Record<string, readonly Refinem
       accepts: [
         { type: "policy_current", ok: true, baseline: "e30=", sig: "c2ln", overlay: {} },
         { type: "policy_current", ok: false, error: "no policy baseline" },
+      ],
+    },
+  ],
+  // The WebAuthn verdict ok-splits (shared/webauthn.ts): EnrollOutcome::into_frame and
+  // PresenceOutcome::into_frame (protocol/control.rs) emit exactly two flat shapes each.
+  //   enroll_result    ok: true  -> requires `credential_id`, never `reason`;  ok: false -> requires `reason`, never `credential_id`
+  //   presence_result  ok: true  -> never `reason`;                            ok: false -> requires `reason`
+  enroll_result: [
+    {
+      name: "ok-split",
+      refuses: [
+        { type: "enroll_result", ok: true },
+        { type: "enroll_result", ok: true, credential_id: "Y3JlZC1h", reason: "r" },
+        { type: "enroll_result", ok: false },
+        { type: "enroll_result", ok: false, credential_id: "Y3JlZC1h", reason: "r" },
+      ],
+      accepts: [
+        { type: "enroll_result", ok: true, credential_id: "Y3JlZC1h" },
+        { type: "enroll_result", ok: false, reason: "attestation_format" },
+      ],
+    },
+  ],
+  presence_result: [
+    {
+      name: "ok-split",
+      refuses: [
+        { type: "presence_result", ok: true, reason: "r" },
+        { type: "presence_result", ok: false },
+      ],
+      accepts: [
+        { type: "presence_result", ok: true },
+        { type: "presence_result", ok: false, reason: "sign_count_not_increased" },
       ],
     },
   ],

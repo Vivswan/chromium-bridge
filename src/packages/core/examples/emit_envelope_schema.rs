@@ -1,6 +1,6 @@
 //! Emit the JSON Schemas schemars derives from the Rust bridge-envelope wire
 //! types, as one JSON object `{ "request": ..., "response": ..., "enclave":
-//! ..., "admin": ..., "policy": ... }` on stdout.
+//! ..., "admin": ..., "policy": ..., "webauthn": ... }` on stdout.
 //!
 //! The Rust types in `protocol.rs` and `protocol/control.rs` are the canonical
 //! envelope contract. The request is emitted with its subschemas inlined (no
@@ -23,7 +23,9 @@
 //!   cargo run -q -p chromium-bridge-core --features envelope-schema \
 //!     --example emit_envelope_schema
 
-use chromium_bridge_core::protocol::control::{AdminControl, EnclaveControl, PolicyControl};
+use chromium_bridge_core::protocol::control::{
+    AdminControl, EnclaveControl, PolicyControl, WebAuthnControl,
+};
 use chromium_bridge_core::protocol::{BridgeReq, BridgeResp};
 
 fn inlined_schema_for<T: schemars::JsonSchema>() -> schemars::Schema {
@@ -41,6 +43,7 @@ fn main() -> Result<(), serde_json::Error> {
         "enclave": schemars::schema_for!(EnclaveControl),
         "admin": schemars::schema_for!(AdminControl),
         "policy": schemars::schema_for!(PolicyControl),
+        "webauthn": schemars::schema_for!(WebAuthnControl),
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())

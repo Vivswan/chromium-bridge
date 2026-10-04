@@ -652,8 +652,8 @@ export function convert(
 // ---- the frame plan (G7) ---------------------------------------------------------
 
 // The control-frame groups, keyed by the emit_envelope_schema output field that carries each Rust enum
-// (EnclaveControl / AdminControl / PolicyControl).
-export const GROUPS = ["enclave", "admin", "policy"] as const;
+// (EnclaveControl / AdminControl / PolicyControl / WebAuthnControl).
+export const GROUPS = ["enclave", "admin", "policy", "webauthn"] as const;
 export type Group = (typeof GROUPS)[number];
 
 /** The host->extension frames the extension validates: the export names of the faithful base and of the
@@ -683,6 +683,12 @@ export const READER_FRAMES: Record<
     policy_current: { wire: "PolicyCurrentWireSchema", enforced: "PolicyCurrentFrameShapeSchema" },
     lang_current: { wire: "LangCurrentWireSchema", enforced: "LangCurrentFrameSchema" },
   },
+  webauthn: {
+    enroll_options: { wire: "EnrollOptionsWireSchema", enforced: "EnrollOptionsFrameSchema" },
+    enroll_result: { wire: "EnrollResultWireSchema", enforced: "EnrollResultFrameSchema" },
+    presence_request: { wire: "PresenceRequestWireSchema", enforced: "PresenceRequestFrameSchema" },
+    presence_result: { wire: "PresenceResultWireSchema", enforced: "PresenceResultFrameSchema" },
+  },
 };
 
 /** Host->extension frames with no fields beyond the tag: classified by tag alone, no validator; generation
@@ -691,6 +697,7 @@ export const BARE_TAG_FRAMES: Record<Group, readonly string[]> = {
   enclave: ["enclave_revoked"],
   admin: [],
   policy: [],
+  webauthn: [],
 };
 
 /** The extension->host frames the extension CONSTRUCTS; the Rust serde parser is the enforcing reader, so these
@@ -714,6 +721,11 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
     policy_get: "PolicyGetWireSchema",
     lang_set: "LangSetWireSchema",
     lang_get: "LangGetWireSchema",
+  },
+  webauthn: {
+    enroll_begin: "EnrollBeginWireSchema",
+    enroll_finish: "EnrollFinishWireSchema",
+    presence_assert: "PresenceAssertWireSchema",
   },
 };
 
@@ -830,12 +842,14 @@ async function main(): Promise<void> {
     enclave: unknown;
     admin: unknown;
     policy: unknown;
+    webauthn: unknown;
   };
 
   const variants = {
     enclave: splitTaggedUnionSchema(fromRust.enclave),
     admin: splitTaggedUnionSchema(fromRust.admin),
     policy: splitTaggedUnionSchema(fromRust.policy),
+    webauthn: splitTaggedUnionSchema(fromRust.webauthn),
   };
   for (const group of GROUPS) assertFramePlan(group, variants[group]);
 
@@ -1006,7 +1020,8 @@ async function main(): Promise<void> {
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
 // protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
-// policy::PolicyOverlay) by scripts/gen-envelope.ts - DO NOT EDIT. Edit the Rust types or
+// policy::PolicyOverlay, WebAuthnControl carries the WebAuthn ceremonies) by scripts/gen-envelope.ts -
+// DO NOT EDIT. Edit the Rust types or
 // src/packages/shared/src/envelope-asymmetries.ts, then run \`moon run gen\`.
 //
 // Per envelope and per host->extension control frame: the FAITHFUL base (*WireSchema: strict objects,

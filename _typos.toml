@@ -13,6 +13,8 @@ extend-ignore-re = [
 ]
 
 [default.extend-words]
+# COSE = CBOR Object Signing and Encryption (RFC 9052): the WebAuthn credential public key format.
+cose = "cose"
 # IIFE = immediately-invoked function expression (esbuild output format).
 iif = "iif"
 # UDID = Apple's unique device identifier (provisioning profiles).

@@ -49,12 +49,14 @@ fn without_descriptions(mut schema: Value) -> Value {
 #[test]
 fn host_control_tags_mirror_the_wire_enums() {
     // Cross-type consistency Rust cannot express: HostControlTag is a separate enum, and a variant added to
-    // EnclaveControl / AdminControl / PolicyControl without it would classify as Forward (relayed to the MCP
-    // server) instead of being answered or dropped. The tag strings are read from each enum's own schema.
+    // EnclaveControl / AdminControl / PolicyControl / WebAuthnControl without it would classify as Forward
+    // (relayed to the MCP server) instead of being answered or dropped. The tag strings are read from each
+    // enum's own schema.
     let mut wire: Vec<String> = Vec::new();
     wire.extend(variant_tags::<EnclaveControl>().into_keys());
     wire.extend(variant_tags::<AdminControl>().into_keys());
     wire.extend(variant_tags::<PolicyControl>().into_keys());
+    wire.extend(variant_tags::<WebAuthnControl>().into_keys());
     let distinct: BTreeSet<&str> = wire.iter().map(String::as_str).collect();
     assert_eq!(
         distinct.len(),
@@ -109,6 +111,7 @@ fn host_request_variants_match_their_wire_enum_variants() {
     let mut wire = variant_tags::<EnclaveControl>();
     wire.extend(variant_tags::<AdminControl>());
     wire.extend(variant_tags::<PolicyControl>());
+    wire.extend(variant_tags::<WebAuthnControl>());
     let requests = variant_tags::<HostRequest>();
     let request_tags: BTreeSet<String> = requests.keys().cloned().collect();
     let browser_to_host: BTreeSet<String> = all_host_control_tags()
@@ -340,6 +343,39 @@ fn classification_matrix() {
             Handle(HostRequest::LangSet { value: "en".into() }),
         ),
         (json!({ "type": "lang_set" }), Malformed(Tag::LangSet)),
+        (
+            json!({ "type": "enroll_begin" }),
+            Handle(HostRequest::EnrollBegin {}),
+        ),
+        (
+            json!({ "type": "enroll_begin", "extra": 1 }),
+            Malformed(Tag::EnrollBegin),
+        ),
+        (
+            json!({ "type": "enroll_finish", "attestation_object": "YXR0", "client_data_json": "Y2Rq" }),
+            Handle(HostRequest::EnrollFinish {
+                attestation_object: "YXR0".into(),
+                client_data_json: "Y2Rq".into(),
+            }),
+        ),
+        (
+            json!({ "type": "enroll_finish", "attestation_object": "YXR0" }),
+            Malformed(Tag::EnrollFinish),
+        ),
+        (
+            json!({ "type": "presence_assert", "credential_id": "Y3JlZA", "authenticator_data": "YXV0aA",
+                    "client_data_json": "Y2Rq", "signature": "c2ln" }),
+            Handle(HostRequest::PresenceAssert {
+                credential_id: "Y3JlZA".into(),
+                authenticator_data: "YXV0aA".into(),
+                client_data_json: "Y2Rq".into(),
+                signature: "c2ln".into(),
+            }),
+        ),
+        (
+            json!({ "type": "presence_assert", "credential_id": "Y3JlZA", "signature": 5 }),
+            Malformed(Tag::PresenceAssert),
+        ),
         // Host->extension frames bounced back by the browser leg.
         (
             json!({ "type": "enclave_proof", "sig": "s" }),
@@ -380,6 +416,22 @@ fn classification_matrix() {
         (
             json!({ "type": "lang_current", "value": "en", "seq": 1 }),
             Malformed(Tag::LangCurrent),
+        ),
+        (
+            json!({ "type": "enroll_options", "challenge": "c" }),
+            Malformed(Tag::EnrollOptions),
+        ),
+        (
+            json!({ "type": "enroll_result", "ok": true }),
+            Malformed(Tag::EnrollResult),
+        ),
+        (
+            json!({ "type": "presence_request", "challenge": "c" }),
+            Malformed(Tag::PresenceRequest),
+        ),
+        (
+            json!({ "type": "presence_result", "ok": true }),
+            Malformed(Tag::PresenceResult),
         ),
     ];
     for (frame, expect) in cases {
@@ -453,6 +505,25 @@ fn malformed_replies_match_the_request_type() {
         ),
         (Tag::LangGet, LangCurrent),
         (Tag::LangSet, LangCurrent),
+        (
+            Tag::EnrollBegin,
+            Frame(json!({ "type": "enroll_result", "ok": false,
+                          "reason": "malformed enroll_begin frame" })),
+        ),
+        (
+            Tag::EnrollFinish,
+            Frame(json!({ "type": "enroll_result", "ok": false,
+                          "reason": "malformed enroll_finish frame" })),
+        ),
+        (
+            Tag::PresenceAssert,
+            Frame(json!({ "type": "presence_result", "ok": false,
+                          "reason": "malformed presence_assert frame" })),
+        ),
+        (Tag::EnrollOptions, Nothing),
+        (Tag::EnrollResult, Nothing),
+        (Tag::PresenceRequest, Nothing),
+        (Tag::PresenceResult, Nothing),
         (Tag::EnclaveRevoke, Nothing),
         (Tag::AuditEvent, Nothing),
         (Tag::EnclaveProof, Nothing),
@@ -502,6 +573,47 @@ fn kill_status_maps_onto_the_pinned_wire_shapes() {
         )
         .unwrap(),
         json!({ "type": "kill_status_result", "ok": false, "error": "corrupt" })
+    );
+}
+
+#[test]
+fn webauthn_outcomes_map_onto_the_pinned_wire_shapes() {
+    // The typed verdicts are the only producers of the result frames: `credential_id` travels iff `ok`
+    // on enroll_result, `reason` iff not on both, so the extension never sees an ok without a credential
+    // or a refusal without a reason.
+    assert_eq!(
+        serde_json::to_value(
+            EnrollOutcome::Enrolled {
+                credential_id: "Y3JlZA".into()
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "enroll_result", "ok": true, "credential_id": "Y3JlZA" })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            EnrollOutcome::Refused {
+                reason: "attestation_format".into()
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "enroll_result", "ok": false, "reason": "attestation_format" })
+    );
+    assert_eq!(
+        serde_json::to_value(PresenceOutcome::Approved.into_frame()).unwrap(),
+        json!({ "type": "presence_result", "ok": true })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            PresenceOutcome::Refused {
+                reason: "sign_count_not_increased".into()
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "presence_result", "ok": false, "reason": "sign_count_not_increased" })
     );
 }
 

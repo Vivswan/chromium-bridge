@@ -139,3 +139,10 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "webauthn_bytes"
+path = "fuzz_targets/webauthn_bytes.rs"
+test = false
+doc = false
+bench = false
+

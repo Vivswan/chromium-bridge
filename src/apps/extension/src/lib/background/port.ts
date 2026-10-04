@@ -7,6 +7,7 @@ import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskErrorMessage } from "../shared/masking";
+import * as webauthn from "../webauthn/exchange";
 import * as auditLog from "./audit-log";
 import * as clients from "./clients";
 import * as presence from "./confirm/presence";
@@ -24,6 +25,7 @@ export const collaborators: readonly PortCollaborator[] = [
   auditLog.collaborator,
   presence.collaborator,
   policySync.collaborator,
+  webauthn.collaborator,
 ];
 
 // The native link is in exactly one of these states. One value, not a
