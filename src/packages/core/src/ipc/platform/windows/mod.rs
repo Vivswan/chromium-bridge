@@ -1,9 +1,10 @@
 //! Windows mechanisms: a named pipe in the local pipe namespace as the bridge
 //! transport, the pipe peer's process identity (image hash plus Authenticode
-//! publisher), and process liveness. The contract with Windows (the pipe name,
-//! the user-only descriptor text, the trust verdict codes) is pure and compiles
-//! on every platform, so each platform's test run exercises it; the mechanisms
-//! behind it are Windows-only FFI quarantines, one per concern.
+//! publisher), and process liveness. The contract with Windows that nothing
+//! native is needed for (the pipe name, the user-only descriptor text) is pure
+//! and compiles into every platform's test build; the mechanisms behind it,
+//! and the trust-verdict fold they feed, are Windows-only FFI quarantines, one
+//! per concern.
 //!
 //! ```text
 //! pipe     -> CreateNamedPipeW / CreateFileW, overlapped reads with a deadline, cross-thread shutdown
@@ -12,10 +13,8 @@
 //! signer   -> WinVerifyTrust and the leaf certificate's subject
 //! ```
 //!
-//! The image is measured by re-opening its path, so the pid-reuse race noted on
-//! [`super::super::peercred::peer_pid`] applies, plus the window in which a
-//! running image is renamed and another file placed at its path; Windows has no
-//! user-mode handle to the mapped image itself. The threat model records both.
+//! The image is measured by re-opening its path; the threat model's residual
+//! list records what that leaves open.
 
 use std::path::Path;
 
@@ -125,6 +124,7 @@ pub fn user_only_sddl(sid: &SidString) -> String {
 /// two ends. A spawner opens both ends of a child's stdio pipe itself, so they
 /// agree and name it; ends opened by different processes mean the pipe was
 /// handed on, and an end we opened ourselves cannot be the harness's.
+#[cfg(windows)]
 pub fn pipe_creator(client: u32, server: u32, me: u32) -> Result<u32, String> {
     if client != server {
         return Err(format!(
@@ -138,11 +138,13 @@ pub fn pipe_creator(client: u32, server: u32, me: u32) -> Result<u32, String> {
 }
 
 /// `WinVerifyTrust`'s verdict on an image, folded to the outcomes the publisher
-/// anchor distinguishes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// anchor distinguishes. A trusted chain carries the signer subject it was
+/// read with, so "trusted but no subject" cannot be represented.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(windows)]
 pub enum TrustStatus {
-    /// The signature verifies and chains to a trusted root.
-    Trusted,
+    /// The signature verifies and chains to a trusted root; the leaf's subject.
+    Trusted(String),
     /// No embedded Authenticode signature.
     Unsigned,
     /// A signature is present but does not match the file's contents.
@@ -154,45 +156,49 @@ pub enum TrustStatus {
 
 /// `winerror.h` values; the `windows-sys` spellings are pinned to these in a
 /// Windows-only test.
+#[cfg(windows)]
 pub const TRUST_E_NOSIGNATURE: i32 = hresult(0x800B_0100);
+#[cfg(windows)]
 pub const TRUST_E_BAD_DIGEST: i32 = hresult(0x8009_6010);
 
+#[cfg(windows)]
 const fn hresult(code: u32) -> i32 {
     i32::from_ne_bytes(code.to_ne_bytes())
 }
 
+#[cfg(windows)]
 impl TrustStatus {
-    pub fn from_hresult(code: i32) -> TrustStatus {
-        match code {
-            0 => TrustStatus::Trusted,
+    /// Fold a verdict code, reading the signer subject only for a trusted chain.
+    pub fn classify(
+        code: i32,
+        subject: impl FnOnce() -> std::io::Result<String>,
+    ) -> std::io::Result<TrustStatus> {
+        Ok(match code {
+            0 => TrustStatus::Trusted(subject()?),
             TRUST_E_NOSIGNATURE => TrustStatus::Unsigned,
             TRUST_E_BAD_DIGEST => TrustStatus::Tampered,
             other => TrustStatus::Untrusted(other),
-        }
+        })
     }
 }
 
-/// The publisher anchor an image earns from its trust verdict and its signer's
-/// subject. An unsigned or untrusted image anchors by hash alone; a tampered
-/// one is refused outright, as a macOS image failing `SecCodeCheckValidity` is.
+/// The publisher anchor an image earns from its trust verdict. An unsigned or
+/// untrusted image anchors by hash alone; a tampered one is refused outright,
+/// as a macOS image failing `SecCodeCheckValidity` is.
+#[cfg(windows)]
 pub fn publisher_anchor(
     status: TrustStatus,
-    subject: Option<String>,
 ) -> std::io::Result<Option<super::super::identity::TeamId>> {
     use std::io::{Error, ErrorKind};
 
     use super::super::identity::TeamId;
 
-    match (status, subject) {
-        (TrustStatus::Trusted, Some(subject)) => TeamId::try_from(subject)
+    match status {
+        TrustStatus::Trusted(subject) => TeamId::try_from(subject)
             .map(Some)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e)),
-        (TrustStatus::Trusted, None) => Err(Error::new(
-            ErrorKind::InvalidData,
-            "trusted signature without a readable signer subject",
-        )),
-        (TrustStatus::Unsigned | TrustStatus::Untrusted(_), _) => Ok(None),
-        (TrustStatus::Tampered, _) => Err(Error::new(
+        TrustStatus::Unsigned | TrustStatus::Untrusted(_) => Ok(None),
+        TrustStatus::Tampered => Err(Error::new(
             ErrorKind::PermissionDenied,
             "image signature does not match its contents",
         )),
@@ -264,7 +270,7 @@ mod tests {
             (r"\\.\pipe\", "empty leaf"),
             (r"\\.\pipe\a\b", "nested leaf"),
             (r"\\.\pipe/a", "slash separator"),
-            ("127.0.0.1:4321", "the retired loopback endpoint"),
+            ("127.0.0.1:4321", "a loopback TCP address"),
         ] {
             assert!(PipeName::try_from(endpoint).is_err(), "{why}: {endpoint}");
         }
@@ -276,20 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn the_pipe_creator_is_the_one_process_behind_both_ends() {
-        // The harness measurement keys on this fold: a spawner opens both ends
-        // of its child's stdin pipe, so agreeing pids name it; an end handed on
-        // from another process, or one this process opened, must not attest
-        // anyone (the Windows wording of the stdin-writer residual).
-        assert_eq!(pipe_creator(4100, 4100, 7), Ok(4100));
-        assert!(
-            pipe_creator(4100, 4200, 7).is_err(),
-            "ends from two processes"
-        );
-        assert!(pipe_creator(7, 7, 7).is_err(), "our own pipe");
-    }
-
-    #[test]
     fn the_descriptor_grants_the_one_sid_and_refuses_an_injectable_sid() {
         // Windows parses the SDDL text, so its spelling is a cross-process
         // contract; and a SID string carrying other characters could rewrite
@@ -298,37 +290,6 @@ mod tests {
         assert_eq!(user_only_sddl(&sid), "D:P(A;;GA;;;S-1-5-21-1-2-3-1001)");
         for bad in ["", "S-1-", "S-1-5-21)(A;;GA;;;WD", "s-1-5-18", "S-2-5-18"] {
             assert!(SidString::try_from(bad.to_string()).is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn the_publisher_anchor_follows_the_trust_verdict() {
-        // winerror.h values are an external fact; the fold from verdict to
-        // anchor is the trust decision the allowlist relies on.
-        type Anchor = Result<Option<&'static str>, std::io::ErrorKind>;
-        let subject = Some("CN=Example Publisher, O=Example, C=US".to_string());
-        let cases: [(i32, Option<String>, Anchor); 6] = [
-            (
-                0,
-                subject.clone(),
-                Ok(Some("CN=Example Publisher, O=Example, C=US")),
-            ),
-            (0, None, Err(std::io::ErrorKind::InvalidData)),
-            (0, Some(String::new()), Err(std::io::ErrorKind::InvalidData)),
-            (TRUST_E_NOSIGNATURE, None, Ok(None)),
-            (hresult(0x800B_0109), subject.clone(), Ok(None)),
-            (
-                TRUST_E_BAD_DIGEST,
-                subject,
-                Err(std::io::ErrorKind::PermissionDenied),
-            ),
-        ];
-        for (code, subject, expected) in cases {
-            let got = publisher_anchor(TrustStatus::from_hresult(code), subject)
-                .map(|anchor| anchor.map(String::from))
-                .map_err(|e| e.kind());
-            let expected = expected.map(|anchor| anchor.map(str::to_string));
-            assert_eq!(got, expected, "hresult {code:#x}");
         }
     }
 

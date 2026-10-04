@@ -75,14 +75,6 @@ pub fn peer_pid(stream: &BridgeStream) -> io::Result<u32> {
     }
 }
 
-/// The PID of the process on the other end of a connected pipe, as the kernel
-/// recorded it when that end opened the pipe. Keyed by pid like the Linux
-/// measurement, so the same pid-reuse residual applies.
-#[cfg(windows)]
-pub fn peer_pid(stream: &super::socket::BridgeStream) -> std::io::Result<u32> {
-    stream.peer_pid()
-}
-
 /// Whether a process with the given pid is alive. Used by the takeover logic
 /// and by the stale-lock cleanup on the connect path. On Unix `kill(pid, 0)`
 /// checks existence without delivering a signal.

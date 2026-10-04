@@ -84,11 +84,10 @@ security-framework-sys = "2"
 # (src/packages/core/src/registration.rs). The vetted wrapper (rust-lang
 # community, windows-sys underneath) instead of hand-rolled Advapi32 FFI.
 winreg = "0.56"
-# The named-pipe bridge transport, the pipe peer's process identity, and the
-# Authenticode signer query (src/packages/core/src/ipc/platform/windows/).
-# Microsoft's own binding, already in the tree under tempfile and winreg, so
-# the version follows theirs; the sync pipe crates were rejected for lacking
-# the stream semantics the broker needs (the adopting commit records which).
+# Microsoft's binding for the named-pipe bridge transport, the pipe peer's
+# process identity, and the Authenticode signer query
+# (src/packages/core/src/ipc/platform/windows/); already in the tree under
+# tempfile and winreg, so the version follows theirs.
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Security",

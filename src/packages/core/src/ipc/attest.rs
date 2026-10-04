@@ -34,7 +34,7 @@ fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
 /// The running-image identity of an arbitrary process named by pid, measured
 /// the same way as [`own_identity`]. Unlike [`peer_identity`] there is no
 /// connected socket to bind the measurement to, so this inherently carries
-/// the pid-reuse race noted on [`super::peercred::peer_pid`]: callers must
+/// the pid-reuse race noted on `peercred::peer_pid`: callers must
 /// treat a positive match as the only signal that grants trust, and every
 /// failure as "not our process".
 fn pid_identity(pid: u32) -> io::Result<HashDigest> {
@@ -66,21 +66,12 @@ pub fn ensure_own_identity() -> io::Result<&'static str> {
 ///                              the running image via SecCodeCheckValidity
 /// ```
 pub fn attest_parent() -> io::Result<ClientIdentity> {
-    os::pid_client_identity(harness_pid()?)
-}
-
-/// The pid of the process measured as our harness: `getppid` (which cannot
-/// fail) on Unix, the creator of our stdin pipe on Windows.
-fn harness_pid() -> io::Result<u32> {
     #[cfg(unix)]
-    {
-        u32::try_from(crate::sys::parent_pid())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "parent pid out of range"))
-    }
+    let harness = u32::try_from(crate::sys::parent_pid())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "parent pid out of range"))?;
     #[cfg(windows)]
-    {
-        os::pipe::stdin_pipe_creator()
-    }
+    let harness = os::pipe::stdin_pipe_creator()?;
+    os::pid_client_identity(harness)
 }
 
 /// Verify the peer on `stream` runs the same executable image as us; the trusted-identity allowlist is exactly

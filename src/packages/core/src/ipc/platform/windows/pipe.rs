@@ -129,10 +129,11 @@ impl PipeListener {
     }
 
     /// Create the next instance before the connected one is handed out, so a
-    /// client arriving between two `accept` calls finds the name listening
-    /// instead of absent (`CreateFileW` would fail with no instance to wait
-    /// for). A failure here only costs that early arrival; the next `accept`
-    /// creates its own instance and reports the error if it persists.
+    /// client arriving between two `accept` calls finds the name listening:
+    /// with only connected instances it would wait out its deadline on
+    /// ERROR_PIPE_BUSY, and with none the name is gone. A failure here only
+    /// costs that early arrival; the next `accept` creates its own instance
+    /// and reports the error if it persists.
     fn listen_again(&self) {
         match self.create_instance(false) {
             Ok(next) => {
@@ -317,8 +318,10 @@ impl PipeStream {
         Ok(())
     }
 
-    /// End the connection from any clone: the peer reads EOF, and a reader of
-    /// this connection blocked on another thread wakes with EOF.
+    /// End the connection from any clone: a reader of this connection blocked
+    /// on another thread wakes with EOF, and on a server end the peer reads
+    /// EOF too (a client end has no disconnect call; its peer sees EOF once the
+    /// last clone drops).
     pub fn shutdown(&self, _how: Shutdown) -> io::Result<()> {
         self.shared.closed.store(true, Ordering::Release);
         let handle = self.shared.handle.as_raw_handle();
@@ -546,9 +549,11 @@ mod tests {
     #[test]
     fn a_claimed_name_refuses_a_second_listener_and_both_ends_see_the_local_peer() {
         // External facts the bridge rests on: FILE_FLAG_FIRST_PIPE_INSTANCE
-        // fails a second bind of a held name (so a squatter cannot join ours),
-        // and the kernel reports the pid on each end of a connected pipe
-        // (the input to attestation). Both ends here are this process.
+        // fails a bind while any instance of the name exists (another broker
+        // of ours, or a name squatted before us; a same-user process can still
+        // add an instance later, which mutual attestation catches), and the
+        // kernel reports the pid on each end of a connected pipe (the input to
+        // attestation). Both ends here are this process.
         let name = unique_name("claim");
         let listener = PipeListener::bind(&name).unwrap();
         assert!(
@@ -627,9 +632,10 @@ mod tests {
 
     #[test]
     fn a_client_arriving_between_accepts_finds_the_name_listening() {
-        // External fact: CreateFileW on a pipe name with no instance fails at
-        // once (ERROR_FILE_NOT_FOUND) and WaitNamedPipeW has nothing to wait
-        // for, so the listener must hold a fresh instance before it hands the
+        // External fact: with every instance connected and none listening,
+        // CreateFileW reports ERROR_PIPE_BUSY and WaitNamedPipeW waits out the
+        // connect deadline; with no instance at all the name is gone. The
+        // listener therefore holds a fresh instance before it hands the
         // connected one out. The connect below runs with no accept pending.
         let name = unique_name("between-accepts");
         let listener = PipeListener::bind(&name).unwrap();

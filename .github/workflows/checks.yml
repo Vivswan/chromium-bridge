@@ -53,7 +53,7 @@ jobs:
           esac
           printf 'container={"image":"%s@%s","options":"--user root"}\n' "$image" "$digest" >> "$GITHUB_OUTPUT"
 
-  # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) loopback-TCP
+  # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) named-pipe
   # code; neither is visible to the Linux build, which alone runs fmt (platform-independent) and the
   # fuzz-workspace check.
   rust:

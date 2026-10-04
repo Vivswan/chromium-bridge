@@ -100,9 +100,9 @@ The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind ea
 What differs on Windows:
 
 - The runtime directory is normally `%LOCALAPPDATA%\chromium-bridge`, falling back to the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset; the temp directory is not guaranteed per-user.
-- The image is measured by re-opening its path, so a running image renamed and replaced at its path is a residual the [threat model](../docs/security/threat-model.md#residual-risks-accepted-tracked) records.
+- The image is measured by re-opening its path; the [threat model](../docs/security/threat-model.md#residual-risks-accepted-tracked) records what that leaves open.
 - The parent pid Windows records is caller-selectable at `CreateProcess`, so the harness is measured as the creator of the server's stdin pipe instead; a console, or pipe ends opened by two different processes, fails closed, and the threat model records what remains.
-- `pair-client --this-parent` is Unix-only for the same reason (a console command has no pipe creator); on Windows pair with `--hash` or `--team-id`, which the server logs for an unenrolled harness at startup.
+- `pair-client --this-parent` is Unix-only for the same reason (a console command has no pipe creator); the [CLI page](../docs/cli.md#trusted-clients-pair-client--revoke-client--list-clients) owns how Windows pairs.
 - The publisher is read from the embedded Authenticode signature with no revocation check; a catalog-signed image (most of Windows itself) anchors by hash alone.
 - The full scoping is in the [threat model](../docs/security/threat-model.md) and [trust boundaries](../docs/security/trust-boundaries.md) docs.
 

@@ -39,6 +39,7 @@ pub use identity::{ClientIdentity, HashDigest, TeamId};
 pub use lockfile::{listen_and_publish, LockFile, PublishOutcome};
 #[cfg(unix)]
 pub use peercred::checked_pid;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use peercred::peer_pid;
 #[cfg(unix)]
 pub use peercred::peer_uid;

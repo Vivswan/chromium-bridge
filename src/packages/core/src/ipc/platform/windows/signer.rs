@@ -29,25 +29,21 @@ use super::{publisher_anchor, TrustStatus};
 
 /// The publisher anchor of the image at `image`, `None` when the image is
 /// unsigned or its chain is not trusted. Runs where a harness is measured
-/// (server startup, `pair-client --this-parent`), not on the bridge accept
-/// path, which hashes the image alone. Revocation is not checked
-/// (`WTD_REVOKE_NONE`); the threat model's residual list owns why.
+/// (admission at server startup, and the unenrolled log that prints the
+/// anchors to pair with), not on the bridge accept path, which hashes the
+/// image alone. Revocation is not checked (`WTD_REVOKE_NONE`); the threat
+/// model's residual list owns why.
 pub(crate) fn publisher_of(image: &Path) -> io::Result<Option<TeamId>> {
     let session = TrustSession::verify(image)?;
-    let status = TrustStatus::from_hresult(session.status);
-    let subject = match status {
-        TrustStatus::Trusted => Some(session.signer_subject()?),
-        TrustStatus::Untrusted(code) => {
-            log_warn!(
-                "ipc",
-                "image {} is signed but its chain is not trusted (HRESULT {code:#x}); anchoring by hash alone",
-                image.display()
-            );
-            None
-        }
-        TrustStatus::Unsigned | TrustStatus::Tampered => None,
-    };
-    publisher_anchor(status, subject)
+    let status = TrustStatus::classify(session.status, || session.signer_subject())?;
+    if let TrustStatus::Untrusted(code) = &status {
+        log_warn!(
+            "ipc",
+            "image {} is signed but its chain is not trusted (HRESULT {code:#x}); anchoring by hash alone",
+            image.display()
+        );
+    }
+    publisher_anchor(status)
 }
 
 /// One `WinVerifyTrust` verification with its provider state held open, so the
