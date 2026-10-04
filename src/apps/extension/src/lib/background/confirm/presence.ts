@@ -40,9 +40,7 @@ import { generateNonce, hexEncode, verifyPresenceProofAgainstPin } from "../encl
 import { platformCanEnroll } from "../enrollment";
 import type { ConfirmationProvider, Presentation } from "./service";
 
-/** The live connection, or null while the link is down. The Connection is one object per connect, so "is the exact
- * connection this challenge was sent on still the live one?" is a reference identity check - a plain non-null test
- * would miss a disconnect+reconnect that installs a NEW connection before verification finishes. */
+/** The live connection, or null while the link is down; compared by identity per Connection in ../connection.ts. */
 let conn: Connection | null = null;
 
 /** One outstanding presence round. Single-flight by construction: the slot

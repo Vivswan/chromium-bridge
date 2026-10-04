@@ -16,9 +16,6 @@ import * as enrollment from "./enrollment";
 import * as kill from "./kill";
 import * as policySync from "./policy-sync";
 
-/** Every module bound to the native link. A connect hands the fresh Connection to all of them, a teardown detaches
- * all of them in the same synchronous transition, and an inbound control frame goes to the first whose onFrame
- * claims it. */
 export const collaborators: readonly PortCollaborator[] = [
   enrollment.collaborator,
   clients.collaborator,
@@ -46,7 +43,7 @@ export function isNativeConnected(): boolean {
   return link.state === "connected";
 }
 
-/** The one currency check: a Connection is live while the link still holds that exact object. */
+/** The currency contract is stated on Connection in connection.ts. */
 function isLive(conn: Connection): boolean {
   return link.state === "connected" && link.conn === conn;
 }
@@ -103,8 +100,7 @@ export function connectNative() {
   }
 }
 
-/** The Connection for one connect. post is bound to this exact port and refuses once the link no longer holds this
- * connection, so a module that kept the Connection across an await cannot write to a successor's pipe. */
+/** post is bound to this exact port; currency per Connection in connection.ts. */
 function mintConnection(port: Browser.runtime.Port): Connection {
   const conn: Connection = {
     generation: ++connects,

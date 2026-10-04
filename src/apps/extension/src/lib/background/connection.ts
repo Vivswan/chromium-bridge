@@ -12,9 +12,8 @@ export interface Connection {
   post(frame: object): boolean;
 }
 
-/** What port.ts drives on connect, teardown, and every inbound frame. onFrame claims a frame by returning true; port.ts
- * offers each frame to the registry in order and treats an unclaimed one as a bridge request, so the guards behind
- * onFrame must be disjoint (tests/background/port-routing.test.ts pins that over the generated frame table). */
+/** onFrame returns true when it claimed the frame; the guards behind it must be disjoint
+ * (tests/background/port-routing.test.ts pins that over the generated frame table). */
 export interface PortCollaborator {
   onAttach(conn: Connection): void;
   onDetach(): void;
