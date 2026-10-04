@@ -491,7 +491,7 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
     ).toBe(false);
   });
 
-  test("added_unix (U64_COUNTER_FIELD): JS-safe hardening on the enforced side", () => {
+  test("added_unix (JS_SAFE_U64_FIELD): JS-safe hardening on the enforced side", () => {
     for (const added of [-1, 1.5]) {
       expect(TrustedClientSchema.safeParse({ ...entry, added_unix: added }).success).toBe(false);
       expect(ClientEntryWireSchema.safeParse({ ...entry, added_unix: added }).success).toBe(false);
@@ -586,10 +586,10 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
     ).toBe(false);
   });
 
-  test("lang seq (U64_COUNTER_FIELD): both sides refuse unsafe, negative, and fractional", () => {
+  test("lang seq (JS_SAFE_U64_FIELD): both sides refuse unsafe, negative, and fractional", () => {
     // The runtime difference is invisible here (the base's z.number().int()
     // is already safe-integer-bound); the schema-level JS-safe maximum is
-    // the pinned U64_COUNTER_FIELD zod form.
+    // the pinned JS_SAFE_U64_FIELD zod form.
     const frame = (seq: number) => ({ type: "lang_current", value: "en", seq });
     for (const seq of [2 ** 60, -1, 1.5]) {
       expect(LangCurrentWireSchema.safeParse(frame(seq)).success).toBe(false);

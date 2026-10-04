@@ -163,10 +163,9 @@ const ANCHOR_FIELD: Reconciliation = {
   },
 };
 
-// A required u64 (lang_current.seq, client added_unix): uint64 on the Rust side, the
-// Zod side hardened to the JS-safe non-negative range (the id idiom - both
-// parsers must read the same number, ADR-0032 decision 7).
-const U64_COUNTER_FIELD: Reconciliation = {
+// A required u64 (lang_current.seq, client added_unix): both parsers must read
+// the same number, so the Zod side stops at the JS-safe bound.
+const JS_SAFE_U64_FIELD: Reconciliation = {
   rust: { type: "integer", format: "uint64", minimum: 0 },
   zod: { type: "integer", minimum: 0, maximum: JS_SAFE },
   canonical: { type: "integer", minimum: 0 },
@@ -291,7 +290,7 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
     "$.properties.error": OPTIONAL_STRING,
     "$.properties.clients.items.properties.name": NONEMPTY_STRING,
     "$.properties.clients.items.properties.anchor": ANCHOR_FIELD,
-    "$.properties.clients.items.properties.added_unix": U64_COUNTER_FIELD,
+    "$.properties.clients.items.properties.added_unix": JS_SAFE_U64_FIELD,
   },
   client_revoke_result: {
     "$.properties.error": OPTIONAL_STRING,
@@ -307,7 +306,7 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
     "$.properties.error": OPTIONAL_STRING,
   },
   lang_current: {
-    "$.properties.seq": U64_COUNTER_FIELD,
+    "$.properties.seq": JS_SAFE_U64_FIELD,
   },
   // Extension->host frames: normalized rust-side only (for the R5
   // strictness walk); there is no Zod derivation to reconcile against.

@@ -298,128 +298,123 @@ mod tests {
         ipc::with_runtime_lock(|lock| T::remove(lock)).unwrap();
     }
 
-    /// The record types the crate's sources implement `Record` for (any path prefix or generics on the
-    /// impl), and every item in those modules the ladder rule refuses. The trait cannot enumerate its
-    /// implementors, so this is what ties the matrix to them.
+    /// What the ladder rule refuses in one module, from a `syn` parse of its source. The trait cannot
+    /// enumerate its implementors, so this is what ties the matrix to them.
     ///
     /// ```text
-    /// fn load, const VERSION, ...     -> shadows the shared loader at a `Type::load()` call site
-    /// serde(default | alias | rename) -> reads a second on-disk spelling: compat outside crate::migrations
-    /// serde(rename_all = ...)         -> allowed: the one wire spelling, not a second one
-    /// serde(deserialize_with = ...)   -> allowed: serde still refuses an absent field without `default`,
-    ///                                    and whether the function refuses a malformed value is in its body
+    /// impl Record for T                  -> T joins the set the matrix must exercise
+    /// inherent fn load, const VERSION    -> refused: shadows the shared loader at a `T::load()` call site
+    /// serde(default), serde(alias)       -> refused: a value for an absent field, a second accepted name
+    /// serde(rename = ..)                 -> refused: fixes the wire name outside the type's own spelling
+    /// serde(rename_all = ..)             -> allowed: the one spelling of every field
+    /// serde(deserialize_with = ..)       -> allowed: serde still refuses an absent field without `default`,
+    ///                                       and whether the fn refuses a malformed value is in its body
     /// ```
-    fn record_impls_in_source() -> (BTreeSet<String>, Vec<String>) {
+    ///
+    /// Items a `macro_rules!` emits (PolicyOverlay's arms in `policy/mod.rs`) are opaque to the parse.
+    fn scan_module(source: &str) -> (Vec<String>, Vec<String>) {
         const METHODS: [&str; 6] = ["load", "decode", "encode", "write", "remove", "path"];
         const COMPAT: [&str; 3] = ["default", "alias", "rename"];
-        // Token-level, so `pub fn load<'a>()` and `const r#VERSION` count like the plain spellings.
-        fn shadowing_items(source: &str) -> Vec<String> {
-            let tokens: Vec<&str> = source.split_whitespace().collect();
-            tokens
-                .windows(2)
-                .filter_map(|pair| {
-                    let ident: String = pair[1]
-                        .trim_start_matches("r#")
-                        .chars()
-                        .take_while(|c| c.is_alphanumeric() || *c == '_')
-                        .collect();
-                    match pair[0] {
-                        "fn" if METHODS.contains(&ident.as_str()) => Some(format!("fn {ident}")),
-                        "const" if ident == "VERSION" => Some("const VERSION".to_string()),
-                        _ => None,
-                    }
-                })
-                .collect()
+        fn line(span: proc_macro2::Span) -> usize {
+            span.start().line
         }
-        // `//` comments and string contents blanked: a comment inside a multi-line attribute would otherwise
-        // hide the key behind it, and a doc comment or fixture quoting `#[serde(default)]` would be flagged.
-        fn code_only(source: &str) -> String {
-            let mut code = String::with_capacity(source.len());
-            let mut chars = source.chars().peekable();
-            while let Some(c) = chars.next() {
-                match c {
-                    '"' => {
-                        code.push('"');
-                        let mut escaped = false;
-                        for c in chars.by_ref() {
-                            if c == '"' && !escaped {
-                                code.push('"');
-                                break;
-                            }
-                            if c == '\n' {
-                                code.push('\n');
-                            }
-                            escaped = c == '\\' && !escaped;
+        fn skip_value(meta: &syn::meta::ParseNestedMeta) -> syn::Result<()> {
+            if meta.input.peek(syn::Token![=]) {
+                meta.value()?.parse::<syn::Expr>()?;
+            } else if meta.input.peek(syn::token::Paren) {
+                meta.parse_nested_meta(|inner| skip_value(&inner))?;
+            }
+            Ok(())
+        }
+        fn serde_item(
+            meta: &syn::meta::ParseNestedMeta,
+            refused: &mut Vec<String>,
+        ) -> syn::Result<()> {
+            if let Some(key) = meta
+                .path
+                .get_ident()
+                .filter(|key| COMPAT.contains(&key.to_string().as_str()))
+            {
+                refused.push(format!("{}: #[serde({key})]", line(key.span())));
+            }
+            skip_value(meta)
+        }
+        fn serde_attrs(attrs: &[syn::Attribute], refused: &mut Vec<String>) {
+            for attr in attrs {
+                if attr.path().is_ident("serde") {
+                    attr.parse_nested_meta(|meta| serde_item(&meta, refused))
+                        .unwrap();
+                } else if attr.path().is_ident("cfg_attr") {
+                    attr.parse_nested_meta(|meta| {
+                        if meta.path.is_ident("serde") {
+                            meta.parse_nested_meta(|inner| serde_item(&inner, refused))
+                        } else {
+                            skip_value(&meta)
                         }
-                    }
-                    '/' if chars.peek() == Some(&'/') => {
-                        for c in chars.by_ref() {
-                            if c == '\n' {
-                                code.push('\n');
-                                break;
-                            }
-                        }
-                    }
-                    _ => code.push(c),
+                    })
+                    .unwrap();
                 }
             }
-            code
         }
-        // `serde` on a word boundary, then any whitespace, then `(`: `#[serde // note\n (default)]` is the
-        // attribute and `consume_serde(default)` is not. Paren depth is tracked so
-        // `rename(serialize = "a", deserialize = "b")` is one item keyed `rename`.
-        fn compat_attributes(source: &str) -> Vec<String> {
-            let is_ident = |c: char| c.is_alphanumeric() || c == '_';
-            let mut pieces = source.split("serde");
-            let first = pieces.next().unwrap_or_default();
-            let mut line = 1 + first.matches('\n').count();
-            let mut glued = first.chars().last().is_some_and(is_ident);
-            pieces
-                .flat_map(|after| {
-                    let at_line = line;
-                    line += after.matches('\n').count();
-                    let open = (!glued)
-                        .then(|| after.trim_start().strip_prefix('('))
-                        .flatten();
-                    glued = after.chars().last().is_some_and(is_ident);
-                    let Some(opened) = open else {
-                        return Vec::new();
-                    };
-                    let mut depth = 0usize;
-                    let close = opened
-                        .find(|c| match c {
-                            '(' => {
-                                depth += 1;
-                                false
-                            }
-                            ')' if depth == 0 => true,
-                            ')' => {
-                                depth -= 1;
-                                false
-                            }
-                            _ => false,
-                        })
-                        .unwrap_or(opened.len());
-                    let (body, _) = opened.split_at(close);
-                    let mut depth = 0usize;
-                    body.split(|c| {
-                        match c {
-                            '(' => depth += 1,
-                            ')' => depth -= 1,
-                            _ => {}
+        fn walk(items: &[syn::Item], records: &mut Vec<String>, refused: &mut Vec<String>) {
+            for item in items {
+                if let syn::Item::Mod(module) = item {
+                    if let Some((_, items)) = &module.content {
+                        walk(items, records, refused);
+                    }
+                } else if let syn::Item::Struct(s) = item {
+                    serde_attrs(&s.attrs, refused);
+                    for field in &s.fields {
+                        serde_attrs(&field.attrs, refused);
+                    }
+                } else if let syn::Item::Enum(e) = item {
+                    serde_attrs(&e.attrs, refused);
+                    for variant in &e.variants {
+                        serde_attrs(&variant.attrs, refused);
+                        for field in &variant.fields {
+                            serde_attrs(&field.attrs, refused);
                         }
-                        c == ',' && depth == 0
-                    })
-                    .map(str::trim)
-                    .filter(|item| {
-                        let key = item.split(['=', '(']).next().unwrap_or_default().trim();
-                        COMPAT.contains(&key)
-                    })
-                    .map(|item| format!("{at_line}: #[serde({item})]"))
-                    .collect::<Vec<_>>()
-                })
-                .collect()
+                    }
+                } else if let syn::Item::Impl(imp) = item {
+                    match &imp.trait_ {
+                        Some((_, path, _)) => {
+                            let is_record =
+                                path.segments.last().is_some_and(|s| s.ident == "Record");
+                            if let (true, syn::Type::Path(ty)) = (is_record, &*imp.self_ty) {
+                                records.push(ty.path.segments.last().unwrap().ident.to_string());
+                            }
+                        }
+                        None => inherent_items(&imp.items, refused),
+                    }
+                }
+            }
         }
+        fn inherent_items(items: &[syn::ImplItem], refused: &mut Vec<String>) {
+            for item in items {
+                if let syn::ImplItem::Fn(f) = item {
+                    let name = &f.sig.ident;
+                    if METHODS.contains(&name.to_string().as_str()) {
+                        refused.push(format!("{}: inherent fn {name}", line(name.span())));
+                    }
+                } else if let syn::ImplItem::Const(c) = item {
+                    if c.ident == "VERSION" {
+                        refused.push(format!("{}: inherent const VERSION", line(c.ident.span())));
+                    }
+                }
+            }
+        }
+        let (mut records, mut refused) = (Vec::new(), Vec::new());
+        walk(
+            &syn::parse_file(source).unwrap().items,
+            &mut records,
+            &mut refused,
+        );
+        (records, refused)
+    }
+
+    /// Every `Record` impl under the crate's `src/`, and every refusal from [`scan_module`] in a module that
+    /// holds one, prefixed with the file path.
+    fn record_impls_in_source() -> (BTreeSet<String>, Vec<String>) {
         fn walk(dir: &Path, types: &mut BTreeSet<String>, refused: &mut Vec<String>) {
             for entry in fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -427,38 +422,16 @@ mod tests {
                     walk(&path, types, refused);
                     continue;
                 }
-                if path.extension().is_none_or(|e| e != "rs") || path.ends_with("runtime_record.rs")
-                {
+                if path.extension().is_none_or(|e| e != "rs") {
                     continue;
                 }
-                let source = code_only(&fs::read_to_string(&path).unwrap());
-                let impls: Vec<String> = source
-                    .lines()
-                    .filter_map(|line| {
-                        let tokens: Vec<&str> = line.split_whitespace().collect();
-                        let i = tokens
-                            .iter()
-                            .position(|t| t.rsplit("::").next() == Some("Record"))?;
-                        (tokens.first()?.starts_with("impl") && tokens.get(i + 1) == Some(&"for"))
-                            .then(|| {
-                                tokens
-                                    .get(i + 2)
-                                    .map(|t| t.trim_end_matches('{').to_string())
-                            })
-                            .flatten()
-                    })
-                    .collect();
-                if impls.is_empty() {
+                let (records, found) = scan_module(&fs::read_to_string(&path).unwrap());
+                if records.is_empty() {
                     continue;
                 }
-                types.extend(impls);
+                types.extend(records);
                 refused.extend(
-                    shadowing_items(&source)
-                        .into_iter()
-                        .map(|item| format!("{}: {item}", path.display())),
-                );
-                refused.extend(
-                    compat_attributes(&source)
+                    found
                         .into_iter()
                         .map(|item| format!("{}:{item}", path.display())),
                 );
@@ -547,5 +520,65 @@ mod tests {
             refused.is_empty(),
             "outside crate::migrations a record module neither shadows the shared loader nor reads a second spelling: {refused:#?}"
         );
+    }
+
+    /// The scanner's controls: a parse that yields nothing, or a refusal that no longer matches, would keep
+    /// the matrix green while saying nothing about the crate.
+    #[test]
+    fn record_module_scan_refuses_and_allows_the_right_items() {
+        let cases: [(&str, &str, &[&str], &[&str]); 7] = [
+            (
+                "field default",
+                "struct R {\n    #[serde(default)]\n    a: u64,\n}",
+                &[],
+                &["2: #[serde(default)]"],
+            ),
+            (
+                "block comment inside the attribute",
+                "struct R {\n    #[serde(/* older files */ default)]\n    a: u64,\n}",
+                &[],
+                &["2: #[serde(default)]"],
+            ),
+            (
+                "cfg_attr wrapper and the nested rename form",
+                "#[cfg_attr(feature = \"x\", serde(alias = \"b\"))]\nenum E {\n    #[serde(rename(deserialize = \"a\"))]\n    A,\n}",
+                &[],
+                &["1: #[serde(alias)]", "3: #[serde(rename)]"],
+            ),
+            (
+                "rename_all, deserialize_with and skip_serializing_if stay allowed",
+                "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]\nstruct R {\n    #[serde(deserialize_with = \"de\", skip_serializing_if = \"Option::is_none\")]\n    a: Option<u64>,\n}",
+                &[],
+                &[],
+            ),
+            (
+                "inherent shadows, not a free fn or a trait impl",
+                "impl R {\n    fn load() {}\n    const VERSION: usize = 1;\n}\nfn load() {}\nimpl Other for R {\n    fn load() {}\n}",
+                &[],
+                &["2: inherent fn load", "3: inherent const VERSION"],
+            ),
+            (
+                "record impls by any path, in nested modules too",
+                "mod inner {\n    impl crate::runtime_record::Record for A {}\n    impl Record for B<'static> {}\n}",
+                &["A", "B"],
+                &[],
+            ),
+            (
+                "attribute text in a comment or a string is not an attribute",
+                "/// Do not add #[serde(default)] here.\nconst NOTE: &str = \"#[serde(alias = \\\"k\\\")]\";\nfn consume_serde(default: u64) {}",
+                &[],
+                &[],
+            ),
+        ];
+        for (case, source, records, refused) in cases {
+            assert_eq!(
+                scan_module(source),
+                (
+                    records.iter().map(ToString::to_string).collect(),
+                    refused.iter().map(ToString::to_string).collect()
+                ),
+                "{case}"
+            );
+        }
     }
 }
