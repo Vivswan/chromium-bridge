@@ -1,5 +1,6 @@
 # cargo-deny config for the SHIPPED dependency graph only.
-# Run: cargo deny --config deny.shipped.toml check bans   (moon run check-gen-isolation; in the `ci` gate)
+# Run: cargo deny --config deny.shipped.toml check bans   (moon run check-gen-isolation; CI: audits.yml,
+# beside `cargo deny check`; not in the moon `ci` aggregate, which has no cargo-deny)
 #
 # deny.toml is the supply-chain gate and keeps dev-dependencies in its graph so
 # their advisories and sources are checked too. This config drops them, which
