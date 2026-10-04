@@ -54,7 +54,11 @@ import {
 
 type Frame = Record<string, unknown>;
 
-const entry: Frame = { name: "codex", anchor: { kind: "hash", value: "abc123" } };
+const entry: Frame = {
+  name: "codex",
+  anchor: { kind: "hash", value: "abc123" },
+  added_unix: 1700000000,
+};
 
 // One representative valid frame per generated schema; the harness below derives the hostile variants. The
 // wrapped validator runs too: a wrapper that silently coerces (z.preprocess) is invisible to the parity gate
@@ -102,8 +106,8 @@ const WIRE_CASES: ReadonlyArray<{
     name: "ClientEntryWireSchema",
     schema: ClientEntryWireSchema,
     enforced: TrustedClientSchema,
-    valid: { ...entry, added_unix: 1700000000 },
-    required: ["name", "anchor"],
+    valid: entry,
+    required: ["name", "anchor", "added_unix"],
   },
   {
     name: "EnclaveProofWireSchema",
@@ -342,16 +346,6 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
       expect(ClientEntryWireSchema.safeParse({ ...entry, anchor }).success).toBe(false);
     }
   });
-
-  test("never invents a value for an absent field (no silent defaults)", () => {
-    // added_unix carries #[serde(default)] on the Rust side; the generated
-    // validator must NOT replay that (a validator that invents fields would
-    // hide a missing-field bug from consumers). Absent stays absent.
-    const wire = ClientEntryWireSchema.parse(entry);
-    expect("added_unix" in wire).toBe(false);
-    const wrapped = TrustedClientSchema.parse(entry);
-    expect("added_unix" in wrapped).toBe(false);
-  });
 });
 
 // Every deliberate divergence between the enforced validator and the
@@ -497,7 +491,7 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
     ).toBe(false);
   });
 
-  test("added_unix (ADDED_UNIX_FIELD): JS-safe hardening on the enforced side", () => {
+  test("added_unix (U64_COUNTER_FIELD): JS-safe hardening on the enforced side", () => {
     for (const added of [-1, 1.5]) {
       expect(TrustedClientSchema.safeParse({ ...entry, added_unix: added }).success).toBe(false);
       expect(ClientEntryWireSchema.safeParse({ ...entry, added_unix: added }).success).toBe(false);

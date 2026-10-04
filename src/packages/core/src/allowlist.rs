@@ -66,7 +66,6 @@ pub struct ClientEntry {
     pub anchor: Anchor,
     /// When this client was paired, Unix seconds. For the audit/status
     /// surface; not used in the admission decision.
-    #[serde(default)]
     pub added_unix: u64,
 }
 

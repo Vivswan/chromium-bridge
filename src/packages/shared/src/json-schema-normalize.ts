@@ -163,16 +163,7 @@ const ANCHOR_FIELD: Reconciliation = {
   },
 };
 
-// ClientEntry.added_unix: u64 + #[serde(default)] on the Rust side (absent
-// reads as 0, writers always emit it); the Zod side accepts absence and
-// hardens the integer to the JS-safe non-negative range, like the id field.
-const ADDED_UNIX_FIELD: Reconciliation = {
-  rust: { type: "integer", format: "uint64", minimum: 0, default: 0 },
-  zod: { type: "integer", minimum: 0, maximum: JS_SAFE },
-  canonical: { type: "integer", minimum: 0 },
-};
-
-// A required u64 counter (lang_current.seq): uint64 on the Rust side, the
+// A required u64 (lang_current.seq, client added_unix): uint64 on the Rust side, the
 // Zod side hardened to the JS-safe non-negative range (the id idiom - both
 // parsers must read the same number, ADR-0032 decision 7).
 const U64_COUNTER_FIELD: Reconciliation = {
@@ -300,7 +291,7 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
     "$.properties.error": OPTIONAL_STRING,
     "$.properties.clients.items.properties.name": NONEMPTY_STRING,
     "$.properties.clients.items.properties.anchor": ANCHOR_FIELD,
-    "$.properties.clients.items.properties.added_unix": ADDED_UNIX_FIELD,
+    "$.properties.clients.items.properties.added_unix": U64_COUNTER_FIELD,
   },
   client_revoke_result: {
     "$.properties.error": OPTIONAL_STRING,

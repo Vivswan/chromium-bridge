@@ -40,7 +40,7 @@ export const BridgeRespWireSchema = z
 // client_list_result's `clients` array.
 export const ClientEntryWireSchema = z
   .object({
-    "added_unix": z.number().int().gte(0).optional(),
+    "added_unix": z.number().int().gte(0),
     "anchor": z.union([
       z.object({ "kind": z.literal("hash"), "value": z.string() }).strict(),
       z.object({ "kind": z.literal("team_id"), "value": z.string() }).strict(),

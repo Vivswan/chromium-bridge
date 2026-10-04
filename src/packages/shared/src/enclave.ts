@@ -138,11 +138,10 @@ export const TrustedClientSchema = ClientEntryWireSchema.extend({
     kind: z.enum(["hash", "team_id"]),
     value: z.string().min(1),
   }),
-  // ASYMMETRY (added_unix): u64 + #[serde(default)] on the Rust side (absent
-  // reads as 0 there); here absence stays absent - no invented value - and
-  // the integer is hardened to the JS-safe non-negative range (same idiom as
-  // the envelope id). Unix seconds, for the audit/status surface.
-  added_unix: z.int().nonnegative().optional(),
+  // ASYMMETRY (added_unix): u64 on the Rust side; here the integer is
+  // hardened to the JS-safe non-negative range (same idiom as the envelope
+  // id). Unix seconds, for the audit/status surface.
+  added_unix: z.int().nonnegative(),
 }).catchall(z.unknown());
 
 export type TrustedClient = z.infer<typeof TrustedClientSchema>;
