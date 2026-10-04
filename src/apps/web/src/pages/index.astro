@@ -177,7 +177,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
       <p class="sec-label">Guarantees</p>
       <h2 class="sec-title">Claims you can check.</h2>
       <p class="sec-sub">Each one is enforced by a mechanism, not a policy
-        document, and each links to the decision record that binds it.</p>
+        document, and each links to the page that explains it.</p>
 
       <div class="g-grid">
         <div class="g-cell">
@@ -187,7 +187,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             explicit interactive confirmation where no enrollment key exists.
             The gate is hard-wired; there is no flag, env var, or grace window
             that skips it.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0031-touch-id-confirmations-and-presence-grants.md">ADR-0031</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#enrollment-and-user-presence">security rationale</a>
         </div>
         <div class="g-cell">
           <h3>On an enrolled Mac, approval is your presence.</h3>
@@ -197,7 +197,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             password - that no page, script, or remote client can forge.
             Without that hardware, the verdict is a click in the extension's
             own window.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0031-touch-id-confirmations-and-presence-grants.md">ADR-0031</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#enrollment-and-user-presence">security rationale</a>
         </div>
         <div class="g-cell">
           <h3>Credentials go one way, masked on top.</h3>
@@ -219,7 +219,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
           <p>Engage it from the CLI or the extension; every client
             loses every browser at once. Releasing it takes proof of presence,
             never a silent API call.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0030-global-kill-switch-and-audit.md">ADR-0030</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#revocation-and-the-kill-switch">security rationale</a>
         </div>
         <div class="g-cell">
           <h3>Decisions are written down, gaps are counted.</h3>
@@ -228,7 +228,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             design: a failed write drops that record and the next one carries
             a visible gap count, because bookkeeping must never block a
             decision.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0030-global-kill-switch-and-audit.md">ADR-0030</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#revocation-and-the-kill-switch">security rationale</a>
         </div>
       </div>
 
@@ -321,8 +321,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
         <p class="footer-credit">Adopted from
           <a href="https://github.com/whg517/browser-bridge">whg517/browser-bridge</a>
           (Apache-2.0). The name and identifiers are our own, a deliberate
-          divergence recorded in
-          <a href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0023-workspace-monorepo-tauri-app.md">ADR-0023</a>.</p>
+          divergence: upstream fixes are ported by hand, never merged.</p>
       </div>
     </footer>
   </body>

@@ -48,7 +48,7 @@ If a change touches permissions, credential access, confirmation, allowlist, mas
 
 ## Decisions: ADR vs RFC
 
-- **ADR** (`docs/adr/`) records a decision *already made*: why single-binary, why a given confirmation UI. Status: Proposed / Accepted / Superseded / Deprecated.
+- **Decision rationale** lives in `docs/security/rationale.md` (what was decided, what was rejected, why); decision *history* lives in PR and commit history, not in a separate record.
 - **RFC** (open a discussion/issue) proposes a *significant change* before building it: a write capability, a new protocol version, a new browser platform, enterprise policy.
 
 The RFC flow, in order:

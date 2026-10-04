@@ -1,6 +1,6 @@
 # Development guide
 
-This document covers the local dev loop, the build/test toolchain, and the release process. For the **branch / commit / sync / merge workflow** (worktrees, Conventional Commits, rebase, squash-merge, gates), see [`../CONTRIBUTING.md`](../CONTRIBUTING.md). For *why* the project is structured the way it is, see [architecture.md](./architecture.md) and the [ADRs](./adr/).
+This document covers the local dev loop, the build/test toolchain, and the release process. For the **branch / commit / sync / merge workflow** (worktrees, Conventional Commits, rebase, squash-merge, gates), see [`../CONTRIBUTING.md`](../CONTRIBUTING.md). For *why* the project is structured the way it is, see [architecture.md](./architecture.md) and [security/rationale.md](./security/rationale.md).
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ proto install    # provisions bun, moon, rust, uv at the pinned versions
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
-Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`). CI pins cargo-machete in checks.yml; typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision, recorded in ADR-0033), so a local version skew can at worst surface a finding early.
+Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`). CI pins cargo-machete in checks.yml; typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision), so a local version skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -51,7 +51,7 @@ src/apps/web/           bun workspace member: minimal Astro site rendering the
 
 All tooling scripts are TypeScript run via bun. Scripts whose only consumer is a GitHub workflow live in `.github/scripts/`; everything with a local consumer (moon tasks, other scripts) stays in `scripts/`. The fuzz smoke moved from the former to the latter when it grew a local moon task, which currently leaves `.github/scripts/` empty. Two scripts (`scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`) are deliberately self-contained on node builtins so they run without a `bun install`: the release workflow builds the binary before installing the workspace, and the nightly fuzz job never installs it at all.
 
-Rust dependencies are gated by automated supply-chain checks ([ADR-0035](./adr/0035-automated-supply-chain-review.md)): `cargo deny` (license allow-list, banned sources, RUSTSEC advisories) runs in every CI gate and again in the nightly rerun, the managed ci.yml's fleet Trivy step gates `Cargo.lock` and `bun.lock` at HIGH/CRITICAL, PRs additionally get the GitHub dependency-review action (an advisory diff, via the platform-managed job in the managed ci.yml), and Dependabot watches cargo, bun, and GitHub Actions. Adding or bumping a crate fails CI on a known advisory or a license outside `deny.toml`'s allow list; there is no manual per-crate audit step. Run `moon run audit` to reproduce the cargo-deny pass locally.
+Rust dependencies are gated by automated supply-chain checks: `cargo deny` (license allow-list, banned sources, RUSTSEC advisories) runs in every CI gate and again in the nightly rerun, the managed ci.yml's fleet Trivy step gates `Cargo.lock` and `bun.lock` at HIGH/CRITICAL, PRs additionally get the GitHub dependency-review action (an advisory diff, via the platform-managed job in the managed ci.yml), and Dependabot watches cargo, bun, and GitHub Actions. Adding or bumping a crate fails CI on a known advisory or a license outside `deny.toml`'s allow list; there is no manual per-crate audit step. Run `moon run audit` to reproduce the cargo-deny pass locally.
 
 ## Common tasks
 
@@ -96,7 +96,7 @@ The full task menu, by area:
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared`), `gen-icons`, `check-gen`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
-| Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the ADR-0034 opening-method canary) |
+| Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `sync-version`, `check-version`, `check-extension-id` |
@@ -117,7 +117,7 @@ moon ci                    # affected-only, based on touched files - a LOCAL
                            # convenience for quick iteration, NEVER the gate
 ```
 
-Cache trust, and the one edge that must never be narrowed: the Rust core is the canonical cross-process contract (ADR-0028), so the `shared` and `extension` tasks declare the whole core crate (plus `scripts/gen-ops.ts` and the cargo manifests) as inputs - the `rust-contract` file group in `.moon/tasks/all.yml`. That list is deliberately over-broad; a change anywhere in `src/packages/core` marks the downstream TS tasks affected, because a stale result on the contract path is the one failure mode this repo cannot accept. If you edit these task definitions, it is always safe to widen inputs and never safe to narrow them. Generated and downloaded output (target/, build/, .wxt/, rendered icons, ...) is kept out of every hash by `hasher.ignorePatterns` in `.moon/workspace.yml`; if you add a new gitignored output directory, add it there too (forgetting only over-invalidates, it cannot go stale), and `moon run check-hasher` (part of the gate) proves no tracked file matches any pattern. `.moon/cache/` is local state and gitignored; `rm -rf .moon/cache` is the reset button.
+Cache trust, and the one edge that must never be narrowed: the Rust core is the canonical cross-process contract, so the `shared` and `extension` tasks declare the whole core crate (plus `scripts/gen-ops.ts` and the cargo manifests) as inputs - the `rust-contract` file group in `.moon/tasks/all.yml`. That list is deliberately over-broad; a change anywhere in `src/packages/core` marks the downstream TS tasks affected, because a stale result on the contract path is the one failure mode this repo cannot accept. If you edit these task definitions, it is always safe to widen inputs and never safe to narrow them. Generated and downloaded output (target/, build/, .wxt/, rendered icons, ...) is kept out of every hash by `hasher.ignorePatterns` in `.moon/workspace.yml`; if you add a new gitignored output directory, add it there too (forgetting only over-invalidates, it cannot go stale), and `moon run check-hasher` (part of the gate) proves no tracked file matches any pattern. `.moon/cache/` is local state and gitignored; `rm -rf .moon/cache` is the reset button.
 
 ## Toolchain pinning (proto)
 
@@ -131,7 +131,7 @@ uv is pinned only in `.prototools`, and python is owned by uv exactly as before:
 
 ## Working on the extension
 
-The extension is built on WXT ([ADR-0027](./adr/0027-extension-rehaul-off-dom-confirmation-wxt-i18n.md)), which generates the manifest (including the pinned key) and bundles the entrypoints under `src/apps/extension/src/entrypoints/`.
+The extension is built on WXT, which generates the manifest (including the pinned key) and bundles the entrypoints under `src/apps/extension/src/entrypoints/`.
 
 ```sh
 bun install

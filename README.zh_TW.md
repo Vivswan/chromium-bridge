@@ -25,20 +25,16 @@ JavaScript。相應的防護措施:
 - **高風險操作需確認。** 提交點擊、按鍵、關閉分頁、檔案上傳, 以及每一次
   `page_eval`, 都要在一個頁面無法看見、無法點擊的擴充功能自有視窗中確認。
   在已完成 Touch ID 註冊的 Mac 上, `page_eval` 和 `page_upload` 的核准是一
-  次 Secure Enclave 的 Touch ID 觸按, 任何頁面或程式都無法偽造
-  ([ADR-0031](./docs/adr/0031-touch-id-confirmations-and-presence-grants.md))。
+  次 Secure Enclave 的 Touch ID 觸按, 任何頁面或程式都無法偽造。
 - **憑證唯讀。** Cookie 和儲存只能讀取 (且始終遮罩: JWT、長十六進位字串、
   長數字串), 永遠不能寫入。設計上不存在 `cookie_set` 或 `storage_set`。
 - **經過驗證與證明的橋接。** 在 macOS 和 Linux 上, 主機行程之間的橋接是一
   個私有的 Unix 網域通訊端 (沒有監聽連接埠)。每個連線都必須通過核心對端
   UID 檢查、核心認證的可執行檔身分, 以及基於每次執行隨機金鑰的 HMAC 質詢。
   MCP 用戶端本身要對照一份以認證程式碼身分為鍵的受信用戶端允許清單獲得准
-  入, 任何一方都可以隨時撤銷信任
-  ([ADR-0024](./docs/adr/0024-multi-client-attested-pairing-and-broker.md)、
-  [ADR-0025](./docs/adr/0025-any-side-revocation-epoch.md))。
+  入, 任何一方都可以隨時撤銷信任。
 - **全域緊急停止開關。** 在 CLI 或擴充功能中的一個動作即可停止一切, 直到
-  你以在場證明 (proof of presence) 明確解除
-  ([ADR-0030](./docs/adr/0030-global-kill-switch-and-audit.md))。每一個安全
+  你以在場證明 (proof of presence) 明確解除。每一個安全
   決策都會寫入磁碟上的稽核日誌。
 
 平台差異, 如實說明: 強橋接保證 (無連接埠通訊端、對端 UID 檢查、身分證明)
@@ -112,7 +108,7 @@ CLI 只依賴二進位檔本身, 在桌面機器、無介面機器和 CI 上都�
 可以同時連接多個瀏覽器 (在 macOS/Linux 上每個瀏覽器有自己的原生主機和標
 籤, 例如 `chrome` 和 `brave`)。其他每個工具都接受可選的 `browser` 參數來指
 定; 連接多個時, 未指定的呼叫會以明確錯誤失敗, 而不是猜測該在哪個已登入瀏覽
-器裡操作。見 [ADR-0022](./docs/adr/0022-multi-browser-label-routing.md)。
+器裡操作。
 
 ### 分頁
 
@@ -168,8 +164,8 @@ CLI 只依賴二進位檔本身, 在桌面機器、無介面機器和 CI 上都�
 | `cookie_get` | 讀取作用中分頁的 Cookie, 含 `httpOnly`; 僅限允許清單內的主機 | 高 |
 | `storage_get` | 讀取頁面的 `localStorage` / `sessionStorage` (同源) | 高 |
 
-設計上沒有寫入工具; Cookie/儲存寫入不在範圍內
-([ADR-0010](./docs/adr/0010-cookie-storage-readonly.md))。
+設計上沒有寫入工具; Cookie/儲存寫入不在範圍內: 偽造的 httpOnly Cookie 是工作階段固定攻擊的風險
+(完整理由見[安全決策理由](./docs/security/rationale.md#extension-gates-and-tool-scope))。
 
 ## 運作原理
 
@@ -200,7 +196,7 @@ CLI 只依賴二進位檔本身, 在桌面機器、無介面機器和 CI 上都�
 | Linux | x64 預編譯; 任何 Chromium 系瀏覽器; 用 CLI 管理。 |
 | Windows | x64 預編譯 (原生, 無需管理員)。橋接安全性為盡力而為; 見 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 瀏覽器 | 任何 Chromium 系瀏覽器, Manifest V3 |
-| MCP 協定 | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
+| MCP 協定 | `2026-07-28` |
 | 內部橋協定 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |
 
 已知瀏覽器 (`--browser` 鍵): `chrome`、`chromium`、`brave`、`edge`、
@@ -245,7 +241,7 @@ Worker 主控台 (找 `[bb]` 日誌)。完整手冊: [docs/cli.md](./docs/cli.md
 | [docs/cli.md](./docs/cli.md) | 完整 CLI: doctor/--fix、uninstall、配對、撤銷、緊急停止開關、稽核 |
 | [docs/operations.md](./docs/operations.md) | 二進位模式、日誌/稽核、執行時目錄、重連 |
 | [docs/privacy-policy.zh_TW.md](./docs/privacy-policy.zh_TW.md) | 擴充功能的隱私權政策 |
-| [docs/adr/](./docs/adr/) | 架構決策記錄: 每一個「為什麼這麼選」 |
+| [docs/security/rationale.md](./docs/security/rationale.md) | 每一項安全決策的理由, 以及被否決的替代方案 |
 
 ## 專案狀態
 

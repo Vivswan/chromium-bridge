@@ -20,11 +20,11 @@ error: refusing to write captured frames inside the repository: /repo/src/packag
 
 - A capture is measured from a real client, so minted frames are reference material only. The committed corpus in `src/packages/core/fuzz/seeds/mcp_jsonrpc/` is hand-authored: write a seed with the same wire shape and synthetic `clientInfo`, never copy a capture.
 
-## The ADR-0034 canary
+## The legacy-era canary
 
 The suite prints one `CANARY` line per harness naming the OPENING method it sent:
 
-- `initialize` - the legacy MCP handshake; the temporary legacy shim (ADR-0034) is still required.
+- `initialize` - the legacy MCP handshake; the temporary legacy shim is still required.
 - `server/discover` - the modern 2026-07-28 opening; once EVERY harness reports this, the legacy shim can be deleted.
 
 ## Isolation (safety)

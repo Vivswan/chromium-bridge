@@ -4,26 +4,26 @@
 
 ## Subcommand overview
 
-`chromium-bridge` is a single binary with subcommand dispatch (see [ADR-0001](./adr/0001-use-rust-single-binary.md)):
+`chromium-bridge` is a single binary with subcommand dispatch:
 
 | Invocation | Mode | Description |
 |------|------|------|
-| `chromium-bridge` (no arguments) | MCP server | Default mode, spawned by the MCP client. The first instance becomes the broker; later instances attach to it ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)). |
+| `chromium-bridge` (no arguments) | MCP server | Default mode, spawned by the MCP client. The first instance becomes the broker; later instances attach to it. |
 | `chromium-bridge --native-host [--label <browser>]` | native host | Thin bridge, spawned by the browser via the host manifest. Never invoked by hand. |
 | `chromium-bridge doctor [--json]` (alias `status`) | read-only diagnostics | Environment and connectivity self-check; changes nothing. `--json` prints the report as one versioned object. |
 | `chromium-bridge doctor --list` | read-only diagnostics | One line per known browser: detection and registration state. |
 | `chromium-bridge doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host. The only mutating form of doctor. |
 | `chromium-bridge uninstall` | removal | Removes exactly the registrations this project wrote, nothing else. |
-| `chromium-bridge pair [--reset]` | enrollment | Mints the Secure Enclave enrollment key (macOS); every use of the key demands Touch ID ([ADR-0021](./adr/0021-enrollment-ceremony.md)). |
-| `chromium-bridge revoke` | enrollment | Deletes the enrollment key; a pinning extension then fails closed ([ADR-0025](./adr/0025-any-side-revocation-epoch.md)). |
+| `chromium-bridge pair [--reset]` | enrollment | Mints the Secure Enclave enrollment key (macOS); every use of the key demands Touch ID. |
+| `chromium-bridge revoke` | enrollment | Deletes the enrollment key; a pinning extension then fails closed. |
 | `chromium-bridge enclave-status [--json]` | read-only | Prints the enrollment state and key fingerprint. |
-| `chromium-bridge presence-selftest` | diagnostic | Raises one user-presence prompt and reports the result, without a browser ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)). |
-| `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --team-id <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)). |
+| `chromium-bridge presence-selftest` | diagnostic | Raises one user-presence prompt and reports the result, without a browser. |
+| `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --team-id <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
 | `chromium-bridge revoke-client --name <label>` | trusted clients | Removes a client; a live broker drops it immediately. |
 | `chromium-bridge list-clients` | read-only | Prints the trusted-client allowlist. |
-| `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release ([ADR-0030](./adr/0030-global-kill-switch-and-audit.md)). |
+| `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release. |
 | `chromium-bridge unkill` | kill switch | Releases the kill switch, after proof of user presence (Touch ID on an enrolled Mac; otherwise an interactive terminal confirmation that refuses a piped stdin). |
-| `chromium-bridge policy show [--json]` | read-only | Prints the host-owned policy state and the effective policy ([ADR-0032](./adr/0032-host-owned-policy-settings.md)). |
+| `chromium-bridge policy show [--json]` | read-only | Prints the host-owned policy state and the effective policy. |
 | `chromium-bridge policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline: one Touch ID tap. Signature-only; refuses up front where no enrollment key exists. |
 | `chromium-bridge policy restrict <field flags>` | policy (free lane) | Applies an unsigned restriction overlay; no prompt, because it can only remove capability. |
 | `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
@@ -85,18 +85,18 @@ Platform notes:
 
 ## Enrollment: pair / revoke / enclave-status
 
-The enrollment ceremony ([ADR-0021](./adr/0021-enrollment-ceremony.md)) binds the host to this machine's Secure Enclave and to you:
+The enrollment ceremony binds the host to this machine's Secure Enclave and to you:
 
 - `chromium-bridge pair` mints a P-256 key inside the Secure Enclave whose every use requires user presence (Touch ID or the login password), then performs a presence-gated self-test signature and prints the key's SHA-256 fingerprint. Compare that fingerprint with the one the extension shows on its enrollment screen; a mismatch means something sits between them.
 - `chromium-bridge pair --reset` replaces the key with a fresh one (presence-gated again); the extension must re-pin.
-- `chromium-bridge revoke` deletes the key. The host confirms the deletion and pushes a revocation to the extension, which fails closed ([ADR-0025](./adr/0025-any-side-revocation-epoch.md)).
+- `chromium-bridge revoke` deletes the key. The host confirms the deletion and pushes a revocation to the extension, which fails closed.
 - `chromium-bridge enclave-status [--json]` reports the current state read-only.
 
-Enrollment is what upgrades the highest-risk confirmations (`page_eval`, `page_upload`, kill-switch release, client pairing) from an on-screen dialog to a hardware Touch ID tap ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)). `chromium-bridge presence-selftest` raises exactly one such prompt so you can see it work without a browser.
+Enrollment is what upgrades the highest-risk confirmations (`page_eval`, `page_upload`, kill-switch release, client pairing) from an on-screen dialog to a hardware Touch ID tap. `chromium-bridge presence-selftest` raises exactly one such prompt so you can see it work without a browser.
 
 ## Trusted clients: pair-client / revoke-client / list-clients
 
-By default (unenrolled), any process that spawns the server is served, and every start logs that open posture at ERROR level. Creating the trusted-client allowlist closes it ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)):
+By default (unenrolled), any process that spawns the server is served, and every start logs that open posture at ERROR level. Creating the trusted-client allowlist closes it:
 
 ```text
 chromium-bridge pair-client --name claude-code --this-parent
@@ -122,7 +122,7 @@ Once the allowlist exists, anything unmatched fails closed, including an identit
 - The state is persisted (in `revocation.json`, next to the lock file) and survives restarts, reconnects, and reboots.
 - The extension's options page shows the state; engaging the switch works from any surface, but releasing it does not (a web page cannot see or touch any of it).
 
-Nothing releases the switch on its own. Release is a CLI act: `chromium-bridge unkill` from a terminal ([ADR-0032](./adr/0032-host-owned-policy-settings.md) decision 6 retired the extension's release toggle; a release request from the extension is refused and audited), and releasing demands proof of user presence ([ADR-0031](./adr/0031-touch-id-confirmations-and-presence-grants.md)): on an enrolled Mac this is a Secure Enclave Touch ID tap, and where no Enclave key exists `unkill` asks you to type an explicit confirmation on a real terminal, and refuses outright when its stdin is a pipe, so no script or background program can quietly reopen the bridge through the CLI. Every release attempt is audited with the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at the presence gate, or refused by an unwritable record after presence passed.
+Nothing releases the switch on its own. Release is a CLI act: `chromium-bridge unkill` from a terminal (the extension's release toggle was retired; a release request from the extension is refused and audited), and releasing demands proof of user presence: on an enrolled Mac this is a Secure Enclave Touch ID tap, and where no Enclave key exists `unkill` asks you to type an explicit confirmation on a real terminal, and refuses outright when its stdin is a pipe, so no script or background program can quietly reopen the bridge through the CLI. Every release attempt is audited with the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at the presence gate, or refused by an unwritable record after presence passed.
 
 If either command reports that the revocation record is unreadable, see the recovery section in [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record); until then, everything keeps failing closed.
 
@@ -130,7 +130,7 @@ If either command reports that the revocation record is unreadable, see the reco
 
 ## Host-owned policy (policy)
 
-`chromium-bridge policy` is the host-owned policy surface ([ADR-0032](./adr/0032-host-owned-policy-settings.md)). The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync-adr-0032); the doctor rows are in [operations.md](./operations.md#host-owned-policy-the-doctor-rows).
+`chromium-bridge policy` is the host-owned policy surface. The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync); the doctor rows are in [operations.md](./operations.md#host-owned-policy-the-doctor-rows).
 
 ```text
 chromium-bridge policy show [--json]              # read-only: store state + effective policy
@@ -144,7 +144,7 @@ chromium-bridge policy rollback --revision <n> [--json]
 `on|off`; the four `*-ms` flags take a non-negative integer;
 `--disabled-tools` takes a comma-separated tool list that states the WHOLE disabled set (keep the tools already in it when adding one; empty entries are dropped, so `--disabled-tools ""` is the empty set - a full clear, which on the `set` lane is a relaxation and costs the tap like any other). Because the list travels comma-joined, a tool name containing a comma or surrounding whitespace cannot ride this transport faithfully: every write seam refuses such a name outright rather than signing a silently mangled list. Parsing is strict: an unknown subcommand, a stray argument, a repeated flag, or a malformed value is an error, never a guess, and `set`/`restrict` demand at least one field flag.
 
-**The two lanes are deliberately asymmetric** (ADR-0032 decision 3). `policy set` is the grant lane: it folds the edits over the current baseline (untouched fields carry baseline values, never effective ones), embeds the touched-field set in the document, and signs the exact document bytes with the Secure Enclave enrollment key - the Touch ID tap IS the signature. Where no enrollment key exists (non-macOS, an unenrolled Mac), the CLI refuses UP FRONT, before any prompt could appear: the CLI's grant path exists only as that signature and never constructs an interactive floor, because a floor-gated CLI grant would quietly create a baseline-writing path on every platform the CLI ships to (decision 5). `policy restrict` is the free lane: no prompt, no signature, and the seam's direction check refuses any edit that would relax the effective policy, so a scripted or forged restriction is at worst a denial of service against your own bridge.
+**The two lanes are deliberately asymmetric.** `policy set` is the grant lane: it folds the edits over the current baseline (untouched fields carry baseline values, never effective ones), embeds the touched-field set in the document, and signs the exact document bytes with the Secure Enclave enrollment key - the Touch ID tap IS the signature. Where no enrollment key exists (non-macOS, an unenrolled Mac), the CLI refuses UP FRONT, before any prompt could appear: the CLI's grant path exists only as that signature and never constructs an interactive floor, because a floor-gated CLI grant would quietly create a baseline-writing path on every platform the CLI ships to (decision 5). `policy restrict` is the free lane: no prompt, no signature, and the seam's direction check refuses any edit that would relax the effective policy, so a scripted or forged restriction is at worst a denial of service against your own bridge.
 
 **Rollback never replays.** `policy rollback --revision <n>` re-derives that revision's effective policy, diffs it against the current one, and applies the difference as a FRESH write: a rollback that only tightens rides the free restrict lane with no prompt; one that relaxes anything is one fresh Touch ID tap, exactly like any other grant. The old signed artifact is never written back - a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
 
@@ -181,7 +181,7 @@ $ chromium-bridge audit --limit 20
 2026-07-17 19:05:02.913Z  kill_release    surface=cli outcome=ok
 ```
 
-A record the reader cannot parse is shown as `UNRECOGNIZED RECORD` and counted, never guessed at; a `dropped=n` field marks records lost to a failed write (a full disk, for example). Recording never blocks or fails an operation: the trail observes decisions, it does not gate them ([ADR-0030](./adr/0030-global-kill-switch-and-audit.md)).
+A record the reader cannot parse is shown as `UNRECOGNIZED RECORD` and counted, never guessed at; a `dropped=n` field marks records lost to a failed write (a full disk, for example). Recording never blocks or fails an operation: the trail observes decisions, it does not gate them.
 
 Error codes and the error taxonomy are in [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs).
 

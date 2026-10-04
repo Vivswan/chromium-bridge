@@ -20,7 +20,7 @@ export const ROOT_DOCS = new Set([
 // Maps a repo-relative markdown path ("docs/architecture.md") to its /docs/
 // route slug, or undefined when the site does not render that file. The
 // rendered set mirrors the globs in docs.ts: the allowlisted root docs (plus
-// .github/SECURITY.md) and docs/, docs/security/, and docs/adr/.
+// .github/SECURITY.md) and docs/ and docs/security/.
 export function repoPathToSlug(rel: string): string | undefined {
   if (!rel.endsWith(".md")) return undefined;
   if (rel === "docs/README.md") return "overview";
@@ -36,6 +36,6 @@ export function repoPathToSlug(rel: string): string | undefined {
   }
   const scoped = rel.slice("docs/".length);
   const dir = scoped.includes("/") ? scoped.slice(0, scoped.lastIndexOf("/")) : "";
-  if (!["", "security", "adr"].includes(dir)) return undefined;
+  if (!["", "security"].includes(dir)) return undefined;
   return scoped.replace(/\.md$/, "").replace(/^README/, "readme");
 }

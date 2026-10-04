@@ -9,7 +9,7 @@
 //     (src/packages/shared/src/ops.gen.ts <- catalogue.rs via `moon run gen`,
 //     freshness enforced by check-gen) and the canonical defaults: the
 //     GENERATED host-owned policy contract (POLICY_DEFAULTS in
-//     src/packages/shared/src/policy.gen.ts <- policy/mod.rs, ADR-0032) for
+//     src/packages/shared/src/policy.gen.ts <- policy/mod.rs) for
 //     the 15 policy fields, and the settings schema
 //     (src/packages/shared/src/settings.ts) for the browser-owned keys.
 //   - SECURITY.md: the fail-safe-defaults table's Default cells are diffed
@@ -107,7 +107,7 @@ export function riskMatrixViolations(
 
 /** The opt-in tools' rows must claim "off by default" exactly when their gate
  * field defaults to false (and never claim it when it defaults to true). The
- * gates are HOST-OWNED policy fields since ADR-0032, so this pin reads the
+ * gates are HOST-OWNED policy fields, so this pin reads the
  * GENERATED policy contract (POLICY_DEFAULTS <- policy.gen.ts), not the
  * settings schema. */
 export function offByDefaultViolations(
@@ -194,7 +194,7 @@ export function settingsKeyViolations(
 }
 
 /** The fields SECURITY.md's fail-safe-defaults table documents - all six are
- * HOST-OWNED policy fields since ADR-0032, so their Default cells pin the
+ * HOST-OWNED policy fields, so their Default cells pin the
  * generated deny baseline (POLICY_DEFAULTS <- policy.gen.ts). A pinned
  * list, like the repo's other pin tests: dropping (or reformatting away) a
  * row must fail here and force a conscious edit, not vanish silently. Adding

@@ -22,10 +22,9 @@ const modules = {
   // named exactly, not globbed, so the rest of .github/ (agent instructions,
   // the PR template) stays out of the site.
   ...import.meta.glob<Doc>("../../../../../.github/SECURITY.md", { eager: true }),
-  // The docs tree: guides, security docs, ADRs, translations.
+  // The docs tree: guides, security docs, translations.
   ...import.meta.glob<Doc>("../../../../../docs/*.md", { eager: true }),
   ...import.meta.glob<Doc>("../../../../../docs/security/*.md", { eager: true }),
-  ...import.meta.glob<Doc>("../../../../../docs/adr/*.md", { eager: true }),
 };
 
 // The repo root sits five directories above this file, so every normalized

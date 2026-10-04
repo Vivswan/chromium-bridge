@@ -4,9 +4,9 @@
 
 ## The two wire modes
 
-`chromium-bridge` is a single binary with subcommand dispatch (see [ADR-0001](./adr/0001-use-rust-single-binary.md)). Two modes carry protocol on stdout:
+`chromium-bridge` is a single binary with subcommand dispatch. Two modes carry protocol on stdout:
 
-- **MCP server** (no arguments): the default mode, spawned by the MCP client. The first instance binds the bridge socket, becomes the broker, and holds session state; later instances attach to it as relays, so several MCP clients share the browsers concurrently ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)). stdout carries MCP JSON-RPC.
+- **MCP server** (no arguments): the default mode, spawned by the MCP client. The first instance binds the bridge socket, becomes the broker, and holds session state; later instances attach to it as relays, so several MCP clients share the browsers concurrently. stdout carries MCP JSON-RPC.
 - **native host** (`--native-host --label <browser>`): a thin bridge, spawned by each browser via the wrapper. Forwards between Native Messaging frames on stdin/stdout and NDJSON on the bridge socket, and terminates the control-plane frames (enrollment, kill, client admin) itself. stdout carries NM frames.
 
 In both modes, **stdout carries only protocol bytes**; every diagnostic goes to stderr. A single stray write would corrupt the frame stream (see [trust-boundaries.md](./security/trust-boundaries.md)).
@@ -28,11 +28,11 @@ Diagnostics all go to **stderr**; two environment variables control the output (
 
 Audit lines record no sensitive content (full page text, cookie/storage values, complete eval return values, form fill values); masking happens on the extension side (see [threat-model.md](./security/threat-model.md)).
 
-Since [ADR-0030](./adr/0030-global-kill-switch-and-audit.md) the same events are also appended to a durable, size-capped `audit.log` (0600, in the runtime directory next to the lock file) and read back with `chromium-bridge audit`; see [cli.md](./cli.md#logging-and-audit-bb_log--bb_log_format).
+The same events are also appended to a durable, size-capped `audit.log` (0600, in the runtime directory next to the lock file) and read back with `chromium-bridge audit`; see [cli.md](./cli.md#logging-and-audit-bb_log--bb_log_format).
 
 ## Kill switch: state, and recovering an unreadable record
 
-`chromium-bridge kill` halts all bridge activity until an explicit, user-present release; the behavior and the release paths are documented in [cli.md](./cli.md#kill-switch-kill--unkill) and [ADR-0030](./adr/0030-global-kill-switch-and-audit.md). The latch lives in `revocation.json` in the runtime directory, the same record that carries the revocation epoch (ADR-0025).
+`chromium-bridge kill` halts all bridge activity until an explicit, user-present release; the behavior and the release paths are documented in [cli.md](./cli.md#kill-switch-kill--unkill). The latch lives in `revocation.json` in the runtime directory, the same record that carries the revocation epoch.
 
 Every enforcement point reads that record fail-closed, so if it becomes unreadable (corrupt JSON, unknown fields, bad permissions), the bridge stops serving everything: tool calls are refused with `BRIDGE_KILLED`, browser connections are severed, fresh instances refuse to start, and both `kill` and `unkill` refuse to write (releasing from a state you cannot read would fail open, and rebuilding the file silently would mask tampering). `doctor` reports the unreadable state and exits non-zero.
 
@@ -40,12 +40,12 @@ Recovery is deliberately manual:
 
 1. Run `chromium-bridge doctor` to confirm the state and find the runtime directory.
 2. Look at `revocation.json` before touching it. If you cannot explain the corruption (a crash mid-write, a disk incident), treat it as a possible tampering indicator and see [incident-response.md](./security/incident-response.md) before proceeding.
-3. Delete `revocation.json` **and** `clients.json` from the runtime directory. Deleting only one is itself detected as tampering (ADR-0025); dropping both is a factory reset of harness trust, back to the loudly-logged unenrolled bootstrap.
+3. Delete `revocation.json` **and** `clients.json` from the runtime directory. Deleting only one is itself detected as tampering; dropping both is a factory reset of harness trust, back to the loudly-logged unenrolled bootstrap.
 4. Re-pair each trusted client (`chromium-bridge pair-client`), and re-engage the kill switch if you had it on. The extension's enrollment pin is not affected (the host key never lived in these files).
 
 ## Host-owned policy: the doctor rows
 
-Since [ADR-0032](./adr/0032-host-owned-policy-settings.md) the host owns the security policy (see [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync-adr-0032); the editing surfaces are documented in [cli.md](./cli.md#host-owned-policy-policy)). `doctor` reports one row:
+The host owns the security policy (see [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync); the editing surfaces are documented in [cli.md](./cli.md#host-owned-policy-policy)). `doctor` reports one row:
 
 - **`policy baseline:`**
   - `none yet` is HEALTHY: it is the pre-cutover state, in which the extension enforces the deny baseline (every capability grant off, every confirmation on) until `chromium-bridge policy set` writes a first baseline. It never flips doctor's exit code.
@@ -60,7 +60,7 @@ The bridge rendezvous lives in a 0700 per-user runtime directory (macOS: `$XDG_R
 
 Peers read the lock file, connect to the endpoint, and must pass the kernel checks and the HMAC challenge-response before the mandatory attach frame (see [architecture.md section 3.3](./architecture.md#33-internal-bridge-protocol-broker---native-hosts-and-relays) and [trust-boundaries.md](./security/trust-boundaries.md)).
 
-**Stale lock file**: a broker that exited abnormally may leave the lock file behind. The next server instance probes it; a dead endpoint is detected and the lock replaced at startup. There is no forced takeover of a live owner: a second instance that finds a live broker attaches to it instead ([ADR-0024](./adr/0024-multi-client-attested-pairing-and-broker.md)). `doctor` only reads the lock file; it never cleans it up.
+**Stale lock file**: a broker that exited abnormally may leave the lock file behind. The next server instance probes it; a dead endpoint is detected and the lock replaced at startup. There is no forced takeover of a live owner: a second instance that finds a live broker attaches to it instead. `doctor` only reads the lock file; it never cleans it up.
 
 ## native host reconnect
 

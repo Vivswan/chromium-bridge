@@ -19,12 +19,12 @@ Translations: [Simplified Chinese](./README.zh_CN.md), [Traditional Chinese](./R
 chromium-bridge drives a real, authenticated browser. It can read page content, cookies (including `httpOnly`), and web storage, and can run JavaScript in your pages. The guardrails:
 
 - **Approve every site.** A new origin triggers a prompt; nothing runs on a site you have not approved.
-- **Confirm high-risk actions.** Submit clicks, key presses, tab close, file uploads, and every `page_eval` confirm on an extension-owned window the page cannot see or click. On a Mac enrolled via Touch ID, `page_eval` and `page_upload` approval is a Secure Enclave user-presence check (Touch ID or the login password) that no page or program can forge ([ADR-0031](./docs/adr/0031-touch-id-confirmations-and-presence-grants.md)).
+- **Confirm high-risk actions.** Submit clicks, key presses, tab close, file uploads, and every `page_eval` confirm on an extension-owned window the page cannot see or click. On a Mac enrolled via Touch ID, `page_eval` and `page_upload` approval is a Secure Enclave user-presence check (Touch ID or the login password) that no page or program can forge.
 - **Gates are on by default.** Each is a documented setting, and relaxing one is an explicit, informed choice ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)).
 - **Read-only credentials.** Cookies and storage can be read (always masked: JWTs, long hex, long digit runs), never written. There is no `cookie_set` or `storage_set` by design.
 - **Authenticated, attested bridge.** On macOS and Linux the host processes talk over a private Unix-domain socket (no listening port). Every connection must pass a kernel peer-UID check, kernel-attested executable identity, and an HMAC challenge over a per-run secret.
-- **Trusted-client allowlist.** MCP clients are admitted against an allowlist keyed on attested code identity, and any side can revoke trust at any time ([ADR-0024](./docs/adr/0024-multi-client-attested-pairing-and-broker.md), [ADR-0025](./docs/adr/0025-any-side-revocation-epoch.md)).
-- **A global kill switch.** One action from the CLI or the extension halts everything until you release it with proof of presence ([ADR-0030](./docs/adr/0030-global-kill-switch-and-audit.md)). Every security decision lands in an on-disk audit trail.
+- **Trusted-client allowlist.** MCP clients are admitted against an allowlist keyed on attested code identity, and any side can revoke trust at any time.
+- **A global kill switch.** One action from the CLI or the extension halts everything until you release it with proof of presence. Every security decision lands in an on-disk audit trail.
 
 **Platform honesty.** The strong bridge guarantees exist on macOS and Linux only; Windows support is best-effort ([SECURITY.md](./.github/SECURITY.md#platform-support)).
 
@@ -98,7 +98,7 @@ command = "/absolute/path/to/chromium-bridge"
 args = []
 ```
 
-Several clients can be connected at once: the first server instance becomes a broker and later instances attach to it, each one attested and individually revocable ([ADR-0024](./docs/adr/0024-multi-client-attested-pairing-and-broker.md)).
+Several clients can be connected at once: the first server instance becomes a broker and later instances attach to it, each one attested and individually revocable.
 
 On WSL, install where the browser runs ([WSL guide](./docs/wsl.md)):
 
@@ -115,7 +115,7 @@ Grouped from the single source of truth, the Rust tool catalogue ([`src/packages
 |------|------|------|
 | `list_browsers` | List the browsers connected to the bridge (label + open-tab count) | low |
 
-Several browsers can be connected at once; on macOS/Linux each gets its own native host and label (for example `chrome` and `brave`). Every other tool takes an optional `browser` argument to pick one. With several connected, an unaddressed call fails with a clear error rather than guessing which logged-in browser to act in ([ADR-0022](./docs/adr/0022-multi-browser-label-routing.md)).
+Several browsers can be connected at once; on macOS/Linux each gets its own native host and label (for example `chrome` and `brave`). Every other tool takes an optional `browser` argument to pick one. With several connected, an unaddressed call fails with a clear error rather than guessing which logged-in browser to act in.
 
 ### Tabs
 
@@ -171,7 +171,7 @@ Several browsers can be connected at once; on macOS/Linux each gets its own nati
 | `cookie_get` | Read cookies for the active tab, incl. `httpOnly`; allowlisted hosts only | high |
 | `storage_get` | Read the page's `localStorage` / `sessionStorage` (same-origin) | high |
 
-No write tools by design; cookie/storage writes are out of scope ([ADR-0010](./docs/adr/0010-cookie-storage-readonly.md)).
+No write tools by design; cookie/storage writes are out of scope: a forged httpOnly cookie is a session-fixation risk (the [security rationale](./docs/security/rationale.md#extension-gates-and-tool-scope) has the full reason).
 
 ## How it works
 
@@ -210,7 +210,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md).
 | Linux | x64 prebuilt; any Chromium-based browser; CLI management surface. |
 | Windows | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./.github/SECURITY.md#platform-support). |
 | Browser | Any Chromium-based browser, Manifest V3 |
-| MCP protocol | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
+| MCP protocol | `2026-07-28` |
 | Internal bridge protocol | `1` (`BRIDGE_PROTOCOL_VERSION` in [src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs)) |
 
 Known browsers (`--browser` keys): `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. Every Chromium browser reads the same native-messaging manifest; only the per-user `NativeMessagingHosts` location differs, and the shared resolver in the core knows them all.
@@ -255,7 +255,7 @@ Full runbook: [docs/cli.md](./docs/cli.md) and [docs/operations.md](./docs/opera
 | [docs/compatibility.md](./docs/compatibility.md) | Version discipline and the capability/protocol handshake |
 | [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM |
 | [docs/wsl.md](./docs/wsl.md) | The two WSL modes: Windows Chrome interop and WSLg |
-| [docs/adr/](./docs/adr/) | Architecture Decision Records: every "why was this chosen" |
+| [docs/security/rationale.md](./docs/security/rationale.md) | Why each security decision was taken, and what was rejected |
 
 <details>
 <summary>Testing and project layout</summary>

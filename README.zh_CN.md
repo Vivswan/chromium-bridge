@@ -25,20 +25,16 @@ JavaScript。相应的防护措施:
 - **高风险操作需确认。** 提交点击、按键、关闭标签页、文件上传, 以及每一次
   `page_eval`, 都要在一个页面无法看见、无法点击的扩展自有窗口中确认。在已
   完成 Touch ID 注册的 Mac 上, `page_eval` 和 `page_upload` 的批准是一次
-  Secure Enclave 的 Touch ID 触按, 任何页面或程序都无法伪造
-  ([ADR-0031](./docs/adr/0031-touch-id-confirmations-and-presence-grants.md))。
+  Secure Enclave 的 Touch ID 触按, 任何页面或程序都无法伪造。
 - **凭据只读。** Cookie 和存储只能读取 (且始终脱敏: JWT、长十六进制串、长
   数字串), 永远不能写入。设计上不存在 `cookie_set` 或 `storage_set`。
 - **经过认证与证明的桥接。** 在 macOS 和 Linux 上, 主机进程之间的桥接是一
   个私有的 Unix 域套接字 (没有监听端口)。每个连接都必须通过内核对端 UID
   检查、内核认证的可执行文件身份, 以及基于每次运行随机密钥的 HMAC 质询。
   MCP 客户端本身要对照一份以认证代码身份为键的受信客户端允许列表获得准入,
-  任何一方都可以随时吊销信任
-  ([ADR-0024](./docs/adr/0024-multi-client-attested-pairing-and-broker.md)、
-  [ADR-0025](./docs/adr/0025-any-side-revocation-epoch.md))。
+  任何一方都可以随时吊销信任。
 - **全局紧急停止开关。** 在 CLI 或扩展中的一个动作即可停止一切,
-  直到你以在场证明 (proof of presence) 显式解除
-  ([ADR-0030](./docs/adr/0030-global-kill-switch-and-audit.md))。每一个安全
+  直到你以在场证明 (proof of presence) 显式解除。每一个安全
   决策都会写入磁盘上的审计日志。
 
 平台差异, 如实说明: 强桥接保证 (无端口套接字、对端 UID 检查、身份证明) 仅
@@ -112,7 +108,7 @@ CLI 只依赖二进制本身, 在桌面机器、无界面机器和 CI 上都一�
 可以同时连接多个浏览器 (在 macOS/Linux 上每个浏览器有自己的原生主机和标
 签, 例如 `chrome` 和 `brave`)。其他每个工具都接受可选的 `browser` 参数来指
 定; 连接多个时, 未指定的调用会以明确错误失败, 而不是猜测该在哪个已登录浏览
-器里操作。见 [ADR-0022](./docs/adr/0022-multi-browser-label-routing.md)。
+器里操作。
 
 ### 标签页
 
@@ -168,8 +164,8 @@ CLI 只依赖二进制本身, 在桌面机器、无界面机器和 CI 上都一�
 | `cookie_get` | 读取活动标签页的 Cookie, 含 `httpOnly`; 仅限允许列表内的主机 | 高 |
 | `storage_get` | 读取页面的 `localStorage` / `sessionStorage` (同源) | 高 |
 
-设计上没有写入工具; Cookie/存储写入不在范围内
-([ADR-0010](./docs/adr/0010-cookie-storage-readonly.md))。
+设计上没有写入工具; Cookie/存储写入不在范围内: 伪造的 httpOnly Cookie 是会话固定攻击的风险
+(完整理由见[安全决策理由](./docs/security/rationale.md#extension-gates-and-tool-scope))。
 
 ## 工作原理
 
@@ -200,7 +196,7 @@ CLI 只依赖二进制本身, 在桌面机器、无界面机器和 CI 上都一�
 | Linux | x64 预编译; 任何 Chromium 系浏览器; 用 CLI 管理。 |
 | Windows | x64 预编译 (原生, 无需管理员)。桥接安全性为尽力而为; 见 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 浏览器 | 任何 Chromium 系浏览器, Manifest V3 |
-| MCP 协议 | `2026-07-28` ([ADR-0034](./docs/adr/0034-mcp-2026-07-28-stateless.md)) |
+| MCP 协议 | `2026-07-28` |
 | 内部桥协议 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |
 
 已知浏览器 (`--browser` 键): `chrome`、`chromium`、`brave`、`edge`、
@@ -245,7 +241,7 @@ Code 里用 `/mcp` 重连) 和 `chrome://extensions` 里扩展的 Service Worker
 | [docs/cli.md](./docs/cli.md) | 完整 CLI: doctor/--fix、uninstall、配对、吊销、紧急停止开关、审计 |
 | [docs/operations.md](./docs/operations.md) | 二进制模式、日志/审计、运行时目录、重连 |
 | [docs/privacy-policy.zh_CN.md](./docs/privacy-policy.zh_CN.md) | 扩展的隐私政策 |
-| [docs/adr/](./docs/adr/) | 架构决策记录: 每一个"为什么这么选" |
+| [docs/security/rationale.md](./docs/security/rationale.md) | 每一项安全决策的理由, 以及被否决的替代方案 |
 
 ## 项目状态
 

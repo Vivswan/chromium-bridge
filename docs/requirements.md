@@ -31,9 +31,9 @@ Users want to let an AI (via an MCP client) operate their own browser directly: 
 - **G5 Single-binary distribution**: the entire backend compiles to one Rust binary; deployment = copying one file
 
 ### 2.2 Non-goals / deferred capabilities
-- **`page_eval` has since been added**: early v0.1 did not implement arbitrary JS execution; phase two added it, with a high-risk confirmation channel + return-value masking. See [ADR-0008](./adr/0008-page-eval-confirmation-channel.md) (supersedes the earlier [ADR-0005](./adr/0005-page-eval-disabled-by-default.md))
-- **Read-only cookie/storage has since been added**: phase three added `cookie_get` / `storage_get`, strictly read-only with masked output. See [ADR-0010](./adr/0010-cookie-storage-readonly.md)
-- **Precise snapshot has since been added**: `page_snapshot_precise` uses chrome.debugger explicitly, warns the user before the call, and briefly shows an infobar while it runs. The default `page_snapshot` still uses the content script approximation. See [ADR-0003](./adr/0003-content-script-snapshot-vs-chrome-debugger.md) and [ADR-0009](./adr/0009-page-snapshot-precise-debugger.md)
+- **`page_eval` has since been added**: early v0.1 did not implement arbitrary JS execution; it was added later, with a high-risk confirmation channel + return-value masking.
+- **Read-only cookie/storage has since been added**: `cookie_get` / `storage_get` were added later, strictly read-only with masked output
+- **Precise snapshot has since been added**: `page_snapshot_precise` uses chrome.debugger explicitly, warns the user before the call, and briefly shows an infobar while it runs. The default `page_snapshot` still uses the content script approximation.
 - **No recording/replay or batch task orchestration**. That is the phase-three playbook layer
 - **No non-Chromium browsers**. Currently targets Google Chrome on macOS/Windows/Linux, plus Chromium on Linux
 
@@ -74,7 +74,7 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 
 ### FR-2 Page reading
 - `page_snapshot`: returns an a11y-style tree of interactive elements; every node has a stable `ref`, role, accessible name, and a fallback selector
-- `page_snapshot_precise`: the **precise version**: uses chrome.debugger + CDP to fetch Chrome's authoritative a11y tree, covering shadow DOM/complex ARIA; shows a notification Toast before attaching, during which Chrome's debug infobar flashes at the top (about 1 second); refs use a `p` prefix, and page_click/fill need no changes. See [ADR-0009](./adr/0009-page-snapshot-precise-debugger.md)
+- `page_snapshot_precise`: the **precise version**: uses chrome.debugger + CDP to fetch Chrome's authoritative a11y tree, covering shadow DOM/complex ARIA; shows a notification Toast before attaching, during which Chrome's debug infobar flashes at the top (about 1 second); refs use a `p` prefix, and page_click/fill need no changes
 - `page_text`: returns the body text (password fields and suspected card numbers masked)
 - `page_screenshot`: returns a PNG of the visible viewport (base64)
 
@@ -83,18 +83,18 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 - `page_fill(ref|selector, value)`: fill a form field; uses native setters so frameworks (React/Vue) see the change; password field values are masked in logs
 - `page_scroll(direction|pixels)`: scroll
 - `page_wait_for(selector|text|nav, timeoutMs)`: wait for a selector/text, or wait for the page load to finish
-- `page_eval(code)`: **high-risk**: executes arbitrary JS. Every call shows an enlarged Toast with the full code; same-origin 60s grace window; return values are masked by default (JWT/long hex/long digit runs/sensitive keywords), and masking can be turned off in the popup. Runs via `new Function` in the global scope, supporting await/return. See [ADR-0008](./adr/0008-page-eval-confirmation-channel.md)
+- `page_eval(code)`: **high-risk**: executes arbitrary JS. Every call shows an enlarged Toast with the full code; same-origin 60s grace window; return values are masked by default (JWT/long hex/long digit runs/sensitive keywords), and masking can be turned off in the popup. Runs via `new Function` in the global scope, supporting await/return
 
 ### FR-4 Security controls
-- **FR-4.1 Domain allowlist**: on the first operation against a new origin, the extension opens a popup requesting authorization; granting it also requests that domain's host permission via `chrome.permissions.request`. The allowlist is stored in `chrome.storage.local` and revocable from the popup. See [ADR-0004](./adr/0004-allowlist-with-optional-host-permissions.md)
-- **FR-4.2 High-risk Toast**: submit clicks and link navigation trigger an in-page Toast; a 30-second timeout rejects; after approval, same-origin actions of the same kind get a 60-second grace window. See [ADR-0006](./adr/0006-toast-confirmation-for-high-risk.md)
+- **FR-4.1 Domain allowlist**: on the first operation against a new origin, the extension opens a popup requesting authorization; granting it also requests that domain's host permission via `chrome.permissions.request`. The allowlist is stored in `chrome.storage.local` and revocable from the popup
+- **FR-4.2 High-risk Toast**: submit clicks and link navigation trigger an in-page Toast; a 30-second timeout rejects; after approval, same-origin actions of the same kind get a 60-second grace window
 - **FR-4.3 host authentication**: the native messaging manifest's `allowed_origins` hardcodes the extension ID; the bridge socket authenticates with a per-run secret + a lock file in the user directory (Unix mode 0600)
 - **FR-4.4 Masking**: `page_text` masks `<input type=password>` and long digit runs; `page_fill` masks password field values when echoing arguments
 
 ### FR-5 Read-only cookie/storage (phase three)
 - **FR-5.1 `cookie_get`**: reads cookies (including httpOnly), naturally constrained by host_permissions (reusing the allowlist); output values are masked, while structural fields (name/domain/httpOnly) are kept
-- **FR-5.2 `storage_get`**: reads the page's localStorage/sessionStorage (content script, same origin); output is always masked (not governed by the `evalMask` policy field, host-owned since [ADR-0032](./adr/0032-host-owned-policy-settings.md), because the token-leak risk of a silent read is equivalent to eval)
-- **FR-5.3 No writes**: no cookie_set / cookie_remove / storage_set. cookie_set could forge httpOnly cookies (session fixation), which not even XSS can do. See [ADR-0010](./adr/0010-cookie-storage-readonly.md)
+- **FR-5.2 `storage_get`**: reads the page's localStorage/sessionStorage (content script, same origin); output is always masked (not governed by the `evalMask` policy field, host-owned, because the token-leak risk of a silent read is equivalent to eval)
+- **FR-5.3 No writes**: no cookie_set / cookie_remove / storage_set. cookie_set could forge httpOnly cookies (session fixation), which not even XSS can do
 
 ## 5. Non-functional requirements
 
@@ -118,10 +118,10 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 ### 6.2 Not in v0.1, later phases
 - **Phase two**:
   - `page_snapshot_precise`: debugger-fallback precise snapshot (flashes the infobar; the user must be told)
-  - `page_eval`: high-risk confirmation channel (enlarged Toast + same-origin 60s grace window + configurable masking). **Done**; see [ADR-0008](./adr/0008-page-eval-confirmation-channel.md)
-  - `page_snapshot_precise`: debugger precise snapshot (notification Toast + infobar flash + p-prefixed refs). **Done**; see [ADR-0009](./adr/0009-page-snapshot-precise-debugger.md)
+  - `page_eval`: high-risk confirmation channel (enlarged Toast + same-origin 60s grace window + configurable masking). **Done**
+  - `page_snapshot_precise`: debugger precise snapshot (notification Toast + infobar flash + p-prefixed refs). **Done**
 - **Phase three**:
-  - `cookie_get` / `storage_get` (read-only, limited to allowlisted domains, masked output). **Done**; see [ADR-0010](./adr/0010-cookie-storage-readonly.md)
+  - `cookie_get` / `storage_get` (read-only, limited to allowlisted domains, masked output). **Done**
   - Skill layer (distill the frequent playbooks, scraping list pages, form filling, cross-tab work, into skills)
   - Recording/replay, batch task orchestration
 
