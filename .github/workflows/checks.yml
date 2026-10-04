@@ -22,8 +22,9 @@ env:
   # The CI image tag the Linux jobs run in (container-image.yml publishes :latest and :<input hash> from
   # main; the package must be public, since these jobs hold no packages:read). `latest` rather than the
   # hash: a PR that moves a pin would otherwise wait for an image that only its own merge can publish, and
-  # inside the image `proto install` and rustup pick the moved pin up anyway. Empty runs every Linux job on
-  # the bare runner, where setup-moon provisions the same toolchain.
+  # inside the image `proto install` and rustup pick the moved pin up anyway. The image job resolves the tag
+  # to its digest once, so every job pins the same content. Empty runs every Linux job on the bare runner,
+  # where setup-moon provisions the same toolchain.
   CI_IMAGE_TAG: latest
 
 jobs:
@@ -39,9 +40,16 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
-          if [ -n "$CI_IMAGE_TAG" ]; then
-            printf 'container={"image":"ghcr.io/%s-ci:%s","options":"--user root"}\n' "${REPOSITORY,,}" "$CI_IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          if [ -z "$CI_IMAGE_TAG" ]; then
+            exit 0
           fi
+          image="ghcr.io/${REPOSITORY,,}-ci"
+          digest="$(docker buildx imagetools inspect "${image}:${CI_IMAGE_TAG}" --format '{{.Manifest.Digest}}')"
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::could not resolve ${image}:${CI_IMAGE_TAG} to a digest (got '${digest}')"; exit 1 ;;
+          esac
+          printf 'container={"image":"%s@%s","options":"--user root"}\n' "$image" "$digest" >> "$GITHUB_OUTPUT"
 
   # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) loopback-TCP
   # code; neither is visible to the Linux build, which alone runs fmt (platform-independent) and the
