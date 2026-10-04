@@ -63,7 +63,9 @@ name = "emit_enclave_contract"
 # reaches `cargo tree -e normal`, so check-gen-isolation still keeps schemars out of the shipped binary.
 chromium-bridge-core = { path = ".", features = ["envelope-schema"] }
 p256.workspace = true
+proc-macro2.workspace = true
 proptest.workspace = true
+syn.workspace = true
 
 # `loom` model-checks the broker's ref-count concurrency (src/packages/core/src/broker.rs).
 # It is only built under `--cfg loom`, which swaps the ref-count's Mutex/Condvar
