@@ -45,7 +45,10 @@ export function jsonVersion(path: string): string {
 // commit: a scratch `git init` re-initialised the shared .git (core.bare flipped to true) and a scratch
 // `git add` rewrote the worktree index. The real gates keep the inherited env on purpose: a partial commit
 // (`git commit --only`) is judged on the hook's temporary index, not the ordinary one.
-export function gitEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+/** The environment a child git is spawned with: process.env, or a test's scrubbed copy. */
+export type Env = Record<string, string | undefined>;
+
+export function gitEnv(base: Env = process.env): Record<string, string> {
   return Object.fromEntries(
     Object.entries(base).filter(
       (entry): entry is [string, string] => !entry[0].startsWith("GIT_") && entry[1] !== undefined,

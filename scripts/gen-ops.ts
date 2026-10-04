@@ -375,7 +375,7 @@ if (typeof extensionManifestKey !== "string" || extensionManifestKey.length === 
   throw new Error("gen-ops: the emitted contract has no extensionManifestKey");
 }
 // Chrome's id derivation: sha256 of the DER key, first 16 bytes, hex mapped
-// onto a-p. Same computation as scripts/check-extension-id.ts.
+// onto a-p.
 const hex = createHash("sha256")
   .update(Buffer.from(extensionManifestKey, "base64"))
   .digest("hex")

@@ -6,7 +6,7 @@
 // contract. PCRE2 reads \p{} and \x{} only in a UTF-8 locale and refuses the pattern outright under C, and
 // the zh_CN bundle is grepped first so an engine that goes blind fails here instead of passing vacuously.
 
-import { repoRoot } from "./lib.ts";
+import { type Env, repoRoot } from "./lib.ts";
 
 // Han, kana, hangul, bopomofo, plus the CJK-only blocks that ride along: punctuation, enclosed and
 // compatibility letters, compatibility and fullwidth forms. tests/browser/ext_test.ts mirrors this class.
@@ -30,8 +30,6 @@ export const ALLOWED_PATHSPECS = [
 ];
 
 export type CjkReport = { status: "clean" } | { status: "hits"; hits: string };
-
-type Env = Record<string, string | undefined>;
 
 function gitGrep(cwd: string, env: Env, args: string[]) {
   const run = Bun.spawnSync(["git", "grep", "-I", "-P", ...args], {

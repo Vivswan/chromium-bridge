@@ -7,11 +7,9 @@
 // Only the tree's own .gitignore files count: --exclude-standard would also read the developer's global
 // excludes and .git/info/exclude, which no CI tool sees.
 
-import { repoRoot } from "./lib.ts";
+import { type Env, repoRoot } from "./lib.ts";
 
 export type IgnoredReport = { status: "clean" } | { status: "ignored"; files: string[] };
-
-type Env = Record<string, string | undefined>;
 
 function gitLsFiles(cwd: string, env: Env, args: string[]): string {
   const run = Bun.spawnSync(["git", "ls-files", ...args], { cwd, env });

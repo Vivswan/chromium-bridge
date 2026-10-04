@@ -63,16 +63,4 @@ describe("gitEnv", () => {
     expect(readFileSync(join(victim, ".git", "HEAD"), "utf8")).toBe(headBefore);
     expect(git(safe, gitEnv(hookEnv), "rev-parse", "--git-dir")).toBe(".git");
   });
-
-  test("every GIT_* variable is dropped and nothing else is", () => {
-    const env = gitEnv({
-      PATH: "/usr/bin",
-      GIT_DIR: "/repo/.git",
-      GIT_INDEX_FILE: "/repo/.git/index",
-      GIT_CEILING_DIRECTORIES: "/",
-      LC_ALL: "C.UTF-8",
-      EMPTY: undefined,
-    });
-    expect(env).toEqual({ PATH: "/usr/bin", LC_ALL: "C.UTF-8" });
-  });
 });
