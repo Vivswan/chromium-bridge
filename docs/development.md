@@ -139,7 +139,7 @@ Cache trust, and the one edge that must never be narrowed: the Rust core is the 
 
 The CI image (`Containerfile`) runs the same `proto install` at build time, with the proto version arriving as its one build arg (`container-image.yml` and `scripts/compose-run.ts` compute it with `bun scripts/pin.ts proto`). Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
 
-`bun scripts/pin.ts <tool>` is the one reader of a pin needed before proto exists. It scans both owner files together and fails when a tool is pinned in both, twice, or nowhere (`moon run check-pins` holds those refusals):
+`bun scripts/pin.ts <tool>` is the one reader of a pin needed before proto exists. It scans both owner files together and fails when a tool is pinned in both, twice, or nowhere; `bun scripts/pin.ts --all` sweeps every pin of both files through the same rule, and `moon run check-pins` (under `hygiene`) runs the sweep and the reader's unit tests:
 
 | Tools | Owner file | Line shape |
 |-------|------------|------------|

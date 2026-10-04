@@ -7,6 +7,7 @@
 //
 //   .prototools    proto = "0.58.2"                  -> bun scripts/pin.ts proto
 //   Containerfile  ARG CARGO_MACHETE_VERSION=0.9.2    -> bun scripts/pin.ts cargo-machete
+//   every pin of both files through the same rule    -> bun scripts/pin.ts --all   (moon run check-pins)
 //
 // .prototools goes through Bun's TOML parser, which already refuses a repeated key (indented or not) and
 // keeps a key under [settings] out of the root. The Containerfile is scanned as text because Docker lets
@@ -18,6 +19,9 @@ import { repoRoot } from "./lib.ts";
 
 export const ownerFiles = [".prototools", "Containerfile"] as const;
 
+const toolName = /^[a-z][a-z0-9-]*$/;
+const argLine = /^\s*ARG\s+([A-Z][A-Z0-9_]*)_VERSION=(\S*)\s*$/;
+
 function owned(root: string, file: (typeof ownerFiles)[number]): string {
   try {
     return readFileSync(join(root, file), "utf8");
@@ -26,35 +30,46 @@ function owned(root: string, file: (typeof ownerFiles)[number]): string {
   }
 }
 
-function prototoolsPins(text: string, tool: string): string[] {
-  let parsed: Record<string, unknown>;
+function prototoolsRoot(text: string): Record<string, unknown> {
   try {
-    parsed = Bun.TOML.parse(text) as Record<string, unknown>;
+    return Bun.TOML.parse(text) as Record<string, unknown>;
   } catch (error) {
     throw new Error(`pin: .prototools is not valid TOML (${(error as Error).message})`);
   }
-  if (!(tool in parsed)) return [];
-  const value = parsed[tool];
+}
+
+function prototoolsPins(root: Record<string, unknown>, tool: string): string[] {
+  if (!(tool in root)) return [];
+  const value = root[tool];
   if (typeof value !== "string" || value === "") {
     throw new Error(`pin: .prototools pins ${tool} to an empty or non-string value`);
   }
   return [value];
 }
 
-function containerfilePins(text: string, tool: string): string[] {
-  const arg = `${tool.toUpperCase().replaceAll("-", "_")}_VERSION`;
-  const instruction = new RegExp(`^\\s*ARG\\s+${arg}=(\\S+)\\s*$`);
-  return text
-    .split("\n")
-    .map((line) => line.match(instruction)?.[1])
-    .filter((pin): pin is string => pin !== undefined);
+// ARG lines keyed by the tool they pin: CARGO_MACHETE_VERSION -> cargo-machete. An ARG with no `=` (the
+// Containerfile's own PROTO_VERSION build arg) declares a consumer, not a pin.
+function containerfileArgs(text: string): [string, string][] {
+  const pins: [string, string][] = [];
+  for (const line of text.split("\n")) {
+    const match = line.match(argLine);
+    if (!match) continue;
+    const tool = (match[1] as string).toLowerCase().replaceAll("_", "-");
+    const value = match[2] as string;
+    if (value === "") throw new Error(`pin: Containerfile pins ${tool} to an empty value`);
+    pins.push([tool, value]);
+  }
+  return pins;
 }
 
-export function readPin(tool: string, root = repoRoot): string {
-  if (!/^[a-z][a-z0-9-]*$/.test(tool)) throw new Error(`pin: not a tool name: ${tool}`);
+function resolve(
+  tool: string,
+  prototools: Record<string, unknown>,
+  args: [string, string][],
+): string {
   const pins = [
-    ...prototoolsPins(owned(root, ".prototools"), tool),
-    ...containerfilePins(owned(root, "Containerfile"), tool),
+    ...prototoolsPins(prototools, tool),
+    ...args.filter(([name]) => name === tool).map(([, value]) => value),
   ];
   if (pins.length === 0)
     throw new Error(`pin: ${tool} is pinned in neither ${ownerFiles.join(" nor ")}`);
@@ -66,14 +81,44 @@ export function readPin(tool: string, root = repoRoot): string {
   return pins[0] as string;
 }
 
+export function readPin(tool: string, root = repoRoot): string {
+  if (!toolName.test(tool)) throw new Error(`pin: not a tool name: ${tool}`);
+  return resolve(
+    tool,
+    prototoolsRoot(owned(root, ".prototools")),
+    containerfileArgs(owned(root, "Containerfile")),
+  );
+}
+
+// Every tool either file pins, each through the one-owner rule, so a second owner added for a tool no
+// CI step asks for by name is still refused.
+export function readAllPins(root = repoRoot): Map<string, string> {
+  const prototools = prototoolsRoot(owned(root, ".prototools"));
+  const args = containerfileArgs(owned(root, "Containerfile"));
+  const tools = new Set<string>([
+    ...Object.entries(prototools)
+      .filter(([, value]) => typeof value !== "object")
+      .map(([key]) => key),
+    ...args.map(([tool]) => tool),
+  ]);
+  for (const tool of tools) {
+    if (!toolName.test(tool)) throw new Error(`pin: not a tool name: ${tool}`);
+  }
+  return new Map([...tools].sort().map((tool) => [tool, resolve(tool, prototools, args)]));
+}
+
 if (import.meta.main) {
   const tool = process.argv[2];
   if (!tool || process.argv.length !== 3) {
-    console.error("usage: bun scripts/pin.ts <tool>");
+    console.error("usage: bun scripts/pin.ts <tool> | --all");
     process.exit(2);
   }
   try {
-    console.log(readPin(tool));
+    if (tool === "--all") {
+      for (const [name, version] of readAllPins()) console.log(`${name} ${version}`);
+    } else {
+      console.log(readPin(tool));
+    }
   } catch (error) {
     console.error((error as Error).message);
     process.exit(1);

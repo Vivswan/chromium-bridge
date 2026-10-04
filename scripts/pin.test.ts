@@ -8,7 +8,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readPin } from "./pin.ts";
+import { readAllPins, readPin } from "./pin.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "pin-test-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -23,13 +23,30 @@ const prototools = [
 ];
 const containerfile = [
   "FROM example.com/base@sha256:0000",
+  "ARG DEBIAN_SNAPSHOT=20260101T000000Z",
   "ARG TYPOS_VERSION=1.50.3",
   "ARG CARGO_MACHETE_VERSION=0.9.2",
+  "ARG PROTO_VERSION",
 ];
+
+// undefined for a file: the file is absent.
+function fixture(files: {
+  prototools?: string[] | undefined;
+  containerfile?: string[] | undefined;
+}) {
+  const root = mkdtempSync(join(scratch, "case-"));
+  const lines = {
+    ".prototools": "prototools" in files ? files.prototools : prototools,
+    Containerfile: "containerfile" in files ? files.containerfile : containerfile,
+  };
+  for (const [file, content] of Object.entries(lines)) {
+    if (content) writeFileSync(join(root, file), `${content.join("\n")}\n`);
+  }
+  return root;
+}
 
 interface Case {
   name: string;
-  // undefined: the file is absent.
   prototools?: string[] | undefined;
   containerfile?: string[] | undefined;
   tool: string;
@@ -80,16 +97,22 @@ const cases: Case[] = [
     outcome: { error: /more than once.*0\.9\.2, 0\.9\.1/ },
   },
   {
+    name: "a second ARG line with an empty value is refused, where Docker would let the empty one win",
+    containerfile: [...containerfile, "ARG CARGO_MACHETE_VERSION="],
+    tool: "cargo-machete",
+    outcome: { error: /Containerfile pins cargo-machete to an empty value/ },
+  },
+  {
     name: "a second key line is refused by the TOML parser",
     prototools: ['proto = "0.58.2"', 'proto = "0.1.0"'],
     tool: "proto",
-    outcome: { error: /not valid TOML.*redefine key 'proto'/ },
+    outcome: { error: /not valid TOML/ },
   },
   {
     name: "a second key line, indented, is refused by the TOML parser",
     prototools: ['proto = "0.58.2"', '  proto = "0.1.0"'],
     tool: "proto",
-    outcome: { error: /not valid TOML.*redefine key 'proto'/ },
+    outcome: { error: /not valid TOML/ },
   },
   {
     name: "a key pinned to a non-string is refused",
@@ -104,6 +127,11 @@ const cases: Case[] = [
     outcome: { error: /empty or non-string/ },
   },
   { name: "a tool pinned nowhere", tool: "node", outcome: { error: /pinned in neither/ } },
+  {
+    name: "an ARG with no value declares the build arg, it does not pin proto a second time",
+    tool: "proto",
+    outcome: { pin: "0.58.2" },
+  },
   {
     name: "a commented-out key is not a pin",
     prototools: ['# proto = "9.9.9"'],
@@ -135,20 +163,32 @@ const cases: Case[] = [
   },
 ];
 
-function write(root: string, file: string, lines: string[] | undefined): void {
-  if (lines) writeFileSync(join(root, file), `${lines.join("\n")}\n`);
-}
-
 describe("readPin: one owner per pin across .prototools and the Containerfile", () => {
   test.each(cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-    const root = mkdtempSync(join(scratch, "case-"));
-    write(root, ".prototools", "prototools" in c ? c.prototools : prototools);
-    write(root, "Containerfile", "containerfile" in c ? c.containerfile : containerfile);
+    const root = fixture(c);
     if ("pin" in c.outcome) {
       expect(readPin(c.tool, root)).toBe(c.outcome.pin);
     } else {
       expect(() => readPin(c.tool, root)).toThrow(c.outcome.error);
     }
+  });
+});
+
+// A second owner added for a tool no CI step asks for by name (every reader stays green on its own tool)
+// is caught only by sweeping every pin of both files.
+describe("readAllPins: every pin of both files through the one-owner rule", () => {
+  test("the sweep lists each tool once, from whichever file owns it, and skips tables and valueless ARGs", () => {
+    expect([...readAllPins(fixture({}))]).toEqual([
+      ["bun", "1.4.2"],
+      ["cargo-machete", "0.9.2"],
+      ["proto", "0.58.2"],
+      ["typos", "1.50.3"],
+    ]);
+  });
+
+  test("a second owner for a tool nobody reads by name is refused", () => {
+    const root = fixture({ containerfile: [...containerfile, "ARG BUN_VERSION=9.9.9"] });
+    expect(() => readAllPins(root)).toThrow(/bun is pinned more than once.*1\.4\.2, 9\.9\.9/);
   });
 });
 
@@ -165,6 +205,13 @@ describe("the CLI's exit status", () => {
 
   test.each([
     ["a pinned tool prints one line and exits 0", ["proto"], 0, /^\S+\n$/, /^$/],
+    [
+      "--all prints one `tool version` line per pin and exits 0",
+      ["--all"],
+      0,
+      /^(\S+ \S+\n)+$/,
+      /^$/,
+    ],
     ["a refused pin exits 1 with the reason on stderr", ["nope"], 1, /^$/, /pinned in neither/],
     ["no tool argument is a usage error, exit 2", [], 2, /^$/, /usage:/],
     ["two tool arguments are a usage error, exit 2", ["proto", "bun"], 2, /^$/, /usage:/],

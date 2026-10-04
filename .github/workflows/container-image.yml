@@ -12,7 +12,6 @@ on:
       - .dockerignore
       - .prototools
       - rust-toolchain.toml
-      - scripts/pin.ts
       - scripts/container-entrypoint.sh
       - .github/workflows/container-image.yml
   workflow_dispatch:
@@ -58,7 +57,7 @@ jobs:
         run: |
           {
             echo "name=ghcr.io/${OWNER,,}/${REPO,,}-ci"
-            echo "tag=$(sha256sum Containerfile .dockerignore .prototools rust-toolchain.toml scripts/pin.ts scripts/container-entrypoint.sh | sha256sum | cut -c1-12)"
+            echo "tag=$(sha256sum Containerfile .dockerignore .prototools rust-toolchain.toml scripts/container-entrypoint.sh | sha256sum | cut -c1-12)"
             bun scripts/pin.ts proto | sed 's/^/proto=/'
           } >> "$GITHUB_OUTPUT"
       - name: Is this commit still the head of main

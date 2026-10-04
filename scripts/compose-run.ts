@@ -38,7 +38,12 @@ const env: NodeJS.ProcessEnv = {
 // launcher reads it, as container-image.yml does for the published image. A flag rather than compose.yaml
 // build.args: the portable compose subset (check-compose) has no args key. Read before the scratch dir
 // below exists, so a refused pin leaves nothing behind.
-const protoPin = readPin("proto");
+let protoPin: string;
+try {
+  protoPin = readPin("proto");
+} catch (error) {
+  die((error as Error).message);
+}
 
 // The pointer's text is `gitdir: <path>`; git itself tolerates a CRLF ending, so trim() does too.
 const dotGit = join(repoRoot, ".git");

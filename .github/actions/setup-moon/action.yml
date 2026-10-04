@@ -17,26 +17,28 @@ inputs:
 runs:
   using: composite
   steps:
+    # The probe's outcome is the branch: success means the image's preinstalled toolchain, failure a bare runner.
     - id: present
       shell: bash
-      run: if command -v proto >/dev/null && command -v moon >/dev/null; then echo "toolchain=preinstalled" >> "$GITHUB_OUTPUT"; else echo "toolchain=missing" >> "$GITHUB_OUTPUT"; fi
-    - if: steps.present.outputs.toolchain == 'missing'
+      continue-on-error: true
+      run: command -v proto && command -v moon
+    - if: steps.present.outcome == 'failure'
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version-file: .bun-version
         # Nothing worth caching runs under this bun (proto's own bun does the installs), and a publishing
         # caller must not restore a cache into what it ships.
         no-cache: true
-    - if: steps.present.outputs.toolchain == 'missing'
+    - if: steps.present.outcome == 'failure'
       id: pin
       shell: bash
       run: bun scripts/pin.ts proto | sed 's/^/proto=/' >> "$GITHUB_OUTPUT"
-    - if: steps.present.outputs.toolchain == 'missing'
+    - if: steps.present.outcome == 'failure'
       uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
       with:
         proto-version: ${{ steps.pin.outputs.proto }}
         auto-install: "true"
-    - if: steps.present.outputs.toolchain == 'preinstalled'
+    - if: steps.present.outcome == 'success'
       shell: bash
       run: proto install
     - if: inputs.cargo == 'true'
