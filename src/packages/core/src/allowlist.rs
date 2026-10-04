@@ -422,7 +422,12 @@ fn resolve_anchor(spec: AnchorSpec) -> Result<Anchor, String> {
 /// The refusal names the two anchors that do work and where their values come
 /// from (the server logs a measured, unenrolled harness at startup).
 #[cfg(windows)]
-const THIS_PARENT_UNAVAILABLE_ON_WINDOWS: &str = "--this-parent is unavailable on Windows: the server identifies a harness by the creator of its stdin pipe, which a console command has none of. Pair with --hash <sha256> or --team-id <publisher subject>; the server logs the hash, and the subject when the image is signed, at startup while unenrolled";
+const THIS_PARENT_UNAVAILABLE_ON_WINDOWS: &str = concat!(
+    "--this-parent is unavailable on Windows: the server identifies a harness by the ",
+    "creator of its stdin pipe, which a console command has none of. Pair with ",
+    "--hash <sha256> or --team-id <publisher subject>; the server logs the hash, and ",
+    "the subject when the image is signed, at startup while unenrolled"
+);
 
 /// `revoke-client`: remove a trusted client. Returns a process exit code.
 pub fn run_revoke_client(name: &str) -> i32 {

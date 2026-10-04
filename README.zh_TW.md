@@ -37,9 +37,9 @@ JavaScript。相應的防護措施:
   你以在場證明 (proof of presence) 明確解除。每一個安全
   決策都會寫入磁碟上的稽核日誌。
 
-平台差異, 如實說明: 強橋接保證 (無連接埠通訊端、對端 UID 檢查、身分證明)
-僅存在於 macOS 和 Linux。在 Windows 上, 橋接是一個僅由 HMAC 金鑰把守的回送
-TCP 通訊端, 伺服器啟動時會對此發出警告。Windows 支援是盡力而為。詳見
+平台差異, 如實說明: 橋接保證 (無連接埠通訊端、同使用者檢查、身分證明) 在
+macOS、Linux 和 Windows 上都成立, 各平台背後的機制不同。在 Windows 上, 橋接
+是一個僅本使用者可開啟的具名管道, 兩端互相證明對方的映像。詳見
 [SECURITY.md](./.github/SECURITY.md#platform-support)。
 
 完整細節: [SECURITY.md](./.github/SECURITY.md)、
@@ -194,7 +194,7 @@ CLI 只依賴二進位檔本身, 在桌面機器、無介面機器和 CI 上都�
 |---|---|
 | macOS | Apple Silicon (arm64) 預編譯; Touch ID 門在這裡。Intel 需從原始碼建置。 |
 | Linux | x64 預編譯; 任何 Chromium 系瀏覽器; 用 CLI 管理。 |
-| Windows | x64 預編譯 (原生, 無需管理員)。橋接安全性為盡力而為; 見 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
+| Windows | x64 預編譯 (原生, 無需管理員)。橋接是僅本使用者可開啟的具名管道, 兩端互相身分證明; 見 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 瀏覽器 | 任何 Chromium 系瀏覽器, Manifest V3 |
 | MCP 協定 | `2026-07-28` |
 | 內部橋協定 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |

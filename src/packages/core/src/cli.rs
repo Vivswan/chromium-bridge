@@ -185,7 +185,7 @@ struct PairClientFlags {
     /// Pin this attested image hash (hex; upper case is lowercased)
     #[arg(long, group = "anchor", value_parser = hash_digest, value_name = "HEX")]
     hash: Option<HashDigest>,
-    /// Pin this macOS signing Team ID
+    /// Pin this signing identity: a macOS Team ID, or a Windows Authenticode publisher subject
     #[arg(long, group = "anchor", value_parser = |id: &str| TeamId::try_from(id), value_name = "ID")]
     team_id: Option<TeamId>,
     /// Measure the process that launched this command and pin its hash
