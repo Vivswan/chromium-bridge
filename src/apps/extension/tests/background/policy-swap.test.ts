@@ -1,9 +1,7 @@
-// ADR-0032: every enforcement call site reads the
-// per-decision policy snapshot, not the legacy chrome.storage bag. Each
-// swapped site gets one post-cutover DENY and one post-cutover GRANT test,
-// always with the legacy storage set to the OPPOSITE value - so a test can
-// only pass if the site actually moved off the legacy read. Pre-cutover
-// behavior is pinned by the existing suites, which run unmodified.
+// Every enforcement call site reads the per-decision policy snapshot. Each
+// site gets one post-cutover DENY and one post-cutover GRANT test, so a test
+// can only pass if the site reads the applied policy rather than the deny
+// baseline or a permissive constant.
 //
 // Sites covered here: dispatch (disabledTools, cdpMode), confirm/gate
 // (confirmHighRiskClick, confirmGraceMs, clickToastTimeoutMs,
@@ -166,16 +164,14 @@ beforeEach(() => {
 // ---- dispatch.ts: disabledTools and cdpMode --------------------------------------
 
 describe("dispatch reads disabledTools from the snapshot", () => {
-  test("deny: a policy-disabled tool is refused although legacy storage allows it", async () => {
-    await fakeBrowser.storage.local.set({ disabledTools: [] });
+  test("deny: a policy-disabled tool is refused", async () => {
     await armCutover({ disabledTools: ["tab_list"] });
     await expect(dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq)).rejects.toThrow(
       "tool disabled in settings: tab_list",
     );
   });
 
-  test("grant: a policy-enabled tool runs although legacy storage disables it", async () => {
-    await fakeBrowser.storage.local.set({ disabledTools: ["tab_list"] });
+  test("grant: a policy-enabled tool runs", async () => {
     await armCutover({ disabledTools: [] });
     await expect(
       dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq),
@@ -184,17 +180,15 @@ describe("dispatch reads disabledTools from the snapshot", () => {
 });
 
 describe("dispatch reads cdpMode from the snapshot", () => {
-  test("grant: policy cdpMode=true selects the CDP backend although legacy says false", async () => {
+  test("grant: policy cdpMode=true selects the CDP backend", async () => {
     const tab = await makeTab();
-    await fakeBrowser.storage.local.set({ cdpMode: false });
     await armCutover({ cdpMode: true });
     await dispatch({ id: 1, op: "page_snapshot", tabId: tab.id, args: {} } as BridgeReq);
     expect(backendSeam.cdpCalls).toEqual([true]);
   });
 
-  test("deny: policy cdpMode=false selects the content-script backend although legacy says true", async () => {
+  test("deny: policy cdpMode=false selects the content-script backend", async () => {
     const tab = await makeTab();
-    await fakeBrowser.storage.local.set({ cdpMode: true });
     await armCutover({ cdpMode: false });
     await dispatch({ id: 1, op: "page_snapshot", tabId: tab.id, args: {} } as BridgeReq);
     expect(backendSeam.cdpCalls).toEqual([false]);
@@ -206,7 +200,7 @@ describe("dispatch reads cdpMode from the snapshot", () => {
 const TAB = { id: 7, url: "https://example.com/x", title: "Example" } as ResolvedTab;
 
 describe("the gate reads its six policy fields from the snapshot", () => {
-  test("pageEvalEnabled deny: an ACTIVE policy false refuses although legacy default is TRUE (the flip)", async () => {
+  test("pageEvalEnabled deny: an ACTIVE policy false refuses", async () => {
     const asked = autoProvider(true);
     // With NO stored record the posture is blocked and the decision cannot
     // even start (pinned in the barrier describe below); the gate-level deny
@@ -225,9 +219,8 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect(asked.length).toBe(0);
   });
 
-  test("pageEvalEnabled grant: policy true runs although legacy storage says false", async () => {
+  test("pageEvalEnabled grant: policy true runs", async () => {
     autoProvider(true);
-    await fakeBrowser.storage.local.set({ pageEvalEnabled: false });
     await armCutover({ pageEvalEnabled: true, confirmPageEval: false });
     await expect(
       preflightPageOp(
@@ -241,9 +234,8 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     ).resolves.toEqual({});
   });
 
-  test("confirmPageEval deny: the policy confirmation is enforced although legacy opted out", async () => {
+  test("confirmPageEval deny: the policy confirmation is enforced", async () => {
     const asked = autoProvider(false);
-    await fakeBrowser.storage.local.set({ confirmPageEval: false });
     await armCutover({ pageEvalEnabled: true, confirmPageEval: true });
     await expect(
       preflightPageOp(
@@ -258,9 +250,8 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect(asked.length).toBe(1);
   });
 
-  test("confirmPageEval grant: the policy opt-out skips the prompt although legacy requires it", async () => {
+  test("confirmPageEval grant: the policy opt-out skips the prompt", async () => {
     const asked = autoProvider(false);
-    await fakeBrowser.storage.local.set({ confirmPageEval: true });
     await armCutover({ pageEvalEnabled: true, confirmPageEval: false });
     await expect(
       preflightPageOp(
@@ -275,9 +266,8 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect(asked.length).toBe(0);
   });
 
-  test("confirmHighRiskClick deny: the policy confirmation is enforced although legacy opted out", async () => {
+  test("confirmHighRiskClick deny: the policy confirmation is enforced", async () => {
     const asked = autoProvider(false);
-    await fakeBrowser.storage.local.set({ confirmHighRiskClick: false });
     await armCutover({ confirmHighRiskClick: true });
     await expect(
       preflightPageOp(
@@ -292,9 +282,8 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect(asked.length).toBe(1);
   });
 
-  test("confirmHighRiskClick grant: the policy opt-out skips the gate although legacy requires it", async () => {
+  test("confirmHighRiskClick grant: the policy opt-out skips the gate", async () => {
     const asked = autoProvider(false);
-    await fakeBrowser.storage.local.set({ confirmHighRiskClick: true });
     await armCutover({ confirmHighRiskClick: false });
     await expect(
       preflightPageOp(
@@ -309,9 +298,8 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect(asked.length).toBe(0);
   });
 
-  test("confirmGraceMs deny: policy 0 reconfirms every click although legacy grants a window", async () => {
+  test("confirmGraceMs deny: policy 0 reconfirms every click", async () => {
     const asked = autoProvider(true);
-    await fakeBrowser.storage.local.set({ confirmGraceMs: 60_000 });
     await armCutover({ confirmGraceMs: 0 });
     await preflightPageOp(
       "page_click",
@@ -332,9 +320,8 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect(asked.length).toBe(2);
   });
 
-  test("confirmGraceMs grant: the policy window suppresses the re-prompt although legacy is 0", async () => {
+  test("confirmGraceMs grant: the policy window suppresses the re-prompt", async () => {
     const asked = autoProvider(true);
-    await fakeBrowser.storage.local.set({ confirmGraceMs: 0 });
     await armCutover({ confirmGraceMs: 60_000 });
     await preflightPageOp(
       "page_click",
@@ -355,9 +342,9 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect(asked.length).toBe(1);
   });
 
-  test("clickToastTimeoutMs comes from the snapshot: grant (longer) and deny (shorter) than legacy", async () => {
+  test("clickToastTimeoutMs comes from the snapshot: grant (longer) and deny (shorter) than the baseline", async () => {
     const asked = autoProvider(true);
-    // Grant direction: policy 111s vs legacy default 30s.
+    // Grant direction: policy 111s vs the baseline 30s.
     await armCutover({ clickToastTimeoutMs: 111_000, confirmGraceMs: 0 });
     let before = Date.now();
     await preflightPageOp(
@@ -369,7 +356,7 @@ describe("the gate reads its six policy fields from the snapshot", () => {
       currentPanicEpoch(),
     );
     expect((asked[0]?.deadline ?? 0) - before).toBeGreaterThanOrEqual(111_000);
-    // Deny direction: policy 500ms vs legacy 30s (the provider answers on a
+    // Deny direction: policy 500ms vs the baseline 30s (the provider answers on a
     // microtask, well inside the auto-deny timer).
     await armCutover({ clickToastTimeoutMs: 500, confirmGraceMs: 0 }, 2);
     before = Date.now();
@@ -384,7 +371,7 @@ describe("the gate reads its six policy fields from the snapshot", () => {
     expect((asked[1]?.deadline ?? 0) - before).toBeLessThan(30_000);
   });
 
-  test("evalToastTimeoutMs comes from the snapshot: grant (longer) and deny (shorter) than legacy", async () => {
+  test("evalToastTimeoutMs comes from the snapshot: grant (longer) and deny (shorter) than the baseline", async () => {
     const asked = autoProvider(true);
     await armCutover({ pageEvalEnabled: true, evalToastTimeoutMs: 222_000 });
     let before = Date.now();
@@ -458,16 +445,14 @@ describe("per-decision snapshot isolation (ADR-0032 decision 4)", () => {
 // ---- upload.ts ----------------------------------------------------------------------
 
 describe("pageUpload reads fileUploadEnabled and its timeout from the snapshot", () => {
-  test("deny: policy false refuses although legacy storage enables it", async () => {
-    await fakeBrowser.storage.local.set({ fileUploadEnabled: true });
+  test("deny: policy false refuses", async () => {
     await armCutover({ fileUploadEnabled: false });
     await expect(
       pageUpload(1, { selector: "#f", path: "/tmp/x" }, await freshValues(), currentPanicEpoch()),
     ).rejects.toThrow("page_upload is disabled");
   });
 
-  test("grant: policy true passes the gate although legacy storage disables it", async () => {
-    await fakeBrowser.storage.local.set({ fileUploadEnabled: false });
+  test("grant: policy true passes the gate", async () => {
     await armCutover({ fileUploadEnabled: true });
     // The missing selector fails AFTER the gate: proof the gate read policy.
     await expect(
@@ -495,16 +480,14 @@ describe("pageUpload reads fileUploadEnabled and its timeout from the snapshot",
 // ---- dialog.ts ----------------------------------------------------------------------
 
 describe("handleDialog reads handleDialogEnabled from the snapshot", () => {
-  test("deny: policy false refuses although legacy storage enables it", async () => {
-    await fakeBrowser.storage.local.set({ handleDialogEnabled: true });
+  test("deny: policy false refuses", async () => {
     await armCutover({ handleDialogEnabled: false });
     await expect(handleDialog(1, { action: "accept" }, await freshValues())).rejects.toThrow(
       "page_handle_dialog is disabled",
     );
   });
 
-  test("grant: policy true passes the gate although legacy storage disables it", async () => {
-    await fakeBrowser.storage.local.set({ handleDialogEnabled: false });
+  test("grant: policy true passes the gate", async () => {
     await armCutover({ handleDialogEnabled: true });
     // The invalid action fails AFTER the gate: proof the gate read policy.
     await expect(handleDialog(1, { action: "bogus" }, await freshValues())).rejects.toThrow(
@@ -516,10 +499,9 @@ describe("handleDialog reads handleDialogEnabled from the snapshot", () => {
 // ---- tabs.ts ------------------------------------------------------------------------
 
 describe("tabClose reads confirmTabClose and its timeout from the snapshot", () => {
-  test("deny: the policy confirmation is enforced (with the policy timeout) although legacy opted out", async () => {
+  test("deny: the policy confirmation is enforced (with the policy timeout)", async () => {
     const asked = autoProvider(false);
     const tab = await makeTab();
-    await fakeBrowser.storage.local.set({ confirmTabClose: false });
     await armCutover({ confirmTabClose: true, clickToastTimeoutMs: 111_000 });
     const before = Date.now();
     await expect(tabClose(tab.id, await freshValues(), currentPanicEpoch())).rejects.toThrow(
@@ -529,13 +511,12 @@ describe("tabClose reads confirmTabClose and its timeout from the snapshot", () 
     expect((asked[0]?.deadline ?? 0) - before).toBeGreaterThanOrEqual(111_000);
   });
 
-  test("grant: the policy opt-out closes unprompted although legacy requires the confirmation", async () => {
+  test("grant: the policy opt-out closes unprompted", async () => {
     const asked = autoProvider(false);
     const tab = await makeTab();
     // fakeBrowser's tabs.remove trips over its own window bookkeeping; the
     // removal is not what is under test, the skipped confirmation is.
     const remove = vi.spyOn(browser.tabs, "remove").mockResolvedValue(undefined);
-    await fakeBrowser.storage.local.set({ confirmTabClose: true });
     await armCutover({ confirmTabClose: false });
     await expect(tabClose(tab.id, await freshValues(), currentPanicEpoch())).resolves.toEqual({
       closed: tab.id,
@@ -554,9 +535,8 @@ describe("snapshotPrecise reads warnPreciseSnapshot from the snapshot", () => {
     return attach;
   }
 
-  test("deny: the policy warning toast is consulted (and a cancel honored) although legacy skips it", async () => {
+  test("deny: the policy warning toast is consulted (and a cancel honored)", async () => {
     const tab = await makeTab();
-    await fakeBrowser.storage.local.set({ warnPreciseSnapshot: false });
     await armCutover({ warnPreciseSnapshot: true });
     const attach = installDebuggerSpy();
     vi.spyOn(browser.tabs, "sendMessage").mockImplementation(async (_tabId, msg) => {
@@ -569,9 +549,8 @@ describe("snapshotPrecise reads warnPreciseSnapshot from the snapshot", () => {
     expect(attach).not.toHaveBeenCalled();
   });
 
-  test("grant: the policy opt-out skips the toast although legacy would warn", async () => {
+  test("grant: the policy opt-out skips the toast", async () => {
     const tab = await makeTab();
-    await fakeBrowser.storage.local.set({ warnPreciseSnapshot: true });
     await armCutover({ warnPreciseSnapshot: false });
     installDebuggerSpy();
     const toasts: unknown[] = [];
@@ -593,16 +572,14 @@ describe("snapshotPrecise reads warnPreciseSnapshot from the snapshot", () => {
 describe("egress masking reads evalMask from the snapshot", () => {
   const SECRET = "bearer: sk-live-abcdef1234567890";
 
-  test("deny: the policy mask applies although legacy opted out", async () => {
-    await fakeBrowser.storage.local.set({ evalMask: false });
+  test("deny: the policy mask applies", async () => {
     await armCutover({ evalMask: true });
     const out = (await maskOpResult("page_eval", SECRET, await freshValues())) as string;
     expect(out).not.toBe(SECRET);
     expect(out).toContain("••••");
   });
 
-  test("grant: the policy opt-out passes the value through although legacy would mask", async () => {
-    await fakeBrowser.storage.local.set({ evalMask: true });
+  test("grant: the policy opt-out passes the value through", async () => {
     await armCutover({ evalMask: false });
     await expect(maskOpResult("page_eval", SECRET, await freshValues())).resolves.toBe(SECRET);
   });
@@ -626,11 +603,10 @@ describe("presence routing is decided from the per-request snapshot (S1)", () =>
     return shown;
   }
 
-  test("deny: policy touchIdConfirm=false keeps the window path although legacy opted in", async () => {
+  test("deny: policy touchIdConfirm=false keeps the window path", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
     const hw = presenceStub();
     const asked = autoProvider(false);
-    await fakeBrowser.storage.local.set({ touchIdConfirm: true });
     await armCutover({ pageEvalEnabled: true, touchIdConfirm: false }, 1, KEY_ID);
     await expect(
       preflightPageOp(
@@ -647,11 +623,10 @@ describe("presence routing is decided from the per-request snapshot (S1)", () =>
     expect(asked[0] !== undefined && isHardwareGated(asked[0])).toBe(false);
   });
 
-  test("grant: policy touchIdConfirm=true routes to hardware although legacy opted out", async () => {
+  test("grant: policy touchIdConfirm=true routes to hardware", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
     const hw = presenceStub();
     const asked = autoProvider(false);
-    await fakeBrowser.storage.local.set({ touchIdConfirm: false });
     await armCutover({ pageEvalEnabled: true, touchIdConfirm: true }, 1, KEY_ID);
     await expect(
       preflightPageOp(
@@ -670,11 +645,9 @@ describe("presence routing is decided from the per-request snapshot (S1)", () =>
 
   test("the routing verdict itself reads the snapshot, not live storage", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
-    await fakeBrowser.storage.local.set({ touchIdConfirm: true });
     await expect(presenceRoutingEnabled(policyValues({ touchIdConfirm: false }))).resolves.toBe(
       false,
     );
-    await fakeBrowser.storage.local.set({ touchIdConfirm: false });
     await expect(presenceRoutingEnabled(policyValues({ touchIdConfirm: true }))).resolves.toBe(
       true,
     );

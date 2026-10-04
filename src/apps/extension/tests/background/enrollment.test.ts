@@ -897,6 +897,19 @@ describe("ceremony state machine", () => {
   });
 });
 
+/** Apply a policy carrying `hostReverifyMs` under the pinned key `scope`, the
+ * only way a non-zero interval reaches the connect-path re-verify check. */
+function armCutoverWith(scope: string, hostReverifyMs: number): void {
+  store.bridgePolicyCutover = true;
+  store.bridgePolicyState = {
+    scope,
+    effective: { ...POLICY_DEFAULTS, disabledTools: [], hostReverifyMs },
+    revision: 1,
+    baselineB64: "ZG9j",
+    at: 1,
+  };
+}
+
 describe("periodic re-verification (hostReverifyMs)", () => {
   test("default 0 never challenges after pinning", async () => {
     const key = await genKey();
@@ -909,7 +922,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("a fresh pin is not re-challenged within the interval", async () => {
     const key = await genKey();
     await pairAndPin(key); // pinnedAt = now, counts as the last verification
-    store.hostReverifyMs = 3_600_000;
+    armCutoverWith(key.keyId, 3_600_000);
     const before = posted.length;
     await onPortConnected();
     expect(posted.length).toBe(before);
@@ -918,7 +931,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("a stale pin is re-challenged on connect and success refreshes the clock", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 1000;
+    armCutoverWith(key.keyId, 1000);
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected();
     const { nonce, context } = lastChallenge();
@@ -927,7 +940,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
     await handleEnclaveFrame(await proofFrame(key, nonce, context));
     const st = inState(await getEnrollmentStatus(), "pinned");
     expect(typeof st.lastVerifiedAt).toBe("number");
-    expect((await enrollmentGate()).allowed).toBe(true);
+    expect(st.blocked).toBe(false);
     // The successful verification satisfies the interval: no new challenge.
     const before = posted.length;
     await onPortConnected();
@@ -938,7 +951,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
     const key = await genKey();
     const attacker = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 1000;
+    armCutoverWith(key.keyId, 1000);
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected();
     const { nonce, context } = lastChallenge();
@@ -947,23 +960,23 @@ describe("periodic re-verification (hostReverifyMs)", () => {
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 
-  test("an unanswered periodic prompt leaves the pinned state and gate unchanged", async () => {
+  test("an unanswered periodic prompt leaves the pin in place and unblocked", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 1000;
+    armCutoverWith(key.keyId, 1000);
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected(); // challenge out
     // The user cancels the presence prompt: the host reports signing_failed.
     await handleEnclaveFrame({ type: "enclave_error", reason: "signing_failed" });
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("pinned");
-    expect((await enrollmentGate()).allowed).toBe(true);
+    expect(st.blocked).toBe(false);
   });
 
   test("a newer lastVerifiedAt outweighs an old pinnedAt", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 1000;
+    armCutoverWith(key.keyId, 1000);
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     store.enclaveLastVerifiedAt = Date.now(); // verified just now
     const before = posted.length;
@@ -974,7 +987,7 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   test("an outstanding challenge suppresses a duplicate periodic challenge", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 1000;
+    armCutoverWith(key.keyId, 1000);
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     await onPortConnected(); // first stale connect: challenge goes out
     const before = posted.length;
@@ -1206,22 +1219,10 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
 
 // ---- ADR-0032: hostReverifyMs comes from the policy snapshot ----
 
-describe("post-cutover hostReverifyMs reads the policy snapshot, not legacy settings", () => {
-  function armCutoverWith(scope: string, hostReverifyMs: number): void {
-    store.bridgePolicyCutover = true;
-    store.bridgePolicyState = {
-      scope,
-      effective: { ...POLICY_DEFAULTS, disabledTools: [], hostReverifyMs },
-      revision: 1,
-      baselineB64: "ZG9j",
-      at: 1,
-    };
-  }
-
-  test("grant direction: policy 0 (never re-verify) silences a stale legacy interval", async () => {
+describe("post-cutover hostReverifyMs reads the policy snapshot", () => {
+  test("grant direction: policy 0 (never re-verify) leaves a stale pin unchallenged", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 1000; // legacy would challenge the stale pin
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     armCutoverWith(key.keyId, 0);
     const before = posted.length;
@@ -1229,10 +1230,9 @@ describe("post-cutover hostReverifyMs reads the policy snapshot, not legacy sett
     expect(posted.length).toBe(before);
   });
 
-  test("deny direction: a policy interval challenges a stale pin although legacy says never", async () => {
+  test("deny direction: a policy interval challenges a stale pin", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 0; // legacy would stay silent
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     armCutoverWith(key.keyId, 1000);
     await onPortConnected();
@@ -1246,7 +1246,6 @@ describe("post-cutover hostReverifyMs reads the policy snapshot, not legacy sett
     // user's opt-in check; the state-typed read skips it with a warning.
     const key = await genKey();
     await pairAndPin(key);
-    store.hostReverifyMs = 1000; // legacy would challenge the stale pin
     (store.enclavePin as { pinnedAt: number }).pinnedAt = Date.now() - 10_000;
     store.bridgePolicyCutover = true; // armed, no record: blocked
     const warn = vi.spyOn(console, "warn");
