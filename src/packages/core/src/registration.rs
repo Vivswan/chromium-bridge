@@ -15,6 +15,7 @@
 //!                   unverified on a real Windows machine (docs/cli.md)
 //! ```
 
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -517,48 +518,29 @@ pub fn remove_wrappers(install_dir: &Path) -> (Vec<String>, Vec<String>) {
     (removed, errors)
 }
 
-/// `doctor --fix`: (re-)register the selected targets. Idempotent, so a
-/// fresh machine gets its first registration and a broken one gets repaired
-/// by the same code path. Returns the process exit code.
+/// `doctor --fix`: [`fix`] with its report printed. Returns the process exit
+/// code: 1 when the repair could not start or any target failed.
 pub fn run_fix(targets: &FixTargets) -> i32 {
-    let (os, dirs) = match resolve_env() {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let entries = browsers::resolve(os, &dirs);
-    let targets = match select_targets(targets, &entries) {
-        Ok(t) => t,
-        Err(code) => return code,
-    };
-
-    let host_exe = match resolve_host_exe() {
-        Ok(p) => p,
+    let outcomes = match fix(targets) {
+        Ok(outcomes) => outcomes,
         Err(e) => {
-            log_error!("doctor", "cannot resolve this binary's path: {e}");
+            log_error!("doctor", "{e}");
             return 1;
         }
     };
-    let registrar = Registrar {
-        host_exe: host_exe.clone(),
-        install_dir: browsers::install_dir(os, &dirs),
-        extension_id: PINNED_EXTENSION_ID.to_string(),
-    };
-
     println!("chromium-bridge doctor --fix (host id {NATIVE_HOST_ID})");
-    println!("host binary: {}", host_exe.display());
-    // Explicit loop: registering is the command's real work and must not
-    // hide as a filter side effect. The failure count only feeds the exit
-    // message, so clamping on (unreachable) overflow is fine.
+    // The failure count only feeds the exit message, so clamping on
+    // (unreachable) overflow is fine.
     let mut failures: usize = 0;
-    for target in &targets {
-        match registrar.register(target) {
+    for outcome in &outcomes {
+        match &outcome.result {
             Ok(lines) => {
                 for line in lines {
                     println!("{line}");
                 }
             }
             Err(e) => {
-                log_error!("doctor", "{}: {e}", target.describe());
+                log_error!("doctor", "{}: {e}", outcome.target);
                 failures = failures.saturating_add(1);
             }
         }
@@ -575,6 +557,65 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
     } else {
         0
     }
+}
+
+/// Why a repair could not start. Every variant is decided before the first
+/// manifest write, so an `Err` left every registration as it was.
+#[derive(Debug)]
+pub enum FixError {
+    /// The platform's home variable is missing or not absolute.
+    Environment(String),
+    /// The targeting mode resolved to no browser; the message carries the
+    /// guidance the CLI prints.
+    NoTargets(String),
+    /// This binary's own path could not be resolved.
+    HostExe(std::io::Error),
+}
+
+impl fmt::Display for FixError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FixError::Environment(e) | FixError::NoTargets(e) => f.write_str(e),
+            FixError::HostExe(e) => write!(f, "cannot resolve this binary's path: {e}"),
+        }
+    }
+}
+
+/// One target's registration: the engine's report lines on success, its
+/// refusal otherwise. Per-target failures travel here, not as the seam's
+/// `Err`, so one broken browser never hides the others' results.
+#[derive(Debug)]
+pub struct TargetOutcome {
+    /// The browser key, or the manifest path of an explicit `--manifest-dir`
+    /// target.
+    pub target: String,
+    pub result: Result<Vec<String>, String>,
+}
+
+/// The repair `doctor --fix` runs, with nothing printed: resolve the
+/// environment and the targets, then register each. Idempotent, so a fresh
+/// machine gets its first registration and a broken one its repair through
+/// this one path. `run_fix` prints the outcomes for the CLI; the native host
+/// logs them when the extension asks for a repair, since stdout is its
+/// protocol. Diagnostics (the ephemeral-path warning) still go to the log.
+pub fn fix(targets: &FixTargets) -> Result<Vec<TargetOutcome>, FixError> {
+    let dirs = BaseDirs::from_env().map_err(FixError::Environment)?;
+    let os = Os::current();
+    let entries = browsers::resolve(os, &dirs);
+    let targets = select_targets(targets, &entries)?;
+    let host_exe = resolve_host_exe().map_err(FixError::HostExe)?;
+    let registrar = Registrar {
+        host_exe,
+        install_dir: browsers::install_dir(os, &dirs),
+        extension_id: PINNED_EXTENSION_ID.to_string(),
+    };
+    Ok(targets
+        .iter()
+        .map(|target| TargetOutcome {
+            target: target.describe(),
+            result: registrar.register(target),
+        })
+        .collect())
 }
 
 /// `chromium-bridge uninstall`: entry point. Removes the registrations for
@@ -661,7 +702,7 @@ fn resolve_host_exe() -> std::io::Result<PathBuf> {
 /// `--browser` keys were already refused at the argv boundary
 /// ([`crate::cli::parse`] resolves them into [`Browser`]s), so the match
 /// here is exhaustive, with no priority chain to order wrongly.
-fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<Target>, i32> {
+fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<Target>, FixError> {
     match targets {
         FixTargets::ManifestDirs(dirs) => Ok(dirs
             .iter()
@@ -673,14 +714,12 @@ fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<
             for browser in browsers {
                 let Some(entry) = entries.iter().find(|e| e.browser == *browser) else {
                     // resolve() enumerates every Browser variant, so this
-                    // cannot be reached; refuse with a typed exit rather than
+                    // cannot be reached; refuse with a typed error rather than
                     // panic if that invariant is ever broken.
-                    log_error!(
-                        "doctor",
+                    return Err(FixError::NoTargets(format!(
                         "browser {:?} missing from the resolved set",
                         browser.key()
-                    );
-                    return Err(2);
+                    )));
                 };
                 out.push(Target::for_browser(entry));
             }
@@ -693,13 +732,11 @@ fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<
                 .map(Target::for_browser)
                 .collect();
             if detected.is_empty() {
-                log_error!(
-                    "doctor",
+                return Err(FixError::NoTargets(format!(
                     "no Chromium-family browser detected for this user; pass --browser <keys> \
                      (known: {}), --all, or --manifest-dir <dir>",
                     known_keys()
-                );
-                return Err(1);
+                )));
             }
             Ok(detected)
         }
