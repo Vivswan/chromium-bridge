@@ -3,7 +3,7 @@
 # image (Containerfile) proto and moon already exist, so the download is skipped and `proto install` only
 # catches a pin that moved after the image was published.
 name: Set up moon
-description: Installs proto, moon, and the tools pinned in .prototools; optionally the pinned Rust toolchain with a cargo cache.
+description: Installs proto, moon, and the tools pinned in .prototools; optionally the rust-toolchain.toml profile and components plus the cargo cache.
 
 inputs:
   cargo:
