@@ -43,6 +43,7 @@ mod mcp_jsonrpc;
 mod nm_frame;
 mod policy_doc;
 mod registration_manifest;
+mod webauthn_authdata;
 
 /// Whether the reader a seed targets accepts those bytes.
 pub type Reader = fn(&[u8]) -> bool;
@@ -102,6 +103,7 @@ pub fn corpus() -> Vec<Directory> {
         nm_frame::directory(),
         policy_doc::directory(),
         registration_manifest::directory(),
+        webauthn_authdata::directory(),
     ]
 }
 

@@ -3,6 +3,8 @@
 
 use coset::iana;
 use coset::{CborSerializable as _, CoseKeyBuilder};
+
+use super::encode;
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::json;
@@ -11,11 +13,11 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::ipc::BrowserLabel;
 
-const UP: u8 = 0x01;
-const UV: u8 = 0x04;
-const BE_BS: u8 = 0x18;
-const AT: u8 = 0x40;
-const ED: u8 = 0x80;
+const UP: u8 = encode::flags::UP;
+const UV: u8 = encode::flags::UV;
+const BE_BS: u8 = encode::flags::BE | encode::flags::BS;
+const AT: u8 = encode::flags::AT;
+const ED: u8 = encode::flags::ED;
 
 fn signing_key() -> SigningKey {
     SigningKey::from_slice(&[0x11; 32]).unwrap()
@@ -30,16 +32,10 @@ fn public_key(sk: &SigningKey) -> CosePublicKey {
 }
 
 fn cose_es256(sk: &SigningKey) -> Vec<u8> {
-    let sec1 = sk.verifying_key().to_sec1_bytes();
-    CoseKeyBuilder::new_ec2_pub_key(
-        iana::EllipticCurve::P_256,
-        sec1[1..33].to_vec(),
-        sec1[33..65].to_vec(),
+    encode::cose_ec2_key(
+        &sk.verifying_key().to_sec1_bytes(),
+        encode::Algorithm::ES256,
     )
-    .algorithm(iana::Algorithm::ES256)
-    .build()
-    .to_vec()
-    .unwrap()
 }
 
 fn statement() -> Statement {
@@ -64,23 +60,13 @@ fn credential(sign_count: u32) -> Credential {
     }
 }
 
-/// `rpIdHash || flags || signCount || [aaguid || credIdLen || credId || cose]`.
 fn auth_data(
     rp_id_hash: [u8; 32],
     flags: u8,
     sign_count: u32,
     attested: Option<(&[u8], &[u8])>,
 ) -> Vec<u8> {
-    let mut out = rp_id_hash.to_vec();
-    out.push(flags);
-    out.extend_from_slice(&sign_count.to_be_bytes());
-    if let Some((id, cose)) = attested {
-        out.extend_from_slice(&[0xaa; 16]);
-        out.extend_from_slice(&u16::try_from(id.len()).unwrap().to_be_bytes());
-        out.extend_from_slice(id);
-        out.extend_from_slice(cose);
-    }
-    out
+    encode::authenticator_data(&rp_id_hash, flags, sign_count, attested)
 }
 
 fn client_data(kind: &str, challenge: &str, origin: &str, extra: serde_json::Value) -> Vec<u8> {

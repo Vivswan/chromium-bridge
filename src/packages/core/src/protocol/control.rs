@@ -317,9 +317,9 @@ pub enum WebAuthnControl {
     /// exactly when not ([`EnrollOutcome::into_frame`]).
     EnrollResult {
         ok: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         credential_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
     /// Host -> extension: one capability-granting act awaits a tap.
@@ -340,7 +340,7 @@ pub enum WebAuthnControl {
     /// ([`PresenceOutcome::into_frame`]).
     PresenceResult {
         ok: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
 }

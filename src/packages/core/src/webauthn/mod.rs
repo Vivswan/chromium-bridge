@@ -18,6 +18,9 @@ mod authenticator_data;
 mod base64url;
 mod client_data;
 mod credential;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod encode;
 mod refusal;
 mod registration;
 mod statement;

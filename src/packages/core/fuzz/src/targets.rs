@@ -8,6 +8,7 @@ use std::io::Cursor;
 
 use chromium_bridge_core::enclave::{base64_decode, base64_encode, der_to_raw_signature};
 use chromium_bridge_core::identity::NATIVE_HOST_ID;
+use chromium_bridge_core::ipc::BrowserLabel;
 use chromium_bridge_core::policy::{
     fold, relaxes, restricts_or_equal, PolicyDoc, PolicyHistory, PolicyOverlay, PolicyStore,
     PolicyValues,
@@ -21,6 +22,11 @@ use chromium_bridge_core::protocol::{
 };
 use chromium_bridge_core::registration::{fuzz_api, manifest_ownership, Ownership};
 use chromium_bridge_core::runtime_record::RuntimeRecord as _;
+use chromium_bridge_core::webauthn::encode::P256_GENERATOR_SEC1;
+use chromium_bridge_core::webauthn::{
+    parse_registration, verify_assertion, Action, Assertion, AuthenticatorData, CosePublicKey,
+    Credential, CredentialId, Nonce, Registration, RpId, Statement, StatementDomain,
+};
 use serde_json::Value;
 
 /// One byte-input target: its binary and seed-directory name, and the body the binary runs.
@@ -65,6 +71,10 @@ pub const REGISTRATION_MANIFEST: Target = Target {
 pub const POLICY_DOC: Target = Target {
     name: "policy_doc",
     run: policy_doc,
+};
+pub const WEBAUTHN_AUTHDATA: Target = Target {
+    name: "webauthn_authdata",
+    run: webauthn_authdata,
 };
 
 /// The Chrome Native-Messaging frame decoder (4-byte LE length prefix + JSON) on the extension<->host
@@ -360,4 +370,64 @@ pub fn policy_doc(data: &[u8]) {
             );
         }
     }
+}
+
+/// The WebAuthn byte parsers the extension's frames feed, on the native-messaging boundary. The bytes are
+/// the authenticatorData of an assertion whose clientDataJSON is valid (so the header checks, not the
+/// client-data checks, decide how far the verifier gets), the attestation object of a registration with
+/// the same valid client data (so the CBOR decoder runs), and the bare authenticatorData layout. Oracle: a
+/// credential key parsed out of attested data round-trips through its storage spelling, the bytes the
+/// trust record will hold.
+pub fn webauthn_authdata(data: &[u8]) {
+    if let Ok(parsed) = AuthenticatorData::parse(data) {
+        if let Some(attested) = parsed.attested {
+            assert_eq!(
+                CosePublicKey::from_sec1(&attested.public_key.to_sec1_bytes()),
+                Ok(attested.public_key),
+                "a parsed credential key must round-trip through its storage spelling"
+            );
+        }
+    }
+    let rp_id = RpId::pinned();
+    let statement = |domain: StatementDomain| Statement {
+        domain,
+        browser_label: BrowserLabel::default_label(),
+        action: Action::parse("fuzz").expect("a fixed valid action"),
+        nonce: Nonce::parse("fuzz-nonce").expect("a fixed valid nonce"),
+    };
+    let client_data = |kind: &str, statement: &Statement| {
+        serde_json::to_vec(&serde_json::json!({
+            "type": kind,
+            "challenge": statement.challenge().to_base64url(),
+            "origin": rp_id.origin(),
+        }))
+        .expect("a JSON object serializes")
+    };
+    let presence = statement(StatementDomain::Presence);
+    let credential = Credential {
+        id: CredentialId::parse(vec![0xc1; 16]).expect("a fixed valid id"),
+        public_key: CosePublicKey::from_sec1(&P256_GENERATOR_SEC1)
+            .expect("the curve generator is on the curve"),
+        sign_count: 0,
+        backup_eligible: false,
+    };
+    let _ = verify_assertion(
+        &credential,
+        &presence,
+        &rp_id,
+        &Assertion {
+            authenticator_data: data.to_vec(),
+            client_data_json: client_data("webauthn.get", &presence),
+            signature: Vec::new(),
+        },
+    );
+    let enrollment = statement(StatementDomain::Enrollment);
+    let _ = parse_registration(
+        &enrollment,
+        &rp_id,
+        &Registration {
+            attestation_object: data.to_vec(),
+            client_data_json: client_data("webauthn.create", &enrollment),
+        },
+    );
 }
