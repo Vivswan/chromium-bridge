@@ -2,7 +2,6 @@ use super::*;
 
 fn rev(epoch: u64, latched: bool) -> Revocation {
     Revocation {
-        version: 1,
         epoch,
         clients_epoch: 0,
         host_key_epoch: 0,
@@ -43,7 +42,6 @@ const H_REVOKED: &str = "deaddeaddeaddeaddeaddeaddeaddeaddeaddead";
 
 fn list_with(hash: &str) -> allowlist::Allowlist {
     allowlist::Allowlist {
-        version: 1,
         clients: vec![allowlist::ClientEntry {
             name: "c".into(),
             anchor: allowlist::Anchor::Hash(hash.try_into().unwrap()),

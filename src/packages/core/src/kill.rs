@@ -187,7 +187,6 @@ mod tests {
 
     fn rev(killed: bool) -> Revocation {
         Revocation {
-            version: 1,
             epoch: 3,
             clients_epoch: 0,
             host_key_epoch: 0,

@@ -13,7 +13,6 @@ fn store(
     let doc = PolicyDoc::from_values(values, revision, Vec::new());
     let bytes = serde_json::to_vec(&doc).unwrap();
     PolicyStore {
-        version: super::super::POLICY_STORE_VERSION,
         baseline_b64: base64_encode(&bytes),
         sig_b64: signed.then(|| base64_encode(b"sig")),
         key_id: signed.then(|| "kid".to_string()),
@@ -115,13 +114,12 @@ fn error_report_round_trips_and_rejects_unknown_fields() {
 
 #[test]
 fn history_report_maps_entries_and_tolerates_a_damaged_one() {
-    use super::super::{PolicyHistoryEntry, POLICY_HISTORY_VERSION};
+    use super::super::PolicyHistoryEntry;
     let good = PolicyDoc {
         revision: 5,
         ..PolicyDoc::default()
     };
     let history = PolicyHistory {
-        version: POLICY_HISTORY_VERSION,
         entries: vec![
             PolicyHistoryEntry {
                 baseline_b64: base64_encode(&serde_json::to_vec(&good).unwrap()),
@@ -282,14 +280,13 @@ fn diff_overlay_treats_disabled_tools_as_a_set() {
 
 #[test]
 fn find_history_effective_folds_the_target_and_reports_misses() {
-    use super::super::{PolicyHistoryEntry, POLICY_HISTORY_VERSION};
+    use super::super::PolicyHistoryEntry;
     let doc = PolicyDoc {
         revision: 4,
         page_eval_enabled: true,
         ..PolicyDoc::default()
     };
     let history = PolicyHistory {
-        version: POLICY_HISTORY_VERSION,
         entries: vec![PolicyHistoryEntry {
             baseline_b64: base64_encode(&serde_json::to_vec(&doc).unwrap()),
             sig_b64: None,
@@ -311,7 +308,7 @@ fn find_history_effective_folds_the_target_and_reports_misses() {
 
 #[test]
 fn find_history_effective_refuses_an_ambiguous_revision() {
-    use super::super::{PolicyHistoryEntry, POLICY_HISTORY_VERSION};
+    use super::super::PolicyHistoryEntry;
     // Every restriction while a baseline is current pushes a history
     // entry at the UNCHANGED revision, so one revision can name several
     // distinct effective states. Rolling back must land exactly one.
@@ -329,7 +326,6 @@ fn find_history_effective_refuses_an_ambiguous_revision() {
         superseded_unix: 1,
     };
     let history = PolicyHistory {
-        version: POLICY_HISTORY_VERSION,
         entries: vec![
             entry(None),
             entry(Some(PolicyOverlay {
@@ -342,7 +338,6 @@ fn find_history_effective_refuses_an_ambiguous_revision() {
     assert!(err.contains("ambiguous"), "got: {err}");
     // Identical duplicates are NOT ambiguous: same effective state.
     let history = PolicyHistory {
-        version: POLICY_HISTORY_VERSION,
         entries: vec![entry(None), entry(None)],
     };
     assert!(

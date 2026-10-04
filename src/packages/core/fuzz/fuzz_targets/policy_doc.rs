@@ -1,8 +1,9 @@
 #![no_main]
-//! Fuzz the policy store parse surface (ADR-0032): runtime_dir()/policy.json
-//! is a same-user-writable file, so every shape read from it - the store
-//! envelope, the base64 baseline bytes, the strict PolicyDoc, the overlay,
-//! and the history ring - must fail closed on hostile bytes, never panic.
+//! Fuzz the policy store parse surface: runtime_dir()/policy.json
+//! is a same-user-writable file, so every shape read from it - the record
+//! envelope (through the production decoder), the base64 baseline bytes, the
+//! strict PolicyDoc, the overlay, and the history ring - must fail closed on
+//! hostile bytes, never panic.
 //! Beyond crash-freedom this target asserts the semantic invariants the
 //! store depends on: a parsed document serde-round-trips to an equal value,
 //! the comparison lattice partitions every pair (relaxes XOR
@@ -16,6 +17,7 @@ use chromium_bridge_core::policy::{
     fold, relaxes, restricts_or_equal, PolicyDoc, PolicyHistory, PolicyOverlay, PolicyStore,
     PolicyValues,
 };
+use chromium_bridge_core::runtime_record::RuntimeRecord as _;
 
 /// The invariants every successfully parsed document must satisfy: validate
 /// and values never panic, and the exact serialized bytes reparse to an
@@ -51,7 +53,7 @@ fuzz_target!(|data: &[u8]| {
         values.push(check_fold(&PolicyValues::default(), &overlay));
     }
 
-    if let Ok(store) = serde_json::from_slice::<PolicyStore>(data) {
+    if let Ok(store) = PolicyStore::decode(data) {
         // Mirror baseline_doc()'s byte path on the parsed envelope (pure:
         // it reads self.baseline_b64, never the filesystem) and cross-check
         // it against a by-hand decode of the same bytes.
@@ -88,7 +90,7 @@ fuzz_target!(|data: &[u8]| {
 
     // The history ring shares the fail-closed posture; parsing it must not
     // panic (its entries are data, never authority, so nothing more to hold).
-    let _ = serde_json::from_slice::<PolicyHistory>(data);
+    let _ = PolicyHistory::decode(data);
 
     // The lattice partition (the store's direction check depends on it): a
     // pair either relaxes somewhere or restricts-or-holds everywhere, never

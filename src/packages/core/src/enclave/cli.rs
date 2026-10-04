@@ -6,6 +6,7 @@ use super::config::HostConfig;
 use super::key::EnrollmentKey;
 use super::pubkey::EnclavePublicKey;
 use super::{EnclaveError, KEY_LABEL};
+use crate::runtime_record::RuntimeRecord as _;
 
 /// `chromium-bridge pair [--reset]`: the user-present half of the enrollment
 /// ceremony. Mints the Enclave key (or reports the existing one), runs a
@@ -81,7 +82,7 @@ pub fn run_pair(reset: bool) -> i32 {
         Ok(k) => k,
         Err(e) => {
             println!("pair failed to mint the enrollment key: {e}");
-            HostConfig::remove();
+            let _ = crate::ipc::with_runtime_lock(HostConfig::remove);
             return 1;
         }
     };
@@ -116,7 +117,7 @@ pub fn run_pair(reset: bool) -> i32 {
         enrolled: true,
         ..HostConfig::default()
     };
-    if let Err(e) = cfg.write() {
+    if let Err(e) = crate::ipc::with_runtime_lock(|lock| cfg.write(lock)) {
         println!("pair failed to record the enrollment policy: {e}");
         rollback_fresh_mint();
         return 1;
@@ -201,7 +202,7 @@ fn dispose_locked(
         // baseline is NOT an artifact of a dead key: leave it untouched.
         Err(e) => return Ok(Err(e)),
     };
-    HostConfig::remove();
+    let _ = HostConfig::remove(lock);
     if let Err(e) = crate::policy::clear_baseline_locked(lock) {
         log_warn!(
             "enclave",
@@ -269,7 +270,7 @@ pub fn run_status() -> i32 {
         Err(e) => println!("key:        lookup failed: {e}"),
     }
 
-    match HostConfig::read() {
+    match HostConfig::load() {
         Ok(Some(cfg)) => println!(
             "policy:     enrolled={} granularity={} ({})",
             cfg.enrolled,
@@ -359,7 +360,7 @@ pub fn run_status_json() -> i32 {
         Err(e @ EnclaveError::KeyInvalid(_)) => KeyReport::Invalid(e.to_string()),
         Err(e) => KeyReport::Error(e.to_string()),
     };
-    let policy = HostConfig::read().map_err(|e| e.to_string());
+    let policy = HostConfig::load().map_err(|e| e.to_string());
     let report = build_status_report(&key, &policy);
     // Serialize through `Value` so the object keys stay sorted (serde_json's
     // default `Map` ordering), byte-for-byte as the previous ad-hoc `json!`

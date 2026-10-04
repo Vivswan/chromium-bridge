@@ -6,9 +6,7 @@
 //! to affect any security decision. A substituted host can forge
 //! `lang_current` and flip the UI language - a nuisance with zero capability
 //! attached, which is exactly why language gets the free lane and policy does
-//! not. The store follows [`crate::revocation`]'s on-disk pattern (a small,
-//! capped, `deny_unknown_fields`, atomically-written 0600 file under the
-//! runtime lock) rather than the heavier policy store, because none of the
+//! not. The store is a plain [`RuntimeRecord`], not a policy store: none of the
 //! policy machinery (signatures, overlays, history) applies here.
 //!
 //! Loop prevention is by sequence, not by guessing (decision 7): a receiver
@@ -23,17 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ipc;
 use crate::policy::JS_SAFE_INT_MAX;
-
-/// The on-disk language store schema version. Bumped only on a
-/// breaking-shape change; unknown-field parsing is fail-closed
-/// (`deny_unknown_fields`) so a newer file is rejected rather than
-/// misinterpreted by an older binary.
-pub const LANG_STORE_VERSION: u32 = 1;
-
-/// Upper bound on `lang.json` when reading it back. The record is a version,
-/// a short enum string, and a counter - a few dozen bytes - so anything
-/// larger is not ours and is refused rather than slurped.
-const LANG_MAX_BYTES: usize = 4 * 1024;
+use crate::runtime_record::{Record, Rung, RuntimeRecord};
 
 /// The accepted `uiLanguage` values. This mirrors the browser-owned
 /// canonical list in `src/packages/shared/src/settings.ts` (`UI_LANGUAGES`):
@@ -56,22 +44,34 @@ pub fn is_valid_lang(value: &str) -> bool {
     UI_LANGUAGES.contains(&value)
 }
 
-/// The persisted shared-language state (ADR-0032 decision 7). `value` is one
-/// of [`UI_LANGUAGES`]; `seq` is a monotonic counter bumped on every accepted
-/// change, constrained to the JS-safe range (the same posture as the policy
-/// revision) so the Rust parser and the extension's Zod parser read the same
-/// number.
+/// The persisted shared-language state (`lang.json`). `value` is one of [`UI_LANGUAGES`]; `seq` is a
+/// monotonic counter bumped on every accepted change, constrained to the JS-safe range (the same
+/// posture as the policy revision) so the Rust parser and the extension's Zod parser read the same
+/// number. Both bounds sit in the parsers themselves, so a damaged store fails the load (the caller
+/// skips its push/reply) rather than answering with a fabricated value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LangStore {
-    /// Schema version; see [`LANG_STORE_VERSION`].
-    pub version: u32,
-    /// The stored language, one of [`UI_LANGUAGES`].
+    #[serde(deserialize_with = "de_ui_language")]
     pub value: String,
-    /// The echo-suppression sequence; bounded to [`JS_SAFE_INT_MAX`] in the
-    /// parser itself so both sides read the same number.
     #[serde(deserialize_with = "de_js_safe_u64")]
     pub seq: u64,
+}
+
+impl Record for LangStore {
+    const FILE: &'static str = "lang.json";
+    const MAX_BYTES: usize = 4 * 1024;
+    const MIGRATIONS: &'static [Rung] = crate::migrations::lang::LADDER;
+}
+
+fn de_ui_language<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let value = String::deserialize(d)?;
+    if !is_valid_lang(&value) {
+        return Err(serde::de::Error::custom(format!(
+            "out-of-enum uiLanguage {value:?}"
+        )));
+    }
+    Ok(value)
 }
 
 /// Mirror of `crate::policy`'s bounded-u64 deserializer: a `seq` above the
@@ -85,50 +85,6 @@ fn de_js_safe_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Erro
         ));
     }
     Ok(value)
-}
-
-impl LangStore {
-    /// Path of the language store in the 0700 per-user runtime directory.
-    pub fn path() -> std::path::PathBuf {
-        ipc::runtime_dir().join("lang.json")
-    }
-
-    /// Read the store. `Ok(None)` when the file does not exist (no language
-    /// stored yet). A present-but-corrupt, oversized, wrong-version, or
-    /// out-of-enum file is an error, NOT a silent default: a damaged store
-    /// fails closed (the caller skips its push/reply) rather than masking a
-    /// tamper with a fabricated value.
-    pub fn load() -> io::Result<Option<Self>> {
-        let Some(bytes) = ipc::read_capped(&Self::path(), LANG_MAX_BYTES)? else {
-            return Ok(None);
-        };
-        let store: LangStore = serde_json::from_slice(&bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("lang store: {e}")))?;
-        if store.version != LANG_STORE_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "lang store version {} is not supported (this binary understands {})",
-                    store.version, LANG_STORE_VERSION
-                ),
-            ));
-        }
-        if !is_valid_lang(&store.value) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("lang store carries an out-of-enum value {:?}", store.value),
-            ));
-        }
-        Ok(Some(store))
-    }
-
-    /// Write atomically, 0600. The [`ipc::RuntimeLockToken`] proves the caller
-    /// holds the runtime lock, so a lock-free rewrite of the language store
-    /// does not compile (the `Allowlist::write` / policy-store pattern).
-    fn write(&self, _lock: &ipc::RuntimeLockToken) -> io::Result<()> {
-        let bytes = serde_json::to_vec_pretty(self)?;
-        ipc::write_private_atomic(&Self::path(), &bytes)
-    }
 }
 
 /// The current shared language and its sequence, mapping the absent store to
@@ -175,7 +131,6 @@ fn set_locked(lock: &ipc::RuntimeLockToken, value: &str) -> io::Result<(String, 
             )
         })?;
     let next = LangStore {
-        version: LANG_STORE_VERSION,
         value: value.to_string(),
         seq,
     };
@@ -192,8 +147,6 @@ fn set_locked(lock: &ipc::RuntimeLockToken, value: &str) -> io::Result<(String, 
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     use crate::test_support::scratch_runtime_dir;
@@ -262,53 +215,23 @@ mod tests {
     }
 
     #[test]
-    fn load_is_fail_closed_on_shape_version_and_out_of_enum() {
-        let _dir = scratch_runtime_dir("lang-load-fail-closed");
-        // Unknown field refused.
-        fs::write(
-            LangStore::path(),
-            br#"{"version":1,"value":"en","seq":0,"surprise":true}"#,
-        )
-        .unwrap();
-        assert!(LangStore::load().is_err());
-        // Wrong version refused.
-        fs::write(LangStore::path(), br#"{"version":99,"value":"en","seq":0}"#).unwrap();
-        assert!(LangStore::load().is_err());
-        // Out-of-enum value refused (a tampered store never answers with a
-        // fabricated language).
-        fs::write(LangStore::path(), br#"{"version":1,"value":"fr","seq":0}"#).unwrap();
-        assert!(LangStore::load().is_err());
-        // A seq past the JS-safe bound refused.
-        fs::write(
-            LangStore::path(),
-            br#"{"version":1,"value":"en","seq":9007199254740992}"#,
-        )
-        .unwrap();
-        assert!(LangStore::load().is_err());
-        // Positive control: the exact shape at the bound loads.
-        fs::write(
-            LangStore::path(),
-            br#"{"version":1,"value":"en","seq":9007199254740991}"#,
-        )
-        .unwrap();
-        let store = LangStore::load().unwrap().unwrap();
-        assert_eq!(store.seq, JS_SAFE_INT_MAX);
-    }
-
-    #[test]
-    fn store_round_trips_through_serde() {
-        let store = LangStore {
-            version: LANG_STORE_VERSION,
-            value: "zh_TW".into(),
-            seq: 42,
+    fn a_stored_value_outside_the_enum_or_the_js_safe_bound_fails_the_load() {
+        // The two bounds the extension's Zod parser enforces on `lang_current`; a store carrying a value
+        // past either would make the host push a frame the extension refuses.
+        let decode = |value: &str, seq: u64| {
+            LangStore::decode(
+                &serde_json::to_vec(&serde_json::json!({
+                    "version": LangStore::VERSION, "value": value, "seq": seq
+                }))
+                .unwrap(),
+            )
         };
-        let bytes = serde_json::to_vec(&store).unwrap();
-        let back: LangStore = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(back, store);
-    }
-
-    #[test]
-    fn path_has_expected_filename() {
-        assert_eq!(LangStore::path().file_name().unwrap(), "lang.json");
+        assert!(decode("fr", 0).is_err(), "out-of-enum value");
+        assert!(
+            decode("en", JS_SAFE_INT_MAX + 1).is_err(),
+            "seq past the bound"
+        );
+        // Positive control: the exact shape at the bound loads.
+        assert_eq!(decode("en", JS_SAFE_INT_MAX).unwrap().seq, JS_SAFE_INT_MAX);
     }
 }

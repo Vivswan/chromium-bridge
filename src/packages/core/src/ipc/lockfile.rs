@@ -4,13 +4,14 @@
 //! shared state.
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::peercred::pid_is_alive;
 use super::socket::{listen, BridgeListener};
+use crate::fsguard::{read_capped, write_private_atomic};
 
 /// Per-process runtime info the MCP server publishes for the native host.
 ///
@@ -101,10 +102,7 @@ fn harden_runtime_dir(dir: &std::path::Path) {
     }
 }
 
-/// Upper bound on the lock file's size when reading it back. The file is a
-/// few hundred bytes of JSON; anything bigger is not ours (e.g. a same-user
-/// process planted a huge file at the path) and is rejected instead of being
-/// slurped into memory.
+/// Read cap for the lock file (a few hundred bytes of JSON); see [`read_capped`].
 const LOCK_MAX_BYTES: usize = 64 * 1024;
 
 impl LockFile {
@@ -255,49 +253,6 @@ pub(crate) fn with_runtime_lock<T>(
     f(&RuntimeLockToken(()))
 }
 
-/// Read a small file in full, bounded by `max` bytes. Returns `Ok(None)` when
-/// the file does not exist; fails with `InvalidData` when it exceeds the cap,
-/// reading at most `max + 1` bytes rather than the whole oversized file.
-pub(crate) fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Option<Vec<u8>>> {
-    let f = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    // Read up to max+1 bytes so an over-cap file is distinguishable from one
-    // of exactly max bytes. An unrepresentable limit fails closed.
-    let cap = u64::try_from(max)
-        .ok()
-        .and_then(|c| c.checked_add(1))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "size cap out of range"))?;
-    let mut bytes = Vec::new();
-    f.take(cap).read_to_end(&mut bytes)?;
-    if bytes.len() > max {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "lock file exceeds the size cap",
-        ));
-    }
-    Ok(Some(bytes))
-}
-
-/// Write `bytes` to `path` atomically via a same-directory temp file that is
-/// created exclusively (0600 on Unix) under a fresh random name and renamed
-/// over the destination, so a pre-planted entry is never adopted or followed
-/// and a looser mode on a planted file at the destination does not carry
-/// over to a private record. Not fsynced: readers see the old file or the
-/// new one, never a partial write, but nothing is promised across a system
-/// crash.
-pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::other("target path has no parent directory"))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(bytes)?;
-    tmp.persist(path)?;
-    Ok(())
-}
-
 pub(super) fn read_lock_or_err() -> io::Result<LockFile> {
     LockFile::read()?.ok_or_else(|| {
         io::Error::new(
@@ -344,90 +299,9 @@ mod tests {
     }
 
     #[test]
-    fn lock_path_has_expected_filename() {
-        assert_eq!(LockFile::path().file_name().unwrap(), "run.lock");
-    }
-
-    #[test]
     fn runtime_lock_token_is_zero_sized() {
         // The token is a pure compile-time witness; holding or passing one
         // must cost nothing at runtime.
         assert_eq!(std::mem::size_of::<RuntimeLockToken>(), 0);
-    }
-
-    /// A scratch directory for filesystem tests, unique per test so parallel
-    /// tests never collide, removed on drop.
-    struct ScratchDir(PathBuf);
-
-    impl ScratchDir {
-        fn new(test: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "chromium-bridge-test-{}-{test}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&dir).unwrap();
-            ScratchDir(dir)
-        }
-    }
-
-    impl Drop for ScratchDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn read_capped_rejects_an_oversized_file_and_passes_a_small_one() {
-        let dir = ScratchDir::new("read-capped");
-        let path = dir.0.join("run.lock");
-
-        // Missing file is a clean None, not an error.
-        assert!(read_capped(&path, LOCK_MAX_BYTES).unwrap().is_none());
-
-        // A file over the cap is rejected without being read in full.
-        fs::write(&path, vec![b'x'; LOCK_MAX_BYTES + 1]).unwrap();
-        let err = read_capped(&path, LOCK_MAX_BYTES).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-
-        // A normal-sized file reads back verbatim.
-        fs::write(&path, b"{\"pid\":1}").unwrap();
-        assert_eq!(
-            read_capped(&path, LOCK_MAX_BYTES).unwrap().unwrap(),
-            b"{\"pid\":1}"
-        );
-    }
-
-    /// tempfile creates the temp file owner-only and rename replaces the
-    /// destination inode: two external facts the secret-bearing lock relies
-    /// on, neither enforced by the compiler.
-    #[cfg(unix)]
-    #[test]
-    fn lock_write_is_owner_only_and_replaces_a_planted_loose_lock() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = ScratchDir::new("planted-lock");
-        let path = dir.0.join("run.lock");
-
-        // A world-readable file planted at the destination must be replaced,
-        // never written through (which would keep its 0644 mode on the secret).
-        fs::write(&path, b"planted").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-
-        write_private_atomic(&path, b"{\"secret\":\"s\"}").unwrap();
-
-        assert_eq!(fs::read(&path).unwrap(), b"{\"secret\":\"s\"}");
-        // Group/other bits only: the umask may strip owner bits too.
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode & 0o077, 0, "lock mode {mode:o} leaks group/other bits");
-        // No temp file is left beside the lock.
-        let leftovers: Vec<_> = fs::read_dir(&dir.0)
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .filter(|n| n != "run.lock")
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "stray files beside the lock: {leftovers:?}"
-        );
     }
 }

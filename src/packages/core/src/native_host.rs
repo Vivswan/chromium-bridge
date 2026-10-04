@@ -28,6 +28,7 @@ use crate::protocol::control::{
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::revocation::{Revocation, REVOCATION_POLL};
+use crate::runtime_record::RuntimeRecord as _;
 use serde::Serialize;
 use serde_json::Value;
 

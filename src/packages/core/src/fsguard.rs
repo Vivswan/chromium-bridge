@@ -1,22 +1,25 @@
-//! The crate's one private-file idiom: files and directories in a user-private location (the 0700 runtime directory,
-//! the wrapper install dir) are created, and the append/lock handles opened, through these helpers, so the
-//! symlink/TOCTOU reasoning for those opens lives once. These paths sit in directories a same-user process can write
-//! to before we do. Reads (`ipc::read_capped`, `enclave::config`) take plain opens that follow a symlink at the
-//! final component; nothing here covers them.
+//! The crate's one private-file idiom: every open, read, and atomic replacement of a file in a user-private
+//! location (the 0700 runtime directory, the wrapper install dir) goes through these helpers, so the
+//! symlink/TOCTOU reasoning lives once. These paths sit in directories a same-user process can write to before
+//! we do.
 //!
 //! ```text
 //! pre-planted symlink     -> opens pass `O_NOFOLLOW`; dirs refuse a symlink leaf
 //! pre-planted loose file  -> `OpenOptions::mode` applies only on create, so the mode is re-asserted on the open handle
 //!                            (no path re-traversal); a file that cannot be tightened fails the open
+//! pre-planted huge file   -> `read_capped` stops at the cap + 1 and refuses, never slurping it
+//! replacement             -> `write_private_atomic` lands an exclusive 0600 temp file by rename, so a planted entry is
+//!                            neither adopted nor followed and its looser mode never carries over
 //! ```
 //!
-//! Atomic replacement (`ipc::write_private_atomic`, `registration::write_atomic`) goes through `tempfile`, not these
-//! helpers: `registration`'s outputs are deliberately world-readable wrappers and manifests the browser must read.
-//! On non-Unix targets the hardening compiles to plain opens: no Unix modes, and the same-user boundary is not enforced
-//! there (SECURITY.md "Platform support").
+//! Reads take plain opens that follow a symlink at the final component: a same-user symlink only redirects a read
+//! to something that user could already read. `registration::write_atomic` is the one replacement outside this
+//! module, because its outputs are deliberately world-readable wrappers and manifests the browser must read. On
+//! non-Unix targets the hardening compiles to plain opens: no Unix modes, and the same-user boundary is not
+//! enforced there (SECURITY.md "Platform support").
 
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 /// Open `path` for appending, creating it 0600 if absent. Refuses a symlink
@@ -82,6 +85,48 @@ pub(crate) fn ensure_private_dir(dir: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
+    Ok(())
+}
+
+/// Read a small private file in full, bounded by `max` bytes. `Ok(None)` when the file does not exist;
+/// `InvalidData` when it exceeds the cap, after reading at most `max + 1` bytes. Every record in the runtime
+/// directory is a few KB at most, so anything larger is not ours (a same-user process planted it) and is
+/// refused instead of slurped into memory.
+pub(crate) fn read_capped(path: &Path, max: usize) -> io::Result<Option<Vec<u8>>> {
+    let f = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    // max + 1 bytes, so an over-cap file is distinguishable from one of exactly max bytes.
+    let cap = u64::try_from(max)
+        .ok()
+        .and_then(|c| c.checked_add(1))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "size cap out of range"))?;
+    let mut bytes = Vec::new();
+    f.take(cap).read_to_end(&mut bytes)?;
+    if bytes.len() > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} is larger than its {max}-byte cap; refusing a file that cannot be ours",
+                path.display()
+            ),
+        ));
+    }
+    Ok(Some(bytes))
+}
+
+/// Write `bytes` to `path` atomically: a same-directory temp file created exclusively (0600 on Unix) under
+/// a fresh random name, renamed over the destination. Not fsynced, for every private record alike: readers
+/// see the old file or the new one, never a partial write, and nothing is promised across a system crash.
+pub(crate) fn write_private_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("target path has no parent directory"))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.persist(path)?;
     Ok(())
 }
 
@@ -200,5 +245,48 @@ mod tests {
             std::os::unix::fs::symlink(&real, &link).unwrap();
             assert!(ensure_private_dir(&link).is_err());
         }
+    }
+
+    #[test]
+    fn read_capped_refuses_an_oversized_file_and_passes_a_small_one() {
+        let dir = scratch("read-capped");
+        let path = dir.join("record.json");
+        assert!(read_capped(&path, 16).unwrap().is_none(), "absent is None");
+        fs::write(&path, vec![b'x'; 17]).unwrap();
+        assert_eq!(
+            read_capped(&path, 16).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        fs::write(&path, b"{\"pid\":1}").unwrap();
+        assert_eq!(read_capped(&path, 16).unwrap().unwrap(), b"{\"pid\":1}");
+    }
+
+    /// tempfile creates the temp file owner-only and rename replaces the destination inode: two external
+    /// facts every secret-bearing record relies on, neither enforced by the compiler.
+    #[cfg(unix)]
+    #[test]
+    fn write_private_atomic_is_owner_only_and_replaces_a_planted_loose_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("planted-record");
+        let path = dir.join("record.json");
+        // A world-readable file planted at the destination is replaced, never written through
+        // (which would keep its 0644 mode on the secret).
+        fs::write(&path, b"planted").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write_private_atomic(&path, b"{\"secret\":\"s\"}").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"{\"secret\":\"s\"}");
+        // Group/other bits only: the umask may strip owner bits too.
+        assert_eq!(
+            mode_of(&path) & 0o077,
+            0,
+            "mode {:o} leaks group/other bits",
+            mode_of(&path)
+        );
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n != "record.json")
+            .collect();
+        assert!(leftovers.is_empty(), "stray temp files: {leftovers:?}");
     }
 }

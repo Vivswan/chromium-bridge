@@ -14,7 +14,6 @@ fn seed_store(revision: u64, values: &PolicyValues, overlay: Option<PolicyOverla
     let doc = PolicyDoc::from_values(values, revision, vec![]);
     let bytes = serde_json::to_vec(&doc).unwrap();
     let store = PolicyStore {
-        version: POLICY_STORE_VERSION,
         baseline_b64: base64_encode(&bytes),
         sig_b64: Some(base64_encode(b"seed-sig")),
         key_id: Some("seed-kid".into()),
@@ -48,7 +47,6 @@ fn store_round_trips_the_exact_baseline_bytes() {
     };
     let bytes = serde_json::to_vec(&doc).unwrap();
     let store = PolicyStore {
-        version: POLICY_STORE_VERSION,
         baseline_b64: base64_encode(&bytes),
         sig_b64: Some("c2ln".into()),
         key_id: Some("kid".into()),
@@ -118,7 +116,6 @@ fn a_flipped_byte_that_breaks_json_fails_baseline_doc_not_load() {
 fn a_non_base64_baseline_fails_baseline_doc_not_load() {
     let _dir = scratch_runtime_dir("policy-tamper-b64");
     let store = PolicyStore {
-        version: POLICY_STORE_VERSION,
         baseline_b64: "not base64!".into(),
         sig_b64: None,
         key_id: None,
@@ -127,30 +124,6 @@ fn a_non_base64_baseline_fails_baseline_doc_not_load() {
     ipc::with_runtime_lock(|lock| store.write(lock)).unwrap();
     let back = PolicyStore::load().unwrap().unwrap();
     assert!(back.baseline_doc().is_err());
-}
-
-#[test]
-fn load_is_fail_closed_on_shape_size_and_version() {
-    let _dir = scratch_runtime_dir("policy-load-fail-closed");
-    // Absent -> Ok(None): the legitimate no-policy-yet state.
-    assert!(PolicyStore::load().unwrap().is_none());
-    // An unknown field is refused, never skimmed over.
-    fs::write(
-        PolicyStore::path(),
-        br#"{"version":1,"baseline_b64":"e30=","surprise":true}"#,
-    )
-    .unwrap();
-    assert!(PolicyStore::load().is_err());
-    // A wrong version is refused.
-    fs::write(
-        PolicyStore::path(),
-        br#"{"version":99,"baseline_b64":"e30="}"#,
-    )
-    .unwrap();
-    assert!(PolicyStore::load().is_err());
-    // An oversized file is refused without being slurped.
-    fs::write(PolicyStore::path(), vec![b' '; POLICY_MAX_BYTES + 1]).unwrap();
-    assert!(PolicyStore::load().is_err());
 }
 
 #[test]
@@ -183,7 +156,7 @@ fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
     assert_eq!(first.key_id.as_deref(), Some("kid-1"));
     assert!(first.overlay.is_none());
     // No previous store existed, so nothing was pushed.
-    assert!(load_history().unwrap().is_none());
+    assert!(PolicyHistory::load().unwrap().is_none());
 
     // The second write supersedes the first: revision 2, and the ring
     // holds the exact previous record.
@@ -196,7 +169,7 @@ fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
     .unwrap();
     let second = PolicyStore::load().unwrap().unwrap();
     assert_eq!(second.baseline_doc().unwrap().revision, 2);
-    let history = load_history().unwrap().unwrap();
+    let history = PolicyHistory::load().unwrap().unwrap();
     assert_eq!(history.entries.len(), 1);
     let entry = &history.entries[0];
     assert_eq!(entry.baseline_b64, first.baseline_b64);
@@ -455,7 +428,7 @@ fn a_restricting_overlay_applies_and_pushes_history() {
     assert!(!store.effective().unwrap().page_eval_enabled);
     // The baseline itself is untouched; only the overlay moved.
     assert_eq!(store.baseline_b64, seeded.baseline_b64);
-    let history = load_history().unwrap().unwrap();
+    let history = PolicyHistory::load().unwrap().unwrap();
     assert_eq!(history.entries.len(), 1);
     assert_eq!(history.entries[0].overlay, None);
     assert!(audit_text().contains("auth=none; restricted=pageEvalEnabled"));
@@ -488,7 +461,7 @@ fn a_relaxing_overlay_is_refused_with_the_store_unchanged() {
     .unwrap_err();
     assert!(matches!(err, PolicyWriteError::NotARestriction));
     assert_eq!(PolicyStore::load().unwrap().unwrap(), seeded);
-    assert!(load_history().unwrap().is_none());
+    assert!(PolicyHistory::load().unwrap().is_none());
     // The refusal is in the trail (log-after-decide), naming the
     // offending posture.
     let trail = audit_text();
@@ -535,38 +508,41 @@ fn restrict_merges_entrywise_keeping_unnamed_entries() {
 }
 
 #[test]
-fn history_evicts_oldest_entries_at_the_cap() {
-    let entry = |tag: u64| PolicyHistoryEntry {
-        baseline_b64: base64_encode(format!("baseline-{tag:04}").as_bytes()),
+fn history_evicts_oldest_entries_until_the_ring_encodes_under_its_own_cap() {
+    // Eviction and the read cap are two facts about one file: a ring written over the cap would
+    // load back as an error at the rollback surface.
+    let entry = |tag: u64, baseline_len: usize| PolicyHistoryEntry {
+        baseline_b64: "A".repeat(baseline_len),
         sig_b64: None,
         key_id: None,
         overlay: None,
         superseded_unix: tag,
     };
+    // Thirty-two entries of 16 KiB overflow the 256 KiB cap by about half.
     let mut history = PolicyHistory {
-        version: POLICY_HISTORY_VERSION,
-        entries: (0..20).map(entry).collect(),
+        entries: (0..32).map(|tag| entry(tag, 16 * 1024)).collect(),
     };
-    // A cap that holds a handful of entries: the ring drops from the
-    // FRONT (oldest) until it fits, keeping the newest.
-    let bytes = history_bytes_capped(&mut history, 800).unwrap();
-    assert!(bytes.len() <= 800);
+    evict_to_fit(&mut history);
+    let bytes = history.encode().unwrap();
+    assert!(bytes.len() <= <PolicyHistory as Record>::MAX_BYTES);
+    assert_eq!(PolicyHistory::decode(&bytes).unwrap(), history);
     assert!(!history.entries.is_empty());
-    assert!(history.entries.len() < 20);
-    assert_eq!(history.entries.last().unwrap().superseded_unix, 19);
+    assert!(history.entries.len() < 32);
+    assert_eq!(history.entries.last().unwrap().superseded_unix, 31);
     assert_eq!(
         history.entries.first().unwrap().superseded_unix,
-        20 - history.entries.len() as u64
+        32 - history.entries.len() as u64
     );
-    // A cap below a single entry empties the ring but still serializes
-    // the envelope.
-    let mut tiny = PolicyHistory {
-        version: POLICY_HISTORY_VERSION,
-        entries: vec![entry(1)],
+    // One entry alone over the cap empties the ring, and the empty ring still encodes.
+    let mut oversized = PolicyHistory {
+        entries: vec![entry(1, 300 * 1024)],
     };
-    let bytes = history_bytes_capped(&mut tiny, 60).unwrap();
-    assert!(tiny.entries.is_empty());
-    assert!(serde_json::from_slice::<PolicyHistory>(&bytes).is_ok());
+    evict_to_fit(&mut oversized);
+    assert!(oversized.entries.is_empty());
+    assert_eq!(
+        PolicyHistory::decode(&oversized.encode().unwrap()).unwrap(),
+        oversized
+    );
 }
 
 #[test]
@@ -576,7 +552,7 @@ fn a_corrupt_history_file_never_blocks_policy_writes() {
     seed_store(1, &PolicyValues::default(), None);
     fs::write(PolicyHistory::path(), b"garbage, not json").unwrap();
     // Reading it fails closed for the (future) rollback surface...
-    assert!(load_history().is_err());
+    assert!(PolicyHistory::load().is_err());
     // ...but the enforcement paths and both seams stay fully functional:
     // the writer logs, replaces the ring, and the policy writes land.
     assert!(PolicyStore::load().unwrap().is_some());
@@ -596,7 +572,7 @@ fn a_corrupt_history_file_never_blocks_policy_writes() {
     )
     .unwrap();
     // The fresh ring holds the records superseded after the corruption.
-    assert_eq!(load_history().unwrap().unwrap().entries.len(), 2);
+    assert_eq!(PolicyHistory::load().unwrap().unwrap().entries.len(), 2);
 }
 
 #[test]
@@ -968,8 +944,7 @@ fn restrict_bounds_the_merged_disabled_tools() {
 fn store_write_refuses_bytes_over_the_read_cap() {
     let _dir = scratch_runtime_dir("policy-write-cap");
     let store = PolicyStore {
-        version: POLICY_STORE_VERSION,
-        baseline_b64: "A".repeat(POLICY_MAX_BYTES),
+        baseline_b64: "A".repeat(<PolicyStore as Record>::MAX_BYTES),
         sig_b64: None,
         key_id: None,
         overlay: None,
@@ -1001,7 +976,7 @@ fn clear_baseline_removes_the_store_and_keeps_history() {
     assert!(PolicyStore::load().unwrap().is_none());
     // The disposed record - baseline, sig, key id, AND overlay - survives
     // in the history ring as the re-signable draft.
-    let history = load_history().unwrap().unwrap();
+    let history = PolicyHistory::load().unwrap().unwrap();
     assert_eq!(history.entries.len(), 1);
     let entry = &history.entries[0];
     assert_eq!(entry.baseline_b64, seeded.baseline_b64);
@@ -1015,7 +990,7 @@ fn clear_baseline_is_a_noop_without_a_store() {
     let _dir = scratch_runtime_dir("policy-clear-baseline-empty");
     ipc::with_runtime_lock(clear_baseline_locked).unwrap();
     assert!(PolicyStore::load().unwrap().is_none());
-    assert!(load_history().unwrap().is_none());
+    assert!(PolicyHistory::load().unwrap().is_none());
 }
 
 #[test]

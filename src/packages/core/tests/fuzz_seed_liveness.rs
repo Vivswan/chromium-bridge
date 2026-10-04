@@ -13,7 +13,9 @@
 use std::path::Path;
 
 use chromium_bridge_core::identity::NATIVE_HOST_ID;
+use chromium_bridge_core::policy::{PolicyHistory, PolicyStore};
 use chromium_bridge_core::registration::{manifest_ownership, Ownership};
+use chromium_bridge_core::runtime_record::RuntimeRecord as _;
 
 #[test]
 fn every_seed_still_classifies_as_its_prefix_claims() {
@@ -95,4 +97,33 @@ fn json_protocol_dictionary_carries_the_current_mcp_literals() {
              fuzzer keeps synthesizing modern-era frames"
         );
     }
+}
+
+/// The `policy_doc` seeds aimed at the record envelope carry a literal version, and the version the
+/// production decoder accepts is the ladder length in the core; a new rung would silently turn the
+/// happy-path seeds into refused files and the fuzzer would stop reaching the store branch.
+#[test]
+fn policy_record_seeds_still_reach_the_branch_they_were_minted_for() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/seeds/policy_doc");
+    let seed = |name: &str| std::fs::read(dir.join(name)).expect("policy_doc seed is readable");
+    for name in ["store_signed", "store_truncated_b64"] {
+        assert!(
+            PolicyStore::decode(&seed(name)).is_ok(),
+            "seed {name} no longer loads as a store envelope; re-mint it at the current version"
+        );
+    }
+    let unknown_field = PolicyStore::decode(&seed("store_unknown_field")).unwrap_err();
+    assert!(
+        unknown_field.to_string().contains("unknown field `surprise`"),
+        "seed store_unknown_field must be refused for its extra field, not earlier: {unknown_field}"
+    );
+    // Positive control: the same envelope minus the extra field is a loadable store.
+    let mut without: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&seed("store_unknown_field")).unwrap();
+    without.remove("surprise");
+    assert!(PolicyStore::decode(&serde_json::to_vec(&without).unwrap()).is_ok());
+    assert!(
+        PolicyHistory::decode(&seed("history")).is_ok(),
+        "seed history no longer loads as a ring; re-mint it at the current version"
+    );
 }
