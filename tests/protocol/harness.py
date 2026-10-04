@@ -9,8 +9,10 @@ every process a test started.
 
 Safety rule: every binary spawned here runs inside a private, per-run runtime
 dir (`isolate`), so the lock, socket, pairing state, and broker logic can
-never reach the developer's real bridge. The spawners refuse to run before
-isolation has taken, and the dir is removed at interpreter exit on every path.
+never reach the developer's real bridge. `isolate` proves the dir took by
+asking the binary itself (`doctor`) where its lock resolves, every child
+starts through the one `spawn` that re-checks the env it will see, and the
+dir is removed at interpreter exit on every path.
 
 Stdlib only, on purpose: an independent implementation of the protocols with
 no dependencies is what makes these suites catch framing and encoding bugs the
@@ -86,21 +88,38 @@ def new_runtime_dir(prefix):
 
 def isolate(prefix):
     """Point every future subprocess at a fresh private runtime dir and prove
-    it took; refuse to run otherwise."""
+    it took; refuse to run otherwise. The proof is the binary's own word: a
+    runtime_dir() that read a variable this env does not set would resolve
+    the lock outside the dir, and `doctor` would say so."""
     global RUNDIR, LOCK
     rundir = new_runtime_dir(prefix)
     os.environ.update(runtime_env(rundir))
     lock = lock_path(rundir)
     if not (os.path.isdir(rundir) and within(rundir, tempfile.gettempdir())):
         sys.exit("REFUSING TO RUN: isolation dir is not a fresh temp dir")
-    if os.environ.get(runtime_dir_var()) != rundir:
-        sys.exit(f"REFUSING TO RUN: {runtime_dir_var()} is not the isolation dir")
     if not within(lock, rundir):
         sys.exit("REFUSING TO RUN: lock path escaped the isolation dir")
     RUNDIR, LOCK = rundir, lock
+    resolved = binary_lock_path()
+    if os.path.realpath(resolved) != os.path.realpath(lock):
+        sys.exit(f"REFUSING TO RUN: the binary resolves its lock to {resolved}, not {lock}")
     print(f"[isolation] per-run runtime dir: {rundir}", file=sys.stderr)
     print(f"[isolation] lock path:           {lock}", file=sys.stderr)
     return rundir
+
+
+DOCTOR_LOCK_LINE = "lock file:"
+
+
+def binary_lock_path():
+    """Where the binary resolves its lock under this process's env, read off
+    the `doctor` report it prints for any state of the runtime dir."""
+    report = run_cli(["doctor"])
+    for line in report.stdout.splitlines():
+        if line.startswith(DOCTOR_LOCK_LINE):
+            return line[len(DOCTOR_LOCK_LINE):].strip()
+    sys.exit(f"REFUSING TO RUN: doctor printed no {DOCTOR_LOCK_LINE!r} line:\n"
+             f"{report.stdout}{report.stderr}")
 
 
 def require_isolated(env=None, platform=os.name):
@@ -392,12 +411,38 @@ def _drain(proc, markers=()):
     proc.drain.start()
 
 
-def start_server(bin_path=None, env=None):
-    """Spawn an MCP server (text stdio; its stderr is drained into err_lines).
-    `bin_path` lets the attestation tests run a copy of the binary."""
+def spawn(args, env=None, bin_path=None, **popen):
+    """The one place the binary starts, so no child runs before the isolation
+    check passes on the env it will see. `bin_path` runs a copy of the binary
+    (the attestation tests)."""
     require_isolated(env)
-    proc = subprocess.Popen([bin_path or BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+    return subprocess.Popen([bin_path or BIN, *args], env=env, **popen)
+
+
+def run_cli(args, env=None, input=None, stdin=None, check=False, timeout=15):
+    """A CLI subcommand run to completion. `stdin` replaces the pipe `input`
+    would be written to: the presence floor reads its phrase from a terminal,
+    so run_with_cli_presence passes a pty here."""
+    if stdin is None:
+        stdin = subprocess.PIPE if input is not None else subprocess.DEVNULL
+    p = spawn(args, env=env, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+              text=True, encoding="utf-8")
+    try:
+        out, err = p.communicate(input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        raise
+    result = subprocess.CompletedProcess(p.args, p.returncode, out, err)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"{args[0]} failed ({result.returncode}): {err}")
+    return result
+
+
+def start_server(bin_path=None, env=None):
+    """Spawn an MCP server (text stdio; its stderr is drained into err_lines)."""
+    proc = spawn([], env=env, bin_path=bin_path, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                 stderr=subprocess.PIPE, text=True, encoding="utf-8")
     _drain(proc)
     return proc
 
@@ -422,12 +467,11 @@ def start_bridge_host(label=None, env=None, bin_path=None):
     because it is the same binary; this side plays the extension. `label` is
     the per-browser identity (`--label`); None lands in the "default" slot.
     nh.connected / nh.ready are set from the stderr markers."""
-    require_isolated(env)
-    cmd = [bin_path or BIN, "--native-host"]
+    args = ["--native-host"]
     if label is not None:
-        cmd += ["--label", label]
-    nh = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, env=env)
+        args += ["--label", label]
+    nh = spawn(args, env=env, bin_path=bin_path, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+               stderr=subprocess.PIPE)
     nh.connected = threading.Event()
     nh.ready = threading.Event()
     _drain(nh, ((HOST_CONNECTED, nh.connected), (HOST_READY, nh.ready)))
@@ -485,11 +529,9 @@ def reap(proc, timeout=5):
 
 
 def connect_bridge(lf, timeout=5):
-    """A raw connection to the bridge socket (Unix-domain on Unix, loopback TCP
-    on Windows): what a foreign, non-binary process would do."""
-    if os.name == "nt":
-        host, port = lf["endpoint"].rsplit(":", 1)
-        return socket.create_connection((host, int(port)), timeout=timeout)
+    """A raw connection to the Unix-domain bridge socket: what a foreign,
+    non-binary process would do. Unix only (Windows bridges over a named
+    pipe); callers skip through skip_unless_unix."""
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(timeout)
     s.connect(lf["endpoint"])
@@ -635,8 +677,7 @@ def _probe_enclave_key(env):
     if sys.platform != "darwin":
         return False
     try:
-        r = subprocess.run([BIN, "enclave-status"], capture_output=True,
-                           text=True, env=env, timeout=10)
+        r = run_cli(["enclave-status"], env=env, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return True
     if r.returncode != 0:
@@ -655,31 +696,18 @@ def run_with_cli_presence(args, phrase="release", check=True, timeout=15, env=No
     """Run a capability-restoring subcommand (`unkill`, `pair-client`) through
     its presence floor: with no enrollment key the hardware rung is
     Unavailable and the CLI floor reads the confirmation phrase from a
-    terminal, so the command runs on a pty and the phrase is typed. Callers
-    guard with enclave_key_present(). Unix only."""
+    terminal, so the command runs on a pty with the phrase already typed (the
+    pty queues it until the child reads). Callers guard with
+    enclave_key_present(). Unix only."""
     import pty
 
     master, slave = pty.openpty()
     try:
-        p = subprocess.Popen([BIN, *args], stdin=slave,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, encoding="utf-8", env=env)
-        os.close(slave)
-        slave = -1
         os.write(master, (phrase + "\n").encode())
-        try:
-            out, err = p.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            p.kill()
-            out, err = p.communicate()
+        return run_cli(args, env=env, stdin=slave, check=check, timeout=timeout)
     finally:
-        if slave >= 0:
-            os.close(slave)
+        os.close(slave)
         os.close(master)
-    result = subprocess.CompletedProcess([BIN, *args], p.returncode, out, err)
-    if check and result.returncode != 0:
-        raise RuntimeError(f"{args[0]} failed ({result.returncode}): {err}")
-    return result
 
 
 def runtime_file(name):
@@ -743,15 +771,16 @@ def capture_tools_list():
 
 class BridgeCase(unittest.TestCase):
     """Spawn helpers that register their cleanup, so a failing assertion never
-    leaks a server or host past the test."""
+    leaks a server or host past the test. A case table calls doCleanups()
+    between its rows, so only one row's processes are alive at a time."""
 
     maxDiff = None
 
-    def server(self, env=None, bin_path=None, wait=True, clear_stale_lock=True):
+    def server(self, env=None, bin_path=None, wait=True, clear_lock=True):
         """A fresh MCP server, reaped at cleanup. With `wait`, the server must
-        write its lock, kept on `proc.lock`. A stale lock is cleared first
-        unless the test is about recovering from one."""
-        if clear_stale_lock:
+        write its lock, kept on `proc.lock`. Whatever lock is on disk is
+        removed first, unless the test is about the server replacing one."""
+        if clear_lock:
             remove_lock(env)
         proc = start_server(bin_path=bin_path, env=env)
         self.addCleanup(reap, proc)
@@ -803,7 +832,7 @@ class BridgeCase(unittest.TestCase):
 
     def skip_unless_unix(self, what):
         if os.name == "nt":
-            self.skipTest(f"{what} is Unix-only (Windows keeps loopback TCP)")
+            self.skipTest(f"{what} is Unix-only (Windows bridges over a named pipe)")
 
     def skip_if_enrolled(self):
         """The presence floor is driven on a pty; an enrolled Secure Enclave key

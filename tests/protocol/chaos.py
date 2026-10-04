@@ -173,6 +173,7 @@ class Faults(ChaosCase):
                 self.assertIsNone(srv.poll(), "the server survived")
                 self.assertEqual(self.bounded("ping", lambda: c.ping(_id=201 + i), 15), rpc_result(201 + i, {}))
                 self.assertRoundTrip(c, self.host(), f"C2 OK {i}", 203 + i)
+            self.doCleanups()
 
     def test_c3_reconnect_storm(self):
         """40 hosts connecting and dying leave the server healthy with a bounded
@@ -221,7 +222,7 @@ class Faults(ChaosCase):
 
         outcome = self.bounded("the client's read after the server died", read_resp, 15)
         self.assertEqual(outcome[0], "eof", f"EOF or broken pipe, not a response: {outcome}")
-        srv2 = self.server(clear_stale_lock=False)
+        srv2 = self.server(clear_lock=False)
         self.assertRoundTrip(self.mcp_ready(srv2), self.host(), "C5 Recovered", 52)
 
     def test_c6_peer_death_in_the_handshake_window(self):
@@ -267,7 +268,7 @@ class Faults(ChaosCase):
         h.kill(srv)
         self.assertEqual((os.path.exists(h.LOCK), os.path.exists(endpoint)), (True, True),
                          "lock and socket left stale after SIGKILL")
-        srv2 = self.server(clear_stale_lock=False)
+        srv2 = self.server(clear_lock=False)
         self.assertTrue(os.path.exists(srv2.lock["endpoint"]), "the next server's socket exists")
         self.assertRoundTrip(self.mcp_ready(srv2), self.host(), "C7 OK", 701)
 
@@ -295,8 +296,7 @@ class Coexistence(ChaosCase):
                     self.assertTrue(os.path.exists(lf["endpoint"]), "the broker's socket exists")
                 relay = next(s for s in servers if s is not owner)
                 self.assertRoundTrip(self.mcp_ready(relay), self.host(), "C4 Coexist", 400 + rnd)
-                for s in servers:
-                    h.reap(s)
+            self.doCleanups()
 
     def test_c9_relay_attach_drop_churn(self):
         """Batches of relays attached and SIGKILLed never underflow or wedge the
@@ -332,8 +332,7 @@ class Enforcement(ChaosCase):
         broker: no wedged socket owner is left behind."""
         broker, cb, nh = self.enrolled_broker()
         self.assertRoundTrip(cb, nh, "C10-before", 1000)
-        subprocess.run([h.BIN, "revoke-client", "--name", "pytest"], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        h.run_cli(["revoke-client", "--name", "pytest"], check=True)
         cb.send({"jsonrpc": "2.0", "id": 1001, "method": "tools/call",
                  "params": {"name": "tab_list", "arguments": {}}})
         self.assertEqual(self.bounded("the revoked call", broker.stdout.readline, 10), "",
@@ -351,7 +350,7 @@ class Enforcement(ChaosCase):
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         self.assertRoundTrip(cb, nh, "C12-before", 1100)
         self.in_flight(cb, nh, 1101)
-        subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        h.run_cli(["kill"], check=True)
         self.assertEqual(self.bounded("the in-flight call", cb.recv, 15),
                          tool_error(1101, "CONNECTION_LOST", h.CONNECTION_LOST))
         self.assertEqual(self.bounded("the next call", lambda: cb.call("tab_list", {}, _id=1102), 10),
@@ -373,12 +372,12 @@ class Enforcement(ChaosCase):
             pass
         os.mkdir(audit_path)
         self.assertRoundTrip(cb, nh, "C13-broken-sink", 1200)
-        kill = subprocess.run([h.BIN, "kill"], capture_output=True, text=True)
+        kill = h.run_cli(["kill"])
         self.assertEqual(kill.returncode, 0, kill.stderr)
         self.assertEqual(cb.call("tab_list", {}, _id=1201), tool_error(1201, "BRIDGE_KILLED", h.BRIDGE_KILLED))
         h.run_with_cli_presence(["unkill"])
         os.rmdir(audit_path)
-        subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        h.run_cli(["kill"], check=True)
         h.run_with_cli_presence(["unkill"])
         cb.call("tab_list", {}, _id=1202)
         deadline = time.time() + 5

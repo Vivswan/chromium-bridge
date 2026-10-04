@@ -18,7 +18,6 @@ each test pins is its first docstring line.
 """
 import json
 import os
-import subprocess
 import time
 import unittest
 
@@ -108,6 +107,7 @@ class ModernEra(E2ECase):
                 McpClient(mcp).send(first)
                 self.assertEqual(h.read_reply_or_eof(mcp), "", "no reply, EOF")
                 self.assertExits(mcp, 5, "the server closed the connection")
+            self.doCleanups()
         mcp = self.server()
         c = McpClient(mcp)
         self.assertEqual(c.ping(_id=1), rpc_result(1, {}))
@@ -226,6 +226,7 @@ class RoundTrips(E2ECase):
                 r = c.call(tool, args, _id=10 + i)
                 self.assertEqual(served.request(), forwarded(tool, args))
                 self.assertEqual(r, tool_result(10 + i, data))
+            self.doCleanups()
 
 
 class ControlFrames(E2ECase):
@@ -307,7 +308,7 @@ class KillSwitch(E2ECase):
         nh = self.host()
         self.assertRoundTrip(c, nh, 80, "Before Kill")
 
-        kill = subprocess.run([h.BIN, "kill"], capture_output=True, text=True)
+        kill = h.run_cli(["kill"])
         self.assertEqual(kill.returncode, 0, kill.stderr)
         self.assertEqual(c.call("tab_list", {}, _id=81),
                          tool_error(81, "BRIDGE_KILLED", h.BRIDGE_KILLED))
@@ -351,7 +352,7 @@ class KillSwitch(E2ECase):
         cli_release = next(rec for rec in h.audit_records()
                            if rec.get("event_kind") == "kill_release" and rec.get("surface") == "cli")
         self.assertIn("auth=cli_confirm", cli_release["detail"], "the release names its presence rung")
-        shown = subprocess.run([h.BIN, "audit"], capture_output=True, text=True)
+        shown = h.run_cli(["audit"])
         self.assertEqual(shown.returncode, 0, shown.stderr)
         self.assertIn("kill_engage", shown.stdout)
         self.assertIn("kill_release", shown.stdout)
@@ -389,10 +390,8 @@ class Broker(E2ECase):
         with open(h.LOCK, "w", encoding="utf-8") as f:
             json.dump({"endpoint": "/nonexistent/chromium-bridge/run.sock",
                        "secret": "0" * 32, "pid": 4294967295}, f)
-        mcp = h.start_server()
-        self.addCleanup(h.reap, mcp)
-        lock = h.wait_lock(mcp)
-        self.assertEqual(lock and lock["pid"], mcp.pid, "the server replaced the dead pid's lock")
+        mcp = self.server(clear_lock=False)
+        self.assertEqual(mcp.lock["pid"], mcp.pid, "the server replaced the dead pid's lock")
 
     def test_foreign_peer_is_refused_by_attestation(self):
         """A non-binary peer on the bridge socket is dropped before any
