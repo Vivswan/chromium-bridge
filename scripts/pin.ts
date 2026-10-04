@@ -46,6 +46,11 @@ function prototoolsPins(root: Record<string, unknown>, tool: string): string[] {
   if (typeof value !== "string" || value === "") {
     throw new Error(`pin: .prototools pins ${tool} to an empty or non-string value`);
   }
+  // A multi-line TOML string would print as two lines, and the consumers' `>> "$GITHUB_OUTPUT"` would
+  // keep the last `proto=` record.
+  if (/\s/.test(value)) {
+    throw new Error(`pin: .prototools pins ${tool} to a value with whitespace`);
+  }
   return [value];
 }
 

@@ -138,6 +138,12 @@ const cases: Case[] = [
     tool: "proto",
     outcome: { error: /empty or non-string/ },
   },
+  {
+    name: "a multi-line string is refused: a value with whitespace would print two lines, and the last `proto=` record written to GITHUB_OUTPUT would win",
+    prototools: ['proto = """0.58.2', '9.9.9"""'],
+    tool: "proto",
+    outcome: { error: /whitespace/ },
+  },
   { name: "a tool pinned nowhere", tool: "node", outcome: { error: /pinned in neither/ } },
   {
     name: "a commented-out key is not a pin",
