@@ -1,17 +1,18 @@
-//! Host-handled control frames on the native-messaging channel: enclave
-//! enrollment and presence, client-allowlist admin, kill switch and audit,
-//! policy and shared language. [`classify_nm_frame`] routes each inbound
-//! frame: these types are answered by the host itself, everything else is
-//! forwarded to the MCP server.
+//! Host-handled control frames on the native-messaging channel: enclave enrollment and presence,
+//! client-allowlist admin, kill switch and audit, policy and shared language. [`classify_nm_frame`]
+//! routes each inbound frame; [`FrameDisposition`] states what reaches the MCP server.
 
+use std::fmt;
+
+use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Enrollment (ADR-0021) and per-action presence (ADR-0031) frames, answered by the native host itself: the
-/// stdin->socket pump signs a challenge with the Secure Enclave key (raising the user-presence prompt) and
-/// never forwards these frames to the MCP server. The host keeps no replay state and signs any valid challenge,
-/// so freshness is the extension's job: a fresh single-use CSPRNG nonce per challenge, a proof accepted only for
-/// the outstanding nonce and verified against its PINNED key, never the `pubkey` field (trustworthy only during
+/// Enrollment and per-action presence frames, answered by the native host itself: the stdin->socket pump
+/// signs a challenge with the Secure Enclave key (raising the user-presence prompt) and never forwards these
+/// frames to the MCP server. The host keeps no replay state and signs any valid challenge, so freshness is
+/// the extension's job: a fresh single-use CSPRNG nonce per challenge, a proof accepted only for the
+/// outstanding nonce and verified against its PINNED key, never the `pubkey` field (trustworthy only during
 /// the user-verified enrollment ceremony).
 ///
 /// ```text
@@ -25,7 +26,7 @@ use serde_json::Value;
 /// error reason     -> REASON_CODES; presence adds bridge_killed and busy (the host refuses, without prompting,
 ///                     while the kill switch is engaged or unreadable, or another presence round is in flight)
 /// enclave_revoke   -> deletes the enrollment key, then best-effort clears the recorded policy baseline and bumps the
-///                     revocation epoch (ADR-0025); not presence-gated (it only reduces capability). Answered
+///                     revocation epoch; not presence-gated (it only reduces capability). Answered
 ///                     enclave_revoked once the key is gone (even when none existed, and even when the baseline clear
 ///                     or epoch bump failed: those are only logged); enclave_error carries the key deletion's
 ///                     reason code (keychain_error, also for an unavailable runtime lock; unsupported_platform off macOS)
@@ -52,14 +53,11 @@ pub enum EnclaveControl {
     EnclaveError {
         reason: String,
     },
-    /// Extension -> host: delete the enrollment key (ADR-0025). An empty
-    /// struct variant so `deny_unknown_fields` applies (unit variants of
-    /// internally tagged enums silently skip it).
+    /// Extension -> host: delete the enrollment key.
     EnclaveRevoke {},
     /// Host -> extension: the enrollment key is gone (ack or proactive push).
     EnclaveRevoked {},
-    /// Extension -> host: ask for one per-action user-presence approval
-    /// (ADR-0031).
+    /// Extension -> host: ask for one per-action user-presence approval.
     PresenceChallenge {
         nonce: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,12 +76,12 @@ pub enum EnclaveControl {
     },
 }
 
-/// Host-admin frames (ADR-0025/0030), answered by the native host itself exactly like [`EnclaveControl`]:
-/// never forwarded to the MCP server, and dropped if the server leg tries to inject one. They give the
-/// options UI the trusted-client allowlist, the global kill switch, and the audit trail, and arrive only from
-/// the extension Chrome connected to this host (`allowed_origins`). List/revoke and `kill_engage` only reduce
-/// capability; `kill_release` would RESTORE it, so the host refuses it (ADR-0032 decision 6) but keeps it
-/// parsed, so a shipped extension gets an audited refusal, never a silent drop.
+/// Host-admin frames, answered by the native host itself exactly like [`EnclaveControl`]: never forwarded
+/// to the MCP server, and dropped if the server leg tries to inject one. They give the options UI the
+/// trusted-client allowlist, the global kill switch, and the audit trail, and arrive only from the extension
+/// Chrome connected to this host (`allowed_origins`). List/revoke and `kill_engage` only reduce capability;
+/// `kill_release` would RESTORE it, so the host refuses it but keeps it parsed, so a shipped extension gets
+/// an audited refusal, never a silent drop.
 ///
 /// ```text
 /// client_list         -> client_list_result { ok, enrolled, clients, error? }; a load failure (including the
@@ -122,7 +120,7 @@ pub enum AdminControl {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: report the kill-switch state (ADR-0030).
+    /// Extension -> host: report the kill-switch state.
     KillStatus {},
     /// Extension -> host: engage the global kill switch.
     KillEngage {},
@@ -139,8 +137,8 @@ pub enum AdminControl {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: one extension-side decision for the audit trail
-    /// (ADR-0030). Fire-and-forget; no reply frame.
+    /// Extension -> host: one extension-side decision for the audit trail.
+    /// Fire-and-forget; no reply frame.
     AuditEvent {
         kind: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,21 +149,16 @@ pub enum AdminControl {
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
-        /// Per-confirmation correlation id (ADR-0030); see the module docs.
+        /// Per-confirmation correlation id; see the module docs.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
 }
 
-/// The kill-switch state as the host reports it, before it is flattened onto
-/// the pinned wire triple: exactly readable-with-verdict or
-/// unreadable-with-error. The wire variant
-/// ([`AdminControl::KillStatusResult`]) stays `{ ok, killed?, error? }` for
-/// contract stability, but hand-assembling it at every reply site let the
-/// mixtures the extension must never see - `ok: true` with no `killed`
-/// claim, `ok: false` asserting one anyway - compile. Every producer builds
-/// one of these instead and lets [`into_frame`](KillStatus::into_frame) emit
-/// the only two flat shapes the contract means.
+/// The kill-switch state as the host reports it: exactly readable-with-verdict or unreadable-with-error.
+/// Every producer builds one of these and lets [`into_frame`](KillStatus::into_frame) flatten it onto the
+/// wire triple, so the mixtures the extension must never see (`ok: true` with no `killed` claim,
+/// `ok: false` asserting one) are unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KillStatus {
     /// The revocation record was readable; `killed` is the definite verdict.
@@ -195,47 +188,10 @@ impl KillStatus {
     }
 }
 
-/// Why the host has no usable policy to report: the structured `reason` on a
-/// `policy_current { ok: false }` frame.
-///
-/// ```text
-/// absent                    -> a capable host that genuinely has no baseline yet
-/// damaged, unreadable       -> the store is present but unusable; the extension keeps the posture it already
-///                              has (the deny baseline pre-cutover, its stored effective policy after)
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicyUnavailableReason {
-    /// No policy baseline exists on this host yet (the pre-cutover state).
-    Absent,
-    /// A baseline exists but is unparsable, or its overlay relaxes it: the
-    /// store is present but its content is damaged or tampered.
-    Damaged,
-    /// The store could not be read (an I/O error distinct from absence).
-    Unreadable,
-}
-
-impl PolicyUnavailableReason {
-    /// The camelCase wire token, matching the extension's pinned enum. Single
-    /// words, so camelCase is the lowercase spelling.
-    pub fn wire(self) -> &'static str {
-        match self {
-            PolicyUnavailableReason::Absent => "absent",
-            PolicyUnavailableReason::Damaged => "damaged",
-            PolicyUnavailableReason::Unreadable => "unreadable",
-        }
-    }
-}
-
-/// The policy state the host reports, before it is flattened onto the pinned
-/// `policy_current` wire triple (ADR-0032 decision 4) - the [`KillStatus`]
-/// discipline applied to the policy push. The wire variant
-/// ([`PolicyControl::PolicyCurrent`]) stays `{ ok, baseline?, sig?, overlay?,
-/// reason?, error? }` for contract stability, but hand-assembling it let the
-/// mixtures the extension must never see compile: `ok: false` carrying a
-/// baseline, a `sig` with no baseline, an `ok: true` with an error. Every
-/// producer builds one of these instead and lets
-/// [`into_frame`](PolicyStatus::into_frame) emit the only two flat shapes the
-/// contract means.
+/// The policy state the host reports, the [`KillStatus`] discipline applied to the policy push: every
+/// producer builds one of these and lets [`into_frame`](PolicyStatus::into_frame) flatten it onto the wire
+/// frame, so an `ok: false` carrying a baseline, a `sig` with no baseline, or an `ok: true` with an error
+/// is unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyStatus {
     /// The store was readable: the EXACT signed baseline bytes (base64), the
@@ -247,20 +203,14 @@ pub enum PolicyStatus {
         sig_b64: Option<String>,
         overlay: Option<crate::policy::PolicyOverlay>,
     },
-    /// No usable policy: `ok: false` with an error, a structured `reason` (`None` only when the frame
-    /// answers a malformed request rather than reporting a store state), and NO baseline claim, so the
-    /// extension keeps its deny baseline rather than trusting bytes nobody vouched for.
-    Unavailable {
-        reason: Option<PolicyUnavailableReason>,
-        error: String,
-    },
+    /// No usable policy: `ok: false` with an error and NO baseline claim, so the extension keeps its deny
+    /// baseline rather than trusting bytes nobody vouched for.
+    Unavailable { error: String },
 }
 
 impl PolicyStatus {
-    /// The pinned `policy_current` wire frame for this state: `baseline` is
-    /// present exactly when the store was readable, `error` and the structured
-    /// `reason` exactly when not, and a `sig` never appears without its
-    /// `baseline`.
+    /// The pinned `policy_current` wire frame for this state: `baseline` is present exactly when the store
+    /// was readable, `error` exactly when not, and a `sig` never appears without its `baseline`.
     pub fn into_frame(self) -> PolicyControl {
         match self {
             PolicyStatus::Present {
@@ -272,39 +222,36 @@ impl PolicyStatus {
                 baseline: Some(baseline_b64),
                 sig: sig_b64,
                 overlay,
-                reason: None,
                 error: None,
             },
-            PolicyStatus::Unavailable { reason, error } => PolicyControl::PolicyCurrent {
+            PolicyStatus::Unavailable { error } => PolicyControl::PolicyCurrent {
                 ok: false,
                 baseline: None,
                 sig: None,
                 overlay: None,
-                reason: reason.map(|r| r.wire().to_string()),
                 error: Some(error),
             },
         }
     }
 }
 
-/// Policy and language frames (ADR-0032), host-handled exactly like [`EnclaveControl`] and
-/// [`AdminControl`]: never forwarded to the MCP server, dropped when the server leg tries to inject one.
-/// The host pushes `policy_current` and `lang_current` unsolicited, at every connect and on every observed
-/// change, which is why those two carry no request disposition: one arriving inbound is an injection.
+/// Policy and language frames, host-handled exactly like [`EnclaveControl`] and [`AdminControl`]: never
+/// forwarded to the MCP server, dropped when the server leg tries to inject one. The host pushes
+/// `policy_current` and `lang_current` unsolicited, at every connect and on every observed change, which is
+/// why those two are not requests: one arriving inbound is an injection.
 ///
 /// ```text
-/// policy_get         -> policy_current; sent only on a connection where the host has already pushed a
-///                       policy frame (never speak first, decision 4): an old host would `Forward` it and
-///                       the MCP server's strict `BridgeResp` parse would tear the browser leg down
-/// lang_get/lang_set  -> lang_current { value, seq }; `seq` suppresses the sender's own echo (decision 7)
+/// policy_get         -> policy_current; the extension sends it only on a connection where the host has
+///                       already pushed a policy frame (never speak first): a host that does not know the
+///                       frame would forward it, and the MCP server's strict `BridgeResp` parse would tear
+///                       the browser leg down
+/// lang_get/lang_set  -> lang_current { value, seq }; `seq` suppresses the sender's own echo
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PolicyControl {
-    /// Extension -> host: request the current policy. An empty struct
-    /// variant so `deny_unknown_fields` applies (unit variants of internally
-    /// tagged enums silently skip it).
+    /// Extension -> host: request the current policy.
     PolicyGet {},
     /// Host -> extension: the policy state (connect/change push, and the
     /// reply to `policy_get`).
@@ -319,10 +266,6 @@ pub enum PolicyControl {
         /// fails the whole frame parse, fail closed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         overlay: Option<crate::policy::PolicyOverlay>,
-        /// Why no policy is available, when `ok: false`: the [`PolicyUnavailableReason`] wire token, absent on
-        /// `ok: true`. OPTIONAL: an old host omits it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -335,475 +278,316 @@ pub enum PolicyControl {
     LangCurrent { value: String, seq: u64 },
 }
 
-/// Ties every control-frame variant to its serde `type` tag, once. Expands to
-/// a tag-set constant and a `wire_tag` method whose match is EXHAUSTIVE over
-/// the enum - no wildcard arm - so adding a variant fails to compile right
-/// here until its tag joins the list, and the new tag then flows into
-/// [`classify_nm_frame`] and [`host_control_type`] automatically (both consume
-/// the constant). The `every_control_variant_tag_is_derived_and_recognized`
-/// test asserts each listed tag is the tag serde actually emits, so the list
-/// cannot drift from the `#[serde(tag = "type")]` attributes either.
-macro_rules! control_wire_tags {
-    ($Enum:ident, $TAGS:ident, { $($Variant:ident => $tag:literal),+ $(,)? }) => {
-        /// The serde `type` tag of every variant, in declaration order.
-        /// Emitted by `control_wire_tags!` from the same list as `wire_tag`.
-        pub const $TAGS: &[&str] = &[$($tag),+];
-
-        impl $Enum {
-            /// The serde `type` tag this frame serializes under. The match is
-            /// exhaustive on purpose: a new variant fails to compile until it
-            /// is added to the `control_wire_tags!` list, which is what keeps
-            /// the classifiers' tag set complete.
-            pub fn wire_tag(&self) -> &'static str {
-                match self {
-                    $($Enum::$Variant { .. } => $tag,)+
-                }
-            }
-        }
-    };
-}
-
-control_wire_tags!(EnclaveControl, ENCLAVE_CONTROL_TAGS, {
-    EnclaveChallenge => "enclave_challenge",
-    EnclaveProof => "enclave_proof",
-    EnclaveError => "enclave_error",
-    EnclaveRevoke => "enclave_revoke",
-    EnclaveRevoked => "enclave_revoked",
-    PresenceChallenge => "presence_challenge",
-    PresenceProof => "presence_proof",
-    PresenceError => "presence_error",
-});
-
-control_wire_tags!(AdminControl, ADMIN_CONTROL_TAGS, {
-    ClientList => "client_list",
-    ClientListResult => "client_list_result",
-    ClientRevoke => "client_revoke",
-    ClientRevokeResult => "client_revoke_result",
-    KillStatus => "kill_status",
-    KillEngage => "kill_engage",
-    KillRelease => "kill_release",
-    KillStatusResult => "kill_status_result",
-    AuditEvent => "audit_event",
-});
-
-control_wire_tags!(PolicyControl, POLICY_CONTROL_TAGS, {
-    PolicyGet => "policy_get",
-    PolicyCurrent => "policy_current",
-    LangGet => "lang_get",
-    LangSet => "lang_set",
-    LangCurrent => "lang_current",
-});
-
-/// The host-directed admin REQUEST kinds: the [`AdminControl`] frames the
-/// extension sends and the host must answer. Carried by
-/// [`FrameDisposition::MalformedAdmin`] so the malformed-reply builder matches
-/// exhaustively - the reply frame type provably corresponds to the request
-/// type, with no string catch-all for a new kind to ride into the wrong reply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdminKind {
+/// The wire `type` tag of every host-handled control frame: the variants of [`EnclaveControl`],
+/// [`AdminControl`], and [`PolicyControl`], spelled by serde. Both pumps key on this one set
+/// ([`FrameDisposition`], [`host_control_type`]); the `host_control_tags_mirror_the_wire_enums` test
+/// holds this list to those three enums.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum HostControlTag {
+    EnclaveChallenge,
+    EnclaveProof,
+    EnclaveError,
+    EnclaveRevoke,
+    EnclaveRevoked,
+    PresenceChallenge,
+    PresenceProof,
+    PresenceError,
     ClientList,
+    ClientListResult,
     ClientRevoke,
+    ClientRevokeResult,
     KillStatus,
     KillEngage,
     KillRelease,
-}
-
-/// Ties every [`AdminKind`] variant to its wire tag AND enumerates the full
-/// kind set, from one list - the `control_wire_tags!` idea, specialized to
-/// this unit-variant request-kind enum, where the same list can also
-/// CONSTRUCT the values. `wire_tag`'s match is exhaustive with no wildcard,
-/// so a new variant fails to compile until it joins the list, and joining
-/// the list is the same edit that grows [`AdminKind::ALL`] - the kind set
-/// cannot lag the enum.
-macro_rules! admin_request_kinds {
-    ($($Variant:ident => $tag:literal),+ $(,)?) => {
-        impl AdminKind {
-            /// Every request kind, in declaration order. Emitted by
-            /// `admin_request_kinds!` from the same list as `wire_tag`, so
-            /// it is exhaustive by construction.
-            pub const ALL: &'static [AdminKind] = &[$(AdminKind::$Variant),+];
-
-            /// The wire `type` tag of the request this kind names (for logs
-            /// and the error text in the `ok: false` reply). Exhaustive with
-            /// no wildcard on purpose (see the macro docs), and `const` so
-            /// the assertion below can tie every tag to the derived
-            /// [`ADMIN_CONTROL_TAGS`] at compile time.
-            pub const fn wire_tag(self) -> &'static str {
-                match self {
-                    $(AdminKind::$Variant => $tag,)+
-                }
-            }
-        }
-    };
-}
-
-admin_request_kinds!(
-    ClientList => "client_list",
-    ClientRevoke => "client_revoke",
-    KillStatus => "kill_status",
-    KillEngage => "kill_engage",
-    KillRelease => "kill_release",
-);
-
-/// Compile-time: every [`AdminKind`] tag is one of the derived
-/// [`ADMIN_CONTROL_TAGS`] (the `control_wire_tags!` list the serde
-/// round-trip test pins), and no two kinds share a tag - so `wire_tag`'s
-/// literals cannot drift from the tag machinery. The exact kind<->tag
-/// pairing (which tag names which kind) is pinned at runtime by
-/// `admin_kind_tags_match_their_classification`.
-const _: () = {
-    const fn str_eq(a: &str, b: &str) -> bool {
-        let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
-        if a.len() != b.len() {
-            return false;
-        }
-        while let ([ha, rest_a @ ..], [hb, rest_b @ ..]) = (a, b) {
-            if *ha != *hb {
-                return false;
-            }
-            a = rest_a;
-            b = rest_b;
-        }
-        true
-    }
-    const fn is_admin_control_tag(tag: &str) -> bool {
-        let mut tags = ADMIN_CONTROL_TAGS;
-        while let [head, rest @ ..] = tags {
-            if str_eq(head, tag) {
-                return true;
-            }
-            tags = rest;
-        }
-        false
-    }
-    let mut kinds: &[AdminKind] = AdminKind::ALL;
-    while let [kind, rest @ ..] = kinds {
-        assert!(
-            is_admin_control_tag(kind.wire_tag()),
-            "an AdminKind wire_tag is not a derived AdminControl tag"
-        );
-        let mut later = rest;
-        while let [other, more @ ..] = later {
-            assert!(
-                !str_eq(kind.wire_tag(), other.wire_tag()),
-                "two AdminKind variants share a wire tag"
-            );
-            later = more;
-        }
-        kinds = rest;
-    }
-};
-
-/// The host-directed policy/language REQUEST kinds (ADR-0032): the
-/// [`PolicyControl`] frames the extension sends and the host must answer with
-/// a reply of a matching type. Carried by [`FrameDisposition::MalformedPolicy`]
-/// so the malformed-reply builder matches exhaustively - the same discipline
-/// as [`AdminKind`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicyKind {
+    KillStatusResult,
+    AuditEvent,
     PolicyGet,
+    PolicyCurrent,
     LangGet,
     LangSet,
+    LangCurrent,
 }
 
-/// Ties every [`PolicyKind`] variant to its wire tag AND enumerates the full
-/// kind set from one list - the [`admin_request_kinds!`] idea for the
-/// policy/language request kinds. Exhaustive `wire_tag` with no wildcard, so a
-/// new variant fails to compile until it joins the list.
-macro_rules! policy_request_kinds {
-    ($($Variant:ident => $tag:literal),+ $(,)?) => {
-        impl PolicyKind {
-            /// Every request kind, in declaration order.
-            pub const ALL: &'static [PolicyKind] = &[$(PolicyKind::$Variant),+];
+/// Which way a control frame travels. The browser->host set is the [`HostRequest`] roster; the
+/// `host_request_variants_match_their_wire_enum_variants` test holds the three equal: this table, the
+/// HostRequest variants, and the writer types the extension generates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    BrowserToHost,
+    HostToBrowser,
+}
 
-            /// The wire `type` tag of the request this kind names (for logs
-            /// and the malformed reply). Exhaustive with no wildcard, and
-            /// `const` so the assertion below can tie every tag to the derived
-            /// [`POLICY_CONTROL_TAGS`] at compile time.
-            pub const fn wire_tag(self) -> &'static str {
-                match self {
-                    $(PolicyKind::$Variant => $tag,)+
+impl HostControlTag {
+    /// Which way a frame wearing this tag travels. Exhaustive on purpose: a new tag must say.
+    pub fn direction(self) -> Direction {
+        match self {
+            HostControlTag::EnclaveChallenge
+            | HostControlTag::EnclaveRevoke
+            | HostControlTag::PresenceChallenge
+            | HostControlTag::ClientList
+            | HostControlTag::ClientRevoke
+            | HostControlTag::KillStatus
+            | HostControlTag::KillEngage
+            | HostControlTag::KillRelease
+            | HostControlTag::AuditEvent
+            | HostControlTag::PolicyGet
+            | HostControlTag::LangGet
+            | HostControlTag::LangSet => Direction::BrowserToHost,
+            HostControlTag::EnclaveProof
+            | HostControlTag::EnclaveError
+            | HostControlTag::EnclaveRevoked
+            | HostControlTag::PresenceProof
+            | HostControlTag::PresenceError
+            | HostControlTag::ClientListResult
+            | HostControlTag::ClientRevokeResult
+            | HostControlTag::KillStatusResult
+            | HostControlTag::PolicyCurrent
+            | HostControlTag::LangCurrent => Direction::HostToBrowser,
+        }
+    }
+
+    /// What the host owes a browser frame wearing this tag that does not parse as its [`HostRequest`]: the
+    /// matching result frame with `ok: false` (or an `invalid_challenge` error) where a reply contract
+    /// exists, so the extension's pending request resolves instead of timing out. Exhaustive on purpose: a
+    /// new tag does not compile until it says what it owes.
+    pub fn malformed_reply(self) -> MalformedReply {
+        match self {
+            HostControlTag::EnclaveChallenge => MalformedReply::Send(Box::new(
+                EnclaveControl::EnclaveError {
+                    reason: "invalid_challenge".into(),
                 }
-            }
+                .into(),
+            )),
+            HostControlTag::PresenceChallenge => MalformedReply::Send(Box::new(
+                EnclaveControl::PresenceError {
+                    reason: "invalid_challenge".into(),
+                }
+                .into(),
+            )),
+            HostControlTag::ClientList => MalformedReply::Send(Box::new(
+                AdminControl::ClientListResult {
+                    ok: false,
+                    enrolled: false,
+                    clients: Vec::new(),
+                    error: Some("malformed client_list frame".into()),
+                }
+                .into(),
+            )),
+            HostControlTag::ClientRevoke => MalformedReply::Send(Box::new(
+                AdminControl::ClientRevokeResult {
+                    ok: false,
+                    error: Some("malformed client_revoke frame".into()),
+                }
+                .into(),
+            )),
+            HostControlTag::KillStatus
+            | HostControlTag::KillEngage
+            | HostControlTag::KillRelease => MalformedReply::Send(Box::new(
+                KillStatus::Unreadable {
+                    error: format!("malformed {self} frame"),
+                }
+                .into_frame()
+                .into(),
+            )),
+            HostControlTag::PolicyGet => MalformedReply::Send(Box::new(
+                PolicyStatus::Unavailable {
+                    error: "malformed policy_get frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
+            HostControlTag::LangGet | HostControlTag::LangSet => MalformedReply::LangCurrent,
+            // No error-reply contract: the genuine extension sends the exact empty revoke shape, and an audit
+            // event is fire-and-forget. Dropping fails closed without inventing a misleading reason code.
+            HostControlTag::EnclaveRevoke | HostControlTag::AuditEvent => MalformedReply::Drop,
+            // Host->extension frames: the browser leg never legitimately originates one.
+            HostControlTag::EnclaveProof
+            | HostControlTag::EnclaveError
+            | HostControlTag::EnclaveRevoked
+            | HostControlTag::PresenceProof
+            | HostControlTag::PresenceError
+            | HostControlTag::ClientListResult
+            | HostControlTag::ClientRevokeResult
+            | HostControlTag::KillStatusResult
+            | HostControlTag::PolicyCurrent
+            | HostControlTag::LangCurrent => MalformedReply::Drop,
         }
-    };
+    }
 }
 
-policy_request_kinds!(
-    PolicyGet => "policy_get",
-    LangGet => "lang_get",
-    LangSet => "lang_set",
-);
-
-/// Compile-time: every [`PolicyKind`] tag is one of the derived
-/// [`POLICY_CONTROL_TAGS`], and no two kinds share a tag - so `wire_tag`'s
-/// literals cannot drift from the tag machinery (the [`AdminKind`] assertion,
-/// specialized to the policy request kinds).
-const _: () = {
-    const fn str_eq(a: &str, b: &str) -> bool {
-        let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
-        if a.len() != b.len() {
-            return false;
+impl fmt::Display for HostControlTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Ok(Value::String(tag)) = serde_json::to_value(self) {
+            f.write_str(&tag)
+        } else {
+            f.write_str("?")
         }
-        while let ([ha, rest_a @ ..], [hb, rest_b @ ..]) = (a, b) {
-            if *ha != *hb {
-                return false;
-            }
-            a = rest_a;
-            b = rest_b;
-        }
-        true
     }
-    const fn is_policy_control_tag(tag: &str) -> bool {
-        let mut tags = POLICY_CONTROL_TAGS;
-        while let [head, rest @ ..] = tags {
-            if str_eq(head, tag) {
-                return true;
-            }
-            tags = rest;
-        }
-        false
-    }
-    let mut kinds: &[PolicyKind] = PolicyKind::ALL;
-    while let [kind, rest @ ..] = kinds {
-        assert!(
-            is_policy_control_tag(kind.wire_tag()),
-            "a PolicyKind wire_tag is not a derived PolicyControl tag"
-        );
-        let mut later = rest;
-        while let [other, more @ ..] = later {
-            assert!(
-                !str_eq(kind.wire_tag(), other.wire_tag()),
-                "two PolicyKind variants share a wire tag"
-            );
-            later = more;
-        }
-        kinds = rest;
-    }
-};
-
-/// The fields of one accepted `audit_event` frame (ADR-0030), traveling by
-/// name from [`classify_nm_frame`] to the audit sink. `kind` is already the
-/// typed, extension-owned [`crate::audit::AuditKind`]: classification maps the
-/// wire string through [`crate::audit::extension_kind`], so a frame claiming a
-/// host-owned kind (an admission, a kill) can never be represented as
-/// recordable past this boundary.
-#[derive(Debug)]
-pub struct AuditEventFields {
-    pub kind: crate::audit::AuditKind,
-    pub outcome: Option<String>,
-    pub tool: Option<String>,
-    pub name: Option<String>,
-    pub detail: Option<String>,
-    pub cid: Option<String>,
 }
 
-/// How the native host's stdin->socket pump must treat one inbound frame.
+/// The host's answer to a frame that wears a control tag but does not parse as its request.
 #[derive(Debug)]
-pub enum FrameDisposition {
-    /// Not a control frame: forward to the MCP server unchanged.
-    Forward,
-    /// A well-formed `enclave_challenge`: answer it locally, do not forward.
-    Challenge {
+pub enum MalformedReply {
+    /// No reply contract: dropped and logged, never forwarded.
+    Drop,
+    /// The matching error or `ok: false` result frame.
+    Send(Box<HostReply>),
+    /// `lang_current` with the UNCHANGED value and sequence (a malformed `lang_set` changes nothing), which
+    /// only the host's language store can supply.
+    LangCurrent,
+}
+
+/// A host->extension control frame of any of the three wire enums, serialized as that frame.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum HostReply {
+    Enclave(EnclaveControl),
+    Admin(AdminControl),
+    Policy(PolicyControl),
+}
+
+impl From<EnclaveControl> for HostReply {
+    fn from(frame: EnclaveControl) -> Self {
+        HostReply::Enclave(frame)
+    }
+}
+
+impl From<AdminControl> for HostReply {
+    fn from(frame: AdminControl) -> Self {
+        HostReply::Admin(frame)
+    }
+}
+
+impl From<PolicyControl> for HostReply {
+    fn from(frame: PolicyControl) -> Self {
+        HostReply::Policy(frame)
+    }
+}
+
+/// An audit kind the browser leg may record, parsed through [`crate::audit::extension_kind`]: a frame
+/// claiming a host-owned kind (an admission, a kill) fails the `audit_event` parse and is dropped, so
+/// nothing downstream can record it. The parse is the only constructor; travels as the kind's wire name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ExtensionAuditKind(crate::audit::AuditKind);
+
+impl From<ExtensionAuditKind> for crate::audit::AuditKind {
+    fn from(kind: ExtensionAuditKind) -> Self {
+        kind.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ExtensionAuditKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let kind = String::deserialize(deserializer)?;
+        crate::audit::extension_kind(&kind)
+            .map(ExtensionAuditKind)
+            .ok_or_else(|| {
+                serde::de::Error::custom(format!("{kind:?} is not an extension-owned audit kind"))
+            })
+    }
+}
+
+/// The browser->host frames the host answers itself, parsed once by [`classify_nm_frame`]. Each variant is
+/// the request shape of the same-named [`EnclaveControl`] / [`AdminControl`] / [`PolicyControl`] variant
+/// (the extension's generated writer types come from those); the
+/// `host_request_variants_match_their_wire_enum_variants` test holds them equal. Empty variants are
+/// struct variants (`{}`) because `deny_unknown_fields` skips unit variants of an internally tagged enum.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HostRequest {
+    /// Sign the enrollment challenge. Signing blocks the pump until the user answers the presence prompt,
+    /// accepted because a challenge only arrives during the user-present enrollment ceremony.
+    EnclaveChallenge {
         nonce: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
-    /// A well-formed `enclave_revoke` (ADR-0025): delete the enrollment key
-    /// locally, bump the revocation epoch, reply `enclave_revoked`.
-    RevokeHostKey,
-    /// A well-formed `presence_challenge` (ADR-0031): sign the per-action
-    /// presence statement locally (raising the user-presence prompt), do not
-    /// forward.
+    /// Delete the enrollment key; not presence-gated (it only reduces capability).
+    EnclaveRevoke {},
+    /// Sign one per-action presence statement, on its own thread so a tap never head-of-line blocks the pump.
     PresenceChallenge {
         nonce: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
-    /// A well-formed `client_list` (ADR-0025): report the allowlist.
-    ClientList,
-    /// A well-formed `client_revoke` (ADR-0025): revoke the named client.
-    ClientRevoke { name: String },
-    /// A well-formed `kill_status` (ADR-0030): report the kill-switch state.
-    KillStatus,
-    /// A well-formed `kill_engage` (ADR-0030): engage the kill switch.
-    KillEngage,
-    /// A well-formed `kill_release` (ADR-0030): a request to release the kill
-    /// switch, which the host REFUSES with an audited `kill_status_result`
-    /// (ADR-0032 decision 6 retired the extension release surface; release is
-    /// `chromium-bridge unkill` only).
-    KillRelease,
-    /// A well-formed `audit_event` (ADR-0030) carrying an extension-owned
-    /// kind: record one extension-side decision in the audit trail.
-    /// Fire-and-forget, no reply.
-    AuditEvent(AuditEventFields),
-    /// A well-formed `audit_event` whose `kind` is not extension-owned
-    /// ([`crate::audit::extension_kind`]): the browser leg must not forge
-    /// host-side events (admissions, kills) into the trail. Dropped at
-    /// classification; the offending kind rides along for the forensic log.
-    DropForeignAuditKind { kind: String },
-    /// A control-frame `type` that is not addressed to the host (a stray
-    /// proof/error/revoked/result, or a malformed host-directed frame with no
-    /// defined error reply) - drop it, never forward it.
-    Drop(&'static str),
-    /// Carries the `enclave_challenge` type but does not parse as that frame:
-    /// reply `enclave_error { reason: "invalid_challenge" }`, do not forward.
-    Malformed,
-    /// Carries the `presence_challenge` type but does not parse as that
-    /// frame: reply `presence_error { reason: "invalid_challenge" }`, do not
-    /// forward.
-    MalformedPresence,
-    /// Carries a `client_*`/`kill_*` request type but does not parse as that
-    /// frame: reply the matching `*_result { ok: false }`, do not forward.
-    MalformedAdmin(AdminKind),
-    /// A well-formed `policy_get` (ADR-0032 decision 4): answer with
-    /// `policy_current` from the host store.
-    PolicyGet,
-    /// A well-formed `lang_get` (ADR-0032 decision 7): answer with
-    /// `lang_current` from the language store.
-    LangGet,
-    /// A well-formed `lang_set` (ADR-0032 decision 7): apply the requested
-    /// language (bumping the sequence only if it changed), answer
-    /// `lang_current`.
-    LangSet { value: String },
-    /// Carries a `policy_get`/`lang_get`/`lang_set` type but does not parse as
-    /// that frame: reply the matching frame with the unchanged state (a
-    /// malformed `lang_set` replies `lang_current` with the value+seq that
-    /// stand, decision 7), do not forward.
-    MalformedPolicy(PolicyKind),
+    ClientList {},
+    ClientRevoke {
+        name: String,
+    },
+    KillStatus {},
+    KillEngage {},
+    /// Refused with an audited `kill_status_result { ok: false }`: release is `chromium-bridge unkill`
+    /// only, but a shipped extension gets a reply, never a silent drop.
+    KillRelease {},
+    /// Fire-and-forget: recorded with the surface stamped host-side, no reply.
+    AuditEvent {
+        #[cfg_attr(feature = "envelope-schema", schemars(with = "String"))]
+        kind: ExtensionAuditKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cid: Option<String>,
+    },
+    PolicyGet {},
+    LangGet {},
+    LangSet {
+        value: String,
+    },
 }
 
-/// Resolve `tag` to its `'static` copy in the derived host-control tag set
-/// ([`ENCLAVE_CONTROL_TAGS`] + [`ADMIN_CONTROL_TAGS`] +
-/// [`POLICY_CONTROL_TAGS`]), or `None` for anything that is not a
-/// host-handled control tag. Both classifiers key on this one set, so a
-/// variant added to any control enum (which the exhaustive `wire_tag`
-/// matches force into the set) is recognized by both from the moment it
-/// compiles.
-fn host_control_tag(tag: &str) -> Option<&'static str> {
-    ENCLAVE_CONTROL_TAGS
-        .iter()
-        .chain(ADMIN_CONTROL_TAGS)
-        .chain(POLICY_CONTROL_TAGS)
-        .copied()
-        .find(|t| *t == tag)
+/// How the native host's stdin->socket pump must treat one inbound frame. Only `Forward` reaches the
+/// MCP server: a frame wearing any [`HostControlTag`] is answered or dropped here, and one arriving FROM
+/// the server is dropped as an injection ([`host_control_type`]).
+#[derive(Debug)]
+pub enum FrameDisposition {
+    /// Not a control frame: forward to the MCP server unchanged. Bridge requests carry `op` (no `type`),
+    /// and the socket handshake frames (`challenge`/`response`) never traverse the pump, so nothing
+    /// legitimate collides with the control tags.
+    Forward,
+    /// A well-formed request: answer it locally, never forward it.
+    Handle(HostRequest),
+    /// A control tag whose frame does not parse as a [`HostRequest`]: a malformed request, or a
+    /// host->extension frame the browser leg never legitimately originates. Never forwarded; answered per
+    /// [`HostControlTag::malformed_reply`]. `error` is serde's reason, for the log.
+    Malformed { tag: HostControlTag, error: String },
 }
 
-/// Classify one native-messaging frame for the pump. Pure, so the
-/// handled-vs-forwarded decision is unit-testable without a socket. Keyed on
-/// the exact `type` tags of [`EnclaveControl`], [`AdminControl`], and
-/// [`PolicyControl`] via the derived tag set: bridge requests carry `op` (no
-/// `type`), and the socket handshake frames (`challenge`/`response`) never
-/// traverse the pump, so nothing legitimate collides.
+/// Classify one native-messaging frame for the pump. Pure, so the handled-vs-forwarded decision is
+/// unit-testable without a socket.
 pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
-    // Resolve against the derived tag set first: anything outside it forwards,
-    // and anything inside it can never fall through to Forward below - the
-    // final arm only ever sees control tags, and drops them.
-    let Some(tag) = frame
-        .get("type")
-        .and_then(Value::as_str)
-        .and_then(host_control_tag)
-    else {
+    let Some(tag) = host_control_type(frame) else {
         return FrameDisposition::Forward;
     };
-    match tag {
-        "enclave_challenge" => match serde_json::from_value(frame.clone()) {
-            Ok(EnclaveControl::EnclaveChallenge { nonce, context }) => {
-                FrameDisposition::Challenge { nonce, context }
-            }
-            _ => FrameDisposition::Malformed,
+    match HostRequest::deserialize(frame) {
+        Ok(request) => FrameDisposition::Handle(request),
+        Err(error) => FrameDisposition::Malformed {
+            tag,
+            error: error.to_string(),
         },
-        "enclave_revoke" => match serde_json::from_value(frame.clone()) {
-            Ok(EnclaveControl::EnclaveRevoke {}) => FrameDisposition::RevokeHostKey,
-            // No error-reply contract exists for a malformed revoke (the
-            // genuine extension sends the exact empty shape); dropping it
-            // fails closed without inventing a misleading reason code.
-            _ => FrameDisposition::Drop("malformed enclave_revoke"),
-        },
-        "presence_challenge" => match serde_json::from_value(frame.clone()) {
-            Ok(EnclaveControl::PresenceChallenge { nonce, context }) => {
-                FrameDisposition::PresenceChallenge { nonce, context }
-            }
-            _ => FrameDisposition::MalformedPresence,
-        },
-        "client_list" => match serde_json::from_value(frame.clone()) {
-            Ok(AdminControl::ClientList {}) => FrameDisposition::ClientList,
-            _ => FrameDisposition::MalformedAdmin(AdminKind::ClientList),
-        },
-        "client_revoke" => match serde_json::from_value(frame.clone()) {
-            Ok(AdminControl::ClientRevoke { name }) => FrameDisposition::ClientRevoke { name },
-            _ => FrameDisposition::MalformedAdmin(AdminKind::ClientRevoke),
-        },
-        "kill_status" => match serde_json::from_value(frame.clone()) {
-            Ok(AdminControl::KillStatus {}) => FrameDisposition::KillStatus,
-            _ => FrameDisposition::MalformedAdmin(AdminKind::KillStatus),
-        },
-        "kill_engage" => match serde_json::from_value(frame.clone()) {
-            Ok(AdminControl::KillEngage {}) => FrameDisposition::KillEngage,
-            _ => FrameDisposition::MalformedAdmin(AdminKind::KillEngage),
-        },
-        "kill_release" => match serde_json::from_value(frame.clone()) {
-            Ok(AdminControl::KillRelease {}) => FrameDisposition::KillRelease,
-            _ => FrameDisposition::MalformedAdmin(AdminKind::KillRelease),
-        },
-        "audit_event" => match serde_json::from_value(frame.clone()) {
-            Ok(AdminControl::AuditEvent {
-                kind,
-                outcome,
-                tool,
-                name,
-                detail,
-                cid,
-            }) => match crate::audit::extension_kind(&kind) {
-                Some(kind) => FrameDisposition::AuditEvent(AuditEventFields {
-                    kind,
-                    outcome,
-                    tool,
-                    name,
-                    detail,
-                    cid,
-                }),
-                // A host-owned kind from the browser leg is a forgery attempt
-                // (or a confused extension); refuse it HERE so no disposition
-                // ever carries a recordable host-side kind. The offending
-                // value travels with the drop for the forensic log.
-                None => FrameDisposition::DropForeignAuditKind { kind },
-            },
-            // Fire-and-forget has no reply contract; a malformed event is
-            // dropped (and logged), never recorded as if it were valid.
-            _ => FrameDisposition::Drop("malformed audit_event"),
-        },
-        "policy_get" => match serde_json::from_value(frame.clone()) {
-            Ok(PolicyControl::PolicyGet {}) => FrameDisposition::PolicyGet,
-            _ => FrameDisposition::MalformedPolicy(PolicyKind::PolicyGet),
-        },
-        "lang_get" => match serde_json::from_value(frame.clone()) {
-            Ok(PolicyControl::LangGet {}) => FrameDisposition::LangGet,
-            _ => FrameDisposition::MalformedPolicy(PolicyKind::LangGet),
-        },
-        "lang_set" => match serde_json::from_value(frame.clone()) {
-            Ok(PolicyControl::LangSet { value }) => FrameDisposition::LangSet { value },
-            _ => FrameDisposition::MalformedPolicy(PolicyKind::LangSet),
-        },
-        // Every remaining control tag names a frame the browser leg never
-        // legitimately originates (proofs, errors, results, the revoked push,
-        // and the host->extension `policy_current`/`lang_current` pushes) -
-        // and any control variant added in the future lands here too until it
-        // is given a handler arm above: dropped, never forwarded. Fail closed
-        // by construction.
-        other => FrameDisposition::Drop(other),
     }
 }
 
-/// The host-control `type` tag carried by `frame` (any [`EnclaveControl`], [`AdminControl`], or
-/// [`PolicyControl`] tag), or `None`. The socket->stdout pump uses it to drop control frames arriving FROM
-/// the MCP server: the ceremony and the admin exchange run strictly between the extension and the host, so
-/// zero trust applies to our own server too. An attested-but-misbehaving server must not inject an
-/// `enclave_error` that burns the extension's outstanding nonce, an `enclave_revoked` that provokes a false
-/// fail-closed "compromised" mark, or a forged `client_list_result` / `policy_current` (ADR-0021/0025/0032).
-pub fn host_control_type(frame: &Value) -> Option<&'static str> {
-    frame
-        .get("type")
-        .and_then(Value::as_str)
-        .and_then(host_control_tag)
+/// The host-control `type` tag carried by `frame`, or `None`. The socket->stdout pump uses it to drop
+/// control frames arriving FROM the MCP server: the ceremony and the admin exchange run strictly between
+/// the extension and the host, so zero trust applies to our own server too. An attested-but-misbehaving
+/// server must not inject an `enclave_error` that burns the extension's outstanding nonce, an
+/// `enclave_revoked` that provokes a false fail-closed "compromised" mark, or a forged
+/// `client_list_result` / `policy_current`.
+pub fn host_control_type(frame: &Value) -> Option<HostControlTag> {
+    // Only a STRING `type` can be a control tag. Deserializing the raw `Value` would also accept the
+    // externally tagged spelling `{"type": {"kill_status": null}}`, turning relay traffic into a control frame.
+    let tag = frame.get("type").and_then(Value::as_str)?;
+    HostControlTag::deserialize(StrDeserializer::<serde::de::value::Error>::new(tag)).ok()
 }
 
 #[cfg(test)]

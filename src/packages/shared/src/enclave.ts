@@ -208,9 +208,6 @@ export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
   baseline: z.string().min(1).optional(),
   sig: z.string().min(1).optional(),
   overlay: PolicyOverlaySchema.optional(),
-  // ASYMMETRY (reason): the host field is Option<String>; the extension pins it to the structured enum,
-  // so a value outside it fails the frame parse. A missing field (an old host) is accepted.
-  reason: z.enum(["absent", "damaged", "unreadable"]).optional(),
   // ASYMMETRY (error): no null arm, as above.
   error: z.string().optional(),
 })
@@ -218,13 +215,12 @@ export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
   // ASYMMETRY (ok-split): a refinement never shows up in z.toJSONSchema, so the structural gate cannot see
   // it and it is pinned in FRAME_REFINEMENTS (scripts/check-envelope-parity.ts) instead. On the wire every
   // field is an Option, so the base validates per-field and would pass shapes PolicyStatus::into_frame
-  // (protocol/control.rs) can never emit. This encodes the only two real host shapes, so a reason can
-  // never ride a frame that also claims success.
-  //   ok: true   -> REQUIRES baseline (sig/overlay optional); never reason or error
-  //   ok: false  -> REQUIRES error (reason optional, an old host omits it); never baseline, sig, or overlay
+  // (protocol/control.rs) can never emit. This encodes the only two real host shapes.
+  //   ok: true   -> REQUIRES baseline (sig/overlay optional); never error
+  //   ok: false  -> REQUIRES error; never baseline, sig, or overlay
   .superRefine((frame, ctx) => {
     const [required, forbidden] = frame.ok
-      ? (["baseline", ["reason", "error"]] as const)
+      ? (["baseline", ["error"]] as const)
       : (["error", ["baseline", "sig", "overlay"]] as const);
     if (frame[required] === undefined) {
       ctx.addIssue({

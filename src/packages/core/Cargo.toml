@@ -57,6 +57,10 @@ name = "emit_contract"
 name = "emit_enclave_contract"
 
 [dev-dependencies]
+# This crate's own gen-only feature, on for test builds only: the control-frame tests derive the tag set
+# and the request shapes from the same JSON Schemas the contract emitter uses. A dev-dependency never
+# reaches `cargo tree -e normal`, so check-gen-isolation still keeps schemars out of the shipped binary.
+chromium-bridge-core = { path = ".", features = ["envelope-schema"] }
 p256.workspace = true
 proptest.workspace = true
 
