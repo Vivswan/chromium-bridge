@@ -118,11 +118,9 @@ pub enum Surface {
 
 /// One audit record: one line of `audit.log`. Every field beyond the first
 /// three is optional so one flat shape covers every kind without inventing a
-/// nested schema per event; `deny_unknown_fields` keeps reads strict.
-///
-/// A line reads back in one spelling only, with no `serde(default)`: a line missing `v` or `ts_ms` is
-/// unrecognized, never a record at the epoch. The record matrix in runtime_record.rs scans this module
-/// for reader-side compat attributes as it does every record file.
+/// nested schema per event; `deny_unknown_fields` keeps reads strict. The
+/// record matrix in runtime_record.rs refuses a reader-side compat attribute
+/// here as in every module outside the migration ladders.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditRecord {
