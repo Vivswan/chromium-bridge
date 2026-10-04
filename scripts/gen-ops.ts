@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { convert, prepare } from "./gen-envelope";
 
 interface ContractTool {
@@ -58,6 +59,8 @@ interface Contract {
   defaultWaitTimeoutMs: number;
   errors: ContractError[];
   capabilities: ContractCapability[];
+  /** The host's user-facing constants (what the docs state and the CLI prints); HostSchema parses it. */
+  host: unknown;
 }
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -464,6 +467,81 @@ export type AuditForwardedKind = (typeof AUDIT_FORWARDED_KINDS)[number];
 
 writeFileSync(join(root, "src/packages/shared/src/audit.gen.ts"), auditOut);
 console.log("generated src/packages/shared/src/audit.gen.ts from the Rust audit whitelist");
+
+// ---- host.gen.ts ---------------------------------------------------------------
+// Self-contained: consumes only contract.host. Structural sanity only; the values are the Rust side's.
+
+const envName = z.string().regex(/^[A-Z][A-Z0-9_]*$/);
+const lowerWords = z
+  .array(z.string().regex(/^[a-z][a-z0-9-]*$/))
+  .min(1)
+  .refine((words) => new Set(words).size === words.length, "repeats a value");
+const HostSchema = z.strictObject({
+  keychainLabel: z.string().regex(/^[a-z0-9]+(\.[a-z0-9-]+)+$/),
+  lockFilename: z.string().regex(/^[a-z0-9][a-z0-9.-]*\.lock$/),
+  clientNameEnv: envName,
+  logLevelEnv: envName,
+  logLevels: lowerWords,
+  logFormatEnv: envName,
+  logFormats: lowerWords,
+  auditDefaultLimit: z.int().positive(),
+  browserKeys: lowerWords,
+});
+const hostParsed = HostSchema.safeParse(contract.host);
+if (!hostParsed.success) {
+  throw new Error(
+    `gen-ops: the emitted host contract is malformed:\n${z.prettifyError(hostParsed.error)}`,
+  );
+}
+const {
+  keychainLabel,
+  lockFilename,
+  clientNameEnv,
+  logLevelEnv,
+  logLevels,
+  logFormatEnv,
+  logFormats,
+  auditDefaultLimit,
+  browserKeys,
+} = hostParsed.data;
+const wordList = (words: string[]): string => words.map((w) => JSON.stringify(w)).join(", ");
+
+const hostOut = `// GENERATED from the Rust core (enclave/mod.rs KEY_LABEL, ipc/lockfile.rs
+// LOCK_FILENAME, mcp_server.rs CLIENT_NAME_ENV, log.rs, audit.rs
+// DEFAULT_AUDIT_LIMIT, browsers.rs Browser::ALL) by scripts/gen-ops.ts - DO NOT
+// EDIT. Run \`moon run gen\`.
+//
+// The host's user-facing constants: the names and values the living docs
+// state and the CLI prints. scripts/check-docs-literals.ts holds the docs to
+// these, so a rename in the Rust core fails the docs gate instead of leaving
+// a troubleshooting page quietly wrong.
+
+// The keychain label of the enclave signing key.
+export const KEYCHAIN_LABEL = ${JSON.stringify(keychainLabel)};
+
+// The lock file under the per-user runtime directory.
+export const LOCK_FILENAME = ${JSON.stringify(lockFilename)};
+
+// The env var a harness may set to name itself in logs and the audit surface.
+export const CLIENT_NAME_ENV = ${JSON.stringify(clientNameEnv)};
+
+// The stderr threshold env var and its accepted values, least to most verbose.
+export const LOG_LEVEL_ENV = ${JSON.stringify(logLevelEnv)};
+export const LOG_LEVELS = [${wordList(logLevels)}] as const;
+
+// The audit line format env var and its accepted values, the default first.
+export const LOG_FORMAT_ENV = ${JSON.stringify(logFormatEnv)};
+export const LOG_FORMATS = [${wordList(logFormats)}] as const;
+
+// How many records \`audit\` prints without \`--limit\`.
+export const AUDIT_DEFAULT_LIMIT = ${auditDefaultLimit};
+
+// The browser CLI keys (\`--browser\`), in report order.
+export const BROWSER_KEYS = [${wordList(browserKeys)}] as const;
+`;
+
+writeFileSync(join(root, "src/packages/shared/src/host.gen.ts"), hostOut);
+console.log("generated src/packages/shared/src/host.gen.ts from the Rust core");
 // ---- enclave.gen.ts + enclave-fixture.gen.ts --------------------------------
 // Self-contained section: the enclave signing contract has its own Rust
 // emitter (examples/emit_enclave_contract.rs) so this block shares no state

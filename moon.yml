@@ -363,6 +363,7 @@ tasks:
         src/packages/shared/src/enclave-fixture.gen.ts \
         src/packages/shared/src/envelope.gen.ts \
         src/packages/shared/src/audit.gen.ts \
+        src/packages/shared/src/host.gen.ts \
         src/packages/shared/src/policy.gen.ts
 
   gen-icons:
@@ -491,23 +492,40 @@ tasks:
 
   # ----- version + repo hygiene checks ---------------------------------------
 
-  sync-version:
-    description: 'Propagate the Cargo.toml version into the JS package manifests'
-    command: 'bun scripts/sync-version.ts'
-    options:
-      runInCI: false
-
   check-version:
     description: 'Verify the crate, JS package, and release-please versions agree'
     command: 'bun scripts/check-version.ts'
 
   check-extension-id:
-    description: 'Verify the pinned key, extension ID, and built manifest agree'
+    description: 'Verify the built extension manifest keeps the pinned key and permission surface, and identity.rs stays the only definition site'
     command: 'bun scripts/check-extension-id.ts'
 
   check-cjk:
+    # Han, kana, hangul, bopomofo, plus the CJK-only blocks that ride along (punctuation, enclosed and
+    # compatibility letters, compatibility and fullwidth forms). A CJK character outside the files that are
+    # deliberately Chinese is an untranslated string on a canonical English surface (an inherited Chinese
+    # tool label once reached the options page). PCRE2 reads \p{} and \x{} only in a UTF-8 locale; under C
+    # it refuses the pattern outright, and the zh_CN bundle control fails first if the engine is ever blind.
     description: 'Verify CJK text stays inside the zh locale files and translated docs'
-    command: 'bun scripts/check-cjk.ts'
+    env:
+      LC_ALL: 'C.UTF-8'
+    script: |
+      set -eu
+      cjk='[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\p{Bopomofo}\x{3000}-\x{303F}\x{3200}-\x{33FF}\x{FE30}-\x{FE4F}\x{FF00}-\x{FFEF}]'
+      git grep -qIP "$cjk" -- src/apps/extension/src/locales/zh_CN.yml
+      hits="$(git grep -nIP "$cjk" -- . \
+        ':!src/apps/extension/src/locales/zh_CN.yml' \
+        ':!src/apps/extension/src/locales/zh_TW.yml' \
+        ':!src/apps/extension/src/lib/native-language-names.ts' \
+        ':!src/apps/extension/tests/lib/i18n.test.ts' \
+        ':!docs/*.zh_CN.md' ':!docs/*.zh_TW.md' ':!README.zh_CN.md' ':!README.zh_TW.md')" && status=0 || status=$?
+      case $status in
+        1) echo "check-cjk: no CJK outside the zh locale files and translated docs" ;;
+        0) printf '%s\n' "$hits" >&2
+           echo "check-cjk: CJK text outside the zh locale files; canonical strings are English, so move it into src/apps/extension/src/locales/*.yml or a *.zh_CN.md / *.zh_TW.md translated doc" >&2
+           exit 1 ;;
+        *) exit "$status" ;;
+      esac
 
   check-typography:
     description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
@@ -525,8 +543,21 @@ tasks:
     command: 'bun scripts/check-moon-hasher.ts'
 
   check-ignored:
+    # Only the tree's own .gitignore files: --exclude-standard would also read the developer's global excludes
+    # and .git/info/exclude, which no CI tool sees. The fleet sync rewrites the managed region of .gitignore,
+    # and a template pattern can shadow tracked source (the Python template's `lib/` once hid every
+    # src/**/lib/ file from Biome and knip); the repo-owned override goes below .gitignore's END marker.
     description: 'No tracked file may be matched by .gitignore (Biome and knip would skip it silently)'
-    command: 'bun scripts/check-gitignore-tracked.ts'
+    script: |
+      set -eu
+      git ls-files --error-unmatch .gitignore >/dev/null
+      ignored="$(git ls-files --cached --ignored --exclude-per-directory=.gitignore)"
+      if [ -n "$ignored" ]; then
+        echo "check-ignored: tracked files matched by .gitignore (Biome and knip skip them silently); add a repo-owned override below .gitignore's END marker:" >&2
+        printf '%s\n' "$ignored" >&2
+        exit 1
+      fi
+      echo "check-ignored: no tracked file is matched by .gitignore"
 
   check-yaml:
     # The managed ci.yml's yamllint job installs its own, unpinned, version (a template-sync decision), so

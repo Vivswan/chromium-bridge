@@ -2,8 +2,9 @@
 
 // Docs-literal parity gate: the living docs must state the canonical identifiers, paths, and protocol
 // versions exactly as the code defines them, or a rename in the code leaves the troubleshooting and
-// security docs quietly wrong. Like scripts/check-extension-id.ts, the canonical values are read from
-// source TEXT, so no cargo or bun workspace is needed; a value this gate cannot find fails it.
+// security docs quietly wrong. Every value comes from the generated contract modules (check-gen keeps
+// those equal to the Rust core), so no cargo is needed here; the one exception is the fleet's release
+// bundle name, which no file in this repository carries.
 //
 //   FAMILY    every doc token shaped like an identifier must be a current canonical value  -> the stale copy a rename leaves
 //   PRESENCE  a doc whose job is to state a value must contain the current one              -> the doc that never got the new value
@@ -12,135 +13,28 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CHALLENGE_DOMAIN, PRESENCE_DOMAIN } from "../src/packages/shared/src/enclave.gen";
+import {
+  AUDIT_DEFAULT_LIMIT,
+  BROWSER_KEYS,
+  CLIENT_NAME_ENV,
+  KEYCHAIN_LABEL,
+  LOCK_FILENAME,
+  LOG_FORMAT_ENV,
+  LOG_FORMATS,
+  LOG_LEVEL_ENV,
+  LOG_LEVELS,
+} from "../src/packages/shared/src/host.gen";
+import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../src/packages/shared/src/identity.gen";
+import {
+  BRIDGE_PROTOCOL_VERSION,
+  MCP_PROTOCOL_VERSION,
+} from "../src/packages/shared/src/protocol.gen";
 
 export interface Violation {
   doc: string;
   line: number;
   message: string;
-}
-
-/** Extract a `[pub] const NAME: &str = "..."` literal from Rust source text.
- * Block comments are stripped first and the match is anchored to a
- * declaration at the start of a line, so a commented-out copy (either
- * comment style) can never be mistaken for the canonical value. Throws when
- * absent: a canonical value this gate cannot find must fail the gate (the
- * extraction pattern needs updating), never weaken it. */
-export function rustStrConst(src: string, name: string, file: string): string {
-  const uncommented = src.replace(/\/\*[\s\S]*?\*\//g, "");
-  const m = uncommented.match(
-    new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?const ${name}: &str = "([^"]+)"`, "m"),
-  );
-  if (!m?.[1]) throw new Error(`cannot find const ${name} in ${file}`);
-  return m[1];
-}
-
-/** The lock filename from the `runtime_dir().join(...)` call in lockfile.rs, so a rename there
- * is picked up from the code, not hard-coded here. */
-export function lockFilename(lockfileSrc: string): string {
-  const m = lockfileSrc.match(/runtime_dir\(\)\.join\("(run[^"]*\.lock)"\)/);
-  if (!m?.[1]) throw new Error("cannot find the run.lock join in ipc/lockfile.rs");
-  return m[1];
-}
-
-export function mcpProtocolVersion(protocolSrc: string, mcpServerSrc: string): string {
-  const hoisted = protocolSrc.match(/MCP_PROTOCOL_VERSION: &str = "(\d{4}-\d{2}-\d{2})"/);
-  if (hoisted?.[1]) return hoisted[1];
-  const inline = mcpServerSrc.match(/"protocolVersion": "(\d{4}-\d{2}-\d{2})"/);
-  if (inline?.[1]) return inline[1];
-  throw new Error("cannot find the MCP protocol version in protocol.rs or mcp_server.rs");
-}
-
-export function bridgeProtocolVersion(protocolSrc: string): string {
-  const m = protocolSrc.match(/BRIDGE_PROTOCOL_VERSION: u32 = (\d+)/);
-  if (!m?.[1]) throw new Error("cannot find BRIDGE_PROTOCOL_VERSION in protocol.rs");
-  return m[1];
-}
-
-/** Every BB_* env var name log.rs reads. */
-export function logEnvVars(logSrc: string): string[] {
-  const names = [...logSrc.matchAll(/std::env::var(?:_os)?\("(BB_[A-Z0-9_]+)"\)/g)].map(
-    (m) => m[1],
-  );
-  if (names.length === 0) throw new Error("cannot find any BB_* env var reads in log.rs");
-  return [...new Set(names)] as string[];
-}
-
-/** Strip Rust comments nesting-aware (a single-level regex stops at the first close delimiter),
- * so a declaration buried in a nested block comment can never stand in for the canonical value. */
-export function stripRustComments(src: string): string {
-  let out = "";
-  let depth = 0;
-  for (let i = 0; i < src.length; i++) {
-    if (src.startsWith("/*", i)) {
-      depth++;
-      i++;
-      continue;
-    }
-    if (src.startsWith("*/", i) && depth > 0) {
-      depth--;
-      i++;
-      continue;
-    }
-    if (depth > 0) continue;
-    if (src.startsWith("//", i)) {
-      const nl = src.indexOf("\n", i);
-      if (nl === -1) break;
-      i = nl - 1;
-      continue;
-    }
-    out += src[i];
-  }
-  return out;
-}
-
-/** The `audit --limit` default from audit.rs's DEFAULT_AUDIT_LIMIT const -
- * the single home the CLI `--help` interpolates; docs/cli.md restates it in
- * prose and is held to it here. Comments are stripped (nesting-aware) and the
- * match is line-anchored, so a commented-out declaration can never stand in
- * for the canonical value. */
-export function auditDefaultLimit(auditSrc: string): string {
-  const m = stripRustComments(auditSrc).match(
-    /^\s*pub const DEFAULT_AUDIT_LIMIT: usize = ([0-9_]+);/m,
-  );
-  if (!m?.[1]) throw new Error("cannot find DEFAULT_AUDIT_LIMIT in audit.rs");
-  return m[1].replaceAll("_", "");
-}
-
-/** The browser CLI keys in Browser::ALL order, from `key()`'s match arms in browsers.rs (the same
- * source `known_keys()` joins into `--help`); docs/cli.md restates the list and is held to it here.
- * Every arm must map a `Browser::`/`Self::` variant to a key literal, so a `_` catch-all or any
- * other arm shape fails the gate instead of silently shrinking the pinned set. */
-export function browserKeys(browsersSrc: string): string[] {
-  const uncommented = stripRustComments(browsersSrc);
-  const block = uncommented.match(/fn key\(self\) -> &'static str \{\s*match self \{([\s\S]*?)\}/);
-  if (!block?.[1]) throw new Error("cannot find Browser::key() in browsers.rs");
-  const keys: string[] = [];
-  for (const raw of block[1].split("\n")) {
-    const line = raw.trim();
-    if (line === "") continue;
-    const m = line.match(/^(?:Browser|Self)::[A-Za-z0-9]+ => "([a-z0-9-]+)",?$/);
-    if (!m?.[1]) {
-      throw new Error(`unclassifiable Browser::key() arm in browsers.rs: ${line}`);
-    }
-    keys.push(m[1]);
-  }
-  if (keys.length === 0) throw new Error("no key arms parsed from Browser::key()");
-  return keys;
-}
-
-/** The accepted lowercase values of one env var, from its `match
- * std::env::var("NAME")` block: the explicit `Some("error") | Some("ERROR")`
- * arms (only the lowercase spelling is the documented one) plus the variant
- * the `_ =>` default arm falls back to - the default value is part of the
- * documented set even though no arm spells it out. */
-export function envValueSet(logSrc: string, name: string): string[] {
-  const block = logSrc.match(new RegExp(`match std::env::var\\("${name}"\\)[^}]*`));
-  if (!block) throw new Error(`cannot find the match block for ${name} in log.rs`);
-  const values = [...block[0].matchAll(/Some\("([a-z]+)"\)/g)].map((m) => m[1]) as string[];
-  const fallback = block[0].match(/_ => \w+::(\w+)/)?.[1]?.toLowerCase();
-  if (fallback && !values.includes(fallback)) values.push(fallback);
-  if (values.length === 0) throw new Error(`no accepted values parsed for ${name}`);
-  return values;
 }
 
 /** A bare release-level bundle filename in prose: `attestation.<ext...>`, not
@@ -359,7 +253,6 @@ export function envTableViolations(
 
 if (import.meta.main) {
   const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-  const rust = (p: string) => readFileSync(resolve(root, "src/packages/core/src", p), "utf8");
   /** Read a doc named by a rule below; a rename must surface as this gate's
    * own failure, not a bare ENOENT stack. */
   const readDoc = (p: string): string => {
@@ -370,25 +263,8 @@ if (import.meta.main) {
     }
   };
 
-  const identityRs = rust("identity.rs");
-  const hostId = rustStrConst(identityRs, "NATIVE_HOST_ID", "identity.rs");
-  const extensionId = rustStrConst(identityRs, "PINNED_EXTENSION_ID", "identity.rs");
-  const keyLabel = rustStrConst(rust("enclave/mod.rs"), "KEY_LABEL", "enclave/mod.rs");
-  const challengeRs = rust("enclave/challenge.rs");
-  const challengeDomain = rustStrConst(challengeRs, "CHALLENGE_DOMAIN", "enclave/challenge.rs");
-  const presenceDomain = rustStrConst(challengeRs, "PRESENCE_DOMAIN", "enclave/challenge.rs");
-  const lockName = lockFilename(rust("ipc/lockfile.rs"));
-  const protocolRs = rust("protocol.rs");
-  const mcpServerRs = rust("mcp_server.rs");
-  const mcpVersion = mcpProtocolVersion(protocolRs, mcpServerRs);
-  const clientNameEnv = rustStrConst(mcpServerRs, "CLIENT_NAME_ENV", "mcp_server.rs");
-  const bridgeVersion = bridgeProtocolVersion(protocolRs);
-  const logRs = rust("log.rs");
-  const envNames = logEnvVars(logRs);
-  const logLevels = envValueSet(logRs, "BB_LOG");
-  const logFormats = envValueSet(logRs, "BB_LOG_FORMAT");
-  const auditLimit = auditDefaultLimit(rust("audit.rs"));
-  const keys = browserKeys(rust("browsers.rs"));
+  const bridgeVersion = String(BRIDGE_PROTOCOL_VERSION);
+  const auditLimit = String(AUDIT_DEFAULT_LIMIT);
 
   // Scope: living markdown only. CHANGELOG.md is release history; sources and
   // tests have their own gates. The security
@@ -419,32 +295,32 @@ if (import.meta.main) {
       // until it is added here alongside its own canonical source.
       label: "bridge identifier",
       family: /com\.vivswan\.[a-z0-9_](?:[a-z0-9._-]*[a-z0-9_])?/g,
-      allowed: new Set([hostId, `${hostId}.json`, keyLabel]),
+      allowed: new Set([NATIVE_HOST_ID, `${NATIVE_HOST_ID}.json`, KEYCHAIN_LABEL]),
     },
     {
       label: "extension id",
       family: /\b[a-p]{32}\b/g,
-      allowed: new Set([extensionId]),
+      allowed: new Set([PINNED_EXTENSION_ID]),
     },
     {
       label: "lock filename",
       family: /\brun(?:\.v\d+)?\.lock\b/g,
-      allowed: new Set([lockName]),
+      allowed: new Set([LOCK_FILENAME]),
     },
     {
       label: "enclave domain string",
       family: /chromium-bridge-(?:enclave|presence)-v\d+/g,
-      allowed: new Set([challengeDomain, presenceDomain]),
+      allowed: new Set([CHALLENGE_DOMAIN, PRESENCE_DOMAIN]),
     },
     {
       label: "BB_LOG env var",
       family: /\bBB_LOG[A-Z0-9_]*/g,
-      allowed: new Set(envNames),
+      allowed: new Set([LOG_LEVEL_ENV, LOG_FORMAT_ENV]),
     },
     {
       label: "client-name env var",
       family: /\bCHROMIUM_BRIDGE_[A-Z0-9_]+\b/g,
-      allowed: new Set([clientNameEnv]),
+      allowed: new Set([CLIENT_NAME_ENV]),
     },
     {
       label: "release attestation bundle",
@@ -457,29 +333,33 @@ if (import.meta.main) {
     for (const f of families) {
       violations.push(...familyViolations(doc, text, f.label, f.family, f.allowed));
     }
-    violations.push(...mcpLineViolations(doc, text, mcpVersion));
+    violations.push(...mcpLineViolations(doc, text, MCP_PROTOCOL_VERSION));
     violations.push(...bridgeVersionLineViolations(doc, text, bridgeVersion));
   }
 
   // The docs whose job is to state a value must state the current one.
   const presences: Array<[string, string, string]> = [
-    [".github/SECURITY.md", hostId, "native host id"],
-    [".github/SECURITY.md", keyLabel, "enclave keychain label"],
-    [".github/SECURITY.md", extensionId, "pinned extension id"],
-    [".github/SECURITY.md", challengeDomain, "enclave challenge domain"],
-    ["docs/chrome-web-store.md", extensionId, "pinned extension id"],
-    ["docs/architecture.md", hostId, "native host id"],
-    ["docs/architecture.md", keyLabel, "enclave keychain label"],
-    ["docs/architecture.md", lockName, "lock filename"],
-    ["docs/architecture.md", mcpVersion, "MCP protocol version"],
-    ["docs/operations.md", lockName, "lock filename"],
-    ["docs/wsl.md", hostId, "native host id"],
-    ["docs/wsl.md", lockName, "lock filename"],
-    ["docs/compatibility.md", `date string \`${mcpVersion}\``, "MCP protocol version row"],
+    [".github/SECURITY.md", NATIVE_HOST_ID, "native host id"],
+    [".github/SECURITY.md", KEYCHAIN_LABEL, "enclave keychain label"],
+    [".github/SECURITY.md", PINNED_EXTENSION_ID, "pinned extension id"],
+    [".github/SECURITY.md", CHALLENGE_DOMAIN, "enclave challenge domain"],
+    ["docs/chrome-web-store.md", PINNED_EXTENSION_ID, "pinned extension id"],
+    ["docs/architecture.md", NATIVE_HOST_ID, "native host id"],
+    ["docs/architecture.md", KEYCHAIN_LABEL, "enclave keychain label"],
+    ["docs/architecture.md", LOCK_FILENAME, "lock filename"],
+    ["docs/architecture.md", MCP_PROTOCOL_VERSION, "MCP protocol version"],
+    ["docs/operations.md", LOCK_FILENAME, "lock filename"],
+    ["docs/wsl.md", NATIVE_HOST_ID, "native host id"],
+    ["docs/wsl.md", LOCK_FILENAME, "lock filename"],
+    [
+      "docs/compatibility.md",
+      `date string \`${MCP_PROTOCOL_VERSION}\``,
+      "MCP protocol version row",
+    ],
     ["docs/compatibility.md", `currently \`${bridgeVersion}\``, "bridge protocol version row"],
-    ["docs/security/threat-model.md", clientNameEnv, "client-name env var"],
-    ["README.md", mcpVersion, "MCP protocol version"],
-    ["docs/development.md", "BB_LOG", "log env var name"],
+    ["docs/security/threat-model.md", CLIENT_NAME_ENV, "client-name env var"],
+    ["README.md", MCP_PROTOCOL_VERSION, "MCP protocol version"],
+    ["docs/development.md", LOG_LEVEL_ENV, "log env var name"],
     // Since --help interpolates these consts, docs/cli.md holds the only
     // hand-written copies of the audit --limit default and the browser key list.
     ["docs/cli.md", `last ${auditLimit} records`, "audit --limit default"],
@@ -505,17 +385,20 @@ if (import.meta.main) {
   // keys" reference. Each is pinned to its own paragraph, so a drift in
   // either fails even if a correct copy exists elsewhere in the doc.
   violations.push(
-    ...listSectionViolations("docs/cli.md", readDoc("docs/cli.md"), keys, "browser key list", [
-      "for each known browser",
-      "Known browser keys",
-    ]),
+    ...listSectionViolations(
+      "docs/cli.md",
+      readDoc("docs/cli.md"),
+      BROWSER_KEYS,
+      "browser key list",
+      ["for each known browser", "Known browser keys"],
+    ),
   );
 
   // The env-var reference tables must enumerate the full accepted value sets.
   for (const doc of ["README.md", "docs/operations.md", "docs/cli.md"]) {
     const text = readDoc(doc);
-    violations.push(...envTableViolations(doc, text, "BB_LOG", logLevels));
-    violations.push(...envTableViolations(doc, text, "BB_LOG_FORMAT", logFormats));
+    violations.push(...envTableViolations(doc, text, LOG_LEVEL_ENV, LOG_LEVELS));
+    violations.push(...envTableViolations(doc, text, LOG_FORMAT_ENV, LOG_FORMATS));
   }
 
   if (violations.length > 0) {
@@ -524,17 +407,17 @@ if (import.meta.main) {
     }
     console.error(
       `\ncheck-docs-literals: ${violations.length} stale or missing doc literal(s). ` +
-        "The canonical values live in the Rust core (identity.rs, enclave/, " +
-        "ipc/lockfile.rs, protocol.rs, mcp_server.rs, log.rs) and in RELEASE_BUNDLE_NAME " +
-        "(this script, mirroring the fleet's publish leg); update the docs to match.",
+        "The canonical values are the generated contract modules in src/packages/shared/src " +
+        "(identity, enclave, protocol, host .gen.ts, each emitted from the Rust core) and " +
+        "RELEASE_BUNDLE_NAME (this script, mirroring the fleet's publish leg); update the docs to match.",
     );
     process.exit(1);
   }
   console.log(
     `check-docs-literals: ${docs.length} living docs agree with the canonical ` +
-      `literals (host id, extension id, keychain label, ${lockName}, enclave domains, ` +
-      `MCP ${mcpVersion}, bridge v${bridgeVersion}, ${envNames.join("/")}, ` +
-      `audit --limit ${auditLimit}, browser keys ${keys.join(",")}, ` +
+      `literals (host id, extension id, keychain label, ${LOCK_FILENAME}, enclave domains, ` +
+      `MCP ${MCP_PROTOCOL_VERSION}, bridge v${bridgeVersion}, ${LOG_LEVEL_ENV}/${LOG_FORMAT_ENV}, ` +
+      `audit --limit ${auditLimit}, browser keys ${BROWSER_KEYS.join(",")}, ` +
       `release bundle ${RELEASE_BUNDLE_NAME})`,
   );
 }

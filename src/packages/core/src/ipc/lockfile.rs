@@ -106,10 +106,14 @@ fn harden_runtime_dir(dir: &std::path::Path) {
 /// Read cap for the lock file (a few hundred bytes of JSON); see [`read_capped`].
 const LOCK_MAX_BYTES: usize = 64 * 1024;
 
+/// The lock file's name under the runtime directory. The docs state it (check-docs-literals holds them to
+/// this value through the generated contract), and a wire change old readers must not survive renames it.
+pub const LOCK_FILENAME: &str = "run.lock";
+
 impl LockFile {
     /// Path of the lock file in the per-user runtime directory.
     pub fn path() -> PathBuf {
-        runtime_dir().join("run.lock")
+        runtime_dir().join(LOCK_FILENAME)
     }
 
     /// Module-private on purpose: the lock file is mutated only inside this module's [`RuntimeMutex`] critical

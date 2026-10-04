@@ -1,18 +1,24 @@
 //! Emit the canonical cross-process contract as one JSON document on stdout:
 //! the tool catalogue (each tool's metadata, grants, and the JSON Schema of
 //! its args struct), the error taxonomy, the capability groupings, the
-//! identity constants, the protocol versions, and the extension-forwarded
-//! audit kinds. `scripts/gen-ops.ts` (run via `moon run gen`) consumes this
-//! to generate the TypeScript side (`src/packages/shared/src/*.gen.ts`); the
-//! emitted JSON itself is never checked in - the Rust sources are the
+//! identity constants, the protocol versions, the extension-forwarded
+//! audit kinds, and the host's user-facing constants (the names and values
+//! the docs and the CLI state). `scripts/gen-ops.ts` (run via `moon run gen`)
+//! consumes this to generate the TypeScript side (`src/packages/shared/src/*.gen.ts`);
+//! the emitted JSON itself is never checked in - the Rust sources are the
 //! contract.
 //!
 //! Run:
 //!   cargo run -q -p chromium-bridge-core --example emit_contract
 
-use chromium_bridge_core::audit::extension_kind_wire_names;
+use chromium_bridge_core::audit::{extension_kind_wire_names, DEFAULT_AUDIT_LIMIT};
+use chromium_bridge_core::browsers::Browser;
+use chromium_bridge_core::enclave::KEY_LABEL;
 use chromium_bridge_core::error::ERROR_SPECS;
 use chromium_bridge_core::identity::{EXTENSION_MANIFEST_KEY, NATIVE_HOST_ID, PINNED_EXTENSION_ID};
+use chromium_bridge_core::ipc::LOCK_FILENAME;
+use chromium_bridge_core::log::{Format, Level, FORMAT_ENV, LEVEL_ENV};
+use chromium_bridge_core::mcp_server::CLIENT_NAME_ENV;
 use chromium_bridge_core::protocol::{
     BRIDGE_PROTOCOL_VERSION, MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION,
     MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
@@ -79,6 +85,17 @@ fn main() -> Result<(), serde_json::Error> {
         "defaultWaitTimeoutMs": DEFAULT_WAIT_TIMEOUT_MS,
         "errors": errors,
         "capabilities": capabilities,
+        "host": {
+            "keychainLabel": KEY_LABEL,
+            "lockFilename": LOCK_FILENAME,
+            "clientNameEnv": CLIENT_NAME_ENV,
+            "logLevelEnv": LEVEL_ENV,
+            "logLevels": Level::ALL.map(Level::name),
+            "logFormatEnv": FORMAT_ENV,
+            "logFormats": Format::ALL.map(Format::name),
+            "auditDefaultLimit": DEFAULT_AUDIT_LIMIT,
+            "browserKeys": Browser::ALL.map(Browser::key),
+        },
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())

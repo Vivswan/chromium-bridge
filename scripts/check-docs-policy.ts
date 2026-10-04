@@ -31,7 +31,7 @@ import { DEFAULTS } from "../src/packages/shared/src/settings";
 /** Every canonical default a doc may pin, from BOTH contracts: the generated
  * host-owned policy deny baseline (policy.gen.ts, the 15 migrated fields)
  * and the browser-owned settings schema (settings.ts). The two key sets are
- * disjoint by construction (Phase 5 removed the policy fields from
+ * disjoint by construction (the policy fields left
  * settings.ts); the loop enforces that so a re-added duplicate key cannot
  * silently shadow one contract's default with the other's. */
 for (const field of POLICY_FIELDS) {
@@ -173,7 +173,7 @@ export const MATRIX_NON_SETTINGS_TOKENS: ReadonlySet<string> = new Set();
 /** Every backticked camelCase token in the matrix must be a canonical gate
  * name (they are how the doc names the configurable gates): a HOST-OWNED
  * policy field (the generated POLICY_FIELDS catalogue) or a remaining
- * browser-owned settings key (settings.ts). Same strength as before Phase 5
+ * browser-owned settings key (settings.ts). Same strength as before the policy split
  * - the expectation moved contracts, it did not loosen. */
 export function settingsKeyViolations(
   md: string,
@@ -257,7 +257,7 @@ export function toolCountViolations(
   count: number = OP_NAMES.length,
 ): string[] {
   // The zh claims are matched via \u escapes ("N ge gongju" in simplified and
-  // traditional forms) so this file stays CJK-free for check-cjk.ts.
+  // traditional forms) so this file stays CJK-free for the check-cjk gate.
   const claims: Array<[doc: string, pattern: RegExp]> = [
     ["README.md", /## What you can do: (\d+) tools/],
     ["README.zh_CN.md", /## .+: (\d+) \u4E2A\u5DE5\u5177/],

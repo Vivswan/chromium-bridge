@@ -16,7 +16,7 @@ use crate::session::Session;
 /// (claude-code/copilot/codex/...). Self-asserted and used for logs and the
 /// audit surface only; it is NEVER the authorization key -- admission keys on
 /// the harness's attested code identity (see [`crate::allowlist`]).
-const CLIENT_NAME_ENV: &str = "CHROMIUM_BRIDGE_CLIENT_NAME";
+pub const CLIENT_NAME_ENV: &str = "CHROMIUM_BRIDGE_CLIENT_NAME";
 
 pub fn run() -> i32 {
     install_stderr_panic_hook();

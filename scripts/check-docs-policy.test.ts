@@ -242,7 +242,7 @@ describe("toolCountViolations", () => {
   const texts = {
     "README.md": "## What you can do: 26 tools",
     // "## Ni neng zuo shen me: 26 ge gongju" (simplified / traditional), via
-    // \u escapes so this file stays CJK-free (check-cjk.ts).
+    // \u escapes so this file stays CJK-free (the check-cjk gate).
     "README.zh_CN.md": "## \u4F60\u80FD\u505A\u4EC0\u4E48: 26 \u4E2A\u5DE5\u5177",
     "README.zh_TW.md": "## \u4F60\u80FD\u505A\u4EC0\u9EBC: 26 \u500B\u5DE5\u5177",
     "docs/architecture.md": "| `tools/` | The tool catalogue (26 tools; the source) |",

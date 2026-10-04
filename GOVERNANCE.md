@@ -86,6 +86,6 @@ If a genuine reason to relocate one appears, update every reference in the same 
 
 ## Versioning & release
 
-- `Cargo.toml` is the single source of truth; `moon run sync-version` propagates it.
+- `Cargo.toml` is the single source of truth; the rolling release PR bumps every copy of it ([Releasing](docs/development.md#releasing)).
 - Releases are cut by release-please from a green `main`: merging the rolling release PR tags `vX.Y.Z`, and the same CI run builds and publishes the assets ([docs/development.md](docs/development.md#releasing)).
 - SemVer discipline applies even pre-1.0: a `0.x` bump is not a license to break compatibility silently. Tool removal/rename, permission widening, and protocol breaks are "major"-shaped.
