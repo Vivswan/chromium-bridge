@@ -950,8 +950,9 @@ fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<
                 .collect();
             if detected.is_empty() {
                 return Err(FixError::NoTargets(format!(
-                    "no Chromium-family browser detected for this user; pass --browser <keys> \
-                     (known: {}), --all, or --manifest-dir <dir>",
+                    "no Chromium-family browser detected for this user: install Chrome, Brave or Edge, \
+                     then run: chromium-bridge doctor --fix (or pass --browser <keys> (known: {}), \
+                     --all, or --manifest-dir <dir>)",
                     known_keys()
                 )));
             }

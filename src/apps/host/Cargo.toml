@@ -17,13 +17,14 @@ chromium-bridge-core.workspace = true
 workspace = true
 
 # The .deb the release builds with cargo-deb (scripts/release-package.ts installer, `--no-build --no-strip`
-# over the attested binary). No maintainer script: one runs as root with no user context and may not write
-# into home directories, so the user runs `doctor --fix` once (docs/release.md).
+# over the attested binary). The postinst only prints the `doctor --fix` line: a maintainer script runs as
+# root with no user context and may not write into home directories (docs/release.md).
 [package.metadata.deb]
 maintainer = "Chromium Bridge maintainers <noreply@github.com>"
 section = "utils"
 priority = "optional"
 depends = "$auto"
+maintainer-scripts = "../../../packaging/deb"
 extended-description = """\
 Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): a native-messaging host and \
 MV3 extension, no debug port. After installing, run `chromium-bridge doctor --fix` once to register \

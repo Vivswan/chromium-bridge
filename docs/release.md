@@ -49,12 +49,12 @@ Each leg wraps its binary unchanged into the platform's installer. The post-inst
 | Leg | Asset | Installs to | Post-install |
 | --- | --- | --- | --- |
 | macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | `doctor --fix` as the account that opened the package (Installer's `USER`, or `SUDO_USER` under `sudo installer`) |
-| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | none: the user runs `chromium-bridge doctor --fix` once |
+| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | prints the one `chromium-bridge doctor --fix` line for the user to run |
 | windows-x64 | `chromium-bridge-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\chromium-bridge\` (per user, no elevation, on the user's PATH) | `doctor --fix` as the installing user; a first install that fails rolls its registrations back with `uninstall`, a failed upgrade restores the previous setup; uninstalling runs `chromium-bridge uninstall` |
 
-- **The .deb has no post-install** because a Debian maintainer script runs as root with no user context and must not write into home directories. A system-wide scope for it is a follow-up.
+- **The .deb's post-install only prints that line** because a Debian maintainer script runs as root with no user context and must not write into home directories. A system-wide scope for it is a follow-up.
 - **No detected browser fails the .pkg and .msi install**, with `doctor --fix`'s reason in the installer log. Install a Chromium browser first, or use the archive.
-- **Sources:** `packaging/pkg/scripts/postinstall`, `packaging/msi/chromium-bridge.wxs`, and the `[package.metadata.deb]` table in `src/apps/host/Cargo.toml`. `scripts/release-package.ts installer` runs pkgbuild, cargo-deb (`--no-build --no-strip`, so the .deb carries the attested bytes), and WiX 3's candle and light.
+- **Sources:** `packaging/pkg/scripts/postinstall`, `packaging/deb/postinst`, `packaging/msi/chromium-bridge.wxs`, and the `[package.metadata.deb]` table in `src/apps/host/Cargo.toml`. `scripts/release-package.ts installer` runs pkgbuild, cargo-deb (`--no-build --no-strip`, so the .deb carries the attested bytes), and WiX 3's candle and light.
 - **Proof on every pull request that touches the installers' sources** (the `paths` filter in `.github/workflows/installers.yml`): it builds all three from the branch and installs each on its runner through `scripts/installer-smoke.ts`. The Windows leg is where the HKCU registration runs for real, and so far the only place it has.
 
 **Unsigned, for now.** Gatekeeper asks the user to right-click and Open the .pkg, and SmartScreen warns on the .msi. Signing is a switch of two repository secrets and the steps that use them, none of which exist yet:
