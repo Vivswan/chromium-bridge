@@ -60,8 +60,6 @@ pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) -> std::io::R
     unblock.add(Signal::SIGINT);
     unblock.thread_unblock()?;
     std::thread::spawn(move || {
-        // `forever` yields only once a registered signal has arrived; the
-        // iterator ends only if the handle is closed, which nothing does.
         match signals.forever().next() {
             Some(sig) => log_info!("mcp", "received signal {sig}, cleaning up and exiting"),
             None => log_warn!("mcp", "signal stream closed; cleaning up and exiting"),
@@ -70,4 +68,116 @@ pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) -> std::io::R
         std::process::exit(0);
     });
     Ok(())
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    use std::os::unix::process::CommandExt;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use nix::sys::signal::{kill, SigSet, Signal};
+    use nix::unistd::Pid;
+
+    use super::spawn_signal_cleanup;
+
+    /// The child half of the test below: the test binary re-invoked with
+    /// this variable set to a scratch directory installs the cleanup, reports
+    /// readiness, and waits to be signalled.
+    const CHILD_ENV: &str = "CHROMIUM_BRIDGE_TEST_SIGNAL_CHILD";
+    const TEST_NAME: &str = "sys::tests::signal_cleanup_runs_even_when_the_signal_arrives_blocked";
+
+    fn wait_for(path: &Path, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if path.exists() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    fn child_role(dir: &Path) {
+        let marker = dir.join("cleaned");
+        spawn_signal_cleanup(move || {
+            std::fs::write(&marker, b"").expect("write the cleanup marker");
+        })
+        .expect("install the signal cleanup");
+        std::fs::write(dir.join("ready"), b"").expect("write the ready marker");
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+
+    /// A signal that arrives blocked, because the parent blocked it before
+    /// exec and the mask was inherited, must still run the cleanup and exit
+    /// 0; without the unblock after registration the server sat forever with
+    /// the signal pending and the lock on disk. The child is spawned with
+    /// the mask already blocked (pre_exec runs after std clears the mask).
+    /// Four cases: SIGTERM and SIGINT, each with the mask blocked and clear.
+    #[test]
+    fn signal_cleanup_runs_even_when_the_signal_arrives_blocked() {
+        if let Some(dir) = std::env::var_os(CHILD_ENV) {
+            child_role(Path::new(&dir));
+        }
+        let exe = std::env::current_exe().expect("test binary path");
+        for (signal, blocked) in [
+            (Signal::SIGTERM, false),
+            (Signal::SIGTERM, true),
+            (Signal::SIGINT, false),
+            (Signal::SIGINT, true),
+        ] {
+            let case = format!("{signal:?} blocked={blocked}");
+            let dir = tempfile::tempdir().expect("scratch dir");
+            let mut cmd = Command::new(&exe);
+            cmd.args([TEST_NAME, "--exact", "--test-threads=1", "--nocapture"])
+                .env(CHILD_ENV, dir.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if blocked {
+                // SAFETY: the closure runs in the forked child before exec
+                // and only calls pthread_sigmask, which is async-signal-safe
+                // and allocates nothing.
+                unsafe {
+                    cmd.pre_exec(move || {
+                        let mut set = SigSet::empty();
+                        set.add(signal);
+                        set.thread_block()?;
+                        Ok(())
+                    });
+                }
+            }
+            let mut child = cmd.spawn().expect("spawn the child");
+            assert!(
+                wait_for(&dir.path().join("ready"), Duration::from_secs(10)),
+                "{case}: child never reported ready"
+            );
+            kill(
+                Pid::from_raw(i32::try_from(child.id()).expect("pid fits")),
+                signal,
+            )
+            .expect("signal the child");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let status = loop {
+                if let Some(status) = child.try_wait().expect("poll the child") {
+                    break status;
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("{case}: child hung with the signal pending");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert!(status.success(), "{case}: exit status {status}");
+            assert!(
+                dir.path().join("cleaned").exists(),
+                "{case}: cleanup did not run before exit"
+            );
+        }
+    }
 }

@@ -15,24 +15,19 @@ license-file = "LICENSE.md"
 publish = false
 
 [workspace.dependencies]
-# Strict standard-alphabet base64 for the enclave proof frames and the signed
-# policy baseline: the STANDARD engine requires canonical padding and rejects
-# nonzero trailing bits, so each byte string has exactly one accepted spelling.
-# Without the default `simd-unsafe` feature: the scalar engine is all the
-# core needs for 65-byte keys and signatures.
+# base64 for the enclave proof frames and the signed policy baseline
+# (src/packages/core/src/enclave). Without the default `simd-unsafe`
+# feature: the scalar engine is all 65-byte keys and signatures need.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
-# OS CSPRNG for the per-run secret and the handshake nonces: getentropy on
-# macOS, the getrandom syscall on Linux, ProcessPrng on Windows. `std` for
-# the conversion into io::Error.
+# OS CSPRNG for the per-run secret and the handshake nonces. `std` for the
+# conversion into io::Error.
 getrandom = { version = "0.4", features = ["std"] }
-# Lowercase hex for MACs, nonces, and image/key fingerprints; strict decode
-# (odd length and non-hex bytes refused) for the handshake MAC.
+# Hex for MACs, nonces, and image/key fingerprints.
 hex = "0.4"
 hmac = "0.13"
 libc = "0.2.186"
-# Safe sigmask wrapper: the signal-cleanup thread unblocks SIGTERM/SIGINT in
-# case the parent handed down a mask that blocks them (a blocked signal never
-# reaches signal-hook's handler). `signal` only.
+# Safe sigmask wrapper for the signal-cleanup thread (src/packages/core/src/sys.rs).
+# `signal` only.
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,
 # per-request version gate, wire model) per ADR-0034 - a many-eyes library
@@ -40,9 +35,7 @@ nix = { version = "0.31", default-features = false, features = ["signal"] }
 # prescribes. `server` only: no HTTP stack, no client, no auth tree.
 rmcp = { version = "3.4.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
-# SIGTERM/SIGINT handed to one cleanup thread through a self-pipe, so the
-# cleanup runs in ordinary thread context, free of async-signal-safety
-# limits. Unix only.
+# SIGTERM/SIGINT delivery to the cleanup thread (src/packages/core/src/sys.rs). Unix only.
 signal-hook = "0.4"
 # `float_roundtrip`: correctly rounded float parsing, so a JSON number the
 # core stores reads back as the same f64 it wrote. The default best-effort parse drifts by an ulp on some
@@ -50,9 +43,7 @@ signal-hook = "0.4"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 hex = "0.4"
 sha2 = { version = "0.11", default-features = false }
-# Atomic file replacement: a uniquely named temp file created exclusively
-# (0600 on Unix) in the target's directory, renamed over the destination,
-# removed on every failure path.
+# Temp-file-then-rename atomic writers (registration, private records).
 tempfile = "3.27"
 thiserror = "2.0.18"
 # rmcp's async runtime. The security core itself stays synchronous; tokio

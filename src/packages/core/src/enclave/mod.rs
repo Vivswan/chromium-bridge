@@ -174,10 +174,8 @@ mod tests {
         assert_eq!(deduped.len(), REASON_CODES.len());
     }
 
-    /// The policy store's one-spelling-per-byte-string invariant rests on
-    /// the engine's canonical-padding and no-trailing-bits settings, which
-    /// the sibling `STANDARD_PAD_INDIFFERENT` and `STANDARD_NO_PAD` engines
-    /// relax one identifier away.
+    /// The one-spelling guarantee the policy store relies on comes from the
+    /// engine's configuration, not from code of ours, so it is pinned here.
     #[test]
     fn base64_decode_accepts_exactly_one_spelling_per_byte_string() {
         for bad in [
