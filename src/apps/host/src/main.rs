@@ -11,8 +11,6 @@ use chromium_bridge_core::{
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    // clap reports help and version on stdout (exit 0) and usage errors on
-    // stderr (exit 2); native-host mode disables the stdout pair.
     let command = match parse(&args) {
         Ok(command) => command,
         Err(report) => report.exit(),

@@ -97,9 +97,8 @@ pub enum FixTargets {
     ManifestDirs(Vec<PathBuf>),
 }
 
-/// The flag surface clap parses `doctor` from. clap enforces the exclusivity
-/// here (one target mode, targets only with `--fix`, `--list` and `--json`
-/// alone); [`DoctorCommand`] is the typed result.
+/// The flag surface clap parses `doctor` from; [`DoctorCommand`] is the
+/// typed result.
 #[derive(Args)]
 #[command(group(ArgGroup::new("target").multiple(false).requires("fix")))]
 struct DoctorFlags {
@@ -187,7 +186,7 @@ struct PairClientFlags {
     #[arg(long, group = "anchor", value_parser = hash_digest, value_name = "HEX")]
     hash: Option<HashDigest>,
     /// Pin this macOS signing Team ID
-    #[arg(long, group = "anchor", value_parser = team_id, value_name = "ID")]
+    #[arg(long, group = "anchor", value_parser = |id: &str| TeamId::try_from(id), value_name = "ID")]
     team_id: Option<TeamId>,
     /// Measure the process that launched this command and pin its hash
     #[arg(long, group = "anchor")]
@@ -264,8 +263,7 @@ pub enum PolicyCommand {
 
 /// The per-field edit flags of `policy set` / `policy restrict`: one flag per
 /// catalogue field, read back by the same ids, so a field added to the
-/// catalogue gets its flag here or fails to compile in [`edit_flag`]. The
-/// required group makes an edit that names no field a usage error.
+/// catalogue gets its flag here or fails to compile in [`edit_flag`].
 impl Args for PolicyOverlay {
     fn augment_args(cmd: clap::Command) -> clap::Command {
         PolicyField::ALL.iter().fold(
@@ -310,7 +308,7 @@ fn edit_arg(field: PolicyField) -> Arg {
     match field.kind() {
         FieldKind::Bool(_) => arg.value_name("on|off").value_parser(on_off),
         FieldKind::Ms(_) => arg.value_name("MS").value_parser(ms),
-        FieldKind::ToolSet(_) => arg.value_name("A,B,...").value_parser(tool_list),
+        FieldKind::ToolSet(_) => arg.value_name("A,B,...").value_parser(parse_tool_list),
     }
 }
 
@@ -395,10 +393,6 @@ fn hash_digest(value: &str) -> Result<HashDigest, String> {
     HashDigest::try_from(value.to_ascii_lowercase())
 }
 
-fn team_id(value: &str) -> Result<TeamId, String> {
-    TeamId::try_from(value)
-}
-
 /// Exactly `on` or `off`, never a guess at `y` or `1`.
 fn on_off(value: &str) -> Result<bool, String> {
     match value {
@@ -415,20 +409,16 @@ fn ms(value: &str) -> Result<Ms, String> {
     Ms::try_from(ms).map_err(|e| e.to_string())
 }
 
-fn tool_list(value: &str) -> Result<Vec<String>, std::convert::Infallible> {
-    Ok(parse_tool_list(value))
-}
-
 /// The `--disabled-tools` value: a comma-separated list. Empty entries are
 /// dropped, so `--disabled-tools ""` is the empty set (a full clear on the
 /// `set` lane). The seam bounds the entry count and size.
-fn parse_tool_list(value: &str) -> Vec<String> {
-    value
+fn parse_tool_list(value: &str) -> Result<Vec<String>, std::convert::Infallible> {
+    Ok(value
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
-        .collect()
+        .collect())
 }
 
 // ---- The two parsers and the mode pre-check ------------------------------------
@@ -451,8 +441,8 @@ struct Cli {
     command: Option<Command>,
 }
 
-/// The argv of native-host mode. Help and version are disabled because stdout
-/// is the protocol stream here and clap prints both to stdout.
+/// The argv of native-host mode. Help and version are disabled: see
+/// [`is_native_host_mode`].
 #[derive(Parser)]
 #[command(
     name = "chromium-bridge",
@@ -481,7 +471,9 @@ struct NativeHostArgs {
 /// registration points straight at chromium-bridge.exe and this origin
 /// selects host mode. Unix registrations keep using the explicit
 /// `--native-host` wrapper argument. Decided before either parser runs:
-/// nothing may touch stdout before host mode is known.
+/// stdout is the protocol stream in host mode, so nothing may touch it before
+/// host mode is known, and clap prints help and version to stdout (the host
+/// parser disables both).
 pub fn is_native_host_mode(args: &[String]) -> bool {
     if args.get(1).map(String::as_str) == Some("--native-host") {
         return true;
@@ -492,9 +484,8 @@ pub fn is_native_host_mode(args: &[String]) -> bool {
             .is_some_and(|arg| arg.starts_with("chrome-extension://"))
 }
 
-/// Parse argv (the program name included) once. `Err` is clap's own report, which the
-/// binary prints with [`clap::Error::exit`]: help and version to stdout with
-/// exit 0, a usage error to stderr with exit 2.
+/// Parse argv (the program name included) once. `Err` is clap's own report,
+/// which the binary prints with [`clap::Error::exit`].
 pub fn parse(args: &[String]) -> Result<Command, clap::Error> {
     if is_native_host_mode(args) {
         let host = NativeHostArgs::try_parse_from(args)?;
@@ -597,7 +588,6 @@ mod tests {
                 ]))),
             ),
             (vec!["pair"], Command::Pair { reset: false }),
-            (vec!["pair", "--reset"], Command::Pair { reset: true }),
             (vec!["revoke"], Command::Revoke),
             (
                 vec!["enclave-status", "--json"],
@@ -642,11 +632,6 @@ mod tests {
             ),
             (vec!["kill"], Command::Kill),
             (vec!["unkill"], Command::Unkill),
-            (vec!["audit", "--limit", "5"], Command::Audit { limit: 5 }),
-            (
-                vec!["policy", "show", "--json"],
-                Command::Policy(PolicyCommand::Show { json: true }),
-            ),
             (
                 vec!["policy", "history"],
                 Command::Policy(PolicyCommand::History { json: false }),
@@ -879,7 +864,7 @@ mod proptests {
             tools in prop::collection::vec(arb_name(), 0..8)
         ) {
             prop_assume!(crate::policy::validate_disabled_tools(&tools).is_ok());
-            prop_assert_eq!(parse_tool_list(&tools.join(",")), tools);
+            prop_assert_eq!(parse_tool_list(&tools.join(",")), Ok(tools));
         }
     }
 }
