@@ -176,9 +176,9 @@ jobs:
       - run: moon run check-gen
       - run: moon run check-envelope check-gen-isolation check-refresh-lockfiles
 
-  # Every bun-side check that needs no build: version and extension-ID parity, the pin cross-checks, CJK
-  # containment, the typography mirror of the managed ci.yml gate, the nightly drivers' tests, docs parity,
-  # and the compose subset. check-docs-policy imports the settings schema, hence the install.
+  # Every bun-side check that needs no build. moon.yml's `hygiene` task owns the list (the `ci` gate depends
+  # on the same task), so a check added there runs here without a change to this file. check-docs-policy
+  # imports the settings schema, hence the install.
   hygiene:
     name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
     needs: image
@@ -191,10 +191,7 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
-      - run: >-
-          moon run check-version check-extension-id check-toolchain check-hasher check-ignored
-          check-cjk check-typography check-fuzz-smoke check-harness-driver
-          check-docs-literals check-docs-policy check-compose check-planning-refs
+      - run: moon run hygiene
 
   # typos is not here: the managed ci.yml's standard-checks job runs the fleet's typos action over the same
   # _typos.toml (the local gate keeps its `moon run typos`).

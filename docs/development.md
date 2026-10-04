@@ -95,7 +95,7 @@ The full task menu, by area:
 
 | Area | Tasks |
 |------|-------|
-| Aggregates | `build`, `test`, `ci`, `release`, `lint`, `fmt`, `fix` |
+| Aggregates | `build`, `test`, `ci`, `hygiene` (the bun-side checks CI's hygiene job runs; `ci` depends on it), `release`, `lint`, `fmt`, `fix` |
 | Dev loops | `dev`, `dev-web`, `extension:dev` |
 | Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `build-release`, `build-repro`, `typos`, `machete`, `audit`, `fuzz-smoke` |
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |

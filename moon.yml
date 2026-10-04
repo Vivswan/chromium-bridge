@@ -52,27 +52,15 @@ tasks:
       - 'extension:test'
       - 'extension:build'
       - '~:test-e2e'
-      - '~:check-version'
-      - '~:check-extension-id'
-      - '~:check-cjk'
-      - '~:check-typography'
-      - '~:check-fuzz-smoke'
-      - '~:check-harness-driver'
+      - '~:hygiene'
       - '~:check-refresh-lockfiles'
       - '~:check-fuzz-workspace'
       - '~:test-fuzz'
       - '~:check-gen'
       - '~:check-envelope'
       - '~:check-gen-isolation'
-      - '~:check-toolchain'
-      - '~:check-hasher'
-      - '~:check-ignored'
       - '~:check-yaml'
       - '~:check-actions'
-      - '~:check-docs-literals'
-      - '~:check-docs-policy'
-      - '~:check-planning-refs'
-      - '~:check-compose'
     options:
       runDepsInParallel: false
 
@@ -499,6 +487,27 @@ tasks:
       interactive: true
 
   # ----- version + repo hygiene checks ---------------------------------------
+
+  # The one list of the bun-side checks that need no build: CI's hygiene job (checks.yml) runs this task and
+  # `ci` depends on it, so a check added here runs in both.
+  hygiene:
+    description: 'Every bun-side check that needs no build (versions, pins, CJK, typography, docs parity, compose); CI runs the same task'
+    deps:
+      - '~:check-version'
+      - '~:check-extension-id'
+      - '~:check-toolchain'
+      - '~:check-hasher'
+      - '~:check-ignored'
+      - '~:check-cjk'
+      - '~:check-typography'
+      - '~:check-fuzz-smoke'
+      - '~:check-harness-driver'
+      - '~:check-docs-literals'
+      - '~:check-docs-policy'
+      - '~:check-planning-refs'
+      - '~:check-compose'
+    options:
+      runDepsInParallel: false
 
   check-version:
     description: 'Verify the crate, JS package, and release-please versions agree'
