@@ -48,5 +48,5 @@ body:
       options:
         - label: Tool risk matrix updated
         - label: Threat model updated (if a boundary moved)
-        - label: ADR added (if a decision was made)
+        - label: Rationale page updated (if a security boundary changed)
         - label: Negative security test added
