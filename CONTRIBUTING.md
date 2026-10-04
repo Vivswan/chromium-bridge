@@ -97,7 +97,7 @@ A new tool touches both sides ([docs/architecture.md](./docs/architecture.md) se
 
 ## Versioning
 
-`Cargo.toml` is the source of truth. Release-please bumps it (and the extension `package.json`) in the rolling release PR and writes `CHANGELOG.md`; after a manual bump, run `moon run sync-version` to propagate it. CI fails if the crate and extension versions drift.
+Versions are bumped only by the rolling release PR; the copies and the gate are in [Releasing](./docs/development.md#releasing).
 
 ## License
 

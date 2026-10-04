@@ -44,15 +44,15 @@ tests/protocol/          e2e.py, adversarial.py, chaos.py - drive the real relea
 tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
                          integration_e2e.ts, run_all.ts (bun workspace member; isolated Chrome only)
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
-scripts/                 bun workspace member: gen-ops.ts, check-version.ts, sync-version.ts,
-                         check-extension-id.ts, check-docs-literals.ts, check-docs-policy.ts,
-                         build-repro.ts, fuzz-smoke.ts, lib.ts, ...
+scripts/                 bun workspace member: gen-ops.ts, check-version.ts, check-extension-id.ts,
+                         check-docs-literals.ts, check-docs-policy.ts, build-repro.ts,
+                         fuzz-smoke.ts, lib.ts, ...
 src/apps/web/           bun workspace member: minimal Astro site rendering the
                          repo's markdown docs + translations (moon run web:build;
                          not part of `moon run ci`)
 ```
 
-All tooling scripts are TypeScript run via bun. Scripts whose only consumer is a GitHub workflow live in `.github/scripts/`; everything with a local consumer (moon tasks, other scripts) stays in `scripts/`. The fuzz smoke moved from the former to the latter when it grew a local moon task, which currently leaves `.github/scripts/` empty. Two scripts (`scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`) are deliberately self-contained on node builtins so they run without a `bun install`: the release workflow builds the binary before installing the workspace, and the nightly fuzz job never installs it at all.
+All tooling scripts are TypeScript run via bun and live in `scripts/`, a bun workspace member. Two of them, `scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`, stay self-contained on node builtins so they run without a `bun install`: the release workflow builds the binary before installing the workspace, and the nightly fuzz job never installs it at all.
 
 Rust dependencies are gated by automated supply-chain checks: `cargo deny` (license allow-list, banned sources, RUSTSEC advisories) runs in every CI gate and again in the nightly rerun, the managed ci.yml's fleet Trivy step gates `Cargo.lock` and `bun.lock` at HIGH/CRITICAL, PRs additionally get the GitHub dependency-review action (an advisory diff, via the platform-managed job in the managed ci.yml), and Dependabot watches cargo, bun, and GitHub Actions. Adding or bumping a crate fails CI on a known advisory or a license outside `deny.toml`'s allow list; there is no manual per-crate audit step. Run `moon run audit` to reproduce the cargo-deny pass locally.
 
@@ -102,7 +102,7 @@ The full task menu, by area:
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
-| Versioning | `sync-version`, `check-version`, `check-extension-id` |
+| Versioning | `check-version`, `check-extension-id` |
 | Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
 
 ## moon: the canonical command interface
@@ -297,6 +297,9 @@ BB_LOG=error chromium-bridge          # quiet
 
 ## Releasing
 
-Releases are cut by release-please: conventional commits on `main` accumulate into a rolling release PR that bumps the version and writes `CHANGELOG.md`; merging it tags the release, and the same CI run builds the macOS Apple Silicon, Linux x64, and Windows x64 archives (binary + built extension), and publishes them to GitHub Releases (see [docs/release.md](./release.md)). The bump covers `Cargo.toml` and every synced JSON manifest (`versionedJsonFiles` in `scripts/lib.ts`: the extension `package.json`), per release-please-config.json's extra-files.
+Releases are cut by release-please from a green `main`; the pipeline (draft release, packaging matrix, attestation, publish) is [docs/release.md](./release.md). The release PR is the only version bump: its extra-files in `release-please-config.json` rewrite every copy below, and `moon run check-version` fails CI when a copy or the config disagrees, including on the release PR itself.
 
-`Cargo.toml` stays the single source of truth between releases: after a manual version change, `moon run sync-version` (`bun scripts/sync-version.ts`) propagates it to the synced JSON manifests (the extension `package.json`, which the WXT-built manifest reads its version from), and CI enforces the consistency on every push (`moon run check-version`), so drift fails the build - including on the release PR itself. Each packaging job additionally refuses to run if the tag doesn't match the Cargo version.
+| Version copy | Who reads it |
+|---|---|
+| `Cargo.toml` `[workspace.package] version` | the crates, the packaging jobs' tag check |
+| `src/apps/extension/package.json` `version` | the WXT-built manifest (`versionedJsonFiles` in `scripts/lib.ts`) |

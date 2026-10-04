@@ -36,7 +36,7 @@ pub use handshake::{
     client_handshake, server_handshake, validate_label, BrowserLabel, DEFAULT_LABEL,
 };
 pub use identity::{ClientIdentity, HashDigest, TeamId};
-pub use lockfile::{listen_and_publish, LockFile, PublishOutcome};
+pub use lockfile::{listen_and_publish, LockFile, PublishOutcome, LOCK_FILENAME};
 #[cfg(unix)]
 pub use peercred::checked_pid;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

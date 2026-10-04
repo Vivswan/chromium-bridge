@@ -10,8 +10,8 @@ import { MANIFEST_PERMISSIONS } from "./src/lib/shared/manifest-permissions";
 // manifest pins in `allowed_origins`, so the key ships in EVERY build (this
 // extension is distributed as load-unpacked, not through a store): a build
 // without it would get a path-derived ID and be rejected by the host.
-// scripts/check-extension-id.ts verifies every copy of the derived ID
-// against the same source.
+// scripts/check-extension-id.ts verifies the BUILT manifest keeps this key
+// and the permission surface.
 
 export default defineConfig({
   srcDir: "src",

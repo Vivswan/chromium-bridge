@@ -291,7 +291,7 @@ async function main(): Promise<void> {
       )
       .catch(() => {});
     const enText = await bodyText();
-    // Keep in sync with the authoritative gate in scripts/check-cjk.ts.
+    // Keep in sync with CJK_CLASS in scripts/check-cjk.ts, the authoritative gate.
     const cjk = enText.match(
       /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\u3000-\u303F\u3200-\u33FF\uFE30-\uFE4F\uFF00-\uFFEF]/u,
     );

@@ -365,6 +365,7 @@ tasks:
         src/packages/shared/src/enclave-fixture.gen.ts \
         src/packages/shared/src/envelope.gen.ts \
         src/packages/shared/src/audit.gen.ts \
+        src/packages/shared/src/host.gen.ts \
         src/packages/shared/src/policy.gen.ts
 
   gen-icons:
@@ -493,23 +494,20 @@ tasks:
 
   # ----- version + repo hygiene checks ---------------------------------------
 
-  sync-version:
-    description: 'Propagate the Cargo.toml version into the JS package manifests'
-    command: 'bun scripts/sync-version.ts'
-    options:
-      runInCI: false
-
   check-version:
     description: 'Verify the crate, JS package, and release-please versions agree'
     command: 'bun scripts/check-version.ts'
 
   check-extension-id:
-    description: 'Verify the pinned key, extension ID, and built manifest agree'
+    description: 'Verify the built extension manifest keeps the pinned key and permission surface, and identity.rs stays the only definition site'
     command: 'bun scripts/check-extension-id.ts'
 
   check-cjk:
-    description: 'Verify CJK text stays inside the zh locale files and translated docs'
-    command: 'bun scripts/check-cjk.ts'
+    description: 'Verify CJK text stays inside the zh locale files and translated docs (one git grep -P; the wrapper owns the excludes and the engine control)'
+    script: |
+      set -e
+      bun scripts/check-cjk.ts
+      bun test scripts/check-cjk.test.ts
 
   check-typography:
     description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
@@ -527,8 +525,11 @@ tasks:
     command: 'bun scripts/check-moon-hasher.ts'
 
   check-ignored:
-    description: 'No tracked file may be matched by .gitignore (Biome and knip would skip it silently)'
-    command: 'bun scripts/check-gitignore-tracked.ts'
+    description: 'No tracked file may be matched by .gitignore (Biome and knip would skip it silently; one git ls-files call behind a typed wrapper)'
+    script: |
+      set -e
+      bun scripts/check-ignored.ts
+      bun test scripts/check-ignored.test.ts scripts/lib.test.ts
 
   check-yaml:
     # The managed ci.yml's yamllint job installs its own, unpinned, version (a template-sync decision), so

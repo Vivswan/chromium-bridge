@@ -26,8 +26,7 @@
         "dev.ts",
         "gen-envelope.ts",
         "gen-ops.ts",
-        "help.ts",
-        "sync-version.ts"
+        "help.ts"
       ],
       "project": ["**/*.ts"]
     },

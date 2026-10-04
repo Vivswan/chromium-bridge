@@ -14,6 +14,12 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 
+/// The env var that sets the stderr threshold: a [`Level::name`] in lower- or uppercase, anything else `info`.
+pub const LEVEL_ENV: &str = "BB_LOG";
+
+/// The env var that picks the audit line format: a [`Format::name`] in lower- or uppercase, anything else `text`.
+pub const FORMAT_ENV: &str = "BB_LOG_FORMAT";
+
 /// Severity, ordered least-verbose (`Error`) to most-verbose (`Debug`).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Level {
@@ -24,6 +30,19 @@ pub enum Level {
 }
 
 impl Level {
+    /// Every level, least to most verbose: the accepted `BB_LOG` values in the order the docs list them.
+    pub const ALL: [Level; 4] = [Level::Error, Level::Warn, Level::Info, Level::Debug];
+
+    /// The lowercase spelling `BB_LOG` accepts; the docs state these through the generated contract.
+    pub fn name(self) -> &'static str {
+        match self {
+            Level::Error => "error",
+            Level::Warn => "warn",
+            Level::Info => "info",
+            Level::Debug => "debug",
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Level::Error => "ERROR",
@@ -34,15 +53,18 @@ impl Level {
     }
 }
 
-/// The active threshold, parsed once from `BB_LOG` (error|warn|info|debug).
-/// Unrecognized or unset values fall back to `info`.
+/// The active threshold, parsed once from [`LEVEL_ENV`].
 pub fn threshold() -> Level {
     static T: OnceLock<Level> = OnceLock::new();
-    *T.get_or_init(|| match std::env::var("BB_LOG").ok().as_deref() {
-        Some("error") | Some("ERROR") => Level::Error,
-        Some("warn") | Some("WARN") => Level::Warn,
-        Some("debug") | Some("DEBUG") => Level::Debug,
-        _ => Level::Info,
+    *T.get_or_init(|| {
+        let raw = std::env::var(LEVEL_ENV).ok();
+        Level::ALL
+            .into_iter()
+            .find(|l| {
+                raw.as_deref()
+                    .is_some_and(|v| v == l.name() || v == l.label())
+            })
+            .unwrap_or(Level::Info)
     })
 }
 
@@ -58,21 +80,46 @@ pub fn emit(level: Level, tag: &str, args: std::fmt::Arguments) {
     }
 }
 
-/// Output format for audit lines, from `BB_LOG_FORMAT` (text|json). Default
-/// `text` keeps the human-readable stderr style; `json` emits one JSON object
-/// per line for machine ingestion.
+/// Output format for audit lines. `Text` keeps the human-readable stderr style; `Json` emits one JSON
+/// object per line for machine ingestion.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Format {
     Text,
     Json,
 }
 
-/// The active audit format, parsed once from `BB_LOG_FORMAT`.
+impl Format {
+    /// Every format, the default first: the accepted `BB_LOG_FORMAT` values in the order the docs list them.
+    pub const ALL: [Format; 2] = [Format::Text, Format::Json];
+
+    /// The lowercase spelling `BB_LOG_FORMAT` accepts; the docs state these through the generated contract.
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::Text => "text",
+            Format::Json => "json",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Format::Text => "TEXT",
+            Format::Json => "JSON",
+        }
+    }
+}
+
+/// The active audit format, parsed once from [`FORMAT_ENV`].
 pub fn format() -> Format {
     static F: OnceLock<Format> = OnceLock::new();
-    *F.get_or_init(|| match std::env::var("BB_LOG_FORMAT").ok().as_deref() {
-        Some("json") | Some("JSON") => Format::Json,
-        _ => Format::Text,
+    *F.get_or_init(|| {
+        let raw = std::env::var(FORMAT_ENV).ok();
+        Format::ALL
+            .into_iter()
+            .find(|f| {
+                raw.as_deref()
+                    .is_some_and(|v| v == f.name() || v == f.label())
+            })
+            .unwrap_or(Format::Text)
     })
 }
 

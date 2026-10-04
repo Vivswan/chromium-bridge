@@ -49,7 +49,7 @@ deny = [
   { crate = "schemars", wrappers = ["rmcp"], reason = "runtime tool schemas come from rmcp only" },
 ]
 # The fuzz crate's core dependency is `path = ".."` with no version, and
-# scripts/sync-version.ts does not maintain this manifest, so a pinned
+# no script maintains this manifest (release-please bumps only the root copies), so a pinned
 # version would drift on every release. Scoped to this fuzz-only config so
 # the shipped workspace's gate keeps rejecting bare path dependencies.
 allow-wildcard-paths = true

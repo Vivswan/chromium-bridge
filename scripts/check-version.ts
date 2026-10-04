@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Verify the version is consistent across the crate, the JS packages that surface it, and the
-// release-please bookkeeping. Cargo.toml is the single source of truth (scripts/sync-version.ts
-// propagates it).
+// release-please bookkeeping. Cargo.toml is the single source of truth; the release PR
+// propagates it through release-please-config.json's extra-files.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

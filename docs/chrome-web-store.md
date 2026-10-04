@@ -11,7 +11,7 @@ But the Chrome Web Store assigns a store-controlled ID on first upload, and the 
 Mitigations that must be planned:
 
 - After the first upload, take the store-assigned ID and add it to `allowed_origins`, ideally trusting both IDs at once: the store ID (store users) plus the current pinned ID (unpacked / developers).
-- Update [`identity.rs`](../src/packages/core/src/identity.rs) (the single definition site the registration engine and the generated TS consume) and [`scripts/check-extension-id.ts`](../scripts/check-extension-id.ts) in step so they trust both IDs.
+- Trusting both IDs is more than a value change: `PINNED_EXTENSION_ID` in [`identity.rs`](../src/packages/core/src/identity.rs) is singular and the registration engine writes one `allowed_origins` entry from it, so the identity contract and the Registrar must model plural IDs first. `moon run gen` then carries the result to every generated copy.
 - Optional: backfill the store listing's public key into the manifest `key` so unpacked loads also get the store ID. This changes today's pinned ID, so it needs weighing.
 
 ## What it solves, and what it does not

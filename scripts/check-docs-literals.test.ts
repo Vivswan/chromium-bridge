@@ -1,92 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import {
-  auditDefaultLimit,
   BUNDLE_TOKEN,
-  bridgeProtocolVersion,
   bridgeVersionLineViolations,
-  browserKeys,
   envTableViolations,
-  envValueSet,
   familyViolations,
   listPresenceViolation,
   listSectionViolations,
-  lockFilename,
-  logEnvVars,
   mcpLineViolations,
-  mcpProtocolVersion,
   presenceViolation,
   RELEASE_BUNDLE_NAME,
-  rustStrConst,
   tokenPresenceViolation,
 } from "./check-docs-literals";
 
 const HOST_ID = "com.vivswan.chromium_bridge.host";
 const KEY_LABEL = "com.vivswan.chromium-bridge.enclave.signing.v1";
 const idFamily = () => /com\.vivswan\.[a-z0-9_](?:[a-z0-9._-]*[a-z0-9_])?/g;
-
-describe("canonical extraction", () => {
-  test("reads a &str const from Rust source text", () => {
-    const src = `pub const NATIVE_HOST_ID: &str = "${HOST_ID}";`;
-    expect(rustStrConst(src, "NATIVE_HOST_ID", "identity.rs")).toBe(HOST_ID);
-  });
-
-  test("a missing const is an error, never a silent pass", () => {
-    expect(() => rustStrConst("nothing here", "NATIVE_HOST_ID", "identity.rs")).toThrow(
-      "identity.rs",
-    );
-  });
-
-  test("a commented-out const is not mistaken for the canonical value", () => {
-    const src = `// const NATIVE_HOST_ID: &str = "com.vivswan.old.host";\npub const NATIVE_HOST_ID: &str = "${HOST_ID}";`;
-    expect(rustStrConst(src, "NATIVE_HOST_ID", "identity.rs")).toBe(HOST_ID);
-    const blockSrc = `/*\nconst NATIVE_HOST_ID: &str = "com.vivswan.old.host";\n*/\npub const NATIVE_HOST_ID: &str = "${HOST_ID}";`;
-    expect(rustStrConst(blockSrc, "NATIVE_HOST_ID", "identity.rs")).toBe(HOST_ID);
-    expect(() =>
-      rustStrConst('// const NATIVE_HOST_ID: &str = "x";', "NATIVE_HOST_ID", "identity.rs"),
-    ).toThrow("identity.rs");
-    expect(() =>
-      rustStrConst('/*\nconst NATIVE_HOST_ID: &str = "x";\n*/', "NATIVE_HOST_ID", "identity.rs"),
-    ).toThrow("identity.rs");
-  });
-
-  test("reads the lock filename from the join call, including a future rename", () => {
-    expect(lockFilename('runtime_dir().join("run.lock")')).toBe("run.lock");
-    expect(lockFilename('runtime_dir().join("run.v2.lock")')).toBe("run.v2.lock");
-    expect(() => lockFilename("no join here")).toThrow("lockfile");
-  });
-
-  test("MCP version: a hoisted protocol.rs const wins over the inline literal", () => {
-    const inline = '"protocolVersion": "2025-06-18",';
-    expect(mcpProtocolVersion("", inline)).toBe("2025-06-18");
-    const hoisted = 'pub const MCP_PROTOCOL_VERSION: &str = "2026-03-26";';
-    expect(mcpProtocolVersion(hoisted, inline)).toBe("2026-03-26");
-    expect(() => mcpProtocolVersion("", "")).toThrow("MCP protocol version");
-  });
-
-  test("reads the bridge protocol version integer", () => {
-    expect(bridgeProtocolVersion("pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;")).toBe("1");
-    expect(() => bridgeProtocolVersion("")).toThrow("BRIDGE_PROTOCOL_VERSION");
-  });
-
-  test("collects the BB_* env var names log.rs reads", () => {
-    const src = 'std::env::var("BB_LOG") ... std::env::var("BB_LOG_FORMAT")';
-    expect(logEnvVars(src)).toEqual(["BB_LOG", "BB_LOG_FORMAT"]);
-    expect(() => logEnvVars("no vars")).toThrow("log.rs");
-  });
-
-  test("collects an env var's accepted values, including the default arm's", () => {
-    const src = `
-    *T.get_or_init(|| match std::env::var("BB_LOG").ok().as_deref() {
-        Some("error") | Some("ERROR") => Level::Error,
-        Some("debug") | Some("DEBUG") => Level::Debug,
-        _ => Level::Info,
-    })`;
-    // "info" has no explicit arm - it is the silent fallback - but it is a
-    // documented value, so the parser must include it.
-    expect(envValueSet(src, "BB_LOG")).toEqual(["error", "debug", "info"]);
-    expect(() => envValueSet(src, "BB_MISSING")).toThrow("BB_MISSING");
-  });
-});
 
 describe("release attestation bundle", () => {
   const LABEL = "release attestation bundle";
@@ -245,88 +173,6 @@ describe("presence and env tables", () => {
     expect(v[0]?.message).toContain("must document");
   });
 
-  test("reads the audit --limit default from its const", () => {
-    expect(auditDefaultLimit("pub const DEFAULT_AUDIT_LIMIT: usize = 200;")).toBe("200");
-    expect(auditDefaultLimit("pub const DEFAULT_AUDIT_LIMIT: usize = 1_000;")).toBe("1000");
-    expect(() => auditDefaultLimit("nothing here")).toThrow("audit.rs");
-    // Commented-out declarations (either style) never stand in for the value.
-    expect(() => auditDefaultLimit("// pub const DEFAULT_AUDIT_LIMIT: usize = 999;")).toThrow(
-      "audit.rs",
-    );
-    expect(() => auditDefaultLimit("/*\npub const DEFAULT_AUDIT_LIMIT: usize = 999;\n*/")).toThrow(
-      "audit.rs",
-    );
-    // A declaration inside a NESTED block comment stays hidden (finding 3).
-    expect(() =>
-      auditDefaultLimit("/* outer /* pub const DEFAULT_AUDIT_LIMIT: usize = 999; */ still */"),
-    ).toThrow("audit.rs");
-  });
-
-  test("reads the browser CLI keys from Browser::key(), not the display maps", () => {
-    const src = `
-    pub fn key(self) -> &'static str {
-        match self {
-            Browser::Chrome => "chrome",
-            Browser::Brave2 => "brave-2",
-        }
-    }
-    fn mac_app(self) -> &'static str {
-        match self {
-            Browser::Chrome => "Google Chrome.app",
-            Browser::Brave2 => "Brave Browser.app",
-        }
-    }`;
-    // Digit/hyphen keys parse; order is the source's.
-    expect(browserKeys(src)).toEqual(["chrome", "brave-2"]);
-    expect(() => browserKeys("no key fn")).toThrow("browsers.rs");
-  });
-
-  test("a Self:: arm is counted, not silently skipped (finding 3)", () => {
-    // The pre-review extractor filtered to lines starting `Browser::`, so a
-    // key written `Self::Opera` vanished from the pinned set. It must be
-    // classified, not dropped.
-    const src = `
-    pub fn key(self) -> &'static str {
-        match self {
-            Browser::Chrome => "chrome",
-            Self::Opera => "opera",
-        }
-    }`;
-    expect(browserKeys(src)).toEqual(["chrome", "opera"]);
-  });
-
-  test("a `_` catch-all (or any unclassifiable arm) throws, never shrinks the list", () => {
-    const withCatchAll = `
-    pub fn key(self) -> &'static str {
-        match self {
-            Browser::Chrome => "chrome",
-            _ => "unknown",
-        }
-    }`;
-    expect(() => browserKeys(withCatchAll)).toThrow("unclassifiable");
-    const withCall = `
-    pub fn key(self) -> &'static str {
-        match self {
-            Browser::Chrome => "chrome",
-            Browser::Weird => key_for_weird(),
-        }
-    }`;
-    expect(() => browserKeys(withCall)).toThrow("unclassifiable");
-  });
-
-  test("a key hidden in a nested block comment is not exposed (finding 3)", () => {
-    // A nested block comment must strip fully; the declaration inside stays
-    // hidden, so the real match block below is the only one seen.
-    const src = `
-    /* disabled /* pub fn key(self) -> &'static str { match self { Browser::Ghost => "ghost", } } */ */
-    pub fn key(self) -> &'static str {
-        match self {
-            Browser::Chrome => "chrome",
-        }
-    }`;
-    expect(browserKeys(src)).toEqual(["chrome"]);
-  });
-
   test("a doc lagging the browser key list is flagged; a wrapped list passes", () => {
     const keys = ["chrome", "brave", "edge"];
     // The doc wraps the list across lines: still the canonical list.
@@ -342,7 +188,7 @@ describe("presence and env tables", () => {
     });
   });
 
-  test("section anchoring pins each list to its own paragraph (finding 2)", () => {
+  test("section anchoring pins each list to its own paragraph", () => {
     const keys = ["chrome", "brave"];
     const doc = [
       "for each known browser (chrome, brave), whether it is present.",
