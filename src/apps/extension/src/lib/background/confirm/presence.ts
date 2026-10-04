@@ -27,28 +27,21 @@
 import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
 import {
   PresenceErrorFrameSchema,
+  type PresenceInboundFrame,
   PresenceInboundFrameSchema,
   PresenceProofFrameSchema,
 } from "@chromium-bridge/shared/enclave";
 import type { PresenceChallengeWire } from "@chromium-bridge/shared/envelope-wire.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { browser } from "wxt/browser";
+import type { Connection, PortCollaborator } from "../connection";
 import { getCompromised, getPin, setCompromised } from "../enclave-pin";
 import { generateNonce, hexEncode, verifyPresenceProofAgainstPin } from "../enclave-verify";
 import { platformCanEnroll } from "../enrollment";
 import type { ConfirmationProvider, Presentation } from "./service";
 
-type PostFrame = (frame: object) => boolean;
-
-/** One port attachment. A fresh object per attachPort, so "is the exact
- * attachment this challenge was sent on still the live one?" is a reference
- * identity check - a plain `post !== null` (or an equal-looking function)
- * would miss a disconnect+reconnect that installs a NEW port before
- * verification finishes. */
-interface PortAttachment {
-  post: PostFrame;
-}
-let port: PortAttachment | null = null;
+/** The live connection, or null while the link is down; compared by identity per Connection in ../connection.ts. */
+let conn: Connection | null = null;
 
 /** One outstanding presence round. Single-flight by construction: the slot
  * is claimed SYNCHRONOUSLY (before any await), so a second same-tick round
@@ -60,31 +53,37 @@ type PendingRound =
   | {
       stage: "preparing";
       nonce: string;
-      /** The attachment this round will send on (identity-checked later). */
-      port: PortAttachment;
+      /** The connection this round will send on (identity-checked later). */
+      conn: Connection;
       settle: (approved: boolean) => void;
     }
   | {
       stage: "challenged";
       nonce: string;
       context: string;
-      /** The attachment the challenge went out on. If the live `port` is no
-       * longer this exact object at verdict time, the port dropped (or was
+      /** The connection the challenge went out on. If the live connection is
+       * no longer this exact object at verdict time, the port dropped (or was
        * replaced) and the round fails closed. */
-      port: PortAttachment;
+      conn: Connection;
       settle: (approved: boolean) => void;
     };
 let pending: PendingRound | null = null;
 
-export function attachPort(p: PostFrame): void {
-  port = { post: p };
-}
-
-/** Port gone: the outstanding round can never complete - deny it. */
-export function detachPort(): void {
-  port = null;
-  cancelPending("native port disconnected");
-}
+export const collaborator: PortCollaborator = {
+  onAttach(c) {
+    conn = c;
+  },
+  /** Port gone: the outstanding round can never complete - deny it. */
+  onDetach() {
+    conn = null;
+    cancelPending("native port disconnected");
+  },
+  onFrame(msg) {
+    if (!isPresenceFrame(msg)) return false;
+    handlePresenceFrame(msg);
+    return true;
+  },
+};
 
 function cancelPending(why: string): void {
   const round = pending;
@@ -96,7 +95,7 @@ function cancelPending(why: string): void {
 }
 
 /** Classification for the port demux: is this frame a presence answer? */
-export function isPresenceFrame(msg: unknown): boolean {
+export function isPresenceFrame(msg: unknown): msg is PresenceInboundFrame {
   return PresenceInboundFrameSchema.safeParse(msg).success;
 }
 
@@ -158,13 +157,13 @@ export function handlePresenceFrame(msg: unknown): void {
     }
     // Fail closed on a mid-verification disconnect OR reconnect: the pin
     // lookup and the crypto above are async, and the port can drop (or drop
-    // and be replaced by a fresh one) while they run. detachPort cancels the
+    // and be replaced by a fresh one) while they run. onDetach cancels the
     // OUTSTANDING round, but this round was already claimed off `pending`, so
-    // the cancel could not reach it. The attachment identity is what closes
-    // both holes: if the live port is no longer the exact object this
+    // the cancel could not reach it. The connection identity is what closes
+    // both holes: if the live connection is no longer the exact object this
     // challenge was sent on, the op can no longer proceed on it, so a
     // stale-but-valid approval must not stand.
-    if (port !== round.port) {
+    if (conn !== round.conn) {
       console.warn("[bb] native port changed before the presence verdict; denying");
       round.settle(false);
       return;
@@ -229,13 +228,13 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
     console.warn("[bb] refusing concurrent presence round");
     return Promise.resolve(false);
   }
-  const p = port;
-  if (!p) return Promise.resolve(false);
+  const live = conn;
+  if (!live) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
     const claim: PendingRound = {
       stage: "preparing",
       nonce: generateNonce(),
-      port: p,
+      conn: live,
       settle: resolve,
     };
     pending = claim;
@@ -255,10 +254,10 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
       // from under us (a detach, a premature frame): only its owner may
       // advance it, and a settled claim must not send a challenge.
       if (pending !== mine) return;
-      // Defense in depth beside the verdict-time identity check: if the port
-      // this round was minted on is no longer the live one, the challenge
-      // would go out on a stale attachment - cancel the round instead.
-      if (port !== p) {
+      // Defense in depth beside the verdict-time identity check: if the
+      // connection this round was minted on is no longer the live one, the
+      // challenge would go out on a stale connection - cancel the round instead.
+      if (conn !== live) {
         cancelPending("native port changed before the challenge was sent");
         return;
       }
@@ -266,12 +265,12 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
         stage: "challenged",
         nonce: claim.nonce,
         context,
-        port: p,
+        conn: live,
         settle: resolve,
       };
       pending = mine;
       if (
-        !p.post({
+        !live.post({
           type: "presence_challenge",
           nonce: claim.nonce,
           context,
@@ -327,8 +326,8 @@ export class EnclavePresenceProvider implements ConfirmationProvider {
   }
 }
 
-/** Tests only: forget the port and any outstanding round. */
+/** Tests only: forget the connection and any outstanding round. */
 export function resetPresenceForTests(): void {
-  port = null;
+  conn = null;
   pending = null;
 }

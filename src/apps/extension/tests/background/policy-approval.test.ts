@@ -22,12 +22,13 @@ import {
 } from "@/lib/background/confirm/service";
 import { registerUnpinnedRelaxationApprover } from "@/lib/background/policy-approval";
 import {
-  attachPort,
+  collaborator,
   getPolicySnapshotForTests,
   getStoredPolicyState,
   handlePolicyFrame,
   resetPolicySyncForTests,
 } from "@/lib/background/policy-sync";
+import { attach } from "./fake-connection";
 
 // The pin store is mocked exactly as in policy-sync.test.ts: null plays the
 // unpinned machine, the golden-fixture key plays a pinned one.
@@ -77,7 +78,7 @@ beforeEach(() => {
   presented = [];
   installFakeWindow();
   registerUnpinnedRelaxationApprover();
-  attachPort(() => true);
+  attach(collaborator);
 });
 
 afterEach(() => {
@@ -168,7 +169,7 @@ describe("the unpinned relaxation approval surface", () => {
 
   test("with the approver unregistered, a relaxing push is refused before any surface exists", async () => {
     resetPolicySyncForTests(); // drops the registered approver (and the port)
-    attachPort(() => true);
+    attach(collaborator);
     await handlePolicyFrame(unsignedFrame(0));
     expect(presented).toHaveLength(0);
     expect(await getStoredPolicyState()).toBeNull();

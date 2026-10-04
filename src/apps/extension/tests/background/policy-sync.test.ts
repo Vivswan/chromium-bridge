@@ -24,9 +24,8 @@ import {
   computeKeyId,
 } from "@/lib/background/enclave-verify";
 import {
-  attachPort,
   chooseLanguage,
-  detachPort,
+  collaborator,
   getLangState,
   getPolicySnapshotForTests,
   getStoredPolicyState,
@@ -39,6 +38,7 @@ import {
   resetPolicySyncForTests,
   setUnpinnedRelaxationApprover,
 } from "@/lib/background/policy-sync";
+import { attach } from "./fake-connection";
 
 // The pin store is mocked: production deny-lists the golden-fixture key as a
 // pin (its scalar is public repo data), which is exactly why the replay must
@@ -161,7 +161,7 @@ beforeEach(() => {
   pinState.throwOnSetCompromised = false;
   auditCalls.events = [];
   posted = [];
-  attachPort((frame) => {
+  attach(collaborator, (frame) => {
     posted.push(frame);
     return true;
   });
@@ -212,8 +212,8 @@ describe("golden-vector replay through the full accept path", () => {
 
   test("rev 2 then rev 1: the replayed lower revision is refused by the ratchet", async () => {
     await push(goldenFrame(1));
-    detachPort();
-    attachPort(() => true); // a fresh connection must not inherit the mark
+    collaborator.onDetach();
+    attach(collaborator); // a fresh connection must not inherit the mark
     await push(goldenFrame(0));
     const stored = await getStoredPolicyState();
     expect(stored?.revision).toBe(2);
@@ -226,8 +226,8 @@ describe("golden-vector replay through the full accept path", () => {
   test("a byte-identical replay is idempotent: it re-opens the barrier without rewriting the store", async () => {
     await push(goldenFrame(0));
     const first = await getStoredPolicyState();
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     expect((await policyDispatchGate()).allowed).toBe(false);
     await push(goldenFrame(0));
     expect((await policyDispatchGate()).allowed).toBe(true);
@@ -413,7 +413,7 @@ describe("the value ratchet (crafted signed documents)", () => {
   test("the ratchet anchors on STORAGE, so it survives module-state loss (SW restart)", async () => {
     await push(await signedFrame(docJson(2, [])));
     resetPolicySyncForTests(); // the SW died; storage did not
-    attachPort(() => true);
+    attach(collaborator);
     await push(await signedFrame(docJson(1, [])));
     const stored = await getStoredPolicyState();
     expect(stored?.revision).toBe(2);
@@ -422,19 +422,19 @@ describe("the value ratchet (crafted signed documents)", () => {
 
 describe("the dispatch barrier and the one-way cutover", () => {
   test("pre-cutover the barrier is inert even with no port at all", async () => {
-    detachPort();
+    collaborator.onDetach();
     expect((await policyDispatchGate()).allowed).toBe(true);
   });
 
   test("post-cutover a connection that saw no verified push is refused (stable reason)", async () => {
     await push(goldenFrame(0));
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     const gate = await policyDispatchGate();
     expect(gate.allowed).toBe(false);
     if (!gate.allowed) expect(gate.reason).toContain("policy barrier");
     // And with the port down entirely, still refused.
-    detachPort();
+    collaborator.onDetach();
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
@@ -503,8 +503,8 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     // A hostile host now replays the genuine, validly-signed rev-1 baseline on a
     // fresh connection. With the anchor gone this would apply as first-ever; with
     // it retained the revision ratchet refuses it, and the barrier stays closed.
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(2);
     expect((await getStoredPolicyState())?.effective).toEqual(goldenValues(1));
@@ -540,8 +540,8 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     // ...so the old, more-permissive genuinely-signed rev-1 baseline replay
     // is REFUSED - the ratchet demands a strictly newer signed document, and
     // the barrier stays closed (fresh verification demanded).
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(2);
     expect((await getStoredPolicyState())?.effective).toEqual(goldenValues(1));
@@ -609,8 +609,8 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     // A subsequent SIGNED rev-1 push under the now-pinned key applies cleanly -
     // it was not clobbered by a stale revision-0 write from the dropped push.
     setUnpinnedRelaxationApprover(null);
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(1);
     expect((await policyDispatchGate()).allowed).toBe(true);
@@ -666,7 +666,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     // THE SERVICE WORKER DIES between the revoke and the re-pair (the common MV3
     // case): every in-memory latch, epoch, and mirror is gone. Storage is not.
     resetPolicySyncForTests();
-    attachPort(() => true);
+    attach(collaborator);
     // The user re-pairs with a FRESH key. Novelty is decided against the durable
     // prior, so this is recognized as new and the corrupt flag is normalized.
     const other = await makeSigner();
@@ -691,7 +691,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: "yes" });
     await onPinRevoked(fixture.keyIdHex);
     resetPolicySyncForTests();
-    attachPort(() => true);
+    attach(collaborator);
     await onPinPinned(fixture.keyIdHex);
     const raw = await fakeBrowser.storage.local.get("bridgePolicyCutover");
     expect(raw.bridgePolicyCutover).toBe("yes"); // untouched: still tampering evidence
@@ -704,7 +704,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     await push(goldenFrame(1)); // rev 2 active under the fixture key
     await onPinRevoked(fixture.keyIdHex);
     resetPolicySyncForTests(); // the SW dies mid-ceremony
-    attachPort(() => true);
+    attach(collaborator);
     await onPinPinned(fixture.keyIdHex); // SAME key: not new, anchor retained
     expect((await getStoredPolicyState())?.revision).toBe(2);
     // The hostile host replays the genuine, validly-signed rev-1 baseline: the
@@ -740,8 +740,8 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
     await onPinRevoked(fixture.keyIdHex);
     await onPinPinned(other.keyId);
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     const { baseline, sig } = await other.signDoc(docJson(1, []));
     await push({ type: "policy_current", ok: true, baseline, sig });
     expect((await policyDispatchGate()).allowed).toBe(true);
@@ -968,7 +968,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     ]) {
       fakeBrowser.reset();
       resetPolicySyncForTests();
-      attachPort(() => true);
+      attach(collaborator);
       // A corrupt cutover flag is the visible proof: only a NEW-key re-pair
       // normalizes it, so if the tampered prior were honoured as known this
       // different-key pin would repair the flag.
@@ -1023,8 +1023,8 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     // Replay the identical frame on a fresh connection, and fire a same-key ABA
     // during the commit. The record write is suppressed as unchanged, so the
     // commit-end race must simply refuse and touch storage not at all.
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     const realSet = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
     const realRemove = fakeBrowser.storage.local.remove.bind(fakeBrowser.storage.local);
     const local = fakeBrowser.storage.local as unknown as {
@@ -1161,7 +1161,7 @@ describe("the unpinned lane (Lane U seam)", () => {
     setUnpinnedRelaxationApprover(() => Promise.resolve(true));
     await push(unsignedFrame(docJson(1, []))); // first doc approved: cutover armed
     // A fresh connection: awaiting until IT verifies a push.
-    attachPort(() => true);
+    attach(collaborator);
     const consulted = vi.fn(() => Promise.resolve(false));
     setUnpinnedRelaxationApprover(consulted);
     await push(unsignedFrame(docJson(2, [], { pageEvalEnabled: true })));
@@ -1175,7 +1175,7 @@ describe("the unpinned lane (Lane U seam)", () => {
   test("a THROWING approver reads as refusal (the .catch fallback): no state write, no verified mark", async () => {
     setUnpinnedRelaxationApprover(() => Promise.resolve(true));
     await push(unsignedFrame(docJson(1, []))); // first doc approved: cutover armed
-    attachPort(() => true);
+    attach(collaborator);
     // The window crashing, closing, or the confirm service dying mid-prompt
     // surfaces as a rejected promise; the seam's .catch(() => false) must read
     // it as a refusal, never as an approval or an unhandled rejection.
@@ -1271,7 +1271,7 @@ describe("the unpinned lane (Lane U seam)", () => {
     // NEW attachment barrier-closed until the host happened to re-push: the
     // held push's mark belongs to the dead attachment (and the commit-time
     // attachment recheck refuses to stamp it anywhere else).
-    attachPort(() => true);
+    attach(collaborator);
     const reconnectPush = handlePolicyFrame(frame);
     release(true);
     await Promise.all([first, reconnectPush]);
@@ -1397,7 +1397,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
     await push({ type: "lang_current", value: "en", seq: 9007199254740991 });
     expect(await storedUiLanguage()).toBe("en");
     // ...then disconnects. The genuine host's push-on-connect starts fresh.
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       posted.push(frame);
       return true;
     });
@@ -1405,6 +1405,70 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
     expect(getLangState()).toEqual({ value: "zh_TW", seq: 1 });
     expect(await storedUiLanguage()).toBe("zh_TW");
   });
+
+  /** Hold the next call to one storage method open until released, and report when a handler entered it. */
+  function holdStorage(method: "get" | "set"): { entered: Promise<void>; release: () => void } {
+    const local = fakeBrowser.storage.local;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let enteredResolve!: () => void;
+    const entered = new Promise<void>((r) => {
+      enteredResolve = r;
+    });
+    const original = local[method].bind(local) as (...args: unknown[]) => Promise<unknown>;
+    const spy = vi
+      .spyOn(
+        local as unknown as Record<typeof method, (...args: unknown[]) => Promise<unknown>>,
+        method,
+      )
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        enteredResolve();
+        await gate;
+        spy.mockRestore();
+        return original(...args);
+      });
+    return { entered, release };
+  }
+
+  // The currency invariant on the lane's two awaited paths: the handler captured the connection the frame arrived
+  // on, and a reconnect that lands WHILE it awaits the storage call right before its commit means the departed
+  // peer's push resumes against the NEW connection's fresh cursor and latches. Neither may be written by the
+  // stale push. The reconnect is injected inside that exact await, so a guard that only runs before it fails here.
+  test.each([
+    {
+      name: "an apply push (held in the uiLanguage write)",
+      stored: undefined,
+      frame: { type: "lang_current", value: "zh_CN", seq: 5 },
+      heldCall: "set" as const,
+    },
+    {
+      name: "a seq-0 adoption push (held in the uiLanguage read)",
+      stored: "zh_CN",
+      frame: { type: "lang_current", value: "en", seq: 0 },
+      heldCall: "get" as const,
+    },
+  ])(
+    "$name that resumes after a reconnect commits nothing on the new connection",
+    async ({ stored, frame, heldCall }) => {
+      if (stored) await fakeBrowser.storage.local.set({ uiLanguage: stored });
+      const held = holdStorage(heldCall);
+      const resumed = handlePolicyFrame(frame);
+      await held.entered;
+      attach(collaborator, (f) => {
+        posted.push(f);
+        return true;
+      });
+      held.release();
+      await resumed;
+      expect(getLangState()).toBeNull();
+      expect(langSets()).toHaveLength(0);
+      // The new connection starts clean: its own push applies from seq 1.
+      await push({ type: "lang_current", value: "zh_TW", seq: 1 });
+      expect(getLangState()).toEqual({ value: "zh_TW", seq: 1 });
+    },
+  );
 
   describe("the pinned trust bar (while-paired scope, decisions 2 and 7)", () => {
     test("unpinned: a host push never applies - the unpaired extension keeps its local value", async () => {
@@ -1477,7 +1541,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
       await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });
       await push({ type: "lang_current", value: "en", seq: 0 });
       expect(langSets()).toHaveLength(1);
-      attachPort((frame) => {
+      attach(collaborator, (frame) => {
         posted.push(frame);
         return true;
       });
@@ -1497,7 +1561,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
 
     test("a reconnect inherits nothing: the new connection must push before a gesture emits", async () => {
       await push({ type: "lang_current", value: "en", seq: 1 });
-      attachPort((frame) => {
+      attach(collaborator, (frame) => {
         posted.push(frame);
         return true;
       });
@@ -1507,7 +1571,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
 
     test("detached port: the choice stays local", async () => {
       await push({ type: "lang_current", value: "en", seq: 1 });
-      detachPort();
+      collaborator.onDetach();
       expect(await chooseLanguage("zh_CN")).toBe(false);
       expect(langSets()).toHaveLength(0);
     });
@@ -1516,7 +1580,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
       // Re-attach with a post that snapshots the cursor, so the emission
       // ordering is asserted from the emit itself, not inferred.
       const cursorAtPost: Array<{ value: string; seq: number } | null> = [];
-      attachPort((frame) => {
+      attach(collaborator, (frame) => {
         posted.push(frame);
         cursorAtPost.push(getLangState());
         return true;
@@ -1667,8 +1731,8 @@ describe("compromise closes the connection (finding 4)", () => {
     pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 2 };
     await onPinRevoked(fixture.keyIdHex); // records the durable prior identity
     await onPinPinned(other.keyId); // different key: clears the record and the latch
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     const { baseline, sig } = await other.signDoc(docJson(1, []));
     await push({ type: "policy_current", ok: true, baseline, sig });
     expect((await getStoredPolicyState())?.revision).toBe(1);
@@ -1686,7 +1750,7 @@ describe("armCutover ordering is fail-closed", () => {
     expect(await getPolicySnapshotForTests()).toEqual({ kind: "awaitingBaseline" });
     expect((await policyDispatchGate()).allowed).toBe(false);
     // Recovery is a fresh verified push, which starts the ratchet cleanly.
-    attachPort(() => true);
+    attach(collaborator);
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(1);
     expect((await policyDispatchGate()).allowed).toBe(true);

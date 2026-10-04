@@ -1,57 +1,49 @@
 // The native-link state machine (background/port.ts): the link is exactly
-// one of connected / reconnect-scheduled / down, held as one value. These
-// guards pin the two interleavings the old port/portOk/timer trio got
-// wrong: a re-entrant connect that throws must not leave the OLD port
-// half-alive behind a state that reads down, and the late disconnect of a
-// port a re-entry already replaced must not tear down the live link.
+// one of connected / reconnect-scheduled / down, held as one value, and every
+// module bound to it attaches and detaches through the collaborator registry
+// in the same transition. These guards pin the interleavings the old
+// port/portOk/timer trio and the hand-kept attach lists got wrong: a
+// re-entrant connect that throws must not leave the OLD port half-alive
+// behind a state that reads down, a teardown must detach every collaborator
+// (a presence proof once APPROVED on a torn-down link), and the late
+// disconnect of a port a re-entry already replaced must not tear down the
+// live link.
 //
 // Residual gap: reconnect behavior against a real native host (Chrome
 // killing the host process when the Port drops, backoff pacing) can only be
 // proven in an isolated browser - the checks.yml browser job covers that.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { Connection } from "@/lib/background/connection";
 
-// Collaborator surfaces the port hands the fresh postFrame to. Mocked so
-// the link lifecycle runs in isolation (dynamic import below, so these
-// consts exist before the factories run).
+// The collaborator modules are mocked so the link lifecycle runs in isolation
+// (dynamic import below, so these consts exist before the factories run).
+// Each mock registers the same hook set the real module exports.
+function mockCollaborator() {
+  return {
+    onAttach: vi.fn<(conn: Connection) => void>(),
+    onDetach: vi.fn(),
+    onFrame: vi.fn<(frame: unknown) => boolean>(() => false),
+  };
+}
 const enrollment = {
-  attachPort: vi.fn(),
-  detachPort: vi.fn(),
+  collaborator: mockCollaborator(),
   // Mirrors the real gate on the allowed path: the dispatch kickoff runs
   // inside the gate before it resolves.
   enrollmentGate: vi.fn((onAllowed?: () => void) => {
     onAllowed?.();
     return Promise.resolve({ allowed: true });
   }),
-  handleEnclaveFrame: vi.fn(() => Promise.resolve()),
-  isEnclaveFrame: vi.fn(() => false),
   onPortConnected: vi.fn(() => Promise.resolve()),
 };
-const clients = {
-  attachPort: vi.fn(),
-  detachPort: vi.fn(),
-  isAdminFrame: vi.fn(() => false),
-  handleAdminFrame: vi.fn(),
-};
+const clients = { collaborator: mockCollaborator() };
 const kill = {
-  attachPort: vi.fn(),
-  detachPort: vi.fn(),
-  handleKillFrame: vi.fn(() => Promise.resolve()),
+  collaborator: mockCollaborator(),
   requestKillStatus: vi.fn(() => Promise.resolve()),
 };
-const auditLog = { attachPort: vi.fn(), detachPort: vi.fn() };
-const presence = {
-  attachPort: vi.fn(),
-  detachPort: vi.fn(),
-  isPresenceFrame: vi.fn(() => false),
-  handlePresenceFrame: vi.fn(),
-};
-const policySync = {
-  attachPort: vi.fn(),
-  detachPort: vi.fn(),
-  isPolicyFrame: vi.fn(() => false),
-  handlePolicyFrame: vi.fn(() => Promise.resolve()),
-};
+const auditLog = { collaborator: mockCollaborator() };
+const presence = { collaborator: mockCollaborator() };
+const policySync = { collaborator: mockCollaborator() };
 const dispatch = vi.fn((_req: unknown) => Promise.resolve({}));
 const runtime = {
   connectNative: vi.fn<() => FakePort>(),
@@ -110,24 +102,37 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** The postFrame the last connect handed the collaborators. */
-function lastPostFrame(): (frame: object) => boolean {
-  const call = enrollment.attachPort.mock.calls.at(-1);
-  if (!call) throw new Error("attachPort was never called");
-  return call[0] as (frame: object) => boolean;
+/** Connect on a fresh fake port and return it. */
+function connect(): FakePort {
+  const port = makePort();
+  runtime.connectNative.mockReturnValueOnce(port);
+  mod.connectNative();
+  return port;
+}
+
+/** The Connection the last connect handed each registry entry, in registry order. */
+function handedConnections(): Connection[][] {
+  return mod.collaborators.map((c) => vi.mocked(c.onAttach).mock.calls.map((call) => call[0]));
+}
+
+function detachCounts(): number[] {
+  return mod.collaborators.map((c) => vi.mocked(c.onDetach).mock.calls.length);
+}
+
+/** Every registry entry, once. */
+function once(): number[] {
+  return mod.collaborators.map(() => 1);
 }
 
 describe("native link lifecycle", () => {
-  test("a successful connect reports connected and wires every surface", () => {
-    const port = makePort();
-    runtime.connectNative.mockReturnValueOnce(port);
-    mod.connectNative();
+  test("a successful connect hands ONE Connection to every registered collaborator, and it posts on the live port", () => {
+    const port = connect();
     expect(mod.isNativeConnected()).toBe(true);
-    for (const m of [enrollment, clients, kill, auditLog, presence, policySync]) {
-      expect(m.attachPort).toHaveBeenCalledTimes(1);
-    }
-    expect(kill.requestKillStatus).toHaveBeenCalledTimes(1);
-    expect(lastPostFrame()({ type: "x" })).toBe(true);
+    const handed = handedConnections();
+    expect(handed.map((h) => h.length)).toEqual(once());
+    expect(new Set(handed.flat()).size).toBe(1);
+    const conn = handed[0]?.[0];
+    expect(conn?.post({ type: "x" })).toBe(true);
     expect(port.postMessage).toHaveBeenCalledWith({ type: "x" });
   });
 
@@ -144,118 +149,98 @@ describe("native link lifecycle", () => {
     expect(mod.isNativeConnected()).toBe(true);
   });
 
-  test("a re-entrant connect that throws leaves NO half-alive old port", () => {
-    // The invalid state the old port/portOk pair could represent: connect
-    // succeeds (port A), a re-entrant connect throws, and A stayed assigned
-    // while the module reported disconnected - frames kept flowing out of a
-    // link that claimed to be down.
-    const portA = makePort();
-    runtime.connectNative.mockReturnValueOnce(portA);
-    mod.connectNative();
-    const postViaA = lastPostFrame();
+  // teardownLink once disconnected the old port but left the collaborators
+  // (presence, kill, ...) attached to it. A frame Chrome
+  // had already queued on that port could then still reach presence, whose
+  // stale attachment matched, and APPROVE while the link read down. And the
+  // old port/portOk pair could hold port A assigned while the module reported
+  // disconnected, so frames kept flowing out of a link that claimed to be
+  // down. Every teardown path must detach the whole registry in the same
+  // transition and leave the old Connection unable to post anywhere.
+  test.each([
+    {
+      name: "the current port disconnecting",
+      teardown: (portA: FakePort) => {
+        portA.emitDisconnect();
+        return null;
+      },
+      connectedAfter: false,
+    },
+    {
+      name: "a re-entrant connect that throws",
+      teardown: () => {
+        runtime.connectNative.mockImplementationOnce(() => {
+          throw new Error("host vanished");
+        });
+        mod.connectNative();
+        return null;
+      },
+      connectedAfter: false,
+    },
+    {
+      name: "a re-entrant connect that succeeds",
+      teardown: () => connect(),
+      connectedAfter: true,
+    },
+  ])(
+    "$name detaches every collaborator in the same transition and strands the old Connection",
+    async ({ teardown, connectedAfter }) => {
+      const portA = connect();
+      const connA = handedConnections()[0]?.[0];
+      if (!connA) throw new Error("connect handed no Connection");
 
-    runtime.connectNative.mockImplementationOnce(() => {
-      throw new Error("host vanished");
-    });
-    mod.connectNative();
-    expect(mod.isNativeConnected()).toBe(false);
-    // The old port was consumed by the transition, not orphaned.
-    expect(portA.disconnect).toHaveBeenCalledTimes(1);
-    // And the down state refuses to post - state and behavior agree.
-    portA.postMessage.mockClear();
-    expect(postViaA({ type: "x" })).toBe(false);
-    expect(portA.postMessage).not.toHaveBeenCalled();
-  });
+      const portB = teardown(portA);
+      expect(mod.isNativeConnected()).toBe(connectedAfter);
+      expect(detachCounts()).toEqual(once());
+      expect(portA.disconnect).toHaveBeenCalledTimes(1);
+      // The torn-down Connection refuses, and the frame reaches neither pipe.
+      portA.postMessage.mockClear();
+      expect(connA.post({ type: "x" })).toBe(false);
+      expect(portA.postMessage).not.toHaveBeenCalled();
+      if (portB) expect(portB.postMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2000);
+    },
+  );
 
   test("a replaced port's late disconnect cannot tear down the live link", async () => {
-    const portA = makePort();
-    const portB = makePort();
-    runtime.connectNative.mockReturnValueOnce(portA).mockReturnValueOnce(portB);
-    mod.connectNative();
-    mod.connectNative(); // re-entry: B replaces A
+    const portA = connect();
+    connect(); // re-entry: B replaces A
     expect(mod.isNativeConnected()).toBe(true);
     expect(portA.disconnect).toHaveBeenCalledTimes(1);
 
     // The stale port's disconnect event arrives late (host side winding
     // down). It must be ignored: the live link stays up, no surface is
     // detached, no reconnect is scheduled.
-    enrollment.detachPort.mockClear();
+    for (const c of mod.collaborators) vi.mocked(c.onDetach).mockClear();
     portA.emitDisconnect();
     expect(mod.isNativeConnected()).toBe(true);
-    expect(enrollment.detachPort).not.toHaveBeenCalled();
+    expect(detachCounts()).toEqual(mod.collaborators.map(() => 0));
     await vi.advanceTimersByTimeAsync(2000);
     expect(runtime.connectNative).toHaveBeenCalledTimes(2); // no reconnect fired
   });
 
-  test("the CURRENT port disconnecting detaches every surface and reconnects", async () => {
-    const portA = makePort();
-    runtime.connectNative.mockReturnValueOnce(portA);
-    mod.connectNative();
-    portA.emitDisconnect();
-    expect(mod.isNativeConnected()).toBe(false);
-    for (const m of [enrollment, clients, kill, auditLog, presence, policySync]) {
-      expect(m.detachPort).toHaveBeenCalledTimes(1);
-    }
-    const portB = makePort();
-    runtime.connectNative.mockReturnValueOnce(portB);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(mod.isNativeConnected()).toBe(true);
-  });
-
-  test("a failed re-entrant connect detaches every collaborator bound to the old port", async () => {
-    // Codex blocking 2: teardownLink used to disconnect the old port but
-    // leave the collaborators (presence, kill, ...) attached to it. A frame
-    // Chrome had already queued on that port could then still reach presence,
-    // whose stale attachment matched, and APPROVE while the link read down.
-    // Teardown must detach the collaborators in the same transition.
-    const portA = makePort();
-    runtime.connectNative.mockReturnValueOnce(portA);
-    mod.connectNative();
-    for (const m of [enrollment, clients, kill, auditLog, presence, policySync])
-      m.detachPort.mockClear();
-
-    runtime.connectNative.mockImplementationOnce(() => {
-      throw new Error("host vanished");
-    });
-    mod.connectNative(); // re-entrant connect throws: teardown then reconnect
-    expect(mod.isNativeConnected()).toBe(false);
-    for (const m of [enrollment, clients, kill, auditLog, presence, policySync]) {
-      expect(m.detachPort).toHaveBeenCalledTimes(1);
-    }
-    await vi.advanceTimersByTimeAsync(2000);
-  });
-
-  test("a frame arriving on a stale port is dropped before the demux", async () => {
+  test("a frame arriving on a stale port is dropped before the demux", () => {
     // The inbound twin of the disconnect identity gate: after a re-entrant
     // connect replaces port A with B, a frame Chrome still delivers on A must
-    // not be routed to any collaborator - only the live port's frames are.
-    const portA = makePort();
-    const portB = makePort();
-    runtime.connectNative.mockReturnValueOnce(portA).mockReturnValueOnce(portB);
-    mod.connectNative();
-    mod.connectNative(); // B replaces A
-    presence.isPresenceFrame.mockReturnValue(true);
+    // not be offered to any collaborator - only the live port's frames are.
+    const portA = connect();
+    const portB = connect(); // B replaces A
+    presence.collaborator.onFrame.mockReturnValueOnce(true);
 
     portA.emitMessage({ type: "presence_proof" });
-    expect(presence.handlePresenceFrame).not.toHaveBeenCalled();
+    for (const c of mod.collaborators) expect(c.onFrame).not.toHaveBeenCalled();
 
     // The live port's frame IS routed.
     portB.emitMessage({ type: "presence_proof" });
-    expect(presence.handlePresenceFrame).toHaveBeenCalledTimes(1);
+    expect(presence.collaborator.onFrame).toHaveBeenCalledTimes(1);
   });
 
   test("an unrecognized push frame is dropped without touching the link", async () => {
-    // ADR-0032 decision 8's unknown-push pin, RE-ASSERTED over the new
-    // router (policy_current is recognized now, so a future frame type
-    // stands in): a push this router does not know must be ignored -
-    // nothing posted back, the port never torn down - and bridge requests
-    // keep flowing on the same port. Without this, an extension one release
-    // behind a frame-adding host would break at every connect.
-    presence.isPresenceFrame.mockReturnValue(false);
-    policySync.isPolicyFrame.mockReturnValue(false);
-    const port = makePort();
-    runtime.connectNative.mockReturnValueOnce(port);
-    mod.connectNative();
+    // A push no collaborator claims and that is not a bridge request must be
+    // ignored - nothing posted back, the port never torn down - and bridge
+    // requests keep flowing on the same port. Without this, an extension one
+    // release behind a frame-adding host would break at every connect.
+    const port = connect();
 
     port.emitMessage({ type: "future_push", ok: true, payload: "YmFzZQ==" });
     expect(port.postMessage).not.toHaveBeenCalled();
@@ -271,23 +256,41 @@ describe("native link lifecycle", () => {
     expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 1, ok: true }));
   });
 
-  test("a policy push routes to the policy module BEFORE the request parse and the gates", () => {
-    // ADR-0032 decisions 4/6: the demux hands policy frames to policy-sync
-    // ahead of parseBridgeReq/enrollmentGate, so a killed or unenrolled
-    // bridge still processes pushes (control-plane mode) and the dispatch
+  test("a claimed control frame never reaches the request parse or the gates", () => {
+    // Control frames route ahead of parseBridgeReq/enrollmentGate, so a
+    // killed or unenrolled bridge still processes pushes and the dispatch
     // barrier can open on the very connection it gates. Nothing is posted
     // back and nothing reaches dispatch.
-    policySync.isPolicyFrame.mockReturnValue(true);
-    const port = makePort();
-    runtime.connectNative.mockReturnValueOnce(port);
-    mod.connectNative();
+    policySync.collaborator.onFrame.mockReturnValueOnce(true);
+    const port = connect();
 
     const frame = { type: "policy_current", ok: true, baseline: "YmFzZQ==" };
     port.emitMessage(frame);
-    expect(policySync.handlePolicyFrame).toHaveBeenCalledTimes(1);
-    expect(policySync.handlePolicyFrame).toHaveBeenCalledWith(frame);
+    expect(policySync.collaborator.onFrame).toHaveBeenCalledWith(frame);
     expect(enrollment.enrollmentGate).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
     expect(port.postMessage).not.toHaveBeenCalled();
+  });
+
+  test("a bridge response rides the connection its request arrived on, never a successor's", async () => {
+    // Chrome spawns a fresh host process per port: the host that asked is
+    // gone with its connection, and the successor never issued the id, so a
+    // reply that settles after a reconnect must reach neither pipe.
+    let finish!: () => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({});
+        }),
+    );
+    const portA = connect();
+    portA.emitMessage({ id: 7, op: "tab_list", args: {} });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    const portB = connect(); // the host restarted mid-request
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(portA.postMessage).not.toHaveBeenCalled();
+    expect(portB.postMessage).not.toHaveBeenCalled();
   });
 });

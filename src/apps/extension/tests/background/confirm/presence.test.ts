@@ -24,14 +24,14 @@ import {
   buildPresenceMessage,
   computeKeyId,
 } from "@/lib/background/enclave-verify";
+import { attach } from "../fake-connection";
 
 vi.mock("@/lib/background/enrollment", () => ({
   platformCanEnroll: vi.fn(() => Promise.resolve(true)),
 }));
 
 import {
-  attachPort,
-  detachPort,
+  collaborator,
   EnclavePresenceProvider,
   handlePresenceFrame,
   isPresenceFrame,
@@ -114,7 +114,7 @@ async function roundTrip(
   answer: (sent: { nonce: string; context: string }) => Promise<unknown> | unknown,
 ): Promise<boolean> {
   const sent: Array<{ nonce: string; context: string }> = [];
-  attachPort((frame) => {
+  attach(collaborator, (frame) => {
     sent.push(frame as { nonce: string; context: string });
     return true;
   });
@@ -231,7 +231,7 @@ describe("EnclavePresenceProvider verdicts", () => {
 
   test("no pin means no round: denied without sending a challenge", async () => {
     const sent: unknown[] = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame);
       return true;
     });
@@ -246,7 +246,7 @@ describe("EnclavePresenceProvider verdicts", () => {
     const key = await genKey();
     await pinKey(key);
     const approved = await roundTrip(key, () => {
-      detachPort();
+      collaborator.onDetach();
       return undefined; // no answer will ever come
     });
     expect(approved).toBe(false);
@@ -254,13 +254,13 @@ describe("EnclavePresenceProvider verdicts", () => {
 
   test("a valid proof arriving after the port detached is denied (fail closed)", async () => {
     // The port can drop AFTER the proof frame is claimed but BEFORE the async
-    // pin lookup + verify finish. detachPort cannot cancel an already-claimed
+    // pin lookup + verify finish. onDetach cannot cancel an already-claimed
     // round, so the post-verification port re-check is what honors the
     // disconnect-denies contract - even though the signature itself is valid.
     const key = await genKey();
     await pinKey(key);
     const sent: Array<{ nonce: string; context: string }> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame as { nonce: string; context: string });
       return true;
     });
@@ -276,10 +276,10 @@ describe("EnclavePresenceProvider verdicts", () => {
     };
     // Deliver the (cryptographically valid) proof - this synchronously claims
     // the round off `pending` and starts the async verify - THEN drop the
-    // port before the verify resolves. detachPort now finds no pending round
+    // port before the verify resolves. onDetach now finds no pending round
     // to cancel, so only the post-verification generation check can deny it.
     handlePresenceFrame(proof);
-    detachPort();
+    collaborator.onDetach();
     expect(await presentation.verdict).toBe(false);
     // A valid signature is not a compromise: no compromised mark is set.
     expect(await getCompromised()).toBeNull();
@@ -293,7 +293,7 @@ describe("EnclavePresenceProvider verdicts", () => {
     const key = await genKey();
     await pinKey(key);
     const sent: Array<{ nonce: string; context: string }> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame as { nonce: string; context: string });
       return true;
     });
@@ -310,8 +310,8 @@ describe("EnclavePresenceProvider verdicts", () => {
     // Claim the round, then simulate a full reconnect (detach + a fresh
     // attach) before the verdict resolves: `post` is non-null again.
     handlePresenceFrame(proof);
-    detachPort();
-    attachPort(() => true);
+    collaborator.onDetach();
+    attach(collaborator);
     expect(await presentation.verdict).toBe(false);
     expect(await getCompromised()).toBeNull();
   });
@@ -320,7 +320,7 @@ describe("EnclavePresenceProvider verdicts", () => {
     const key = await genKey();
     await pinKey(key);
     const sent: Array<{ nonce: string; context: string }> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame as { nonce: string; context: string });
       return true;
     });
@@ -352,7 +352,7 @@ describe("EnclavePresenceProvider verdicts", () => {
     const key = await genKey();
     await pinKey(key);
     const sent: Array<{ nonce: string; context: string }> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame as { nonce: string; context: string });
       return true;
     });
@@ -386,7 +386,7 @@ describe("EnclavePresenceProvider verdicts", () => {
     const key = await genKey();
     await pinKey(key);
     const sent: unknown[] = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame);
       return true;
     });
@@ -415,14 +415,14 @@ describe("EnclavePresenceProvider verdicts", () => {
           rejectA = rej;
         }),
     );
-    attachPort(() => true);
+    attach(collaborator);
     const { provider } = displayStub();
     const roundA = new EnclavePresenceProvider(provider).present(payload("eval", "a"));
-    detachPort(); // settles A; its setup is still parked in presenceCapable
+    collaborator.onDetach(); // settles A; its setup is still parked in presenceCapable
     expect(await roundA.verdict).toBe(false);
 
     const sent: Array<{ nonce: string; context: string }> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame as { nonce: string; context: string });
       return true;
     });
@@ -445,14 +445,14 @@ describe("EnclavePresenceProvider verdicts", () => {
 });
 
 // The stale-port case: a FAILED re-entrant connect, where port.ts fires no local onDisconnect and teardownLink's
-// only presence-facing action is detachPort(). Without that call the round stayed pending with the old port
+// only presence-facing action is collaborator.onDetach(). Without that call the round stayed pending with the old port
 // still attached, and a cryptographically valid proof APPROVED while the link was down.
 describe("adjudication: a valid proof after teardown cannot approve", () => {
-  test("detachPort at teardown denies a subsequently delivered valid proof", async () => {
+  test("onDetach at teardown denies a subsequently delivered valid proof", async () => {
     const key = await genKey();
     await pinKey(key);
     const sent: Array<{ nonce: string; context: string }> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame as { nonce: string; context: string });
       return true;
     });
@@ -469,7 +469,7 @@ describe("adjudication: a valid proof after teardown cannot approve", () => {
     };
     // The failed re-entrant connect: teardownLink's presence action, with no
     // onDisconnect and no replacement attach.
-    detachPort();
+    collaborator.onDetach();
     // The round is already denied by the teardown; the late (valid) proof
     // finds no round and cannot revive it.
     handlePresenceFrame(proof);
@@ -484,7 +484,7 @@ describe("service routing and the window-approval refusal", () => {
     const key = await genKey();
     await pinKey(key);
     const sent: Array<{ nonce: string; context: string }> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       sent.push(frame as { nonce: string; context: string });
       return true;
     });
@@ -523,7 +523,7 @@ describe("service routing and the window-approval refusal", () => {
   test("denial through the window stays possible for hardware payloads", async () => {
     const key = await genKey();
     await pinKey(key);
-    attachPort(() => true);
+    attach(collaborator);
     const display = displayStub();
     installConfirmationProvider(display.provider);
     installPresenceProvider(new EnclavePresenceProvider(display.provider));

@@ -5,27 +5,27 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
-  attachPort,
-  detachPort,
+  collaborator,
   handleAdminFrame,
   isAdminFrame,
   requestClientList,
   revokeTrustedClient,
 } from "@/lib/background/clients";
+import { attach } from "./fake-connection";
 
 let posted: Array<Record<string, unknown>>;
 
 beforeEach(() => {
   posted = [];
-  detachPort(); // resolve any leftover pending from a prior test
-  attachPort((frame) => {
+  collaborator.onDetach(); // resolve any leftover pending from a prior test
+  attach(collaborator, (frame) => {
     posted.push(frame as Record<string, unknown>);
     return true;
   });
 });
 
 afterEach(() => {
-  detachPort();
+  collaborator.onDetach();
   vi.useRealTimers();
 });
 
@@ -84,10 +84,10 @@ describe("client list", () => {
   });
 
   test("fails closed without a port and on a malformed reply", async () => {
-    detachPort();
+    collaborator.onDetach();
     expect((await requestClientList()).ok).toBe(false);
 
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       posted.push(frame as Record<string, unknown>);
       return true;
     });
@@ -108,7 +108,7 @@ describe("client list", () => {
 
   test("port disconnect resolves the pending request as a refusal", async () => {
     const p = requestClientList();
-    detachPort();
+    collaborator.onDetach();
     const view = await p;
     expect(failed(view).error).toContain("disconnected");
   });

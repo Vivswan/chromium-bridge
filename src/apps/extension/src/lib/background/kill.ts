@@ -14,10 +14,11 @@
 //   {state: unknown} -> refused (the host cannot read its own state)
 //   malformed        -> refused (tampering evidence, never mapped to absent)
 //
-// port.ts hands this module the port (attachPort) and every kill_status_result frame; messages.ts routes the
+// port.ts drives `collaborator` (the connection, then every kill_status_result frame); messages.ts routes the
 // options-page actions here. Unsolicited results update the mirror; solicited ones also resolve the pending request.
 
 import {
+  isKillStatusFrame,
   type KillMirror,
   KillMirrorSchema,
   type KillStatusResult,
@@ -26,6 +27,7 @@ import type { KillEngageWire, KillStatusWire } from "@chromium-bridge/shared/env
 import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
+import type { Connection, PortCollaborator } from "./connection";
 
 const KILL_MIRROR_KEY = "bridgeKillMirror";
 
@@ -102,33 +104,38 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 
 /** Closed over the GENERATED wire types (envelope-wire.gen.ts <- protocol/control.rs), so a typo'd frame type is a
  * compile error rather than an op the engage-arming switch in request() silently misses. Inbound kill_status_result
- * frames are parsed in port.ts with KillStatusResultSchema; nothing malformed reaches handleKillFrame.
- *   kill_release  -> deliberately absent: the host refuses it from the extension (ADR-0032 decision 6);
- *                    release lives in the CLI */
+ * frames are classified by isKillStatusFrame in the collaborator; nothing malformed reaches handleKillFrame.
+ *   kill_release  -> deliberately absent: the host refuses it from the extension; release lives in the CLI */
 export type KillControlFrame = KillStatusWire | KillEngageWire;
 
-let postFrame: ((frame: KillControlFrame) => boolean) | null = null;
+let conn: Connection | null = null;
 
-export function attachPort(post: (frame: KillControlFrame) => boolean): void {
-  postFrame = post;
-  // At-least-once for the panic brake (ADR-0030): an engage handed to a port that died UNCONFIRMED (no
-  // authoritative killed frame arrived) is re-asserted on the fresh host, so a dying host cannot drop the brake
-  // silently. Host-side it is idempotent (re-engaging re-bumps the epoch) and audited.
-  //   user released in the gap  -> the re-assert re-kills; visible friction beats a lost kill
-  //   the SW dies too           -> the flag is module state, so the brake is lost after restart (nothing durable re-arms)
-  if (unconfirmedEngageSeq !== null) {
-    auditEvent("kill_engaged", { outcome: "requested" });
-    if (post({ type: "kill_engage" })) {
-      unconfirmedEngageSeq = frameArrivals;
+export const collaborator: PortCollaborator = {
+  onAttach(c) {
+    conn = c;
+    // At-least-once for the panic brake: an engage handed to a port that died UNCONFIRMED (no authoritative killed
+    // frame arrived) is re-asserted on the fresh host, so a dying host cannot drop the brake silently. Host-side it
+    // is idempotent (re-engaging re-bumps the epoch) and audited.
+    //   user released in the gap  -> the re-assert re-kills; visible friction beats a lost kill
+    //   the SW dies too           -> the flag is module state, so the brake is lost after restart (nothing durable re-arms)
+    if (unconfirmedEngageSeq !== null) {
+      auditEvent("kill_engaged", { outcome: "requested" });
+      if (c.post({ type: "kill_engage" } satisfies KillControlFrame)) {
+        unconfirmedEngageSeq = frameArrivals;
+      }
+      // A failed re-post keeps the flag armed: the next attach retries.
     }
-    // A failed re-post keeps the flag armed: the next attach retries.
-  }
-}
-
-export function detachPort(): void {
-  postFrame = null;
-  failPending("native host disconnected");
-}
+  },
+  onDetach() {
+    conn = null;
+    failPending("native host disconnected");
+  },
+  onFrame(msg) {
+    if (!isKillStatusFrame(msg)) return false;
+    void handleKillFrame(msg);
+    return true;
+  },
+};
 
 export interface KillView {
   ok: boolean;
@@ -177,12 +184,10 @@ function request(
   frame: KillControlFrame,
   timeoutMs: number = KILL_REQUEST_TIMEOUT_MS,
 ): Promise<KillView> {
-  if (!postFrame) {
+  const live = conn;
+  if (!live) {
     return mirrorView(false, false, "native host not connected");
   }
-  // Captured so the closure below posts on the port proven live here (the
-  // module-level slot is mutable, so TS cannot carry the narrowing in).
-  const post = postFrame;
   if (pending) {
     return Promise.resolve({
       ok: false,
@@ -198,7 +203,7 @@ function request(
       void mirrorView(false, true, "no reply from the native host (timed out)").then(resolve);
     }, timeoutMs);
     pending = { resolve, timer };
-    if (!post(frame)) {
+    if (!live.post(frame)) {
       clearTimeout(timer);
       pending = null;
       void mirrorView(false, false, "failed to send the request to the native host").then(resolve);
@@ -207,7 +212,7 @@ function request(
       // forces a decision here about whether it arms the re-post.
       switch (frame.type) {
         case "kill_engage":
-          // Arm the at-least-once re-post (see attachPort) for EVERY engage
+          // Arm the at-least-once re-post (see collaborator.onAttach) for EVERY engage
           // that actually reached the pipe, whichever surface posted it.
           // Armed only on success, in the same synchronous turn as the post,
           // so the flag being set always means "a real engage is
@@ -258,7 +263,7 @@ let panicWaiter: { afterSeq: number; sawRefusal: boolean; resolve: () => void } 
 
 // The watermark of a panic engage that was handed to a port but has not yet
 // been CONFIRMED by an authoritative "killed" frame that arrived after it.
-// attachPort re-posts while this is armed (at-least-once, see there); only
+// collaborator.onAttach re-posts while this is armed (at-least-once, see there); only
 // a killed arrival after the watermark disarms it ("unknown" may mean the
 // engage failed host-side and applied nothing).
 let unconfirmedEngageSeq: number | null = null;
@@ -327,13 +332,13 @@ export function engageKill(): Promise<KillView> {
  * authoritative state, and an engage racing a host-side release (CLI unkill) still lands AFTER it (final state: killed).
  *
  *   returned view    -> the SEND outcome plus the last-known mirror, never the engage's result (the mirror carries that)
- *   successful post  -> arms the at-least-once re-post (attachPort); only a killed frame arriving after it disarms
+ *   successful post  -> arms the at-least-once re-post (collaborator.onAttach); only a killed frame arriving after it disarms
  *   port down        -> ok: false; nothing can drive the browser through a dead port either */
 export function engageKillSwitch(): Promise<KillView> {
   if (!pending) return engageKill();
   auditEvent("kill_engaged", { outcome: "requested" });
-  if (!postFrame) return mirrorView(false, false, "native host not connected");
-  if (!postFrame({ type: "kill_engage" })) {
+  if (!conn) return mirrorView(false, false, "native host not connected");
+  if (!conn.post({ type: "kill_engage" } satisfies KillControlFrame)) {
     return mirrorView(false, false, "failed to send the request to the native host");
   }
   // Armed only AFTER the successful post (same synchronous turn, so no
@@ -427,7 +432,7 @@ async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<v
 
 /** Tests only: forget port + pending so suites can drive both paths. */
 export function resetKillForTests(): void {
-  postFrame = null;
+  conn = null;
   failPending("test reset");
   pending = null;
   frameChain = Promise.resolve();

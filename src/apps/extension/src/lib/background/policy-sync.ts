@@ -20,7 +20,7 @@
 // scope no longer matches the current pin is inert, so a push that raced a re-pair, or an old baseline replayed after a
 // same-key revoke+re-pair, cannot be enforced. resolvePolicyState folds the persisted facts into one PolicyState arm.
 //
-// port.ts hands this module the port (attachPort) and routes policy/lang frames BEFORE the request parse and the kill
+// port.ts drives `collaborator` (the connection, then every policy/lang frame) BEFORE the request parse and the kill
 // and enrollment gates, so a killed bridge still consumes pushes; frames process strictly in arrival order. This module
 // sends only `lang_set`, and only on a connection whose host already pushed `lang_current`.
 
@@ -28,6 +28,7 @@ import {
   KEY_ID_HEX,
   LangCurrentFrameSchema,
   PolicyCurrentFrameSchema,
+  type PolicyInboundFrame,
   PolicyInboundFrameSchema,
   type StoredPolicyState,
   StoredPolicyStateSchema,
@@ -48,6 +49,7 @@ import { UI_LANGUAGES, type UiLanguageValue } from "@chromium-bridge/shared/sett
 import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
+import type { Connection, PortCollaborator } from "./connection";
 import { getPin, setCompromised } from "./enclave-pin";
 import { base64Decode, verifyPolicySignatureAgainstPin } from "./enclave-verify";
 
@@ -131,50 +133,54 @@ function freezePolicyValues(values: PolicyValues): PolicyValues {
 
 // ---- port plumbing (mirrors presence.ts) --------------------------------------
 
-type PostFrame = (frame: object) => boolean;
-
-/** A fresh attachment per attachPort, so "did THIS connection verify a push, and under which scope?" is a
- * reference-identity fact a reconnect cannot inherit (ADR-0032 decision 4). The verified arm carries scope and
+/** What THIS connection has earned. A fresh record per onAttach, so "did this connection verify a push, and under
+ * which scope?" is a reference-identity fact a reconnect cannot inherit. The verified arm carries scope and
  * generation so the barrier closes the instant the pin moves away from either. */
-type AttachmentPolicy =
+type ConnectionPolicy =
   | { kind: "awaiting" }
   | { kind: "verified"; scope: PolicyScope; generation: number };
 
-/** One port attachment. Only the `lang_set` send below ever posts through `post`. */
-interface PortAttachment {
-  post: PostFrame;
-  policy: AttachmentPolicy;
+/** The live connection and the latches that belong to it. Only the `lang_set` send below ever posts through it. */
+interface LiveConnection {
+  readonly conn: Connection;
+  policy: ConnectionPolicy;
   /** THIS connection's host has pushed a schema-valid `lang_current`: the
-   * never-speak-first gate for `lang_set` (ADR-0032 decisions 4 and 7). An
-   * old host that never pushes one never sees a language frame it would
-   * fatally forward; a reconnect inherits nothing. */
+   * never-speak-first gate for `lang_set`. An old host that never pushes one
+   * never sees a language frame it would fatally forward; a reconnect
+   * inherits nothing. */
   langSeen: boolean;
-  /** The first-pairing adoption `lang_set` (decision 7) already went out on
-   * THIS connection: at most one per connection, however many seq:0 pushes
-   * the host repeats. The honest host's reply push carries seq >= 1, which
-   * ends the adoption condition entirely. */
+  /** The first-pairing adoption `lang_set` already went out on THIS
+   * connection: at most one per connection, however many seq:0 pushes the
+   * host repeats. The honest host's reply push carries seq >= 1, which ends
+   * the adoption condition entirely. */
   langAdoptionOffered: boolean;
 }
 
-let port: PortAttachment | null = null;
+let live: LiveConnection | null = null;
 
-export function attachPort(post: PostFrame): void {
-  port = {
-    post,
-    policy: { kind: "awaiting" },
-    langSeen: false,
-    langAdoptionOffered: false,
-  };
-  // The apply cursor is per-connection, like the two latches above: a
-  // departed peer's {value, seq:MAX} push must not suppress the genuine
-  // host's real, lower seq on the next connection (its own push-on-connect
-  // re-applies idempotently; see the lang section's cursor docs).
-  lang = null;
-}
-
-export function detachPort(): void {
-  port = null;
-}
+export const collaborator: PortCollaborator = {
+  onAttach(conn) {
+    live = {
+      conn,
+      policy: { kind: "awaiting" },
+      langSeen: false,
+      langAdoptionOffered: false,
+    };
+    // The apply cursor is per-connection, like the two latches above: a
+    // departed peer's {value, seq:MAX} push must not suppress the genuine
+    // host's real, lower seq on the next connection (its own push-on-connect
+    // re-applies idempotently; see the lang section's cursor docs).
+    lang = null;
+  },
+  onDetach() {
+    live = null;
+  },
+  onFrame(msg) {
+    if (!isPolicyFrame(msg)) return false;
+    void handlePolicyFrame(msg);
+    return true;
+  },
+};
 
 // ---- lang_current: the shared-language lane (ADR-0032 decision 7) -------------------
 //
@@ -190,7 +196,7 @@ export function detachPort(): void {
 const UI_LANGUAGE_KEY = "uiLanguage";
 
 /** The last applied host push on the CURRENT connection; its `seq` is the apply cursor (only a strictly greater push
- * applies). In memory and reset by attachPort on purpose: the host re-pushes on every connect, and a persisted cursor
+ * applies). In memory and reset by onAttach on purpose: the host re-pushes on every connect, and a persisted cursor
  * would read that equal-seq push as already applied and suppress the repair of a stale local pick. */
 let lang: { value: string; seq: number } | null = null;
 
@@ -218,7 +224,7 @@ function isSharedLanguage(value: string): value is UiLanguageValue {
 /** The APPLY path plus the adoption offer. Never emits on apply; the ONLY
  * emit in here is the once-per-connection adoption send for seq:0. Runs on
  * the frame chain (routeOne), so applies and sends never interleave. */
-async function handleLangCurrent(msg: unknown, attachment: PortAttachment | null): Promise<void> {
+async function handleLangCurrent(msg: unknown, attachment: LiveConnection | null): Promise<void> {
   const parsed = LangCurrentFrameSchema.safeParse(msg);
   if (!parsed.success) {
     console.warn("[bb] dropping malformed lang_current frame");
@@ -256,10 +262,10 @@ async function handleLangCurrent(msg: unknown, attachment: PortAttachment | null
   if (stored !== value) {
     await browser.storage.local.set({ [UI_LANGUAGE_KEY]: value });
   }
-  // The writes awaited, and attachPort resets the cursor synchronously off
+  // The writes awaited, and onAttach resets the cursor synchronously off
   // the frame chain: a departed connection's push resuming here must not
   // re-commit the old peer's seq over the NEW connection's fresh cursor.
-  if (attachment !== port) return;
+  if (attachment !== live) return;
   // The cursor commits only once the write held (a throwing write unwinds
   // through the frame chain's catch with the cursor unmoved, so the host's
   // same-seq replay can still repair the stale storage).
@@ -271,8 +277,8 @@ async function handleLangCurrent(msg: unknown, attachment: PortAttachment | null
  * push carries seq >= 1 and returns through the non-emitting apply path.
  *   host repeats seq:0  -> one offer per connection (langAdoptionOffered)
  *   reconnect           -> re-offers; a missed adoption costs latency, never the import */
-async function maybeAdoptExtensionLanguage(attachment: PortAttachment | null): Promise<void> {
-  if (!attachment || attachment !== port) return;
+async function maybeAdoptExtensionLanguage(attachment: LiveConnection | null): Promise<void> {
+  if (!attachment || attachment !== live) return;
   if (attachment.langAdoptionOffered) return;
   // A real push already applied on this connection: the host HAS an
   // explicit value, so a later seq:0 is inconsistent noise, not an adoption
@@ -282,9 +288,9 @@ async function maybeAdoptExtensionLanguage(attachment: PortAttachment | null): P
   if (typeof stored !== "string" || !isSharedLanguage(stored)) return;
   // The read awaited: re-check the connection so a reconnect mid-read
   // cannot ride the dead attachment's offer.
-  if (attachment !== port) return;
+  if (attachment !== live) return;
   attachment.langAdoptionOffered = true;
-  attachment.post({ type: "lang_set", value: stored } satisfies LangSetWire);
+  attachment.conn.post({ type: "lang_set", value: stored } satisfies LangSetWire);
 }
 
 /** The only gesture-driven `lang_set` emitter (the options picker's `lang_choose` message; the picker's own local write
@@ -293,12 +299,12 @@ async function maybeAdoptExtensionLanguage(attachment: PortAttachment | null): P
  * push-on-connect re-asserts the host truth. Resolves with whether a frame was posted. */
 export function chooseLanguage(value: UiLanguageValue): Promise<boolean> {
   const send = frameChain.then(async () => {
-    const attachment = port;
+    const attachment = live;
     if (!attachment?.langSeen) return false;
     if (!(await langLanePinned())) return false;
     // The pinned read awaited: only the still-live attachment may emit.
-    if (attachment !== port) return false;
-    return attachment.post({ type: "lang_set", value } satisfies LangSetWire);
+    if (attachment !== live) return false;
+    return attachment.conn.post({ type: "lang_set", value } satisfies LangSetWire);
   });
   frameChain = send.then(
     () => undefined,
@@ -562,9 +568,9 @@ export async function policyDispatchGate(): Promise<PolicyGate> {
   // generation: a mark from before a same-key re-pair carries the old generation and no longer opens the gate.
   if (
     state.kind === "active" &&
-    port?.policy.kind === "verified" &&
-    scopesEqual(port.policy.scope, scope) &&
-    port.policy.generation === pinGeneration
+    live?.policy.kind === "verified" &&
+    scopesEqual(live.policy.scope, scope) &&
+    live.policy.generation === pinGeneration
   ) {
     return { allowed: true };
   }
@@ -674,8 +680,8 @@ export async function onPinPinned(newKeyId: string): Promise<void> {
   // Remaining window: no restart-reconciliation hook exists, so an SW death between the reset and this remove costs
   // the user one extra revoke+re-pair, never a wrong novelty decision or a fail-open state.
   await browser.storage.local.remove(POLICY_PRIOR_PIN_KEY);
-  if (port) {
-    port.policy = { kind: "awaiting" };
+  if (live) {
+    live.policy = { kind: "awaiting" };
   }
 }
 
@@ -688,8 +694,8 @@ export async function onPinRevoked(revokedKeyId: string | null): Promise<void> {
   // Synchronously, so the second leg of a same-key revoke+re-pair is distinguishable from the pre-revoke pin.
   pinGeneration += 1;
   if (revokedKeyId !== null) lastPinnedKeyId = revokedKeyId;
-  if (port) {
-    port.policy = { kind: "awaiting" };
+  if (live) {
+    live.policy = { kind: "awaiting" };
   }
   if (revokedKeyId !== null) {
     await browser.storage.local.set({ [POLICY_PRIOR_PIN_KEY]: revokedKeyId });
@@ -721,7 +727,7 @@ export function setUnpinnedRelaxationApprover(approver: UnpinnedRelaxationApprov
 // ---- inbound frames --------------------------------------------------------------
 
 /** Classification for the port demux: is this frame a policy/language push? */
-export function isPolicyFrame(msg: unknown): boolean {
+export function isPolicyFrame(msg: unknown): msg is PolicyInboundFrame {
   return PolicyInboundFrameSchema.safeParse(msg).success;
 }
 
@@ -736,7 +742,7 @@ let frameChain: Promise<void> = Promise.resolve();
 let pendingApproval: {
   baselineB64: string;
   overlayJson: string;
-  attachment: PortAttachment | null;
+  attachment: LiveConnection | null;
 } | null = null;
 
 /** Route one inbound policy/lang frame. The attachment is captured synchronously so the verified mark lands on exactly
@@ -748,7 +754,7 @@ let pendingApproval: {
  *   bad push arrives -> requests past the gate run under the stored effective -> signature fails -> latch set synchronously
  * Nothing that reads the gate or dispatch after the latch passes. */
 export function handlePolicyFrame(msg: unknown): Promise<void> {
-  const attachment = port;
+  const attachment = live;
   // A TRULY IDENTICAL replay of the push held at the approver (same baseline, overlay, attachment) is dropped: the
   // pending prompt's verdict covers it, and another prompt would let a hostile unpinned host occupy the confirmation
   // FIFO. Anything less serializes on the frame chain: a different overlay is the host tightening mid-window, and a
@@ -774,7 +780,7 @@ export function handlePolicyFrame(msg: unknown): Promise<void> {
   return frameChain;
 }
 
-async function routeOne(msg: unknown, attachment: PortAttachment | null): Promise<void> {
+async function routeOne(msg: unknown, attachment: LiveConnection | null): Promise<void> {
   const inbound = PolicyInboundFrameSchema.safeParse(msg);
   if (!inbound.success) return;
   if (inbound.data.type === "lang_current") {
@@ -806,7 +812,7 @@ function refuse(why: string, opts: { audit?: boolean } = {}): void {
  *   the barrier reopens only to  -> a policy the pinned key signed at or above the stored revision
  *   enclave re-attestation       -> adds nothing unless hostReverifyMs is set (its default 0 never re-verifies) */
 async function markPolicyCompromised(
-  attachment: PortAttachment | null,
+  attachment: LiveConnection | null,
   reason: string,
 ): Promise<void> {
   // SYNCHRONOUS, before any await: this is the whole point of the sticky latch.
@@ -828,7 +834,7 @@ async function markPolicyCompromised(
   }
 }
 
-async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | null): Promise<void> {
+async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | null): Promise<void> {
   const parsed = PolicyCurrentFrameSchema.safeParse(msg);
   if (!parsed.success) return refuse("malformed policy_current frame");
   // The frame schema is loose and its parse output RETAINS unknown keys: only the named fields below may be read; never
@@ -1038,9 +1044,9 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
     );
   }
   // The mark carries the snapshot scope and generation, both still equal to the commit values. It lands only when this
-  // frame's attachment is STILL the live port: stamping a dead attachment would verify a connection that no longer exists
-  // while the live one earned nothing, so stamp nothing; the record stays applied and the new connection's own push earns its mark.
-  if (attachment && attachment === port) {
+  // frame's connection is STILL the live one: stamping a dead connection would verify one that no longer exists while
+  // the live one earned nothing, so stamp nothing; the record stays applied and the new connection's own push earns its mark.
+  if (attachment && attachment === live) {
     attachment.policy = { kind: "verified", scope: scopeAtStart, generation: generationAtStart };
   } else if (attachment) {
     console.warn(
@@ -1058,7 +1064,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
  * INCLUDING the durable prior-pin identity, which is exactly what a restart is
  * meant to preserve - suites that need a clean store reset fakeBrowser storage. */
 export function resetPolicySyncForTests(): void {
-  port = null;
+  live = null;
   lang = null;
   unpinnedApprover = null;
   pendingApproval = null;
