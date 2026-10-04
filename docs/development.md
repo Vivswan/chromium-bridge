@@ -292,7 +292,7 @@ When a crash is filed:
 
 Deliberately not fuzzed, and why:
 
-- `allowlist.rs`, `revocation.rs`, `ipc/lockfile.rs`: pure `serde_json::from_slice` into derived `deny_unknown_fields` structs. Fuzzing them would fuzz serde_json, not our code; negative unit tests already pin the fail-closed behavior.
+- `allowlist.rs`, `trust.rs`, `ipc/lockfile.rs`: pure `serde_json::from_slice` into derived `deny_unknown_fields` structs. Fuzzing them would fuzz serde_json, not our code; negative unit tests already pin the fail-closed behavior.
 - `enclave/pubkey.rs`: `EnclavePublicKey::from_x963` is a length check plus a lead-byte check, not point validation. Too trivial to earn a target.
 - Broker semantics: owned by loom model checking and `tests/protocol/adversarial.py`, which exercise interleavings and hostile peers rather than byte parsing.
 - Presence signing: Security.framework calls, not a byte parser.

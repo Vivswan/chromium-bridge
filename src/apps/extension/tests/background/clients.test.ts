@@ -70,17 +70,17 @@ describe("client list", () => {
     expect(view.clients[0]?.anchor.kind).toBe("signer");
   });
 
-  test("surfaces a host-side failure (tamper case) as ok:false", async () => {
+  test("surfaces a host-side failure (unreadable trust record) as ok:false", async () => {
     const p = requestClientList();
     handleAdminFrame({
       type: "client_list_result",
       ok: false,
       enrolled: true,
       clients: [],
-      error: "clients.json is missing but this machine has enrolled trusted clients",
+      error: "trust record unreadable: permission denied",
     });
     const view = await p;
-    expect(failed(view).error).toContain("missing");
+    expect(failed(view).error).toContain("unreadable");
   });
 
   test("fails closed without a port and on a malformed reply", async () => {

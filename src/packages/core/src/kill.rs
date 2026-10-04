@@ -62,7 +62,6 @@ pub(crate) fn verdict(trust: io::Result<TrustState>) -> Result<(), CallError> {
 /// audited. Returns the new epoch.
 pub fn engage(surface: Surface) -> io::Result<u64> {
     let epoch = set_killed(true)?;
-    // Log-after-decide, outside the critical section.
     audit::record(
         AuditRecord::new(AuditKind::KillEngage)
             .surface(surface)
@@ -82,7 +81,6 @@ pub fn engage(surface: Surface) -> io::Result<u64> {
 /// ```
 pub fn release(surface: Surface, auth: PresenceAttestation) -> io::Result<u64> {
     let result = set_killed(false);
-    // Log-after-decide, outside the critical section, on BOTH arms.
     let auth_name = auth.path().wire_name();
     match &result {
         Ok(_) => audit::record(
@@ -108,7 +106,7 @@ fn set_killed(killed: bool) -> io::Result<u64> {
 
 /// Record a release that was REFUSED at the presence gate, so an attempted
 /// silent unkill (a piped stdin, a declined prompt, a failed hardware check)
-/// is visible in the trail. Log-after-decide: the refusal already happened.
+/// is visible in the trail.
 pub(crate) fn audit_refused_release(surface: Surface, err: &presence::PresenceError) {
     audit::record(
         AuditRecord::new(AuditKind::KillRelease)

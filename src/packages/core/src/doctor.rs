@@ -14,8 +14,9 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::browsers::{self, BaseDirs, Os, HOST_ID};
+use crate::browsers::{self, BaseDirs, Os};
 use crate::cli::DoctorCommand;
+use crate::identity::NATIVE_HOST_ID;
 use crate::ipc::LockFile;
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
 use crate::registration::{self, RegState};
@@ -42,7 +43,7 @@ pub struct Report {
     /// `Browser::ALL` order - or the reason the check could not run at all
     /// (e.g. no HOME).
     pub manifests: Result<Vec<ManifestStatus>, String>,
-    /// The global kill switch. `Ok(bool)` from a readable revocation record;
+    /// The global kill switch. `Ok(bool)` from a readable trust record;
     /// `Err(text)` when the record is unreadable (in which case every
     /// enforcement point is failing closed).
     pub kill: Result<bool, String>,
@@ -230,7 +231,7 @@ fn render(r: &Report) -> String {
         )),
     }
 
-    out.push_str(&format!("native manifests: (host id {HOST_ID})\n"));
+    out.push_str(&format!("native manifests: (host id {NATIVE_HOST_ID})\n"));
     match &r.manifests {
         Err(err) => out.push_str(&format!("  could not check: {err}\n")),
         Ok(list) => {
@@ -313,7 +314,7 @@ fn run_list() -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
-    println!("known browsers (host id {HOST_ID}):");
+    println!("known browsers (host id {NATIVE_HOST_ID}):");
     for entry in browsers::resolve(os, &dirs) {
         println!(
             "  {:<9} {:<13} {:<30} {}",

@@ -136,7 +136,7 @@ fn server_injected_policy_frames_are_dropped_not_forwarded() {
 }
 
 /// A scratch runtime dir for the frame-answer tests (the policy
-/// and language stores, the revocation record, and the audit trail all
+/// and language stores, the trust record, and the audit trail all
 /// resolve their paths internally): the crate-wide
 /// [`crate::test_support::scratch_runtime_dir`] guard, so no test reads
 /// or writes the user's real state and no other module's tests race the
@@ -366,7 +366,7 @@ fn extension_kill_release_is_refused_audited_and_does_not_release() {
 
 #[test]
 fn kill_status_reply_never_claims_a_state_it_cannot_read() {
-    // On a machine whose revocation record is absent (the unit-test
+    // On a machine whose trust record is absent (the unit-test
     // environment), the reply is ok with an explicit killed flag; the
     // ok:false shape is pinned by the malformed test above and the
     // adversarial suite (corrupt record).

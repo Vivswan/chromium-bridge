@@ -50,41 +50,34 @@ fn mcp_ndjson_single_line_roundtrip() {
 }
 
 #[test]
-fn mcp_read_rejects_a_line_over_the_cap() {
-    // A newline-less client line longer than the cap is rejected instead of
-    // being buffered in full (the memory-exhaustion path on the client
-    // leg). A tiny cap keeps the test fast; mcp_read wires the real 64 MB.
-    let mut r = Cursor::new(vec![b'x'; 64]); // no newline, cap is 16
-    let err = mcp_read_capped(&mut r, 16).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+fn ndjson_read_cap_boundary_is_exact() {
+    // Pins the off-by-one the +1 sentinel guards, for a terminated line and
+    // for an unterminated one (the hostile stream that never sends the
+    // newline) alike. Valid JSON throughout, so a refusal here is the cap's
+    // and not the decoder's.
+    let line = br#"{"id":1,"op":"tab_list","args":{}}"#.to_vec();
+    let mut terminated = line.clone();
+    terminated.push(b'\n');
+    for (row, wire) in [("terminated", terminated), ("unterminated", line)] {
+        let total = wire.len();
+        let got: Option<BridgeReq> =
+            ndjson_read_capped(&mut Cursor::new(wire.clone()), total, "test")
+                .unwrap_or_else(|e| panic!("{row}: a line exactly at the cap must parse: {e}"));
+        assert_eq!(got.map(|req| req.id), Some(1), "{row}");
+        let err = ndjson_read_capped::<_, BridgeReq>(&mut Cursor::new(wire), total - 1, "test")
+            .err()
+            .unwrap_or_else(|| panic!("{row}: one byte under the cap must refuse"));
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{row}");
+    }
 }
 
 #[test]
-fn mcp_read_cap_boundary_is_exact() {
-    // The cap counts the whole line, newline included. A line whose length
-    // equals the cap parses; one byte tighter rejects it. Pins the
-    // off-by-one the +1 sentinel guards.
-    let mut wire = br#"{"jsonrpc":"2.0","id":1}"#.to_vec();
-    wire.push(b'\n');
-    let total = wire.len();
-
-    let got = mcp_read_capped(&mut Cursor::new(wire.clone()), total).unwrap();
-    assert_eq!(got.unwrap().id, Some(json!(1)));
-
-    let err = mcp_read_capped(&mut Cursor::new(wire), total - 1).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn mcp_read_skips_blank_lines_without_recursing() {
-    // A large flood of blank lines: the iterative loop skips them in
-    // constant stack, whereas the old `return mcp_read(r)` recursion would
-    // grow the stack once per blank and overflow (aborting under
-    // panic=abort). Sized well past any plausible stack depth, so a
-    // regression back to recursion makes this test crash rather than pass.
+fn ndjson_read_skips_blank_lines_without_recursing() {
+    // Sized past any plausible stack depth, so a regression back to a
+    // recursive skip (the reader's doc says why it loops) crashes rather
+    // than passes.
     let mut buf = vec![b'\n'; 200_000];
-    let msg = JsonRpc::ok(json!(2), json!({}));
-    mcp_write(&mut buf, &msg).unwrap();
+    mcp_write(&mut buf, &JsonRpc::ok(json!(2), json!({}))).unwrap();
     let got = mcp_read(&mut Cursor::new(buf)).unwrap().unwrap();
     assert_eq!(got.id, Some(json!(2)));
 }
@@ -157,52 +150,6 @@ fn bridge_req_parse_refuses_exactly_what_the_extension_refuses() {
             .unwrap_or_else(|| panic!("{wire}: EOF"));
         assert_eq!(got.id, 1, "{wire}");
     }
-}
-
-#[test]
-fn bridge_read_rejects_a_line_over_the_cap() {
-    // A newline-less line longer than the cap is rejected instead of being
-    // buffered in full (the memory-exhaustion path). A tiny cap keeps the
-    // test fast; the public bridge_read wires the real 64 MB ceiling.
-    let mut r = Cursor::new(vec![b'x'; 64]); // no newline, cap is 16
-    let err = bridge_read_capped::<_, Value>(&mut r, 16).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn bridge_read_cap_boundary_is_exact() {
-    // The cap counts the whole line, newline included. A line whose length
-    // equals the cap parses; one byte tighter rejects it rather than
-    // truncating. This pins the off-by-one the +1 sentinel guards.
-    let mut wire = br#"{"id":1,"op":"tab_list","args":{}}"#.to_vec();
-    wire.push(b'\n');
-    let total = wire.len();
-
-    let got: Option<BridgeReq> = bridge_read_capped(&mut Cursor::new(wire.clone()), total).unwrap();
-    assert_eq!(got.unwrap().id, 1);
-
-    let err = bridge_read_capped::<_, BridgeReq>(&mut Cursor::new(wire), total - 1).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn bridge_read_skips_blank_lines_without_recursing() {
-    // A large flood of blank lines is skipped iteratively, in constant
-    // stack; a recursive skip would grow the stack once per blank and
-    // overflow (aborting under panic=abort). Sized well past any plausible
-    // stack depth, so a regression to recursion crashes rather than passes.
-    let mut wire = vec![b'\n'; 200_000];
-    bridge_write(
-        &mut wire,
-        &BridgeReq {
-            id: 9,
-            command: BridgeCommand::TabList(NoArgs {}),
-            browser: None,
-        },
-    )
-    .unwrap();
-    let got: BridgeReq = bridge_read(&mut Cursor::new(wire)).unwrap().unwrap();
-    assert_eq!(got.id, 9);
 }
 
 #[test]

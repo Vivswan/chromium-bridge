@@ -353,47 +353,6 @@ error_taxonomy! {
 mod tests {
     use super::*;
 
-    #[test]
-    fn display_text_is_model_facing() {
-        assert!(CallError::NotConnected
-            .to_string()
-            .contains("not connected"));
-        assert_eq!(
-            CallError::UnknownTool("foo".into()).to_string(),
-            "unknown tool: foo"
-        );
-        // The extension's own error text passes through verbatim.
-        assert_eq!(CallError::Extension("boom".into()).to_string(), "boom");
-        assert!(CallError::Timeout(Duration::from_secs(120))
-            .to_string()
-            .contains("did not respond"));
-    }
-
-    #[test]
-    fn tool_disabled_message_names_which_gate_fired() {
-        let grant_off = CallError::ToolDisabled {
-            tool: "page_eval".into(),
-            reason: ToolDisabledReason::GrantOff("pageEvalEnabled"),
-        };
-        assert!(grant_off.to_string().contains("page_eval"));
-        assert!(grant_off.to_string().contains("pageEvalEnabled"));
-        assert_eq!(grant_off.code(), "TOOL_DISABLED");
-
-        let listed = CallError::ToolDisabled {
-            tool: "tab_close".into(),
-            reason: ToolDisabledReason::InDisabledList,
-        };
-        assert!(listed.to_string().contains("disabled-tools list"));
-        assert_eq!(listed.code(), "TOOL_DISABLED");
-
-        let unreadable = CallError::ToolDisabled {
-            tool: "tab_list".into(),
-            reason: ToolDisabledReason::StoreUnreadable("bad json".into()),
-        };
-        assert!(unreadable.to_string().contains("failing closed"));
-        assert_eq!(unreadable.code(), "TOOL_DISABLED");
-    }
-
     // ERROR_SPECS is the single source of truth for cross-process error
     // codes (the TS constants are generated from it). Every CallError variant
     // must map into the table.

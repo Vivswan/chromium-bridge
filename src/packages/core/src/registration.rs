@@ -19,10 +19,9 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::browsers::{
-    self, BaseDirs, Browser, BrowserEntry, Os, Registration, HOST_ID, PINNED_EXTENSION_ID,
-};
+use crate::browsers::{self, BaseDirs, Browser, BrowserEntry, Os, Registration};
 use crate::cli::{FixTargets, UninstallArgs};
+use crate::identity::{NATIVE_HOST_ID, PINNED_EXTENSION_ID};
 use serde::Serialize;
 
 /// The `description` the legacy `install.sh` / `install.ps1` wrote, verbatim.
@@ -152,9 +151,11 @@ pub fn manifest_ownership(contents: &str) -> Ownership {
         Err(e) => return Ownership::Foreign(format!("not a JSON manifest ({e})")),
     };
     match parsed.get("name").and_then(|v| v.as_str()) {
-        Some(name) if name == HOST_ID => {}
+        Some(name) if name == NATIVE_HOST_ID => {}
         other => {
-            return Ownership::Foreign(format!("manifest name is {other:?}, expected {HOST_ID:?}"))
+            return Ownership::Foreign(format!(
+                "manifest name is {other:?}, expected {NATIVE_HOST_ID:?}"
+            ))
         }
     }
     match parsed.get("description").and_then(|v| v.as_str()) {
@@ -226,7 +227,7 @@ impl Registrar {
     /// itself on Windows).
     fn manifest_json(&self, launch_path: &Path) -> Result<String, String> {
         let manifest = serde_json::json!({
-            "name": HOST_ID,
+            "name": NATIVE_HOST_ID,
             "description": MANIFEST_DESCRIPTION,
             "path": launch_path,
             "type": "stdio",
@@ -543,7 +544,7 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
 
-    println!("chromium-bridge doctor --fix (host id {HOST_ID})");
+    println!("chromium-bridge doctor --fix (host id {NATIVE_HOST_ID})");
     println!("host binary: {}", host_exe.display());
     // Explicit loop: registering is the command's real work and must not
     // hide as a filter side effect. The failure count only feeds the exit
@@ -592,7 +593,7 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
         targets.push(Target::for_explicit_dir(dir));
     }
 
-    println!("chromium-bridge uninstall (host id {HOST_ID})");
+    println!("chromium-bridge uninstall (host id {NATIVE_HOST_ID})");
     let mut failed = false;
     for target in &targets {
         match Registrar::uninstall(target) {
