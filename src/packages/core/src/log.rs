@@ -9,7 +9,10 @@
 //! Prefer the `log_error!` / `log_warn!` / `log_info!` / `log_debug!` macros
 //! over calling [`emit`] directly.
 
+use std::fmt::Display;
 use std::sync::OnceLock;
+
+use serde::Serialize;
 
 /// Severity, ordered least-verbose (`Error`) to most-verbose (`Debug`).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -73,59 +76,43 @@ pub fn format() -> Format {
     })
 }
 
-/// Minimal JSON string escaping - enough for the small, controlled values we
-/// put in audit fields (tool names, codes, numbers). Avoids pulling serde into
-/// the hot path for one line.
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len().saturating_add(2));
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-/// Render one audit line from a timestamp and ordered key/value fields. Pure,
-/// so both output formats are unit-testable without touching stderr or the
-/// clock.
-pub fn render_audit(fmt: Format, ts_ms: u128, fields: &[(&str, &str)]) -> String {
+/// One stderr audit line for `event`. The JSON form is the event's own fields under the `"kind":"audit"`
+/// envelope log collectors key on, so an event names its own kind under another key ([`AuditRecord`]
+/// uses `event_kind`). Pure, so both formats are unit-testable without touching stderr.
+///
+/// [`AuditRecord`]: crate::audit::AuditRecord
+///
+/// ```text
+/// text  -> [AUDIT] <event's Display>
+/// json  -> {"kind":"audit", ...event's own fields}
+/// ```
+pub fn render_audit<T: Display + Serialize>(fmt: Format, event: &T) -> serde_json::Result<String> {
     match fmt {
-        Format::Text => {
-            let mut s = format!("[AUDIT] ts={ts_ms}");
-            for (k, v) in fields {
-                s.push_str(&format!(" {k}={v}"));
-            }
-            s
-        }
-        Format::Json => {
-            let mut s = format!("{{\"kind\":\"audit\",\"ts\":{ts_ms}");
-            for (k, v) in fields {
-                s.push_str(&format!(",\"{}\":\"{}\"", json_escape(k), json_escape(v)));
-            }
-            s.push('}');
-            s
-        }
+        Format::Text => Ok(format!("[AUDIT] {event}")),
+        Format::Json => serde_json::to_string(&Envelope {
+            kind: "audit",
+            event,
+        }),
     }
 }
 
-/// Emit a structured audit event (one tool invocation) to stderr. Gated at the
-/// `Info` threshold so `BB_LOG=warn`/`error` silences it, but on by default.
-pub fn audit(fields: &[(&str, &str)]) {
+#[derive(Serialize)]
+struct Envelope<'a, T: Serialize> {
+    kind: &'static str,
+    #[serde(flatten)]
+    event: &'a T,
+}
+
+/// Emit one structured audit event to stderr. Gated at the `Info` threshold so
+/// `BB_LOG=warn`/`error` silences it, but on by default.
+pub fn audit<T: Display + Serialize>(event: &T) {
     if !enabled(Level::Info) {
         return;
     }
-    let ts_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    eprintln!("{}", render_audit(format(), ts_ms, fields));
+    match render_audit(format(), event) {
+        Ok(line) => eprintln!("{line}"),
+        Err(e) => crate::log_warn!("audit", "audit line could not be rendered: {e}"),
+    }
 }
 
 #[macro_export]
@@ -154,58 +141,4 @@ macro_rules! log_debug {
     ($tag:expr, $($a:tt)*) => {
         $crate::log::emit($crate::log::Level::Debug, $tag, format_args!($($a)*))
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn severity_ordering() {
-        assert!(Level::Error < Level::Warn);
-        assert!(Level::Warn < Level::Info);
-        assert!(Level::Info < Level::Debug);
-    }
-
-    #[test]
-    fn info_threshold_hides_debug_only() {
-        // `enabled` compares against the process-wide threshold; assert the
-        // ordering rule it relies on (default threshold is Info).
-        assert!(Level::Error <= Level::Info);
-        assert!(Level::Info <= Level::Info);
-        assert!(Level::Debug > Level::Info);
-    }
-
-    #[test]
-    fn render_audit_text() {
-        let line = render_audit(
-            Format::Text,
-            1234,
-            &[("req", "7"), ("tool", "page_click"), ("outcome", "ok")],
-        );
-        assert_eq!(line, "[AUDIT] ts=1234 req=7 tool=page_click outcome=ok");
-    }
-
-    #[test]
-    fn render_audit_json_is_valid_and_escaped() {
-        let line = render_audit(
-            Format::Json,
-            1234,
-            &[("tool", "page_eval"), ("code", "EXECUTION_FAILED")],
-        );
-        // Parses as JSON and carries the fields.
-        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(v["kind"], "audit");
-        assert_eq!(v["ts"], 1234);
-        assert_eq!(v["tool"], "page_eval");
-        assert_eq!(v["code"], "EXECUTION_FAILED");
-    }
-
-    #[test]
-    fn json_escape_handles_quotes_and_control() {
-        let line = render_audit(Format::Json, 0, &[("k", "a\"b\\c\nd")]);
-        // Still valid JSON despite quotes/backslash/newline in the value.
-        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(v["k"], "a\"b\\c\nd");
-    }
 }

@@ -43,7 +43,7 @@ fn revoke_always_writes_an_audit_trail_entry() {
             Ok(text) => text
                 .lines()
                 .map(|l| serde_json::from_str(l).unwrap())
-                .filter(|r: &AuditRecord| r.kind == AuditKind::RevokeClient)
+                .filter(|r: &AuditRecord| r.event_kind == AuditKind::RevokeClient)
                 .collect(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => panic!("cannot read the audit trail: {e}"),

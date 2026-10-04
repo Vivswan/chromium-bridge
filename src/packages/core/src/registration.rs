@@ -23,6 +23,7 @@ use crate::browsers::{
     self, BaseDirs, Browser, BrowserEntry, Os, Registration, HOST_ID, PINNED_EXTENSION_ID,
 };
 use crate::cli::{FixTargets, UninstallArgs};
+use serde::Serialize;
 
 /// The `description` the legacy `install.sh` / `install.ps1` wrote, verbatim.
 const MANIFEST_DESCRIPTION_LEGACY: &str = "Chromium Bridge native messaging host";
@@ -104,7 +105,8 @@ pub enum Ownership {
 
 /// The diagnosed state of one registration, as reported by `doctor` and
 /// repaired by `--fix`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RegState {
     /// No manifest file (and no registry key on Windows).
     Missing,
