@@ -106,7 +106,7 @@ chromium-bridge list-clients
 chromium-bridge revoke-client --name codex
 ```
 
-- `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust).
+- `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust). Unix only: on Windows the server keys a harness on the creator of its stdin pipe, which a console command has none of, so pair with `--hash` or `--team-id` using the values the server logs at startup while unenrolled.
 - Authorization keys on the attested anchor (a signing Team ID where the client is signed, an image hash otherwise); the `--name` is a label for logs and revocation, never the authorization key.
 - Hash anchors change when the client updates; re-run `pair-client` with the same name to replace the entry (the re-pair path).
 - Adding a client is a capability grant, so it is presence-gated: Touch ID on an enrolled Mac, an interactive terminal confirmation otherwise. Revoking is friction-free by design; a live broker drops the revoked client and refuses its re-attach.

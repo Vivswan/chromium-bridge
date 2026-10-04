@@ -202,6 +202,29 @@ fn admit_own_harness() -> Option<Harness> {
                  the browser. Run `chromium-bridge pair-client` to enroll trusted clients and \
                  turn on enforcement. See SECURITY.md."
             );
+            // The measured anchors, so the operator can pair this harness with
+            // `--hash` or `--team-id` where `--this-parent` cannot measure it
+            // (Windows, or any harness that spawns the server over a pipe).
+            // The subject is printed bare, not as a shell argument: an X.500
+            // subject can carry quotes and commas, and quoting differs per shell.
+            if let Some(id) = &identity {
+                let team = id
+                    .team_id
+                    .as_ref()
+                    .map(|t| format!(", team id / publisher subject [{t}]"))
+                    .unwrap_or_default();
+                log_error!(
+                    "mcp",
+                    "this harness measured as hash {}{team}; pair it with `pair-client --hash {}`{}",
+                    id.hash,
+                    id.hash,
+                    if id.team_id.is_some() {
+                        " or `--team-id` with that subject, quoted for your shell"
+                    } else {
+                        ""
+                    }
+                );
+            }
             crate::audit::record(
                 crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessAdmit)
                     .surface(crate::audit::Surface::Host)
