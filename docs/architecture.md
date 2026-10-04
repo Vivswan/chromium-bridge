@@ -140,7 +140,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chrom
 | `native_host.rs` | `--native-host` mode: NM frames <-> socket NDJSON, control-plane frame handling, graceful exit on EOF |
 | `tools/` | The tool catalogue (26 tools; the cross-process contract source): one `catalogue!` row per tool emits the `BridgeCommand` enum, the `ToolId` index, and the `Tool` record (metadata, grants, dispatch, typed args schema); capabilities are read off the records |
 | `runtime_record.rs` | The one loader and writer for every JSON record in the runtime directory: capped read, version envelope, strict parse, atomic 0600 write under the runtime lock |
-| `migrations/` | One migration ladder per record; a record's schema version is its ladder's length, and the ladders are the only home for compatibility code |
+| `migrations/` | One migration ladder per record, a floor plus its rungs (the rule under the runtime-state table below); the ladders are the only home for compatibility code |
 | `allowlist.rs` | The trusted-client allowlist: the entry types, the pairing and revocation writes, and `pair-client` / `revoke-client` / `list-clients` |
 | `trust.rs` | The trust record (`trust.json`): the kill latch, the paired clients, the change epoch, and the admission decision every enforcement point takes from one read |
 | `kill.rs` | Kill-switch engage/release; release demands a `PresenceAttestation` |
@@ -201,6 +201,21 @@ Runtime state, in the 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/
 | `policy-history.json` (0600) | Superseded policy revisions, a bounded ring; data for rollback, never authority |
 | `lang.json` (0600) | The shared `uiLanguage` preference and its echo-suppression sequence |
 | `audit.log` (0600) | The durable audit trail, size-capped |
+
+Every record loaded through `runtime_record.rs` (`trust.json`, `policy.json`, `policy-history.json`, `lang.json`, and the enrollment `config.json`) carries a `version` envelope and climbs a migration ladder in `src/packages/core/src/migrations/`. The extension's settings store climbs one of the same shape in `src/apps/extension/src/lib/shared/settings-migration.ts`. A ladder is an explicit floor plus an array of rungs, and the current version is derived from both:
+
+```text
+FIRST_VERSION = 0                        the version the first rung lifts from
+MIGRATIONS    = [rungA, rungB]           the array is the ladder; no rung carries a version, no file name does
+CURRENT       = FIRST_VERSION + MIGRATIONS.length
+
+append a rung                           -> CURRENT rises by one
+retire rung 0, raise FIRST_VERSION      -> CURRENT unchanged; every stored version keeps its meaning
+stored < FIRST_VERSION                  -> too old to climb: a host record is refused, the settings
+                                           store is stamped current and salvaged per field
+```
+
+The floor is what makes retiring the oldest rung safe. Derived from the rung count alone, every stored version would silently renumber the moment the first rung is deleted, and the wrong rung would run on every existing file. Today every ladder is empty or one no-op rung: this is the shape, not data.
 
 The Secure Enclave enrollment key lives in the keychain under `com.vivswan.chromium-bridge.enclave.signing.v1`, never on disk.
 

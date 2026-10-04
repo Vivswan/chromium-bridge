@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime_record::{Record, Rung};
+use crate::runtime_record::{Ladder, Record};
 
 /// Enrollment policy recorded on disk, policy only: the key material lives in the Secure Enclave / keychain, and the
 /// security decisions are enforced by the keychain ACL (presence-gated signing) and the extension's public-key pin,
@@ -24,7 +24,7 @@ pub struct HostConfig {
 impl Record for HostConfig {
     const FILE: &'static str = "config.json";
     const MAX_BYTES: usize = 4 * 1024;
-    const MIGRATIONS: &'static [Rung] = crate::migrations::config::LADDER;
+    const LADDER: Ladder = crate::migrations::config::LADDER;
 }
 
 impl Default for HostConfig {

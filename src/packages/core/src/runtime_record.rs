@@ -1,15 +1,17 @@
 //! One loader and one writer for every JSON record in the 0700 runtime directory.
 //!
-//! A record file is an envelope, `{"version": N, ...body}`, where N counts the migration rungs the body has
-//! been through. The version is never declared: it IS the length of the record's ladder in
-//! [`crate::migrations`], so a rung cannot land without the version moving and the version cannot move
-//! without a rung. No reader branches on a version; the ladder is the only home for compatibility code.
+//! A record file is an envelope, `{"version": N, ...body}`, where N is the rung of the record's
+//! [`Ladder`] the body stands on. The version is never declared: it is derived from the ladder in
+//! [`crate::migrations`] (the floor plus the rung count, the rule on `Ladder`), so a rung cannot land
+//! without the version moving. No reader branches on a version; the ladder is the only home for
+//! compatibility code.
 //!
 //! ```text
 //! absent file                 -> Ok(None); each record says what absence means (bootstrap, no policy yet)
 //! over MAX_BYTES              -> refused unread (fsguard::read_capped)
 //! version above the ladder    -> refused: a newer binary's file, or a forged one, is never half-read
-//! version below the ladder    -> the pending rungs run in order, then the body parses as the record type
+//! version below the floor     -> refused: too old to climb, so no rung ever runs on a body it was not written for
+//! version on the ladder       -> the pending rungs run in order, then the body parses as the record type
 //! damaged JSON, unknown field -> refused; every record is deny_unknown_fields and every caller fails closed
 //! repeated key, any depth     -> refused; a record has exactly one accepted spelling
 //! ```
@@ -32,9 +34,44 @@ use serde_json::{Map, Value};
 use crate::fsguard;
 use crate::ipc::{self, RuntimeLockToken};
 
-/// One migration step: lifts a record body from version `i` to `i + 1`. Rung `i` of a ladder is applied
-/// to a file stored at version `i`.
+/// One migration step: lifts a record body from version `i` to `i + 1`.
 pub type Rung = fn(Value) -> io::Result<Value>;
+
+/// A record's migration ladder: its rungs, and the version the first rung lifts from. The explicit floor
+/// is what makes retiring the oldest rung safe: without it every stored version would silently renumber
+/// the moment `rungs[0]` is deleted, and the wrong rung would run on every existing file.
+///
+/// ```text
+/// retire rung 0, raise first_version   -> current unchanged, every stored version keeps its meaning
+/// stored < first_version               -> too old to climb: refused like any malformed record
+/// ```
+pub struct Ladder {
+    pub first_version: usize,
+    pub rungs: &'static [Rung],
+}
+
+impl Ladder {
+    pub const fn current(&self) -> usize {
+        self.first_version.saturating_add(self.rungs.len())
+    }
+
+    pub fn climb(&self, version: usize, body: Value) -> io::Result<Value> {
+        let refused = |why: String| io::Error::new(io::ErrorKind::InvalidData, why);
+        let Some(climbed) = version.checked_sub(self.first_version) else {
+            return Err(refused(format!(
+                "version {version} is below this binary's floor {}; too old to migrate",
+                self.first_version
+            )));
+        };
+        let pending = self.rungs.get(climbed..).ok_or_else(|| {
+            refused(format!(
+                "version {version} is above this binary's {}; refusing a file it cannot read",
+                self.current()
+            ))
+        })?;
+        pending.iter().try_fold(body, |body, rung| rung(body))
+    }
+}
 
 /// What a record declares: its file name, its read cap, and its ladder. Everything else comes from
 /// [`RuntimeRecord`], which every `Record` gets.
@@ -44,14 +81,14 @@ pub trait Record: Serialize + DeserializeOwned + Sized {
     /// Read cap; a larger file is refused unread.
     const MAX_BYTES: usize;
     /// The migration ladder, from `crate::migrations`.
-    const MIGRATIONS: &'static [Rung];
+    const LADDER: Ladder;
 }
 
 /// The loader and writer shared by every [`Record`], implemented once below. A second impl does not
 /// compile; an inherent method on a record would shadow these at its call sites, and the matrix test
 /// refuses one.
 pub trait RuntimeRecord: Record {
-    const VERSION: usize = Self::MIGRATIONS.len();
+    const VERSION: usize = Self::LADDER.current();
 
     fn path() -> PathBuf {
         ipc::runtime_dir().join(Self::FILE)
@@ -70,19 +107,9 @@ pub trait RuntimeRecord: Record {
         serde_json::from_slice::<NoDuplicateKeys>(bytes).map_err(|e| invalid(Self::FILE, e))?;
         let envelope: Envelope<Map<String, Value>> =
             serde_json::from_slice(bytes).map_err(|e| invalid(Self::FILE, e))?;
-        let Some(pending) = Self::MIGRATIONS.get(envelope.version..) else {
-            return Err(invalid(
-                Self::FILE,
-                format!(
-                    "version {} is above this binary's {}; refusing a file it cannot read",
-                    envelope.version,
-                    Self::VERSION
-                ),
-            ));
-        };
-        let body = pending
-            .iter()
-            .try_fold(Value::Object(envelope.body), |body, rung| rung(body))?;
+        let body = Self::LADDER
+            .climb(envelope.version, Value::Object(envelope.body))
+            .map_err(|e| invalid(Self::FILE, e))?;
         serde_json::from_value(body).map_err(|e| invalid(Self::FILE, e))
     }
 
@@ -197,6 +224,7 @@ mod tests {
     use std::fmt::Debug;
     use std::path::Path;
 
+    use serde_json::json;
     use syn::ext::IdentExt;
     use syn::spanned::Spanned;
     use syn::visit::Visit;
@@ -239,9 +267,9 @@ mod tests {
         assert_eq!(
             written.get("version"),
             Some(&Value::from(T::VERSION)),
-            "{file}: the envelope carries the ladder length"
+            "{file}: the envelope carries the ladder's current version"
         );
-        let edited = |edit: fn(&mut Map<String, Value>)| {
+        let edited = |edit: &dyn Fn(&mut Map<String, Value>)| {
             let mut copy = written.clone();
             edit(&mut copy);
             serde_json::to_vec(&copy).unwrap()
@@ -263,23 +291,30 @@ mod tests {
             bytes.resize(T::MAX_BYTES + 1, b' ');
             bytes
         };
-        let tampered: [(&str, Vec<u8>); 6] = [
+        // One below a floor of zero is -1, which the usize envelope refuses as the floor would.
+        let below_floor = i64::try_from(T::LADDER.first_version).unwrap() - 1;
+        let tampered: [(&str, Vec<u8>); 7] = [
             (
                 "version above the ladder",
-                edited(|m| {
-                    let above = m["version"].as_u64().unwrap() + 1;
-                    m.insert("version".into(), Value::from(above));
+                edited(&|m| {
+                    m.insert("version".into(), Value::from(T::VERSION + 1));
+                }),
+            ),
+            (
+                "version below the floor",
+                edited(&|m| {
+                    m.insert("version".into(), Value::from(below_floor));
                 }),
             ),
             (
                 "version missing",
-                edited(|m| {
+                edited(&|m| {
                     m.remove("version");
                 }),
             ),
             (
                 "unknown field",
-                edited(|m| {
+                edited(&|m| {
                     m.insert("surprise".into(), Value::Bool(true));
                 }),
             ),
@@ -607,6 +642,101 @@ mod tests {
             refused.is_empty(),
             "outside crate::migrations no module reads a second spelling or fills an absent field, and no record module shadows the shared loader: {refused:#?}"
         );
+    }
+
+    /// The floor, not the rung count, fixes which rung a stored version climbs. The control: the same
+    /// hand-authored ladder with its first rung retired reads the same v2 file right when the floor was
+    /// raised with it and wrong when it was not.
+    #[test]
+    fn a_stored_version_climbs_from_the_floor_and_is_refused_off_the_ladder() {
+        fn parse_retries(mut body: Value) -> io::Result<Value> {
+            let retries = body["retries"].as_str().unwrap().parse::<u64>().unwrap();
+            body["retries"] = Value::from(retries);
+            Ok(body)
+        }
+        fn add_backoff(mut body: Value) -> io::Result<Value> {
+            body["backoff_ms"] = Value::from(500);
+            Ok(body)
+        }
+        const FULL: Ladder = Ladder {
+            first_version: 1,
+            rungs: &[parse_retries, add_backoff],
+        };
+        const RETIRED_AND_RAISED: Ladder = Ladder {
+            first_version: 2,
+            rungs: &[add_backoff],
+        };
+        const RETIRED_FLOOR_KEPT: Ladder = Ladder {
+            first_version: 1,
+            rungs: &[add_backoff],
+        };
+        let v1 = || json!({"retries": "3"});
+        let v2 = || json!({"retries": 3});
+        let current = || json!({"retries": 3, "backoff_ms": 500});
+        type Case = (
+            &'static str,
+            &'static Ladder,
+            usize,
+            Value,
+            Result<Value, &'static str>,
+        );
+        let cases: [Case; 9] = [
+            ("v1 climbs both rungs", &FULL, 1, v1(), Ok(current())),
+            ("v2 climbs the last rung", &FULL, 2, v2(), Ok(current())),
+            ("v3 stands on the top", &FULL, 3, current(), Ok(current())),
+            (
+                "v0 is below the floor",
+                &FULL,
+                0,
+                v1(),
+                Err("below this binary's floor 1"),
+            ),
+            (
+                "v4 is above the ladder",
+                &FULL,
+                4,
+                current(),
+                Err("above this binary's 3"),
+            ),
+            (
+                "retired and raised: v2 still climbs",
+                &RETIRED_AND_RAISED,
+                2,
+                v2(),
+                Ok(current()),
+            ),
+            (
+                "retired and raised: v1 is too old",
+                &RETIRED_AND_RAISED,
+                1,
+                v1(),
+                Err("below this binary's floor 2"),
+            ),
+            (
+                "floor kept: the same v2 file reads as the top, backoff never added",
+                &RETIRED_FLOOR_KEPT,
+                2,
+                v2(),
+                Ok(v2()),
+            ),
+            (
+                "floor kept: v1 gets the wrong rung, retries stays a string",
+                &RETIRED_FLOOR_KEPT,
+                1,
+                v1(),
+                Ok(json!({"retries": "3", "backoff_ms": 500})),
+            ),
+        ];
+        for (case, ladder, stored, body, expected) in cases {
+            let climbed = ladder.climb(stored, body).map_err(|e| e.to_string());
+            match expected {
+                Ok(value) => assert_eq!(climbed, Ok(value), "{case}"),
+                Err(refusal) => {
+                    let err = climbed.expect_err(case);
+                    assert!(err.contains(refusal), "{case}: {err}");
+                }
+            }
+        }
     }
 
     /// The scanner's controls. The matrix's census catches a scan that finds no records, but a scan that

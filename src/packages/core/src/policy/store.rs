@@ -13,7 +13,7 @@ use super::{
 use crate::enclave::{base64_decode, base64_encode};
 use crate::ipc;
 use crate::presence::{PolicySignOutcome, PresencePath};
-use crate::runtime_record::{Record, Rung, RuntimeRecord};
+use crate::runtime_record::{Ladder, Record, RuntimeRecord};
 
 // ---- The on-disk store ------------------------------------------------------
 
@@ -51,7 +51,7 @@ pub struct PolicyStore {
 impl Record for PolicyStore {
     const FILE: &'static str = "policy.json";
     const MAX_BYTES: usize = 256 * 1024;
-    const MIGRATIONS: &'static [Rung] = crate::migrations::policy::LADDER;
+    const LADDER: Ladder = crate::migrations::policy::LADDER;
 }
 
 impl PolicyStore {
@@ -105,7 +105,7 @@ pub struct PolicyHistory {
 impl Record for PolicyHistory {
     const FILE: &'static str = "policy-history.json";
     const MAX_BYTES: usize = 256 * 1024;
-    const MIGRATIONS: &'static [Rung] = crate::migrations::policy_history::LADDER;
+    const LADDER: Ladder = crate::migrations::policy_history::LADDER;
 }
 
 /// One superseded [`PolicyStore`] record, plus when it was superseded.

@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::allowlist::{Anchor, ClientEntry};
 use crate::ipc::{ClientIdentity, RuntimeLockToken};
-use crate::runtime_record::{Record, Rung, RuntimeRecord};
+use crate::runtime_record::{Ladder, Record, RuntimeRecord};
 
 /// How often the long-lived watchers (the broker's idle-connection sweep, the native host's push watch)
 /// re-read the record. One value, so propagation latency cannot drift apart across enforcement points.
@@ -87,7 +87,7 @@ impl Serialize for Clients {
 impl Record for Trust {
     const FILE: &'static str = "trust.json";
     const MAX_BYTES: usize = 256 * 1024;
-    const MIGRATIONS: &'static [Rung] = crate::migrations::trust::LADDER;
+    const LADDER: Ladder = crate::migrations::trust::LADDER;
 }
 
 impl Trust {
