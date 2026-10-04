@@ -1,4 +1,4 @@
-//! Ladder for `clients.json` ([`crate::allowlist::Allowlist`]).
+//! Ladder for `trust.json` ([`crate::trust::Trust`]).
 
 use crate::runtime_record::Rung;
 

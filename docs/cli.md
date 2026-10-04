@@ -119,12 +119,12 @@ Once the allowlist exists, anything unmatched fails closed, including an identit
 
 - Live browser connections are severed within about a second, and new ones are refused. In-flight tool calls fail fast with `CONNECTION_LOST`.
 - Every subsequent tool call, from every attached client, is refused with the stable `BRIDGE_KILLED` error code. Clients stay connected so they can show you the refusal instead of dying silently.
-- The state is persisted (in `revocation.json`, next to the lock file) and survives restarts, reconnects, and reboots.
+- The state is persisted (in `trust.json`, next to the lock file) and survives restarts, reconnects, and reboots.
 - The extension's options page shows the state; engaging the switch works from any surface, but releasing it does not (a web page cannot see or touch any of it).
 
 Nothing releases the switch on its own. Release is a CLI act: `chromium-bridge unkill` from a terminal (the extension's release toggle was retired; a release request from the extension is refused and audited), and releasing demands proof of user presence: on an enrolled Mac this is a Secure Enclave Touch ID tap, and where no Enclave key exists `unkill` asks you to type an explicit confirmation on a real terminal, and refuses outright when its stdin is a pipe, so no script or background program can quietly reopen the bridge through the CLI. Every release attempt is audited with the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at the presence gate, or refused by an unwritable record after presence passed.
 
-If either command reports that the revocation record is unreadable, see the recovery section in [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record); until then, everything keeps failing closed.
+If either command reports that the trust record is unreadable, see the recovery section in [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record); until then, everything keeps failing closed.
 
 `doctor` prints the kill state and exits non-zero while the switch is engaged or its state is unreadable.
 

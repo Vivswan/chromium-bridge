@@ -48,10 +48,10 @@ pub mod policy;
 pub mod presence;
 pub mod protocol;
 pub mod registration;
-pub mod revocation;
 pub mod runtime_record;
 pub mod session;
 pub(crate) mod sys;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tools;
+pub mod trust;

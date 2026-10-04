@@ -2,9 +2,8 @@
 //! [`Rung`](crate::runtime_record::Rung) lifting a body from version `i` to `i + 1`.
 //! [`crate::runtime_record`] derives each record's version from its ladder.
 
-pub(crate) mod clients;
 pub(crate) mod config;
 pub(crate) mod lang;
 pub(crate) mod policy;
 pub(crate) mod policy_history;
-pub(crate) mod revocation;
+pub(crate) mod trust;

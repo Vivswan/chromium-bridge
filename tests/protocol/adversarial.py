@@ -29,9 +29,9 @@ Attack matrix (LIVE = asserted here; REF = covered elsewhere, named):
   A16  enrolled + genuinely paired harness       LIVE  admitted; drives the bridge
   A17  revoke-client vs a live broker            LIVE  dropped, no re-attach
   A18  revoke from the extension surface         LIVE  host-mediated, epoch bumped
-  A19  deleting clients.json alone               LIVE  tampering, not a reset
+  A19  deleting trust.json                       LIVE  the loud bootstrap, never silent
   A20  kill switch vs a live broker              LIVE  typed refusal at every surface
-  A21  corrupt revocation record                 LIVE  everything fails closed
+  A21  corrupt trust record                      LIVE  everything fails closed
   A22  unkill without user presence              LIVE  refused and audited
   A23  junk _meta protocolVersion values         LIVE  -32022 strings, -32602 malformed
   A24  bare discover opener + hostile flood      LIVE  opener dropped; flood served
@@ -301,16 +301,15 @@ class Admission(AdversarialCase):
 
 class Revocation(AdversarialCase):
     def test_a17_revoke_reaches_the_live_broker(self):
-        """revoke-client bumps the epoch with the allowlist in one critical
-        section; the live broker drops the revoked harness on its next request
-        (EOF, no service), exits, and a re-attach is refused."""
+        """revoke-client rewrites the allowlist and bumps the epoch in one atomic
+        write of the trust record; the live broker drops the revoked harness on
+        its next request (EOF, no service), exits, and a re-attach is refused."""
         srv, c, nh = self.enrolled_broker()
         self.assertRoundTrip(c, nh, 50)
+        before = h.read_trust()["epoch"]
         subprocess.run([h.BIN, "revoke-client", "--name", "pytest"], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        rev = h.read_revocation()
-        self.assertGreater(rev["epoch"], 0)
-        self.assertEqual(rev["clients_epoch"], rev["epoch"], "the epoch moved with the allowlist")
+        self.assertGreater(h.read_trust()["epoch"], before, "the epoch moved with the allowlist")
         c.send({"jsonrpc": "2.0", "id": 51, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
         self.assertEqual(self.bounded("the revoked call", srv.stdout.readline, 10), "",
@@ -336,28 +335,26 @@ class Revocation(AdversarialCase):
         clients = reply.pop("clients")
         self.assertEqual(reply, {"type": "client_list_result", "ok": True, "enrolled": True})
         self.assertEqual(sorted(cl["name"] for cl in clients), ["pytest", "victim"])
-        before = h.read_revocation()["epoch"]
+        before = h.read_trust()["epoch"]
         nm_write(nh, {"type": "client_revoke", "name": "victim"})
         self.assertEqual(nm_read(nh), {"type": "client_revoke_result", "ok": True})
-        with open(h.runtime_file("clients.json")) as f:
-            self.assertEqual([cl["name"] for cl in json.load(f)["clients"]], ["pytest"])
-        self.assertGreater(h.read_revocation()["epoch"], before)
+        self.assertEqual([cl["name"] for cl in h.read_trust()["clients"]], ["pytest"])
+        self.assertGreater(h.read_trust()["epoch"], before)
         self.assertRoundTrip(c, nh, 60)
         nm_write(nh, {"type": "client_revoke", "name": "ghost"})
         self.assertEqual(nm_read(nh), {"type": "client_revoke_result", "ok": False,
                                        "error": "no trusted client named 'ghost'"})
 
-    def test_a19_deleting_the_allowlist_is_tampering_not_a_reset(self):
-        """Deleting clients.json alone trips the revocation record's enrollment
-        latch (fail closed); deleting both files is the documented same-user
-        revert to the open bootstrap, which is ERROR-logged, never silent."""
+    def test_a19_deleting_the_trust_record_is_the_loud_bootstrap(self):
+        """The whole trust state is one record, so deleting it is the documented
+        same-user revert to the open bootstrap: no user-space marker survives a
+        writer who can delete any file we can write. The revert is ERROR-logged,
+        never silent."""
         self.skip_if_enrolled()
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
         pair("--name", "pytest", "--this-parent")
-        os.remove(h.runtime_file("clients.json"))
-        self.assertRefusedToStart(self.server(wait=False), "tampering")
         h.reset_enrollment()
         srv = self.server()
         self.assertIn("harness admission is NOT enforced", h.server_stderr(srv))
@@ -372,7 +369,7 @@ class KillSwitch(AdversarialCase):
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         self.assertRoundTrip(c, nh, 60)
         subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        rev = h.read_revocation()
+        rev = h.read_trust()
         self.assertEqual((rev["killed"], rev["kill_epoch"]), (True, rev["epoch"]),
                          "the kill landed with its epoch bump in one record")
         self.assertEqual(c.call("tab_list", {}, _id=61), tool_error(61, "BRIDGE_KILLED", h.BRIDGE_KILLED))
@@ -386,7 +383,7 @@ class KillSwitch(AdversarialCase):
         self.assertEqual(c2.call("tab_list", {}, _id=63), tool_error(63, "BRIDGE_KILLED", h.BRIDGE_KILLED),
                          "a relayed harness gets the same typed refusal")
 
-    def test_a21_corrupt_revocation_record_fails_everything_closed(self):
+    def test_a21_corrupt_trust_record_fails_everything_closed(self):
         """An unreadable record makes the kill state unknowable: the live broker
         drops its harness, a fresh instance refuses to start, unkill refuses
         (audited as an error with its presence rung), doctor reports it."""
@@ -394,7 +391,7 @@ class KillSwitch(AdversarialCase):
         # Drain the fire-and-forget initialized notification before corrupting:
         # the guard runs on every inbound message.
         self.assertEqual(c.ping(_id=69), rpc_result(69, {}))
-        with open(h.runtime_file("revocation.json"), "w") as f:
+        with open(h.runtime_file("trust.json"), "w") as f:
             f.write("{ this is not json")
         c.send({"jsonrpc": "2.0", "id": 70, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
@@ -423,17 +420,17 @@ class KillSwitch(AdversarialCase):
         h.remove_lock()
         already = len(h.audit_records())
         subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.assertIs(h.read_revocation()["killed"], True)
+        self.assertIs(h.read_trust()["killed"], True)
         piped = subprocess.run([h.BIN, "unkill"], input="release\n", capture_output=True, text=True)
         self.assertEqual(piped.returncode, 1, piped.stderr)
         self.assertIn("not a terminal", piped.stderr)
-        self.assertIs(h.read_revocation()["killed"], True, "engaged after the piped attempt")
+        self.assertIs(h.read_trust()["killed"], True, "engaged after the piped attempt")
         wrong = h.run_with_cli_presence(["unkill"], phrase="yes", check=False)
         self.assertEqual(wrong.returncode, 1, wrong.stderr)
-        self.assertIs(h.read_revocation()["killed"], True, "engaged after the declined prompt")
+        self.assertIs(h.read_trust()["killed"], True, "engaged after the declined prompt")
         ok = h.run_with_cli_presence(["unkill"])
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        self.assertIs(h.read_revocation()["killed"], False)
+        self.assertIs(h.read_trust()["killed"], False)
         releases = [rec for rec in h.audit_records()[already:] if rec["event_kind"] == "kill_release"]
         self.assertEqual([rec["outcome"] for rec in releases], ["refused", "refused", "ok"])
         for rec in releases[:2]:

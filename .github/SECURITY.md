@@ -270,13 +270,12 @@ Those leftovers grant no capability: the challenge domains differ, an old pin fa
 
 ## Lock poisoning policy (std::sync::Mutex)
 
-The core is built with panics aborting the process, but library code cannot assume it (tests and future embeddings unwind). Every `Mutex::lock().unwrap_or_else(...)` recover site is therefore a policy decision, not noise. The rule:
+The core is built with panics aborting the process, so a poisoned lock cannot occur in a shipped binary; library code still meets one under unwinding (tests and future embeddings). The broker's `Lock<T>` wrapper (`broker.rs`) and the native host's stdout writer carry one policy: recover the inner value and proceed. `session.rs` is the deliberate exception and keeps its split: its connection-registry and pending-call lookups refuse on poison, since a poisoned map could route a call to the wrong browser, and its release paths recover.
 
-- **Refuse on authorization paths.** Where poisoned state could admit, serve, or free capacity for a peer, treat the poison as untrustworthy state and refuse. The broker's attach path, its revocation registry, and the kill switch's reach all do this; see `broker.rs`.
-- **Recover on cleanup and egress paths.** Where refusing would leak a slot or wedge a shutdown, recover the inner value and proceed (the broker's release and shutdown paths).
-- **The native host's two writer-leg sites recover.** The stdout frame writer in `write_control_reply` and the socket-to-stdout pump in `native_host.rs` serialize frame writes to stdout; the guarded `BufWriter` carries no security state, and refusing to write would silently wedge the browser leg.
+- **Why recover is safe there.** The guarded values are bookkeeping (a harness count, the relay registry, a frame writer); an inconsistent reading can at worst refuse an attach or release a slot late, never admit a peer, because admission is decided from the trust record, not from a lock.
+- **Why refuse is not.** Refusing to lock would wedge the shutdown wait, leak a registry slot, or silence the browser leg, and leave the kill sweep unable to reach a relay.
 
-A new `Mutex` in the core must pick a side explicitly and say why at the recover site.
+A new `Mutex` in the core uses the wrapper or the same recovery; a site that refuses states why here, as `session.rs` does.
 
 ## Security-relevant changes (review bar)
 
@@ -300,7 +299,7 @@ The fuzzing rule for bespoke parsing at a trust boundary in the Rust core:
 
 - **Triggers on** a new or changed bespoke parser or semantic validator over attacker-controlled input: wire frames, hand-written byte parsers, ownership or identity decisions.
 - **Requires** a new or extended cargo-fuzz target in `src/packages/core/fuzz/`, or a deliberate exclusion with its reason in the [Fuzzing section](../docs/development.md#fuzzing) of the development guide.
-- **Does not trigger on** plain derived-serde readers guarded by negative tests (the allowlist, revocation, and lockfile readers); the rule is about bespoke parsing or semantic-validation logic, not `serde_json`.
+- **Does not trigger on** plain derived-serde readers guarded by negative tests (the trust record and lockfile readers); the rule is about bespoke parsing or semantic-validation logic, not `serde_json`.
 
 Extra review care applies to these security-critical surfaces:
 
@@ -308,7 +307,7 @@ Extra review care applies to these security-critical surfaces:
 - `src/packages/core/src/protocol.rs` and `protocol/`
 - `src/packages/core/src/broker.rs`
 - `src/packages/core/src/allowlist.rs`
-- `src/packages/core/src/revocation.rs`
+- `src/packages/core/src/trust.rs`
 - `src/packages/core/src/kill.rs`
 - `src/packages/core/src/presence/`
 - `src/packages/core/src/enclave/`

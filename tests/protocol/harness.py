@@ -684,7 +684,7 @@ def run_with_cli_presence(args, phrase="release", check=True, timeout=15, env=No
 
 def runtime_file(name):
     """A file in the isolated runtime dir beside the lock (audit.log,
-    clients.json, revocation.json)."""
+    trust.json)."""
     return os.path.join(os.path.dirname(LOCK), name)
 
 
@@ -696,22 +696,20 @@ def read_jsonl(path):
         return []
 
 
-def read_revocation():
-    with open(runtime_file("revocation.json")) as f:
+def read_trust():
+    with open(runtime_file("trust.json")) as f:
         return json.load(f)
 
 
 def reset_enrollment():
-    """Back to the unenrolled bootstrap: clients.json AND the revocation
-    record. Removing only the allowlist is not a reset but detectable
-    tampering (its enrollment latch lives in the record), so a test that
-    paired must drop both."""
+    """Back to the unenrolled bootstrap: remove the one trust record (paired
+    clients, kill latch, epoch). Deleting it is the documented same-user
+    revert to the open bootstrap, pinned live by A19."""
     require_isolated()
-    for name in ("clients.json", "revocation.json"):
-        try:
-            os.remove(runtime_file(name))
-        except FileNotFoundError:
-            pass
+    try:
+        os.remove(runtime_file("trust.json"))
+    except FileNotFoundError:
+        pass
 
 
 def audit_records():

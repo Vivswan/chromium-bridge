@@ -141,8 +141,8 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chrom
 | `tools/` | The tool catalogue (26 tools; the cross-process contract source): one `catalogue!` row per tool emits the `BridgeCommand` enum, the `ToolId` index, and the `Tool` record (metadata, grants, dispatch, typed args schema); capabilities are read off the records |
 | `runtime_record.rs` | The one loader and writer for every JSON record in the runtime directory: capped read, version envelope, strict parse, atomic 0600 write under the runtime lock |
 | `migrations/` | One migration ladder per record; a record's schema version is its ladder's length, and the ladders are the only home for compatibility code |
-| `allowlist.rs` | The trusted-client allowlist: `pair-client` / `revoke-client` / `list-clients` and the admission decision |
-| `revocation.rs` | The revocation epoch and the kill latch (`revocation.json`), one-way enrollment latch, tamper detection |
+| `allowlist.rs` | The trusted-client allowlist: the entry types, the pairing and revocation writes, and `pair-client` / `revoke-client` / `list-clients` |
+| `trust.rs` | The trust record (`trust.json`): the kill latch, the paired clients, the change epoch, and the admission decision every enforcement point takes from one read |
 | `kill.rs` | Kill-switch engage/release; release demands a `PresenceAttestation` |
 | `presence/` | User-presence proofs: Secure Enclave Touch ID on an enrolled Mac; interactive fail-closed floors elsewhere |
 | `enclave/` | The enrollment ceremony: Secure Enclave key, presence-gated signing, pin/verify/revoke |
@@ -196,8 +196,7 @@ Runtime state, in the 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/
 |------|----------|
 | `run.lock` (0600) | The broker's pid and the per-run HMAC secret; the socket rendezvous |
 | the bridge socket (0600) | Unix only; no listening port exists |
-| `clients.json` (0600) | The trusted-client allowlist |
-| `revocation.json` (0600) | The revocation epoch, the enrollment latch, and the kill latch |
+| `trust.json` (0600) | The trust record: the kill latch, the trusted-client allowlist, and the change epoch |
 | `policy.json` (0600) | The host-owned policy: the signed baseline and the unsigned restriction overlay (section 11.3) |
 | `policy-history.json` (0600) | Superseded policy revisions, a bounded ring; data for rollback, never authority |
 | `lang.json` (0600) | The shared `uiLanguage` preference and its echo-suppression sequence |
@@ -253,7 +252,7 @@ Client B spawns its own chromium-bridge process
   -> it finds a live broker via the lock file
   -> attests itself over the socket (kernel checks + HMAC + attach frame
      carrying its harness's attested identity)
-  -> broker checks the identity against clients.json; unmatched fails closed
+  -> broker checks the identity against the trust record's paired clients; unmatched fails closed
   -> B's tool calls multiplex through the shared session
 Broker exits when the last attached harness detaches.
 ```
@@ -266,7 +265,7 @@ The full treatment is in [docs/security/](./security/); this is the map.
 |------|------|-----|
 | Harness admission (stdio) | Kernel-attested parent identity checked against the trusted-client allowlist; fail-closed once enrolled | [harness admission](./security/rationale.md#harness-admission-and-the-client-allowlist) |
 | Bridge socket | 0600 Unix-domain socket in a 0700 dir; peer-UID check; mutual executable attestation; HMAC challenge-response; role-declaring attach | [host identity](./security/rationale.md#host-identity-and-attestation) |
-| Any-side revocation | Monotonic epoch in `revocation.json`, re-read at every enforcement point; both credential halves deleted on unpair | [revocation](./security/rationale.md#revocation-and-the-kill-switch) |
+| Any-side revocation | Every enforcement point re-reads `trust.json` before it decides; both credential halves deleted on unpair | [revocation](./security/rationale.md#revocation-and-the-kill-switch) |
 | Enrollment (host <-> extension) | Secure Enclave key, presence-gated signing, extension-side pin, fingerprint comparison | [enrollment](./security/rationale.md#enrollment-and-user-presence) |
 | Site allowlist | Per-origin approval + `chrome.permissions.request`; page cannot self-approve | [trust boundaries](./security/trust-boundaries.md) |
 | High-risk confirmation | Extension-owned window off the page-reachable DOM; deny on timeout/close | [trust boundaries](./security/trust-boundaries.md) |

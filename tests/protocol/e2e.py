@@ -299,7 +299,7 @@ class KillSwitch(E2ECase):
         and the 0600 audit trail records each step with its surface."""
         self.skip_if_enrolled()
         self.skip_unless_unix("the pty-driven release")
-        for name in ("revocation.json", "audit.log", "audit.log.1", "audit.log.lock"):
+        for name in ("trust.json", "audit.log", "audit.log.1", "audit.log.lock"):
             self.addCleanup(self._remove, h.runtime_file(name))
         already = len(h.audit_records())
         mcp = self.server()

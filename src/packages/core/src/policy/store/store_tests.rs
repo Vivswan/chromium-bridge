@@ -725,14 +725,14 @@ fn a_disposal_during_the_prompt_conflicts_even_with_no_store_on_both_sides() {
     // epoch as it stood before the tap.
     let doc = PolicyDoc::from_values(&PolicyValues::default(), 1, vec![PolicyField::CdpMode]);
     let bytes = serde_json::to_vec(&doc).unwrap();
-    let observed_epoch = crate::revocation::Revocation::current()
+    let observed_epoch = crate::trust::TrustState::current()
         .unwrap()
-        .host_key_epoch;
+        .host_key_epoch();
     // The disposal seam runs to completion mid-prompt: key deleted,
     // baseline cleared (a no-op here, no store exists), host-key epoch
     // bumped inside its critical section.
     ipc::with_runtime_lock(|lock| {
-        crate::revocation::bump_locked(lock, crate::revocation::Scope::HostKey)
+        crate::trust::Trust::mutate_locked(lock, crate::trust::Scope::HostKey, |_| {})
     })
     .unwrap();
     // The store guard alone cannot see it (no store observed, no store
@@ -785,23 +785,17 @@ fn a_tampered_overlay_that_relaxes_the_baseline_refuses_every_read() {
 fn clearing_the_baseline_bumps_the_policy_epoch_once() {
     let _dir = scratch_runtime_dir("policy-clear-epoch");
     seed_store(1, &PolicyValues::default(), None);
-    let before = crate::revocation::Revocation::current()
-        .unwrap()
-        .policy_epoch;
+    let before = crate::trust::TrustState::current().unwrap().policy_epoch();
     ipc::with_runtime_lock(clear_baseline_locked).unwrap();
     assert!(PolicyStore::load().unwrap().is_none());
-    let after = crate::revocation::Revocation::current()
-        .unwrap()
-        .policy_epoch;
+    let after = crate::trust::TrustState::current().unwrap().policy_epoch();
     assert!(
         after > before,
         "a connected host only pushes the cleared state if the epoch moved"
     );
     // Clearing an already-absent store is a no-op: no epoch churn.
     ipc::with_runtime_lock(clear_baseline_locked).unwrap();
-    let again = crate::revocation::Revocation::current()
-        .unwrap()
-        .policy_epoch;
+    let again = crate::trust::TrustState::current().unwrap().policy_epoch();
     assert_eq!(again, after);
 }
 
@@ -997,9 +991,7 @@ fn clear_baseline_is_a_noop_without_a_store() {
 fn a_signed_write_bumps_the_policy_epoch() {
     let _dir = scratch_runtime_dir("policy-policy-epoch-signed");
     let _reset = policy_test_hook::ResetOnDrop;
-    let before = crate::revocation::Revocation::current()
-        .unwrap()
-        .policy_epoch;
+    let before = crate::trust::TrustState::current().unwrap().policy_epoch();
     policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues {
@@ -1010,9 +1002,7 @@ fn a_signed_write_bumps_the_policy_epoch() {
         Surface::Core,
     )
     .unwrap();
-    let after = crate::revocation::Revocation::current()
-        .unwrap()
-        .policy_epoch;
+    let after = crate::trust::TrustState::current().unwrap().policy_epoch();
     assert!(after > before, "a signed write must bump the policy epoch");
 }
 
@@ -1027,9 +1017,7 @@ fn a_restriction_bumps_the_policy_epoch() {
         },
         None,
     );
-    let before = crate::revocation::Revocation::current()
-        .unwrap()
-        .policy_epoch;
+    let before = crate::trust::TrustState::current().unwrap().policy_epoch();
     restrict(
         PolicyOverlay {
             page_eval_enabled: Some(false),
@@ -1038,8 +1026,6 @@ fn a_restriction_bumps_the_policy_epoch() {
         Surface::Cli,
     )
     .unwrap();
-    let after = crate::revocation::Revocation::current()
-        .unwrap()
-        .policy_epoch;
+    let after = crate::trust::TrustState::current().unwrap().policy_epoch();
     assert!(after > before, "a restriction must bump the policy epoch");
 }
