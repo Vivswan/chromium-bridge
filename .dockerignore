@@ -1,9 +1,7 @@
-# Build context for Containerfile: only the pin files and the pin reader it reads, and the entrypoint it
-# copies. Everything else (node_modules, target, .git, the sources) reaches the container through
+# Build context for Containerfile: only the two files proto and rustup read natively, and the entrypoint
+# it copies. Everything else (node_modules, target, .git, the sources) reaches the container through
 # compose.yaml's bind mount.
 *
-!Containerfile
 !.prototools
 !rust-toolchain.toml
-!scripts/pin.sh
 !scripts/container-entrypoint.sh

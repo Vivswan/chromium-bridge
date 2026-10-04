@@ -12,7 +12,7 @@ on:
       - .dockerignore
       - .prototools
       - rust-toolchain.toml
-      - scripts/pin.sh
+      - scripts/pin.ts
       - scripts/container-entrypoint.sh
       - .github/workflows/container-image.yml
   workflow_dispatch:
@@ -39,17 +39,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Image name and tag
+      # The .bun-version bun, only to run the pin reader; the image installs its own through proto. No
+      # cache: this workflow publishes, and a restored cache is an input to what it publishes.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          no-cache: true
+      - name: Image name, tag, and proto pin
         id: image
         env:
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
         # GHCR coordinates are lowercase; the owner's login and the repository name need not be. The
         # tag hashes the per-file checksums, so each input is framed by its name and bytes cannot move
-        # across file boundaries unnoticed.
+        # across file boundaries unnoticed. The proto pin is the Containerfile's one build arg.
         run: |
-          echo "name=ghcr.io/${OWNER,,}/${REPO,,}-ci" >> "$GITHUB_OUTPUT"
-          echo "tag=$(sha256sum Containerfile .dockerignore .prototools rust-toolchain.toml scripts/pin.sh scripts/container-entrypoint.sh | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=ghcr.io/${OWNER,,}/${REPO,,}-ci"
+            echo "tag=$(sha256sum Containerfile .dockerignore .prototools rust-toolchain.toml scripts/pin.ts scripts/container-entrypoint.sh | sha256sum | cut -c1-12)"
+            bun scripts/pin.ts proto | sed 's/^/proto=/'
+          } >> "$GITHUB_OUTPUT"
       - name: Is this commit still the head of main
         id: latest
         # A re-run or a late finish of an older main commit must not move `latest` backward.
@@ -76,6 +85,7 @@ jobs:
           file: Containerfile
           platforms: linux/amd64
           push: true
+          build-args: PROTO_VERSION=${{ steps.image.outputs.proto }}
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
             ${{ steps.latest.outputs.publish == 'true' && format('{0}:latest', steps.image.outputs.name) || '' }}

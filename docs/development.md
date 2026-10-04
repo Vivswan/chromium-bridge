@@ -15,7 +15,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 
 Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`).
 
-The `Containerfile` pins cargo-machete (`ARG CARGO_MACHETE_VERSION`), and checks.yml installs that version on a bare runner through `scripts/pin.sh`. typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision), so a local version skew can at worst surface a finding early.
+The `Containerfile` pins cargo-machete (`ARG CARGO_MACHETE_VERSION`), and checks.yml installs that version on a bare runner through `bun scripts/pin.ts cargo-machete`. typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision), so a local version skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -105,7 +105,7 @@ The full task menu, by area:
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `check-version`, `check-extension-id` |
-| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-pins`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
 
 ## moon: the canonical command interface
 
@@ -130,11 +130,16 @@ Cache trust, and the one edge that must never be narrowed: the Rust core is the 
 
 ## Toolchain pinning (proto)
 
-`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it reads proto's own version through `scripts/pin.sh` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, runs `proto install`, and on request installs rust with `setup-rust-toolchain`.
+`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain:
 
-The CI image (`Containerfile`) runs the same `proto install` at build time, after the same `scripts/pin.sh proto`. Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+1. `setup-bun` installs the `.bun-version` bun, only to run the pin reader.
+2. `bun scripts/pin.ts proto` reads proto's own version, the one pin `moonrepo/setup-toolchain` cannot read.
+3. That action installs proto, and `proto install` provisions the `.prototools` tools (its bun lands on top of the first, so a bare runner carries two).
+4. With `cargo: "true"`, `setup-rust-toolchain` installs rust from `rust-toolchain.toml`.
 
-`scripts/pin.sh <tool>` is the one reader of a pin needed before bun or proto exist. It scans both owner files together and fails when a tool is pinned in both, twice, or nowhere:
+The CI image (`Containerfile`) runs the same `proto install` at build time, with the proto version arriving as its one build arg (`container-image.yml` and `scripts/compose-run.ts` compute it with `bun scripts/pin.ts proto`). Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+
+`bun scripts/pin.ts <tool>` is the one reader of a pin needed before proto exists. It scans both owner files together and fails when a tool is pinned in both, twice, or nowhere (`moon run check-pins` holds those refusals):
 
 | Tools | Owner file | Line shape |
 |-------|------------|------------|

@@ -496,6 +496,7 @@ tasks:
       - '~:check-version'
       - '~:check-extension-id'
       - '~:check-toolchain'
+      - '~:check-pins'
       - '~:check-hasher'
       - '~:check-ignored'
       - '~:check-cjk'
@@ -534,6 +535,10 @@ tasks:
   check-toolchain:
     description: 'The bun pin copies (.prototools, package.json, .bun-version) must agree, and .prototools must leave rust to rustup and python to uv'
     command: 'bun scripts/check-toolchain.ts'
+
+  check-pins:
+    description: 'The pin reader CI bootstraps from (scripts/pin.ts) refuses a tool pinned in both .prototools and the Containerfile, twice, or nowhere'
+    command: 'bun test scripts/pin.test.ts'
 
   check-hasher:
     description: 'No tracked file may match a .moon/workspace.yml hasher.ignorePattern (a stale-cache hole)'

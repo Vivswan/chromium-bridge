@@ -10,8 +10,11 @@ ARG CARGO_NEXTEST_VERSION=0.9.146
 ARG TYPOS_VERSION=1.50.3
 ARG ACTIONLINT_VERSION=1.7.12
 # checks.yml's tooling job installs the same cargo-machete on a bare runner, read from this line by
-# scripts/pin.sh.
+# scripts/pin.ts.
 ARG CARGO_MACHETE_VERSION=0.9.2
+# No default: proto's own pin is .prototools's, and no script runs in here to read it. container-image.yml
+# and scripts/compose-run.ts compute it with `bun scripts/pin.ts proto` and pass it in.
+ARG PROTO_VERSION
 
 # Chrome for Testing ships no Linux arm64 build; Debian's chromium does, and the isolation guard
 # accepts it inside a container. build-essential: cargo needs a C linker. xvfb + xauth: the
@@ -51,12 +54,10 @@ ENV HOME=/home/ci \
     BUN_INSTALL=/home/ci/.bun \
     PATH=/home/ci/.proto/shims:/home/ci/.proto/bin:/home/ci/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
-# scripts/pin.sh resolves both pin files from its own parent directory, so the copy keeps the checkout's
-# layout. --chown: COPY writes root-owned entries whatever USER is, and the ci user could not later delete
-# a root-owned scripts/ directory under /tmp/pins.
+# proto and rustup read these two files natively. --chown: COPY writes root-owned entries whatever USER
+# is, and the ci user removes the directory below.
 WORKDIR /tmp/pins
-COPY --chown=ci:ci Containerfile .prototools rust-toolchain.toml ./
-COPY --chown=ci:ci scripts/pin.sh scripts/pin.sh
+COPY --chown=ci:ci .prototools rust-toolchain.toml ./
 
 # rustup owns rust: rust-toolchain.toml is its only pin (`rustup toolchain install` with no argument
 # installs the file's toolchain, profile and components included), and .prototools deliberately leaves
@@ -69,8 +70,7 @@ RUN curl -fsSL "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/$(
 
 # The installer is the release asset of the pinned version (it installs into PROTO_HOME/bin), not the
 # unversioned script on moonrepo.dev.
-RUN proto_version="$(scripts/pin.sh proto)" \
-    && curl -fsSL "https://github.com/moonrepo/proto/releases/download/v${proto_version}/proto_cli-installer.sh" \
+RUN curl -fsSL "https://github.com/moonrepo/proto/releases/download/v${PROTO_VERSION:?build arg from bun scripts/pin.ts proto}/proto_cli-installer.sh" \
     | bash -s -- --no-modify-path \
     && proto --version \
     && proto install

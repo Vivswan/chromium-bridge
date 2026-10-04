@@ -14,6 +14,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { die, repoRoot } from "./lib.ts";
+import { readPin } from "./pin.ts";
 
 const [service, ...command] = process.argv.slice(2);
 if (!service) die("usage: bun scripts/compose-run.ts ci|browser|shell [command [args...]]", 2);
@@ -60,7 +61,10 @@ function compose(...args: string[]): number {
   return run.status ?? 1;
 }
 
-let status = compose("build", service);
+// The Containerfile's one build arg: proto's pin is .prototools's and no script runs inside the build, so the
+// launcher reads it, as container-image.yml does for the published image. A flag rather than compose.yaml
+// build.args: the portable compose subset (check-compose) has no args key.
+let status = compose("build", "--build-arg", `PROTO_VERSION=${readPin("proto")}`, service);
 if (status === 0) status = compose("run", "--rm", service, ...command);
 if (scratch) rmSync(scratch, { recursive: true, force: true });
 process.exit(status);
