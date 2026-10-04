@@ -1,11 +1,11 @@
-// The confirm window's panic exit (ADR-0030): confirm_deny_kill denies every
-// pending confirmation AND engages the kill switch in one SW-side step. The
-// property that must hold under any interleaving: by the time the kill_engage
-// frame is posted to the host, the in-flight action is ALREADY settled false,
-// so nothing arriving later (a window Allow, a hardware tap's verdict) can
-// approve it - and while the engage is in flight, no OTHER confirmation
-// (queued or newly arriving) is presented for approval. Sender gating rides
-// the same confirm-window-only rule as the other confirm_* messages.
+// The confirm window's panic exit: confirm_deny_kill denies every pending
+// confirmation AND engages the kill switch in one SW-side step. The property
+// that must hold under any interleaving: by the time the kill_engage frame is
+// posted to the host, the in-flight action is ALREADY settled false, so nothing
+// arriving later (a window Allow, a hardware tap's verdict) can approve it -
+// and while the engage is in flight, no OTHER confirmation (queued or newly
+// arriving) is presented for approval. Sender gating rides the same
+// confirm-window-only rule as the other confirm_* messages.
 
 import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -81,8 +81,8 @@ const REQ = () => ({
   tabTitle: "Example",
   detail: "return 1;",
   timeoutMs: 5000,
-  // The decision-time routing verdict (ADR-0032 decision 4): eval routes to
-  // the presence provider whenever one is installed.
+  // The decision-time routing verdict (one snapshot per decision): eval
+  // routes to the presence provider whenever one is installed.
   presenceRouting: true,
   panicEpoch: currentPanicEpoch(),
 });
@@ -316,14 +316,13 @@ describe("confirm_deny_kill", () => {
 
   test("panic during a pending exchange answering alive: the stale killed mirror must not lift the latch", async () => {
     // The switch is engaged (mirror reads killed) and another exchange (a
-    // status query here; a host-side app/CLI release poses the identical
-    // race - the extension itself can no longer emit kill_release,
-    // ADR-0032 decision 6) is in flight. The panic lands: the mirror still
-    // reads the STALE killed while the host is about to answer that
-    // exchange with alive - and the panic's engage is queued BEHIND it on
-    // the pipe. Lifting from the mirror snapshot would open a window
-    // (exchange answered alive, engage not yet applied) where a fresh
-    // confirmation presents against an open gate.
+    // status query here; a host-side app/CLI release poses the identical race -
+    // the extension itself cannot emit kill_release, the host refuses it) is in
+    // flight. The panic lands: the mirror still reads the STALE killed while
+    // the host is about to answer that exchange with alive - and the panic's
+    // engage is queued BEHIND it on the pipe. Lifting from the mirror snapshot
+    // would open a window (exchange answered alive, engage not yet applied)
+    // where a fresh confirmation presents against an open gate.
     const presented = fakeProvider(installConfirmationProvider);
     const frames: Array<Record<string, unknown>> = [];
     attach(collaborator, (frame) => {
@@ -420,7 +419,7 @@ describe("confirm_deny_kill", () => {
   test("a pre-panic killed frame mid-write cannot serve as the panic's refusal proof", async () => {
     // A killed frame ARRIVES (a cross-surface engage push, or a stale status
     // answer) and its serialized mirror write is still in flight when the
-    // panic lands. It must not count as the panic's phase-1 refusal: the
+    // panic lands. It must not count as the panic's refusal: the
     // only refusal seen predates the engage, so a pre-panic exchange's alive
     // answer arriving next (a host-side release racing the brake) would
     // otherwise lift the latch with the engage still queued behind it.
@@ -542,7 +541,7 @@ describe("confirm_deny_kill", () => {
   test("an unknown answer to the engage is not refusal proof: a plain alive read cannot lift", async () => {
     // The host answering the engage ok:false means the kill write FAILED -
     // nothing applied. The unknown mirror refuses upstream (fail closed),
-    // but it must not satisfy phase 1: otherwise a later plain alive read
+    // but it must not count as the refusal: otherwise a later plain alive read
     // (the host recovering, no release ever having happened) would lift the
     // latch without any presence-gated act.
     const presented = fakeProvider(installConfirmationProvider);
@@ -621,13 +620,13 @@ describe("confirm_deny_kill", () => {
   });
 });
 
-// The audit correlation id (ADR-0030): the extension mints one per-attempt
-// `cid` and stamps it on EVERY audit event that attempt emits - its
-// confirm_shown, its verdict, and a denial issued before any surface showed -
-// so the desktop audit panel joins a verdict to exactly its own shown row. The
-// security-relevant property, and the fix for the panic-latch bug: a denial of
-// a confirmation that never reached a surface carries an id that matches no
-// shown row, so it can never close an unrelated open confirmation.
+// The audit correlation id: the extension mints one per-attempt `cid` and
+// stamps it on EVERY audit event that attempt emits - its confirm_shown, its
+// verdict, and a denial issued before any surface showed - so the desktop audit
+// panel joins a verdict to exactly its own shown row. The security-relevant
+// property, and the fix for the panic-latch bug: a denial of a confirmation
+// that never reached a surface carries an id that matches no shown row, so it
+// can never close an unrelated open confirmation.
 describe("audit correlation id (cid)", () => {
   test("a confirmation's shown and its verdict share the same cid", async () => {
     const presented = fakeProvider(installConfirmationProvider);

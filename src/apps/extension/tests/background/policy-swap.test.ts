@@ -12,7 +12,7 @@
 // (touchIdConfirm). enrollment's hostReverifyMs rides the ceremony harness
 // in enrollment.test.ts instead.
 //
-// Plus the decision-4 in-flight rule at vitest granularity: a policy swap
+// Plus the in-flight snapshot rule at vitest granularity: a policy swap
 // landing mid-confirmation does not alter the in-flight decision's grace.
 // What only the CHROME_BIN isolated-browser suite can verify remains a REAL
 // mid-confirmation policy push surviving SW timing; flagged, not attempted.
@@ -104,9 +104,9 @@ async function armCutover(
   if (effective) {
     await fakeBrowser.storage.local.set({
       bridgePolicyState: {
-        // The stored record is ACTIVE only in scope (ADR-0032 decision 3):
-        // null is the unpinned lane (these suites mostly run unpinned); the
-        // presence tests pin a key and stamp its id here.
+        // The stored record is ACTIVE only in scope (the ratchet is bound to
+        // the pin): null is the unpinned lane (these suites mostly run
+        // unpinned); the presence tests pin a key and stamp its id here.
         scope,
         effective: policyValues(effective),
         revision,
@@ -401,9 +401,9 @@ describe("the gate reads its six policy fields from the snapshot", () => {
   });
 });
 
-// ---- the decision-4 in-flight rule -------------------------------------------------
+// ---- the in-flight rule: a decision never re-reads live policy -------------------
 
-describe("per-decision snapshot isolation (ADR-0032 decision 4)", () => {
+describe("per-decision snapshot isolation: a decision never re-reads live policy", () => {
   test("a policy swap mid-confirmation does not alter the in-flight decision's grace", async () => {
     await armCutover({ confirmGraceMs: 60_000 });
     const asked: ConfirmPayload[] = [];
@@ -583,7 +583,7 @@ describe("egress masking reads evalMask from the snapshot", () => {
 
 // ---- confirm/presence.ts ------------------------------------------------------------
 
-describe("presence routing is decided from the per-request snapshot (S1)", () => {
+describe("presence routing is decided from the per-request snapshot", () => {
   // A real 64-hex keyId: the stored record's scope must both satisfy the
   // strict schema and match the pinned scope for the record to be ACTIVE.
   const KEY_ID = "0".repeat(64);
@@ -658,7 +658,7 @@ describe("a blocked posture is not consumable as values and the barrier refuses 
   // three, in both arms.
   test("awaitingBaseline (cutover armed, no record): blocked + refusal; the raw accessor reports the arm honestly", async () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
-    // Exact shape, not toMatchObject (CS-5): the blocked arm must carry NO
+    // Exact shape, not toMatchObject: the blocked arm must carry NO
     // .values key at all - the leak is closed structurally, not by callers
     // declining to read it.
     await expect(getEffectivePolicy()).resolves.toEqual({
@@ -677,7 +677,7 @@ describe("a blocked posture is not consumable as values and the barrier refuses 
       bridgePolicyCutover: true,
       bridgePolicyState: { tampered: true },
     });
-    // Exact shape, not toMatchObject (CS-5): the blocked arm must carry NO
+    // Exact shape, not toMatchObject: the blocked arm must carry NO
     // .values key at all - the leak is closed structurally, not by callers
     // declining to read it.
     await expect(getEffectivePolicy()).resolves.toEqual({
@@ -699,7 +699,7 @@ describe("a blocked posture is not consumable as values and the barrier refuses 
     });
   });
 
-  test("dispatch refuses from its OWN single read when blocked (the barrier race, SFX-1a)", async () => {
+  test("dispatch refuses from its OWN single read when blocked (the barrier race)", async () => {
     // The enrollment gate's barrier check and dispatch's snapshot are
     // separate awaits on the request path: a compromise latching between
     // them must be refused by the snapshot read itself, never run under the

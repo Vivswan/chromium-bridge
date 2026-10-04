@@ -1,12 +1,12 @@
 // The informational (non-gating) in-page notice. This is NOT a confirmation
 // surface: it defaults to PROCEED after its timeout, and the user can only
 // cancel. Real confirmations moved OFF the page-reachable DOM to the
-// extension-owned window (ADR-0027); this notice stays in-page because a page
-// suppressing its own courtesy warning gains nothing (it cannot approve
-// anything here), while a focus-stealing window for a heads-up would be
-// hostile UX. Styles are inline so no stylesheet injection is needed; the
-// colors come from the Control Tower constants (theme-colors.ts) and follow
-// the OS scheme, since our stylesheet's tokens are not injected here.
+// extension-owned window; this notice stays in-page because a page suppressing
+// its own courtesy warning gains nothing (it cannot approve anything here),
+// while a focus-stealing window for a heads-up would be hostile UX. Styles are
+// inline so no stylesheet injection is needed; the colors come from the Control
+// Tower constants (theme-colors.ts) and follow the OS scheme, since our
+// stylesheet's tokens are not injected here.
 //
 // Layout follows the Control Tower toast: mono brand line, message, and a
 // draining countdown track next to a quiet Cancel. The track fill is neutral

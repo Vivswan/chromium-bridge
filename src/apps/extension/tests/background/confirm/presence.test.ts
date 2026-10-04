@@ -1,6 +1,5 @@
-// The Enclave user-presence provider (ADR-0031): the confirmation gate that
-// only a verified host signature can approve. These are the adversarial
-// pins for the phase:
+// The Enclave user-presence provider: the confirmation gate that only a
+// verified host signature can approve. The adversarial pins:
 //   - a valid signed proof (pinned key, presence domain, exact nonce+context)
 //     approves;
 //   - a proof signed by ANY other key denies AND marks the bridge

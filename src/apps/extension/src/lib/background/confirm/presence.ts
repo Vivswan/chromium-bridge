@@ -1,9 +1,9 @@
-// The Enclave user-presence confirmation provider (ADR-0031): the approval
-// mechanism behind the "eval" and "upload" confirmation kinds on a capable,
-// enrolled device. The window surface stays - it SHOWS what is being
-// approved - but approval itself is the host-side Secure Enclave signature,
-// whose user-presence ACL raises the Touch ID prompt. What makes this
-// unforgeable end to end:
+// The Enclave user-presence confirmation provider: the approval mechanism
+// behind the "eval" and "upload" confirmation kinds on a capable, enrolled
+// device. The window surface stays - it SHOWS what is being approved - but
+// approval itself is the host-side Secure Enclave signature, whose
+// user-presence ACL raises the Touch ID prompt. What makes this unforgeable end
+// to end:
 //
 // - the approval the service accepts is a P-256 signature over
 //   PRESENCE_DOMAIN || 0x00 || nonce || 0x00 || context, verified against
@@ -199,21 +199,21 @@ export async function presenceCapable(): Promise<boolean> {
   return (await getPin()) !== null;
 }
 
-/** The routing verdict for the "eval"/"upload" kinds: the policy field
- * (default ON) AND device capability. Computed at DECISION time from the
- * caller's per-request policy snapshot and carried in the ConfirmRequest
- * (ADR-0032 decision 4): presentation never re-reads live policy, so a push
- * landing while the confirmation waits in the queue cannot re-route it.
- * Opting out falls back to the off-DOM window confirmation - still
- * confirmed, not hardware-gated. */
+/** The routing verdict for the "eval"/"upload" kinds: the policy field (default
+ * ON) AND device capability. Computed at DECISION time from the caller's
+ * per-request policy snapshot and carried in the ConfirmRequest: presentation
+ * never re-reads live policy, so a push landing while the confirmation waits in
+ * the queue cannot re-route it. Opting out falls back to the off-DOM window
+ * confirmation - still confirmed, not hardware-gated. */
 export async function presenceRoutingEnabled(policy: PolicyValues): Promise<boolean> {
   if (policy.touchIdConfirm === false) return false;
   // A THROWN probe fails the op closed (the throw propagates and the caller
   // refuses): the legacy window-fallback is deliberately NOT restored here,
   // because demoting a hardware-required approval to an ordinary window on an
-  // anomalous storage error would downgrade the Touch ID gate (ADR-0031
-  // no-downgrade). A compromised or absent pin returns false cleanly without
-  // throwing, so the normal window routing is unaffected.
+  // anomalous storage error would downgrade the Touch ID gate, and a hardware
+  // gate never falls through to a weaker one. A compromised or absent pin
+  // returns false cleanly without throwing, so the normal window routing is
+  // unaffected.
   return presenceCapable();
 }
 

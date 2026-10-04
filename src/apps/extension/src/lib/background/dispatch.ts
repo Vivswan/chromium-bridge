@@ -117,7 +117,7 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
   // carries it, so a deny-kill that lands AND lifts anywhere across the decision (inside the policy read, the
   // tab resolve, or the allowlist check) still denies the confirmation on the epoch mismatch.
   const panicEpoch = currentPanicEpoch();
-  // ONE policy snapshot per request (ADR-0032 decision 4), threaded through
+  // ONE policy snapshot per request, never a live re-read, threaded through
   // the disable gate, the backend choice, the confirmation preflight, the
   // SW-op handlers, and egress masking: a policy push landing while this
   // request is in flight - a confirmation can hold the pipeline open for
@@ -142,7 +142,7 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
     // Page-level ops, one pipeline for both backends:
     //   resolve tab -> allowlist -> preflight (risk + confirmation, on the
     //   extension-owned surface) -> re-validate the tab -> backend act
-    //   (content script or CDP per cdpMode, ADR-0017) -> egress masking.
+    //   (content script or CDP per cdpMode) -> egress masking.
     // Policy never lives in a backend, so it cannot drift between them.
     const tab = await activeTab();
     await ensureAllowed(tab.url);

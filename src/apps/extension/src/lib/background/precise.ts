@@ -3,7 +3,7 @@
 // DOM, complex ARIA) but briefly shows the "Started debugging this browser"
 // infobar on EVERY tab while attached. We attach -> fetch tree -> tag elements ->
 // detach within one handler so the infobar only flashes (~1s). The user is
-// warned via an informational toast before attach. See ADR-0009.
+// warned via an informational toast before attach.
 
 import { InfoToastResultSchema, PageReplySchema } from "@chromium-bridge/shared/content-msg";
 import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
@@ -13,8 +13,8 @@ import { initI18n, t } from "../i18n";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 // The browser.debugger primitives + the non-debuggable URL filter now live in
-// the CdpSession facade (ADR-0017); precise.ts reuses them rather than keeping
-// its own private copies.
+// the CdpSession facade; precise.ts reuses them rather than keeping its own
+// private copies.
 import { dbgSend, isDebuggable } from "./cdp/session";
 import { activeTab, injectIfNeeded } from "./tabs";
 
@@ -106,10 +106,10 @@ export async function snapshotPrecise(_args: OpArgs, policy: PolicyValues) {
     );
   }
 
-  // Warn the user via an informational toast in the page. Proceed unless
-  // they actively cancel within the timeout. Skippable via policy; the
-  // REQUIRED snapshot parameter is dispatch's per-request one (ADR-0032
-  // decision 4), so the whole decision runs under it.
+  // Warn the user via an informational toast in the page. Proceed unless they
+  // actively cancel within the timeout. Skippable via policy; the REQUIRED
+  // snapshot parameter is dispatch's per-request one, so the whole decision
+  // runs under it and never re-reads live policy.
   const warnPrecise = policy.warnPreciseSnapshot;
   await injectIfNeeded(tab.id);
   if (warnPrecise) {
@@ -146,7 +146,7 @@ export async function snapshotPrecise(_args: OpArgs, policy: PolicyValues) {
     }
   }
 
-  // In CDP mode (ADR-0017) the registry may already hold a persistent debugger
+  // In CDP mode the registry may already hold a persistent debugger
   // attach on this tab; withCdpAttach rides it (a second attach would fail and
   // detaching it would tear down the persistent session). When CDP mode is off
   // it attaches transiently and detaches on every exit path.

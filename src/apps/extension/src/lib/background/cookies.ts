@@ -2,7 +2,7 @@
 // is SW-only). httpOnly cookies are readable here (that's the point - session
 // tokens live there). Values are masked before leaving the extension. No
 // set/remove: writing would allow forging httpOnly cookies (session fixation),
-// which even page XSS cannot do. See ADR-0010.
+// which even page XSS cannot do.
 
 import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
 import type { Browser } from "wxt/browser";

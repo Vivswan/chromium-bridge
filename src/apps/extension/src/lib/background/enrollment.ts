@@ -10,8 +10,8 @@
 //                MV3 respawns the host every few minutes); "Verify now" and the opt-in hostReverifyMs re-verify
 //   compromised  a pinned-key verification failed; refused until the user revokes and re-pairs
 //
-// Enrollment is required wherever the platform can enroll (ADR-0032 retired requireEnrollment; a stored value is
-// never consulted). Where the browser's own probe says no Secure Enclave, the gate does not block and no
+// Enrollment is required wherever the platform can enroll (there is no opt-out setting; a stored requireEnrollment
+// is never consulted). Where the browser's own probe says no Secure Enclave, the gate does not block and no
 // challenge is issued.
 
 import {
@@ -150,7 +150,7 @@ async function issueChallenge(
  * authenticated, and a substituted host on macOS could otherwise dodge enrollment by claiming "unsupported".
  * Off macOS enrollment is unavailable rather than unsatisfied (the bridge runs on the base transport
  * authentication); a Mac without a Secure Enclave stays blocked (REASON_HELP.unsupported_platform), and a failed
- * probe fails closed as capable. Shared with confirm/presence.ts (ADR-0031). */
+ * probe fails closed as capable. Shared with confirm/presence.ts. */
 export async function platformCanEnroll(): Promise<boolean> {
   try {
     const info = await browser.runtime.getPlatformInfo();
@@ -200,23 +200,22 @@ async function readGateState(): Promise<Gate> {
         "and reload the extension.",
     };
   }
-  // The kill switch next (ADR-0030), before any enrollment reasoning: while
-  // the mirror says killed (or unknown, or is malformed) every bridge request
-  // is refused here, whatever the enrollment state. The mirror lives in the
-  // storage the line above just confined, which is why the order matters.
+  // The kill switch next, before any enrollment reasoning: while the mirror
+  // says killed (or unknown, or is malformed) every bridge request is refused
+  // here, whatever the enrollment state. The mirror lives in the storage the
+  // line above just confined, which is why the order matters.
   const kill = await killGate();
   if (!kill.allowed) return kill;
-  // The policy dispatch barrier next (ADR-0032 decision 4). Post-cutover,
-  // every bridge request is refused until a policy push has verified and
-  // applied on the CURRENT host connection, whatever the enrollment state -
-  // an op must not race ahead of the connect push and run under a cached
-  // policy the host has since tightened. Pre-cutover (the flag, in the
-  // storage confined above, was never set) the barrier is inert and the
-  // deny baseline governs.
+  // The policy dispatch barrier next. Post-cutover, every bridge request is
+  // refused until a policy push has verified and applied on the CURRENT host
+  // connection, whatever the enrollment state - an op must not race ahead of
+  // the connect push and run under a cached policy the host has since
+  // tightened. Pre-cutover (the flag, in the storage confined above, was never
+  // set) the barrier is inert and the deny baseline governs.
   const policy = await policyDispatchGate();
   if (!policy.allowed) return policy;
   // Enrollment is unconditionally required where the platform can enroll
-  // (ADR-0032: requireEnrollment is retired; a stored value - however it got
+  // (requireEnrollment is no longer a setting; a stored value - however it got
   // there - is never consulted, so a planted `false` cannot open this gate).
   const compromised = await pinStore.getCompromised();
   if (compromised) {
@@ -250,19 +249,18 @@ async function readGateState(): Promise<Gate> {
 
 /** Called by port.ts after each successful connectNative(). Once pinned this
  * refreshes the badge and, only when the opt-in hostReverifyMs interval has
- * lapsed, issues a re-verify challenge; per ADR-0021 the default steady
- * state is never challenged (a challenge is a Touch ID prompt, and MV3
- * reconnects every few minutes). While unpaired it drives the ceremony
- * forward. */
+ * lapsed, issues a re-verify challenge; the default steady state is never
+ * challenged (a challenge is a Touch ID prompt, and MV3 reconnects every few
+ * minutes). While unpaired it drives the ceremony forward. */
 export function onPortConnected(): Promise<void> {
   return serialized(async () => {
     // Do not read or act on trust state until it is confined to the extension (trusted-storage.ts): the same
     // reasoning as the gate. If hardening failed, do nothing - the gate is already blocking every request, so
     // there is no ceremony to drive.
     if (!(await hardenStorageAccess()).ok) return;
-    // ADR-0025: an unpair that could not reach the host yet (port was down,
-    // SW died) is retried on every connect until the host acknowledges the
-    // key deletion. Independent of the gate/ceremony state below.
+    // An unpair that could not reach the host yet (port was down, SW died) is
+    // retried on every connect until the host acknowledges the key deletion.
+    // Independent of the gate/ceremony state below.
     await maybeSendPendingHostRevoke();
     await updateBadge();
     if (!(await platformCanEnroll())) return; // no Enclave here; no ceremony
@@ -278,14 +276,14 @@ export function onPortConnected(): Promise<void> {
   });
 }
 
-/** Resend the not-yet-acknowledged host key-deletion request (ADR-0025). The
- * durable flag is cleared by the host's `enclave_revoked` ack (a lost frame
- * or a dead SW just means another send here), or superseded when a fresh
- * pairing is PINNED (approvePending): `enclave_revoke` names no key, so past
- * a re-pair it would delete the newly minted key, not the one the revoke
- * meant. Merely starting a ceremony does not supersede it - an abandoned
- * ceremony must leave the deletion pending, or the old key would outlive the
- * revoke with nothing left to request its removal. */
+/** Resend the not-yet-acknowledged host key-deletion request. The durable flag
+ * is cleared by the host's `enclave_revoked` ack (a lost frame or a dead SW
+ * just means another send here), or superseded when a fresh pairing is PINNED
+ * (approvePending): `enclave_revoke` names no key, so past a re-pair it would
+ * delete the newly minted key, not the one the revoke meant. Merely starting a
+ * ceremony does not supersede it - an abandoned ceremony must leave the
+ * deletion pending, or the old key would outlive the revoke with nothing left
+ * to request its removal. */
 async function maybeSendPendingHostRevoke(): Promise<void> {
   const live = conn;
   if (!live) return;
@@ -298,14 +296,13 @@ async function maybeSendPendingHostRevoke(): Promise<void> {
 /** Optional lazy re-verification (hostReverifyMs > 0): on connect, when the
  * last successful verification (pairing counts as one) is older than the
  * interval, challenge the host against the pin. The default (0) keeps the
- * ADR-0021 session behavior: verify at pairing and on demand only. This is
- * detection, not gating - like a manual verify, an unanswered or declined
- * prompt leaves the pinned state and the gate unchanged, and only a
- * cryptographic mismatch (or a host that can no longer prove the key) fails
- * closed. Each re-verify raises a Touch ID prompt, which is why it is
- * opt-in. */
+ * session behavior: verify at pairing and on demand only. This is detection,
+ * not gating - like a manual verify, an unanswered or declined prompt leaves
+ * the pinned state and the gate unchanged, and only a cryptographic mismatch
+ * (or a host that can no longer prove the key) fails closed. Each re-verify
+ * raises a Touch ID prompt, which is why it is opt-in. */
 async function maybePeriodicReverify(pin: EnclavePin): Promise<void> {
-  // A policy field (ADR-0032), read once: its own decision moment.
+  // A host-owned policy field, read once: its own decision moment.
   const effective = await getEffectivePolicy();
   if (effective.state === "blocked") {
     // The connect path is NOT behind the dispatch barrier: resolving a blocked posture to the deny-baseline
@@ -356,7 +353,7 @@ const REASON_HELP: Record<EnclaveReasonCode, (mode: CeremonyMode) => string> = {
     "unsupported_platform: the host reports no Secure Enclave, but this browser is " +
     "running on macOS. If this Mac genuinely lacks one (pre-T2 Intel), pairing is " +
     "impossible and the bridge stays blocked - enrollment is required on macOS " +
-    "(ADR-0032) and this configuration is unsupported. Otherwise treat the host " +
+    "and this configuration is unsupported. Otherwise treat the host " +
     "binary as suspect (outdated or substituted) and leave the bridge blocked.",
   invalid_challenge: () =>
     "invalid_challenge: the host rejected our challenge frame (version mismatch?).",
@@ -389,12 +386,12 @@ export function handleEnclaveFrame(msg: EnclaveInboundFrame): Promise<void> {
   });
 }
 
-/** The host says the enrollment key is gone (ADR-0025): the acknowledgement
- * of our own `enclave_revoke`, or a host-originated push after an
- * out-of-band `chromium-bridge revoke` / `pair --reset`. Pure capability
- * reduction, so the (unauthenticated) frame is safe to honor: with a pin it
- * fails the bridge closed until the user re-pairs; without one it only
- * settles the pending-unpair bookkeeping. */
+/** The host says the enrollment key is gone: the acknowledgement of our own
+ * `enclave_revoke`, or a host-originated push after an out-of-band
+ * `chromium-bridge revoke` / `pair --reset`. Pure capability reduction, so the
+ * (unauthenticated) frame is safe to honor: with a pin it fails the bridge
+ * closed until the user re-pairs; without one it only settles the
+ * pending-unpair bookkeeping. */
 async function handleRevoked(): Promise<void> {
   if (await pinStore.getHostRevokePending()) {
     await pinStore.setHostRevokePending(false);
@@ -567,7 +564,7 @@ export function approvePending(): Promise<RuntimeResponse<"enroll_approve">> {
     // The pin IS the fresh pairing: a deletion request still pending from
     // before it is stale, and resending it would revoke the key just pinned.
     await pinStore.setHostRevokePending(false);
-    // A (re-)pin decides the policy ratchet scope (ADR-0032 decision 3): onPinPinned resets the ratchet for a
+    // A (re-)pin decides the policy ratchet scope: onPinPinned resets the ratchet for a
     // DIFFERENT key but RETAINS it for a same-key re-pair (so an old permissive baseline cannot replay), drops
     // this connection's verified mark, and keeps the cutover flag.
     await onPinPinned(pending.keyId);
@@ -597,25 +594,23 @@ export function rejectPending(): Promise<RuntimeResponse<"enroll_reject">> {
 }
 
 /** Forget the pin and all ceremony records, and ask the host to delete its
- * enclave key too (ADR-0025: unpairing from either side leaves NO usable
- * credential behind - previously an extension-side revoke left the host's
- * keychain key alive). The deletion request is durable: if the port is down
- * it is stored and resent on every connect until the host acknowledges.
- * Pairing does not auto-restart afterwards (paused), so revoking never
- * triggers a surprise Touch ID prompt; the user starts the next ceremony
- * from the options page. */
+ * enclave key too (unpairing from either side leaves NO usable credential
+ * behind). The deletion request is durable: if the port is down it is stored
+ * and resent on every connect until the host acknowledges. Pairing does not
+ * auto-restart afterwards (paused), so revoking never triggers a surprise Touch
+ * ID prompt; the user starts the next ceremony from the options page. */
 export function revokePin(): Promise<RuntimeResponse<"enroll_revoke">> {
   return serialized(async () => {
     clearOutstanding();
     // Read the pin BEFORE clearing the store: its keyId is the prior identity
     // onPinRevoked persists durably, and the next re-pair decides key-novelty
-    // against it (ADR-0032 decision 3). Read after clearAll it would always be
-    // null, and every re-pair would read as "prior unknown" - which is
-    // fail-closed but strands the revoke-and-re-pair recovery the latched-state
-    // messages promise. `null` here means nothing was pinned.
+    // against it. Read after clearAll it would always be null, and every
+    // re-pair would read as "prior unknown" - which is fail-closed but strands
+    // the revoke-and-re-pair recovery the latched-state messages promise.
+    // `null` here means nothing was pinned.
     const revokedKeyId = (await pinStore.getPin())?.keyId ?? null;
     // Hand the identity over BEFORE clearAll, so no SW death can land in a gap where both copies are gone.
-    // Revoke RETAINS the policy ratchet record (ADR-0032 decision 3): a same-key re-pair must still refuse an
+    // Revoke RETAINS the policy ratchet record: a same-key re-pair must still refuse an
     // old-baseline replay, and the record stays inert (deny baseline + closed barrier) while unpinned. The
     // cutover flag survives too: post-reset means the closed barrier, never the open pre-cutover posture.
     await onPinRevoked(revokedKeyId);

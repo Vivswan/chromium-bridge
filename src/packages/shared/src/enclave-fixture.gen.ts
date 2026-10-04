@@ -109,12 +109,12 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
   ],
 };
 
-// The POLICY_DOMAIN vectors (ADR-0032 decision 3): signed policy baselines
-// over the same fixture key. Each message is the Rust policy_message
-// (POLICY_DOMAIN || 0x00 || the exact document bytes), docB64 is those exact
-// bytes as the wire `baseline` carries them, and the document strict-parses
-// under the generated PolicyDocSchema. The extension's policy golden test
-// replays the full verify-then-parse path through WebCrypto.
+// The POLICY_DOMAIN vectors: signed policy baselines over the same fixture key.
+// Each message is the Rust policy_message (POLICY_DOMAIN || 0x00 || the exact
+// document bytes), docB64 is those exact bytes as the wire `baseline` carries
+// them, and the document strict-parses under the generated PolicyDocSchema. The
+// extension's policy golden test replays the full verify-then-parse path
+// through WebCrypto.
 
 export interface PolicyGoldenVector {
   /** Base64 of the exact signed document bytes (the wire `baseline`). */

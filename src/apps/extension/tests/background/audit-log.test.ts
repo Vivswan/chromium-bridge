@@ -1,9 +1,8 @@
-// The forwarding half of the extension audit ring (ADR-0030): whether an
-// event reaches the host's durable trail is a property of its KIND alone.
-// The per-call `forward` flag is gone - a call site must not be able to
-// suppress forensic evidence for a forwarded kind, and the local-only kinds
-// (which the host audits authoritatively when it handles them) must never
-// leak a duplicate frame.
+// The forwarding half of the extension audit ring: whether an event reaches the
+// host's durable trail is a property of its KIND alone. The per-call `forward`
+// flag is gone - a call site must not be able to suppress forensic evidence for
+// a forwarded kind, and the local-only kinds (which the host audits
+// authoritatively when it handles them) must never leak a duplicate frame.
 
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";

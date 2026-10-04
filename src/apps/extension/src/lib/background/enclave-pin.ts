@@ -1,9 +1,9 @@
-// Storage for the extension-side trust anchor of ADR-0021: the pinned
+// Storage for the extension-side trust anchor of enrollment: the pinned
 // enrollment public key, plus the ceremony's intermediate records. Everything
 // lives in browser.storage.local (extension-private, survives service-worker
 // restarts), mirroring allowlist-store.ts. The single-use challenge nonce is
-// deliberately NOT here: it stays in service-worker memory only
-// (see enrollment.ts), so a persisted copy can never be replayed against.
+// deliberately NOT here: it stays in service-worker memory only (see
+// enrollment.ts), so a persisted copy can never be replayed against.
 //
 // Record shapes are the Zod schemas in @chromium-bridge/shared (enclave.ts
 // there); every read parses against them, and key records additionally pass
@@ -161,14 +161,13 @@ export async function setLastVerifiedAt(at: number): Promise<void> {
   await browser.storage.local.set({ [LAST_VERIFIED_KEY]: at });
 }
 
-/** ADR-0025: a revoke here must also delete the HOST's enclave key (closing
- * the asymmetry where unpairing left a live keychain key behind). The request
- * rides a control frame on the native-messaging port; this durable flag
- * survives MV3 SW death and port gaps, and every port connect resends the
- * request until it is settled: cleared by the host's `enclave_revoked`
- * acknowledgement, or superseded when a fresh pairing is pinned (the frame
- * names no key, so past a re-pair it would delete the newly minted key - see
- * enrollment.ts). */
+/** A revoke here must also delete the HOST's enclave key: unpairing from either
+ * side must leave no usable credential behind. The request rides a control
+ * frame on the native-messaging port; this durable flag survives MV3 SW death
+ * and port gaps, and every port connect resends the request until it is
+ * settled: cleared by the host's `enclave_revoked` acknowledgement, or
+ * superseded when a fresh pairing is pinned (the frame names no key, so past a
+ * re-pair it would delete the newly minted key - see enrollment.ts). */
 export async function getHostRevokePending(): Promise<boolean> {
   return (await read(HOST_REVOKE_PENDING_KEY)) === true;
 }

@@ -5,16 +5,15 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
 
-// The ADR-0030 kill-switch panel: one prominent, explicit switch that halts
-// all bridge activity everywhere. ENGAGE-ONLY (ADR-0032 decision 6): the
-// host refuses `kill_release` from the extension, so releasing lives in
-// `chromium-bridge unkill` - this panel engages and
-// shows the state, never releases. Everything here goes through the SW
-// router (extension-page senders only) and is RELAYED to the native host,
+// The kill-switch panel: one prominent, explicit switch that halts all bridge
+// activity everywhere. ENGAGE-ONLY: the host refuses `kill_release` from the
+// extension, so releasing lives in `chromium-bridge unkill` - this panel
+// engages and shows the state, never releases. Everything here goes through the
+// SW router (extension-page senders only) and is RELAYED to the native host,
 // which performs the transition and answers with the resulting state - this
-// panel can only ask, never decide. Event-driven: the SW-only mirror is
-// watched via storage.onChanged, so a kill or unkill from any surface
-// reflects here without polling.
+// panel can only ask, never decide. Event-driven: the SW-only mirror is watched
+// via storage.onChanged, so a kill or unkill from any surface reflects here
+// without polling.
 export function KillSwitchPanel() {
   const { t } = useI18n();
   const [view, setView] = useState<KillView | null>(null);
@@ -40,11 +39,10 @@ export function KillSwitchPanel() {
   const killed = view?.state === "killed";
 
   const engage = async () => {
-    // Engaging is deliberately zero-friction (ADR-0030): the brake must be
-    // one action from every surface. Releasing restores capability, so it is
-    // not offered here at all: the host refuses kill_release from the
-    // extension (ADR-0032 decision 6), and release lives behind
-    // `chromium-bridge unkill`'s presence gate.
+    // Engaging is deliberately zero-friction: the brake must be one action
+    // from every surface. Releasing restores capability, so it is not offered
+    // here at all: the host refuses kill_release from the extension, and
+    // release lives behind `chromium-bridge unkill`'s presence gate.
     setBusy(true);
     setActionError(null);
     const r = await send({ type: "set_kill", on: true });

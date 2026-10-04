@@ -7,7 +7,7 @@
 // Fail closed: enrollment.ts readGateState awaits this result before every gate decision, so an unavailable
 // or throwing setAccessLevel (a Chrome older than the manifest's minimum_chrome_version) keeps the bridge blocked.
 //
-// Residual (ADR-0027 and the threat model): setAccessLevel is async, so between a service-worker cold start and
+// Residual (recorded in the threat model): setAccessLevel is async, so between a service-worker cold start and
 // this call resolving storage.local is briefly content-script-writable, and a value planted in that window is locked
 // in and then believed. No user-space API closes it; the enrollment ceremony's cryptographic checks bound what a
 // planted pin achieves.

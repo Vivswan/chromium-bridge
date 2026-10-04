@@ -1,6 +1,6 @@
-// The off-DOM confirmation surface protocol (ADR-0027): what the service
-// worker shows in the extension-owned confirmation window, and the two
-// runtime messages the window exchanges with it.
+// The off-DOM confirmation surface protocol: what the service worker shows in
+// the extension-owned confirmation window, and the two runtime messages the
+// window exchanges with it.
 //
 // The whole point of this surface is that a guarded PAGE cannot reach it: the
 // window is an extension page (chrome-extension:// origin, separate process),
@@ -8,11 +8,10 @@
 // from extension pages. A content script or page script can therefore
 // neither read a pending confirmation nor answer one.
 //
-// ADR-0031: ConfirmKind "eval" and "upload" are the two kinds whose
-// authorization moves to the host's Secure-Enclave user-presence gate
-// (Touch ID) on a capable, enrolled device with the touchIdConfirm policy
-// on. The surface stays as a
-// display-only window; `hardware: true` marks such a payload, and the
+// ConfirmKind "eval" and "upload" are the two kinds whose authorization
+// moves to the host's Secure-Enclave user-presence gate (Touch ID) on a
+// capable, enrolled device with the touchIdConfirm policy on. The surface
+// stays a display-only window; `hardware: true` marks such a payload, and the
 // service refuses a window-side approval for it - the tap is the approval.
 //
 // The payload is a discriminated union on `kind`, each arm carrying exactly
@@ -32,12 +31,12 @@ export const ConfirmKindSchema = z.enum([
   "eval", // page_eval - arbitrary JS; detail carries the FULL code
   "tab_close", // closing a tab
   "upload", // page_upload - detail carries the exact local file path
-  // ADR-0032 decision 3, the unpinned lane: an UNSIGNED host policy push
-  // that would relax the enforced effective policy on an extension with no
-  // pinned key. origin/tabTitle are "" (no page is involved); detail carries
-  // the relaxing fields' wire names, one per line (possibly none: the
-  // first-ever document always rides this lane even when it grants nothing
-  // over the deny baseline). Never presented on a pinned extension.
+  // The unpinned lane: an UNSIGNED host policy push that would relax the
+  // enforced effective policy on an extension with no pinned key.
+  // origin/tabTitle are "" (no page is involved); detail carries the relaxing
+  // fields' wire names, one per line (possibly none: the first-ever document
+  // always rides this lane even when it grants nothing over the deny baseline).
+  // Never presented on a pinned extension.
   "policy_relax",
 ]);
 
@@ -62,13 +61,13 @@ const confirmPage = {
   detail: z.string(),
 } as const;
 
-/** ADR-0031: approval comes from the host's Enclave user-presence tap, not
- * the window. The window renders display-only (no Allow button) and the
- * service refuses a window-side approval; denial stays window-reachable
- * (removing capability is always friction-free). Only the two
- * presence-gated kinds ("eval"/"upload") may carry it, and only as the
- * literal `true`: the service never emits `hardware: false` (absence IS the
- * not-gated state), so the boolean's dead false arm is unrepresentable. */
+/** Approval comes from the host's Enclave user-presence tap, not the window.
+ * The window renders display-only (no Allow button) and the service refuses a
+ * window-side approval; denial stays window-reachable (removing capability is
+ * always friction-free). Only the two presence-gated kinds ("eval"/"upload")
+ * may carry it, and only as the literal `true`: the service never emits
+ * `hardware: false` (absence IS the not-gated state), so the boolean's dead
+ * false arm is unrepresentable. */
 const hardware = z.literal(true).optional();
 
 export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
@@ -94,10 +93,10 @@ export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
 
 export type ConfirmPayload = z.infer<typeof ConfirmPayloadSchema>;
 
-/** Whether this payload's approval belongs to the hardware tap (ADR-0031).
- * The union already confines `hardware` to the two presence-gated kinds;
- * this is the one place consumers read it, so the narrowing lives here
- * instead of at every call site. */
+/** Whether this payload's approval belongs to the hardware tap. The union
+ * already confines `hardware` to the two presence-gated kinds; this is the one
+ * place consumers read it, so the narrowing lives here instead of at every call
+ * site. */
 export function isHardwareGated(payload: ConfirmPayload): boolean {
   return (payload.kind === "eval" || payload.kind === "upload") && payload.hardware === true;
 }

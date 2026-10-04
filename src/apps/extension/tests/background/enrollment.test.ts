@@ -296,7 +296,7 @@ describe("ceremony state machine", () => {
     expect((await getEnrollmentStatus()).state).toBe("unpaired");
   });
 
-  test("a killed mirror refuses the gate even with enrollment satisfied (ADR-0030)", async () => {
+  test("a killed mirror refuses the gate even with enrollment satisfied", async () => {
     // Fully pinned...
     const key = await genKey();
     await pairAndPin(key);
@@ -307,7 +307,7 @@ describe("ceremony state machine", () => {
     expect(gate.allowed).toBe(false);
     if (!gate.allowed) expect(gate.reason).toContain("kill switch");
     // And it wins even when a (retired) requireEnrollment=false value is
-    // still lying around in storage - nothing consults it (ADR-0032).
+    // still lying around in storage - nothing consults it.
     store.requireEnrollment = false;
     gate = await enrollmentGate();
     expect(gate.allowed).toBe(false);
@@ -552,8 +552,8 @@ describe("ceremony state machine", () => {
     const key = await genKey();
     await pairAndPin(key);
     expect((await revokePin()).ok).toBe(true);
-    // ADR-0025: the unpair also asks the host to delete its enclave key, so
-    // no usable credential is left behind. Sent immediately (port attached).
+    // An unpair also asks the host to delete its enclave key, so no usable
+    // credential is left behind. Sent immediately (port attached).
     expect(posted[posted.length - 1]).toEqual({ type: "enclave_revoke" });
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("unpaired");
@@ -584,7 +584,7 @@ describe("ceremony state machine", () => {
     expect((await getEnrollmentStatus()).hostRevokePending).toBe(true);
     // `chromium-bridge pair --reset` ran out of band and minted a NEW enclave
     // key. The reconnect still resends the stale revoke (the accepted pre-pin
-    // window, ADR-0025) but must not challenge (pairing is paused).
+    // window) but must not challenge (pairing is paused).
     attach(collaborator, (f) => {
       posted.push(f as Record<string, unknown>);
       return true;
@@ -650,9 +650,10 @@ describe("ceremony state machine", () => {
   });
 
   test("a host-originated enclave_revoked fails a pinned bridge closed", async () => {
-    // The ADR-0025 push: `chromium-bridge revoke` ran out-of-band, the host
-    // noticed and pushed enclave_revoked. A pinned extension must flip to the
-    // fail-closed compromised state without waiting for an opt-in reverify.
+    // The any-side revocation push: `chromium-bridge revoke` ran out-of-band,
+    // the host noticed and pushed enclave_revoked. A pinned extension must flip
+    // to the fail-closed compromised state without waiting for an opt-in
+    // reverify.
     const key = await genKey();
     await pairAndPin(key);
     expect((await enrollmentGate()).allowed).toBe(true);
@@ -680,7 +681,7 @@ describe("ceremony state machine", () => {
     expect(res).toEqual({ ok: false, error: expect.stringContaining("revoke") });
   });
 
-  test("a stored requireEnrollment=false neither opens the gate nor skips the ceremony (retired, ADR-0032)", async () => {
+  test("a stored requireEnrollment=false neither opens the gate nor skips the ceremony", async () => {
     // The setting is retired: enrollment is unconditionally required. A
     // stored `false` - a pre-migration leftover, or a value planted by a
     // same-user process - must not bypass the gate (the old code path read
@@ -1046,9 +1047,9 @@ describe("platform scoping (non-Enclave platforms)", () => {
   });
 });
 
-// ---- ADR-0032: the policy barrier in the gate, and the re-pair reset ------------
+// ---- the policy barrier in the gate, and the re-pair reset ----------------------
 
-describe("policy dispatch barrier wiring (ADR-0032)", () => {
+describe("policy dispatch barrier wiring", () => {
   beforeEach(() => {
     policySync.resetPolicySyncForTests();
   });
@@ -1069,7 +1070,7 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
     if (!gate.allowed) expect(gate.reason).toContain("policy barrier");
   });
 
-  test("the barrier refuses BEFORE the dispatch kickoff runs (S4): onAllowed never fires while the snapshot would fall to POLICY_DEFAULTS", async () => {
+  test("the barrier refuses BEFORE the dispatch kickoff runs: onAllowed never fires while the snapshot would fall to POLICY_DEFAULTS", async () => {
     // In awaitingBaseline the snapshot carries no values, and port.ts hands
     // the dispatch kickoff INTO enrollmentGate, which consults
     // policyDispatchGate before invoking it, so no .effective read can drive
@@ -1115,7 +1116,7 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
     expect((await enrollmentGate()).allowed).toBe(true);
   });
 
-  test("revokePin RETAINS the stored ratchet (finding 2) but NEVER clears the cutover flag", async () => {
+  test("revokePin RETAINS the stored ratchet (the same-key replay anchor) but NEVER clears the cutover flag", async () => {
     // Retaining the anchor across a revoke is what refuses an old permissive
     // baseline replaying after a revoke + same-key re-pair with zero fresh
     // presence: the revision high-water-mark must survive the revoke, or a
@@ -1159,7 +1160,7 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
     expect(store.bridgePolicyCutover).toBe(true);
   });
 
-  test("approvePending RETAINS the ratchet when re-pinning the SAME key (finding 2)", async () => {
+  test("re-pinning the SAME key RETAINS the ratchet, so no old baseline can replay", async () => {
     const key = await genKey();
     // Establish `key` as the prior pinned identity through the REAL path - a
     // revoke that records it durably. Without this the retention below would come
@@ -1215,7 +1216,7 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
   });
 });
 
-// ---- ADR-0032: hostReverifyMs comes from the policy snapshot ----
+// ---- hostReverifyMs comes from the policy snapshot ----
 
 describe("post-cutover hostReverifyMs reads the policy snapshot", () => {
   test("grant direction: policy 0 (never re-verify) leaves a stale pin unchallenged", async () => {

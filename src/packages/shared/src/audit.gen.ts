@@ -3,7 +3,7 @@
 // list, then run `moon run gen`.
 //
 // The audit kinds the host accepts over the extension's audit_event control
-// frame (audit::extension_kind, ADR-0030). The extension's forwarding set
+// frame (audit::extension_kind). The extension's forwarding set
 // (background/audit-log.ts) and the forwarded prefix of its audit-ring
 // vocabulary (shared/enclave.ts AUDIT_EVENT_KINDS) build on this, so the two
 // sides of the forwarding boundary cannot drift apart.

@@ -1,9 +1,9 @@
 // CdpSessionRegistry - a module-level singleton mapping tabId -> CdpSession.
 //
 // In CDP mode the debugger stays attached across ops (the "Started debugging
-// this browser" banner persists - by design, ADR-0017), so we cache one
-// attached session per tab and reuse it. Sessions are torn down when the tab
-// closes, when Chrome detaches us, or when the user turns CDP mode off.
+// this browser" banner persists - by design), so we cache one attached session
+// per tab and reuse it. Sessions are torn down when the tab closes, when Chrome
+// detaches us, or when the user turns CDP mode off.
 
 import { browser } from "wxt/browser";
 import { getEffectivePolicy } from "../effective-policy";

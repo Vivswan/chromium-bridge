@@ -17,9 +17,9 @@ import { TrustedClientsPanel } from "./TrustedClientsPanel";
 // The options page. Every write is event-driven (useSettings rides storage.onChanged), so a change from any
 // surface reflects here with no polling and no manual refresh.
 //
-// The security policy itself (the 15 host-owned fields, ADR-0032) is not edited here: it is set with
+// The security policy itself (the 15 host-owned fields) is not edited here: it is set with
 // `chromium-bridge policy`, signed by the paired host key, and only enforced by this extension. Kill RELEASE
-// moved with it (the host refuses `kill_release` from the extension, decision 6); engaging stays one click away.
+// lives host-side too (the host refuses `kill_release` from the extension); engaging stays one click away.
 //
 // Sections are ordered by decision weight: kill switch, pairing, then the sites hero that scopes everything
 // below. Amber and red stay reserved for pending and kill/deny; consequences are neutral ink.
@@ -82,11 +82,11 @@ export function OptionsApp() {
           onChange={(v) => {
             void (async () => {
               // Local write first, AWAITED before the relay: the host's echo
-              // push applies through storage, and a still-in-flight local
-              // write landing after it would clobber the applied value. The
-              // lang_choose relay is the gesture -> lang_set path of
-              // ADR-0032 decision 7 (the SW emits only when paired and the
-              // live connection allows it; offline the choice stays local).
+              // push applies through storage, and a still-in-flight local write
+              // landing after it would clobber the applied value. The
+              // lang_choose relay is the gesture -> lang_set path of the
+              // language sync (the SW emits only when paired and the live
+              // connection allows it; offline the choice stays local).
               await update("uiLanguage", v);
               await send({ type: "lang_choose", value: v });
             })();
@@ -123,9 +123,9 @@ export function OptionsApp() {
       </Section>
 
       <Section title={t("options.section_security")}>
-        {/* The ADR-0032 pointer where the 15 policy toggles used to be: the
-            security policy is host-owned - set with `chromium-bridge policy`,
-            signed by the paired key, enforced here - so this page shows where it lives
+        {/* The pointer where the 15 policy toggles used to be: the security
+            policy is host-owned - set with `chromium-bridge policy`, signed by
+            the paired key, enforced here - so this page shows where it lives
             instead of pretending to control it. */}
         <div className="py-1">
           <div className="text-[13px] font-medium">{t("settings.policy_managed_title")}</div>

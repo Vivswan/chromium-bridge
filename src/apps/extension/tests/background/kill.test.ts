@@ -1,5 +1,5 @@
-// ADR-0030: the extension half of the kill switch. Pins the properties the
-// design leans on:
+// The extension half of the kill switch. Pins the properties the design leans
+// on:
 // - the gate's fail-closed matrix over the SW-only mirror (absent allows,
 //   alive allows, killed/unknown/malformed all refuse);
 // - the mirror is written only from host kill_status_result frames, and an

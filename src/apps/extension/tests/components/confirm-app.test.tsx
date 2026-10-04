@@ -158,10 +158,10 @@ describe("ConfirmApp", () => {
   });
 });
 
-// ADR-0032: the unpinned policy-relaxation payload. No page is
-// involved, the detail carries wire field names that render beside their
-// localized labels, and the ordinary Allow/Deny mechanics (arming delay,
-// Escape, resolve) stay exactly the window's.
+// The unpinned policy-relaxation payload. No page is involved, the detail
+// carries wire field names that render beside their localized labels, and the
+// ordinary Allow/Deny mechanics (arming delay, Escape, resolve) stay exactly
+// the window's.
 describe("ConfirmApp policy_relax", () => {
   function stubPolicyPayload(detail: string) {
     vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
@@ -221,7 +221,7 @@ describe("ConfirmApp policy_relax", () => {
     expect(screen.getByRole("button", { name: /allow/i })).toBeInTheDocument();
   });
 
-  test("an empty detail falls back to the could-not-itemize note (defensive; U2 makes it unreachable) and still requires the gesture", async () => {
+  test("an empty detail falls back to the could-not-itemize note (defensive: the approval lane always itemizes, so it is unreachable) and still requires the gesture", async () => {
     stubPolicyPayload("");
     const user = userEvent.setup();
     await mount();

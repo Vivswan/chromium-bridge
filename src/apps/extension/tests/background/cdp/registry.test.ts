@@ -48,7 +48,7 @@ beforeEach(() => {
   };
 });
 
-describe("cdp registry teardown is policy-driven (ADR-0032 S2)", () => {
+describe("cdp registry teardown is policy-driven: a cdpMode refusal detaches", () => {
   test("a policy push restricting cdpMode tears down on the push path", async () => {
     const teardown = await freshRegistry();
     // The accepted push's writes: cutover armed, record with cdpMode false.
@@ -59,7 +59,7 @@ describe("cdp registry teardown is policy-driven (ADR-0032 S2)", () => {
     await vi.waitFor(() => expect(teardown).toHaveBeenCalled());
   });
 
-  test("a decision that raced a restriction cannot register a persistent session (SFX-3)", async () => {
+  test("a decision that raced a restriction cannot register a persistent session", async () => {
     // The leak this closes: a decision snapshotted cdpMode:true, a
     // restricting push landed (teardownAll fired) while a confirmation held
     // the decision open, and the decision then reached session creation -
@@ -87,7 +87,7 @@ describe("cdp registry teardown is policy-driven (ADR-0032 S2)", () => {
     expect(mod.cdpRegistry.size).toBe(0);
   });
 
-  test("an ERRORED policy read at session creation fails closed like a refusal (CS-2)", async () => {
+  test("an ERRORED policy read at session creation fails closed like a refusal", async () => {
     // The recheck read itself rejecting (a storage failure, not a policy
     // refusal) must not leave the just-made session attached, registered,
     // and bannered: detach, forget, and rethrow.

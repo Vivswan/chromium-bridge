@@ -1,11 +1,11 @@
-// The extension's policy consumption core (policy-sync.ts) under ADR-0032 decisions 3 and 4: the golden
+// The extension's policy consumption core (policy-sync.ts), signed lane and snapshot rule: the golden
 // vectors (Rust-signed baselines) replay through the real WebCrypto verify -> strict parse -> ratchet ->
 // storage path, and crafted documents are signed by an in-test key playing the pinned Enclave key. The
 // describe blocks name the accept/refuse matrix; a refusal must leave no state change.
 //
 // The pin store is mocked (production deny-lists the fixture key as a pin); everything below it - crypto,
 // schemas, ratchet, storage - is real. Left to the isolated-browser suite (CHROME_BIN): that the ratchet and
-// cutover survive real SW death, and the decision 4 in-flight rule under a real mid-confirmation push.
+// cutover survive real SW death, and the in-flight snapshot rule under a real mid-confirmation push.
 
 import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
 import {
@@ -246,12 +246,12 @@ describe("golden-vector replay through the full accept path", () => {
     // The stored effective is retained, never reverted to defaults.
     expect(stored?.revision).toBe(1);
     expect(stored?.effective).toEqual(goldenValues(0));
-    // A signature that does not verify against the pin is evidence about
-    // the signer (ADR-0031 posture), not a mere refusal.
+    // A signature that does not verify against the pin is treated as evidence
+    // about the signer, not a mere refusal.
     expect(pinState.compromised?.reason).toContain("signature verification");
   });
 
-  test("a genuine push against the WRONG pin is refused, marks compromised, and latches the gate (E2F-1)", async () => {
+  test("a genuine push against the WRONG pin is refused, marks compromised, and latches the gate for the SW life", async () => {
     const other = await makeSigner();
     pinState.pin = { keyId: other.keyId, pubkeyB64: other.pubkeyB64, pinnedAt: 1 };
     await push(goldenFrame(0));
@@ -463,7 +463,7 @@ describe("the dispatch barrier and the one-way cutover", () => {
   });
 });
 
-describe("the scope-stamped ratchet (findings 1 and 2)", () => {
+describe("the scope-stamped ratchet: pin transitions and same-key replay", () => {
   test("a stored record goes inert the instant the pin scope no longer matches", async () => {
     await push(goldenFrame(1)); // active under the fixture-key scope
     expect((await policyDispatchGate()).allowed).toBe(true);
@@ -484,7 +484,7 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     });
   });
 
-  test("same-key re-pair retains the anchor, so an OLD lower-revision baseline replay is refused (finding 2)", async () => {
+  test("same-key re-pair retains the anchor, so an OLD lower-revision baseline replay is refused", async () => {
     // rev 2 lands, then the user revokes and re-pairs the SAME key.
     await push(goldenFrame(1));
     // Model the ACTUAL unpinned interval: pin=null between revoke and
@@ -511,7 +511,7 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
-  test("U1: an APPROVED unsigned push during the unpinned window cannot destroy the retained pinned anchor", async () => {
+  test("an APPROVED unsigned push during the unpinned window cannot destroy the retained pinned anchor", async () => {
     // rev 2 lands under the pinned fixture key, then the user revokes.
     await push(goldenFrame(1));
     pinState.pin = null;
@@ -585,7 +585,7 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     expect(await policyCutoverArmed()).toBe(true); // one-way, survives the reset
   });
 
-  test("unpinned->pinned mid-approval: the unsigned push is dropped at commit, not enforced under the new pin (finding 1)", async () => {
+  test("unpinned->pinned mid-approval: the unsigned push is dropped at commit, not enforced under the new pin", async () => {
     // The interleave: an unpinned relaxing push waits on the
     // (arbitrarily long) approver; pairing lands DURING that window. The
     // commit-time scope recheck must catch unpinned-at-snapshot ->
@@ -616,7 +616,7 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
     expect((await policyDispatchGate()).allowed).toBe(true);
   });
 
-  test("an ABA same-key revoke+re-pair mid-verify is dropped by the generation epoch (E2F-2)", async () => {
+  test("an ABA same-key revoke+re-pair mid-verify is dropped by the generation epoch", async () => {
     // rev 1 lands, active under the fixture key.
     await push(goldenFrame(0));
     expect((await getStoredPolicyState())?.revision).toBe(1);
@@ -649,8 +649,8 @@ describe("the scope-stamped ratchet (findings 1 and 2)", () => {
   });
 });
 
-describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 undo, E2F-5)", () => {
-  test("H1: the durable prior survives an SW restart, so a different-key re-pair still recovers a corrupt cutover flag", async () => {
+describe("policy consumption hardening: durable prior pin, sticky latch, ownership-checked undo, one storage read", () => {
+  test("the durable prior survives an SW restart, so a different-key re-pair still recovers a corrupt cutover flag", async () => {
     // THE REGRESSION: with the prior identity held only in memory, every re-pair
     // after an SW restart read as "prior unknown" -> never a new key -> the
     // normalize path never ran. Since armCutover THROWS on a corrupt flag and
@@ -684,7 +684,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
-  test("H1: a SAME-key re-pair across an SW restart is still not new, so a corrupt flag stays latched", async () => {
+  test("a SAME-key re-pair across an SW restart is still not new, so a corrupt flag stays latched", async () => {
     // The mirror image of the test above: the durable prior must DECIDE novelty,
     // not merely make every re-pair look new. Re-pinning the very key that was
     // revoked is not fresh evidence, so nothing is cleared or normalized.
@@ -698,7 +698,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     expect(await policyDispatchGate()).toMatchObject({ allowed: false });
   });
 
-  test("H1: known-A -> revoke -> re-pair A retains the ratchet across an SW restart (finding 2)", async () => {
+  test("revoke then re-pair of the same key keeps the ratchet across an SW restart, so an older baseline cannot replay", async () => {
     // The anchor must survive the restart too, or the old-baseline replay
     // would reopen on every re-paired worker.
     await push(goldenFrame(1)); // rev 2 active under the fixture key
@@ -714,7 +714,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
-  test("F2: a same-key re-pair keeps the compromise latch (no stored record); a different-key re-pair clears it", async () => {
+  test("a same-key re-pair keeps the compromise latch (no stored record); a different-key re-pair clears it", async () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
     // Set the sticky latch: a flipped-byte baseline fails the fixture-key sig.
     const v = fixture.vectors[0];
@@ -747,7 +747,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     expect((await policyDispatchGate()).allowed).toBe(true);
   });
 
-  test("E2F-5: resolution reads the cutover flag and the record in a SINGLE two-key storage.get", async () => {
+  test("resolution reads the cutover flag and the record in a SINGLE two-key storage.get", async () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
     const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
     const calls: (string | string[])[] = [];
@@ -773,7 +773,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     expect(singleKeyGets).toHaveLength(0);
   });
 
-  test("F3: an ABA revoke+re-pair DURING the commit writes leaves no stale record and stamps no mark", async () => {
+  test("an ABA revoke+re-pair DURING the commit writes leaves no stale record and stamps no mark", async () => {
     const signer = await makeSigner();
     pinState.pin = { keyId: signer.keyId, pubkeyB64: signer.pubkeyB64, pinnedAt: 1 };
     const rev1 = await signer.signDoc(docJson(1, []));
@@ -853,7 +853,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
-  test("H4: an A->B->A transition during a stalled push does not resurrect the reset anchor", async () => {
+  test("an A->B->A transition during a stalled push does not resurrect the reset anchor", async () => {
     // Both new-key pins RESET the ratchet (they remove the record). If the undo
     // blindly restored its pre-write snapshot, the A/rev-1 anchor would come back
     // ACTIVE under scope A - silently defeating the reset and refusing legitimate
@@ -896,7 +896,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
-  test("H4: an undo that itself fails still refuses and audits the race", async () => {
+  test("an undo that itself fails still refuses and audits the race", async () => {
     // The undo is best-effort; the REFUSAL is not. If the restore throws and the
     // exception escapes, frameChain's catch swallows it and the policy_refused
     // audit never fires - the race would go unrecorded.
@@ -1006,7 +1006,7 @@ describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 un
     );
   });
 
-  test("H5: a raced idempotent replay writes nothing at all - no record write, no undo write", async () => {
+  test("a raced idempotent replay writes nothing at all - no record write, no undo write", async () => {
     // The idempotent push-on-connect replay writes nothing (setMirror discipline).
     // If a pin transition races THAT push, the undo must not "restore" a record
     // it never replaced - a blind re-set would retrigger every onChanged consumer.
@@ -1135,8 +1135,8 @@ describe("the unpinned lane (Lane U seam)", () => {
     await push(unsignedFrame(docJson(1, [])));
     consulted.mockClear();
     // The forged "restriction" rides the free lane with the largest revision
-    // the schema admits. It applies (harmless DoS, decision 3) but its
-    // revision is clamped out of the stored record.
+    // the schema admits. It applies (a forged restriction only removes
+    // capability) but its revision is clamped out of the stored record.
     await push(unsignedFrame(docJson(POLICY_REVISION_MAX, [], { disabledTools: ["page_eval"] })));
     expect((await getStoredPolicyState())?.revision).toBe(0);
     expect(consulted).not.toHaveBeenCalled();
@@ -1189,7 +1189,7 @@ describe("the unpinned lane (Lane U seam)", () => {
     expect((await policyDispatchGate()).allowed).toBe(false);
   });
 
-  test("a byte-identical push arriving while one is already held at the approver is collapsed (U6)", async () => {
+  test("a byte-identical push arriving while one is already held at the approver is collapsed", async () => {
     let release!: (approved: boolean) => void;
     const consulted = vi.fn(
       () =>
@@ -1283,7 +1283,7 @@ describe("the unpinned lane (Lane U seam)", () => {
     expect((await policyDispatchGate()).allowed).toBe(true);
   });
 
-  test("U1 backstop: a pinned-scope record landing mid-approval is still refused at the write", async () => {
+  test("the write-time backstop: a pinned-scope record landing mid-approval is still refused at the write", async () => {
     const v = fixture.vectors[1];
     if (!v) throw new Error("missing golden vector");
     setUnpinnedRelaxationApprover(async () => {
@@ -1311,7 +1311,7 @@ describe("the unpinned lane (Lane U seam)", () => {
   });
 });
 
-describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)", () => {
+describe("lang_current: the shared-language lane, sequence-suppressed", () => {
   const storedUiLanguage = async (): Promise<unknown> =>
     (await fakeBrowser.storage.local.get("uiLanguage")).uiLanguage;
   const langSets = (): object[] =>
@@ -1470,7 +1470,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
     },
   );
 
-  describe("the pinned trust bar (while-paired scope, decisions 2 and 7)", () => {
+  describe("the pinned trust bar (while-paired scope)", () => {
     test("unpinned: a host push never applies - the unpaired extension keeps its local value", async () => {
       pinState.pin = null;
       await fakeBrowser.storage.local.set({ uiLanguage: "zh_TW" });
@@ -1500,7 +1500,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
     });
   });
 
-  describe("first-pairing adoption (seq 0, ADR :652-654)", () => {
+  describe("first-pairing adoption (seq 0: the host adopts the extension value once)", () => {
     test("an explicitly-set local language is offered exactly ONCE across a full seq-0 -> reply cycle", async () => {
       await fakeBrowser.storage.local.set({ uiLanguage: "zh_CN" });
       await push({ type: "lang_current", value: "en", seq: 0 });
@@ -1510,7 +1510,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
       expect(langSets()).toHaveLength(1);
       // The host adopted and replies with seq 1: applied through the
       // NON-EMITTING apply path - the whole cycle emitted exactly one
-      // lang_set (the ADR-mandated loop-absence property).
+      // lang_set (the loop-absence property of the sequence rule).
       await push({ type: "lang_current", value: "zh_CN", seq: 1 });
       expect(getLangState()).toEqual({ value: "zh_CN", seq: 1 });
       expect(await storedUiLanguage()).toBe("zh_CN");
@@ -1599,7 +1599,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
       expect(await storedUiLanguage()).toBe("en");
     });
 
-    test("a full set-push-apply cycle emits exactly ONE lang_set (the ADR-mandated echo-loop test)", async () => {
+    test("a full set-push-apply cycle emits exactly ONE lang_set (no echo loop)", async () => {
       // The host's push-on-connect.
       await push({ type: "lang_current", value: "en", seq: 1 });
       // The user's gesture (the picker wrote uiLanguage locally already).
@@ -1616,7 +1616,7 @@ describe("lang_current: the shared-language lane (ADR-0032 decision 7, Phase 4)"
   });
 });
 
-describe("corrupt stored state latches closed (finding 3)", () => {
+describe("corrupt stored state latches closed, never fails open", () => {
   // A corrupt record - a garbage object, or a valid-looking one missing the
   // scope stamp - is DISTINCT from an absent one and must NOT read as absent:
   // that was the fail-open where an older genuine baseline replayed as
@@ -1664,7 +1664,7 @@ describe("corrupt stored state latches closed (finding 3)", () => {
   });
 });
 
-describe("compromise closes the connection (finding 4)", () => {
+describe("compromise closes the connection", () => {
   test("a bad signature drops THIS connection's verified mark, closing the barrier immediately", async () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
     // An earlier genuine push verified this connection (barrier open).
@@ -1699,7 +1699,7 @@ describe("compromise closes the connection (finding 4)", () => {
     expect((await policyDispatchGate()).allowed).toBe(false); // ...but the barrier is shut
   });
 
-  test("a failed-persist compromise stays sticky against a replayed genuine frame (E2F-1)", async () => {
+  test("a failed-persist compromise stays sticky against a replayed genuine frame", async () => {
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true });
     // A genuine push verifies this connection: barrier open, record stored.
     await push(goldenFrame(0));
@@ -1756,7 +1756,7 @@ describe("armCutover ordering is fail-closed", () => {
     expect((await policyDispatchGate()).allowed).toBe(true);
   });
 
-  test("the write order is cutover-first, and a record-write failure leaves deny (E2F-6)", async () => {
+  test("the write order is cutover-first, and a record-write failure leaves deny", async () => {
     // Drive the real accept path and INTERCEPT the writes: assert the cutover
     // flag lands before the record, then fail the record write to reproduce the
     // "SW died between arm and write" shape from live code, not a seeded flag.

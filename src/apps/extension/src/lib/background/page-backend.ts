@@ -1,5 +1,5 @@
 // Strategy interface for running page-level ops, plus the selector that picks
-// the backend based on the cdpMode setting (ADR-0017).
+// the backend based on the cdpMode setting.
 //
 //   - cdpMode OFF (default) -> ContentScriptBackend: inject the content
 //     script and message it.

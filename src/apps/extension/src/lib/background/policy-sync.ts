@@ -1,4 +1,4 @@
-// The extension side of host-owned policy (ADR-0032): `policy_current` pushes are verified against the extension's
+// The extension side of host-owned policy: `policy_current` pushes are verified against the extension's
 // OWN pinned key, ratcheted, stored as the effective policy behind a one-way cutover flag, and gate each connection
 // through the dispatch barrier enrollment.ts consults. `lang_current` rides the separate language lane below.
 //
@@ -95,7 +95,7 @@ let ratchetResetGeneration = 0;
 
 // ---- the ratchet scope --------------------------------------------------------
 
-/** The identity a ratchet state is bound to (ADR-0032 decision 3). Two states share a ratchet only when their scopes are
+/** The identity a ratchet state is bound to. Two states share a ratchet only when their scopes are
  * EQUAL: a different pinned key, or the pinned<->unpinned boundary, is a fresh scope that never inherits the old anchor. */
 export type PolicyScope = { pinned: true; keyId: string } | { pinned: false };
 
@@ -181,7 +181,7 @@ export const collaborator: PortCollaborator = {
   },
 };
 
-// ---- lang_current: the shared-language lane (ADR-0032 decision 7) -------------------
+// ---- lang_current: the shared-language lane --------------------------------------
 //
 // A storage.onChanged listener cannot tell a user's write from an applied push, so emission never hangs off storage
 // events and a set-push-apply cycle emits exactly one `lang_set`:
@@ -200,7 +200,7 @@ const UI_LANGUAGE_KEY = "uiLanguage";
 let lang: { value: string; seq: number } | null = null;
 
 /** Tests only: the applied-push cursor. Nothing security-relevant may ever
- * key on it (decision 7). */
+ * key on it. */
 export function getLangState(): { value: string; seq: number } | null {
   return lang;
 }
@@ -239,14 +239,15 @@ async function handleLangCurrent(msg: unknown, attachment: LiveConnection | null
   if (!(await langLanePinned())) return;
   const { value, seq } = parsed.data;
   if (seq === 0) {
-    // seq 0 = the host store's never-explicitly-set default: no signal,
-    // nothing to apply (the local preference stands), but it is the
-    // first-pairing adoption trigger (ADR-0032 :670-672).
+    // seq 0 = the host store's never-explicitly-set default: no signal, nothing
+    // to apply (the local preference stands), but it is the first-pairing
+    // adoption trigger: a host value never explicitly set adopts the
+    // extension's language.
     await maybeAdoptExtensionLanguage(attachment);
     return;
   }
-  // Sequence-suppressed (decision 7): only a strictly newer push applies;
-  // an echo or replay has nothing to ride on.
+  // Sequence-suppressed: only a strictly newer push applies; an echo or replay
+  // has nothing to ride on.
   if (lang && seq <= lang.seq) return;
   // Out-of-enum: refused WITHOUT advancing the cursor, so a later genuine
   // push with the same seq still applies.
@@ -316,8 +317,8 @@ export function chooseLanguage(value: UiLanguageValue): Promise<boolean> {
 
 // ---- the persisted reads (each discriminates its three outcomes) ---------------
 
-/** `corrupt` (present but not exactly `true`) is tampering and must not read as armed or unarmed: it latches closed
- * (ADR-0032 decision 8). Written only as `true`; only onPinPinned's new-key path touches a corrupt flag, rewriting it to `true`. */
+/** `corrupt` (present but not exactly `true`) is tampering and must not read as armed or unarmed: it latches closed.
+ * Written only as `true`; only onPinPinned's new-key path touches a corrupt flag, rewriting it to `true`. */
 type CutoverRead = "unarmed" | "armed" | "corrupt";
 
 /** Classify a raw stored cutover value. `undefined` is the absent signal
@@ -503,11 +504,11 @@ async function undoRecordWrite(
   throw new Error("refusing to undo a policy record write over a corrupt prior record");
 }
 
-/** Arm the one-way cutover (ADR-0032 decision 8). Set on the first accepted
- * push, cleared by nothing on the accept path. Deliberately armed BEFORE the
- * record write: if the SW dies between the two, the resulting armed +
- * absent-record state resolves to awaitingBaseline (closed barrier = fail
- * closed), never an open barrier despite an applied policy. */
+/** Arm the one-way cutover. Set on the first accepted push, cleared by nothing
+ * on the accept path. Deliberately armed BEFORE the record write: if the SW
+ * dies between the two, the resulting armed + absent-record state resolves to
+ * awaitingBaseline (closed barrier = fail closed), never an open barrier
+ * despite an applied policy. */
 async function armCutover(): Promise<void> {
   const cutover = await readCutover();
   if (cutover === "armed") return;
@@ -520,9 +521,9 @@ async function armCutover(): Promise<void> {
   console.log("[bb] policy cutover armed: host policy governs from here on (one-way)");
 }
 
-/** Whether the first policy push has ever been accepted (ADR-0032 decision
- * 8). Fail-closed on a corrupt flag: a tampered value reads as armed, so the
- * barrier governs rather than falling back to the pre-cutover posture. */
+/** Whether the first policy push has ever been accepted. Fail-closed on a
+ * corrupt flag: a tampered value reads as armed, so the barrier governs rather
+ * than falling back to the pre-cutover posture. */
 export async function policyCutoverArmed(): Promise<boolean> {
   return (await readCutover()) !== "unarmed";
 }
@@ -533,29 +534,30 @@ export type PolicyGate = { allowed: true } | { allowed: false; reason: string };
 
 const BARRIER_REASON =
   "policy barrier: no verified policy push has been accepted on this host connection under " +
-  "the current pin, so every bridge request is refused (ADR-0032). A policy-capable host " +
+  "the current pin, so every bridge request is refused. A policy-capable host " +
   "pushes its policy at connect; a host that stays silent or pushes junk keeps the bridge " +
   "refusing.";
 
 const LATCHED_REASON =
   "policy state latched closed: the stored policy record or the cutover flag is corrupt " +
   "(tampering evidence). Every bridge request is refused until you revoke the pin and " +
-  "re-pair (ADR-0032 decision 4, the kill-mirror STRICT precedent).";
+  "re-pair (the same strict posture as the kill mirror: garbage where a record should be " +
+  "is tampering evidence).";
 
 const COMPROMISED_LIFE_REASON =
   "policy state latched closed: a policy baseline failed signature verification against the " +
-  "pinned key this session (host-substitution evidence, ADR-0031 posture). Every bridge " +
-  "request is refused for the rest of this browser session; revoke the pin and re-pair with " +
-  "a fresh key to recover (ADR-0032, E2F-1).";
+  "pinned key this session (host-substitution evidence: the signature did not verify against the " +
+  "pinned key). Every bridge request is refused for the rest of this browser session; revoke the " +
+  "pin and re-pair with a fresh key to recover.";
 
-/** The per-connection dispatch barrier (ADR-0032 decision 4). Post-cutover,
- * bridge requests are refused until a policy push has verified and applied on
- * the CURRENT host connection UNDER THE CURRENT SCOPE AND GENERATION - so no op
- * can race ahead of the connect push and run under a cached copy the host has
- * since tightened, and a pin transition (scope OR generation move) closes the
- * barrier the instant it lands. Pre-cutover the barrier is inert: the deny
- * baseline governs. A corrupt store, or an in-life signature failure,
- * latches it closed regardless of the connection. */
+/** The per-connection dispatch barrier. Post-cutover, bridge requests are
+ * refused until a policy push has verified and applied on the CURRENT host
+ * connection UNDER THE CURRENT SCOPE AND GENERATION - so no op can race ahead
+ * of the connect push and run under a cached copy the host has since tightened,
+ * and a pin transition (scope OR generation move) closes the barrier the
+ * instant it lands. Pre-cutover the barrier is inert: the deny baseline
+ * governs. A corrupt store, or an in-life signature failure, latches it closed
+ * regardless of the connection. */
 export async function policyDispatchGate(): Promise<PolicyGate> {
   // A signature failure this SW life refuses everything, whatever the cutover, pin, or record say.
   if (compromisedThisLife) return { allowed: false, reason: COMPROMISED_LIFE_REASON };
@@ -587,8 +589,8 @@ export type PolicyPosture =
   | { kind: "blocked"; reason: string };
 
 const AWAITING_REASON =
-  "policy cutover is armed but no in-scope verified policy baseline is stored (ADR-0032 " +
-  "decision 4): the deny posture governs and every enforcement read refuses until a " +
+  "policy cutover is armed but no in-scope verified policy baseline is stored: the deny " +
+  "posture governs and every enforcement read refuses until a " +
   "baseline verifies under the current pin.";
 
 export async function getPolicyPosture(): Promise<PolicyPosture> {
@@ -646,7 +648,7 @@ export async function getStoredPolicyState(): Promise<StoredPolicyState | null> 
 
 // ---- pin lifecycle hooks (called from enrollment.ts) ----------------------------
 
-/** A key was (re-)pinned (ADR-0032 decision 3). Novelty is decided from the PRIOR PIN IDENTITY (the durable prior
+/** A key was (re-)pinned. Novelty is decided from the PRIOR PIN IDENTITY (the durable prior
  * written at revoke, then this life's mirror), never from the stored record's scope: a same-key re-pair whose record is
  * absent or corrupt must not read as a new key. Always drops this connection's verified mark, bumps the generation
  * epoch, and never clears an armed cutover.
@@ -684,7 +686,7 @@ export async function onPinPinned(newKeyId: string): Promise<void> {
   }
 }
 
-/** The pin was revoked (ADR-0032 decision 3). RETAINS the ratchet record so a same-key re-pair still refuses an
+/** The pin was revoked. RETAINS the ratchet record so a same-key re-pair still refuses an
  * old-baseline replay; the scope check keeps it inert while unpinned, and writeStoredRecord's pinned-anchor rule keeps
  * any unsigned push from replacing it. Never clears cutover or the in-life compromise latch (only onPinPinned's new-key path does).
  *   revokedKeyId: string  -> persisted as the durable prior the next onPinPinned decides novelty against
@@ -716,7 +718,7 @@ export type UnpinnedRelaxationApprover = (relaxation: UnpinnedRelaxation) => Pro
 
 let unpinnedApprover: UnpinnedRelaxationApprover | null = null;
 
-/** Register the unpinned lane's approval surface (ADR-0032 decision 3): the off-DOM confirmation window that holds an
+/** Register the unpinned lane's approval surface: the off-DOM confirmation window that holds an
  * unpinned relaxation unapplied until the user approves it (policy-approval.ts registers it). While none is registered
  * every unpinned relaxation, including the first-ever document, is refused. Never consulted on a pinned extension. */
 export function setUnpinnedRelaxationApprover(approver: UnpinnedRelaxationApprover | null): void {
@@ -749,7 +751,7 @@ let pendingApproval: {
  *
  * port.ts void-routes these frames like the kill frames, so requests already past the gate can dispatch while a
  * bad-signature push is still verifying; a synchronous verifying-hold is deliberately not built (the kill frames' trade-off).
- * Recorded in docs/security/threat-model.md, "Host-owned policy (ADR-0032) residual ledger".
+ * Recorded in docs/security/threat-model.md, "Host-owned policy residual ledger".
  *   bad push arrives -> requests past the gate run under the stored effective -> signature fails -> latch set synchronously
  * Nothing that reads the gate or dispatch after the latch passes. */
 export function handlePolicyFrame(msg: unknown): Promise<void> {
@@ -790,8 +792,8 @@ async function routeOne(msg: unknown, attachment: LiveConnection | null): Promis
 }
 
 /** A refusal changes nothing, and says so: the stored effective stays enforced and the connection's verified mark, if
- * it has one, is kept (only markPolicyCompromised drops it), and the failure is surfaced rather than smoothed over
- * (ADR-0032 decision 4). The attack-shaped refusals (a rejected policy CLAIM after crypto/ratchet reasoning) are also
+ * it has one, is kept (only markPolicyCompromised drops it), and the failure is surfaced rather than smoothed over.
+ * The attack-shaped refusals (a rejected policy CLAIM after crypto/ratchet reasoning) are also
  * routed to the audit ring as `policy_refused`; the benign shape/version-skew refusals are console-only, so the ring
  * stays a meaningful security trail. */
 function refuse(why: string, opts: { audit?: boolean } = {}): void {
@@ -799,12 +801,13 @@ function refuse(why: string, opts: { audit?: boolean } = {}): void {
   if (opts.audit) auditEvent("policy_refused", { detail: why.slice(0, 512) });
 }
 
-/** A signature failed against the pin (ADR-0031 posture): positive evidence the signer does not hold the pinned key.
+/** A signature failed against the pin. A genuine host signs with the pinned key, so this is treated as
+ * host-substitution evidence, never as ordinary skew.
  * The in-life latch is SET and this connection's verified mark dropped SYNCHRONOUSLY, before any await, so a replayed
  * byte-identical genuine frame cannot ride the idempotent-replay path back to a verified mark while, or after, the
  * durable persist fails.
  *
- * Residual, recorded in docs/security/threat-model.md ("Host-owned policy (ADR-0032) residual ledger"): the latch is in
+ * Residual, recorded in docs/security/threat-model.md ("Host-owned policy residual ledger"): the latch is in
  * memory, so a failed setCompromised persist followed by an SW restart leaves a fresh SW that accepts a replayed genuine
  * frame. Closing it needs a durable write-before-proceed or a boot-time re-attestation, not a wider in-memory latch.
  *
@@ -862,7 +865,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
     : { pinned: false };
   if (pinAtStart) {
     if (sig === undefined) {
-      // The no-downgrade rule (ADR-0032 decision 3): a pinned extension never accepts an unsigned baseline. A missing
+      // The no-downgrade rule: a pinned extension never accepts an unsigned baseline. A missing
       // signature is a refusal, not crypto evidence; nothing here proves who sent it.
       return refuse("unsigned baseline on a pinned extension", { audit: true });
     }
@@ -872,7 +875,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
 
   // Strict-parse the SAME bytes the signature covered - only after it held
   // (pinned lane); on an unpinned machine strict parsing is the entry point
-  // (there is nothing to verify, decision 3).
+  // (there is nothing to verify).
   let docJson: unknown;
   try {
     docJson = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(docBytes));
@@ -883,12 +886,11 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
   if (!doc.success) return refuse("baseline document failed the strict schema");
   const baselineValues = policyValuesFrom(doc.data);
 
-  // The unsigned overlay may only restrict the verified baseline. Its SHAPE
-  // was strict-parsed by the frame schema; its DIRECTION is recomputed here
-  // from the generated table, field by field, and one relaxing entry fails
-  // the whole push (decision 4). Folding is by catalogue name only, so the
-  // folded effective differs from the baseline exactly on the overlay's own
-  // entries.
+  // The unsigned overlay may only restrict the verified baseline. Its SHAPE was
+  // strict-parsed by the frame schema; its DIRECTION is recomputed here from
+  // the generated table, field by field, and one relaxing entry fails the whole
+  // push. Folding is by catalogue name only, so the folded effective differs
+  // from the baseline exactly on the overlay's own entries.
   const effective = foldPolicyOverlay(baselineValues, overlay ?? {});
   const overlayRelaxes = relaxedPolicyFields(effective, baselineValues);
   if (overlayRelaxes.length > 0) {
@@ -941,7 +943,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
   }
 
   if (!scopeAtStart.pinned) {
-    // The unpinned lane (ADR-0032 decision 3): a document that only restricts applies silently; a relaxation, including
+    // The unpinned lane: a document that only restricts applies silently; a relaxation, including
     // the first document ever, applies only on the user's window approval and is refused while no approver is
     // registered. The approver await can last minutes; the commit recheck below stops a pin landing in that window from
     // turning this unsigned document into an enforced, barrier-opening policy.
@@ -952,7 +954,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
       const storedNow = await readStoredRecord();
       if (storedNow.kind === "valid" && storedNow.record.scope !== null) {
         return refuse(
-          "unsigned push cannot replace the retained pinned-scope anchor; re-pair to recover (U1)",
+          "unsigned push cannot replace the retained pinned-scope anchor; re-pair to recover",
           { audit: true },
         );
       }

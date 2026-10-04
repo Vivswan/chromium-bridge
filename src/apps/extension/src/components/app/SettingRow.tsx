@@ -8,8 +8,8 @@ import { useI18n } from "@/hooks/useI18n";
 // line shown while the toggle sits in its dangerous position. `dangerOn`
 // picks which side is risky (protections warn when OFF; opt-in powers warn
 // when ON). Consequence ink is neutral on purpose - amber stays reserved for
-// pending states. `more` holds provenance/platform detail (ADR references,
-// caveats) behind a details affordance so the visible copy stays one line.
+// pending states. `more` holds provenance/platform detail (where a value comes
+// from, caveats) behind a details affordance so the visible copy stays one line.
 // The title is a <label> bound to the switch: the text is part of the hit
 // target, compensating the small control.
 export function SettingRow({

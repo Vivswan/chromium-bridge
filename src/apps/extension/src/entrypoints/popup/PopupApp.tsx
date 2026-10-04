@@ -179,8 +179,8 @@ export function PopupApp() {
     void refresh();
   };
 
-  // Engaging is deliberately zero-friction (ADR-0030): the brake must be one
-  // action from every surface. This popup can only engage, never release.
+  // Engaging is deliberately zero-friction: the brake must be one action from
+  // every surface. This popup can only engage, never release.
   const engageKill = async () => {
     setKillBusy(true);
     setKillError(null);

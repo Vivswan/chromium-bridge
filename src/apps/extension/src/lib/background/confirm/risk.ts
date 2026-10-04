@@ -5,7 +5,7 @@
 
 import type { ClickProbe } from "../../dom/page-api";
 
-/** Submit buttons and navigating links are gated (ADR-0006's tiering). */
+/** Submit buttons and navigating links are the high-risk tier. */
 export function isHighRiskClick(t: ClickProbe): boolean {
   if (t.role === "button" && t.type === "submit") return true;
   if (t.tagName === "A" && t.hasHref) return true;

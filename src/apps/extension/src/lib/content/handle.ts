@@ -79,7 +79,7 @@ export async function handle(raw: unknown) {
     case "page_eval":
       return await runEval(msg.args);
     case "storage_get":
-      // RAW values; the SW masks them on egress (always-on, ADR-0010).
+      // RAW values; the SW masks them on egress (always-on).
       return api.readStorage(msg.args);
     default:
       return unreachable(msg);

@@ -193,11 +193,10 @@ async function main(): Promise<void> {
     );
 
     // ---- i18n: English default, three locales, native-name picker ----------
-    // NOT covered here (flagged, ADR-0032 Phase 4): the language ROUND TRIP
-    // extension -> host and back in all three locales needs a registered
-    // native host, which this suite does not launch; it belongs with the
-    // BB_REAL_E2E integration run. The locale swap below exercises only the
-    // storage-driven half.
+    // NOT covered here: the language ROUND TRIP extension -> host and back in
+    // all three locales needs a registered native host, which this suite does
+    // not launch; it belongs with the BB_REAL_E2E integration run. The locale
+    // swap below exercises only the storage-driven half.
     // CJK is written as \u escapes so the check-cjk gate's allowlist stays
     // limited to the locale bundles and the native-names module.
     const NATIVE = {
@@ -209,10 +208,10 @@ async function main(): Promise<void> {
       zh_CN: "\u663E\u793A\u8BED\u8A00",
       zh_TW: "\u986F\u793A\u8A9E\u8A00",
     };
-    // The Security section's host-owned-policy pointer, per locale: the ADR-0032
-    // Phase 5 replacement for the retired tool grid (settings.policy_managed_title
-    // in the locale bundles), proving the page body reads the locale bundle
-    // (the original leak was the retired grid showing zh on en).
+    // The Security section's host-owned-policy pointer, per locale
+    // (settings.policy_managed_title in the locale bundles), proving the page
+    // body reads the locale bundle (the original leak was the since-removed
+    // tool grid showing zh on en).
     const POLICY_MANAGED_TITLE = {
       en: "Set with chromium-bridge policy",
       zh_CN: "\u7528 chromium-bridge policy \u8BBE\u7F6E",

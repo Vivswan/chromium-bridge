@@ -1,12 +1,12 @@
-// ADR-0032: the unpinned window-approval surface
-// (policy-approval.ts), driven END TO END through the real confirmation
-// service with a fake provider (the service.test.ts idiom - no browser
-// window) and the real policy-sync accept path over the golden vectors.
-// What CANNOT be tested here: the actual extension window rendering and the
-// no-page-can-reach-it property; both belong to the isolated-browser suite
-// (CHROME_BIN). Verdicts are delivered through service.resolveConfirm - the
-// exact function the router's sender-gated confirm_resolve arm calls
-// (messages.ts pins the confirm-window-only gating in its own tests).
+// The unpinned window-approval surface (policy-approval.ts), driven END TO END
+// through the real confirmation service with a fake provider (the
+// service.test.ts idiom - no browser window) and the real policy-sync accept
+// path over the golden vectors. What CANNOT be tested here: the actual
+// extension window rendering and the no-page-can-reach-it property; both belong
+// to the isolated-browser suite (CHROME_BIN). Verdicts are delivered through
+// service.resolveConfirm - the exact function the router's sender-gated
+// confirm_resolve arm calls (messages.ts pins the confirm-window-only gating in
+// its own tests).
 
 import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
 import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";

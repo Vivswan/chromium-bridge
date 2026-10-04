@@ -1,7 +1,7 @@
-// The ADR-0025 trusted-client admin exchange, extension side: request/reply
-// correlation over the native-messaging port, the fail-closed timeout, and
-// the unsolicited-frame drops. The host side (allowlist rewrite + epoch bump)
-// is covered by the Rust unit tests and the python e2e/adversarial suites.
+// The trusted-client admin exchange, extension side: request/reply correlation
+// over the native-messaging port, the fail-closed timeout, and the
+// unsolicited-frame drops. The host side (allowlist rewrite + epoch bump) is
+// covered by the Rust unit tests and the python e2e/adversarial suites.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {

@@ -1,8 +1,8 @@
-// The confirmation payload union (ADR-0027/0031/0032): each kind carries
-// exactly its own fields, so the combinations the service never produces are
-// PARSE errors at the window's trust boundary, not rendering decisions. The
-// type-level side is pinned with @ts-expect-error: constructing an invalid
-// combination fails to compile, not just to parse.
+// The confirmation payload union: each kind carries exactly its own fields, so
+// the combinations the service never produces are PARSE errors at the window's
+// trust boundary, not rendering decisions. The type-level side is pinned with a
+// ts-expect-error directive: constructing an invalid combination fails to
+// compile, not just to parse.
 
 import { describe, expect, test } from "bun:test";
 import { type ConfirmPayload, ConfirmPayloadSchema, isHardwareGated } from "../src/confirm";

@@ -111,9 +111,9 @@ export const InfoToastResultSchema = z.strictObject({
   cancelled: z.boolean(),
 });
 
-// The three shapes the page API's readStorage can produce. The SW's egress
-// mask (background/egress.ts, ADR-0010) parses against this union and REFUSES
-// anything else - a drifted shape must fail closed, not pass through raw.
+// The three shapes the page API's readStorage can produce. The SW's egress mask
+// (background/egress.ts) parses against this union and REFUSES anything else -
+// a drifted shape must fail closed, not pass through raw.
 export const StorageReadResultSchema = z.union([
   z.strictObject({ key: z.string(), found: z.literal(false) }),
   z.strictObject({ key: z.string(), found: z.literal(true), value: z.string() }),

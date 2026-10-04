@@ -1,14 +1,14 @@
-// The unpinned-machine window-approval surface (ADR-0032). On an extension with NO pinned key, an
+// The unpinned-machine window-approval surface. On an extension with NO pinned key, an
 // unsigned `policy_current` push that would RELAX the enforced effective policy (or is the first document ever)
 // is held unapplied by policy-sync and handed to the approver registered here, which turns it into one
-// confirmation in the extension-owned off-DOM window (ADR-0027): the same queue, deadline, fail-closed
+// confirmation in the extension-owned off-DOM window: the same queue, deadline, fail-closed
 // semantics, and sender-gated resolve path as every other confirmation.
 //   restriction-or-equal push, active anchor stored      -> never reaches this module (policy-sync applies it free)
 //   first document ever (no active anchor)               -> held here even when it only restricts
 //   PINNED extension                                     -> never consults it (the no-downgrade rule refuses unsigned pushes first)
 //   decline, timeout, window closed, SW death mid-prompt -> false; policy-sync refuses the push, the stored effective stays enforced
 // One approval per push, never blanket: nothing here caches a verdict or opens a grace window, and every
-// round trip is audit-visible through the service's confirm_shown/confirm_denied events (ADR-0030).
+// round trip is audit-visible through the service's confirm_shown/confirm_denied events.
 
 import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
 import { relaxedPolicyFields } from "@chromium-bridge/shared/policy-compare";

@@ -1,4 +1,4 @@
-// The extension half of the ADR-0030 kill switch: a service-worker-only mirror of the host's kill state, and the
+// The extension half of the kill switch: a service-worker-only mirror of the host's kill state, and the
 // control-frame plumbing that reads and toggles it.
 //
 // The host's revocation record is the AUTHORITY; the mirror only lets the extension's own gate refuse ops locally
@@ -237,7 +237,7 @@ export function requestKillStatus(): Promise<KillView> {
   return request({ type: "kill_status" });
 }
 
-// ---- panic-latch support (ADR-0030 confirm-window engage) --------------------
+// ---- panic-latch support (the confirm window's deny-and-kill engage) ---------
 
 // Arrival counter for inbound kill_status_result frames, stamped in
 // handleKillFrame BEFORE the serialized processing chain: SW storage writes
@@ -253,11 +253,11 @@ let frameArrivals = 0;
 // Frame-driven ONLY: at panic time the stored mirror can read a stale "killed" while a pending release is about to
 // write "alive" with the panic's own engage still queued behind it. Only frames that ARRIVED after the subscribe
 // count (afterSeq); the subscribe and the engage post share one synchronous turn, so that is counting from the post.
-//   phase 1: an authoritative "killed" arrives  -> the engage (or an equivalent cross-surface kill) provably applied
-//   phase 2: a LATER authoritative "alive"       -> only a presence-gated release produces it; confirmations may resume
-//   "unknown"                                    -> not phase 1: it also covers the engage failing host-side (ok:false)
+//   refusal: an authoritative "killed" arrives   -> the engage (or an equivalent cross-surface kill) provably applied
+//   release: a LATER authoritative "alive"        -> only a presence-gated release produces it; confirmations may resume
+//   "unknown"                                     -> not a refusal: it also covers the engage failing host-side (ok:false)
 //
-// Residual: a cross-surface kill push already in flight when the panic lands can satisfy phase 1 one frame early,
+// Residual: a cross-surface kill push already in flight when the panic lands can count as the refusal one frame early,
 // and a repeat panic anchored at an EARLIER outstanding engage can lift on a release landing before its own engage
 // settles. Both need a presence-gated release racing the brake; no page, content script, or MCP client can mint
 // either frame (router sender gate, server-leg control-frame drop). A replaced host binary could forge them, but
@@ -310,25 +310,24 @@ function advancePanicWaiter(state: KillMirror["state"], seq: number): void {
     waiter.resolve();
   }
   // "unknown" advances nothing: it is not proof the engage applied (the host may have failed to WRITE the kill),
-  // and treating it as phase 1 would let a later plain alive read lift the latch with no presence-gated release.
+  // and counting it as the refusal would let a later plain alive read lift the latch with no presence-gated release.
   // The gate refuses on the unknown mirror regardless, so waiting stays fail closed.
 }
 
-/** Engage the switch - the ONLY transition this extension can request
- * (ADR-0032 decision 6: the host refuses kill_release from the extension,
- * so no release lane exists here; release lives behind `chromium-bridge
- * unkill`'s presence gate). The host performs the
- * transition (and audits it, surface=extension); the mirror adopts the
- * host's answer. The caller was already gated: the router accepts set_kill
- * only from extension pages, and its schema pins `on` to `true`, so a page
- * can NEVER reach this and a release cannot even be expressed. */
+/** Engage the switch - the ONLY transition this extension can request (the host
+ * refuses kill_release from the extension, so no release lane exists here;
+ * release lives behind `chromium-bridge unkill`'s presence gate). The host
+ * performs the transition (and audits it, surface=extension); the mirror adopts
+ * the host's answer. The caller was already gated: the router accepts set_kill
+ * only from extension pages, and its schema pins `on` to `true`, so a page can
+ * NEVER reach this and a release cannot even be expressed. */
 export function engageKill(): Promise<KillView> {
   // Local ring only: the host records the authoritative kill_engage.
   auditEvent("kill_engaged", { outcome: "requested" });
   return request({ type: "kill_engage" });
 }
 
-/** The panic engage (the confirm window's deny-and-kill, ADR-0030): never refused because another kill exchange
+/** The panic engage (the confirm window's deny-and-kill): never refused because another kill exchange
  * (the startup status query, an options-page read) holds the single request slot. With the slot free this is
  * engageKill(); with it occupied the engage is posted anyway, uncorrelated, which is safe because the control frames
  * carry no ids and the host applies them in arrival order on one pipe: the pending exchange settles with equally

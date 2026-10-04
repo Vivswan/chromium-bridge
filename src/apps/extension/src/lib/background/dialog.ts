@@ -23,7 +23,7 @@ import { dbgSend, isDebuggable } from "./cdp/session";
 import { activeTab } from "./tabs";
 
 export async function handleDialog(args: OpArgs, policy: PolicyValues): Promise<unknown> {
-  // ONE policy snapshot for the whole decision (ADR-0032 decision 4):
+  // ONE policy snapshot for the whole decision, never a live re-read mid-decision:
   // dispatch threads its per-request snapshot in; the REQUIRED parameter is
   // what holds the invariant (tests start their own decisions via
   // withFreshPolicy). The grants come from the generated catalogue (the

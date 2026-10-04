@@ -72,8 +72,8 @@ describe("background entrypoint", () => {
     // would then refuse).
     expect(sweepPending).toHaveBeenCalledTimes(1);
     expect(installConfirm).toHaveBeenCalledTimes(1);
-    // The Enclave user-presence provider (ADR-0031) must be wired at startup
-    // too, or eval/upload confirmations silently stay window-only.
+    // The Enclave user-presence provider must be wired at startup too, or
+    // eval/upload confirmations silently stay window-only.
     expect(installPresence).toHaveBeenCalledTimes(1);
     expect(verifyId).toHaveBeenCalledTimes(1);
     // The connect happens only after the sweep COMPLETED (not merely began):

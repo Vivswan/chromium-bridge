@@ -4,10 +4,10 @@ import { browser } from "wxt/browser";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
 
-// The ADR-0030 read-only audit panel: the extension's local ring of security
-// decisions (confirmations, pairing approvals, revocations, kill toggles),
-// newest first. Strictly display: there is nothing to click but scroll. The
-// ring lives in the extension-context-only trusted storage and is fetched through the router
+// The read-only audit panel: the extension's local ring of security decisions
+// (confirmations, pairing approvals, revocations, kill toggles), newest first.
+// Strictly display: there is nothing to click but scroll. The ring lives in the
+// extension-context-only trusted storage and is fetched through the router
 // (extension-page senders only); storage.onChanged drives refreshes, so a new
 // decision appears without polling. The durable, host-side trail is
 // `chromium-bridge audit`.

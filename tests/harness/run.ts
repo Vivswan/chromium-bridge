@@ -8,8 +8,8 @@
 // bridge broker or pairing state.
 //
 //   connection check   -> the harness's own health check, or a fake-LLM-driven tool call, must report the server usable
-//   ADR-0034 canary    -> prints each harness's OPENING method; once every harness opens with `server/discover`
-//                         instead of the legacy `initialize`, the temporary legacy shim can be deleted
+//   opening canary     -> prints each harness's OPENING method; once every harness opens with `server/discover`
+//                         instead of the legacy `initialize`, the temporary legacy era can be disabled
 //
 // Node builtins only (no scripts/lib.ts import), so it runs without a `bun install`. Dual-use: `moon run
 // harness-smoke` locally, and nightly.yml's harness-smoke job, which uploads build/harness-captures/.
@@ -766,7 +766,7 @@ function writeShim(ctx: { scratch: string; runtime: string; capture: string }): 
 
 interface CaptureAnalysis {
   frames: number;
-  /** Method of the first frame carrying one: the ADR-0034 canary. */
+  /** Method of the first frame carrying one: the legacy-era removal canary. */
   opening: string | undefined;
   methods: string[];
 }
@@ -795,7 +795,7 @@ function analyzeCapture(capture: string): CaptureAnalysis {
   return { frames: frames.length, opening: methods[0], methods };
 }
 
-/** The shim-removal canary (ADR-0034), printed prominently per harness. */
+/** The legacy-era removal canary, printed prominently per harness. */
 function printCanary(name: string, analysis: CaptureAnalysis): void {
   const prefix = `[harness-smoke] CANARY ${name}: opening method =`;
   if (analysis.opening === undefined) {
@@ -803,10 +803,10 @@ function printCanary(name: string, analysis: CaptureAnalysis): void {
       `[harness-smoke] CANARY ${name}: no frames captured (the server was never launched)`,
     );
   } else if (analysis.opening === "initialize") {
-    console.log(`${prefix} initialize (LEGACY handshake; the ADR-0034 shim is still required)`);
+    console.log(`${prefix} initialize (LEGACY handshake; the legacy era is still required)`);
   } else if (analysis.opening === "server/discover") {
     console.log(
-      `${prefix} server/discover (MODERN ${MODERN_PROTOCOL_VERSION} opening; once every harness reports this, delete the ADR-0034 legacy shim)`,
+      `${prefix} server/discover (MODERN ${MODERN_PROTOCOL_VERSION} opening; once every harness reports this, disable the legacy era)`,
     );
   } else {
     console.log(`${prefix} ${analysis.opening} (unexpected - inspect the capture)`);

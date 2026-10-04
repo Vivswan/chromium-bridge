@@ -6,7 +6,7 @@
 // Two gates, both mandatory:
 //   1. OFF by default (fileUploadEnabled). The user must opt in.
 //   2. EVERY call shows a confirmation on the extension-owned surface
-//      (ADR-0027) displaying the exact file path before anything is attached.
+//      displaying the exact file path before anything is attached.
 //      There is no grace window - every upload reconfirms, like page_eval.
 //      On a capable, enrolled device with the touchIdConfirm policy on, this
 //      same confirmation routes through the host's Secure Enclave user-presence
@@ -38,10 +38,10 @@ export async function pageUpload(
   panicEpoch: number,
 ): Promise<unknown> {
   // ONE policy snapshot and ONE decision-start panic epoch for the whole
-  // decision (ADR-0032 decision 4): dispatch captures both at the
-  // decision's true start, before its first await, and threads them in; the
-  // REQUIRED parameters are what hold the invariant (tests start their own
-  // decisions via withFreshPolicy plus currentPanicEpoch()).
+  // decision, never a live re-read: dispatch captures both at the decision's
+  // true start, before its first await, and threads them in; the REQUIRED
+  // parameters are what hold the invariant (tests start their own decisions via
+  // withFreshPolicy plus currentPanicEpoch()).
   // The grants come from the generated catalogue (the Rust tool record is
   // their one home), so enforcement cannot name a field the policy does not
   // carry.
@@ -79,10 +79,10 @@ export async function pageUpload(
     tabTitle: tab.title || "",
     detail: `${path}\n(input: ${selector})`,
     timeoutMs: policy.clickToastTimeoutMs,
-    // The hardware-routing verdict is part of THIS decision's snapshot
-    // (ADR-0032 decision 4): computed here and carried in the request, so a
-    // policy push landing while the confirmation waits in the queue cannot
-    // re-route it at presentation time.
+    // The hardware-routing verdict is part of THIS decision's snapshot:
+    // computed here and carried in the request, so a policy push landing while
+    // the confirmation waits in the queue cannot re-route it at presentation
+    // time.
     presenceRouting: await presenceRoutingEnabled(policy),
     panicEpoch,
   });
