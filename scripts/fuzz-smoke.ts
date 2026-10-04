@@ -43,7 +43,7 @@ export interface Options {
 /**
  * The --failure-dir directory is recursively DELETED at startup, so it must stay inside the core package's
  * fuzz/failures* namespace: an absolute path, a `.`/`..` or empty segment, or a plain name like `src` or
- * `fuzz/seeds` could point the delete at tracked checkout contents.
+ * `fuzz/fuzz_targets` could point the delete at tracked checkout contents.
  */
 export function isSafeFailureDir(path: string): boolean {
   const segments = path.split("/");
@@ -228,16 +228,18 @@ export function buildReport(info: FailureInfo): string {
     );
   } else if (primary) {
     lines.push(
-      "Pin the input as a regression seed so every future run (nightly and",
-      "local smoke) replays it first, which is what makes the tracking",
-      "issue's auto-close on a later green night trustworthy:",
+      "Pin the input as a labelled seed in the generator so every future run (nightly",
+      "and local smoke) replays it first, which is what makes the tracking issue's",
+      "auto-close on a later green night trustworthy. fuzz/seeds/ is generated and",
+      "gitignored (a file copied there is erased by the next run), so the pin is a case:",
       "",
-      "```bash",
-      `mkdir -p src/packages/core/fuzz/seeds/${info.target}`,
-      `cp src/packages/core/fuzz/artifacts/${info.target}/${primary} src/packages/core/fuzz/seeds/${info.target}/`,
+      "```text",
+      `src/packages/core/fuzz/src/seeds/${info.target}.rs: add a Seed::refused (or Seed::accepted)`,
+      "case built from the production type this input mutates, with the reader that must",
+      "refuse it; `moon run test-fuzz` holds it to that label.",
       "```",
       "",
-      "then commit the new seed file with the fix.",
+      "then commit the case with the fix.",
     );
   }
 
@@ -393,7 +395,7 @@ function main(): number {
   for (const target of targets) {
     console.log(`[fuzz-smoke] ${target}: ${options.runs} runs (target ${host})`);
     // Pass the corpus dir explicitly (libFuzzer needs it to exist) so the
-    // committed seeds can ride along as a second corpus dir libFuzzer merges in.
+    // generated seeds (moon run fuzz-seeds) ride along as a second corpus dir libFuzzer merges in.
     const corpus = `fuzz/corpus/${target}`;
     mkdirSync(resolve(core, corpus), { recursive: true });
     const runArgs = ["run", "--target", host, target, corpus];

@@ -1,10 +1,15 @@
-# cargo-fuzz fuzzer-generated corpus and crash reproducers. The fuzz crate
-# (src/packages/core/fuzz/Cargo.toml + fuzz_targets/) and its lockfile ARE
-# tracked; only the machine-generated outputs are ignored (build artifacts
-# land in target/ and coverage reports in coverage/, both covered by the
-# managed Rust and Node sections below).
+# cargo-fuzz outputs. The fuzz crate (src/packages/core/fuzz/Cargo.toml,
+# src/, fuzz_targets/, examples/) and its lockfile ARE tracked; only the
+# machine-generated outputs are ignored (build artifacts land in target/ and
+# coverage reports in coverage/, both covered by the managed Rust and Node
+# sections below).
 /src/packages/core/fuzz/corpus/
 /src/packages/core/fuzz/artifacts/
+# The seed corpus and the JSON token dictionary are generated from the
+# production types by `moon run fuzz-seeds` (fuzz/src/seeds/) before every
+# fuzz pass; der.dict beside the generated dictionary is hand-written and tracked.
+/src/packages/core/fuzz/seeds/
+/src/packages/core/fuzz/dictionaries/json_protocol.dict
 # fuzz-smoke.ts failure reports (cleared and rewritten per run, consumed by
 # the nightly job's issue filing)
 /src/packages/core/fuzz/failures/

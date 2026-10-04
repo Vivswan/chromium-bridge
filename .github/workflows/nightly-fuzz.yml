@@ -73,6 +73,11 @@ jobs:
           key: fuzz-corpus-v1-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             fuzz-corpus-v1-
+      # The seed corpus and the JSON dictionary are generated from the production types (never
+      # committed: a committed corpus drifted from them). --locked: nothing else exercises the fuzz
+      # workspace's own Cargo.lock on this job.
+      - name: Generate the seed corpus
+        run: cargo run --locked --manifest-path src/packages/core/fuzz/Cargo.toml --example seeds
       - name: Fuzz every target (bounded pass; crashes are collected, not fatal per target)
         env:
           SEED: ${{ inputs.seed }}

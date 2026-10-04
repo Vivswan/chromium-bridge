@@ -240,10 +240,10 @@ describe("buildReport (failure-report contract v1)", () => {
     expect(report).toContain("nm_frame fuzz/artifacts/nm_frame/crash-abc123");
   });
 
-  test("instructs pinning the input as a regression seed", () => {
+  test("instructs pinning the input as a generator case, never a file in the generated seeds dir", () => {
     const report = buildReport(failure());
-    expect(report).toContain("cp src/packages/core/fuzz/artifacts/nm_frame/crash-abc123");
-    expect(report).toContain("fuzz/seeds/nm_frame");
+    expect(report).toContain("src/packages/core/fuzz/src/seeds/nm_frame.rs");
+    expect(report).not.toContain("fuzz/seeds/nm_frame/");
   });
 
   test("structured targets get regression-test advice instead of a seed pin", () => {

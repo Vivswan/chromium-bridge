@@ -1,1 +1,0 @@
-{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"roots":{"listChanged":true},"elicitation":{}},"clientInfo":{"name":"example-harness","title":"Example Harness","version":"0.1.0"}},"jsonrpc":"2.0","id":0}

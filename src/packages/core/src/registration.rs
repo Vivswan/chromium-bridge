@@ -35,15 +35,22 @@ const MANIFEST_DESCRIPTION: &str =
 /// First line of every wrapper this project writes.
 const WRAPPER_SHEBANG: &str = "#!/usr/bin/env bash";
 
-/// Fuzz-only aliases of the two ownership markers, for the cargo-fuzz
-/// workspace's [`manifest_ownership`] oracle (see the `fuzzing` feature in
-/// Cargo.toml). Aliases of the real constants, so the oracle can never drift
+/// Fuzz-only aliases of the two ownership markers and the manifest writer, for the
+/// cargo-fuzz workspace's [`manifest_ownership`] oracle and seed generator (see the
+/// `fuzzing` feature in Cargo.toml). Aliases of the real items, so neither can drift
 /// from what this module actually writes; they stay private otherwise.
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzz_api {
     pub const MANIFEST_DESCRIPTION: &str = super::MANIFEST_DESCRIPTION;
     pub const MANIFEST_DESCRIPTION_LEGACY: &str = super::MANIFEST_DESCRIPTION_LEGACY;
+
+    pub fn manifest_json(
+        registrar: &super::Registrar,
+        launch_path: &std::path::Path,
+    ) -> Result<String, String> {
+        registrar.manifest_json(launch_path)
+    }
 }
 
 /// Everything the engine needs to lay a registration down. Paths are injected
