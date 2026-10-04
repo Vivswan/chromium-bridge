@@ -153,7 +153,7 @@ jobs:
       - run: moon run typecheck check-ts shared:test extension:test
       - run: moon run extension:build
       # With build/extension/ present, check-extension-id also asserts the built manifest's security surface
-      # (key, permissions, host access); the hygiene job runs it build-free for the source-level parity only.
+      # (key, permissions, host access); the hygiene job runs it build-free, so only its source checks apply there.
       - run: moon run check-extension-id
 
   # The two checks that need BOTH toolchains: the generated TS must be exactly what the Rust emitters produce
@@ -174,7 +174,7 @@ jobs:
           cargo: "true"
       - run: bun install --frozen-lockfile
       - run: moon run check-gen
-      - run: moon run check-envelope check-gen-isolation
+      - run: moon run check-envelope check-gen-isolation check-refresh-lockfiles
 
   # Every bun-side check that needs no build: version and extension-ID parity, the pin cross-checks, CJK
   # containment, the typography mirror of the managed ci.yml gate, the nightly drivers' tests, docs parity,

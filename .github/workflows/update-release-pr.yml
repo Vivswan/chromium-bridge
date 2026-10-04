@@ -1,21 +1,25 @@
-# The release-PR hook of the release pipeline: repo-owned, generated once
-# by the fleet sync and never overwritten by it. The managed
-# ci.yml's update-release-pr job calls this workflow whenever release-please
-# creates or refreshes the release PR (independently of any release cut),
-# so everything this repository wants on that PR happens here: regenerating
-# files that must ride in the release commit, updating version references
-# in docs. Add jobs freely - releases never wait on this path.
-# Token caveat: pushes to the PR branch made with the default github.token
-# do NOT re-trigger the PR's CI checks (the same limitation behind the
-# release PR's close/reopen note in docs/release.md); with
-# REPO_PLATFORM_TOKEN they do, so the checkout and GH_TOKEN below prefer
-# that secret when it is configured.
+# The release-PR hook of the release pipeline: repo-owned, generated once by the fleet sync and never
+# overwritten by it. The managed ci.yml's update-release-pr job calls this workflow from the main-push run
+# in which release-please created or refreshed the release PR, so everything this repository wants on that
+# PR happens here. Add jobs freely - releases never wait on this path.
+#
+# release-please bumps Cargo.toml and the extension package.json (extra-files) and no lockfile, so the
+# release PR fails every --locked step until scripts/refresh-lockfiles.ts re-locks and commits; the push
+# below carries that commit to the PR branch. The push cannot loop back into this hook, which only runs
+# off a push to main:
+#
+#   github.token push         -> triggers no workflow at all (GitHub's recursion guard), so the PR's checks
+#                                still need the close/reopen in docs/release.md
+#   REPO_PLATFORM_TOKEN push  -> runs the PR's own pull_request CI, which is what the lockfiles are for
+#   release-please refresh    -> rebuilds the PR branch from main and drops the commit; that run's call of
+#                                this hook adds it again
 
 name: Update Release PR
 
 on:
   workflow_call:
     inputs:
+      # The caller's contract; nothing here reads it yet.
       pr_number:
         description: The release PR's number
         required: true
@@ -26,22 +30,24 @@ on:
         type: string
 
 jobs:
-  update-release-pr:
+  refresh-lockfiles:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write # enough to push regenerated files back to the PR branch
+      contents: write # the lockfile commit is pushed back to the PR branch
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.head_branch }}
           token: ${{ secrets.REPO_PLATFORM_TOKEN || github.token }}
-      - name: Update the release PR
+      - uses: ./.github/actions/setup-moon
+        with:
+          cargo: "true"
+      - name: Re-lock the bumped workspace and push the commit
         env:
-          GH_TOKEN: ${{ secrets.REPO_PLATFORM_TOKEN || github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_BRANCH: ${{ inputs.head_branch }}
-        # Repository-specific release-PR preparation goes here, e.g.:
-        #   ./regenerate-versioned-files.sh
-        #   git commit -am "chore: regenerate for release" && git push origin "$HEAD_BRANCH"
-        run: echo "nothing to add to release PR $PR_NUMBER yet"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bun scripts/refresh-lockfiles.ts
+          git push origin "HEAD:$HEAD_BRANCH"

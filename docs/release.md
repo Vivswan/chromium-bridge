@@ -12,7 +12,20 @@ Releases are driven by **release-please**. Conventional commits on `main` accumu
 
 If the pipeline dies after the draft exists, a rerun cannot recreate it (release-please sees the forced tag); re-run the failed jobs, or finish by hand with `gh release upload <tag> <assets> --clobber` and `gh release edit <tag> --draft=false` (a hand-published release carries no `attestation.json`).
 
-The machinery is the managed `.github/workflows/ci.yml`, downstream of the all-green gate, so a release can only ever be cut from a green `main`, and the packaging jobs run in that same CI run. Its jobs, in order: `release` calls the fleet's `fleet-release.yml` (release-please cuts the draft); `update-release` calls this repository's hook, only when release-please reports `release_created`; `publish-release` calls the fleet's `fleet-release-publish.yml` (attest, then publish); `pages` deploys the site after the publish, in the same run. `update-release-pr` calls the repo-owned `update-release-pr.yml` hook whenever release-please creates or refreshes the release PR. The managed workflows run on `github.token` alone; no repository secret is involved. release-please creates the release PR with that token, so the PR's CI run does not start on its own: close and reopen it (or push to it) to run its checks. A release cut can also fail when a workflow-file change lands on `main` between the release PR merge and the cut job, because `github.token` cannot create a ref on a commit whose workflow files differ from `main`; the next merge to `main` runs release-please again and cuts it, or cut the release by hand.
+The machinery is the managed `.github/workflows/ci.yml`, downstream of the all-green gate, so a release can only ever be cut from a green `main`, and the packaging jobs run in that same CI run. Its jobs, in order:
+
+- **`release`** calls the fleet's `fleet-release.yml`: release-please cuts the draft.
+- **`update-release`** calls this repository's hook, only when release-please reports `release_created`.
+- **`publish-release`** calls the fleet's `fleet-release-publish.yml`: attest, then publish.
+- **`site`** deploys the site after the publish, in the same run.
+- **`update-release-pr`** calls the repo-owned `update-release-pr.yml` hook whenever release-please creates or refreshes the release PR.
+
+When the bump changes a lockfile, the release PR carries one commit beyond release-please's own: the `update-release-pr` hook re-locks `Cargo.lock`, `src/packages/core/fuzz/Cargo.lock`, and `bun.lock` for the bumped version and pushes that commit to the PR branch, because release-please bumps the manifests alone and every `--locked` step refuses a lagging lockfile.
+
+The managed workflows run on `github.token` alone; no repository secret is involved. Its limits:
+
+- **The PR's CI run does not start on its own.** release-please creates the release PR with that token, and the hook's push uses it too, so close and reopen the PR (or push to it) to run its checks.
+- **A cut can fail on a workflow-file change** that lands on `main` between the release PR merge and the cut job, because `github.token` cannot create a ref on a commit whose workflow files differ from `main`. The next merge to `main` runs release-please again and cuts it, or cut the release by hand.
 
 Each packaging job's first step is a **version consistency check**: after stripping the leading `v` and any `-dev`/`-rc` prerelease suffix from the tag, its core version must equal the `version` in `Cargo.toml`, otherwise the run fails immediately. Cargo is the single version source. Tags with a suffix (such as `v0.1.0-rc.1`) are marked as prereleases.
 
@@ -36,7 +49,10 @@ The `sbom` job in update-release.yml runs alongside the packaging jobs (it used 
 - It attests the SBOM's build provenance (same `actions/attest-build-provenance` step as the binaries), so `gh attestation verify chromium-bridge.cdx.json --repo <repo>` works on the downloaded asset.
 - It attaches the SBOM and its `.attestation.jsonl` bundle to the draft release for the tag.
 
-An SBOM tooling failure still **never blocks** a binary release: the job is `continue-on-error`, so the fleet's publish stage (which waits for every hook job) still runs - the release goes out without an SBOM and the annotated failure on the run flags it. Because the attest step runs before the upload (an asset nobody can verify must not ship), an attestation outage costs the SBOM asset the same way. The loss is permanent for that tag - the published release is immutable, so the SBOM cannot be attached afterwards; the next release carries one again.
+An SBOM tooling failure still **never blocks** a binary release: the job is `continue-on-error`, so the fleet's publish stage (which waits for every hook job) still runs. The release goes out without an SBOM, and the annotated failure on the run flags it.
+
+- **An attestation outage costs the SBOM asset the same way.** The attest step runs before the upload, because an asset nobody can verify must not ship.
+- **The loss is permanent for that tag.** The published release is immutable, so the SBOM cannot be attached afterwards. The next release carries one again.
 
 ## SemVer rules
 
