@@ -447,10 +447,9 @@ export function createPageApi(refAttr: string): PageApi {
     },
 
     waitFor(args) {
-      // Mirrors the host's DEFAULT_WAIT_TIMEOUT_MS (the canonical copy in
-      // src/packages/core/src/tools/handlers.rs); the factory is
-      // self-contained, so this must stay a literal - a source-pin test
-      // holds the two together.
+      // Mirrors the host's DEFAULT_WAIT_TIMEOUT_MS (tools/args.rs, emitted
+      // into ops.gen.ts); the factory is self-contained, so this must stay a
+      // literal - a test pins it to the generated constant.
       const timeoutMs = args.timeoutMs ?? 30000;
       const start = Date.now();
       return new Promise((resolve, reject) => {

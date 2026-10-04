@@ -7,7 +7,7 @@
 // emitted source spellings are pinned so the generated file stays stable.
 
 import { describe, expect, test } from "bun:test";
-import { convert, prepare } from "./gen-envelope";
+import { convert, prepare, splitFlattenedCommand } from "./gen-envelope";
 
 const strictObject = (properties: Record<string, unknown>, required: string[]) => ({
   type: "object",
@@ -237,6 +237,121 @@ describe("the emitted source spellings are pinned (keeps the generated file stab
     const entry = prepared.properties.entry;
     expect(convert(prepared, "t", (node) => (node === entry ? "NamedSchema" : undefined))).toBe(
       'z.object({ "entry": NamedSchema }).strict()',
+    );
+  });
+});
+
+// G6: the request's flattened command. The fixture is the exact shape schemars emits for
+// `#[serde(flatten)] command: BridgeCommand` (parent properties, a oneOf of adjacently tagged
+// branches, unevaluatedProperties: false); serde's other enum shapes must not be read as one.
+describe("splitFlattenedCommand (G6)", () => {
+  const branch = (op: string, args: Record<string, unknown>) => ({
+    description: "variant doc",
+    type: "object",
+    properties: { args, op: { type: "string", const: op } },
+    required: ["op", "args"],
+  });
+  const tabFocusArgs = {
+    type: "object",
+    additionalProperties: false,
+    properties: { tabId: { type: "integer", format: "int64" } },
+    required: ["tabId"],
+  };
+  const noArgs = { type: "object", additionalProperties: false };
+  const request = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    title: "BridgeReq",
+    type: "object",
+    properties: {
+      browser: { type: ["string", "null"] },
+      id: { type: "integer", format: "uint64", minimum: 0 },
+      tabId: { type: ["integer", "null"], format: "int64" },
+    },
+    oneOf: [branch("tab_list", noArgs), branch("tab_focus", tabFocusArgs)],
+    required: ["id"],
+    unevaluatedProperties: false,
+  };
+
+  test("gives back the pre-typed envelope and one args schema per op", () => {
+    const { envelope, commands } = splitFlattenedCommand(request, "$");
+    expect(envelope).toEqual({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      title: "BridgeReq",
+      type: "object",
+      properties: {
+        args: {},
+        browser: { type: ["string", "null"] },
+        id: { type: "integer", format: "uint64", minimum: 0 },
+        op: { type: "string" },
+        tabId: { type: ["integer", "null"], format: "int64" },
+      },
+      required: ["id", "args", "op"],
+      additionalProperties: false,
+    });
+    expect([...commands.keys()]).toEqual(["tab_list", "tab_focus"]);
+    expect(commands.get("tab_focus")).toEqual(tabFocusArgs);
+    // The envelope then converts exactly as the untyped request always did.
+    expect(convert(prepare(envelope, "$"), "BridgeReqWireSchema")).toBe(
+      'z.object({ "args": z.any(), "browser": z.union([z.string(), z.null()]).optional(), ' +
+        '"id": z.number().int().gte(0), "op": z.string(), ' +
+        '"tabId": z.union([z.number().int(), z.null()]).optional() }).strict()',
+    );
+  });
+
+  test("refuses a request that is not a flattened tagged union", () => {
+    // The strictness carrier is unevaluatedProperties: without it an unknown envelope field would pass.
+    const { unevaluatedProperties: _dropped, ...loose } = request;
+    expect(() => splitFlattenedCommand(loose, "$")).toThrow("G6");
+    // A plain strict object (the pre-typed request) is not a command carrier either.
+    expect(() =>
+      splitFlattenedCommand({ ...loose, additionalProperties: false, oneOf: undefined }, "$"),
+    ).toThrow("G6");
+    // The envelope declaring op or args itself would shadow the command's.
+    expect(() =>
+      splitFlattenedCommand(
+        { ...request, properties: { ...request.properties, op: { type: "string" } } },
+        "$",
+      ),
+    ).toThrow("declares op");
+  });
+
+  test("refuses branches outside serde's adjacently tagged shape", () => {
+    const withBranch = (b: unknown) => ({ ...request, oneOf: [request.oneOf[0], b] });
+    // A third member: an internally tagged variant would carry its fields here.
+    expect(() =>
+      splitFlattenedCommand(
+        withBranch({
+          type: "object",
+          properties: { op: { type: "string", const: "x" }, args: noArgs, tabId: {} },
+          required: ["op", "args"],
+        }),
+        "$",
+      ),
+    ).toThrow("exactly {op, args}");
+    // args optional: a frame without args would be accepted.
+    expect(() =>
+      splitFlattenedCommand(withBranch({ ...branch("x", noArgs), required: ["op"] }), "$"),
+    ).toThrow("exactly {op, args}");
+    // No op const: an untagged branch cannot be keyed.
+    expect(() =>
+      splitFlattenedCommand(
+        withBranch({
+          type: "object",
+          properties: { op: { type: "string" }, args: noArgs },
+          required: ["op", "args"],
+        }),
+        "$",
+      ),
+    ).toThrow("no string op const");
+    // A branch-level constraint beside the members would be dropped silently.
+    expect(() =>
+      splitFlattenedCommand(
+        withBranch({ ...branch("x", noArgs), additionalProperties: false }),
+        "$",
+      ),
+    ).toThrow("beside the command members");
+    expect(() => splitFlattenedCommand(withBranch(branch("tab_list", noArgs)), "$")).toThrow(
+      "repeats op",
     );
   });
 });

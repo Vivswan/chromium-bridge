@@ -11,16 +11,16 @@ use std::sync::{Arc, OnceLock};
 
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-    DiscoverResult, Implementation, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-    ServerCapabilities, ServerConfig, Tool as McpTool,
+    DiscoverResult, Implementation, JsonObject, ListToolsResult, PaginatedRequestParams,
+    ProtocolVersion, ServerCapabilities, ServerConfig, Tool as McpTool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, ServerHandler};
-use serde_json::Value;
 
+use crate::error::CallError;
 use crate::protocol::MCP_CACHE_TTL_MS;
 use crate::session::Session;
-use crate::tools;
+use crate::tools::{self, Tool, ToolCall};
 
 /// The server implementation identity advertised where the protocol carries
 /// it: the legacy `initialize` result's `serverInfo` and the modern
@@ -37,8 +37,7 @@ fn shared_tools() -> Arc<[McpTool]> {
     static TOOLS: OnceLock<Arc<[McpTool]>> = OnceLock::new();
     Arc::clone(TOOLS.get_or_init(|| {
         tools::all()
-            .iter()
-            .map(|t| McpTool::new(t.name, t.description, t.input_schema.clone()))
+            .map(|t| McpTool::new(t.name, t.description, t.input_schema()))
             .collect()
     }))
 }
@@ -148,18 +147,17 @@ impl ServerHandler for BridgeHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let name = request.name.to_string();
-        // Absent arguments dispatch as Null, exactly as the pre-rmcp server
-        // read them; each tool's builder decides what shapes it accepts.
-        let args = request.arguments.map(Value::Object).unwrap_or(Value::Null);
+        // Absent arguments are an empty object: a tool whose args are all
+        // optional runs, one with a required arg refuses on the missing field.
+        let args = request.arguments.unwrap_or_default();
         let session = self.session.clone();
         // Tool work blocks (bridge round-trips, up to the 12s connect wait),
         // so it runs on the blocking pool, keeping the protocol threads free.
-        let outcome =
-            tokio::task::spawn_blocking(move || execute_tool_call(&session, &name, &args))
-                .await
-                .map_err(|e| {
-                    McpError::internal_error(format!("tool execution task failed: {e}"), None)
-                })?;
+        let outcome = tokio::task::spawn_blocking(move || execute_tool_call(&session, &name, args))
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("tool execution task failed: {e}"), None)
+            })?;
         Ok(CallToolResponse::Complete(call_tool_result(&outcome)))
     }
 
@@ -209,25 +207,24 @@ impl ServerHandler for BridgeHandler {
     }
 }
 
-/// Execute one tool call against the shared session: the kill-switch gate,
-/// the audit record, and the dispatch, exactly as the pre-rmcp dispatcher
-/// ran them. Serves every harness (the broker's own stdio harness and all
-/// relays route here through their per-connection rmcp services).
-fn execute_tool_call(session: &Session, name: &str, args: &Value) -> tools::Outcome {
+/// Execute one tool call against the shared session: the boundary parse, the
+/// kill-switch gate, the policy gate, the audit record, and the dispatch.
+/// Serves every harness (the broker's own stdio harness and all relays route
+/// here through their per-connection rmcp services).
+fn execute_tool_call(session: &Session, name: &str, args: JsonObject) -> tools::Outcome {
     // Correlate every invocation with a per-call request id and record a
     // structured audit event (tool, outcome, taxonomy code, duration).
     let req_id = next_request_id();
     let started = std::time::Instant::now();
-    // The global kill switch gates EVERY tool call before any routing or bridge traffic (ADR-0030),
-    // failing closed on an engaged switch AND on an unreadable record; the harness connection stays up
-    // so the typed refusal is delivered. The host-side policy gate (ADR-0032 decisions 4/5) runs
-    // alongside it: defense in depth for the honest-host path, an unreadable store denying all.
+    // The global kill switch gates EVERY tool call before any routing or bridge traffic, failing
+    // closed on an engaged switch AND on an unreadable record; the harness connection stays up so
+    // the typed refusal is delivered. The host-side policy gate runs alongside it: defense in depth
+    // for the honest-host path, an unreadable store denying all.
     let (route, out) = route_and_dispatch(
         session,
-        name,
-        args,
+        ToolCall::parse(name, args),
         crate::kill::check(),
-        crate::policy::gating::check(name),
+        crate::policy::gating::check,
     );
     let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::ToolCall);
     rec.req = Some(req_id);
@@ -251,32 +248,39 @@ fn next_request_id() -> u64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Route and dispatch one tool call from a SINGLE parse of its `browser` argument: the audit route and the dispatch
-/// both consume that one result, so the trail can never record a default route for a call the strict parse refused.
-/// The kill and policy verdicts arrive injected so the fail-closed matrix is unit-testable without the runtime
-/// directory or the audit sink (both live in [`execute_tool_call`]).
+/// Route and dispatch one tool call from its SINGLE boundary parse: the audit route and the dispatch both consume
+/// that one [`ToolCall`], so the trail can never record a default route for a call the parse refused. The kill
+/// verdict arrives computed and the policy gate injected so the fail-closed matrix is unit-testable without the
+/// runtime directory or the audit sink (both live in [`execute_tool_call`]).
 ///
 /// ```text
 /// route re-read after the dispatch -> a host may connect during the call's startup wait
-/// kill vs policy                   -> the kill switch is the global brake, so it wins over the per-tool policy gate
+/// kill, then parse, then policy    -> the kill switch is the global brake, so it wins over every other refusal;
+///                                     the policy gate needs the parsed tool, so it runs after the parse
 /// ```
 fn route_and_dispatch(
     session: &Session,
-    name: &str,
-    args: &Value,
-    kill: Result<(), crate::error::CallError>,
-    policy: Result<(), crate::error::CallError>,
+    call: Result<ToolCall, CallError>,
+    kill: Result<(), CallError>,
+    policy: impl FnOnce(&Tool) -> Result<(), CallError>,
 ) -> (Option<(String, u64)>, tools::Outcome) {
-    let browser = tools::extract_browser(args);
-    let route_now = || browser.as_ref().ok().and_then(|b| session.route_info(*b));
+    let addressed: Option<Option<String>> =
+        call.as_ref().ok().map(|c| c.browser().map(str::to_owned));
+    let route_now = || {
+        addressed
+            .as_ref()
+            .and_then(|browser| session.route_info(browser.as_deref()))
+    };
     let route = route_now();
-    let out = match (kill, policy) {
-        (Ok(()), Ok(())) => match &browser {
-            Ok(b) => tools::dispatch(session, name, args, *b),
-            Err(e) => tools::error_outcome(e),
+    let out = match kill {
+        Err(e) => tools::error_outcome(&e),
+        Ok(()) => match call {
+            Err(e) => tools::error_outcome(&e),
+            Ok(call) => match policy(&call.tool()) {
+                Err(e) => tools::error_outcome(&e),
+                Ok(()) => tools::dispatch(session, call),
+            },
         },
-        (Err(e), _) => tools::error_outcome(&e),
-        (Ok(()), Err(e)) => tools::error_outcome(&e),
     };
     let route = route.or_else(route_now);
     (route, out)
@@ -336,14 +340,17 @@ mod tests {
 
     #[test]
     fn the_catalogue_maps_in_static_order_with_schemas() {
+        // rmcp's Tool model is the external side of this mapping: an SDK
+        // upgrade that normalizes or reorders what it is given fails here.
         let mapped = shared_tools();
-        let catalogue = tools::all();
+        let catalogue: Vec<Tool> = tools::all().collect();
         assert_eq!(mapped.len(), catalogue.len());
         for (m, t) in mapped.iter().zip(catalogue.iter()) {
             assert_eq!(m.name, t.name);
             assert_eq!(m.description.as_deref(), Some(t.description));
             assert_eq!(
-                *m.input_schema, t.input_schema,
+                *m.input_schema,
+                t.input_schema(),
                 "schema for {} must survive the mapping",
                 t.name
             );
@@ -395,34 +402,38 @@ mod tests {
         assert!(matches!(result.content[0], ContentBlock::Image(_)));
     }
 
+    fn call(name: &str, args: serde_json::Value) -> Result<ToolCall, CallError> {
+        ToolCall::parse(name, serde_json::from_value(args).unwrap())
+    }
+
     #[test]
-    fn a_malformed_browser_arg_is_refused_with_the_typed_code() {
-        // `browser: 123` used to be re-read here with laxer rules than
-        // dispatch's (`as_str`, silently None); the strict parse runs once
-        // and the refusal carries the stable INVALID_ARGUMENT code, with no
-        // routing attempted (a fresh session would otherwise block in the
-        // 12s startup wait - this test finishing quickly is itself the
-        // assertion).
+    fn a_refused_parse_is_typed_and_skips_dispatch() {
+        // A malformed `browser`, an unknown tool, and args outside the struct
+        // are each refused by the one boundary parse with the stable
+        // INVALID_ARGUMENT code, with no routing attempted (a fresh session
+        // would otherwise block in the 12s startup wait - this test finishing
+        // quickly is itself the assertion).
         let session = Session::new();
-        let (_route, out) = route_and_dispatch(
-            &session,
-            "tab_list",
-            &json!({ "browser": 123 }),
-            Ok(()),
-            Ok(()),
-        );
-        assert!(out.is_error());
-        assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
+        for (name, args) in [
+            ("tab_list", json!({ "browser": 123 })),
+            ("no_such_tool", json!({})),
+            ("tab_focus", json!({})),
+            ("tab_list", json!({ "junk": 1 })),
+        ] {
+            let (_route, out) =
+                route_and_dispatch(&session, call(name, args.clone()), Ok(()), |_| Ok(()));
+            assert!(out.is_error(), "{name} {args}");
+            assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"), "{name} {args}");
+        }
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_malformed_browser_arg_records_no_route_even_with_a_browser_connected() {
-        // The single-parse guard, non-vacuously: with a live connection, the
-        // lax pre-refactor read would have resolved the sole browser and
-        // stamped a route onto the audit line of a call dispatch then
-        // refused. The strict parse feeds routing and dispatch from ONE
-        // result, so the refused call records no route at all.
+    fn a_refused_parse_records_no_route_even_with_a_browser_connected() {
+        // The single-parse guard, non-vacuously: with a live connection, a
+        // lax read would resolve the sole browser and stamp a route onto the
+        // audit line of a call then refused. The one parse feeds routing and
+        // dispatch from ONE result, so the refused call records no route.
         use std::io::{BufReader, BufWriter};
         use std::os::unix::net::UnixStream;
 
@@ -435,25 +446,24 @@ mod tests {
 
         let (route, out) = route_and_dispatch(
             &session,
-            "tab_list",
-            &json!({ "browser": 123 }),
+            call("tab_list", json!({ "browser": 123 })),
             Ok(()),
-            Ok(()),
+            |_| Ok(()),
         );
         assert_eq!(route, None, "a refused parse must not invent a route");
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
 
-        // Control: the same session does route a well-formed call (captured
-        // pre-dispatch from the same single parse).
-        let (route, _out) = route_and_dispatch(
+        // Control: the same session does route a well-formed call that a
+        // later gate refuses (captured pre-dispatch from the same parse).
+        let (route, out) = route_and_dispatch(
             &session,
-            "no_such_tool",
-            &json!({ "browser": "chrome" }),
+            call("tab_list", json!({ "browser": "chrome" })),
             Ok(()),
-            Ok(()),
+            |_| Err(CallError::Killed),
         );
         assert_eq!(route.map(|(l, _)| l), Some("chrome".to_string()));
+        assert!(out.is_error());
     }
 
     #[test]
@@ -468,10 +478,9 @@ mod tests {
         let session = Session::new();
         let (_route, out) = route_and_dispatch(
             &session,
-            "tab_list",
-            &json!({}),
-            Err(crate::error::CallError::Killed),
-            Ok(()),
+            call("tab_list", json!({})),
+            Err(CallError::Killed),
+            |_| Ok(()),
         );
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("BRIDGE_KILLED"));
@@ -489,13 +498,14 @@ mod tests {
         let session = Session::new();
         let (_route, out) = route_and_dispatch(
             &session,
-            "page_eval",
-            &json!({}),
+            call("page_eval", json!({ "code": "1" })),
             Ok(()),
-            Err(crate::error::CallError::ToolDisabled {
-                tool: "page_eval".into(),
-                reason: crate::error::ToolDisabledReason::GrantOff("pageEvalEnabled"),
-            }),
+            |tool| {
+                Err(CallError::ToolDisabled {
+                    tool: tool.name.into(),
+                    reason: crate::error::ToolDisabledReason::GrantOff("pageEvalEnabled"),
+                })
+            },
         );
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("TOOL_DISABLED"));

@@ -1,13 +1,13 @@
-//! The host-side dispatch gate (ADR-0032 decision 4): before any bridge
-//! traffic, refuse a tool whose gating capability grant is off in the
-//! effective policy, or that the effective policy lists in `disabledTools`.
+//! The host-side dispatch gate: before any bridge traffic, refuse a tool
+//! whose gating capability grant is off in the effective policy, or that the
+//! effective policy lists in `disabledTools`.
 //!
 //! This is defense in depth for the honest-host path, NOT a substitute for the
-//! extension's own gate (decision 5): the extension keeps enforcing at its
-//! trust boundary precisely because the host may not be ours. The two states
-//! that must not be conflated are the crux (decisions 4 and 5):
+//! extension's own gate: the extension keeps enforcing at its trust boundary
+//! precisely because the host may not be ours. The two states that must not
+//! be conflated are the crux:
 //! - a store that is ABSENT means "no policy yet" (pre-cutover) and allows,
-//!   matching the pre-ADR-0032 behavior - the gate bites only once a policy
+//!   matching the pre-policy behavior - the gate bites only once a policy
 //!   exists;
 //! - a store that is present but UNREADABLE or corrupt denies ALL, failing
 //!   closed, never a silent default that could mask a tamper.
@@ -18,19 +18,21 @@
 //! half [`crate::mcp::handler`] injects into the pure router.
 
 use crate::error::{CallError, ToolDisabledReason};
+use crate::tools::Tool;
 
 use super::{PolicyField, PolicyStore, PolicyValues};
 use crate::runtime_record::RuntimeRecord as _;
 
-/// A capability grant (ADR-0032 decision 1): one of the four host-owned fields
-/// whose permissive pole GRANTS the bridge a capability. Only a grant can gate
-/// a tool at dispatch - the confirmation flags and the millisecond windows
-/// only ever remove capability, and `disabledTools` is its own lane - so
-/// `Grant` is a distinct type that keeps a confirmation field out of the
-/// gating table by construction. `grants_are_the_true_permissive_fields`
-/// pins the set against the direction catalogue.
+/// A capability grant: one of the four host-owned fields whose permissive
+/// pole GRANTS the bridge a capability. Only a grant can gate a tool at
+/// dispatch - the confirmation flags and the millisecond windows only ever
+/// remove capability, and `disabledTools` is its own lane - so `Grant` is a
+/// distinct type that keeps a confirmation field out of a tool's record by
+/// construction. `grants_are_the_true_permissive_fields` pins the set against
+/// the direction catalogue. Which tools each grant gates is the tool
+/// catalogue's ([`Tool::grants`] and [`Tool::required_grants`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Grant {
+pub enum Grant {
     CdpMode,
     FileUpload,
     HandleDialog,
@@ -39,9 +41,9 @@ enum Grant {
 
 impl Grant {
     /// The policy field this grant is - the source of its wire name (for the
-    /// refusal message and audit) and the tie that pins every grant to a
-    /// `TruePermissive` field.
-    const fn field(self) -> PolicyField {
+    /// refusal message, the audit, and the generated TypeScript) and the tie
+    /// that pins every grant to a `TruePermissive` field.
+    pub const fn field(self) -> PolicyField {
         match self {
             Grant::CdpMode => PolicyField::CdpMode,
             Grant::FileUpload => PolicyField::FileUploadEnabled,
@@ -63,60 +65,9 @@ impl Grant {
     }
 }
 
-/// Every catalogue tool mapped to the capability grants that gate it, `&[]` when none do (ADR-0032 decision 4); every
-/// one of a tool's grants must be on for it to run. Tool names are strings the compiler cannot check for coverage, so
-/// `tool_grant_table_covers_every_catalogue_tool_exactly_once` pins the table to the catalogue: a new tool cannot ship
-/// without a deliberate answer to "does a grant gate this", and a stale entry fails the same test.
-///
-/// ```text
-/// cdpMode                          -> the master grant for using Chrome's debugger at all: gates every
-///                                     Permission::Debugger tool (cdp_mode_gates_exactly_the_debugger_tools pins that
-///                                     against the catalogue's permission column)
-/// page_upload, page_handle_dialog  -> carry their own grant on top
-/// ```
-const TOOL_GRANTS: &[(&str, &[Grant])] = &[
-    ("list_browsers", &[]),
-    ("tab_list", &[]),
-    ("tab_focus", &[]),
-    ("tab_open", &[]),
-    ("tab_close", &[]),
-    ("page_snapshot", &[]),
-    ("page_click", &[]),
-    ("page_fill", &[]),
-    ("page_text", &[]),
-    ("page_screenshot", &[]),
-    ("page_scroll", &[]),
-    ("page_wait_for", &[]),
-    ("page_eval", &[Grant::PageEval]),
-    ("page_snapshot_precise", &[Grant::CdpMode]),
-    ("cookie_get", &[]),
-    ("storage_get", &[]),
-    ("page_navigate", &[]),
-    ("page_back", &[]),
-    ("page_forward", &[]),
-    ("page_reload", &[]),
-    ("page_press", &[]),
-    ("page_hover", &[]),
-    ("page_select", &[]),
-    ("console_get", &[Grant::CdpMode]),
-    ("page_handle_dialog", &[Grant::CdpMode, Grant::HandleDialog]),
-    ("page_upload", &[Grant::CdpMode, Grant::FileUpload]),
-];
-
-/// The grants that gate `name`, or `&[]` for an ungated (or unknown) tool. An
-/// unknown name is ungated here on purpose: [`crate::tools::dispatch`] refuses
-/// it as `UnknownTool`, so inventing a policy refusal for it would only
-/// mislabel the same rejection.
-fn grants_for(name: &str) -> &'static [Grant] {
-    TOOL_GRANTS
-        .iter()
-        .find(|(tool, _)| *tool == name)
-        .map_or(&[], |(_, grants)| *grants)
-}
-
-/// The host-side dispatch verdict for `name` against the loaded effective policy (ADR-0032 decision 4). Pure
-/// over the load result so the fail-closed matrix is unit-testable without the runtime directory, exactly as
-/// [`crate::kill::verdict`] is over the revocation read. The three load states carry decision 5's crux:
+/// The host-side dispatch verdict for `tool` against the loaded effective policy. Pure over the load result so
+/// the fail-closed matrix is unit-testable without the runtime directory, exactly as [`crate::kill::verdict`] is
+/// over the revocation read. The three load states carry the crux:
 ///
 /// ```text
 /// `Ok(None)`             -> no policy store yet (pre-cutover): allow; the gate bites only once a policy exists
@@ -125,7 +76,7 @@ fn grants_for(name: &str) -> &'static [Grant] {
 ///                           could mask a tamper
 /// ```
 pub(crate) fn verdict(
-    name: &str,
+    tool: &Tool,
     effective: Result<Option<PolicyValues>, String>,
 ) -> Result<(), CallError> {
     let effective = match effective {
@@ -133,34 +84,34 @@ pub(crate) fn verdict(
         Ok(Some(effective)) => effective,
         Err(reason) => {
             return Err(CallError::ToolDisabled {
-                tool: name.to_string(),
+                tool: tool.name.to_string(),
                 reason: ToolDisabledReason::StoreUnreadable(reason),
             })
         }
     };
-    for grant in grants_for(name) {
+    for grant in tool.required_grants() {
         if !grant.is_on(&effective) {
             return Err(CallError::ToolDisabled {
-                tool: name.to_string(),
+                tool: tool.name.to_string(),
                 reason: ToolDisabledReason::GrantOff(grant.field().wire_name()),
             });
         }
     }
-    if effective.disabled_tools.iter().any(|t| t == name) {
+    if effective.disabled_tools.iter().any(|t| t == tool.name) {
         return Err(CallError::ToolDisabled {
-            tool: name.to_string(),
+            tool: tool.name.to_string(),
             reason: ToolDisabledReason::InDisabledList,
         });
     }
     Ok(())
 }
 
-/// Load the effective policy and compute the dispatch verdict for `name`. The
+/// Load the effective policy and compute the dispatch verdict for `tool`. The
 /// impure half (reads the runtime-directory store) that
 /// [`crate::mcp::handler`] injects into the pure router, paired with
 /// [`verdict`] the way [`crate::kill::check`] pairs with its own verdict.
-pub fn check(name: &str) -> Result<(), CallError> {
-    verdict(name, load_effective())
+pub fn check(tool: &Tool) -> Result<(), CallError> {
+    verdict(tool, load_effective())
 }
 
 /// Collapse the two-step store read into the tri-state [`verdict`] consumes:
@@ -179,7 +130,7 @@ fn load_effective() -> Result<Option<PolicyValues>, String> {
 mod tests {
     use super::*;
     use crate::policy::{direction, BoolPole, Direction};
-    use crate::tools::{all, Permission};
+    use crate::tools::{all, ToolId};
     use std::collections::BTreeSet;
 
     /// The effective policy with every capability grant on and no disabled
@@ -193,44 +144,6 @@ mod tests {
             page_eval_enabled: true,
             ..PolicyValues::default()
         }
-    }
-
-    fn catalogue_names() -> BTreeSet<&'static str> {
-        all().iter().map(|t| t.name).collect()
-    }
-
-    #[test]
-    fn tool_grant_table_covers_every_catalogue_tool_exactly_once() {
-        let mut table: BTreeSet<&str> = BTreeSet::new();
-        for (tool, _) in TOOL_GRANTS {
-            assert!(
-                table.insert(tool),
-                "tool {tool} listed twice in TOOL_GRANTS"
-            );
-        }
-        assert_eq!(
-            table,
-            catalogue_names(),
-            "TOOL_GRANTS must list every catalogue tool exactly once (and no phantom)"
-        );
-    }
-
-    #[test]
-    fn cdp_mode_gates_exactly_the_debugger_tools() {
-        let gated_by_cdp: BTreeSet<&str> = TOOL_GRANTS
-            .iter()
-            .filter(|(_, grants)| grants.contains(&Grant::CdpMode))
-            .map(|(tool, _)| *tool)
-            .collect();
-        let debugger_tools: BTreeSet<&str> = all()
-            .iter()
-            .filter(|t| t.permission == Permission::Debugger)
-            .map(|t| t.name)
-            .collect();
-        assert_eq!(
-            gated_by_cdp, debugger_tools,
-            "cdpMode must gate exactly the Permission::Debugger tools"
-        );
     }
 
     #[test]
@@ -265,20 +178,21 @@ mod tests {
     #[test]
     fn absent_policy_allows_every_tool() {
         // Pre-cutover: no store, so the honest-host gate stays out of the way.
-        for name in catalogue_names() {
+        for tool in all() {
             assert!(
-                verdict(name, Ok(None)).is_ok(),
-                "absent policy must allow {name}"
+                verdict(&tool, Ok(None)).is_ok(),
+                "absent policy must allow {}",
+                tool.name
             );
         }
     }
 
     #[test]
     fn corrupt_store_denies_every_tool() {
-        // An unreadable store fails closed as deny-all (decision 5), carrying
-        // the stable TOOL_DISABLED code for every tool, gated or not.
-        for name in catalogue_names() {
-            let err = verdict(name, Err("policy store decode: bad".into())).unwrap_err();
+        // An unreadable store fails closed as deny-all, carrying the stable
+        // TOOL_DISABLED code for every tool, gated or not.
+        for tool in all() {
+            let err = verdict(&tool, Err("policy store decode: bad".into())).unwrap_err();
             assert!(
                 matches!(
                     err,
@@ -287,7 +201,8 @@ mod tests {
                         ..
                     }
                 ),
-                "corrupt store must deny {name}"
+                "corrupt store must deny {}",
+                tool.name
             );
             assert_eq!(err.code(), "TOOL_DISABLED");
         }
@@ -310,12 +225,13 @@ mod tests {
                 Grant::HandleDialog => eff.handle_dialog_enabled = false,
                 Grant::PageEval => eff.page_eval_enabled = false,
             }
-            for name in catalogue_names() {
-                let gated = grants_for(name).contains(&grant);
-                let refused = verdict(name, Ok(Some(eff.clone()))).is_err();
+            for tool in all() {
+                let gated = tool.required_grants().any(|g| g == grant);
+                let refused = verdict(&tool, Ok(Some(eff.clone()))).is_err();
                 assert_eq!(
                     refused, gated,
-                    "with {grant:?} off, {name} refused={refused} but gated={gated}"
+                    "with {grant:?} off, {} refused={refused} but gated={gated}",
+                    tool.name
                 );
             }
         }
@@ -325,7 +241,7 @@ mod tests {
     fn a_grant_off_refusal_names_the_grant() {
         let mut eff = all_grants_on();
         eff.page_eval_enabled = false;
-        let err = verdict("page_eval", Ok(Some(eff))).unwrap_err();
+        let err = verdict(&ToolId::PageEval.tool(), Ok(Some(eff))).unwrap_err();
         assert!(matches!(
             err,
             CallError::ToolDisabled {
@@ -339,7 +255,7 @@ mod tests {
     fn disabled_tools_membership_refuses_only_the_listed_tool() {
         let mut eff = all_grants_on();
         eff.disabled_tools = vec!["tab_list".to_string()];
-        let err = verdict("tab_list", Ok(Some(eff.clone()))).unwrap_err();
+        let err = verdict(&ToolId::TabList.tool(), Ok(Some(eff.clone()))).unwrap_err();
         assert!(matches!(
             err,
             CallError::ToolDisabled {
@@ -349,7 +265,7 @@ mod tests {
         ));
         assert_eq!(err.code(), "TOOL_DISABLED");
         // A tool absent from the list, and otherwise ungated, still runs.
-        assert!(verdict("tab_focus", Ok(Some(eff))).is_ok());
+        assert!(verdict(&ToolId::TabFocus.tool(), Ok(Some(eff))).is_ok());
     }
 
     #[test]
@@ -358,7 +274,7 @@ mod tests {
         // grant on is still refused when the policy disables it by name.
         let mut eff = all_grants_on();
         eff.disabled_tools = vec!["page_upload".to_string()];
-        let err = verdict("page_upload", Ok(Some(eff))).unwrap_err();
+        let err = verdict(&ToolId::PageUpload.tool(), Ok(Some(eff))).unwrap_err();
         assert!(matches!(
             err,
             CallError::ToolDisabled {

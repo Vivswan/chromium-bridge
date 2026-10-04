@@ -1,6 +1,6 @@
-// Generate the contract-derived TypeScript from the Rust core, the canonical contract source (ADR-0028), by
-// running the core's emitter examples. Run `moon run gen` after editing the catalogue, taxonomy, enclave, or
-// policy module in src/packages/core; CI regenerates and fails on a stale diff.
+// Generate the contract-derived TypeScript from the Rust core, the canonical contract source, by running the
+// core's emitter examples. Run `moon run gen` after editing the catalogue, taxonomy, enclave, or policy module
+// in src/packages/core; CI regenerates and fails on a stale diff.
 //
 //   emit_contract          -> ops.gen.ts, errors.gen.ts, protocol.gen.ts, identity.gen.ts, audit.gen.ts
 //   emit_enclave_contract  -> enclave.gen.ts, enclave-fixture.gen.ts
@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { convert, prepare } from "./gen-envelope";
 
 interface ContractTool {
   name: string;
@@ -17,11 +18,11 @@ interface ContractTool {
   scope: string;
   permission: string;
   confirmation: string;
+  /** The policy fields (wire names) that must be true for the tool to run. */
+  grants: string[];
   description: string;
-  inputSchema?: {
-    properties?: Record<string, { type: string; description?: string }>;
-    required?: string[];
-  };
+  /** The schemars schema of the tool's args struct, as the extension receives the args. */
+  argsSchema: unknown;
 }
 
 interface ContractError {
@@ -53,6 +54,8 @@ interface Contract {
     pinnedExtensionId: string;
   };
   tools: ContractTool[];
+  /** The page_wait_for timeout the host fills in when the caller sends none. */
+  defaultWaitTimeoutMs: number;
   errors: ContractError[];
   capabilities: ContractCapability[];
 }
@@ -70,44 +73,6 @@ if (!emitted.success) {
   throw new Error(`gen-ops: cargo emit_contract failed with status ${emitted.exitCode}`);
 }
 const contract = JSON.parse(emitted.stdout.toString()) as Contract;
-
-// Args that exist only for the MCP server: `browser` picks which connected
-// browser a call routes to and is consumed there - it is never forwarded
-// inside the bridge request's args. Excluded here so the extension-facing
-// shapes describe only what the extension can actually receive.
-const ROUTING_ARGS = new Set(["browser"]);
-
-const jsonTypeToZod = (jsonType: string): string => {
-  switch (jsonType) {
-    case "string":
-      return "z.string()";
-    case "integer":
-      return "z.int()";
-    case "number":
-      return "z.number()";
-    case "boolean":
-      return "z.boolean()";
-    default:
-      throw new Error(`gen-ops: unsupported JSON Schema type ${JSON.stringify(jsonType)}`);
-  }
-};
-
-// The generator understands `type` + `description` and nothing else. Any
-// other keyword (enum, minimum, pattern, ...) would be silently dropped from
-// the generated validator - weaker validation than the catalogue claims - so
-// its appearance must fail generation until support is added here AND in the
-// per-op equivalence assertions (ops.gen.test.ts).
-const SUPPORTED_PROP_KEYWORDS = new Set(["type", "description"]);
-
-const assertSupportedProp = (tool: string, key: string, prop: Record<string, unknown>): void => {
-  for (const keyword of Object.keys(prop)) {
-    if (!SUPPORTED_PROP_KEYWORDS.has(keyword)) {
-      throw new Error(
-        `gen-ops: ${tool}.${key} uses unsupported inputSchema keyword ${JSON.stringify(keyword)}`,
-      );
-    }
-  }
-};
 
 // Emit an object key: bare when it is a valid JS identifier (matches Biome's
 // quoteProperties: "as-needed", keeping gen output format-stable), quoted
@@ -139,59 +104,74 @@ const meta = contract.tools
   )
   .join("\n");
 
-// Per-op Zod arg validators, derived from each tool's inputSchema. Required
-// props stay required; the rest are `.optional()`. strictObject: an op must
-// not smuggle another op's fields (the host's payload builders send exactly
-// the declared fields, so this rejects only forged or drifted traffic).
-const argSchema = (t: ContractTool): string => {
-  const props = t.inputSchema?.properties ?? {};
-  const required = new Set(t.inputSchema?.required ?? []);
-  for (const [k, prop] of Object.entries(props)) assertSupportedProp(t.name, k, prop);
-  const fields = Object.keys(props)
-    .filter((k) => !ROUTING_ARGS.has(k))
-    .map((k) => {
-      const prop = props[k];
-      if (!prop) throw new Error(`gen-ops: missing property schema for ${k}`);
-      const zod = jsonTypeToZod(prop.type);
-      return `${emitKey(k)}: ${zod}${required.has(k) ? "" : ".optional()"}`;
-    });
-  return fields.length ? `z.strictObject({ ${fields.join(", ")} })` : "z.strictObject({})";
+// Per-op Zod arg validators: each tool's args struct schema through the envelope generator's fail-closed
+// rules (G1-G5 in scripts/gen-envelope.ts), so a struct the rules cannot model faithfully aborts generation
+// here too. Strict objects, required fields required, no defaults: the same frame the Rust reader accepts.
+const preparedArgs = new Map<string, Record<string, unknown>>();
+for (const t of contract.tools) {
+  const prepared = prepare(t.argsSchema, `$.tools.${t.name}.args`);
+  if (typeof prepared !== "object" || prepared === null || Array.isArray(prepared)) {
+    throw new Error(`gen-ops: ${t.name} args schema did not prepare to an object schema`);
+  }
+  preparedArgs.set(t.name, prepared as Record<string, unknown>);
+}
+const preparedArgsOf = (t: ContractTool): Record<string, unknown> => {
+  const prepared = preparedArgs.get(t.name);
+  if (prepared === undefined) throw new Error(`gen-ops: no prepared args for ${t.name}`);
+  return prepared;
 };
 
-const argSchemas = contract.tools.map((t) => `  ${emitKey(t.name)}: ${argSchema(t)},`).join("\n");
+const argSchemas = contract.tools
+  .map((t) => `  ${emitKey(t.name)}: ${convert(preparedArgsOf(t), `${t.name} args`)},`)
+  .join("\n");
 
 // The envelope-level OpArgs union: every tool's props merged, all optional
 // (per-op required-ness is the per-op validators' job). A prop declared by
-// two tools must agree on its type, otherwise the union is ill-formed.
-const unionProps = new Map<string, string>();
+// two tools must agree on its schema, otherwise the union is ill-formed.
+const unionProps = new Map<string, unknown>();
 for (const t of contract.tools) {
-  const props = t.inputSchema?.properties ?? {};
+  const props = preparedArgsOf(t).properties as Record<string, unknown>;
   for (const [k, prop] of Object.entries(props)) {
-    if (ROUTING_ARGS.has(k)) continue;
-    const zod = jsonTypeToZod(prop.type);
     const prior = unionProps.get(k);
-    if (prior !== undefined && prior !== zod) {
+    if (prior !== undefined && JSON.stringify(prior) !== JSON.stringify(prop)) {
       throw new Error(
-        `gen-ops: conflicting types for arg ${JSON.stringify(k)}: ${prior} vs ${zod}`,
+        `gen-ops: conflicting schemas for arg ${JSON.stringify(k)}: ` +
+          `${JSON.stringify(prior)} vs ${JSON.stringify(prop)}`,
       );
     }
-    unionProps.set(k, zod);
+    unionProps.set(k, prop);
   }
 }
 const opArgsFields = [...unionProps.entries()]
-  .map(([k, zod]) => `  ${emitKey(k)}: ${zod}.optional(),`)
+  .map(([k, prop]) => `  ${emitKey(k)}: ${convert(prop, `OpArgs.${k}`)}.optional(),`)
   .join("\n");
 
-const opsOut = `// GENERATED from the Rust core (src/packages/core/src/tools/catalogue.rs) by
-// scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run \`moon run gen\`.
+// The per-tool capability grants, as policy wire names. Emitted with a compile-time pin against the
+// generated policy contract, so a grant can only ever name a boolean policy field.
+const grants = contract.tools
+  .map((t) => `  ${emitKey(t.name)}: [${t.grants.map((g) => JSON.stringify(g)).join(", ")}],`)
+  .join("\n");
+
+if (!Number.isInteger(contract.defaultWaitTimeoutMs) || contract.defaultWaitTimeoutMs <= 0) {
+  throw new Error(
+    `gen-ops: defaultWaitTimeoutMs ${JSON.stringify(contract.defaultWaitTimeoutMs)} is not a positive integer`,
+  );
+}
+
+const opsOut = `// GENERATED from the Rust core (src/packages/core/src/tools/catalogue.rs and
+// args.rs) by scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run
+// \`moon run gen\`.
 //
 // The tool catalogue, TS side: op names, policy metadata (risk / scope /
-// permission / confirmation), and the per-op Zod arg validators the extension
-// enforces at the native-messaging boundary. BridgeCommand (the discriminated
-// request union) is INFERRED from the validators, so the compile-time types
-// and the runtime checks cannot drift apart.
+// permission / confirmation), the per-tool capability grants, and the per-op
+// Zod arg validators the extension enforces at the native-messaging boundary
+// (derived from the Rust args structs, the same structs the Rust reader
+// parses). BridgeCommand (the discriminated request union) is INFERRED from
+// the validators, so the compile-time types and the runtime checks cannot
+// drift apart.
 
 import { z } from "zod";
+import type { PolicyFieldName, PolicyValues } from "./policy.gen";
 
 export const OP_NAMES = [
   ${opNames},
@@ -223,9 +203,26 @@ export const TOOL_META: Readonly<Record<OpName, ToolMeta>> = {
 ${meta}
 };
 
-// Per-op arg validators, derived from each tool's inputSchema (minus the
-// server-consumed \`browser\` routing arg). The extension parses an inbound
-// request's args against its op's validator before dispatching - fail closed.
+// The policy fields whose value is a plain boolean: the only shape a grant
+// may have, so enforcement's \`=== true\` reads stay type-honest.
+type BooleanPolicyField = {
+  [K in PolicyFieldName]: PolicyValues[K] extends boolean ? K : never;
+}[PolicyFieldName];
+
+// A tool's own capability grants (Tool::grants in catalogue.rs): every one
+// must be true in the effective policy for the tool to run. The background
+// enforcement (confirm/gate.ts, upload.ts, dialog.ts) indexes this table, so
+// a gated tool cannot gain an enforcement gate the policy contract does not
+// carry. The extension's handlers check only the tool's own grants; the host
+// is the cdpMode gate (Tool::required_grants adds it for every debugger-backed
+// tool).
+export const TOOL_GRANTS = {
+${grants}
+} as const satisfies Readonly<Record<OpName, readonly BooleanPolicyField[]>>;
+
+// Per-op arg validators, derived from each tool's args struct. The
+// extension parses an inbound request's args against its op's validator
+// before dispatching - fail closed.
 export const OP_ARG_SCHEMAS = {
 ${argSchemas}
 } as const satisfies Readonly<Record<OpName, z.ZodType>>;
@@ -238,13 +235,21 @@ export type BridgeCommand = {
   [K in OpName]: { op: K; args: z.infer<(typeof OP_ARG_SCHEMAS)[K]> };
 }[OpName];
 
-// The envelope-level args bag: the union of every tool's inputSchema props,
-// all optional (the per-op validators enforce required-ness).
-export const OpArgsSchema = z.strictObject({
+// The envelope-level args bag: the union of every tool's args props, all
+// optional (the per-op validators enforce required-ness).
+export const OpArgsSchema = z
+  .object({
 ${opArgsFields}
-});
+  })
+  .strict();
 
 export type OpArgs = z.infer<typeof OpArgsSchema>;
+
+// The page_wait_for timeout the host fills in when the caller sends none
+// (the serde default of PageWaitForArgs.timeout_ms in tools/args.rs). The
+// in-page waitFor keeps the same literal as its own fallback, because the
+// page API factory is self-contained; its test pins that literal to this.
+export const DEFAULT_WAIT_TIMEOUT_MS = ${contract.defaultWaitTimeoutMs};
 `;
 
 writeFileSync(join(root, "src/packages/shared/src/ops.gen.ts"), opsOut);

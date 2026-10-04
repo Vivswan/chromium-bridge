@@ -3,7 +3,10 @@
 //! ..., "admin": ..., "policy": ... }` on stdout.
 //!
 //! The Rust types in `protocol.rs` and `protocol/control.rs` are the canonical
-//! envelope contract (ADR-0028). Two consumers read this output:
+//! envelope contract. The request is emitted with its subschemas inlined (no
+//! `$defs`): its flattened `BridgeCommand` references one args struct per
+//! tool, and the consumers below split the command per op by structure,
+//! never by name. Two consumers read this output:
 //!
 //! - `scripts/gen-envelope.ts` (`moon run gen`) generates the extension's base
 //!   wire validators from it (`src/packages/shared/src/envelope-wire.gen.ts`);
@@ -25,9 +28,15 @@
 use chromium_bridge_core::protocol::control::{AdminControl, EnclaveControl, PolicyControl};
 use chromium_bridge_core::protocol::{BridgeReq, BridgeResp};
 
+fn inlined_schema_for<T: schemars::JsonSchema>() -> schemars::Schema {
+    let mut settings = schemars::generate::SchemaSettings::default();
+    settings.inline_subschemas = true;
+    settings.into_generator().into_root_schema_for::<T>()
+}
+
 fn main() -> Result<(), serde_json::Error> {
     let out = serde_json::json!({
-        "request": schemars::schema_for!(BridgeReq),
+        "request": inlined_schema_for::<BridgeReq>(),
         "response": schemars::schema_for!(BridgeResp),
         // The host-handled control frames (ADR-0021/0025/0030/0031/0032).
         // Emitted as the whole internally-tagged enums; the parity script

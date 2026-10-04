@@ -29,9 +29,9 @@ pub enum CallError {
     UnknownTool(String),
 
     /// A tool argument was missing or of the wrong type. Raised by the
-    /// payload builders (`tools::handlers`), which parse each tool's args
-    /// into a typed shape instead of fabricating defaults for absent
-    /// required fields. Field 0 is the tool name plus the parse failure.
+    /// boundary parse into the tool's typed args struct (`tools::args`),
+    /// which refuses instead of fabricating defaults for absent required
+    /// fields. Field 0 is the tool name plus the parse failure.
     #[error("invalid tool arguments: {0}")]
     InvalidArgument(String),
 

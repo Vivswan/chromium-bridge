@@ -84,12 +84,7 @@ This project drives a real logged-in browser, and a past incident nearly took do
 
 A new tool touches both sides ([docs/architecture.md](./docs/architecture.md) section 10):
 
-1. **Add it to the Rust catalogue** ([`src/packages/core/src/tools/catalogue.rs`](src/packages/core/src/tools/catalogue.rs)), the single source for the tool's identity (name, description, risk, scope, permission, confirmation, inputSchema). Then give it:
-   - a `HANDLERS` registry entry plus a `build_*` payload fn (`src/packages/core/src/tools/handlers.rs`);
-   - a home in [`src/packages/core/src/tools/capabilities.rs`](src/packages/core/src/tools/capabilities.rs);
-   - a bumped count in `tool_count_is_pinned`.
-
-   The `registry_covers_catalogue` and capability-parity tests (`cargo test`) point at whichever you miss.
+1. **Add it to the Rust catalogue**: one `catalogue!` row in [`src/packages/core/src/tools/catalogue.rs`](src/packages/core/src/tools/catalogue.rs) (name, variant, args struct, risk, permission, confirmation, grants, dispatch with its capability, description) plus a typed args struct in [`src/packages/core/src/tools/args.rs`](src/packages/core/src/tools/args.rs), whose field docs become the schema descriptions. The row is the only table: the `BridgeCommand` variant, the `ToolId` index, the `Tool` record, and the capability roster derive from it.
 2. **Regenerate the TS side** with `moon run gen` (`src/packages/shared/src/*.gen.ts`); CI fails if the generated files are stale.
    - A new arg that widens the envelope's args bag is picked up automatically.
    - A new envelope FIELD is a protocol change: see `BridgeReq` in `src/packages/core/src/protocol.rs` and the envelope parity gate, `moon run check-envelope`.

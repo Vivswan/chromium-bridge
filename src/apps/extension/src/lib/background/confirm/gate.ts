@@ -4,11 +4,10 @@
 // being hand-mirrored between the content-script and CDP backends. The only
 // backend involvement is the click probe (a DOM read).
 
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/ops.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
-import { TOOL_GATES } from "../../shared/tool-gates";
 import type { PageBackend } from "../page-backend";
 import type { ResolvedTab } from "../tabs";
 import { presenceRoutingEnabled } from "./presence";
@@ -158,11 +157,10 @@ export async function preflightPageOp(
       if (typeof code !== "string" || !code.trim()) {
         throw new Error("page_eval needs non-empty `code`");
       }
-      // Kill switch first: refuse before any confirmation prompt. The gate
-      // field comes from the shared TOOL_GATES map, the same entry the
-      // options grid renders, so enforcement and UI cannot name different
-      // fields.
-      if (policy[TOOL_GATES.page_eval] === false) {
+      // Kill switch first: refuse before any confirmation prompt. The grants
+      // come from the generated catalogue (the Rust tool record is their one
+      // home), so enforcement cannot name a field the policy does not carry.
+      if (TOOL_GRANTS.page_eval.some((grant) => policy[grant] !== true)) {
         throw new Error("page_eval disabled in settings");
       }
       // Confirm EVERY call, showing the full code, unless the eval

@@ -12,10 +12,13 @@ import { z } from "zod";
 import {
   CLASSIFIED_TAGS,
   classifierCoverageProblems,
+  commandArgsProblems,
+  commandCoverageProblems,
   FRAME_PLANS,
   FRAME_REFINEMENTS,
   GROUPS,
   type Group,
+  normalizeCommandArgs,
   refinementProblems,
 } from "./check-envelope-parity";
 
@@ -140,5 +143,134 @@ describe("refinementProblems", () => {
     for (const problem of problems) {
       expect(problem).toContain("no longer refuses");
     }
+  });
+});
+
+// R6: the request's typed command, per op. The Rust fixtures are the exact shapes schemars emits for an
+// args struct (the JsInt bounds, `default` on a serde-defaulted field, no `properties` on an empty struct);
+// the Zod side is what gen-ops.ts emits for the same struct. The mutation cases prove that a validator
+// drifting from its struct is CAUGHT, in both directions.
+describe("commandArgsProblems (R6)", () => {
+  const JS_SAFE = Number.MAX_SAFE_INTEGER;
+  const jsInt = { type: "integer", minimum: -JS_SAFE, maximum: JS_SAFE };
+  const rustWaitFor = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      nav: { description: "Wait for a navigation event", type: "boolean" },
+      selector: { description: "Wait for this selector", type: "string" },
+      timeoutMs: { default: 30000, description: "Max wait in ms", ...jsInt },
+    },
+  };
+  const zodWaitFor = z
+    .object({
+      nav: z.boolean().optional(),
+      selector: z.string().optional(),
+      timeoutMs: z.number().int().optional(),
+    })
+    .strict();
+
+  test("today's real derivations of one struct are equivalent", () => {
+    expect(commandArgsProblems("page_wait_for", rustWaitFor, zodWaitFor)).toEqual([]);
+    // An empty struct: schemars omits `properties`, Zod emits `{}`.
+    expect(
+      commandArgsProblems(
+        "tab_list",
+        { type: "object", additionalProperties: false },
+        z.object({}).strict(),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a validator missing a field, or carrying one the struct lacks, is refused", () => {
+    const missing = z
+      .object({ nav: z.boolean().optional(), selector: z.string().optional() })
+      .strict();
+    expect(commandArgsProblems("page_wait_for", rustWaitFor, missing).join()).toContain(
+      "timeoutMs",
+    );
+    const extra = zodWaitFor.extend({ text: z.string().optional() });
+    expect(commandArgsProblems("page_wait_for", rustWaitFor, extra).join()).toContain("text");
+  });
+
+  test("a validator widening a field or dropping required-ness is refused", () => {
+    const widened = z
+      .object({
+        nav: z.string().optional(),
+        selector: z.string().optional(),
+        timeoutMs: z.number().int().optional(),
+      })
+      .strict();
+    expect(commandArgsProblems("page_wait_for", rustWaitFor, widened).join()).toContain("nav");
+    const rustRequired = {
+      type: "object",
+      additionalProperties: false,
+      properties: { tabId: jsInt },
+      required: ["tabId"],
+    };
+    expect(
+      commandArgsProblems(
+        "tab_focus",
+        rustRequired,
+        z.object({ tabId: z.number().int().optional() }).strict(),
+      ).join(),
+    ).toContain("required");
+    expect(
+      commandArgsProblems(
+        "tab_focus",
+        rustRequired,
+        z.object({ tabId: z.number().int() }).strict(),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a raw i64 field is a parser disagreement, not an erased width claim", () => {
+    // 2^53 parses as i64 on the host and is refused by z.int() in the extension; the Rust args spell
+    // integers as JsInt so the bounds appear on both sides, and a struct that slips back to i64
+    // (schemars: int64, unbounded) must fail here rather than be canonicalized away.
+    const rustRawInt = {
+      type: "object",
+      additionalProperties: false,
+      properties: { pixels: { format: "int64", type: "integer" } },
+    };
+    expect(
+      commandArgsProblems(
+        "page_scroll",
+        rustRawInt,
+        z.object({ pixels: z.number().int().optional() }).strict(),
+      ).join(),
+    ).toContain("pixels");
+  });
+
+  test("a side losing strictness is refused, not compared away", () => {
+    expect(() => normalizeCommandArgs({ type: "object", properties: {} }, "rust")).toThrow(
+      "not strict",
+    );
+    expect(() => normalizeCommandArgs(z.toJSONSchema(z.looseObject({})), "zod")).toThrow(
+      "not strict",
+    );
+    // `default` is erased on the Rust side only: a Zod .default() would hand the extension a value the
+    // frame never carried.
+    expect(normalizeCommandArgs({ type: "boolean", default: true }, "rust")).toEqual({
+      type: "boolean",
+    });
+    expect(normalizeCommandArgs({ type: "boolean", default: true }, "zod")).toEqual({
+      type: "boolean",
+      default: true,
+    });
+  });
+});
+
+describe("commandCoverageProblems (R6)", () => {
+  test("the same op set both ways is clean; a tool on one side only is named", () => {
+    expect(
+      commandCoverageProblems(new Set(["tab_list", "page_eval"]), ["page_eval", "tab_list"]),
+    ).toEqual([]);
+    expect(commandCoverageProblems(new Set(["tab_list", "tab_rename"]), ["tab_list"])).toEqual([
+      "command tab_rename: a Rust tool with no generated validator",
+    ]);
+    expect(commandCoverageProblems(new Set(["tab_list"]), ["tab_list", "tab_rename"])).toEqual([
+      "command tab_rename: a generated validator with no Rust tool",
+    ]);
   });
 });

@@ -5,7 +5,7 @@
 //
 // Sites covered here: dispatch (disabledTools, cdpMode), confirm/gate
 // (confirmHighRiskClick, confirmGraceMs, clickToastTimeoutMs,
-// pageEvalEnabled via TOOL_GATES, confirmPageEval, evalToastTimeoutMs),
+// pageEvalEnabled via TOOL_GRANTS, confirmPageEval, evalToastTimeoutMs),
 // upload (fileUploadEnabled, clickToastTimeoutMs), dialog
 // (handleDialogEnabled), tabs (confirmTabClose, clickToastTimeoutMs),
 // precise (warnPreciseSnapshot), egress (evalMask), confirm/presence
