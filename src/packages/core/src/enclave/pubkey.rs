@@ -3,7 +3,7 @@
 
 use sha2::{Digest, Sha256};
 
-use super::encoding::base64_encode;
+use super::base64_encode;
 use super::EnclaveError;
 
 /// Byte length of the public key on the wire: the X9.63 uncompressed P-256

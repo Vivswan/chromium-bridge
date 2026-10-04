@@ -6,8 +6,8 @@
 //! Beyond crash-freedom this target asserts the semantic invariants the
 //! store depends on: a parsed document serde-round-trips to an equal value,
 //! the comparison lattice partitions every pair (relaxes XOR
-//! restricts_or_equal), fold is idempotent, and the hand-rolled strict
-//! base64 accepts exactly one spelling per byte string (decode then encode
+//! restricts_or_equal), fold is idempotent, and the strict base64 decoder
+//! accepts exactly one spelling per byte string (decode then encode
 //! reproduces the input).
 use libfuzzer_sys::fuzz_target;
 

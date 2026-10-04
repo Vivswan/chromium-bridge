@@ -12,7 +12,6 @@ mod challenge;
 mod cli;
 mod config;
 mod der;
-mod encoding;
 mod key;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -29,9 +28,26 @@ pub use cli::{
 };
 pub use config::HostConfig;
 pub use der::{der_to_raw_signature, SIG_LEN};
-pub use encoding::{base64_decode, base64_encode, Base64DecodeError};
 pub use key::{respond_to_challenge, respond_to_presence_challenge, EnrollmentKey};
 pub use pubkey::{EnclavePublicKey, PUBKEY_LEN};
+
+use base64::Engine as _;
+
+/// Standard-alphabet base64 with padding (RFC 4648): the one engine behind
+/// every base64 field this crate hands the extension (proof frames, the
+/// signed policy baseline), so the two sides can never pick different
+/// alphabets.
+pub fn base64_encode(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// The exact inverse of [`base64_encode`], accepting only what it emits. The
+/// STANDARD engine requires canonical padding and refuses nonzero trailing
+/// bits (`Zh==`), so every byte string has exactly one accepted spelling and
+/// a signed document cannot be re-spelled without failing to decode.
+pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    base64::engine::general_purpose::STANDARD.decode(input)
+}
 
 /// Keychain label of the enrollment signing key. Stable across processes: the
 /// `pair` CLI mints under this label and the Chrome-spawned `--native-host`
@@ -156,6 +172,36 @@ mod tests {
         deduped.sort_unstable();
         deduped.dedup();
         assert_eq!(deduped.len(), REASON_CODES.len());
+    }
+
+    /// The policy store's one-spelling-per-byte-string invariant rests on
+    /// the engine's canonical-padding and no-trailing-bits settings, which
+    /// the sibling `STANDARD_PAD_INDIFFERENT` and `STANDARD_NO_PAD` engines
+    /// relax one identifier away.
+    #[test]
+    fn base64_decode_accepts_exactly_one_spelling_per_byte_string() {
+        for bad in [
+            // Missing or short padding.
+            "Z", "Zg", "Zg=", "Zm9vYQ",
+            // Bytes outside the standard alphabet (whitespace, url-safe,
+            // non-ASCII).
+            "Zm9v\n", "Zm 9v", "Zm9-", "Zm9_", "Zm\u{e9}",
+            // Malformed or misplaced padding.
+            "====", "Z===", "Zg=v", "Zg==Zg==", "Zm8=Zm8=",
+            // Nonzero trailing bits: the canonical spellings are "Zg==" and
+            // "Zm8=".
+            "Zh==", "Zm9=",
+        ] {
+            assert!(base64_decode(bad).is_err(), "{bad:?} must be refused");
+        }
+        for (bytes, canonical) in [(&b"f"[..], "Zg=="), (b"fo", "Zm8="), (b"foo", "Zm9v")] {
+            assert_eq!(base64_encode(bytes), canonical, "{bytes:?} encodes once");
+            assert_eq!(
+                base64_decode(canonical).unwrap(),
+                bytes,
+                "{canonical} decodes"
+            );
+        }
     }
 
     #[test]

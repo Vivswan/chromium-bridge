@@ -15,6 +15,12 @@ license-file = "LICENSE.md"
 publish = false
 
 [workspace.dependencies]
+# Strict standard-alphabet base64 for the enclave proof frames and the signed
+# policy baseline: the STANDARD engine requires canonical padding and rejects
+# nonzero trailing bits, so each byte string has exactly one accepted spelling.
+# Without the default `simd-unsafe` feature: the scalar engine is all the
+# core needs for 65-byte keys and signatures.
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 hmac = "0.13"
 libc = "0.2.186"
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,
