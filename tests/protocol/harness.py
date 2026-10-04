@@ -16,6 +16,7 @@ Stdlib only, on purpose: an independent implementation of the protocols with
 no dependencies is what makes these suites catch framing and encoding bugs the
 Rust types cannot see. Never add a package.
 """
+import atexit
 import json
 import os
 import re
@@ -58,8 +59,10 @@ def lock_path(rundir):
 
 def new_runtime_dir(prefix):
     """A fresh private runtime dir directly under the OS temp dir (a nested
-    one overruns the Unix socket path limit)."""
+    one overruns the Unix socket path limit), removed at interpreter exit
+    whether the suite passes, fails, or dies on an exception."""
     rundir = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, rundir, ignore_errors=True)
     OWNED_RUNTIME_DIRS.add(rundir)
     return rundir
 
