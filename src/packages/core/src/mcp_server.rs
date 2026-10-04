@@ -149,10 +149,7 @@ fn admit_own_harness() -> Option<Harness> {
     let identity = match ipc::attest_parent() {
         Ok(id) => Some(id),
         Err(e) => {
-            log_warn!(
-                "mcp",
-                "could not attest the spawning harness (parent pid): {e}"
-            );
+            log_warn!("mcp", "could not attest the harness process: {e}");
             None
         }
     };

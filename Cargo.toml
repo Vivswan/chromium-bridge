@@ -87,9 +87,8 @@ winreg = "0.56"
 # The named-pipe bridge transport, the pipe peer's process identity, and the
 # Authenticode signer query (src/packages/core/src/ipc/platform/windows/).
 # Microsoft's own binding, already in the tree under tempfile and winreg, so
-# the version follows theirs. The sync pipe crates (interprocess) expose no
-# read deadline and no cross-thread shutdown, which the broker's attach phase
-# needs, so the overlapped I/O is ours over this binding.
+# the version follows theirs; the sync pipe crates were rejected for lacking
+# the stream semantics the broker needs (the adopting commit records which).
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Security",

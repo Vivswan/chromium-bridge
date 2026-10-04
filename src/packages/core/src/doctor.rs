@@ -102,12 +102,6 @@ impl Report {
     }
 }
 
-/// Passive reachability probe: connect to our own bridge socket and drop the
-/// connection immediately. No command bytes are ever sent.
-fn probe(endpoint: &str) -> bool {
-    crate::ipc::probe_endpoint(endpoint)
-}
-
 /// Gather the per-browser manifest states (read-only), or the reason the
 /// check could not run.
 fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
@@ -127,7 +121,7 @@ fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
 pub fn gather() -> Report {
     let lock = match LockFile::read() {
         Ok(Some(lf)) => LockState::Present {
-            reachable: probe(&lf.endpoint),
+            reachable: crate::ipc::probe_endpoint(&lf.endpoint),
             secret_len: lf.secret.len(),
             pid: lf.pid,
             endpoint: lf.endpoint,
@@ -534,12 +528,12 @@ mod tests {
         let sock = dir.path().join("run.sock");
         let listener = UnixListener::bind(&sock).unwrap();
         let path = sock.to_string_lossy().into_owned();
-        assert!(probe(&path));
+        assert!(crate::ipc::probe_endpoint(&path));
 
         // Close it and unlink, then probe the now-dead socket: must fail.
         drop(listener);
         let _ = std::fs::remove_file(&sock);
-        assert!(!probe(&path));
+        assert!(!crate::ipc::probe_endpoint(&path));
     }
 
     #[cfg(windows)]
@@ -554,9 +548,9 @@ mod tests {
         else {
             panic!("a fresh scratch runtime dir has no live broker to lose to");
         };
-        assert!(probe(&lock.endpoint));
+        assert!(crate::ipc::probe_endpoint(&lock.endpoint));
 
         drop(listener);
-        assert!(!probe(&lock.endpoint));
+        assert!(!crate::ipc::probe_endpoint(&lock.endpoint));
     }
 }

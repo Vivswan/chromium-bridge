@@ -113,6 +113,7 @@ impl PipeListener {
         loop {
             match wait_for_client(&instance) {
                 Ok(()) => {
+                    self.listen_again();
                     let shared = Arc::new(Shared::new(instance, PipeEnd::Server));
                     return Ok((PipeStream::new(shared)?, ()));
                 }
@@ -124,6 +125,20 @@ impl PipeListener {
                 }
                 Err(err) => return Err(err),
             }
+        }
+    }
+
+    /// Create the next instance before the connected one is handed out, so a
+    /// client arriving between two `accept` calls finds the name listening
+    /// instead of absent (`CreateFileW` would fail with no instance to wait
+    /// for). A failure here only costs that early arrival; the next `accept`
+    /// creates its own instance and reports the error if it persists.
+    fn listen_again(&self) {
+        match self.create_instance(false) {
+            Ok(next) => {
+                *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(next);
+            }
+            Err(e) => log_warn!("ipc", "could not pre-create the next pipe instance: {e}"),
         }
     }
 }
@@ -608,6 +623,19 @@ mod tests {
             "child attests its harness:\n{stdout}"
         );
         assert!(output.status.success(), "child test run passes");
+    }
+
+    #[test]
+    fn a_client_arriving_between_accepts_finds_the_name_listening() {
+        // External fact: CreateFileW on a pipe name with no instance fails at
+        // once (ERROR_FILE_NOT_FOUND) and WaitNamedPipeW has nothing to wait
+        // for, so the listener must hold a fresh instance before it hands the
+        // connected one out. The connect below runs with no accept pending.
+        let name = unique_name("between-accepts");
+        let listener = PipeListener::bind(&name).unwrap();
+        let (_server, _client) = pair(&listener, &name);
+        PipeStream::connect(&name, Duration::from_millis(500))
+            .expect("a listening instance exists between accepts");
     }
 
     #[test]

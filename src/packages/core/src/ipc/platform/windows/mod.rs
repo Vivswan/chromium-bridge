@@ -8,7 +8,7 @@
 //! ```text
 //! pipe     -> CreateNamedPipeW / CreateFileW, overlapped reads with a deadline, cross-thread shutdown
 //! acl      -> the current user's SID rendered to an SDDL descriptor only that SID can open
-//! process  -> OpenProcess, the image path, liveness, the recorded parent pid
+//! process  -> OpenProcess, the image path, liveness
 //! signer   -> WinVerifyTrust and the leaf certificate's subject
 //! ```
 //!
@@ -31,7 +31,12 @@ pub(crate) mod process;
 pub(crate) mod signer;
 
 #[cfg(windows)]
-pub(crate) use identity::*;
+use std::io;
+
+#[cfg(windows)]
+use super::super::identity::{ClientIdentity, HashDigest};
+#[cfg(windows)]
+use super::super::socket::BridgeStream;
 
 /// The pipe namespace of the local machine. A name outside it (a `\\host\pipe\`
 /// UNC path, a plain file path) would make `CreateFileW` open something other
@@ -194,55 +199,40 @@ pub fn publisher_anchor(
     }
 }
 
-/// The identity measurements [`super::super::attest`] runs through the `os`
-/// alias, shaped like the Linux and macOS files.
+/// Error message for an unmeasurable self identity, used by
+/// [`super::super::attest`].
 #[cfg(windows)]
-mod identity {
-    use std::io;
+pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot hash own executable image";
 
-    use super::super::super::identity::{ClientIdentity, HashDigest};
-    use super::super::super::socket::BridgeStream;
-    use super::{pipe, process, signer};
+/// This process's own executable identity: the SHA-256 of its image file,
+/// found the same way a peer's is so the two measurements compare.
+#[cfg(windows)]
+pub(crate) fn own_identity() -> io::Result<HashDigest> {
+    pid_identity(std::process::id())
+}
 
-    /// Error message for an unmeasurable self identity, used by
-    /// [`super::super::super::attest`].
-    pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot hash own executable image";
+/// The peer's running-image identity, keyed by the pid the kernel records
+/// for the other end of the pipe.
+#[cfg(windows)]
+pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
+    pid_identity(stream.peer_pid()?)
+}
 
-    /// This process's own executable identity: the SHA-256 of its image file,
-    /// found the same way a peer's is so the two measurements compare.
-    pub(crate) fn own_identity() -> io::Result<HashDigest> {
-        pid_identity(std::process::id())
-    }
+/// The running-image identity of an arbitrary process named by pid.
+#[cfg(windows)]
+pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
+    HashDigest::of_file(&process::image_path(pid)?)
+}
 
-    /// The peer's running-image identity, keyed by the pid the kernel records
-    /// for the other end of the pipe.
-    pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
-        pid_identity(stream.peer_pid()?)
-    }
-
-    /// The running-image identity of an arbitrary process named by pid.
-    pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
-        HashDigest::of_file(&process::image_path(pid)?)
-    }
-
-    /// The full client identity of a process: its image hash plus the
-    /// Authenticode publisher of that image when the signature verifies.
-    pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
-        let image = process::image_path(pid)?;
-        Ok(ClientIdentity {
-            hash: HashDigest::of_file(&image)?,
-            team_id: signer::publisher_of(&image)?,
-        })
-    }
-
-    /// The pid of the process to measure as this server's harness: the creator
-    /// of our stdin pipe. The recorded parent would be the obvious choice, but
-    /// a Windows launcher can name any process it can open as the parent
-    /// (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`), while the pipe it writes us
-    /// through is its own.
-    pub(crate) fn harness_pid() -> io::Result<u32> {
-        pipe::stdin_pipe_creator()
-    }
+/// The full client identity of a process: its image hash plus the
+/// Authenticode publisher of that image when the signature verifies.
+#[cfg(windows)]
+pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
+    let image = process::image_path(pid)?;
+    Ok(ClientIdentity {
+        hash: HashDigest::of_file(&image)?,
+        team_id: signer::publisher_of(&image)?,
+    })
 }
 
 #[cfg(test)]

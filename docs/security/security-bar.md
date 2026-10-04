@@ -56,7 +56,7 @@ On every OS, harness admission is enforced only once one client is paired; befor
 | Linux | the spawning harness's code identity, checked against the allowlist ([boundary 1](trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20)) | the software fallback only | holds for the bridge, on the same gates; presence is software-attested |
 | Windows | the spawning harness's image hash and Authenticode publisher, checked against the allowlist ([boundary 1](trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20)) | the software fallback only | holds for the bridge: a named pipe only this user can open, mutual image attestation, the run secret ([boundary 2](trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson)); presence is software-attested |
 
-Windows measures an image by re-opening its path, a window the [threat model's residual risks](threat-model.md#residual-risks-accepted-tracked) own; the [platform table in the security policy](../../.github/SECURITY.md#platform-support) owns the per-mechanism state.
+The Windows residuals behind that row are the [threat model's](threat-model.md#residual-risks-accepted-tracked); the [platform table in the security policy](../../.github/SECURITY.md#platform-support) owns the per-mechanism state.
 
 ## Against the convenience-first design class
 

@@ -30,13 +30,8 @@ use super::{publisher_anchor, TrustStatus};
 /// The publisher anchor of the image at `image`, `None` when the image is
 /// unsigned or its chain is not trusted. Runs where a harness is measured
 /// (server startup, `pair-client --this-parent`), not on the bridge accept
-/// path, which hashes the image alone.
-///
-/// Revocation is not checked (`WTD_REVOKE_NONE`), the policy a browser's own
-/// installer verification uses: an online check stalls startup when the CRL
-/// server is unreachable, and a cache-only check fails on a machine that never
-/// fetched the CRL. A revoked publisher therefore keeps its anchor until
-/// `revoke-client` removes it; the threat model records it.
+/// path, which hashes the image alone. Revocation is not checked
+/// (`WTD_REVOKE_NONE`); the threat model's residual list owns why.
 pub(crate) fn publisher_of(image: &Path) -> io::Result<Option<TeamId>> {
     let session = TrustSession::verify(image)?;
     let status = TrustStatus::from_hresult(session.status);

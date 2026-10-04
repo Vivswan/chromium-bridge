@@ -59,8 +59,9 @@ pub fn ensure_own_identity() -> io::Result<&'static str> {
 /// real parent already dead  -> Unix: measures the reaper (commonly pid 1), refused by an enforced allowlist unless it
 ///                              names that binary; unenrolled admission ignores the identity (allowlist::decide)
 /// who writes our stdin      -> Unix: unproven, the pipe's write end can be inherited or passed on; Windows: the pipe's
-///                              creator, unless a same-user process duplicates a harness's pipe end into a child it
-///                              launches
+///                              creator, but a child the harness spawned with a piped stdin holds the read end by
+///                              inheritance and can run a server that only reads the harness's own requests, and
+///                              PROCESS_DUP_HANDLE on the harness yields the write end too, so that holder can inject
 /// pid-keyed measurement     -> the same pid-reuse race as attest_pid; on macOS pid_client_identity still validates
 ///                              the running image via SecCodeCheckValidity
 /// ```
@@ -78,7 +79,7 @@ fn harness_pid() -> io::Result<u32> {
     }
     #[cfg(windows)]
     {
-        os::harness_pid()
+        os::pipe::stdin_pipe_creator()
     }
 }
 
