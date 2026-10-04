@@ -464,9 +464,9 @@ pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
             // Normalizing user INPUT to lowercase is the legitimate-entry
             // convenience this path has always offered; only the persisted
             // form is held strictly canonical (see [`HashDigest`]).
-            let digest = HashDigest::try_from(h.to_ascii_lowercase())
-                .map_err(|_| "--hash must be non-empty lowercase hex".to_string())?;
-            Ok(Anchor::Hash(digest))
+            HashDigest::try_from(h.to_ascii_lowercase())
+                .map(Anchor::Hash)
+                .map_err(|e| format!("--hash: {e}"))
         }
         AnchorSpec::TeamId(t) => TeamId::try_from(t.clone())
             .map(Anchor::TeamId)
@@ -799,10 +799,15 @@ mod tests {
             resolve_anchor(&AnchorSpec::Hash("DEADBEEF".repeat(5))).unwrap(),
             Anchor::Hash(hd("deadbeef"))
         );
-        // Non-hex and empty input are refused with the same message as ever.
-        for bad in ["", "not-hex", "dead beef"] {
+        // Non-hex, empty, and wrong-width input are refused with the digest's
+        // own rule, so the user is never told a value fails a rule it meets
+        // (`--hash deadbeef` used to be reported as not lowercase hex).
+        for bad in ["", "not-hex", "dead beef", "deadbeef"] {
             let err = resolve_anchor(&AnchorSpec::Hash(bad.into())).unwrap_err();
-            assert_eq!(err, "--hash must be non-empty lowercase hex");
+            assert_eq!(
+                err, "--hash: hash anchor must be 40 or 64 lowercase hex characters",
+                "{bad:?}"
+            );
         }
     }
 
