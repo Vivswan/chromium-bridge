@@ -41,10 +41,17 @@ pub(crate) fn ignore_sigpipe() {
     }
 }
 
-/// Run `f` on a dedicated thread when SIGTERM or SIGINT arrives, then exit.
-/// signal-hook's handler only writes to a self-pipe; the thread wakes from
-/// the iterator and runs the cleanup in ordinary thread context, free of
-/// async-signal-safety limits, so it may touch the filesystem. The two
+/// The termination signals [`spawn_signal_cleanup`] handles.
+#[cfg(unix)]
+const CLEANUP_SIGNALS: [libc::c_int; 2] = [
+    signal_hook::consts::signal::SIGTERM,
+    signal_hook::consts::signal::SIGINT,
+];
+
+/// Run `f` on a dedicated thread when one of [`CLEANUP_SIGNALS`] arrives,
+/// then exit. signal-hook's handler only writes to a self-pipe; the thread
+/// wakes from the iterator and runs the cleanup in ordinary thread context,
+/// free of async-signal-safety limits, so it may touch the filesystem. The
 /// signals are unblocked on the calling thread after the handler is in
 /// place: a parent that blocked them before exec hands its mask down, and a
 /// blocked signal would stay pending forever instead of reaching the
@@ -52,12 +59,12 @@ pub(crate) fn ignore_sigpipe() {
 #[cfg(unix)]
 pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) -> std::io::Result<()> {
     use nix::sys::signal::{SigSet, Signal};
-    use signal_hook::consts::signal::{SIGINT, SIGTERM};
 
-    let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT])?;
-    let mut unblock = SigSet::empty();
-    unblock.add(Signal::SIGTERM);
-    unblock.add(Signal::SIGINT);
+    let mut signals = signal_hook::iterator::Signals::new(CLEANUP_SIGNALS)?;
+    let unblock: SigSet = CLEANUP_SIGNALS
+        .iter()
+        .map(|&raw| Signal::try_from(raw))
+        .collect::<Result<_, _>>()?;
     unblock.thread_unblock()?;
     std::thread::spawn(move || {
         match signals.forever().next() {
@@ -81,17 +88,15 @@ mod tests {
     use nix::sys::signal::{kill, SigSet, Signal};
     use nix::unistd::Pid;
 
-    use super::spawn_signal_cleanup;
+    use super::{spawn_signal_cleanup, CLEANUP_SIGNALS};
 
-    /// The child half of the test below: the test binary re-invoked with
-    /// this variable set to a scratch directory installs the cleanup, reports
-    /// readiness, and waits to be signalled.
+    /// Set to a scratch directory, turns a re-invocation of the test binary
+    /// into the signalled child.
     const CHILD_ENV: &str = "CHROMIUM_BRIDGE_TEST_SIGNAL_CHILD";
     const TEST_NAME: &str = "sys::tests::signal_cleanup_runs_even_when_the_signal_arrives_blocked";
 
-    /// Kills and reaps the child on every exit path of the test, a failed
-    /// assertion included, so a failing run never leaves a sleeping child
-    /// behind.
+    /// Kills and reaps the child on every exit path, so a failing run never
+    /// leaves a sleeping child behind.
     struct Reaped(Child);
 
     impl Drop for Reaped {
@@ -124,24 +129,23 @@ mod tests {
         }
     }
 
-    /// A signal that arrives blocked, because the parent blocked it before
-    /// exec and the mask was inherited, must still run the cleanup and exit
-    /// 0; without the unblock after registration the server sat forever with
-    /// the signal pending and the lock on disk. The child is spawned with
-    /// the mask already blocked (pre_exec runs after std clears the mask).
-    /// Four cases: SIGTERM and SIGINT, each with the mask blocked and clear.
+    /// A signal that arrives blocked, the mask inherited from a parent that
+    /// blocked it before exec, must still run the cleanup and exit 0; a
+    /// server that only registered the handler sat forever with the signal
+    /// pending. The mask is blocked in pre_exec because std clears the
+    /// child's mask before it runs, so blocking in the parent would not reach
+    /// the child.
     #[test]
     fn signal_cleanup_runs_even_when_the_signal_arrives_blocked() {
         if let Some(dir) = std::env::var_os(CHILD_ENV) {
             child_role(Path::new(&dir));
         }
         let exe = std::env::current_exe().expect("test binary path");
-        for (signal, blocked) in [
-            (Signal::SIGTERM, false),
-            (Signal::SIGTERM, true),
-            (Signal::SIGINT, false),
-            (Signal::SIGINT, true),
-        ] {
+        let cases = CLEANUP_SIGNALS
+            .iter()
+            .map(|&raw| Signal::try_from(raw).expect("a cleanup signal is a known signal"))
+            .flat_map(|signal| [(signal, false), (signal, true)]);
+        for (signal, blocked) in cases {
             let case = format!("{signal:?} blocked={blocked}");
             let dir = tempfile::tempdir().expect("scratch dir");
             let mut cmd = Command::new(&exe);
@@ -152,8 +156,8 @@ mod tests {
                 .stderr(Stdio::null());
             if blocked {
                 // SAFETY: the closure runs in the forked child before exec
-                // and only calls pthread_sigmask, which is async-signal-safe
-                // and allocates nothing.
+                // and calls only sigemptyset, sigaddset, and pthread_sigmask,
+                // all async-signal-safe; nothing in it allocates.
                 unsafe {
                     cmd.pre_exec(move || {
                         let mut set = SigSet::empty();
