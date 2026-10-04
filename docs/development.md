@@ -255,6 +255,7 @@ moon run check-fuzz-smoke  # unit tests for the driver itself (in the ci gate)
 The smoke needs a nightly toolchain plus `cargo install cargo-fuzz`, and skips with a message when either is missing. The nightly job passes `--require-toolchain`, which turns that skip into a failure: a skipped night must not read as green and auto-close the tracking issue.
 
 - Targets come from `cargo +nightly fuzz list`, so the list cannot drift from `fuzz/Cargo.toml`.
+- With the toolchain present, a checkout without the generated seeds or dictionary is refused with the task to run (`moon run fuzz-seeds`), so a bare `bun scripts/fuzz-smoke.ts` on a fresh clone exits 1 instead of fuzzing without the corpus.
 - A crashing target does not abort the pass: the script writes that target's failure report, moves on, and exits 1 at the end when anything failed.
 - `--seed=N` pins libFuzzer's PRNG for a best-effort deterministic re-run; the crash input file stays the real reproducer, since the persisted corpus differs from night to night.
 - Locally each target gets 30 seconds. The nightly run gives 120 seconds per target and passes `--cmin`, which minimizes each passing target's corpus before the cache save (cmin bounds each snapshot's size; GitHub's LRU cache eviction bounds the number of snapshots).
