@@ -404,16 +404,9 @@ fn resolve_anchor(spec: AnchorSpec) -> Result<Anchor, String> {
         AnchorSpec::Hash(hash) => Ok(Anchor::Hash(hash)),
         AnchorSpec::TeamId(team_id) => Ok(Anchor::TeamId(team_id)),
         AnchorSpec::ThisParent => {
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            {
-                let id = ipc::attest_parent()
-                    .map_err(|e| format!("could not attest the parent process: {e}"))?;
-                Ok(Anchor::Hash(id.hash))
-            }
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            {
-                Err("--this-parent is not supported on this platform (no attestation)".into())
-            }
+            let id = ipc::attest_parent()
+                .map_err(|e| format!("could not attest the parent process: {e}"))?;
+            Ok(Anchor::Hash(id.hash))
         }
     }
 }

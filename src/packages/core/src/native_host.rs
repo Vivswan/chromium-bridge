@@ -905,8 +905,7 @@ fn run_control_plane() -> i32 {
 pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
     // Capture our own executable identity before dialing, so attesting the
     // server compares against the genuine binary and we fail fast if we cannot
-    // hash our own image. See ADR-0020.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    // hash our own image.
     if let Err(e) = ipc::ensure_own_identity() {
         log_error!(
             "native-host",
@@ -952,14 +951,10 @@ pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
 
     // Kernel-attest the SERVER before speaking the handshake or forwarding any
     // frames: require it to be another instance of THIS binary. Fail closed so
-    // a hostile same-user process cannot impersonate the MCP server. See
-    // ADR-0020.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        if let Err(e) = ipc::attest_peer(&stream) {
-            log_error!("native-host", "server attestation failed: {e}");
-            return 1;
-        }
+    // a hostile same-user process cannot impersonate the MCP server.
+    if let Err(e) = ipc::attest_peer(&stream) {
+        log_error!("native-host", "server attestation failed: {e}");
+        return 1;
     }
 
     // Build the buffered halves the pumps will reuse, then authenticate over

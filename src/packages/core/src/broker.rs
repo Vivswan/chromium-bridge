@@ -5,8 +5,8 @@
 //! connections in its [`Session`], and multiplexes every attached harness's tool calls. Later instances attest
 //! it and attach as relays; the broker exits when the last harness (its own plus every relay) detaches.
 //!
-//! Every connection passes the HMAC handshake (ADR-0019/0020), preceded on Unix by the peer-UID check and on
-//! Linux and macOS by `attest_peer` (our own binary; Windows gets neither, see [`crate::ipc`]), then sends one
+//! Every connection passes the HMAC handshake, preceded by the same-user check (the peer UID on Unix, the pipe's
+//! descriptor on Windows) and by `attest_peer` (our own binary, see [`crate::ipc`]), then sends one
 //! [`AttachRequest`]:
 //!
 //! ```text
@@ -832,18 +832,15 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted<'_> {
     // Kernel-attest the peer's executable identity: only another instance of
     // THIS binary may attach at all (a native host or a sibling relay). A
     // different same-user program is rejected here, before the HMAC handshake.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        if let Err(e) = ipc::attest_peer(&stream) {
-            log_warn!("broker", "rejected bridge connection: {e}");
-            audit::record(
-                audit::AuditRecord::new(audit::AuditKind::AttachRefuse)
-                    .surface(audit::Surface::Broker)
-                    .outcome("refused")
-                    .detail("peer attestation failed"),
-            );
-            return Admitted::Rejected;
-        }
+    if let Err(e) = ipc::attest_peer(&stream) {
+        log_warn!("broker", "rejected bridge connection: {e}");
+        audit::record(
+            audit::AuditRecord::new(audit::AuditKind::AttachRefuse)
+                .surface(audit::Surface::Broker)
+                .outcome("refused")
+                .detail("peer attestation failed"),
+        );
+        return Admitted::Rejected;
     }
 
     // Bound the handshake + attach phase with a read timeout so a peer that
@@ -1206,12 +1203,9 @@ pub(crate) fn run_relay(harness: Option<HarnessId>) -> RelayOutcome {
     };
     // Attest the broker: it must be another instance of THIS binary before we
     // speak the handshake or forward a frame. Fail closed.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        if let Err(e) = ipc::attest_peer(&stream) {
-            log_error!("relay", "broker attestation failed: {e}");
-            return RelayOutcome::Denied;
-        }
+    if let Err(e) = ipc::attest_peer(&stream) {
+        log_error!("relay", "broker attestation failed: {e}");
+        return RelayOutcome::Denied;
     }
 
     let read_half = match stream.try_clone() {

@@ -11,8 +11,6 @@
 //! repair IS the registration (see docs/cli.md).
 
 use std::path::PathBuf;
-#[cfg(windows)]
-use std::time::Duration;
 
 use serde::Serialize;
 
@@ -107,18 +105,7 @@ impl Report {
 /// Passive reachability probe: connect to our own bridge socket and drop the
 /// connection immediately. No command bytes are ever sent.
 fn probe(endpoint: &str) -> bool {
-    #[cfg(unix)]
-    {
-        std::os::unix::net::UnixStream::connect(endpoint).is_ok()
-    }
-    #[cfg(windows)]
-    {
-        let addr = match endpoint.parse() {
-            Ok(a) => a,
-            Err(_) => return false,
-        };
-        std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
-    }
+    crate::ipc::probe_endpoint(endpoint)
 }
 
 /// Gather the per-browser manifest states (read-only), or the reason the
@@ -557,14 +544,19 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn probe_detects_open_and_closed_ports() {
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-        assert!(probe(&endpoint));
+    fn probe_detects_a_live_and_a_closed_pipe() {
+        // External fact the probe rests on: a pipe name exists only while a
+        // server holds an instance, so opening it succeeds against a live
+        // broker and fails once the listener is gone.
+        let _dir = crate::test_support::scratch_runtime_dir("doctor-probe");
+        let crate::ipc::PublishOutcome::Published(listener, lock) =
+            crate::ipc::listen_and_publish().unwrap()
+        else {
+            panic!("a fresh scratch runtime dir has no live broker to lose to");
+        };
+        assert!(probe(&lock.endpoint));
 
         drop(listener);
-        assert!(!probe(&endpoint));
+        assert!(!probe(&lock.endpoint));
     }
 }
