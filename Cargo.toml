@@ -33,6 +33,10 @@ libc = "0.2.186"
 # prescribes. `server` only: no HTTP stack, no client, no auth tree.
 rmcp = { version = "3.4.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
+# SIGTERM/SIGINT handed to one cleanup thread through a self-pipe, so the
+# cleanup runs in ordinary thread context, free of async-signal-safety
+# limits. Unix only.
+signal-hook = "0.4"
 # `float_roundtrip`: correctly rounded float parsing, so a JSON number the
 # core stores reads back as the same f64 it wrote. The default best-effort parse drifts by an ulp on some
 # inputs, which breaks the write/read-back identity the store relies on.

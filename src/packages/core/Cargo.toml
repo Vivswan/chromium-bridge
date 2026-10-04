@@ -74,5 +74,8 @@ core-foundation.workspace = true
 security-framework.workspace = true
 security-framework-sys.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+signal-hook.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true

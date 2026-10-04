@@ -1,10 +1,10 @@
 //! Quarantined libc shims: the only `unsafe` outside the designated FFI
-//! modules (`ipc::platform`, `ipc::peercred`, and
-//! `enclave::macos`). Each wrapper exposes a small libc surface through a
-//! safe function so callers (broker, attest, lockfile, protocol, mcp_server)
-//! never hold an `unsafe` block themselves: `geteuid`/`getppid` are
-//! infallible by POSIX contract, while the signal wrappers report (or log)
-//! the syscall status instead of pretending it cannot fail.
+//! modules (`ipc::platform`, `ipc::peercred`, and `enclave::macos`). Each
+//! wrapper exposes a small libc surface through a safe function so callers
+//! (broker, attest, lockfile, protocol) never hold an `unsafe` block
+//! themselves: `geteuid`/`getppid` are infallible by POSIX contract, and
+//! ignoring SIGPIPE cannot fail for that signal. The signal-cleanup thread
+//! below holds no unsafe at all; signal-hook owns the handler.
 #![cfg_attr(
     unix,
     expect(
@@ -41,40 +41,33 @@ pub(crate) fn ignore_sigpipe() {
     }
 }
 
-/// Block SIGTERM/SIGINT process-wide and run `f` on a dedicated thread when
-/// one arrives, then exit. Blocking the signals here (and letting a single
-/// thread `sigwait` for them) sidesteps async-signal-safety limits: the
-/// cleanup runs in ordinary thread context, so it may touch the filesystem
-/// freely. Callers MUST invoke this before spawning worker threads so those
-/// threads inherit the blocked mask.
+/// Run `f` on a dedicated thread when SIGTERM or SIGINT arrives, then exit.
+/// signal-hook's handler only writes to a self-pipe; the thread wakes from
+/// the iterator and runs the cleanup in ordinary thread context, free of
+/// async-signal-safety limits, so it may touch the filesystem. If the
+/// handler cannot be registered, the server keeps running without signal
+/// cleanup and says so: a signal then takes the default disposition and the
+/// next server start clears the stale lock.
 #[cfg(unix)]
-pub(crate) fn block_signals_and_spawn_cleanup<F: Fn() + Send + 'static>(f: F) {
-    // SAFETY: sigset_t is a plain C value type for which all-zero bytes are a
-    // valid state; sigemptyset below defines the contents.
-    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `set` is a live, writable local for the duration of the call.
-    unsafe { libc::sigemptyset(&mut set) };
-    // SAFETY: `set` was initialized by sigemptyset above and outlives the call.
-    unsafe { libc::sigaddset(&mut set, libc::SIGTERM) };
-    // SAFETY: as for SIGTERM above: same initialized set, same lifetime.
-    unsafe { libc::sigaddset(&mut set, libc::SIGINT) };
-    // Block in the current (main) thread; threads spawned later inherit it.
-    // SAFETY: `set` is fully built and outlives the call; POSIX permits a null
-    // oldset pointer.
-    unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
+pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
+    use signal_hook::consts::signal::{SIGINT, SIGTERM};
 
+    let mut signals = match signal_hook::iterator::Signals::new([SIGTERM, SIGINT]) {
+        Ok(signals) => signals,
+        Err(e) => {
+            log_warn!(
+                "mcp",
+                "could not register the SIGTERM/SIGINT handler ({e}); a signal will exit without cleanup"
+            );
+            return;
+        }
+    };
     std::thread::spawn(move || {
-        let mut sig: std::os::raw::c_int = 0;
-        // Wait until one of the blocked signals is delivered. On the
-        // (never-observed) sigwait failure, still run the cleanup and
-        // exit rather than leave a zombie server with no signal handling.
-        // SAFETY: `set` moved into this thread and `sig` is a live local; both
-        // outlive the blocking call.
-        let rc = unsafe { libc::sigwait(&set, &mut sig) };
-        if rc == 0 {
-            log_info!("mcp", "received signal {sig}, cleaning up and exiting");
-        } else {
-            log_warn!("mcp", "sigwait failed ({rc}); cleaning up and exiting");
+        // `forever` yields only once a registered signal has arrived; the
+        // iterator ends only if the handle is closed, which nothing does.
+        match signals.forever().next() {
+            Some(sig) => log_info!("mcp", "received signal {sig}, cleaning up and exiting"),
+            None => log_warn!("mcp", "signal stream closed; cleaning up and exiting"),
         }
         f();
         std::process::exit(0);
