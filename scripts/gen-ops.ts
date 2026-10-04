@@ -742,18 +742,22 @@ console.log(
 // distinct from both enclave domains, or a policy signature could be
 // replayed as an enrollment or presence proof.
 
-const POLICY_DIRECTION_TAGS = [
-  "truePermissive",
-  "falsePermissive",
-  "growsPermissive",
-  "growsPermissiveZeroTop",
-  "shrinksPermissiveSet",
-] as const;
+// The direction tags each value kind may carry (Rust BoolPole / MsOrder /
+// the single set order). The Rust types make a kind/direction mismatch
+// unrepresentable; this table lets generation refuse an unknown tag with a
+// clear message instead of emitting a table the typed TS object rejects.
+const POLICY_KIND_DIRECTIONS = {
+  bool: ["truePermissive", "falsePermissive"],
+  ms: ["growsPermissive", "growsPermissiveZeroTop"],
+  toolSet: ["shrinksPermissiveSet"],
+} as const;
 
-type PolicyDirectionTag = (typeof POLICY_DIRECTION_TAGS)[number];
+type PolicyKindTag = keyof typeof POLICY_KIND_DIRECTIONS;
+type PolicyDirectionTag = (typeof POLICY_KIND_DIRECTIONS)[PolicyKindTag][number];
 
 interface PolicyContractField {
   name: string;
+  kind: PolicyKindTag;
   direction: PolicyDirectionTag;
 }
 
@@ -828,9 +832,14 @@ for (const field of policy.fields) {
   if (typeof field.name !== "string" || !/^[a-z][A-Za-z0-9]*$/.test(field.name)) {
     throw new Error(`gen-ops: policy field name ${JSON.stringify(field.name)} is not camelCase`);
   }
-  if (!(POLICY_DIRECTION_TAGS as readonly string[]).includes(field.direction)) {
+  if (!Object.hasOwn(POLICY_KIND_DIRECTIONS, field.kind)) {
     throw new Error(
-      `gen-ops: policy field ${field.name} carries unknown direction ${JSON.stringify(field.direction)}`,
+      `gen-ops: policy field ${field.name} carries unknown kind ${JSON.stringify(field.kind)}`,
+    );
+  }
+  if (!(POLICY_KIND_DIRECTIONS[field.kind] as readonly string[]).includes(field.direction)) {
+    throw new Error(
+      `gen-ops: policy field ${field.name} (${field.kind}) carries unknown direction ${JSON.stringify(field.direction)}`,
     );
   }
 }
@@ -848,27 +857,24 @@ if (policy.docDefaults.v !== policy.docVersion) {
   throw new Error("gen-ops: the default policy document disagrees with docVersion");
 }
 
-// The direction tag determines a field's value shape - a boolean pole is a
-// boolean field, a grow direction is a millisecond count, the shrink-set
-// direction is the tool list - and the emitted default must already inhabit
-// it. A mismatch means the Rust catalogue and this derivation disagree, so
-// fail generation rather than emit a validator that rejects the defaults.
+// A field's value kind determines its Zod shape, and the emitted default
+// must already inhabit it. A mismatch means the Rust catalogue and this
+// derivation disagree, so fail generation rather than emit a validator that
+// rejects the defaults.
 const policyZodType = (field: PolicyContractField): string => {
   const dflt = policy.defaults[field.name];
-  switch (field.direction) {
-    case "truePermissive":
-    case "falsePermissive":
+  switch (field.kind) {
+    case "bool":
       if (typeof dflt !== "boolean") {
         throw new Error(`gen-ops: policy field ${field.name} has a non-boolean default`);
       }
       return "z.boolean()";
-    case "growsPermissive":
-    case "growsPermissiveZeroTop":
+    case "ms":
       if (!Number.isInteger(dflt) || (dflt as number) < 0) {
         throw new Error(`gen-ops: policy field ${field.name} has a non-integer default`);
       }
       return "z.int().nonnegative()";
-    case "shrinksPermissiveSet":
+    case "toolSet":
       if (!Array.isArray(dflt) || !dflt.every((t) => typeof t === "string")) {
         throw new Error(`gen-ops: policy field ${field.name} has a non-string-array default`);
       }
@@ -882,6 +888,16 @@ if (!/^[\x20-\x7e]*$/.test(policyDefaultsJson)) {
 }
 
 const policyFieldNameItems = policyFieldNames.map((n) => JSON.stringify(n)).join(",\n  ");
+const policyFieldNamesOfKind = (kind: PolicyKindTag): string =>
+  policy.fields
+    .filter((f) => f.kind === kind)
+    .map((f) => `  ${JSON.stringify(f.name)},`)
+    .join("\n");
+const policyFieldKindCases = (kind: PolicyKindTag): string =>
+  policy.fields
+    .filter((f) => f.kind === kind)
+    .map((f) => `    case ${JSON.stringify(f.name)}:`)
+    .join("\n");
 const policyDirectionItems = policy.fields
   .map((f) => `  ${emitKey(f.name)}: ${JSON.stringify(f.direction)},`)
   .join("\n");
@@ -900,10 +916,9 @@ const policyOut = `// GENERATED from the Rust core (src/packages/core/src/policy
 // scripts/gen-ops.ts - DO NOT EDIT. Edit the policy module, then run
 // \`moon run gen\`.
 //
-// The host-owned policy contract, TS side (ADR-0032). The extension recomputes every relax/restrict
-// comparison from the direction table itself, never trusting a host's claim about which way a change points,
-// and verifies a signed baseline under POLICY_DOMAIN against its pinned key before strict-parsing the same
-// bytes with PolicyDocSchema.
+// The host-owned policy contract, TS side. The extension recomputes every relax/restrict comparison from the
+// direction table itself, never trusting a host's claim about which way a change points, and verifies a signed
+// baseline under POLICY_DOMAIN against its pinned key before strict-parsing the same bytes with PolicyDocSchema.
 
 import { z } from "zod";
 
@@ -948,20 +963,57 @@ export function isPolicyFieldName(field: string): field is PolicyFieldName {
   return POLICY_FIELD_SET.has(field);
 }
 
-// A field's declared permissive pole (Rust Direction): the value direction
-// that grants capability. "truePermissive"/"falsePermissive" are the
-// boolean poles; "growsPermissive" millisecond windows grant as they grow;
-// "growsPermissiveZeroTop" is hostReverifyMs's custom order (0 = never
-// re-verify = MOST permissive, topping the scale); "shrinksPermissiveSet"
-// is disabledTools (dropping an entry re-enables a tool).
-export type PolicyDirection =
-  | "truePermissive"
-  | "falsePermissive"
-  | "growsPermissive"
-  | "growsPermissiveZeroTop"
-  | "shrinksPermissiveSet";
+// The fields by value kind (Rust FieldKind), each list in catalogue order,
+// and the refinement from a field name to its kind-typed handle: a boolean
+// comparison can only ever read a boolean field, so no direction can meet a
+// value of the wrong shape.
+export const BOOL_POLICY_FIELDS = [
+${policyFieldNamesOfKind("bool")}
+] as const;
 
-export const POLICY_DIRECTIONS: Readonly<Record<PolicyFieldName, PolicyDirection>> = {
+export const MS_POLICY_FIELDS = [
+${policyFieldNamesOfKind("ms")}
+] as const;
+
+export const TOOL_SET_POLICY_FIELDS = [
+${policyFieldNamesOfKind("toolSet")}
+] as const;
+
+export type BoolPolicyField = (typeof BOOL_POLICY_FIELDS)[number];
+export type MsPolicyField = (typeof MS_POLICY_FIELDS)[number];
+export type ToolSetPolicyField = (typeof TOOL_SET_POLICY_FIELDS)[number];
+
+export type PolicyFieldKind =
+  | { kind: "bool"; field: BoolPolicyField }
+  | { kind: "ms"; field: MsPolicyField }
+  | { kind: "toolSet"; field: ToolSetPolicyField };
+
+export function policyFieldKind(field: PolicyFieldName): PolicyFieldKind {
+  switch (field) {
+${policyFieldKindCases("bool")}
+      return { kind: "bool", field };
+${policyFieldKindCases("ms")}
+      return { kind: "ms", field };
+${policyFieldKindCases("toolSet")}
+      return { kind: "toolSet", field };
+  }
+}
+
+// A field's declared permissive pole (Rust Direction), typed by kind so the
+// table cannot pair a field with a direction of another kind.
+//   bool    -> "truePermissive" | "falsePermissive" (a skipped confirmation is a grant)
+//   ms      -> "growsPermissive" (a longer window grants) | "growsPermissiveZeroTop"
+//              (hostReverifyMs: 0 = never re-verify = MOST permissive, topping the scale)
+//   toolSet -> "shrinksPermissiveSet" (dropping an entry re-enables a tool)
+export type BoolPole = "truePermissive" | "falsePermissive";
+export type MsOrder = "growsPermissive" | "growsPermissiveZeroTop";
+export type PolicyDirection = BoolPole | MsOrder | "shrinksPermissiveSet";
+
+export const POLICY_DIRECTIONS: Readonly<
+  Record<BoolPolicyField, BoolPole> &
+    Record<MsPolicyField, MsOrder> &
+    Record<ToolSetPolicyField, "shrinksPermissiveSet">
+> = {
 ${policyDirectionItems}
 };
 
@@ -992,8 +1044,8 @@ export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
 // bounds as the document (JS-safe millisecond values, the disabledTools
 // caps). Strict on purpose, unlike the R5-loose control-frame wrappers: an
 // overlay field the catalogue does not own fails the whole frame parse,
-// fail closed (ADR-0032 decision 4). Whether a parsed overlay actually
-// RESTRICTS is the consumer's direction check, never this shape's.
+// fail closed. Whether a parsed overlay actually RESTRICTS is the
+// consumer's direction check, never this shape's.
 export const PolicyOverlaySchema = z.strictObject({
 ${policyOverlayFields}
 });
@@ -1017,13 +1069,13 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032 decision 8): a corrupt field in the
- * snapshotted chrome.storage bag falls back to its deny-baseline default, and the import review SHOWS that
- * fallback to the user, who signs it under their tap; it is never silently enforced.
+ * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY: a corrupt field in the snapshotted chrome.storage
+ * bag falls back to its deny-baseline default, and the import review SHOWS that fallback to the user, who signs
+ * it under their tap; it is never silently enforced.
  *
  * NEVER parse the stored effective policy with this: a per-field default fallback moves a corrupt field
  * toward its permissive pole relative to a user-restricted policy, the "garbage in, defaults out" relaxation
- * ADR-0032 decision 4 forbids. The stored effective policy is read with parseStoredPolicyValues below.
+ * the fail-closed store forbids. The stored effective policy is read with parseStoredPolicyValues below.
  */
 export function salvagePolicyValues(stored: unknown): PolicyValues {
   const bag: Record<string, unknown> =
@@ -1040,7 +1092,7 @@ export function salvagePolicyValues(stored: unknown): PolicyValues {
  * Strict parse of the extension's stored effective policy: \`null\` on ANY failure (a corrupt field, a
  * non-object, an extra key), never a salvage, which would hand a corrupted store a relaxation. Its caller,
  * policy-sync.ts classifyStored, reads null as CORRUPT, never absent: the state resolves to compromised, every
- * enforcement read refuses, and no replacement push lands while the record stays corrupt (ADR-0032 decision 4).
+ * enforcement read refuses, and no replacement push lands while the record stays corrupt.
  */
 export function parseStoredPolicyValues(stored: unknown): PolicyValues | null {
   const parsed = PolicyValuesSchema.safeParse(stored);

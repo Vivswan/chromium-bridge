@@ -2,6 +2,7 @@ use std::fs;
 
 use super::*;
 use crate::audit::Surface;
+use crate::policy::Ms;
 use crate::presence::policy_test_hook::{self, Mock};
 
 use crate::test_support::scratch_runtime_dir;
@@ -52,7 +53,7 @@ fn store_round_trips_the_exact_baseline_bytes() {
         sig_b64: Some("c2ln".into()),
         key_id: Some("kid".into()),
         overlay: Some(PolicyOverlay {
-            confirm_grace_ms: Some(0),
+            confirm_grace_ms: Some(Ms::ZERO),
             ..PolicyOverlay::default()
         }),
     };
@@ -468,7 +469,7 @@ fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
     let _dir = scratch_runtime_dir("policy-overlay-retention");
     let _reset = policy_test_hook::ResetOnDrop;
     let overlay = PolicyOverlay {
-        confirm_grace_ms: Some(1_000),
+        confirm_grace_ms: Some(Ms::from(1_000u32)),
         disabled_tools: Some(vec!["page_eval".into()]),
         ..PolicyOverlay::default()
     };
@@ -477,7 +478,7 @@ fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
     policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues {
-            confirm_grace_ms: 1_000,
+            confirm_grace_ms: Ms::from(1_000u32),
             ..PolicyValues::default()
         },
         vec![PolicyField::ConfirmGraceMs],
@@ -508,7 +509,7 @@ fn folding_the_effective_values_leaves_effective_unchanged() {
     };
     let overlay = PolicyOverlay {
         page_eval_enabled: Some(false),
-        confirm_grace_ms: Some(0),
+        confirm_grace_ms: Some(Ms::ZERO),
         disabled_tools: Some(vec!["page_upload".into()]),
         ..PolicyOverlay::default()
     };
@@ -769,7 +770,7 @@ fn restrict_merges_entrywise_keeping_unnamed_entries() {
     );
     restrict(
         PolicyOverlay {
-            confirm_grace_ms: Some(0),
+            confirm_grace_ms: Some(Ms::ZERO),
             ..PolicyOverlay::default()
         },
         Surface::Cli,
@@ -780,7 +781,7 @@ fn restrict_merges_entrywise_keeping_unnamed_entries() {
         store.overlay,
         Some(PolicyOverlay {
             page_eval_enabled: Some(false),
-            confirm_grace_ms: Some(0),
+            confirm_grace_ms: Some(Ms::ZERO),
             ..PolicyOverlay::default()
         })
     );
@@ -841,7 +842,7 @@ fn a_corrupt_history_file_never_blocks_policy_writes() {
     .unwrap();
     restrict(
         PolicyOverlay {
-            confirm_grace_ms: Some(0),
+            confirm_grace_ms: Some(Ms::ZERO),
             ..PolicyOverlay::default()
         },
         Surface::Cli,
@@ -1243,7 +1244,7 @@ fn clear_baseline_removes_the_store_and_keeps_history() {
             ..PolicyValues::default()
         },
         Some(PolicyOverlay {
-            confirm_grace_ms: Some(0),
+            confirm_grace_ms: Some(Ms::ZERO),
             ..PolicyOverlay::default()
         }),
     );

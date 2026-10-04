@@ -177,7 +177,7 @@ fn load_effective() -> Result<Option<PolicyValues>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{direction, Direction};
+    use crate::policy::{direction, BoolPole, Direction};
     use crate::tools::{all, Permission};
     use std::collections::BTreeSet;
 
@@ -240,24 +240,25 @@ mod tests {
             Grant::HandleDialog,
             Grant::PageEval,
         ];
+        let true_permissive = Direction::Bool(BoolPole::TruePermissive);
         // Each grant is a capability grant (permissive at true), never a
         // confirmation flag or a window.
         for g in grants {
             assert_eq!(
                 direction(g.field()),
-                Direction::TruePermissive,
+                true_permissive,
                 "grant {g:?} must map to a TruePermissive field"
             );
         }
         // The four grants are exactly the four TruePermissive fields: no
         // capability grant exists that a tool could never gate on.
         let grant_fields: BTreeSet<&str> = grants.iter().map(|g| g.field().wire_name()).collect();
-        let true_permissive: BTreeSet<&str> = PolicyField::ALL
+        let true_permissive_fields: BTreeSet<&str> = PolicyField::ALL
             .iter()
-            .filter(|f| direction(**f) == Direction::TruePermissive)
+            .filter(|f| direction(**f) == true_permissive)
             .map(|f| f.wire_name())
             .collect();
-        assert_eq!(grant_fields, true_permissive);
+        assert_eq!(grant_fields, true_permissive_fields);
     }
 
     #[test]

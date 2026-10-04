@@ -2,23 +2,27 @@
 // mirror the Rust core's semantics exactly (field_relaxes / fold /
 // zero_top_rank in src/packages/core/src/policy/mod.rs): the extension
 // recomputes every relax/restrict decision from these, so a divergence is a
-// parser-differential on the security boundary. The two arms a naive
-// comparator gets wrong are pinned hardest: the hostReverifyMs zero-top
-// order and the disabledTools set semantics.
+// parser-differential on the security boundary. The grant condition under
+// each pole is checked over the whole generated catalogue; the two orders a
+// naive comparator gets wrong (the hostReverifyMs zero-top order and the
+// disabledTools set semantics) are pinned as a case list.
 
 import { describe, expect, test } from "bun:test";
 import {
   POLICY_DEFAULTS,
+  POLICY_DIRECTIONS,
   POLICY_FIELDS,
   PolicyDocSchema,
+  type PolicyFieldName,
   type PolicyValues,
+  policyFieldKind,
 } from "../src/policy.gen";
 import {
   foldPolicyOverlay,
   policyFieldRelaxes,
   policyRelaxes,
   policyValuesEqual,
-  policyValuesFromDoc,
+  policyValuesFrom,
   relaxedPolicyFields,
 } from "../src/policy-compare";
 
@@ -26,120 +30,117 @@ function values(overrides: Partial<PolicyValues> = {}): PolicyValues {
   return { ...POLICY_DEFAULTS, disabledTools: [...POLICY_DEFAULTS.disabledTools], ...overrides };
 }
 
-describe("boolean poles", () => {
-  test("truePermissive: enabling a grant relaxes, disabling restricts", () => {
-    expect(policyFieldRelaxes("pageEvalEnabled", values({ pageEvalEnabled: true }), values())).toBe(
-      true,
-    );
-    expect(policyFieldRelaxes("pageEvalEnabled", values(), values({ pageEvalEnabled: true }))).toBe(
-      false,
-    );
-    expect(policyFieldRelaxes("pageEvalEnabled", values(), values())).toBe(false);
-  });
+/** `field` at its permissive pole and at its restrictive pole, every other
+ * field at the deny baseline, read from the generated direction table. */
+function poles(field: PolicyFieldName): { lax: PolicyValues; tight: PolicyValues } {
+  const handle = policyFieldKind(field);
+  switch (handle.kind) {
+    case "bool": {
+      const grant = POLICY_DIRECTIONS[handle.field] === "truePermissive";
+      return { lax: values({ [handle.field]: grant }), tight: values({ [handle.field]: !grant }) };
+    }
+    case "ms": {
+      const zeroTop = POLICY_DIRECTIONS[handle.field] === "growsPermissiveZeroTop";
+      return {
+        lax: values({ [handle.field]: zeroTop ? 0 : 2 }),
+        tight: values({ [handle.field]: 1 }),
+      };
+    }
+    case "toolSet":
+      return {
+        lax: values({ [handle.field]: [] }),
+        tight: values({ [handle.field]: ["page_eval"] }),
+      };
+  }
+}
 
-  test("falsePermissive: dropping a confirmation relaxes, restoring restricts", () => {
-    expect(
-      policyFieldRelaxes("confirmPageEval", values({ confirmPageEval: false }), values()),
-    ).toBe(true);
-    expect(
-      policyFieldRelaxes("confirmPageEval", values(), values({ confirmPageEval: false })),
-    ).toBe(false);
-  });
+describe("every field relaxes exactly toward its declared pole", () => {
+  for (const field of POLICY_FIELDS) {
+    test(field, () => {
+      const { lax, tight } = poles(field);
+      expect(relaxedPolicyFields(lax, tight)).toEqual([field]);
+      expect(relaxedPolicyFields(tight, lax)).toEqual([]);
+      expect(policyRelaxes(lax, tight)).toBe(true);
+      expect(policyRelaxes(tight, lax)).toBe(false);
+    });
+  }
 });
 
-describe("grow-direction fields", () => {
-  test("growsPermissive: a longer window relaxes, a shorter one restricts", () => {
-    expect(policyFieldRelaxes("confirmGraceMs", values({ confirmGraceMs: 120000 }), values())).toBe(
+describe("the orders a naive comparator gets wrong", () => {
+  const anchorTools = values({ disabledTools: ["page_eval", "page_upload"] });
+  const cases: [string, PolicyFieldName, PolicyValues, PolicyValues, boolean][] = [
+    // 0 = never re-verify = MOST permissive, above every positive interval.
+    ["reverify 0 over 5000", "hostReverifyMs", values(), values({ hostReverifyMs: 5000 }), true],
+    ["reverify 5000 over 0", "hostReverifyMs", values({ hostReverifyMs: 5000 }), values(), false],
+    [
+      "reverify 9000 over 5000",
+      "hostReverifyMs",
+      values({ hostReverifyMs: 9000 }),
+      values({ hostReverifyMs: 5000 }),
       true,
-    );
-    expect(policyFieldRelaxes("confirmGraceMs", values({ confirmGraceMs: 1 }), values())).toBe(
+    ],
+    [
+      "reverify 5000 over 9000",
+      "hostReverifyMs",
+      values({ hostReverifyMs: 5000 }),
+      values({ hostReverifyMs: 9000 }),
       false,
-    );
-    expect(policyFieldRelaxes("confirmGraceMs", values(), values())).toBe(false);
-  });
-
-  test("hostReverifyMs zero-top: 0 tops the scale (the arm a numeric comparator gets backwards)", () => {
-    // 0 = never re-verify = MOST permissive: moving 5000 -> 0 relaxes...
-    expect(policyFieldRelaxes("hostReverifyMs", values(), values({ hostReverifyMs: 5000 }))).toBe(
+    ],
+    ["reverify 0 over 0", "hostReverifyMs", values(), values(), false],
+    // A set: dropping ANY anchor entry relaxes, whatever else the candidate
+    // adds; order and duplicates carry no meaning.
+    [
+      "one tool dropped",
+      "disabledTools",
+      values({ disabledTools: ["page_eval"] }),
+      anchorTools,
       true,
-    );
-    // ...and 0 -> any positive interval restricts, never relaxes.
-    expect(policyFieldRelaxes("hostReverifyMs", values({ hostReverifyMs: 5000 }), values())).toBe(
+    ],
+    [
+      "one tool dropped while others are added",
+      "disabledTools",
+      values({ disabledTools: ["page_eval", "tab_close", "cookies_get"] }),
+      anchorTools,
+      true,
+    ],
+    [
+      "reordered superset",
+      "disabledTools",
+      values({ disabledTools: ["page_upload", "page_eval", "tab_close"] }),
+      anchorTools,
       false,
-    );
-    // Among positive values the numeric order holds: longer = laxer.
-    expect(
-      policyFieldRelaxes(
-        "hostReverifyMs",
-        values({ hostReverifyMs: 9000 }),
-        values({ hostReverifyMs: 5000 }),
-      ),
-    ).toBe(true);
-    expect(
-      policyFieldRelaxes(
-        "hostReverifyMs",
-        values({ hostReverifyMs: 5000 }),
-        values({ hostReverifyMs: 9000 }),
-      ),
-    ).toBe(false);
-    // 0 vs 0: equal, no relax.
-    expect(policyFieldRelaxes("hostReverifyMs", values(), values())).toBe(false);
-  });
-});
-
-describe("disabledTools set semantics", () => {
-  test("dropping ANY anchor entry relaxes, whatever else the candidate adds", () => {
-    const anchor = values({ disabledTools: ["page_eval", "page_upload"] });
-    expect(
-      policyFieldRelaxes("disabledTools", values({ disabledTools: ["page_eval"] }), anchor),
-    ).toBe(true);
-    // Adding new entries alongside the drop does not launder it.
-    expect(
-      policyFieldRelaxes(
-        "disabledTools",
-        values({ disabledTools: ["page_eval", "tab_close", "cookies_get"] }),
-        anchor,
-      ),
-    ).toBe(true);
-  });
-
-  test("supersets and reorderings never relax; duplicates carry no meaning", () => {
-    const anchor = values({ disabledTools: ["page_eval", "page_upload"] });
-    expect(
-      policyFieldRelaxes(
-        "disabledTools",
-        values({ disabledTools: ["page_upload", "page_eval", "tab_close"] }),
-        anchor,
-      ),
-    ).toBe(false);
-    expect(
-      policyFieldRelaxes(
-        "disabledTools",
-        values({ disabledTools: ["page_upload", "page_eval", "page_eval"] }),
-        anchor,
-      ),
-    ).toBe(false);
-  });
+    ],
+    [
+      "reordered with a duplicate",
+      "disabledTools",
+      values({ disabledTools: ["page_upload", "page_eval", "page_eval"] }),
+      anchorTools,
+      false,
+    ],
+  ];
+  for (const [name, field, candidate, anchor, expected] of cases) {
+    test(name, () => {
+      expect(policyFieldRelaxes(field, candidate, anchor)).toBe(expected);
+    });
+  }
 });
 
 describe("relaxes over the whole document", () => {
-  test("any single relaxed field makes the policy relax; equal policies never do", () => {
+  test("every relaxed field is named, in catalogue order; equal policies relax nothing", () => {
     expect(policyRelaxes(values(), values())).toBe(false);
-    expect(policyRelaxes(values({ cdpMode: true }), values())).toBe(true);
     expect(relaxedPolicyFields(values({ cdpMode: true, evalMask: false }), values())).toEqual([
       "cdpMode",
       "evalMask",
     ]);
   });
 
-  test("a pure restriction relaxes nothing (the complement reading)", () => {
+  test("a pure restriction relaxes nothing, and the anchor relaxes it on exactly those fields", () => {
     const restricted = values({
       confirmGraceMs: 1000,
       hostReverifyMs: 60000,
       disabledTools: ["page_eval"],
     });
-    expect(policyRelaxes(restricted, values())).toBe(false);
-    // And the anchor relaxes relative to it on exactly those fields.
+    expect(relaxedPolicyFields(restricted, values())).toEqual([]);
     expect(relaxedPolicyFields(values(), restricted)).toEqual([
       "hostReverifyMs",
       "confirmGraceMs",
@@ -151,14 +152,10 @@ describe("relaxes over the whole document", () => {
 describe("fold", () => {
   test("present overlay entries override, absent ones keep the baseline (Rust fold)", () => {
     const baseline = values({ pageEvalEnabled: true, confirmGraceMs: 120000 });
-    const folded = foldPolicyOverlay(baseline, {
-      pageEvalEnabled: false,
-      disabledTools: ["page_upload"],
-    });
-    expect(folded.pageEvalEnabled).toBe(false);
-    expect(folded.disabledTools).toEqual(["page_upload"]);
-    expect(folded.confirmGraceMs).toBe(120000);
-    expect(folded.cdpMode).toBe(false);
+    expect(
+      foldPolicyOverlay(baseline, { pageEvalEnabled: false, disabledTools: ["page_upload"] }),
+    ).toEqual(values({ confirmGraceMs: 120000, disabledTools: ["page_upload"] }));
+    expect(foldPolicyOverlay(baseline, {})).toEqual(baseline);
   });
 
   test("folding never aliases its inputs (frozen defaults stay intact)", () => {
@@ -169,14 +166,9 @@ describe("fold", () => {
     kept.disabledTools.push("mutated");
     expect(POLICY_DEFAULTS.disabledTools).toEqual([]);
   });
-
-  test("an empty overlay folds to field-wise equality", () => {
-    const baseline = values({ fileUploadEnabled: true, disabledTools: ["a", "b"] });
-    expect(policyValuesEqual(foldPolicyOverlay(baseline, {}), baseline)).toBe(true);
-  });
 });
 
-describe("policyValuesFromDoc", () => {
+describe("policyValuesFrom", () => {
   test("strips exactly the scoping fields and copies the array", () => {
     const doc = PolicyDocSchema.parse({
       v: 1,
@@ -184,9 +176,8 @@ describe("policyValuesFromDoc", () => {
       touched: ["pageEvalEnabled"],
       ...values({ pageEvalEnabled: true, disabledTools: ["page_upload"] }),
     });
-    const detached = policyValuesFromDoc(doc);
-    expect(Object.keys(detached).sort()).toEqual([...POLICY_FIELDS].sort());
-    expect(detached.pageEvalEnabled).toBe(true);
+    const detached = policyValuesFrom(doc);
+    expect(detached).toEqual(values({ pageEvalEnabled: true, disabledTools: ["page_upload"] }));
     detached.disabledTools.push("mutated");
     expect(doc.disabledTools).toEqual(["page_upload"]);
   });

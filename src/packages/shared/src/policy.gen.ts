@@ -3,10 +3,9 @@
 // scripts/gen-ops.ts - DO NOT EDIT. Edit the policy module, then run
 // `moon run gen`.
 //
-// The host-owned policy contract, TS side (ADR-0032). The extension recomputes every relax/restrict
-// comparison from the direction table itself, never trusting a host's claim about which way a change points,
-// and verifies a signed baseline under POLICY_DOMAIN against its pinned key before strict-parsing the same
-// bytes with PolicyDocSchema.
+// The host-owned policy contract, TS side. The extension recomputes every relax/restrict comparison from the
+// direction table itself, never trusting a host's claim about which way a change points, and verifies a signed
+// baseline under POLICY_DOMAIN against its pinned key before strict-parsing the same bytes with PolicyDocSchema.
 
 import { z } from "zod";
 
@@ -65,20 +64,79 @@ export function isPolicyFieldName(field: string): field is PolicyFieldName {
   return POLICY_FIELD_SET.has(field);
 }
 
-// A field's declared permissive pole (Rust Direction): the value direction
-// that grants capability. "truePermissive"/"falsePermissive" are the
-// boolean poles; "growsPermissive" millisecond windows grant as they grow;
-// "growsPermissiveZeroTop" is hostReverifyMs's custom order (0 = never
-// re-verify = MOST permissive, topping the scale); "shrinksPermissiveSet"
-// is disabledTools (dropping an entry re-enables a tool).
-export type PolicyDirection =
-  | "truePermissive"
-  | "falsePermissive"
-  | "growsPermissive"
-  | "growsPermissiveZeroTop"
-  | "shrinksPermissiveSet";
+// The fields by value kind (Rust FieldKind), each list in catalogue order,
+// and the refinement from a field name to its kind-typed handle: a boolean
+// comparison can only ever read a boolean field, so no direction can meet a
+// value of the wrong shape.
+export const BOOL_POLICY_FIELDS = [
+  "cdpMode",
+  "fileUploadEnabled",
+  "handleDialogEnabled",
+  "pageEvalEnabled",
+  "confirmHighRiskClick",
+  "confirmPageEval",
+  "touchIdConfirm",
+  "confirmTabClose",
+  "warnPreciseSnapshot",
+  "evalMask",
+] as const;
 
-export const POLICY_DIRECTIONS: Readonly<Record<PolicyFieldName, PolicyDirection>> = {
+export const MS_POLICY_FIELDS = [
+  "hostReverifyMs",
+  "confirmGraceMs",
+  "clickToastTimeoutMs",
+  "evalToastTimeoutMs",
+] as const;
+
+export const TOOL_SET_POLICY_FIELDS = ["disabledTools"] as const;
+
+export type BoolPolicyField = (typeof BOOL_POLICY_FIELDS)[number];
+export type MsPolicyField = (typeof MS_POLICY_FIELDS)[number];
+export type ToolSetPolicyField = (typeof TOOL_SET_POLICY_FIELDS)[number];
+
+export type PolicyFieldKind =
+  | { kind: "bool"; field: BoolPolicyField }
+  | { kind: "ms"; field: MsPolicyField }
+  | { kind: "toolSet"; field: ToolSetPolicyField };
+
+export function policyFieldKind(field: PolicyFieldName): PolicyFieldKind {
+  switch (field) {
+    case "cdpMode":
+    case "fileUploadEnabled":
+    case "handleDialogEnabled":
+    case "pageEvalEnabled":
+    case "confirmHighRiskClick":
+    case "confirmPageEval":
+    case "touchIdConfirm":
+    case "confirmTabClose":
+    case "warnPreciseSnapshot":
+    case "evalMask":
+      return { kind: "bool", field };
+    case "hostReverifyMs":
+    case "confirmGraceMs":
+    case "clickToastTimeoutMs":
+    case "evalToastTimeoutMs":
+      return { kind: "ms", field };
+    case "disabledTools":
+      return { kind: "toolSet", field };
+  }
+}
+
+// A field's declared permissive pole (Rust Direction), typed by kind so the
+// table cannot pair a field with a direction of another kind.
+//   bool    -> "truePermissive" | "falsePermissive" (a skipped confirmation is a grant)
+//   ms      -> "growsPermissive" (a longer window grants) | "growsPermissiveZeroTop"
+//              (hostReverifyMs: 0 = never re-verify = MOST permissive, topping the scale)
+//   toolSet -> "shrinksPermissiveSet" (dropping an entry re-enables a tool)
+export type BoolPole = "truePermissive" | "falsePermissive";
+export type MsOrder = "growsPermissive" | "growsPermissiveZeroTop";
+export type PolicyDirection = BoolPole | MsOrder | "shrinksPermissiveSet";
+
+export const POLICY_DIRECTIONS: Readonly<
+  Record<BoolPolicyField, BoolPole> &
+    Record<MsPolicyField, MsOrder> &
+    Record<ToolSetPolicyField, "shrinksPermissiveSet">
+> = {
   cdpMode: "truePermissive",
   fileUploadEnabled: "truePermissive",
   handleDialogEnabled: "truePermissive",
@@ -151,8 +209,8 @@ export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
 // bounds as the document (JS-safe millisecond values, the disabledTools
 // caps). Strict on purpose, unlike the R5-loose control-frame wrappers: an
 // overlay field the catalogue does not own fails the whole frame parse,
-// fail closed (ADR-0032 decision 4). Whether a parsed overlay actually
-// RESTRICTS is the consumer's direction check, never this shape's.
+// fail closed. Whether a parsed overlay actually RESTRICTS is the
+// consumer's direction check, never this shape's.
 export const PolicyOverlaySchema = z.strictObject({
   cdpMode: z.boolean().optional(),
   fileUploadEnabled: z.boolean().optional(),
@@ -204,13 +262,13 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032 decision 8): a corrupt field in the
- * snapshotted chrome.storage bag falls back to its deny-baseline default, and the import review SHOWS that
- * fallback to the user, who signs it under their tap; it is never silently enforced.
+ * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY: a corrupt field in the snapshotted chrome.storage
+ * bag falls back to its deny-baseline default, and the import review SHOWS that fallback to the user, who signs
+ * it under their tap; it is never silently enforced.
  *
  * NEVER parse the stored effective policy with this: a per-field default fallback moves a corrupt field
  * toward its permissive pole relative to a user-restricted policy, the "garbage in, defaults out" relaxation
- * ADR-0032 decision 4 forbids. The stored effective policy is read with parseStoredPolicyValues below.
+ * the fail-closed store forbids. The stored effective policy is read with parseStoredPolicyValues below.
  */
 export function salvagePolicyValues(stored: unknown): PolicyValues {
   const bag: Record<string, unknown> =
@@ -227,7 +285,7 @@ export function salvagePolicyValues(stored: unknown): PolicyValues {
  * Strict parse of the extension's stored effective policy: `null` on ANY failure (a corrupt field, a
  * non-object, an extra key), never a salvage, which would hand a corrupted store a relaxation. Its caller,
  * policy-sync.ts classifyStored, reads null as CORRUPT, never absent: the state resolves to compromised, every
- * enforcement read refuses, and no replacement push lands while the record stays corrupt (ADR-0032 decision 4).
+ * enforcement read refuses, and no replacement push lands while the record stays corrupt.
  */
 export function parseStoredPolicyValues(stored: unknown): PolicyValues | null {
   const parsed = PolicyValuesSchema.safeParse(stored);

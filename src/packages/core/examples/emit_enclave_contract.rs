@@ -27,7 +27,7 @@ use chromium_bridge_core::enclave::{
     POLICY_DOMAIN, PRESENCE_DOMAIN, PUBKEY_LEN, REASON_CODES, SIG_LEN,
 };
 use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
-use chromium_bridge_core::policy::{PolicyDoc, PolicyField};
+use chromium_bridge_core::policy::{Ms, PolicyDoc, PolicyField};
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};
@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PolicyField::DisabledTools,
         ],
         page_eval_enabled: true,
-        confirm_grace_ms: 120_000,
+        confirm_grace_ms: Ms::from(120_000u32),
         disabled_tools: vec!["page_upload".to_string()],
         ..PolicyDoc::default()
     };

@@ -2,13 +2,14 @@ use super::*;
 use serde_json::json;
 
 /// Values differing from the deny baseline only in `hostReverifyMs`.
-fn with_reverify(ms: u64) -> PolicyValues {
+fn with_reverify(ms: u32) -> PolicyValues {
     PolicyValues {
-        host_reverify_ms: ms,
+        host_reverify_ms: Ms::from(ms),
         ..PolicyValues::default()
     }
 }
 
+/// Values differing from the deny baseline only in `disabledTools`.
 fn with_tools(tools: &[&str]) -> PolicyValues {
     PolicyValues {
         disabled_tools: tools.iter().map(|t| t.to_string()).collect(),
@@ -16,34 +17,213 @@ fn with_tools(tools: &[&str]) -> PolicyValues {
     }
 }
 
+/// `field` at its permissive pole and at its restrictive pole, every other
+/// field at the deny baseline, read from the catalogue's declared direction.
+fn poles(field: PolicyField) -> (PolicyValues, PolicyValues) {
+    let mut lax = PolicyValues::default();
+    let mut tight = PolicyValues::default();
+    match field.kind() {
+        FieldKind::Bool(f) => {
+            let grant = f.pole() == BoolPole::TruePermissive;
+            *lax.bool_mut(f) = grant;
+            *tight.bool_mut(f) = !grant;
+        }
+        FieldKind::Ms(f) => {
+            let (l, t) = match f.order() {
+                MsOrder::GrowsPermissive => (Ms::from(2u32), Ms::from(1u32)),
+                MsOrder::GrowsPermissiveZeroTop => (Ms::ZERO, Ms::from(1u32)),
+            };
+            *lax.ms_mut(f) = l;
+            *tight.ms_mut(f) = t;
+        }
+        FieldKind::ToolSet(f) => {
+            *lax.tools_mut(f) = Vec::new();
+            *tight.tools_mut(f) = vec!["page_eval".into()];
+        }
+    }
+    (lax, tight)
+}
+
 #[test]
-fn direction_is_total_over_the_pinned_field_catalogue() {
-    // Pins the exact catalogue AND each field's declared direction: a
-    // silently added, removed, or reclassified field fails right here.
-    let table: Vec<(&str, Direction)> = PolicyField::ALL
-        .iter()
-        .map(|f| (f.wire_name(), direction(*f)))
-        .collect();
-    assert_eq!(
-        table,
-        [
-            ("cdpMode", Direction::TruePermissive),
-            ("fileUploadEnabled", Direction::TruePermissive),
-            ("handleDialogEnabled", Direction::TruePermissive),
-            ("pageEvalEnabled", Direction::TruePermissive),
-            ("confirmHighRiskClick", Direction::FalsePermissive),
-            ("confirmPageEval", Direction::FalsePermissive),
-            ("touchIdConfirm", Direction::FalsePermissive),
-            ("confirmTabClose", Direction::FalsePermissive),
-            ("warnPreciseSnapshot", Direction::FalsePermissive),
-            ("evalMask", Direction::FalsePermissive),
-            ("hostReverifyMs", Direction::GrowsPermissiveZeroTop),
-            ("confirmGraceMs", Direction::GrowsPermissive),
-            ("clickToastTimeoutMs", Direction::GrowsPermissive),
-            ("evalToastTimeoutMs", Direction::GrowsPermissive),
-            ("disabledTools", Direction::ShrinksPermissiveSet),
-        ]
+fn every_field_relaxes_exactly_toward_its_declared_pole() {
+    // The direction table is the only owner of what relaxes: a field's
+    // permissive pole relaxes its restrictive pole, no other field moves, and
+    // the reverse never relaxes, for every catalogue field.
+    for field in PolicyField::ALL {
+        let (lax, tight) = poles(*field);
+        let relaxed: Vec<PolicyField> = PolicyField::ALL
+            .iter()
+            .copied()
+            .filter(|f| field_relaxes(*f, &lax, &tight))
+            .collect();
+        assert_eq!(
+            relaxed,
+            vec![*field],
+            "{} alone must relax toward its declared permissive pole",
+            field.wire_name()
+        );
+        assert!(
+            !relaxes(&tight, &lax) && restricts_or_equal(&tight, &lax),
+            "{} must not relax away from its declared permissive pole",
+            field.wire_name()
+        );
+    }
+}
+
+#[test]
+fn the_orders_a_naive_comparator_gets_wrong() {
+    // hostReverifyMs: 0 = never re-verify = MOST permissive, above every
+    // positive interval. disabledTools: a set, where dropping any anchor
+    // entry relaxes whatever else the candidate adds, and order or
+    // duplicates carry no meaning.
+    let anchor_tools = with_tools(&["page_eval", "page_upload"]);
+    let cases = [
+        (
+            "reverify 0 over 60000",
+            with_reverify(0),
+            with_reverify(60_000),
+            true,
+        ),
+        (
+            "reverify 60000 over 0",
+            with_reverify(60_000),
+            with_reverify(0),
+            false,
+        ),
+        (
+            "reverify 60000 over 1000",
+            with_reverify(60_000),
+            with_reverify(1_000),
+            true,
+        ),
+        (
+            "reverify 1000 over 60000",
+            with_reverify(1_000),
+            with_reverify(60_000),
+            false,
+        ),
+        (
+            "same tool set",
+            anchor_tools.clone(),
+            anchor_tools.clone(),
+            false,
+        ),
+        (
+            "tool superset",
+            with_tools(&["page_eval", "page_upload", "tab_close"]),
+            anchor_tools.clone(),
+            false,
+        ),
+        (
+            "reordered tool set with a duplicate",
+            with_tools(&["page_upload", "page_eval", "page_eval"]),
+            anchor_tools.clone(),
+            false,
+        ),
+        (
+            "one tool dropped",
+            with_tools(&["page_eval"]),
+            anchor_tools.clone(),
+            true,
+        ),
+        (
+            "one tool dropped while another is added",
+            with_tools(&["page_eval", "tab_close"]),
+            anchor_tools.clone(),
+            true,
+        ),
+        (
+            "every tool dropped",
+            with_tools(&[]),
+            anchor_tools.clone(),
+            true,
+        ),
+    ];
+    for (name, candidate, anchor, expected) in cases {
+        assert_eq!(relaxes(&candidate, &anchor), expected, "{name}");
+        assert_eq!(restricts_or_equal(&candidate, &anchor), !expected, "{name}");
+    }
+}
+
+#[test]
+fn serialized_bytes_are_the_signed_wire_contract() {
+    // The signature covers these exact bytes and the extension strict-parses
+    // them, so key spelling, key order, and value encoding are an external
+    // contract: the bytes must never move.
+    let values = PolicyValues {
+        cdp_mode: true,
+        file_upload_enabled: false,
+        handle_dialog_enabled: true,
+        page_eval_enabled: false,
+        confirm_high_risk_click: false,
+        confirm_page_eval: true,
+        touch_id_confirm: false,
+        confirm_tab_close: true,
+        warn_precise_snapshot: false,
+        eval_mask: true,
+        host_reverify_ms: Ms::from(1u32),
+        confirm_grace_ms: Ms::from(2u32),
+        click_toast_timeout_ms: Ms::from(3u32),
+        eval_toast_timeout_ms: Ms::try_from(JS_SAFE_INT_MAX).unwrap(),
+        disabled_tools: vec!["page_eval".into(), "tab_close".into()],
+    };
+    let fields = concat!(
+        r#""cdpMode":true,"#,
+        r#""fileUploadEnabled":false,"#,
+        r#""handleDialogEnabled":true,"#,
+        r#""pageEvalEnabled":false,"#,
+        r#""confirmHighRiskClick":false,"#,
+        r#""confirmPageEval":true,"#,
+        r#""touchIdConfirm":false,"#,
+        r#""confirmTabClose":true,"#,
+        r#""warnPreciseSnapshot":false,"#,
+        r#""evalMask":true,"#,
+        r#""hostReverifyMs":1,"#,
+        r#""confirmGraceMs":2,"#,
+        r#""clickToastTimeoutMs":3,"#,
+        r#""evalToastTimeoutMs":9007199254740991,"#,
+        r#""disabledTools":["page_eval","tab_close"]"#
     );
+    assert_eq!(
+        serde_json::to_string(&values).unwrap(),
+        format!("{{{fields}}}")
+    );
+    assert_eq!(
+        serde_json::from_str::<PolicyValues>(&format!("{{{fields}}}")).unwrap(),
+        values
+    );
+
+    let mut overlay = PolicyOverlay::default();
+    for field in PolicyField::ALL {
+        overlay.set_from(*field, &values);
+    }
+    assert_eq!(
+        serde_json::to_string(&overlay).unwrap(),
+        format!("{{{fields}}}")
+    );
+    assert_eq!(
+        serde_json::from_str::<PolicyOverlay>(&format!("{{{fields}}}")).unwrap(),
+        overlay
+    );
+    assert_eq!(
+        serde_json::to_string(&PolicyOverlay::default()).unwrap(),
+        "{}"
+    );
+
+    let doc = PolicyDoc::from_values(
+        &values,
+        7,
+        vec![
+            PolicyField::CdpMode,
+            PolicyField::EvalToastTimeoutMs,
+            PolicyField::DisabledTools,
+        ],
+    );
+    let doc_json = format!(
+        r#"{{"v":1,"revision":7,"touched":["cdpMode","evalToastTimeoutMs","disabledTools"],{fields}}}"#
+    );
+    assert_eq!(serde_json::to_string(&doc).unwrap(), doc_json);
+    assert_eq!(serde_json::from_str::<PolicyDoc>(&doc_json).unwrap(), doc);
 }
 
 #[test]
@@ -60,48 +240,6 @@ fn wire_names_match_serde_emission_and_round_trip() {
 }
 
 #[test]
-fn document_keys_are_exactly_the_scoping_fields_plus_the_wire_names() {
-    // PolicyDoc's keys come from rename_all = "camelCase" over the struct
-    // fields, PolicyField's from the macro literals. Nothing ties the two
-    // together at compile time, so pin their equality here: a struct
-    // field rename (or a macro literal edit) that lets them drift makes a
-    // touched entry stop naming a document key.
-    let doc = serde_json::to_value(PolicyDoc::default()).unwrap();
-    let doc_keys: std::collections::BTreeSet<&str> = doc
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    let expected: std::collections::BTreeSet<&str> = ["v", "revision", "touched"]
-        .into_iter()
-        .chain(PolicyField::ALL.iter().map(|f| f.wire_name()))
-        .collect();
-    assert_eq!(doc_keys, expected);
-    // The overlay carries exactly the wire-named fields (all optional).
-    let full_overlay: PolicyOverlay =
-        serde_json::from_value(doc_without_scoping_fields(&doc)).unwrap();
-    assert_eq!(
-        serde_json::to_value(&full_overlay)
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .len(),
-        PolicyField::ALL.len()
-    );
-}
-
-/// The default document's JSON minus v/revision/touched: a full overlay
-/// in wire spelling, for the key-parity pin above.
-fn doc_without_scoping_fields(doc: &serde_json::Value) -> serde_json::Value {
-    let mut obj = doc.as_object().unwrap().clone();
-    obj.remove("v");
-    obj.remove("revision");
-    obj.remove("touched");
-    serde_json::Value::Object(obj)
-}
-
-#[test]
 fn unknown_touched_field_names_fail_the_parse() {
     // requireEnrollment is retired and uiLanguage is deliberately not a
     // policy field; neither may ride into a touched set.
@@ -114,33 +252,6 @@ fn unknown_touched_field_names_fail_the_parse() {
     let mut doc = serde_json::to_value(PolicyDoc::default()).unwrap();
     doc["touched"] = json!(["pageEvalEnabled", "requireEnrollment"]);
     assert!(serde_json::from_value::<PolicyDoc>(doc).is_err());
-}
-
-#[test]
-fn host_reverify_zero_tops_the_permissiveness_scale() {
-    // The order a naive numeric comparator gets backwards: 0 = never
-    // re-verify = MOST permissive.
-    assert!(relaxes(&with_reverify(0), &with_reverify(60_000)));
-    assert!(!relaxes(&with_reverify(60_000), &with_reverify(0)));
-    assert!(restricts_or_equal(
-        &with_reverify(60_000),
-        &with_reverify(0)
-    ));
-    assert!(!restricts_or_equal(
-        &with_reverify(0),
-        &with_reverify(60_000)
-    ));
-    // Among positive values permissiveness grows with the number.
-    assert!(relaxes(&with_reverify(60_000), &with_reverify(1_000)));
-    assert!(!relaxes(&with_reverify(1_000), &with_reverify(60_000)));
-    assert!(restricts_or_equal(
-        &with_reverify(1_000),
-        &with_reverify(60_000)
-    ));
-    assert!(!restricts_or_equal(
-        &with_reverify(60_000),
-        &with_reverify(1_000)
-    ));
 }
 
 #[test]
@@ -172,90 +283,39 @@ fn validate_refuses_a_foreign_document_version() {
 
 #[test]
 fn ms_fields_parse_only_inside_the_js_safe_bound() {
-    // The parser differential F2 closes: without this bound a huge ms
-    // value signs and stores host-side while the generated Zod (z.int()
-    // rejects unsafe integers) refuses the push.
-    for field in [
-        "hostReverifyMs",
-        "confirmGraceMs",
-        "clickToastTimeoutMs",
-        "evalToastTimeoutMs",
-    ] {
+    // The generated Zod (z.int()) refuses unsafe integers: without this
+    // bound a huge millisecond value would sign and store host-side while
+    // the extension refuses the push. Document and overlay lanes alike; a
+    // huge-but-restricting overlay value is a legal restriction under the
+    // zero-top order, so the overlay lane needs the bound just as much.
+    for field in PolicyField::ALL
+        .iter()
+        .filter(|f| matches!(f.kind(), FieldKind::Ms(_)))
+    {
+        let name = field.wire_name();
         let mut doc = serde_json::to_value(PolicyDoc::default()).unwrap();
-        doc[field] = json!(9_007_199_254_740_991u64);
+        doc[name] = json!(JS_SAFE_INT_MAX);
         assert!(
             serde_json::from_value::<PolicyDoc>(doc.clone()).is_ok(),
-            "{field} must accept 2^53 - 1"
+            "{name} must accept 2^53 - 1"
         );
-        doc[field] = json!(9_007_199_254_740_992u64);
+        doc[name] = json!(JS_SAFE_INT_MAX + 1);
         assert!(
             serde_json::from_value::<PolicyDoc>(doc).is_err(),
-            "{field} must refuse 2^53"
+            "{name} must refuse 2^53"
         );
-    }
-}
-
-#[test]
-fn overlay_ms_fields_parse_only_inside_the_js_safe_bound() {
-    // The same differential as the document fields, overlay lane: a
-    // huge-but-restricting overlay value is a legal restriction under
-    // the zero-top order, so without this bound it would store
-    // host-side and then fail the extension's JS-safe frame parse.
-    for field in [
-        "hostReverifyMs",
-        "confirmGraceMs",
-        "clickToastTimeoutMs",
-        "evalToastTimeoutMs",
-    ] {
-        let ok = json!({ field: 9_007_199_254_740_991u64 });
         assert!(
-            serde_json::from_value::<PolicyOverlay>(ok).is_ok(),
-            "overlay {field} must accept 2^53 - 1"
+            serde_json::from_value::<PolicyOverlay>(json!({ name: JS_SAFE_INT_MAX })).is_ok(),
+            "overlay {name} must accept 2^53 - 1"
         );
-        let over = json!({ field: 9_007_199_254_740_992u64 });
         assert!(
-            serde_json::from_value::<PolicyOverlay>(over).is_err(),
-            "overlay {field} must refuse 2^53"
+            serde_json::from_value::<PolicyOverlay>(json!({ name: JS_SAFE_INT_MAX + 1 })).is_err(),
+            "overlay {name} must refuse 2^53"
         );
     }
     // Absent fields stay None through the bounded deserializer.
     let empty: PolicyOverlay = serde_json::from_value(json!({})).unwrap();
     assert_eq!(empty, PolicyOverlay::default());
-}
-
-#[test]
-fn validate_bounds_ms_fields_for_constructed_docs() {
-    // The parser never sees a constructed document; set_signed relies on
-    // validate() to refuse it before any prompt.
-    let over = JS_SAFE_INT_MAX + 1;
-    for doc in [
-        PolicyDoc {
-            host_reverify_ms: over,
-            ..PolicyDoc::default()
-        },
-        PolicyDoc {
-            confirm_grace_ms: over,
-            ..PolicyDoc::default()
-        },
-        PolicyDoc {
-            click_toast_timeout_ms: over,
-            ..PolicyDoc::default()
-        },
-        PolicyDoc {
-            eval_toast_timeout_ms: over,
-            ..PolicyDoc::default()
-        },
-    ] {
-        assert!(doc.validate().is_err(), "{doc:?} must fail validate()");
-    }
-    let at_bound = PolicyDoc {
-        host_reverify_ms: JS_SAFE_INT_MAX,
-        confirm_grace_ms: JS_SAFE_INT_MAX,
-        click_toast_timeout_ms: JS_SAFE_INT_MAX,
-        eval_toast_timeout_ms: JS_SAFE_INT_MAX,
-        ..PolicyDoc::default()
-    };
-    assert!(at_bound.validate().is_ok());
 }
 
 #[test]
@@ -330,44 +390,23 @@ fn policy_field_wire_names_carry_no_comma() {
 }
 
 #[test]
-fn host_reverify_default_zero_is_the_decided_deny_baseline_exception() {
-    // hostReverifyMs's default 0 IS the field's most permissive value -
-    // the one deliberate exception to "the deny baseline sits at every
-    // field's restrictive pole" (user decision 2026-08-10: the deny
-    // mechanism is grants-off + confirmations-on, and today's shipped
-    // default of 0 is kept). Pinned together so no future review
-    // rediscovers it as a bug.
-    assert_eq!(PolicyValues::default().host_reverify_ms, 0);
-    assert_eq!(
-        direction(PolicyField::HostReverifyMs),
-        Direction::GrowsPermissiveZeroTop
-    );
-}
-
-#[test]
-fn touched_set_embeds_and_round_trips_byte_exact() {
-    let doc = PolicyDoc {
-        revision: 3,
-        touched: vec![
-            PolicyField::PageEvalEnabled,
-            PolicyField::HostReverifyMs,
-            PolicyField::DisabledTools,
-        ],
-        page_eval_enabled: true,
-        ..PolicyDoc::default()
-    };
-    // The exact serialized bytes (what a signature would cover)
-    // strict-parse back to the same document, touched set included.
-    let bytes = serde_json::to_vec(&doc).unwrap();
-    let back: PolicyDoc = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(back, doc);
-    assert_eq!(back.touched, doc.touched);
-    // And the embedded set is spelled in wire names inside those bytes.
-    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        value["touched"],
-        json!(["pageEvalEnabled", "hostReverifyMs", "disabledTools"])
-    );
+fn the_deny_baseline_sits_at_every_boolean_restrictive_pole() {
+    // The deny mechanism is grants-off plus confirmations-on, a consistency
+    // between the Default table and the catalogue's poles that neither can
+    // express alone: a new boolean field with a permissive default fails
+    // here. The windows are usability defaults, not poles, and hostReverifyMs
+    // keeps its decided permissive default (see `Default for PolicyValues`).
+    let base = PolicyValues::default();
+    for field in PolicyField::ALL {
+        if let FieldKind::Bool(f) = field.kind() {
+            assert_eq!(
+                base.get_bool(f),
+                f.pole() == BoolPole::FalsePermissive,
+                "{} must default to its restrictive pole",
+                field.wire_name()
+            );
+        }
+    }
 }
 
 #[test]
@@ -400,73 +439,23 @@ fn unknown_fields_are_rejected_fail_closed() {
 }
 
 #[test]
-fn an_empty_overlay_serializes_to_an_empty_object() {
-    assert_eq!(
-        serde_json::to_value(PolicyOverlay::default()).unwrap(),
-        json!({})
-    );
-}
-
-#[test]
-fn the_default_is_the_deny_baseline() {
-    let base = PolicyValues::default();
-    assert!(!base.cdp_mode);
-    assert!(!base.file_upload_enabled);
-    assert!(!base.handle_dialog_enabled);
-    assert!(!base.page_eval_enabled);
-    assert!(base.confirm_high_risk_click);
-    assert!(base.confirm_page_eval);
-    assert!(base.touch_id_confirm);
-    assert!(base.confirm_tab_close);
-    assert!(base.warn_precise_snapshot);
-    assert!(base.eval_mask);
-    assert_eq!(base.host_reverify_ms, 0);
-    assert_eq!(base.confirm_grace_ms, 60_000);
-    assert_eq!(base.click_toast_timeout_ms, 30_000);
-    assert_eq!(base.eval_toast_timeout_ms, 45_000);
-    assert!(base.disabled_tools.is_empty());
-
-    let doc = PolicyDoc::default();
-    assert_eq!(doc.v, POLICY_DOC_VERSION);
-    assert_eq!(doc.revision, 0);
-    assert!(doc.touched.is_empty());
-    assert_eq!(doc.values(), base);
-}
-
-#[test]
 fn fold_applies_exactly_the_present_overlay_entries() {
     let base = PolicyValues::default();
     let overlay = PolicyOverlay {
         page_eval_enabled: Some(false),
-        confirm_grace_ms: Some(0),
+        confirm_grace_ms: Some(Ms::ZERO),
         disabled_tools: Some(vec!["page_upload".into()]),
         ..PolicyOverlay::default()
     };
-    let effective = fold(&base, &overlay);
-    assert!(!effective.page_eval_enabled);
-    assert_eq!(effective.confirm_grace_ms, 0);
-    assert_eq!(effective.disabled_tools, vec!["page_upload".to_string()]);
-    // Untouched fields pass through.
     assert_eq!(
-        effective.click_toast_timeout_ms,
-        base.click_toast_timeout_ms
+        fold(&base, &overlay),
+        PolicyValues {
+            page_eval_enabled: false,
+            confirm_grace_ms: Ms::ZERO,
+            disabled_tools: vec!["page_upload".into()],
+            ..base.clone()
+        }
     );
-    assert_eq!(effective.eval_mask, base.eval_mask);
     // An empty overlay is the identity.
     assert_eq!(fold(&base, &PolicyOverlay::default()), base);
-}
-
-#[test]
-fn disabled_tools_relax_only_when_an_anchor_entry_is_dropped() {
-    let anchor = with_tools(&["page_eval", "page_upload"]);
-    // Growing the set (or holding it) never relaxes.
-    assert!(!relaxes(&anchor.clone(), &anchor));
-    assert!(!relaxes(
-        &with_tools(&["page_eval", "page_upload", "tab_close"]),
-        &anchor
-    ));
-    // Dropping any anchor entry relaxes, even while adding others.
-    assert!(relaxes(&with_tools(&["page_eval"]), &anchor));
-    assert!(relaxes(&with_tools(&["page_eval", "tab_close"]), &anchor));
-    assert!(relaxes(&with_tools(&[]), &anchor));
 }

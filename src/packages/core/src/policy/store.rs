@@ -9,8 +9,8 @@ use std::io;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    field_relaxes, fold, restricts_or_equal, validate_disabled_tools, PolicyDoc, PolicyField,
-    PolicyOverlay, PolicyValues, JS_SAFE_INT_MAX, POLICY_DOC_VERSION,
+    field_differs, field_relaxes, fold, restricts_or_equal, validate_disabled_tools, PolicyDoc,
+    PolicyField, PolicyOverlay, PolicyValues, JS_SAFE_INT_MAX,
 };
 use crate::enclave::{base64_decode, base64_encode};
 use crate::ipc;
@@ -417,18 +417,17 @@ pub fn set_signed(
         host_key_epoch,
     };
     let revision = next_revision(observed.store.as_ref().map(|o| o.revision))?;
-    // Decision 3: the signed document carries BASELINE values, not effective
-    // ones, on fields it does not touch. An untouched field departing from
-    // the current baseline (in either direction - a restrictive drift is
-    // still an unnamed edit) would break the invariant every retained
-    // overlay entry depends on: an entry written at-or-under the old
-    // baseline value stays at-or-under it only if untouched baseline values
-    // carry. Promptless, like every validity refusal here.
-    if PolicyField::ALL.iter().any(|f| {
-        !touched.contains(f)
-            && (field_relaxes(*f, &values, &baseline_anchor)
-                || field_relaxes(*f, &baseline_anchor, &values))
-    }) {
+    // The signed document carries BASELINE values, not effective ones, on
+    // fields it does not touch. An untouched field departing from the
+    // current baseline (in either direction - a restrictive drift is still
+    // an unnamed edit) would break the invariant every retained overlay
+    // entry depends on: an entry written at-or-under the old baseline value
+    // stays at-or-under it only if untouched baseline values carry.
+    // Promptless, like every validity refusal here.
+    if PolicyField::ALL
+        .iter()
+        .any(|f| !touched.contains(f) && field_differs(*f, &values, &baseline_anchor))
+    {
         return Err(PolicyWriteError::Invalid(
             "an untouched field departs from the current baseline (the signed document \
              carries baseline values on fields it does not touch)",
@@ -803,90 +802,16 @@ pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
     }
 }
 
-impl PolicyDoc {
-    /// A document carrying `values` under the given scoping fields. Private
-    /// to the seams: surfaces pass [`PolicyValues`] and a touched set;
-    /// revision arithmetic belongs to [`set_signed`] alone.
-    fn from_values(values: &PolicyValues, revision: u64, touched: Vec<PolicyField>) -> PolicyDoc {
-        PolicyDoc {
-            v: POLICY_DOC_VERSION,
-            revision,
-            touched,
-            cdp_mode: values.cdp_mode,
-            file_upload_enabled: values.file_upload_enabled,
-            handle_dialog_enabled: values.handle_dialog_enabled,
-            page_eval_enabled: values.page_eval_enabled,
-            confirm_high_risk_click: values.confirm_high_risk_click,
-            confirm_page_eval: values.confirm_page_eval,
-            touch_id_confirm: values.touch_id_confirm,
-            confirm_tab_close: values.confirm_tab_close,
-            warn_precise_snapshot: values.warn_precise_snapshot,
-            eval_mask: values.eval_mask,
-            host_reverify_ms: values.host_reverify_ms,
-            confirm_grace_ms: values.confirm_grace_ms,
-            click_toast_timeout_ms: values.click_toast_timeout_ms,
-            eval_toast_timeout_ms: values.eval_toast_timeout_ms,
-            disabled_tools: values.disabled_tools.clone(),
-        }
-    }
-}
-
 /// The overlay a grant write leaves behind: the stored entries minus those
-/// on the `touched` fields (the tapped edit supersedes them, ADR-0032
-/// decision 3). One function on purpose - the pre-prompt relaxation-coverage
-/// check and the locked write must compute the same retention or the check
-/// guards a different store than the one written.
+/// on the `touched` fields (the tapped edit supersedes them). One function
+/// on purpose - the pre-prompt relaxation-coverage check and the locked
+/// write must compute the same retention or the check guards a different
+/// store than the one written.
 fn retained_overlay(mut overlay: PolicyOverlay, touched: &[PolicyField]) -> PolicyOverlay {
     for field in touched {
-        clear_overlay_entry(&mut overlay, *field);
+        overlay.clear(*field);
     }
     overlay
-}
-
-/// Clear the overlay entry for one field. Exhaustive with no wildcard, like
-/// the direction table: a new field fails to compile here until it says how
-/// its overlay entry clears, so touched-field supersession can never
-/// silently skip one.
-fn clear_overlay_entry(overlay: &mut PolicyOverlay, field: PolicyField) {
-    match field {
-        PolicyField::CdpMode => overlay.cdp_mode = None,
-        PolicyField::FileUploadEnabled => overlay.file_upload_enabled = None,
-        PolicyField::HandleDialogEnabled => overlay.handle_dialog_enabled = None,
-        PolicyField::PageEvalEnabled => overlay.page_eval_enabled = None,
-        PolicyField::ConfirmHighRiskClick => overlay.confirm_high_risk_click = None,
-        PolicyField::ConfirmPageEval => overlay.confirm_page_eval = None,
-        PolicyField::TouchIdConfirm => overlay.touch_id_confirm = None,
-        PolicyField::ConfirmTabClose => overlay.confirm_tab_close = None,
-        PolicyField::WarnPreciseSnapshot => overlay.warn_precise_snapshot = None,
-        PolicyField::EvalMask => overlay.eval_mask = None,
-        PolicyField::HostReverifyMs => overlay.host_reverify_ms = None,
-        PolicyField::ConfirmGraceMs => overlay.confirm_grace_ms = None,
-        PolicyField::ClickToastTimeoutMs => overlay.click_toast_timeout_ms = None,
-        PolicyField::EvalToastTimeoutMs => overlay.eval_toast_timeout_ms = None,
-        PolicyField::DisabledTools => overlay.disabled_tools = None,
-    }
-}
-
-/// Whether the overlay carries an entry for `field`. Exhaustive for the
-/// same reason as [`clear_overlay_entry`].
-fn overlay_entry_present(overlay: &PolicyOverlay, field: PolicyField) -> bool {
-    match field {
-        PolicyField::CdpMode => overlay.cdp_mode.is_some(),
-        PolicyField::FileUploadEnabled => overlay.file_upload_enabled.is_some(),
-        PolicyField::HandleDialogEnabled => overlay.handle_dialog_enabled.is_some(),
-        PolicyField::PageEvalEnabled => overlay.page_eval_enabled.is_some(),
-        PolicyField::ConfirmHighRiskClick => overlay.confirm_high_risk_click.is_some(),
-        PolicyField::ConfirmPageEval => overlay.confirm_page_eval.is_some(),
-        PolicyField::TouchIdConfirm => overlay.touch_id_confirm.is_some(),
-        PolicyField::ConfirmTabClose => overlay.confirm_tab_close.is_some(),
-        PolicyField::WarnPreciseSnapshot => overlay.warn_precise_snapshot.is_some(),
-        PolicyField::EvalMask => overlay.eval_mask.is_some(),
-        PolicyField::HostReverifyMs => overlay.host_reverify_ms.is_some(),
-        PolicyField::ConfirmGraceMs => overlay.confirm_grace_ms.is_some(),
-        PolicyField::ClickToastTimeoutMs => overlay.click_toast_timeout_ms.is_some(),
-        PolicyField::EvalToastTimeoutMs => overlay.eval_toast_timeout_ms.is_some(),
-        PolicyField::DisabledTools => overlay.disabled_tools.is_some(),
-    }
 }
 
 /// The fields the overlay carries entries for, in catalogue order.
@@ -894,33 +819,20 @@ fn overlay_present_fields(overlay: &PolicyOverlay) -> Vec<PolicyField> {
     PolicyField::ALL
         .iter()
         .copied()
-        .filter(|f| overlay_entry_present(overlay, *f))
+        .filter(|f| overlay.has(*f))
         .collect()
 }
 
 /// Merge `arg` over `stored` entry-wise: a present `arg` entry wins, an
 /// absent one keeps the stored entry. Pure shape work - whether the result
 /// restricts is the caller's direction check, never assumed here.
-fn merge_overlay(stored: &PolicyOverlay, arg: PolicyOverlay) -> PolicyOverlay {
-    PolicyOverlay {
-        cdp_mode: arg.cdp_mode.or(stored.cdp_mode),
-        file_upload_enabled: arg.file_upload_enabled.or(stored.file_upload_enabled),
-        handle_dialog_enabled: arg.handle_dialog_enabled.or(stored.handle_dialog_enabled),
-        page_eval_enabled: arg.page_eval_enabled.or(stored.page_eval_enabled),
-        confirm_high_risk_click: arg
-            .confirm_high_risk_click
-            .or(stored.confirm_high_risk_click),
-        confirm_page_eval: arg.confirm_page_eval.or(stored.confirm_page_eval),
-        touch_id_confirm: arg.touch_id_confirm.or(stored.touch_id_confirm),
-        confirm_tab_close: arg.confirm_tab_close.or(stored.confirm_tab_close),
-        warn_precise_snapshot: arg.warn_precise_snapshot.or(stored.warn_precise_snapshot),
-        eval_mask: arg.eval_mask.or(stored.eval_mask),
-        host_reverify_ms: arg.host_reverify_ms.or(stored.host_reverify_ms),
-        confirm_grace_ms: arg.confirm_grace_ms.or(stored.confirm_grace_ms),
-        click_toast_timeout_ms: arg.click_toast_timeout_ms.or(stored.click_toast_timeout_ms),
-        eval_toast_timeout_ms: arg.eval_toast_timeout_ms.or(stored.eval_toast_timeout_ms),
-        disabled_tools: arg.disabled_tools.or_else(|| stored.disabled_tools.clone()),
+fn merge_overlay(stored: &PolicyOverlay, mut arg: PolicyOverlay) -> PolicyOverlay {
+    for field in PolicyField::ALL {
+        if !arg.has(*field) {
+            arg.copy_entry(*field, stored);
+        }
     }
+    arg
 }
 
 /// `Some(overlay)` when it carries any entry, `None` for the empty overlay,

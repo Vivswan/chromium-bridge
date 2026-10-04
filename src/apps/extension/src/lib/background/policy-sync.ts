@@ -41,7 +41,7 @@ import {
 import {
   foldPolicyOverlay,
   policyValuesEqual,
-  policyValuesFromDoc,
+  policyValuesFrom,
   relaxedPolicyFields,
 } from "@chromium-bridge/shared/policy-compare";
 import { UI_LANGUAGES, type UiLanguageValue } from "@chromium-bridge/shared/settings";
@@ -317,7 +317,7 @@ async function maybeAdoptExtensionLanguage(attachment: PortAttachment | null): P
 export function chooseLanguage(value: UiLanguageValue): Promise<boolean> {
   const send = frameChain.then(async () => {
     const attachment = port;
-    if (!attachment || !attachment.langSeen) return false;
+    if (!attachment?.langSeen) return false;
     if (!(await langLanePinned())) return false;
     // The pinned read awaited: only the still-live attachment may emit.
     if (attachment !== port) return false;
@@ -907,7 +907,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: PortAttachment | nu
   }
   const doc = PolicyDocSchema.safeParse(docJson);
   if (!doc.success) return refuse("baseline document failed the strict schema");
-  const baselineValues = policyValuesFromDoc(doc.data);
+  const baselineValues = policyValuesFrom(doc.data);
 
   // The unsigned overlay may only restrict the verified baseline. Its SHAPE
   // was strict-parsed by the frame schema; its DIRECTION is recomputed here
