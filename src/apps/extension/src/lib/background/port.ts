@@ -13,6 +13,7 @@ import * as presence from "./confirm/presence";
 import type { Connection, PortCollaborator } from "./connection";
 import { dispatch } from "./dispatch";
 import * as enrollment from "./enrollment";
+import { inLife } from "./in-life";
 import * as kill from "./kill";
 import * as policySync from "./policy-sync";
 
@@ -36,16 +37,16 @@ type NativeLink =
   | { state: "reconnect-scheduled"; timer: ReturnType<typeof setTimeout> }
   | { state: "down" };
 
-let link: NativeLink = { state: "down" };
-let connects = 0;
+const link = inLife<NativeLink>(() => ({ state: "down" }));
+const connects = inLife(() => 0);
 
 export function isNativeConnected(): boolean {
-  return link.state === "connected";
+  return link.value.state === "connected";
 }
 
 /** The currency contract is stated on Connection in connection.ts. */
 function isLive(conn: Connection): boolean {
-  return link.state === "connected" && link.conn === conn;
+  return link.value.state === "connected" && link.value.conn === conn;
 }
 
 /** Consume the current link and leave it down: cancel a scheduled
@@ -54,8 +55,8 @@ function isLive(conn: Connection): boolean {
  * a collaborator attachment that would still honor its frames - behind a
  * state that reads down. */
 function teardownLink(): void {
-  const prev = link;
-  link = { state: "down" };
+  const prev = link.value;
+  link.value = { state: "down" };
   if (prev.state === "reconnect-scheduled") clearTimeout(prev.timer);
   if (prev.state === "connected") {
     // Detach in the same synchronous transition that consumes the port. Left
@@ -79,7 +80,7 @@ export function connectNative() {
   try {
     const port = browser.runtime.connectNative(NATIVE_HOST_ID);
     const conn = mintConnection(port);
-    link = { state: "connected", port, conn };
+    link.value = { state: "connected", port, conn };
     console.log("[bb] native host connected", conn.generation);
     port.onMessage.addListener((msg) => onNativeMessage(conn, msg));
     port.onDisconnect.addListener(() => onNativeDisconnect(conn));
@@ -103,7 +104,7 @@ export function connectNative() {
 /** post is bound to this exact port; currency per Connection in connection.ts. */
 function mintConnection(port: Browser.runtime.Port): Connection {
   const conn: Connection = {
-    generation: ++connects,
+    generation: ++connects.value,
     post(frame) {
       if (!isLive(conn)) return false;
       try {
@@ -132,8 +133,8 @@ function onNativeDisconnect(conn: Connection) {
 }
 
 function scheduleReconnect() {
-  if (link.state !== "down") return;
-  link = {
+  if (link.value.state !== "down") return;
+  link.value = {
     state: "reconnect-scheduled",
     timer: setTimeout(() => {
       connectNative();

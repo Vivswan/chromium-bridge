@@ -8,6 +8,7 @@ import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/ops.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
+import { inLife } from "../in-life";
 import type { PageBackend } from "../page-backend";
 import type { ResolvedTab } from "../tabs";
 import { presenceRoutingEnabled } from "./presence";
@@ -56,7 +57,10 @@ export function bindOrigin(preflight: PreflightResult, expectOrigin: string): Pa
 // confirm on another same-origin tab. page_press, page_select, page_eval,
 // tab_close, and page_upload always reconfirm. Lives in SW memory: a SW recycle
 // simply re-prompts, which errs closed.
-let lastConfirmed: { key: string | null; until: number } = { key: null, until: 0 };
+const lastConfirmed = inLife<{ key: string | null; until: number }>(() => ({
+  key: null,
+  until: 0,
+}));
 
 function originOf(url: string | undefined): string {
   if (!url) return "";
@@ -69,7 +73,7 @@ function originOf(url: string | undefined): string {
 
 /** Reset the grace window (tests). */
 export function resetClickGraceWindow(): void {
-  lastConfirmed = { key: null, until: 0 };
+  lastConfirmed.reset();
 }
 
 /**
@@ -101,7 +105,11 @@ export async function preflightPageOp(
       const actionDesc = describeAction(probe, "click");
       const key = `${tab.id}:${originOf(tab.url)}:${actionDesc}`;
       const graceMs = policy.confirmGraceMs;
-      if (graceMs > 0 && lastConfirmed.key === key && Date.now() < lastConfirmed.until) {
+      if (
+        graceMs > 0 &&
+        lastConfirmed.value.key === key &&
+        Date.now() < lastConfirmed.value.until
+      ) {
         return preflight; // within the grace window
       }
       const approved = await confirmWithUser({
@@ -114,7 +122,7 @@ export async function preflightPageOp(
         panicEpoch,
       });
       if (!approved) throw new Error(`user denied: ${actionDesc}`);
-      lastConfirmed = { key, until: Date.now() + graceMs };
+      lastConfirmed.value = { key, until: Date.now() + graceMs };
       return preflight;
     }
 

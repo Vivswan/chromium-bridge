@@ -7,6 +7,7 @@
 
 import { browser } from "wxt/browser";
 import { getEffectivePolicy } from "../effective-policy";
+import { inLife } from "../in-life";
 import { POLICY_STORAGE_KEYS } from "../policy-sync";
 import { CdpSession } from "./session";
 
@@ -106,10 +107,10 @@ export const cdpRegistry = new CdpSessionRegistry();
 // Wire session teardown to the relevant Chrome events. Called once at SW
 // startup from background.ts (NOT at module load, so importing the registry
 // from unit tests / the backend selector stays free of chrome.* side effects).
-let listenersInstalled = false;
+const listenersInstalled = inLife(() => false);
 export function installCdpLifecycleListeners(): void {
-  if (listenersInstalled) return;
-  listenersInstalled = true;
+  if (listenersInstalled.value) return;
+  listenersInstalled.value = true;
 
   // Tab closed -> detach + forget.
   browser.tabs.onRemoved.addListener((tabId) => {

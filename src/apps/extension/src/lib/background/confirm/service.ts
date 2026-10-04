@@ -11,7 +11,10 @@ import {
   isHardwareGated,
 } from "@chromium-bridge/shared/confirm";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import pLimit from "p-limit";
 import { auditEvent } from "../audit-log";
+import { confirmationsLatched } from "../brake";
+import { inLife } from "../in-life";
 
 /** The fields every confirmation request carries. */
 interface ConfirmRequestBase {
@@ -65,21 +68,18 @@ interface Active {
   settle: (approved: boolean) => void;
 }
 
-// One live confirmation at a time, FIFO: each request appends itself to
-// this promise chain (the audit-log idiom) and runs when its predecessor
-// has fully settled. Occupancy IS the chain - there is no separate flag to
-// desynchronize from it, and the chain's own catch keeps it alive, so a
-// presentation step that throws can deny its own request but never wedge
-// every confirmation behind a stuck boolean.
-let tail: Promise<void> = Promise.resolve();
-let active: Active | null = null;
+// One live confirmation at a time, FIFO: each request runs on this lane once its predecessor has fully settled.
+// Occupancy IS the lane, so no separate flag can desynchronize from it, and a presentation step that throws denies
+// its own request without wedging the ones queued behind it.
+const queue = inLife(() => pLimit(1));
+const active = inLife<Active | null>(() => null);
 
 // Installed by the background entrypoint at SW startup. No provider
 // installed = every confirmation denies (fail closed).
-let defaultProvider: ConfirmationProvider | null = null;
+const defaultProvider = inLife<ConfirmationProvider | null>(() => null);
 
 export function installConfirmationProvider(p: ConfirmationProvider): void {
-  defaultProvider = p;
+  defaultProvider.value = p;
 }
 
 // The Enclave user-presence provider. Whether a confirmation routes to it
@@ -88,10 +88,10 @@ export function installConfirmationProvider(p: ConfirmationProvider): void {
 // push landing between decision and presentation cannot re-route an in-flight
 // confirmation. A missing provider routes to the window (still a real
 // confirmation), never to "no confirmation".
-let presence: ConfirmationProvider | null = null;
+const presence = inLife<ConfirmationProvider | null>(() => null);
 
 export function installPresenceProvider(p: ConfirmationProvider): void {
-  presence = p;
+  presence.value = p;
 }
 
 /** The provider for one request. "eval" and "upload" go to the Enclave
@@ -108,60 +108,33 @@ function providerFor(req: ConfirmRequest): {
   provider: ConfirmationProvider | null;
   hardware: boolean;
 } {
-  if ((req.kind === "eval" || req.kind === "upload") && presence && req.presenceRouting) {
-    return { provider: presence, hardware: true };
+  if ((req.kind === "eval" || req.kind === "upload") && presence.value && req.presenceRouting) {
+    return { provider: presence.value, hardware: true };
   }
-  return { provider: defaultProvider, hardware: false };
+  return { provider: defaultProvider.value, hardware: false };
 }
 
-// The panic latch: while it is on, EVERY confirmation (active, queued, or newly requested)
-// denies without presenting. It closes the window the queue would otherwise open: a request that
-// passed the kill gate while the mirror still read alive would pop a fresh surface the user could
-// approve while the brake is still in flight to the host.
-//   engaged  -> denyAllConfirmations, from the confirm window's deny-and-kill
-//   lifted   -> releasePanicDeny, router-only, on the proofs its doc names; a lost engage (posted, never
-//               answered, host restarts alive) keeps it on until the SW's own restart clears it
-let panicDeny = false;
-// Edge marker beside the level latch, bumped on every panic. Every request carries the epoch its
-// decision captured at its start (ConfirmRequest.panicEpoch), so a panic that lands AND lifts between
-// that capture and presentation, invisible to the level check alone, still denies on the mismatch.
-let panicEpoch = 0;
+// The panic latch (every confirmation denies without presenting while a deny-and-kill's brake is in flight or awaits
+// its release) is the brake's: confirmationsLatched() in brake.ts. This edge marker sits beside it, bumped on every
+// panic: every request carries the epoch its decision captured at its start (ConfirmRequest.panicEpoch), so a panic
+// that lands AND lifts between that capture and presentation, invisible to the level alone, still denies on the
+// mismatch. Never reset, exactly like the real thing across panics.
+const panicEpoch = inLife(() => 0);
 
 /** Capture the panic epoch at the START of a decision, before its first await. Every confirmation the
  * decision raises carries this value, so the service denies it if a deny-kill crossed the decision,
  * even one that lifted again before the confirmation was created. */
 export function currentPanicEpoch(): number {
-  return panicEpoch;
+  return panicEpoch.value;
 }
 
-/** The confirm window hit the brake: deny the active confirmation and latch
- * everything behind it to auto-deny. Settling the active entry lets the
- * chain advance, and every request already queued on it sees the latch and
- * denies without presenting. Returns the panic's epoch, which is the ONLY
- * token that can later lift this latch (releasePanicDeny). */
-export function denyAllConfirmations(): number {
-  panicDeny = true;
-  panicEpoch += 1;
-  active?.settle(false);
-  return panicEpoch;
-}
-
-/** Router-only: lift the panic latch, scoped to the panic that armed it. `epoch` must be the value
- * denyAllConfirmations returned, so an earlier panic's kill settling late can never lift a NEWER panic's latch.
- *
- * The router calls this only on proof that the brake fully settled or never left the station:
- *   kill state authoritatively reads alive again AFTER the engage applied            -> lift (an explicit, presence-gated release)
- *   send failed AND no posted engage is still unconfirmed (kill.ts engageOutstanding) -> lift (nothing is in flight)
- *   send failed while an earlier engage is unconfirmed, or timeout                    -> no lift: a posted frame may still apply
- */
-export function releasePanicDeny(epoch: number): void {
-  if (epoch === panicEpoch) panicDeny = false;
-}
-
-/** Tests only: clear the latch level. The epoch stays monotonic, exactly
- * like the real thing across panics. */
-export function resetPanicForTests(): void {
-  panicDeny = false;
+/** The confirm window hit the brake: deny the active confirmation and bump the epoch. Settling the active entry lets
+ * the lane advance, and every request queued behind it sees the brake's latch and denies without presenting. The
+ * router follows this with the panic engage in the same synchronous turn (messages.ts denyAndKill), which arms the
+ * latch. */
+export function denyAllConfirmations(): void {
+  panicEpoch.value += 1;
+  active.value?.settle(false);
 }
 
 /** Ask the user. Resolves true only on an explicit, in-time approval from
@@ -177,7 +150,7 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
     // merges audit records from every browser, so per-worker counters would collide, and a random
     // id cannot be steered onto another attempt's row.
     const cid = crypto.randomUUID();
-    if (panicDeny) {
+    if (confirmationsLatched()) {
       // Created while the latch is on: denied at the door. Waiting in the
       // queue instead would let it present if the latch lifts before it
       // reaches the front (its own epoch is the post-panic one). No surface was
@@ -186,15 +159,13 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
       resolve(false);
       return;
     }
-    tail = tail
-      .then(() => presentOne(req, epoch, cid, resolve))
+    void queue
+      .value(() => presentOne(req, epoch, cid, resolve))
       .catch((e: unknown) => {
-        // presentOne settles every path it knows about; this is the chain's
-        // backstop for anything it did not - deny THIS request and keep the
-        // serializer alive for the ones queued behind it. Audit the denial like
-        // every other deny path: a shown attempt already emitted its own
-        // verdict via settle, so at worst this is a second confirm_denied under
-        // the same cid - never a missing trail.
+        // presentOne settles every path it knows about; this is the backstop for anything it did not: deny THIS
+        // request (the lane advances on its own, settled or rejected). Audit the denial like every other deny path:
+        // a shown attempt already emitted its own verdict via settle, so at worst this is a second confirm_denied
+        // under the same cid, never a missing trail.
         console.error("[bb] confirmation step failed; denying", e);
         auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
         resolve(false);
@@ -202,17 +173,16 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
   });
 }
 
-/** Run one confirmation at the front of the queue. The returned promise is
- * what holds the next queued request back: it settles when this
- * confirmation does. Every known failure path resolves the verdict false
- * and returns; the chain's catch backstops the rest. */
+/** Run one confirmation at the front of the lane. The returned promise holds the next queued request back: it
+ * settles when this confirmation does. Every known failure path resolves the verdict false and returns; the
+ * caller's catch backstops the rest. */
 async function presentOne(
   req: ConfirmRequest,
   epoch: number,
   cid: string,
   resolve: (approved: boolean) => void,
 ): Promise<void> {
-  if (panicDeny || panicEpoch !== epoch) {
+  if (confirmationsLatched() || panicEpoch.value !== epoch) {
     // Denied unseen: the user already chose "kill everything" - showing
     // more consent surfaces after that choice would invert it. Same
     // attempt cid, but no surface was shown, so it resolves no row.
@@ -273,7 +243,7 @@ async function presentOne(
       if (done) return;
       done = true;
       clearTimeout(timer);
-      active = null;
+      active.value = null;
       try {
         presentation.dismiss();
       } catch (e) {
@@ -293,7 +263,7 @@ async function presentOne(
       advance();
     };
     const timer = setTimeout(() => settle(false), req.timeoutMs);
-    active = { payload, settle };
+    active.value = { payload, settle };
     // The surface is up in front of the user from here, so audit it now.
     // Same cid as the verdict above, so the panel joins the pair exactly.
     auditEvent("confirm_shown", { tool: req.kind, name: req.origin, cid });
@@ -315,7 +285,8 @@ async function presentOne(
  * request is ever handed out, and only by id: a stale or foreign window gets
  * nothing. */
 export function getPendingConfirm(id: string): ConfirmPayload | null {
-  return active && active.payload.id === id ? active.payload : null;
+  const current = active.value;
+  return current && current.payload.id === id ? current.payload : null;
 }
 
 /** messages.ts routes this ONLY from the confirmation window; that sender check is what makes
@@ -324,15 +295,16 @@ export function getPendingConfirm(id: string): ConfirmPayload | null {
  *   hardware-gated + approve  -> refused; only the Touch ID prompt approves
  *   any payload + deny        -> accepted; removing capability is always friction-free */
 export function resolveConfirm(id: string, approved: boolean): RuntimeResponse<"confirm_resolve"> {
-  if (!active || active.payload.id !== id) {
+  const current = active.value;
+  if (!current || current.payload.id !== id) {
     return { ok: false, error: "no such pending confirmation" };
   }
-  if (approved && isHardwareGated(active.payload)) {
+  if (approved && isHardwareGated(current.payload)) {
     return {
       ok: false,
       error: "hardware-gated confirmation: approval requires the Touch ID prompt",
     };
   }
-  active.settle(approved);
+  current.settle(approved);
   return { ok: true };
 }

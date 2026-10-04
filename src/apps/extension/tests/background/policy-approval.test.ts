@@ -17,7 +17,6 @@ import type { Presentation } from "@/lib/background/confirm/service";
 import {
   denyAllConfirmations,
   installConfirmationProvider,
-  resetPanicForTests,
   resolveConfirm,
 } from "@/lib/background/confirm/service";
 import { registerUnpinnedRelaxationApprover } from "@/lib/background/policy-approval";
@@ -85,7 +84,6 @@ afterEach(() => {
   // Drain anything a failed assertion left pending, so the service's shared
   // FIFO can never wedge the next test's confirmation behind a stale one.
   denyAllConfirmations();
-  resetPanicForTests();
 });
 
 /** Push a frame and answer the NEW confirmation it raises through the
