@@ -35,7 +35,7 @@ jobs:
           chrome-version: ${{ inputs.chrome-version }}
       - run: bun install --frozen-lockfile
       - name: Isolation guard and canary unit tests (no browser needed)
-        run: bun test tests/browser/browser-safety.test.ts
+        run: bun test tests/browser/*.test.ts
       # The smoke and security suites load the extension non-headless (MV3 service-worker reliability),
       # hence the virtual display; xvfb ships on GitHub's ubuntu runners.
       - name: Browser suites
