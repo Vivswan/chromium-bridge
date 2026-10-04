@@ -19,6 +19,10 @@ publish = false
 # (src/packages/core/src/enclave). Without the default `simd-unsafe`
 # feature: the scalar engine is all 65-byte keys and signatures need.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
+# The argv boundary (src/packages/core/src/cli.rs): clap parses argv once into
+# the typed Command tree. Derive only: no color, suggestions, or help wrapping,
+# so the shipped binary carries the parser and nothing cosmetic.
+clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 # OS CSPRNG for the per-run secret and the handshake nonces. `std` for the
 # conversion into io::Error.
 getrandom = { version = "0.4", features = ["std"] }

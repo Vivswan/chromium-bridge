@@ -167,24 +167,6 @@ fn grant_gate_refuses_every_keyless_state_with_a_clear_message() {
 }
 
 #[test]
-fn an_unparsable_argv_still_counts_as_asking_for_json() {
-    let args = |list: &[&str]| list.iter().map(ToString::to_string).collect::<Vec<_>>();
-    // An empty `set` edit fails the parser, yet the raw argv names
-    // --json: run_policy must emit the versioned error object for it.
-    let bad = args(&["chromium-bridge", "policy", "set", "--json"]);
-    assert!(policy_args(&bad).is_err());
-    assert!(argv_wants_json(&bad));
-    // No --json anywhere: the prose path.
-    assert!(!argv_wants_json(&args(&[
-        "chromium-bridge",
-        "policy",
-        "bogus"
-    ])));
-    // argv[0] and argv[1] are outside the scan, whatever they contain.
-    assert!(!argv_wants_json(&args(&["--json", "--json"])));
-}
-
-#[test]
 fn a_no_op_rollback_changes_nothing() {
     let v = PolicyValues::default();
     assert_eq!(plan_rollback(&v, &v, &v), RollbackPlan::NoChange);

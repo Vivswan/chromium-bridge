@@ -509,17 +509,6 @@ pub fn remove_wrappers(install_dir: &Path) -> (Vec<String>, Vec<String>) {
     (removed, errors)
 }
 
-/// `chromium-bridge uninstall`: parse argv and run. Returns the exit code.
-pub fn run_uninstall_cli(argv: &[String]) -> i32 {
-    match crate::cli::uninstall_args(argv) {
-        Ok(args) => run_uninstall(&args),
-        Err(e) => {
-            eprintln!("uninstall: {e}");
-            2
-        }
-    }
-}
-
 /// `doctor --fix`: (re-)register the selected targets. Idempotent, so a
 /// fresh machine gets its first registration and a broken one gets repaired
 /// by the same code path. Returns the process exit code.
@@ -593,7 +582,7 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
 
     let mut targets: Vec<Target> = entries.iter().map(Target::for_browser).collect();
     for dir in &args.manifest_dirs {
-        targets.push(Target::for_explicit_dir(Path::new(dir)));
+        targets.push(Target::for_explicit_dir(dir));
     }
 
     println!("chromium-bridge uninstall (host id {HOST_ID})");
@@ -661,14 +650,14 @@ fn resolve_host_exe() -> std::io::Result<PathBuf> {
 }
 
 /// Resolve the typed `--fix` targeting mode into concrete targets. Unknown
-/// `--browser` keys were already refused at the CLI boundary
-/// ([`crate::cli::doctor_args`] parses them into [`Browser`]s), so the match
+/// `--browser` keys were already refused at the argv boundary
+/// ([`crate::cli::parse`] resolves them into [`Browser`]s), so the match
 /// here is exhaustive, with no priority chain to order wrongly.
 fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<Target>, i32> {
     match targets {
         FixTargets::ManifestDirs(dirs) => Ok(dirs
             .iter()
-            .map(|d| Target::for_explicit_dir(Path::new(d)))
+            .map(|dir| Target::for_explicit_dir(dir))
             .collect()),
         FixTargets::All => Ok(entries.iter().map(Target::for_browser).collect()),
         FixTargets::Browsers(browsers) => {
