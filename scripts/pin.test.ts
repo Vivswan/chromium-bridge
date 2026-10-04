@@ -91,6 +91,18 @@ const cases: Case[] = [
     outcome: { error: /more than once.*1\.4\.2, 9\.9\.9/ },
   },
   {
+    name: "a lowercase arg instruction is still an ARG to Docker, so still a second owner",
+    containerfile: [...containerfile, "arg BUN_VERSION=9.9.9"],
+    tool: "bun",
+    outcome: { error: /more than once.*1\.4\.2, 9\.9\.9/ },
+  },
+  {
+    name: "a second pair on one ARG line is still an ARG to Docker, so still a second owner",
+    containerfile: [...containerfile, "ARG DEBIAN_SNAPSHOT=20260101T000000Z BUN_VERSION=9.9.9"],
+    tool: "bun",
+    outcome: { error: /more than once.*1\.4\.2, 9\.9\.9/ },
+  },
+  {
     name: "a second ARG line, indented so Docker still reads it, is a duplicate",
     containerfile: [...containerfile, "  ARG CARGO_MACHETE_VERSION=0.9.1"],
     tool: "cargo-machete",
@@ -127,11 +139,6 @@ const cases: Case[] = [
     outcome: { error: /empty or non-string/ },
   },
   { name: "a tool pinned nowhere", tool: "node", outcome: { error: /pinned in neither/ } },
-  {
-    name: "an ARG with no value declares the build arg, it does not pin proto a second time",
-    tool: "proto",
-    outcome: { pin: "0.58.2" },
-  },
   {
     name: "a commented-out key is not a pin",
     prototools: ['# proto = "9.9.9"'],

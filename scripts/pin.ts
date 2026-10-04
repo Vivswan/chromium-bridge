@@ -20,7 +20,9 @@ import { repoRoot } from "./lib.ts";
 export const ownerFiles = [".prototools", "Containerfile"] as const;
 
 const toolName = /^[a-z][a-z0-9-]*$/;
-const argLine = /^\s*ARG\s+([A-Z][A-Z0-9_]*)_VERSION=(\S*)\s*$/;
+// Docker reads the instruction case-insensitively and takes several `name[=value]` pairs on one ARG line.
+const argInstruction = /^\s*arg\s+(.+?)\s*$/i;
+const versionPair = /^([A-Z][A-Z0-9_]*)_VERSION=(\S*)$/;
 
 function owned(root: string, file: (typeof ownerFiles)[number]): string {
   try {
@@ -47,17 +49,21 @@ function prototoolsPins(root: Record<string, unknown>, tool: string): string[] {
   return [value];
 }
 
-// ARG lines keyed by the tool they pin: CARGO_MACHETE_VERSION -> cargo-machete. An ARG with no `=` (the
+// ARG pairs keyed by the tool they pin: CARGO_MACHETE_VERSION -> cargo-machete. A name with no `=` (the
 // Containerfile's own PROTO_VERSION build arg) declares a consumer, not a pin.
 function containerfileArgs(text: string): [string, string][] {
   const pins: [string, string][] = [];
   for (const line of text.split("\n")) {
-    const match = line.match(argLine);
-    if (!match) continue;
-    const tool = (match[1] as string).toLowerCase().replaceAll("_", "-");
-    const value = match[2] as string;
-    if (value === "") throw new Error(`pin: Containerfile pins ${tool} to an empty value`);
-    pins.push([tool, value]);
+    const instruction = line.match(argInstruction);
+    if (!instruction) continue;
+    for (const pair of (instruction[1] as string).split(/\s+/)) {
+      const match = pair.match(versionPair);
+      if (!match) continue;
+      const tool = (match[1] as string).toLowerCase().replaceAll("_", "-");
+      const value = match[2] as string;
+      if (value === "") throw new Error(`pin: Containerfile pins ${tool} to an empty value`);
+      pins.push([tool, value]);
+    }
   }
   return pins;
 }
