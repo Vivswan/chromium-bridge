@@ -1,10 +1,8 @@
+import type { KillView } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
-// Type-only: the SW's own KillView declaration (lib/background/kill.ts), so
-// this panel cannot re-declare a drifted mirror of it.
-import type { KillView } from "@/lib/background/kill";
 import { send } from "@/lib/messages";
 
 // The ADR-0030 kill-switch panel: one prominent, explicit switch that halts
@@ -24,11 +22,7 @@ export function KillSwitchPanel() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      setView((await send<KillView>({ type: "get_kill" })) ?? null);
-    } catch (e) {
-      console.warn("[bb] kill panel refresh failed", e);
-    }
+    setView(await send({ type: "get_kill" }));
   }, []);
 
   useEffect(() => {
@@ -53,15 +47,10 @@ export function KillSwitchPanel() {
     // `chromium-bridge unkill`'s presence gate.
     setBusy(true);
     setActionError(null);
-    try {
-      const r = await send<KillView>({ type: "set_kill", on: true });
-      if (!r?.ok) setActionError(t("kill.failed", [r?.error ?? t("kill.no_reply")]));
-      setView(r ?? null);
-    } catch (e) {
-      setActionError(t("kill.failed", [String(e)]));
-    } finally {
-      setBusy(false);
-    }
+    const r = await send({ type: "set_kill", on: true });
+    if (!r.ok) setActionError(t("kill.failed", [r.error ?? t("kill.no_reply")]));
+    setView(r);
+    setBusy(false);
   };
 
   const stateLine = () => {

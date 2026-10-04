@@ -10,6 +10,7 @@ import {
   type ConfirmPayload,
   isHardwareGated,
 } from "@chromium-bridge/shared/confirm";
+import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { auditEvent } from "../audit-log";
 
 /** The fields every confirmation request carries. */
@@ -323,7 +324,7 @@ export function getPendingConfirm(id: string): ConfirmPayload | null {
  * user-presence answer, so even the trusted window cannot stand in for the tap.
  *   hardware-gated + approve  -> refused; only the Touch ID prompt approves
  *   any payload + deny        -> accepted; removing capability is always friction-free */
-export function resolveConfirm(id: string, approved: boolean): { ok: boolean; error?: string } {
+export function resolveConfirm(id: string, approved: boolean): RuntimeResponse<"confirm_resolve"> {
   if (!active || active.payload.id !== id) {
     return { ok: false, error: "no such pending confirmation" };
   }

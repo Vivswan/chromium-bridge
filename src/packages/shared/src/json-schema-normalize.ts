@@ -190,15 +190,6 @@ const OPTIONAL_NONEMPTY_STRING: Reconciliation = {
   canonical: { type: "string" },
 };
 
-// policy_current.reason: Option<String> on the host side (the serde null arm), pinned by the extension to the
-// {absent,damaged,unreadable} enum so a value outside it fails the frame parse. The enum is zod-side only, so
-// canonical drops it like NONEMPTY_STRING drops minLength.
-const POLICY_REASON_FIELD: Reconciliation = {
-  rust: { type: ["string", "null"] },
-  zod: { type: "string", enum: ["absent", "damaged", "unreadable"] },
-  canonical: { type: "string" },
-};
-
 // policy_current.overlay: Option<PolicyOverlay> on the Rust side (a null arm around the strict all-optional object);
 // the Zod side is the GENERATED PolicyOverlaySchema (policy.gen.ts). The overlay is also the one STRICT_ZOD_NODES
 // exception to R5: strict on both sides (ADR-0032 decision 4).
@@ -322,7 +313,6 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
     "$.properties.baseline": OPTIONAL_NONEMPTY_STRING,
     "$.properties.sig": OPTIONAL_NONEMPTY_STRING,
     "$.properties.overlay": OVERLAY_FIELD,
-    "$.properties.reason": POLICY_REASON_FIELD,
     "$.properties.error": OPTIONAL_STRING,
   },
   lang_current: {

@@ -160,19 +160,17 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
         window, off the page. Dark and light are both first-class; flip the
         chip in the corner to see.</p>
 
-      <div class="shot-pair">
-        <figure class="shot">
-          <Image class="shot-dark" src={confirmDark} width={440} height={680} densities={[1, 2]} loading="lazy"
-            alt="The extension's confirmation window for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
-          <Image class="shot-light" src={confirmLight} width={440} height={680} densities={[1, 2]} loading="lazy"
-            alt="The extension's confirmation window in the light scheme, for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
-          <figcaption>A client wants to run a script in your tab. The extension
-            draws this in its own window, off the page. There is no Allow button:
-            on an enrolled Mac with the default settings, approval is a Secure
-            Enclave presence check - your touch or your login password - so
-            nothing on screen, and no remote client, can press it for you.</figcaption>
-        </figure>
-      </div>
+      <figure class="shot">
+        <Image class="shot-dark" src={confirmDark} width={440} height={680} densities={[1, 2]} loading="lazy"
+          alt="The extension's confirmation window for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
+        <Image class="shot-light" src={confirmLight} width={440} height={680} densities={[1, 2]} loading="lazy"
+          alt="The extension's confirmation window in the light scheme, for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
+        <figcaption>A client wants to run a script in your tab. The extension
+          draws this in its own window, off the page. There is no Allow button:
+          on an enrolled Mac with the default settings, approval is a Secure
+          Enclave presence check - your touch or your login password - so
+          nothing on screen, and no remote client, can press it for you.</figcaption>
+      </figure>
     </section>
 
     <section class="guarantees wrap" id="guarantees">

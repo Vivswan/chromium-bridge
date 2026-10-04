@@ -1,6 +1,5 @@
-//! OS-CSPRNG-backed secrets and hex encoding, shared by the lock file's
-//! per-run secret, the handshake nonces, and the enclave module's
-//! fingerprints.
+//! The per-run secret and the handshake nonces: 128 bits from the OS CSPRNG,
+//! hex-encoded.
 
 use std::io;
 
@@ -11,31 +10,8 @@ use std::io;
 /// the caller must refuse to proceed instead.
 pub(crate) fn generate_secret() -> io::Result<String> {
     let mut buf = [0u8; 16];
-    fill_os_random(&mut buf)?;
-    Ok(hex_encode(&buf))
-}
-
-#[cfg(unix)]
-fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
-    use std::io::Read;
-
-    // We avoid pulling in `rand` by reading /dev/urandom directly (macOS and
-    // Linux both expose it).
-    let mut f = std::fs::File::open("/dev/urandom")?;
-    f.read_exact(buf)
-}
-
-#[cfg(windows)]
-fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
-    super::platform::windows::fill_os_random(buf)
-}
-
-pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len().saturating_mul(2));
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    getrandom::fill(&mut buf)?;
+    Ok(hex::encode(buf))
 }
 
 #[cfg(test)]

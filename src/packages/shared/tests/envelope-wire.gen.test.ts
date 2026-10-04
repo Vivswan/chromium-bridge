@@ -269,30 +269,14 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
     });
   }
 
-  test("policy_current reason: wire accepts any string, the wrapper pins the enum", () => {
-    // The generated wire base is faithful to the host's Option<String>, but
-    // the enforced wrapper narrows reason to the {absent,damaged,unreadable}
-    // enum. An out-of-enum string is accepted by the base and refused by the
-    // wrapper (fail closed), and a missing reason (old host) is accepted by
-    // both.
+  test("policy_current error: type confusion on the ok:false arm is refused on both sides", () => {
+    // The ok:true representative frame above cannot carry `error`, so the
+    // ok:false arm gets its own confusion probe: both sides refuse a non-string.
     const base = { type: "policy_current", ok: false, error: "e" };
-    for (const reason of ["absent", "damaged", "unreadable"]) {
-      expect(PolicyCurrentFrameSchema.safeParse({ ...base, reason }).success).toBe(true);
-    }
-    expect(PolicyCurrentWireSchema.safeParse({ ...base, reason: "bogus" }).success).toBe(true);
-    expect(PolicyCurrentFrameSchema.safeParse({ ...base, reason: "bogus" }).success).toBe(false);
     expect(PolicyCurrentFrameSchema.safeParse(base).success).toBe(true);
-    // Type confusion on the ok:false-arm fields (the ok:true representative
-    // frame above cannot carry them): both sides refuse a non-string.
-    for (const field of ["reason", "error"]) {
-      for (const hostile of [7, true, { hostile: true }]) {
-        expect(PolicyCurrentWireSchema.safeParse({ ...base, [field]: hostile }).success).toBe(
-          false,
-        );
-        expect(PolicyCurrentFrameSchema.safeParse({ ...base, [field]: hostile }).success).toBe(
-          false,
-        );
-      }
+    for (const hostile of [7, true, { hostile: true }]) {
+      expect(PolicyCurrentWireSchema.safeParse({ ...base, error: hostile }).success).toBe(false);
+      expect(PolicyCurrentFrameSchema.safeParse({ ...base, error: hostile }).success).toBe(false);
     }
   });
 
@@ -300,12 +284,9 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
     // Pinned in FRAME_REFINEMENTS (scripts/check-envelope-parity.ts): on the
     // wire every field is an Option, so the base ACCEPTS these; the wrapper's
     // superRefine refuses everything outside the two shapes into_frame emits
-    // - mixtures of the arms, and an arm missing its mandatory field. A
-    // reason explains only the failure arm, so it must never ride a frame
-    // that also claims success.
+    // - mixtures of the arms, and an arm missing its mandatory field.
     const outsideTheSplit = [
       // Mixtures: a field from the other arm.
-      { type: "policy_current", ok: true, baseline: "YmFzZQ==", reason: "absent" },
       { type: "policy_current", ok: true, baseline: "YmFzZQ==", error: "e" },
       { type: "policy_current", ok: false, error: "e", baseline: "YmFzZQ==" },
       { type: "policy_current", ok: false, error: "e", sig: "c2ln" },
@@ -315,7 +296,6 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
       { type: "policy_current", ok: true },
       { type: "policy_current", ok: true, sig: "c2ln" },
       { type: "policy_current", ok: false },
-      { type: "policy_current", ok: false, reason: "absent" },
     ];
     for (const frame of outsideTheSplit) {
       expect(PolicyCurrentWireSchema.safeParse(frame).success).toBe(true);
@@ -335,7 +315,6 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
       PolicyCurrentFrameSchema.safeParse({
         type: "policy_current",
         ok: false,
-        reason: "absent",
         error: "no policy baseline on this host",
       }).success,
     ).toBe(true);

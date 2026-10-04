@@ -26,14 +26,15 @@ pub fn run() -> i32 {
     // on the way out (a stale lock is harmless but confuses diagnostics, and a
     // broker that exits should clean up after itself). Ownership-guarded: if a
     // successor has already taken over, the lock and socket on disk are the
-    // NEW broker's, and removing them would take the working bridge down. This
-    // must run BEFORE we spawn any worker threads: it blocks SIGTERM/SIGINT
-    // process-wide, and only threads created afterwards inherit that blocked
-    // mask -- otherwise the kernel could deliver the signal to an unmasked
-    // worker and terminate us before the handler thread runs.
-    install_signal_cleanup(|| {
+    // NEW broker's, and removing them would take the working bridge down.
+    // Installed first, before anything is bound or published: a signal that
+    // lands earlier takes the default disposition and leaves nothing behind.
+    if let Err(e) = install_signal_cleanup(|| {
         ipc::LockFile::remove_if_owned();
-    });
+    }) {
+        log_error!("mcp", "cannot install the SIGTERM/SIGINT cleanup: {e}");
+        return 1;
+    }
 
     // Capture our own executable identity up front, before binding or dialing,
     // so peer attestation compares against the genuine binary rather than one
@@ -265,17 +266,17 @@ fn client_name_from_env() -> Option<String> {
         .filter(|n| ipc::validate_label(n))
 }
 
-/// Block SIGTERM/SIGINT process-wide and run `f` on a dedicated thread when
-/// one arrives, then exit. Blocking the signals here (and letting a single
-/// thread `sigwait` for them) sidesteps async-signal-safety limits: the
-/// cleanup runs in ordinary thread context, so it may touch the filesystem
-/// freely. Callers MUST invoke this before spawning worker threads so those
-/// threads inherit the blocked mask.
-fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
+/// Run `f` on a dedicated thread when SIGTERM or SIGINT arrives, then exit
+/// ([`crate::sys::spawn_signal_cleanup`]). Windows has no equivalent here;
+/// the next server start clears a stale lock.
+fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) -> std::io::Result<()> {
     #[cfg(unix)]
-    crate::sys::block_signals_and_spawn_cleanup(f);
+    {
+        crate::sys::spawn_signal_cleanup(f)
+    }
     #[cfg(not(unix))]
     {
         let _ = f;
+        Ok(())
     }
 }

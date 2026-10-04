@@ -16,12 +16,8 @@ export function AuditPanel() {
   const [entries, setEntries] = useState<AuditEntry[] | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      const r = await send<{ entries: AuditEntry[] }>({ type: "get_audit" });
-      setEntries(r?.entries ?? null);
-    } catch (e) {
-      console.warn("[bb] audit panel refresh failed", e);
-    }
+    const r = await send({ type: "get_audit" });
+    setEntries(r.ok ? r.entries : null);
   }, []);
 
   useEffect(() => {

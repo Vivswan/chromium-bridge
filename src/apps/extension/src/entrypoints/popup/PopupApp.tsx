@@ -1,12 +1,9 @@
+import type { EnrollmentStatus, KillView } from "@chromium-bridge/shared/runtime-msg";
 import { PendingApprovalsSchema } from "@chromium-bridge/shared/storage";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
-// Type-only: the SW's own KillView declaration (lib/background/kill.ts), so
-// this popup cannot re-declare a drifted mirror of it.
-import type { KillView } from "@/lib/background/kill";
-import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
 
@@ -95,11 +92,12 @@ export function PopupApp() {
   const [killError, setKillError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const status = await send<{ nativeConnected?: boolean }>({ type: "get_status" });
-    setConnected(Boolean(status?.nativeConnected));
-    setEnroll(await send<EnrollmentStatus>({ type: "get_enrollment" }));
-    const al = await send<{ list?: string[] }>({ type: "get_allowlist" });
-    setList(al?.list ?? []);
+    const status = await send({ type: "get_status" });
+    setConnected(status.ok && status.nativeConnected);
+    const enrollment = await send({ type: "get_enrollment" });
+    setEnroll(enrollment.ok ? enrollment : undefined);
+    const al = await send({ type: "get_allowlist" });
+    setList(al.ok ? al.list : []);
     const { pendingAllow } = await browser.storage.local.get("pendingAllow");
     const parsed = PendingApprovalsSchema.safeParse(pendingAllow);
     if (!parsed.success) {
@@ -118,11 +116,7 @@ export function PopupApp() {
       const now = Date.now();
       setPending(parsed.data.find((p) => p.expiresAt > now) ?? null);
     }
-    try {
-      setKill((await send<KillView>({ type: "get_kill" })) ?? null);
-    } catch {
-      setKill(null);
-    }
+    setKill(await send({ type: "get_kill" }));
   }, []);
 
   useEffect(() => {
@@ -190,15 +184,10 @@ export function PopupApp() {
   const engageKill = async () => {
     setKillBusy(true);
     setKillError(null);
-    try {
-      const r = await send<KillView>({ type: "set_kill", on: true });
-      if (!r?.ok) setKillError(t("kill.failed", [r?.error ?? t("kill.no_reply")]));
-      else setKill(r);
-    } catch (e) {
-      setKillError(t("kill.failed", [String(e)]));
-    } finally {
-      setKillBusy(false);
-    }
+    const r = await send({ type: "set_kill", on: true });
+    if (!r.ok) setKillError(t("kill.failed", [r.error ?? t("kill.no_reply")]));
+    else setKill(r);
+    setKillBusy(false);
   };
 
   const enrollAct = async (type: "enroll_approve" | "enroll_reject") => {

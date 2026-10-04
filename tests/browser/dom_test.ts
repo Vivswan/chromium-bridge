@@ -19,6 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type Subprocess, spawn } from "bun";
 import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
+import { waitForPageTarget, withDeadline } from "./devtools-target";
 
 const REPO = path.resolve(import.meta.dir, "../..");
 // The built bundle (esbuild strips TS types from src/content.ts). Run
@@ -61,22 +62,7 @@ function check(cond: boolean, label: string): void {
  * sub-second; only a wedged browser reaches this. */
 const CDP_COMMAND_TIMEOUT_MS = 30000;
 
-/** Bound `promise` to `ms`, rejecting with a message that names the phase. */
-function withDeadline<T>(promise: Promise<T>, ms: number, phase: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${phase} timed out after ${ms}ms`)), ms);
-    promise.then(
-      (v) => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(timer);
-        reject(e);
-      },
-    );
-  });
-}
+const CONNECT_STEP_TIMEOUT_MS = 10000;
 
 // ─── headless Chrome process ───────────────────────────────────────────────
 class Chrome {
@@ -181,16 +167,10 @@ class Page {
     };
   }
   static async connect(port: number): Promise<Page> {
-    // Find the page target.
-    const listRes = await fetch(`http://127.0.0.1:${port}/json/list`, {
-      signal: AbortSignal.timeout(10000),
-    });
-    const targets = (await listRes.json()) as any[];
-    const page = targets.find((t) => t.type === "page");
-    if (!page) throw new Error("no page target");
+    const page = await waitForPageTarget(port, CONNECT_STEP_TIMEOUT_MS);
     // Connect to the browser-level WS, then attach via flattened session.
     const verRes = await fetch(`http://127.0.0.1:${port}/json/version`, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(CONNECT_STEP_TIMEOUT_MS),
     });
     const ver = (await verRes.json()) as any;
     const wsUrl = ver.webSocketDebuggerUrl;
@@ -202,7 +182,7 @@ class Page {
         ws.onopen = () => r();
         ws.onerror = () => rej(new Error("ws open failed"));
       }),
-      10000,
+      CONNECT_STEP_TIMEOUT_MS,
       "CDP WebSocket open",
     );
     // Attach to the page target to get a sessionId for flattened protocol.

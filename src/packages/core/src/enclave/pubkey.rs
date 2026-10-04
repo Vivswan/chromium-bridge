@@ -3,7 +3,7 @@
 
 use sha2::{Digest, Sha256};
 
-use super::encoding::base64_encode;
+use super::base64_encode;
 use super::EnclaveError;
 
 /// Byte length of the public key on the wire: the X9.63 uncompressed P-256
@@ -50,7 +50,7 @@ impl EnclavePublicKey {
     /// in `enclave_proof` frames and the fingerprint the user compares between
     /// the `pair` terminal output and the extension's enrollment UI.
     pub fn fingerprint_hex(&self) -> String {
-        crate::ipc::hex_encode(Sha256::digest(&self.sec1).as_slice())
+        hex::encode(Sha256::digest(&self.sec1))
     }
 
     /// Fingerprint grouped in 4-char blocks for human comparison.

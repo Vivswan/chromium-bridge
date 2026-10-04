@@ -14,12 +14,13 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    field_differs, fold, load_history, restrict, restricts_or_equal, set_signed, FieldKind,
-    PolicyDoc, PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
+    field_differs, fold, restrict, restricts_or_equal, set_signed, FieldKind, PolicyDoc,
+    PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
 };
 use crate::audit::Surface;
 use crate::cli::{argv, policy_args, PolicyCommand};
 use crate::enclave::{base64_decode, EnclaveError, EnrollmentKey};
+use crate::runtime_record::RuntimeRecord as _;
 
 // ---- The reports (typed, versioned) ------------------------------------------
 
@@ -187,7 +188,7 @@ fn status_from_store(store: &PolicyStore) -> PolicyStatusReport {
 /// The history report, read fail-closed. `Err` only when the ring itself is
 /// unreadable; an absent ring is the empty report.
 pub fn gather_history_report() -> Result<PolicyHistoryReport, String> {
-    match load_history().map_err(|e| e.to_string())? {
+    match PolicyHistory::load().map_err(|e| e.to_string())? {
         None => Ok(PolicyHistoryReport {
             v: 1,
             entries: Vec::new(),
@@ -738,7 +739,7 @@ struct RollbackInputs {
 /// The disk reads behind a rollback, output-free so the prose and `--json`
 /// renderings share one path.
 fn rollback_inputs(revision: u64) -> Result<RollbackInputs, String> {
-    let history = match load_history() {
+    let history = match PolicyHistory::load() {
         Ok(Some(h)) => h,
         Ok(None) => return Err("there is no policy history on this machine.".to_string()),
         Err(e) => return Err(format!("the policy history is unreadable ({e}).")),

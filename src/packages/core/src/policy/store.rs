@@ -1,7 +1,5 @@
-//! The on-disk policy store, the history ring, and the write seams
-//! (ADR-0032 decisions 3 and 5), on the `Allowlist` template: fail-closed
-//! loads, atomic 0600 writes under the runtime lock, a module-private write
-//! path behind the public seams, and log-after-decide audit outside the
+//! The on-disk policy store, the history ring, and the write seams: two
+//! [`RuntimeRecord`]s behind public seams, and log-after-decide audit outside the
 //! lock.
 
 use std::io;
@@ -15,24 +13,15 @@ use super::{
 use crate::enclave::{base64_decode, base64_encode};
 use crate::ipc;
 use crate::presence::{PolicySignOutcome, PresencePath};
+use crate::runtime_record::{Record, Rung, RuntimeRecord};
 
-// ---- The on-disk store (ADR-0032 decision 5) --------------------------------
+// ---- The on-disk store ------------------------------------------------------
 
-/// The current on-disk policy store schema version. Bumped only on a
-/// breaking-shape change; unknown-field parsing is fail-closed
-/// (`deny_unknown_fields`) so a newer file is rejected rather than
-/// misinterpreted by an older binary.
-pub const POLICY_STORE_VERSION: u32 = 1;
-
-/// Upper bound on `policy.json` when reading it back. One baseline plus an
-/// overlay is a few KB; anything larger is not ours and is rejected rather
-/// than slurped into memory.
-const POLICY_MAX_BYTES: usize = 256 * 1024;
-
-/// The persisted policy state (ADR-0032 decision 5): the signed baseline as the EXACT bytes the signature covers
+/// The persisted policy state (`policy.json`): the signed baseline as the EXACT bytes the signature covers
 /// (base64, so the artifact survives the JSON hop byte-for-byte), its signature, and the restriction overlay.
 /// Storage, not authority: the extension verifies the signature against its own pin and the host re-derives
-/// everything from the bytes.
+/// everything from the bytes. An unreadable store means refuse at every caller, never a default that could
+/// mask a tamper.
 ///
 /// ```text
 /// load          -> the FILE authority: size cap, strict shape, store version; no base64 work
@@ -43,8 +32,6 @@ const POLICY_MAX_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyStore {
-    /// Schema version; see [`POLICY_STORE_VERSION`].
-    pub version: u32,
     /// The exact signed document bytes, base64 (strict alphabet, one
     /// accepted spelling per byte string - see [`base64_decode`]).
     pub baseline_b64: String,
@@ -61,40 +48,13 @@ pub struct PolicyStore {
     pub overlay: Option<PolicyOverlay>,
 }
 
+impl Record for PolicyStore {
+    const FILE: &'static str = "policy.json";
+    const MAX_BYTES: usize = 256 * 1024;
+    const MIGRATIONS: &'static [Rung] = crate::migrations::policy::LADDER;
+}
+
 impl PolicyStore {
-    /// Path of the policy store in the 0700 per-user runtime directory.
-    pub fn path() -> std::path::PathBuf {
-        ipc::runtime_dir().join("policy.json")
-    }
-
-    /// Read the store. `Ok(None)` when the file does not exist (no policy
-    /// yet). A present-but-corrupt, oversized, or wrong-version file is an
-    /// error, NOT a silent `None`: the callers' contract (ADR-0032 decision
-    /// 5) is "unreadable store means refuse", never a default that could
-    /// mask a tamper. The baseline bytes are deliberately not decoded here -
-    /// see the type docs for the load/baseline_doc split.
-    pub fn load() -> io::Result<Option<Self>> {
-        let Some(bytes) = ipc::read_capped(&Self::path(), POLICY_MAX_BYTES)? else {
-            return Ok(None);
-        };
-        let store: PolicyStore = serde_json::from_slice(&bytes).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("policy store decode: {e}"),
-            )
-        })?;
-        if store.version != POLICY_STORE_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "policy store version {} is not supported (this binary understands {})",
-                    store.version, POLICY_STORE_VERSION
-                ),
-            ));
-        }
-        Ok(Some(store))
-    }
-
     /// The signed baseline document, strict-parsed from the EXACT stored
     /// bytes: strict base64, strict `deny_unknown_fields` JSON, and
     /// [`PolicyDoc::validate`]. Any failure is an error, never a default -
@@ -126,47 +86,26 @@ impl PolicyStore {
         }
         Ok(effective)
     }
-
-    /// Write atomically, 0600. The [`ipc::RuntimeLockToken`] proves the
-    /// caller holds the runtime lock, so a lock-free rewrite of the policy
-    /// store does not compile (the `Allowlist::write` pattern).
-    fn write(&self, _lock: &ipc::RuntimeLockToken) -> io::Result<()> {
-        let bytes = serde_json::to_vec_pretty(self)?;
-        // Never write what load cannot read back: a store over the read cap
-        // would persist fine and then fail every subsequent load.
-        if bytes.len() > POLICY_MAX_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "policy store would serialize to {} bytes, over the {POLICY_MAX_BYTES}-byte read cap",
-                    bytes.len()
-                ),
-            ));
-        }
-        ipc::write_private_atomic(&Self::path(), &bytes)
-    }
 }
 
 // ---- History: the rollback ring (data, never authority) ---------------------
 
-/// The current policy-history schema version.
-pub const POLICY_HISTORY_VERSION: u32 = 1;
-
-/// Cap on `policy-history.json`: the eviction in [`history_bytes_capped`]
-/// keeps the serialized ring at or under this, and reads refuse anything
-/// larger.
-const POLICY_HISTORY_MAX_BYTES: usize = 256 * 1024;
-
-/// Superseded policy records, oldest first: the data a future rollback
+/// Superseded policy records (`policy-history.json`), oldest first: the data a rollback
 /// surface offers back to the user. Data, never authority - no enforcement
 /// path reads this file, and a rollback built from it is an ordinary
-/// [`set_signed`] / [`restrict`] write with the full checks of those seams.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// [`set_signed`] / [`restrict`] write with the full checks of those seams. A damaged ring
+/// never affects the store's [`RuntimeRecord::load`] or the seams: their writer replaces it and moves on
+/// ([`push_history_locked`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistory {
-    /// Schema version; see [`POLICY_HISTORY_VERSION`].
-    pub version: u32,
     pub entries: Vec<PolicyHistoryEntry>,
+}
+
+impl Record for PolicyHistory {
+    const FILE: &'static str = "policy-history.json";
+    const MAX_BYTES: usize = 256 * 1024;
+    const MIGRATIONS: &'static [Rung] = crate::migrations::policy_history::LADDER;
 }
 
 /// One superseded [`PolicyStore`] record, plus when it was superseded.
@@ -184,53 +123,16 @@ pub struct PolicyHistoryEntry {
     pub superseded_unix: u64,
 }
 
-impl PolicyHistory {
-    /// Path of the history ring in the 0700 per-user runtime directory.
-    pub fn path() -> std::path::PathBuf {
-        ipc::runtime_dir().join("policy-history.json")
-    }
-}
-
-/// Read the history ring. `Ok(None)` when absent; corrupt, oversized, or
-/// wrong-version is an error, same posture as every other on-disk record.
-/// Only the future rollback surface reads this - no enforcement path calls
-/// it, and a damaged ring never affects [`PolicyStore::load`] or the seams
-/// (their writer replaces it and moves on, see [`push_history_locked`]).
-pub fn load_history() -> io::Result<Option<PolicyHistory>> {
-    let Some(bytes) = ipc::read_capped(&PolicyHistory::path(), POLICY_HISTORY_MAX_BYTES)? else {
-        return Ok(None);
-    };
-    let history: PolicyHistory = serde_json::from_slice(&bytes).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("policy history decode: {e}"),
-        )
-    })?;
-    if history.version != POLICY_HISTORY_VERSION {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "policy history version {} is not supported (this binary understands {})",
-                history.version, POLICY_HISTORY_VERSION
-            ),
-        ));
-    }
-    Ok(Some(history))
-}
-
 /// Push the superseded store record onto the ring, inside the caller's
 /// runtime-lock hold. Best-effort by contract: history failures NEVER fail
 /// the policy write they trail - an unreadable ring is logged and replaced
 /// (it is rollback data, never authority; refusing the policy write over it
 /// would let a corrupt convenience file deny service to enforcement), and a
 /// failed write is logged and dropped.
-fn push_history_locked(_lock: &ipc::RuntimeLockToken, prev: &PolicyStore) {
-    let mut history = match load_history() {
+fn push_history_locked(lock: &ipc::RuntimeLockToken, prev: &PolicyStore) {
+    let mut history = match PolicyHistory::load() {
         Ok(Some(history)) => history,
-        Ok(None) => PolicyHistory {
-            version: POLICY_HISTORY_VERSION,
-            entries: Vec::new(),
-        },
+        Ok(None) => PolicyHistory::default(),
         Err(e) => {
             log_warn!(
                 "policy",
@@ -238,10 +140,7 @@ fn push_history_locked(_lock: &ipc::RuntimeLockToken, prev: &PolicyStore) {
                  (history is rollback data, never authority; the policy write \
                  itself is unaffected)"
             );
-            PolicyHistory {
-                version: POLICY_HISTORY_VERSION,
-                entries: Vec::new(),
-            }
+            PolicyHistory::default()
         }
     };
     history.entries.push(PolicyHistoryEntry {
@@ -251,33 +150,19 @@ fn push_history_locked(_lock: &ipc::RuntimeLockToken, prev: &PolicyStore) {
         overlay: prev.overlay.clone(),
         superseded_unix: now_unix(),
     });
-    match history_bytes_capped(&mut history, POLICY_HISTORY_MAX_BYTES) {
-        Ok(bytes) => {
-            if let Err(e) = ipc::write_private_atomic(&PolicyHistory::path(), &bytes) {
-                log_warn!(
-                    "policy",
-                    "policy history write failed ({e}); the policy write itself is unaffected"
-                );
-            }
-        }
-        Err(e) => log_warn!(
+    evict_to_fit(&mut history);
+    if let Err(e) = history.write(lock) {
+        log_warn!(
             "policy",
-            "policy history serialize failed ({e}); the policy write itself is unaffected"
-        ),
+            "policy history write failed ({e}); the policy write itself is unaffected"
+        );
     }
 }
 
-/// Serialize the ring, evicting oldest entries until the bytes fit `cap`.
-/// Pure eviction (no I/O), parameterized on the cap so the loop is
-/// unit-testable; production passes [`POLICY_HISTORY_MAX_BYTES`]. The empty
-/// envelope is returned even in the pathological case where it alone
-/// exceeds the cap (it cannot, at ~30 bytes against 256 KiB).
-fn history_bytes_capped(history: &mut PolicyHistory, cap: usize) -> serde_json::Result<Vec<u8>> {
-    loop {
-        let bytes = serde_json::to_vec_pretty(history)?;
-        if bytes.len() <= cap || history.entries.is_empty() {
-            return Ok(bytes);
-        }
+/// Drop oldest entries until the ring encodes under its read cap, so the ring is never written in a
+/// shape its own load refuses. An empty ring always fits.
+fn evict_to_fit(history: &mut PolicyHistory) {
+    while !history.entries.is_empty() && history.encode().is_err() {
         history.entries.remove(0);
     }
 }
@@ -627,7 +512,6 @@ fn write_baseline_locked(
         touched,
     );
     let next = PolicyStore {
-        version: POLICY_STORE_VERSION,
         baseline_b64: base64_encode(doc_bytes),
         sig_b64: Some(sig_b64),
         key_id: Some(key_id),
@@ -753,18 +637,12 @@ pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
         return Ok(());
     };
     push_history_locked(lock, &prev);
-    match std::fs::remove_file(PolicyStore::path()) {
-        Ok(()) => {
-            // The clear is a policy change like any write: bump the policy
-            // epoch (best-effort, same contract as the write paths) so a
-            // connected host pushes the cleared state - the extension drops
-            // to its deny baseline now, not at its next connect.
-            bump_policy_epoch_locked(lock);
-            Ok(())
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
+    PolicyStore::remove(lock)?;
+    // The clear is a policy change like any write: bump the policy epoch (best-effort, same contract as
+    // the write paths) so a connected host pushes the cleared state - the extension drops to its deny
+    // baseline now, not at its next connect.
+    bump_policy_epoch_locked(lock);
+    Ok(())
 }
 
 /// The overlay a grant write leaves behind: the stored entries minus those

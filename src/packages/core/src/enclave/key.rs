@@ -3,8 +3,8 @@
 
 use crate::protocol::control::EnclaveControl;
 
+use super::base64_encode;
 use super::challenge::{challenge_message, policy_message, presence_message};
-use super::encoding::base64_encode;
 use super::pubkey::EnclavePublicKey;
 use super::{reason_code, EnclaveError};
 

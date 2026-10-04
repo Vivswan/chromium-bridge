@@ -26,17 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::ipc::{self, ClientIdentity, HashDigest, TeamId};
 use crate::presence::{self, PresenceAttestation};
 use crate::revocation::Revocation;
-
-/// The current on-disk allowlist schema version. Bumped only on a
-/// breaking-shape change; unknown-field parsing is fail-closed
-/// (`deny_unknown_fields`) so a newer file is rejected rather than
-/// misinterpreted by an older binary.
-const ALLOWLIST_VERSION: u32 = 1;
-
-/// Upper bound on the allowlist file when reading it back. A few dozen
-/// entries are a few KB; anything larger is not ours and is rejected rather
-/// than slurped into memory.
-const ALLOWLIST_MAX_BYTES: usize = 256 * 1024;
+use crate::runtime_record::{Record, Rung, RuntimeRecord};
 
 /// The authorization key of an allowlist entry: the unforgeable thing a
 /// harness's attested identity must match. Never the name. Both payloads are
@@ -79,16 +69,20 @@ pub struct ClientEntry {
     pub added_unix: u64,
 }
 
-/// The persisted allowlist. Its mere *presence* on disk means admission is
+/// The persisted allowlist (`clients.json`). Its mere *presence* on disk means admission is
 /// enforced (see [`decide`]); an empty `clients` list is therefore a fully
-/// locked bridge, not an open one.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// locked bridge, not an open one. Loading a present-but-damaged file is an error, NOT a
+/// silent `None`: treating it as unenrolled would fail *open*, so callers fail closed on the error.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Allowlist {
-    /// Schema version; see [`ALLOWLIST_VERSION`].
-    #[serde(default)]
-    pub version: u32,
     pub clients: Vec<ClientEntry>,
+}
+
+impl Record for Allowlist {
+    const FILE: &'static str = "clients.json";
+    const MAX_BYTES: usize = 256 * 1024;
+    const MIGRATIONS: &'static [Rung] = crate::migrations::clients::LADDER;
 }
 
 /// The admission verdict for a harness. Kept separate from acting on it so the
@@ -107,39 +101,6 @@ pub enum Decision {
 }
 
 impl Allowlist {
-    /// Path of the allowlist file in the 0700 per-user runtime directory.
-    pub fn path() -> std::path::PathBuf {
-        ipc::runtime_dir().join("clients.json")
-    }
-
-    /// Read the allowlist. `Ok(None)` when the file does not exist
-    /// (unenrolled). A present-but-corrupt or oversized file is an error, NOT
-    /// a silent `None`: treating a damaged allowlist as "unenrolled" would
-    /// fail *open*, so the caller must fail closed on the error instead.
-    pub fn load() -> io::Result<Option<Self>> {
-        let Some(bytes) = ipc::read_capped(&Self::path(), ALLOWLIST_MAX_BYTES)? else {
-            return Ok(None);
-        };
-        Self::decode(&bytes).map(Some)
-    }
-
-    /// The one place a persisted allowlist becomes typed.
-    fn decode(bytes: &[u8]) -> io::Result<Self> {
-        let list: Allowlist = serde_json::from_slice(bytes).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("allowlist decode: {e}"))
-        })?;
-        if list.version != ALLOWLIST_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "allowlist version {} is not supported (this binary understands {})",
-                    list.version, ALLOWLIST_VERSION
-                ),
-            ));
-        }
-        Ok(list)
-    }
-
     /// Whether `identity` matches any entry. Returns the matched entry's name.
     /// A `Hash` anchor matches the measured hash; a `TeamId` anchor matches a
     /// measured Team ID. Comparisons are plain equality: these are not secrets.
@@ -176,7 +137,6 @@ impl Allowlist {
         }
         ipc::with_runtime_lock(|lock| {
             let mut list = Self::load()?.unwrap_or_default();
-            list.version = ALLOWLIST_VERSION;
             list.clients.retain(|c| c.name != name);
             list.clients.push(ClientEntry {
                 name: name.to_string(),
@@ -209,7 +169,6 @@ impl Allowlist {
             list.clients.retain(|c| c.name != name);
             let removed = list.clients.len() != before;
             if removed {
-                list.version = ALLOWLIST_VERSION;
                 list.write(lock)?;
                 if let Err(e) =
                     crate::revocation::bump_locked(lock, crate::revocation::Scope::Clients)
@@ -236,15 +195,6 @@ impl Allowlist {
             );
         }
         Ok(removed)
-    }
-
-    /// Write atomically, 0600. The [`ipc::RuntimeLockToken`] proves the
-    /// caller holds the runtime lock (it is only minted inside
-    /// [`ipc::with_runtime_lock`]), so a lock-free rewrite of the allowlist
-    /// does not compile.
-    fn write(&self, _lock: &ipc::RuntimeLockToken) -> io::Result<()> {
-        let bytes = serde_json::to_vec_pretty(self)?;
-        ipc::write_private_atomic(&Self::path(), &bytes)
     }
 }
 
@@ -592,10 +542,7 @@ mod tests {
     }
 
     fn list_of(entries: Vec<ClientEntry>) -> Allowlist {
-        Allowlist {
-            version: ALLOWLIST_VERSION,
-            clients: entries,
-        }
+        Allowlist { clients: entries }
     }
 
     #[test]
@@ -724,7 +671,6 @@ mod tests {
         let bytes = serde_json::to_vec(&list).unwrap();
         let back: Allowlist = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back.clients, vec![hash_entry, team_entry]);
-        assert_eq!(back.version, ALLOWLIST_VERSION);
     }
 
     #[test]
@@ -774,7 +720,7 @@ mod tests {
             // poisons the whole list with the same tampering-class error as
             // any other decode failure, and the error names the rule.
             let file = serde_json::json!({
-                "version": 1,
+                "version": Allowlist::VERSION,
                 "clients": [
                     { "name": "good", "anchor": { "kind": "team_id", "value": "TEAMID0001" }, "added_unix": 0 },
                     { "name": "bad", "anchor": anchor, "added_unix": 0 },
@@ -784,7 +730,7 @@ mod tests {
                 .expect_err(&format!("{kind} anchor value {bad:?} must be refused"));
             assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{kind} {bad:?}");
             assert!(
-                err.to_string().starts_with("allowlist decode: ") && err.to_string().contains(rule),
+                err.to_string().starts_with("clients.json: ") && err.to_string().contains(rule),
                 "{kind} {bad:?}: {err}"
             );
         }
@@ -866,18 +812,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_are_rejected_fail_closed() {
-        // deny_unknown_fields: a file with an extra field (a newer schema, or
-        // tampering) is refused rather than parsed leniently.
-        let json = serde_json::json!({
-            "version": 1,
-            "clients": [],
-            "surprise": true
-        });
-        assert!(serde_json::from_value::<Allowlist>(json).is_err());
-
-        // The same holds at every nesting level: inside an entry and inside
-        // the anchor's adjacently-tagged {kind, value} shape.
+    fn unknown_fields_are_rejected_at_every_nesting_level() {
+        // The record's own strictness is pinned for every record in runtime_record.rs; an entry and
+        // the anchor's adjacently-tagged {kind, value} shape must be as strict, or a tampered field
+        // inside an entry would be skimmed over.
         assert!(serde_json::from_value::<ClientEntry>(serde_json::json!({
             "name": "codex",
             "anchor": { "kind": "hash", "value": "ab".repeat(20) },

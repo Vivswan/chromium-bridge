@@ -15,8 +15,8 @@ export function SiteList() {
   const [note, setNote] = useState("");
 
   const refresh = useCallback(async () => {
-    const resp = await send<{ list?: string[] }>({ type: "get_allowlist" });
-    setList(resp?.list ?? []);
+    const resp = await send({ type: "get_allowlist" });
+    setList(resp.ok ? resp.list : []);
   }, []);
 
   useEffect(() => {
@@ -43,8 +43,8 @@ export function SiteList() {
       setNote(t("settings.add_site_parse_failed"));
       return;
     }
-    const resp = await send<{ ok?: boolean }>({ type: "add_allow", glob });
-    if (resp?.ok) {
+    const resp = await send({ type: "add_allow", glob });
+    if (resp.ok) {
       setValue("");
       setNote("");
       void refresh();

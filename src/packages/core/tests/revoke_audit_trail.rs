@@ -14,6 +14,7 @@
 
 use chromium_bridge_core::allowlist::{Allowlist, Anchor, ClientEntry};
 use chromium_bridge_core::audit::{audit_path, AuditKind, AuditRecord, Surface};
+use chromium_bridge_core::runtime_record::RuntimeRecord as _;
 
 #[test]
 fn revoke_always_writes_an_audit_trail_entry() {
@@ -29,14 +30,13 @@ fn revoke_always_writes_an_audit_trail_entry() {
     // Plant an enrolled allowlist directly: pairing through the API would
     // demand a user-presence proof, which tests must never raise.
     let list = Allowlist {
-        version: 1,
         clients: vec![ClientEntry {
             name: "codex".into(),
             anchor: Anchor::Hash("ab".repeat(20).try_into().unwrap()),
             added_unix: 0,
         }],
     };
-    std::fs::write(Allowlist::path(), serde_json::to_vec(&list).unwrap()).unwrap();
+    std::fs::write(Allowlist::path(), list.encode().unwrap()).unwrap();
 
     let revoke_records = || -> Vec<AuditRecord> {
         match std::fs::read_to_string(audit_path()) {
