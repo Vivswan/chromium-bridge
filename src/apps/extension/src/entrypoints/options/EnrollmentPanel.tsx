@@ -1,9 +1,9 @@
+import type { EnrollmentActionType, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
-import type { EnrollmentStatus } from "@/lib/enrollment-status";
 import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
 
@@ -17,10 +17,11 @@ import { send } from "@/lib/messages";
 // printed - with the extension's side marked in amber (waiting on you).
 export function EnrollmentPanel() {
   const { t } = useI18n();
-  const [st, setSt] = useState<EnrollmentStatus | undefined | null>(null);
+  // null until the first answer lands; a refusal renders the no-status line.
+  const [st, setSt] = useState<RuntimeResponse<"get_enrollment"> | null>(null);
 
   const refresh = useCallback(async () => {
-    setSt((await send<EnrollmentStatus>({ type: "get_enrollment" })) ?? undefined);
+    setSt(await send({ type: "get_enrollment" }));
   }, []);
 
   useEffect(() => {
@@ -41,7 +42,7 @@ export function EnrollmentPanel() {
     return () => browser.storage.onChanged.removeListener(onChange);
   }, [refresh]);
 
-  const act = async (type: string, confirmKey?: MessageKey) => {
+  const act = async (type: EnrollmentActionType, confirmKey?: MessageKey) => {
     if (confirmKey && !window.confirm(t(confirmKey))) return;
     await send({ type });
     void refresh();
@@ -50,7 +51,7 @@ export function EnrollmentPanel() {
   const fmtDate = (ms?: number) => (ms ? new Date(ms).toLocaleString() : "");
 
   if (st === null) return <div className="py-2 text-xs text-text-3">{t("enroll.loading")}</div>;
-  if (st === undefined) {
+  if (!st.ok) {
     return <div className="py-2 text-xs font-semibold text-danger">{t("enroll.no_status")}</div>;
   }
 

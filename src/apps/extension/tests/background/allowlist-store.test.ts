@@ -63,22 +63,20 @@ describe("canonicalOriginGlob", () => {
 describe("addAllow", () => {
   test("persists the canonical glob and reports ok", async () => {
     const r = await addAllow("https://example.com/deep/path");
-    expect(r.ok).toBe(true);
-    expect(r.list).toEqual(["https://example.com/*"]);
+    expect(r).toEqual({ ok: true, list: ["https://example.com/*"] });
     expect(await getAllowlist()).toEqual(["https://example.com/*"]);
   });
 
   test("refuses an invalid origin without persisting", async () => {
     const r = await addAllow("file:///x");
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("not a valid");
+    expect(r).toEqual({ ok: false, error: expect.stringContaining("not a valid") });
     expect(await getAllowlist()).toEqual([]);
   });
 
   test("de-duplicates", async () => {
     await addAllow("https://example.com/a");
     const r = await addAllow("https://example.com/b");
-    expect(r.list).toEqual(["https://example.com/*"]);
+    expect(r).toEqual({ ok: true, list: ["https://example.com/*"] });
   });
 });
 
@@ -147,8 +145,7 @@ describe("pending approvals (the popup mirror is derived, not parallel)", () => 
       ],
     });
     const r = await resolvePendingAllow("allow_ghost", true);
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("no such pending request");
+    expect(r).toEqual({ ok: false, error: expect.stringContaining("no such pending request") });
     expect(await readPending()).toBeUndefined();
     // And crucially: no grant happened.
     expect(await getAllowlist()).toEqual([]);

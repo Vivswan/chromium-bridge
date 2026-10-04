@@ -1,30 +1,29 @@
-// UI -> service worker request helper. The message shapes are the RuntimeMsg
-// union validated in the SW router (src/packages/shared/src/runtime-msg.ts); this is a
-// thin promise wrapper the React views call. Every response is treated as
-// possibly-undefined (the SW may be asleep or refuse), so callers render the
-// empty/blocked state rather than hang.
+// The pages' one way to ask the service worker anything. The answer is parsed
+// against the message's declared response before a view sees it, so a view can
+// only ever render a shape the contract names.
 
+import {
+  type RuntimeMsg,
+  type RuntimeMsgType,
+  type RuntimeResponse,
+  runtimeResponseSchema,
+} from "@chromium-bridge/shared/runtime-msg";
 import { browser } from "wxt/browser";
 
-export async function send<T = Record<string, unknown>>(msg: object): Promise<T | undefined> {
+export async function send<K extends RuntimeMsgType>(
+  msg: RuntimeMsg & { type: K },
+): Promise<RuntimeResponse<K>> {
+  const type: K = msg.type;
+  let raw: unknown;
   try {
-    return (await browser.runtime.sendMessage(msg)) as T;
+    raw = await browser.runtime.sendMessage(msg);
   } catch {
-    return undefined;
+    return { ok: false, error: "no answer from the service worker" };
   }
+  const parsed = runtimeResponseSchema(type).safeParse(raw);
+  if (!parsed.success) {
+    console.error("[bb] malformed runtime response", type, parsed.error);
+    return { ok: false, error: `malformed ${type} response from the service worker` };
+  }
+  return parsed.data;
 }
-
-/** The SW's answer to get_clients (ADR-0025), mirroring
- * lib/background/clients.ts ClientListView: success carries the list,
- * failure carries the reason - never both, never neither. */
-export type ClientListView =
-  | {
-      ok: true;
-      enrolled: boolean;
-      clients: Array<{
-        name: string;
-        anchor: { kind: "hash" | "team_id"; value: string };
-        added_unix?: number;
-      }>;
-    }
-  | { ok: false; error: string };

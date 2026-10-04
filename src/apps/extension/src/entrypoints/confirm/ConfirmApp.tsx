@@ -1,16 +1,15 @@
 import {
   type ConfirmKind,
   type ConfirmPayload,
-  ConfirmPayloadSchema,
   isHardwareGated,
 } from "@chromium-bridge/shared/confirm";
 import type { OpName } from "@chromium-bridge/shared/ops.gen";
 import { isPolicyFieldName, type PolicyFieldName } from "@chromium-bridge/shared/policy.gen";
 import { useEffect, useRef, useState } from "react";
-import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import type { MessageKey } from "@/lib/i18n";
+import { send } from "@/lib/messages";
 
 // The confirmation window (ADR-0027): an extension-owned page a guarded page
 // cannot reach, read, or click. It fetches the pending payload by the id in
@@ -105,11 +104,8 @@ function policyRelaxLines(detail: string, t: (k: MessageKey) => string): string 
 }
 
 async function resolve(id: string, approved: boolean): Promise<void> {
-  try {
-    await browser.runtime.sendMessage({ type: "confirm_resolve", id, approved });
-  } catch {
-    // SW gone; the request is already lost (denied).
-  }
+  // A refusal needs no handling: the request is already lost (denied).
+  await send({ type: "confirm_resolve", id, approved });
   window.close();
 }
 
@@ -119,11 +115,9 @@ async function resolve(id: string, approved: boolean): Promise<void> {
 // dismiss closes this window right after the deny; the engage continues in
 // the SW, so nothing is lost with the document.
 async function denyAndKill(): Promise<void> {
-  try {
-    await browser.runtime.sendMessage({ type: "confirm_deny_kill" });
-  } catch {
-    // SW gone; the request is already lost (denied) and nothing can act.
-  }
+  // A refusal needs no handling: the request is already lost (denied) and
+  // nothing can act.
+  await send({ type: "confirm_deny_kill" });
   window.close();
 }
 
@@ -217,12 +211,8 @@ export function ConfirmApp() {
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get("id") || "";
-    void browser.runtime.sendMessage({ type: "confirm_ready", id }).then(
-      (resp: { payload?: unknown } | undefined) => {
-        const parsed = ConfirmPayloadSchema.safeParse(resp?.payload ?? null);
-        setPayload(parsed.success ? parsed.data : null);
-      },
-      () => setPayload(null),
+    void send({ type: "confirm_ready", id }).then((resp) =>
+      setPayload(resp.ok ? resp.payload : null),
     );
   }, []);
 

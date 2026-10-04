@@ -1,17 +1,25 @@
-// Runtime message router for the popup / options page and the confirmation window; the background entrypoint
-// installs it via registerRuntimeMessageRouter(). Every inbound message is parsed against RuntimeMsgSchema
-// first, and a malformed one is answered with a refusal, never interpreted loosely.
+// Runtime message router for the popup / options page and the confirmation
+// window; the background entrypoint installs it via
+// registerRuntimeMessageRouter(). Every inbound message is parsed against the
+// contract's request union first, and a malformed one is answered with a
+// refusal, never interpreted loosely.
 //
-// Sender gating is security-critical: the content script sends the router NOTHING, so a content-script sender
-// is a compromised renderer reaching for trust state. Without the gate a content script on an approved origin
-// could add_allow{evil.com} to seed the allowlist, or read keyId/fingerprint out of get_enrollment.
-//   any message   -> extension page only (fromExtensionPage)
-//   confirm_*     -> the confirmation window only (fromConfirmPage)
+// Sender gating is security-critical: the content script sends the router
+// NOTHING, so a content-script sender is a compromised renderer reaching for
+// trust state. Without the gate a content script on an approved origin could
+// add_allow{evil.com} to seed the allowlist, or read keyId/fingerprint out of
+// get_enrollment. Each message's gate is declared in the contract table and
+// checked once here.
+//   extension-page  -> any of the extension's own pages (fromExtensionPage)
+//   confirm-window  -> the confirmation window alone (fromConfirmPage)
 
 import {
-  isEnrollmentAction,
+  RUNTIME_CONTRACT,
   type RuntimeMsg,
   RuntimeMsgSchema,
+  type RuntimeMsgType,
+  type RuntimeRequest,
+  type RuntimeResponse,
 } from "@chromium-bridge/shared/runtime-msg";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
@@ -51,8 +59,7 @@ import { isNativeConnected } from "./port";
 // True only for a sender that is one of the extension's OWN pages (popup /
 // options / confirm), identified by the extension id AND a chrome-extension://
 // <our-id>/ URL. A content script's sender carries the http(s) page URL and its
-// id is our extension id too, so the URL prefix is the discriminator. Every
-// router message requires this.
+// id is our extension id too, so the URL prefix is the discriminator.
 function fromExtensionPage(sender: Browser.runtime.MessageSender): boolean {
   return (
     sender.id === browser.runtime.id &&
@@ -61,9 +68,10 @@ function fromExtensionPage(sender: Browser.runtime.MessageSender): boolean {
   );
 }
 
-// The verdict may come ONLY from the confirmation window, not any extension page. Exact pathname, not a prefix
-// (a prefix admits /confirm.htmlfoo and /confirm.html/...), and not url.origin, which some URL parsers render
-// as an opaque "null" for chrome-extension:// while pathname is correct in both; the query/hash stay free (?id=...).
+// Exact pathname, not a prefix (a prefix admits /confirm.htmlfoo and
+// /confirm.html/...), and not url.origin, which some URL parsers render as an
+// opaque "null" for chrome-extension:// while pathname is correct in both; the
+// query/hash stay free (?id=...).
 function fromConfirmPage(sender: Browser.runtime.MessageSender): boolean {
   if (!fromExtensionPage(sender) || typeof sender.url !== "string") return false;
   try {
@@ -73,158 +81,111 @@ function fromConfirmPage(sender: Browser.runtime.MessageSender): boolean {
   }
 }
 
-const ENROLLMENT_ACTIONS = {
+type Handler<K extends RuntimeMsgType> = (
+  msg: RuntimeRequest<K>,
+) => RuntimeResponse<K> | Promise<RuntimeResponse<K>>;
+
+// One handler per contract entry, each typed to that entry's declared
+// response: a handler answering with another shape, or a message type without
+// a handler, fails to compile.
+const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
+  resolve_allow: (msg) => resolvePendingAllow(msg.id, msg.allow),
+  get_allowlist: async () => ({ ok: true, list: await getAllowlist() }),
+  add_allow: (msg) => addAllow(msg.glob),
+  remove_allow: async (msg) => ({ ok: true, ...(await removeAllow(msg.glob)) }),
+  get_status: () => ({ ok: true, nativeConnected: isNativeConnected() }),
+  get_enrollment: getEnrollmentStatus,
+  get_clients: requestClientList,
+  revoke_client: (msg) => revokeTrustedClient(msg.name),
+  get_kill: requestKillStatus,
+  // The host decides and audits the transition; this only relays a control
+  // frame, and the schema already made release inexpressible.
+  set_kill: engageKill,
+  get_audit: async () => ({ ok: true, entries: await readRing() }),
+  // Re-derives the pending mirror through the one serialized store path: live
+  // requests are rewritten, never deleted; with none, the ghost goes and the
+  // badge clears.
+  sweep_pending: async () => {
+    await syncPendingMirror();
+    return { ok: true };
+  },
+  // The picker already wrote uiLanguage locally; `sent` is diagnostic only,
+  // since an offline choice legitimately stays local.
+  lang_choose: async (msg) => ({ ok: true, sent: await chooseLanguage(msg.value) }),
   enroll_pair: startPairing,
   enroll_verify: verifyPinnedNow,
   enroll_approve: approvePending,
   enroll_reject: rejectPending,
   enroll_revoke: revokePin,
-} as const;
+  confirm_ready: (msg) => ({ ok: true, payload: getPendingConfirm(msg.id) }),
+  confirm_resolve: (msg) => resolveConfirm(msg.id, msg.approved),
+  confirm_deny_kill: denyAndKill,
+};
 
-/** The router core, exported for the sender-gating tests. */
+// The confirm window's panic exit: deny everything pending, then engage the
+// kill switch, as ONE worker-side step. denyAllConfirmations settles the
+// in-flight op false synchronously and latches new arrivals to auto-deny
+// before the kill frame is posted, so nothing races through while the brake
+// is in flight; and the deny tears the confirm window down, so a second send
+// from that dying document could be lost.
+//   engageKillSwitch, not engageKill  -> an in-flight status query cannot get the brake refused
+//   stale id                          -> changes nothing; whatever is pending is denied and the engage still goes out
+//   deny                              -> always accepted (capability reduction); hardware payloads refuse only APPROVALS
+function denyAndKill(): Promise<RuntimeResponse<"confirm_deny_kill">> {
+  const panicEpoch = denyAllConfirmations();
+  // The latch lifts on exactly two proofs, epoch-scoped so a stale release
+  // from an EARLIER panic cannot lift this one. The stored kill mirror is never
+  // consulted: at panic time it can read a stale "killed" while a pending
+  // release is about to write "alive" with this engage still queued behind it.
+  //   alive AFTER a refusing state applied (host frames, pipe order)  -> this engage, or an equivalent cross-surface kill, landed;
+  //                                                                      only a presence-gated release produces that alive
+  //   engage never reached the pipe AND no other engage outstanding   -> nothing is in flight; the kill mirror tells the user the truth
+  //   timeout                                                         -> neither proof (the frame may still apply); the latch stays down
+  // Residual: a host silent forever leaves confirmations denying until the
+  // worker restarts, the fail-closed "kill everything".
+  void whenKillRevivesAfterRefusal().then(() => releasePanicDeny(panicEpoch));
+  return engageKillSwitch().then((r) => {
+    if (!r.ok && r.sent === false && !engageOutstanding()) {
+      releasePanicDeny(panicEpoch);
+      console.error("[bb] confirm-window kill engage failed", r.error);
+    } else if (!r.ok) {
+      console.error("[bb] confirm-window kill engage unconfirmed", r.error);
+    }
+    return r;
+  });
+}
+
+// `type` is passed beside `msg` so the lookup stays correlated: indexing the
+// handler table with the message's own union-typed `type` would lose the
+// per-arm request type.
+async function dispatch<K extends RuntimeMsgType>(
+  type: K,
+  msg: RuntimeRequest<K>,
+): Promise<RuntimeResponse<K>> {
+  return HANDLERS[type](msg);
+}
+
+/** The router core, exported for the sender-gating tests. Always answers:
+ * a handler that rejects is reported as a refusal rather than left to time
+ * out at the sender. */
 export function route(
   msg: RuntimeMsg,
   sender: Browser.runtime.MessageSender,
-  sendResponse: (response?: unknown) => void,
+  sendResponse: (response: RuntimeResponse) => void,
 ): boolean {
-  // Refuse EVERY message from a non-extension-page sender: a content script sends the router nothing, so one
-  // here is a compromised renderer reaching for trust state. confirm_* is gated more strictly still, below.
   if (!fromExtensionPage(sender)) {
     sendResponse({ ok: false, error: "this action is only accepted from extension pages" });
     return false;
   }
-  switch (msg.type) {
-    case "resolve_allow":
-      void resolvePendingAllow(msg.id, msg.allow).then((r) => sendResponse(r));
-      return true; // async
-    case "get_allowlist":
-      void getAllowlist().then((list) => sendResponse({ list }));
-      return true;
-    case "add_allow":
-      void addAllow(msg.glob).then((r) => sendResponse(r));
-      return true;
-    case "remove_allow":
-      void removeAllow(msg.glob).then((r) => sendResponse({ ok: true, ...r }));
-      return true;
-    case "get_status":
-      sendResponse({ nativeConnected: isNativeConnected() });
-      return false;
-    case "get_enrollment":
-      void getEnrollmentStatus().then((st) => sendResponse(st));
-      return true;
-    case "get_clients":
-      // ADR-0025: read the host's trusted-client allowlist. Extension-page
-      // senders only (the top-level gate above): a content script must never
-      // enumerate the trust set.
-      void requestClientList().then((r) => sendResponse(r));
-      return true;
-    case "revoke_client":
-      // ADR-0025: revoke one trusted client. Capability reduction only, but
-      // still extension-page gated like every trust-state mutation.
-      void revokeTrustedClient(msg.name).then((r) => sendResponse(r));
-      return true;
-    case "get_kill":
-      // ADR-0030: the kill switch's state (SW-only mirror + a live host
-      // query when the port is up). Extension-page senders only, like every
-      // other trust-state read.
-      void requestKillStatus().then((r) => sendResponse(r));
-      return true;
-    case "set_kill":
-      // ADR-0030: ENGAGE-ONLY (ADR-0032 decision 6: the schema pins on:true and the host refuses kill_release
-      // from the extension; release lives in the CLI). Only the extension's own pages reach this line (the
-      // gate above), and the host decides and audits the actual transition; this only relays a control frame.
-      void engageKill().then((r) => sendResponse(r));
-      return true;
-    case "get_audit":
-      // ADR-0030: the read-only audit ring for the options panel.
-      void readRing().then((entries) => sendResponse({ entries }));
-      return true;
-    case "sweep_pending":
-      // The popup saw an unparsable pendingAllow record: re-derive the
-      // mirror through the ONE serialized store path. If the SW holds live
-      // requests, this rewrites them (never deletes them); with none, it
-      // removes the ghost and clears the badge. The popup itself never
-      // writes the record - an uncoordinated popup-side remove could race a
-      // freshly minted request and orphan its resolver.
-      void syncPendingMirror().then(() => sendResponse({ ok: true }));
-      return true;
-    case "lang_choose":
-      // ADR-0032 decision 7: the options picker's user gesture, the ONLY
-      // gesture-driven lang_set emitter (the schema already enum-pinned the
-      // value). The picker wrote uiLanguage locally itself; this relays the
-      // choice to the host, which answers with a lang_current push. `sent`
-      // is diagnostic only - an offline choice legitimately stays local.
-      void chooseLanguage(msg.value).then(
-        (sent) => sendResponse({ ok: true, sent }),
-        () => sendResponse({ ok: false, error: "language relay failed" }),
-      );
-      return true;
-    case "confirm_ready":
-      // The confirmation window (ADR-0027) asking for its payload. Requires the
-      // confirmation window SPECIFICALLY (not just any extension page): a
-      // content script (or any other page) must never see what is pending.
-      if (!fromConfirmPage(sender)) {
-        sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
-        return false;
-      }
-      sendResponse({ payload: getPendingConfirm(msg.id) });
-      return false;
-    case "confirm_resolve":
-      // The user's verdict, ONLY from the confirmation window - this
-      // restriction is what makes page-side auto-approval impossible (the
-      // page can neither see nor answer the request).
-      if (!fromConfirmPage(sender)) {
-        sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
-        return false;
-      }
-      sendResponse(resolveConfirm(msg.id, msg.approved));
-      return false;
-    case "confirm_deny_kill": {
-      // The confirm window's panic exit (ADR-0030): deny everything pending, then engage the kill switch, as ONE
-      // SW-side message. denyAllConfirmations settles the in-flight op false synchronously and latches new arrivals
-      // to auto-deny before the kill frame is posted, so nothing races through while the brake is in flight; and the
-      // deny tears the confirm window down, so a second send from that dying document could be lost.
-      //   engageKillSwitch, not engageKill  -> an in-flight status query cannot get the brake refused
-      //   stale id                          -> changes nothing; whatever is pending is denied and the engage still goes out
-      //   deny                              -> always accepted (capability reduction); hardware payloads refuse only APPROVALS
-      if (!fromConfirmPage(sender)) {
-        sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
-        return false;
-      }
-      const panicEpoch = denyAllConfirmations();
-      // The latch lifts on exactly two proofs, epoch-scoped so a stale release from an EARLIER panic cannot lift
-      // this one. The stored kill mirror is never consulted: at panic time it can read a stale "killed" while a
-      // pending release is about to write "alive" with this engage still queued behind it.
-      //   alive AFTER a refusing state applied (host frames, pipe order)  -> this engage, or an equivalent cross-surface kill, landed;
-      //                                                                      only a presence-gated release produces that alive
-      //   engage never reached the pipe AND no other engage outstanding   -> nothing is in flight; the kill mirror tells the user the truth
-      //   timeout                                                         -> neither proof (the frame may still apply); the latch stays down
-      // Residual: a host silent forever leaves confirmations denying until the SW restarts, the fail-closed "kill everything".
-      void whenKillRevivesAfterRefusal().then(() => releasePanicDeny(panicEpoch));
-      void engageKillSwitch().then((r) => {
-        if (!r.ok && r.sent === false && !engageOutstanding()) {
-          releasePanicDeny(panicEpoch);
-          console.error("[bb] confirm-window kill engage failed", r.error);
-        } else if (!r.ok) {
-          console.error("[bb] confirm-window kill engage unconfirmed", r.error);
-        }
-        sendResponse(r);
-      });
-      return true;
-    }
-    default: {
-      if (!isEnrollmentAction(msg.type)) {
-        // The schema admits nothing else; a new message type must be added
-        // both there and here, and this fails closed until it is.
-        sendResponse({ ok: false, error: `unhandled message type: ${(msg as RuntimeMsg).type}` });
-        return false;
-      }
-      // Enrollment actions change the trust anchor; the top-level gate already
-      // required an extension-page sender.
-      ENROLLMENT_ACTIONS[msg.type]().then((r) => sendResponse(r));
-      return true;
-    }
+  if (RUNTIME_CONTRACT[msg.type].gate === "confirm-window" && !fromConfirmPage(sender)) {
+    sendResponse({ ok: false, error: "confirmations are confirm-window-only" });
+    return false;
   }
+  void dispatch(msg.type, msg).then(sendResponse, (e: unknown) => {
+    console.error("[bb] runtime message handler failed", msg.type, e);
+    sendResponse({ ok: false, error: `${msg.type} failed` });
+  });
+  return true;
 }
 
 export function registerRuntimeMessageRouter(): void {

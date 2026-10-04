@@ -57,7 +57,7 @@ beforeEach(() => {
   vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
     const m = msg as { type: string; approved?: boolean };
     sent.push(m);
-    if (m.type === "confirm_ready") return { payload: PAYLOAD };
+    if (m.type === "confirm_ready") return { ok: true, payload: PAYLOAD };
     return { ok: true };
   });
   vi.stubGlobal("close", vi.fn());
@@ -113,7 +113,7 @@ describe("ConfirmApp", () => {
   test("a stale request (no payload) shows the gone state and cannot approve", async () => {
     vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
       sent.push(msg as { type: string });
-      return { payload: null };
+      return { ok: true, payload: null };
     });
     await mount();
     expect(await screen.findByText(/no longer pending/i)).toBeInTheDocument();
@@ -144,7 +144,7 @@ describe("ConfirmApp", () => {
     vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
       const m = msg as { type: string };
       sent.push(m);
-      if (m.type === "confirm_ready") return { payload: { ...PAYLOAD, hardware: true } };
+      if (m.type === "confirm_ready") return { ok: true, payload: { ...PAYLOAD, hardware: true } };
       return { ok: true };
     });
     const user = userEvent.setup();
@@ -169,6 +169,7 @@ describe("ConfirmApp policy_relax", () => {
       sent.push(m);
       if (m.type === "confirm_ready") {
         return {
+          ok: true,
           payload: { ...PAYLOAD, kind: "policy_relax", origin: "", tabTitle: "", detail },
         };
       }
