@@ -2,10 +2,11 @@
 // (check-envelope-parity.ts): the classified inbound tag sets must EQUAL the
 // gated inbound plans, modulo the pinned CLASSIFIED_OUTBOUND_TAGS ceremony
 // exceptions. Exercised against the gate's REAL tables (importing the script
-// is side-effect-free: the gate only runs under import.meta.main), so the
-// regression the rule exists to prevent - a writer-only tag added to a
-// classification array, routing inbound frames nothing validates - stays
-// caught even if the surrounding script changes.
+// runs no gate: main() only runs under import.meta.main; the one import-time
+// check is the refinement counter's liveness probe, which throws rather than
+// let a dead counter pass), so the regression the rule exists to prevent - a
+// writer-only tag added to a classification array, routing inbound frames
+// nothing validates - stays caught even if the surrounding script changes.
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
@@ -19,6 +20,7 @@ import {
   GROUPS,
   type Group,
   normalizeCommandArgs,
+  refinementCounterProblems,
   refinementProblems,
 } from "./check-envelope-parity";
 
@@ -105,22 +107,21 @@ describe("refinementProblems", () => {
     expect(problems[0]).toContain("pins 0");
   });
 
-  test("a refinement NESTED below the frame level is counted too", () => {
-    // The count walk is recursive: a .refine buried on a property (or deeper)
-    // is exactly as invisible to z.toJSONSchema as a top-level superRefine,
-    // so it must demand a pin the same way.
-    const buried = z.looseObject({
-      ok: z.boolean(),
-      clients: z.array(z.looseObject({ name: z.string().refine((n) => n !== "x") })),
-    });
-    const problems = refinementProblems("client_list_result", buried, []);
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("1 custom refinement(s)");
-    // Built-in checks (min length and friends) surface in the structural
-    // diff and are not counted as refinements.
-    const bounded = z.looseObject({ ok: z.boolean(), name: z.string().min(1).max(8) });
-    expect(refinementProblems("client_list_result", bounded, [])).toEqual([]);
-  });
+  const counters: readonly [string, (schema: z.ZodType) => number, readonly string[]][] = [
+    ["a dead counter (reads 0 everywhere)", () => 0, ["one .superRefine", "one .refine nested"]],
+    ["an over-counting counter (reads 1 everywhere)", () => 1, ["built-in checks only"]],
+  ];
+  test.each(counters)(
+    "%s is refused by the liveness probe, naming each failed probe",
+    (_, count, names) => {
+      // refinementCounterProblems owns the failure mode it closes.
+      const problems = refinementCounterProblems(count);
+      expect(problems).toHaveLength(names.length);
+      for (const [i, name] of names.entries()) {
+        expect(problems[i]).toContain(`refinement counter: ${name}`);
+      }
+    },
+  );
 
   test("a pinned refinement that vanished is refused (pins bind both ways)", () => {
     const unrefined = z.looseObject({ type: z.literal("policy_current"), ok: z.boolean() });

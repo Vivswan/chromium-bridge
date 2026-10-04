@@ -5,11 +5,13 @@
 // side must equal its own origin's approved form and is refused loudly
 // otherwise - a drifted parser can never be compared away, not even by
 // converging on the canonical form. Structure everywhere else must survive
-// normalization verbatim. The fixtures below are the real shapes each
-// derivation emits today; the mutation cases prove drift is CAUGHT.
+// normalization verbatim. The fixtures below are hand-written inputs in each
+// origin's approved form, there for the mutation cases to drift FROM; the
+// gate's live run is the positive control, so no case here restates the table.
 
 import { describe, expect, test } from "bun:test";
 import {
+  declareReconciledFields,
   diffSchemas,
   normalizeEnvelopeSchema,
   splitTaggedUnionSchema,
@@ -99,21 +101,6 @@ describe("normalizeEnvelopeSchema", () => {
     expect(() => zodReq({ args: { anyOf: [zodArgs] } })).toThrow("narrowing");
     // Response schemas get no args rule.
     expect(diffSchemas(zodResp({ args: zodArgs }), rustResp({ args: true }))).not.toEqual([]);
-  });
-
-  test("R4: today's real derivations reconcile field by field", () => {
-    expect(
-      diffSchemas(
-        rustReq({ id: RUST.id, op: RUST.op, browser: RUST.browser }),
-        zodReq({ id: ZOD.id, op: ZOD.op, browser: ZOD.browser }),
-      ),
-    ).toEqual([]);
-    expect(
-      diffSchemas(
-        rustResp({ id: RUST.id, error: RUST.error }),
-        zodResp({ id: ZOD.id, error: ZOD.error }),
-      ),
-    ).toEqual([]);
   });
 
   test("R4 mutation: a side adopting the OTHER side's approved form is refused", () => {
@@ -418,24 +405,6 @@ const ZOD_CLIENT_LIST = {
 };
 
 describe("normalizeEnvelopeSchema on control frames", () => {
-  test("R5 + R4: today's real proof-frame derivations are equivalent", () => {
-    expect(
-      diffSchemas(
-        normalizeEnvelopeSchema(RUST_PROOF, "enclave_proof", "rust"),
-        normalizeEnvelopeSchema(ZOD_PROOF, "enclave_proof", "zod"),
-      ),
-    ).toEqual([]);
-  });
-
-  test("R5 + R4: today's real client_list_result derivations are equivalent", () => {
-    expect(
-      diffSchemas(
-        normalizeEnvelopeSchema(RUST_CLIENT_LIST, "client_list_result", "rust"),
-        normalizeEnvelopeSchema(ZOD_CLIENT_LIST, "client_list_result", "zod"),
-      ),
-    ).toEqual([]);
-  });
-
   test("R5 refusal: a Rust frame losing deny_unknown_fields is fail-open drift", () => {
     const loosened = { ...RUST_PROOF, additionalProperties: {} };
     expect(() => normalizeEnvelopeSchema(loosened, "enclave_proof", "rust")).toThrow(
@@ -463,8 +432,8 @@ describe("normalizeEnvelopeSchema on control frames", () => {
   });
 
   test("R5 is scoped to control frames: nested objects are checked, envelopes are not", () => {
-    // The nested ClientEntry object also carries the origin marker (checked
-    // by the equivalence test above); a nested Rust object losing it fails.
+    // The nested ClientEntry object also carries the origin marker (the gate's
+    // live run is the positive control); a nested Rust object losing it fails.
     const nested = structuredClone(RUST_CLIENT_LIST) as typeof RUST_CLIENT_LIST;
     delete (nested.properties.clients.items as Record<string, unknown>).additionalProperties;
     expect(() => normalizeEnvelopeSchema(nested, "client_list_result", "rust")).toThrow(
@@ -503,7 +472,7 @@ describe("normalizeEnvelopeSchema on control frames", () => {
     );
   });
 
-  test("R4 mutation: kill_status_result.killed must keep each origin's form", () => {
+  test("R4 mutation: kill_status_result.killed must keep the rust origin's form", () => {
     const rustKill = {
       type: "object",
       additionalProperties: false,
@@ -515,23 +484,6 @@ describe("normalizeEnvelopeSchema on control frames", () => {
       },
       required: ["type", "ok"],
     };
-    const zodKill = {
-      type: "object",
-      additionalProperties: {},
-      properties: {
-        type: { type: "string", const: "kill_status_result" },
-        ok: { type: "boolean" },
-        killed: { type: "boolean" },
-        error: { type: "string" },
-      },
-      required: ["type", "ok"],
-    };
-    expect(
-      diffSchemas(
-        normalizeEnvelopeSchema(rustKill, "kill_status_result", "rust"),
-        normalizeEnvelopeSchema(zodKill, "kill_status_result", "zod"),
-      ),
-    ).toEqual([]);
     // Rust dropping the Option null-arm (killed no longer optional in the
     // wire type) is refused, not erased.
     const changed = structuredClone(rustKill);
@@ -588,7 +540,7 @@ describe("normalizeEnvelopeSchema on control frames", () => {
   });
 });
 
-// ---- the PolicyControl frames (ADR-0032: R5 strict-nested exception + new R4s) --
+// ---- the PolicyControl frames (R5 strict-nested exception + new R4s) ----------
 
 // The real shapes each derivation emits today for the policy push. The
 // overlay is Option<PolicyOverlay> on the Rust side (a null arm around the
@@ -677,36 +629,8 @@ const RUST_LANG_CURRENT = {
   },
   required: ["type", "value", "seq"],
 };
-const ZOD_LANG_CURRENT = {
-  type: "object",
-  additionalProperties: {},
-  properties: {
-    type: { type: "string", const: "lang_current" },
-    value: { type: "string" },
-    seq: { type: "integer", minimum: 0, maximum: JS_SAFE },
-  },
-  required: ["type", "value", "seq"],
-};
 
 describe("normalizeEnvelopeSchema on the policy frames", () => {
-  test("R4 + R5: today's real policy_current derivations are equivalent", () => {
-    expect(
-      diffSchemas(
-        normalizeEnvelopeSchema(rustPolicyCurrent(), "policy_current", "rust"),
-        normalizeEnvelopeSchema(zodPolicyCurrent(), "policy_current", "zod"),
-      ),
-    ).toEqual([]);
-  });
-
-  test("R4: today's real lang_current derivations are equivalent", () => {
-    expect(
-      diffSchemas(
-        normalizeEnvelopeSchema(RUST_LANG_CURRENT, "lang_current", "rust"),
-        normalizeEnvelopeSchema(ZOD_LANG_CURRENT, "lang_current", "zod"),
-      ),
-    ).toEqual([]);
-  });
-
   test("an unconsumed STRICT_ZOD_NODES pin is refused, not left inert", () => {
     // The zod frame losing its overlay property entirely: the strict-nested
     // exception pin (and the overlay reconciliation) would sit inert, so
@@ -821,4 +745,25 @@ describe("splitTaggedUnionSchema", () => {
       "duplicate",
     );
   });
+});
+
+// A reviewer reads the table through the gate's asymmetry listing, where a
+// direction with a blank reason says nothing about why a widening is safe;
+// the declaration refuses it at module load instead of printing a blank row.
+describe("declareReconciledFields", () => {
+  test.each([["widen"], ["narrow"]] as const)(
+    "a %s with a blank reason is refused at declaration, naming the path",
+    (direction) => {
+      const blank = {
+        direction,
+        reason: "  ",
+        rust: { type: "string" },
+        zod: { type: "string" },
+        canonical: { type: "string" },
+      };
+      expect(() => declareReconciledFields({ response: { "$.properties.error": blank } })).toThrow(
+        `response $.properties.error is a ${direction} with no reason`,
+      );
+    },
+  );
 });

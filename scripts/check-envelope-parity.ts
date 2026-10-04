@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-// The envelope asymmetry gate (ADR-0028). The extension enforces a GENERATED base (envelope-wire.gen.ts, kept
-// fresh by `moon run check-gen`) wrapped by a hand-written asymmetry layer (envelope.ts / enclave.ts); this gate
-// derives a schema from each side and fails on any difference the approved asymmetry list does not explain.
+// The envelope asymmetry gate. The extension enforces a GENERATED base (envelope-wire.gen.ts, kept fresh by
+// `moon run check-gen`) wrapped by a hand-written asymmetry layer (envelope.ts / enclave.ts); this gate derives a
+// schema from each side and fails on any difference the approved asymmetry list does not explain.
 //
 //   schemars, gen-only `envelope-schema` feature   -> the Rust wire types (protocol.rs, protocol/control.rs)
 //   z.toJSONSchema on the WRAPPED validators        -> the Zod side
@@ -15,6 +15,7 @@
 //   classified inbound tags                             -> must equal the gated inbound plans plus the pinned CLASSIFIED_OUTBOUND_TAGS
 //   the request's typed command (R6, below)             -> its op set must equal OP_NAMES, and each op's Rust args
 //                                                          struct must equal the extension's per-op validator
+//   the approved asymmetries                            -> printed as a table (scope, direction, reason) for the PR reviewer
 //
 // The table rules are exported and unit-tested in scripts/check-envelope-parity.test.ts; the gate itself runs
 // under import.meta.main via `moon run check-envelope` (part of `moon run ci`).
@@ -46,6 +47,7 @@ import {
   ANNOTATION_KEYS,
   type ControlFrameKind,
   diffSchemas,
+  listAsymmetries,
   normalizeEnvelopeSchema,
   type SchemaOrigin,
   splitTaggedUnionSchema,
@@ -117,10 +119,10 @@ export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
   policy: new Set(POLICY_FRAME_TYPES),
 };
 
-// Ceremony tags classified WITHOUT an inbound plan, deliberately (ADR-0025):
-// these are extension->host ("rust-parsed") frames, and classifying the
-// inbound direction too makes the extension handle a copy arriving inbound
-// as ceremony traffic - dropped/refused by the handler - instead of
+// Ceremony tags classified WITHOUT an inbound plan, deliberately: these are
+// extension->host ("rust-parsed") frames, and classifying the inbound
+// direction too makes the extension handle a copy arriving inbound as
+// ceremony traffic - dropped/refused by the handler - instead of
 // dispatching it (see ENCLAVE_FRAME_TYPES in shared/enclave.ts). Not a
 // missing validator, so do not "fix" the exception away; each entry is
 // cross-checked below to stay classified and stay "rust-parsed".
@@ -180,23 +182,22 @@ export const FRAME_REFINEMENTS: Readonly<
 
 /** Count the custom checks (refinements) in a Zod schema, recursively, so a .refine buried on a nested property
  * counts too. Built-in checks (min_length, bounds, formats) surface in the JSON Schema derivations and are the
- * structural diff's business, so they are not counted. */
-function customCheckCount(schema: z.ZodType): number {
+ * structural diff's business, so they are not counted.
+ *
+ * Zod has no public check-kind accessor: .refine() attaches a ZodCustom, .superRefine() a bare $ZodCheck, and only
+ * `_zod.def.check === "custom"` (the route Zod documents for library authors) names both. refinementCounterProblems
+ * owns what a dead read would cost and proves the counter live at module load. */
+function countCustomChecks(schema: z.core.$ZodType): number {
   let count = 0;
   const seen = new Set<object>();
   const visit = (node: unknown): void => {
     if (typeof node !== "object" || node === null || seen.has(node)) return;
     seen.add(node);
-    const def = (node as { _zod?: { def?: Record<string, unknown> } })._zod?.def;
-    if (def !== undefined) {
-      const checks = def.checks;
-      if (Array.isArray(checks)) {
-        for (const check of checks) {
-          const checkDef = (check as { _zod?: { def?: { check?: unknown } } })._zod?.def;
-          if (checkDef?.check === "custom") count += 1;
-        }
+    if (node instanceof z.core.$ZodType) {
+      for (const check of node._zod.def.checks ?? []) {
+        if (check._zod.def.check === "custom") count += 1;
       }
-      visit(def);
+      visit(node._zod.def);
       return;
     }
     if (Array.isArray(node)) {
@@ -208,6 +209,36 @@ function customCheckCount(schema: z.ZodType): number {
   visit(schema);
   return count;
 }
+
+/** Known schemas with a known refinement count, held against a counter: the failure a dead counter would otherwise
+ * produce is an unpinned frame growing a refinement unnoticed, its count of 0 matching its empty pin list. Run at
+ * module load against countCustomChecks; exported so scripts/check-envelope-parity.test.ts can prove the refusal on
+ * a dead counter. */
+export function refinementCounterProblems(count: (schema: z.ZodType) => number): string[] {
+  const probes: readonly [string, z.ZodType, number][] = [
+    ["one .superRefine on the frame", z.looseObject({ ok: z.boolean() }).superRefine(() => {}), 1],
+    [
+      "one .refine nested under an array item",
+      z.looseObject({
+        clients: z.array(z.looseObject({ name: z.string().refine((n) => n !== "x") })),
+      }),
+      1,
+    ],
+    ["built-in checks only", z.looseObject({ name: z.string().min(1).max(8) }), 0],
+  ];
+  return probes.flatMap(([name, schema, expected]) => {
+    const got = count(schema);
+    return got === expected
+      ? []
+      : [
+          `refinement counter: ${name} counts ${got}, expected ${expected} - Zod's check internals moved; ` +
+            "fix countCustomChecks before trusting any refinement pin",
+        ];
+  });
+}
+
+const counterProblems = refinementCounterProblems(countCustomChecks);
+if (counterProblems.length > 0) throw new Error(counterProblems.join("\n"));
 
 /** The refinement-pin rule (see FRAME_REFINEMENTS): pure over its inputs so
  * scripts/check-envelope-parity.test.ts can prove the refusals fire; the
@@ -221,7 +252,7 @@ export function refinementProblems(
   pins: readonly RefinementPin[],
 ): string[] {
   const problems: string[] = [];
-  const checks = customCheckCount(schema);
+  const checks = countCustomChecks(schema);
   if (checks !== pins.length) {
     problems.push(
       `${tag}: the wrapped validator carries ${checks} custom refinement(s) but ` +
@@ -588,6 +619,17 @@ function main(): void {
     if (!zodPlannedTags.has(tag)) {
       fail(`FRAME_REFINEMENTS pins ${tag} but no { zod } plan carries a validator for it`);
     }
+  }
+
+  // The approved asymmetries, for the reviewer of a PR touching the hand-written layer: every row is a place the
+  // extension's parser deliberately differs from the host's, and a widen is where it accepts a frame the host refuses.
+  const rows = listAsymmetries();
+  const scopeWidth = Math.max(...rows.map((row) => row.scope.length));
+  console.log(
+    "\nPinned parser asymmetries (narrow: the extension refuses earlier; widen: it accepts more than the host)",
+  );
+  for (const row of rows) {
+    console.log(`  ${row.scope.padEnd(scopeWidth)}  ${row.direction.padEnd(6)}  ${row.reason}`);
   }
 
   if (failed) process.exit(1);
