@@ -41,7 +41,6 @@ signal-hook = "0.4"
 # core stores reads back as the same f64 it wrote. The default best-effort parse drifts by an ulp on some
 # inputs, which breaks the write/read-back identity the store relies on.
 serde_json = { version = "1", features = ["float_roundtrip"] }
-hex = "0.4"
 sha2 = { version = "0.11", default-features = false }
 # Temp-file-then-rename atomic writers (registration, private records).
 tempfile = "3.27"
