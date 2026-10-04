@@ -285,8 +285,9 @@ pub(crate) fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Opti
 /// created exclusively (0600 on Unix) under a fresh random name and renamed
 /// over the destination, so a pre-planted entry is never adopted or followed
 /// and a looser mode on a planted file at the destination does not carry
-/// over to the secret-bearing lock. Not fsynced: the lock describes a live
-/// process, so a crash loses nothing a reboot would not also discard.
+/// over to a private record. Not fsynced: readers see the old file or the
+/// new one, never a partial write, but nothing is promised across a system
+/// crash.
 pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path
         .parent()
@@ -396,9 +397,9 @@ mod tests {
         );
     }
 
-    /// tempfile creates 0600 and rename replaces the destination inode: two
-    /// external facts the secret-bearing lock relies on, neither enforced by
-    /// the compiler.
+    /// tempfile creates the temp file owner-only and rename replaces the
+    /// destination inode: two external facts the secret-bearing lock relies
+    /// on, neither enforced by the compiler.
     #[cfg(unix)]
     #[test]
     fn lock_write_is_owner_only_and_replaces_a_planted_loose_lock() {
@@ -415,8 +416,9 @@ mod tests {
         write_private_atomic(&path, b"{\"secret\":\"s\"}").unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), b"{\"secret\":\"s\"}");
+        // Group/other bits only: the umask may strip owner bits too.
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "lock mode {mode:o} is not owner-only");
+        assert_eq!(mode & 0o077, 0, "lock mode {mode:o} leaks group/other bits");
         // No temp file is left beside the lock.
         let leftovers: Vec<_> = fs::read_dir(&dir.0)
             .unwrap()
