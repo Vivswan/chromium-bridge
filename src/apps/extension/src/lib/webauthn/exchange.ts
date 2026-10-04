@@ -30,6 +30,7 @@ import {
 } from "@chromium-bridge/shared/webauthn";
 import { browser } from "wxt/browser";
 import type { Connection, PortCollaborator } from "../background/connection";
+import { inLife } from "../background/in-life";
 
 /** How long the host has to answer before an exchange fails closed. Nothing here waits on the user: the
  * tap happens in the page before the frame is posted, so a local round trip is all this covers. */
@@ -51,17 +52,17 @@ interface Outstanding {
   fail: (error: string) => void;
 }
 
-let conn: Connection | null = null;
-let outstanding: Outstanding | null = null;
-let pendingRequest: PresenceRequestFrame | null = null;
+const conn = inLife<Connection | null>(() => null);
+const outstanding = inLife<Outstanding | null>(() => null);
+const pendingRequest = inLife<PresenceRequestFrame | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
-    conn = c;
+    conn.value = c;
   },
   onDetach() {
-    conn = null;
-    pendingRequest = null;
+    conn.value = null;
+    pendingRequest.value = null;
     failOutstanding("native host disconnected");
   },
   onFrame(msg) {
@@ -77,8 +78,8 @@ export function isWebAuthnFrame(msg: unknown): msg is WebAuthnInboundFrame {
 }
 
 function failOutstanding(error: string): void {
-  const current = outstanding;
-  outstanding = null;
+  const current = outstanding.value;
+  outstanding.value = null;
   if (current) {
     clearTimeout(current.timer);
     current.fail(error);
@@ -88,8 +89,8 @@ function failOutstanding(error: string): void {
 /** Why a frame cannot be posted right now, or null when the slot is free. Single-flight: the host answers
  * in order on one pipe, so a second exchange is refused, never queued behind the first. */
 function slotRefusal(): Refused | null {
-  if (!conn) return { ok: false, error: "native host not connected" };
-  if (outstanding) return { ok: false, error: "a WebAuthn exchange is already in flight" };
+  if (!conn.value) return { ok: false, error: "native host not connected" };
+  if (outstanding.value) return { ok: false, error: "a WebAuthn exchange is already in flight" };
   return null;
 }
 
@@ -101,16 +102,16 @@ function exchange<T>(
   onReply: (frame: WebAuthnInboundFrame) => T | Refused,
   onPosted: () => void = () => {},
 ): Promise<T | Refused> {
-  const live = conn;
+  const live = conn.value;
   const refused = slotRefusal();
   if (!live || refused)
     return Promise.resolve(refused ?? { ok: false, error: "native host not connected" });
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      outstanding = null;
+      outstanding.value = null;
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, WEBAUTHN_EXCHANGE_TIMEOUT_MS);
-    outstanding = {
+    outstanding.value = {
       replies,
       timer,
       settle: (reply) => resolve(onReply(reply)),
@@ -118,7 +119,7 @@ function exchange<T>(
     };
     if (!live.post(frame)) {
       clearTimeout(timer);
-      outstanding = null;
+      outstanding.value = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });
       return;
     }
@@ -165,7 +166,7 @@ export function finishEnrollment(response: RegistrationResponse): Promise<Enroll
 /** The host-pushed presence request awaiting the user's tap, or null. The page reads it, shows the
  * action, runs `navigator.credentials.get`, and answers through assertPresence. */
 export function pendingPresenceRequest(): PresenceRequestFrame | null {
-  return pendingRequest;
+  return pendingRequest.value;
 }
 
 /** Hand the host the `navigator.credentials.get` response the page produced for the pending request. The
@@ -173,10 +174,10 @@ export function pendingPresenceRequest(): PresenceRequestFrame | null {
  * and the newer request stays pending for the page to read. The request is consumed only once the answer
  * is on the pipe, so neither a busy worker nor a failed post loses a tap the user already made. */
 export function assertPresence(answer: PresenceAnswer): Promise<PresenceAssertView> {
-  if (!pendingRequest) {
+  if (!pendingRequest.value) {
     return Promise.resolve({ ok: false, error: "no presence request is pending" });
   }
-  if (pendingRequest.nonce !== answer.nonce) {
+  if (pendingRequest.value.nonce !== answer.nonce) {
     return Promise.resolve({ ok: false, error: "the presence request was superseded" });
   }
   const { nonce: _answered, ...response } = answer;
@@ -189,7 +190,7 @@ export function assertPresence(answer: PresenceAnswer): Promise<PresenceAssertVi
       return result.data.ok ? { ok: true } : { ok: false, error: result.data.reason };
     },
     () => {
-      pendingRequest = null;
+      pendingRequest.value = null;
     },
   );
 }
@@ -204,28 +205,30 @@ export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
       console.warn("[bb] dropping malformed presence_request");
       return;
     }
-    if (pendingRequest) console.warn("[bb] a newer presence request replaces the unanswered one");
-    pendingRequest = parsed.data;
+    if (pendingRequest.value)
+      console.warn("[bb] a newer presence request replaces the unanswered one");
+    pendingRequest.value = parsed.data;
     // The page is where the tap happens, and it shows the action before asking for it.
     void browser.runtime.openOptionsPage().catch((e: unknown) => {
       console.warn("[bb] could not open the options page for the presence request", e);
     });
     return;
   }
-  const current = outstanding;
+  const current = outstanding.value;
   if (!current?.replies.includes(msg.type)) {
     console.warn(`[bb] dropping unsolicited ${msg.type}`);
     return;
   }
-  outstanding = null;
+  outstanding.value = null;
   clearTimeout(current.timer);
   current.settle(msg);
 }
 
-/** Tests only: forget the connection, the outstanding exchange, and the pending request. */
+/** Tests only: the first life's state again. */
 export function resetWebAuthnForTests(): void {
-  conn = null;
-  pendingRequest = null;
-  if (outstanding) clearTimeout(outstanding.timer);
-  outstanding = null;
+  const current = outstanding.value;
+  if (current) clearTimeout(current.timer);
+  conn.reset();
+  outstanding.reset();
+  pendingRequest.reset();
 }
