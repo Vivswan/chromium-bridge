@@ -15,9 +15,8 @@
 // and may not be capturable - Page.handleJavaScriptDialog then errors, which we
 // surface honestly.
 
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/ops.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
-import { TOOL_GATES } from "../shared/tool-gates";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
@@ -31,10 +30,10 @@ export async function handleDialog(
   // ONE policy snapshot for the whole decision (ADR-0032 decision 4):
   // dispatch threads its per-request snapshot in; the REQUIRED parameter is
   // what holds the invariant (tests start their own decisions via
-  // withFreshPolicy). The gate field comes from the shared TOOL_GATES
-  // map, the same entry the options grid renders, so enforcement and UI
-  // cannot name different settings.
-  if (policy[TOOL_GATES.page_handle_dialog] !== true) {
+  // withFreshPolicy). The grants come from the generated catalogue (the
+  // Rust tool record is their one home), so enforcement cannot name a field
+  // the policy does not carry.
+  if (TOOL_GRANTS.page_handle_dialog.some((grant) => policy[grant] !== true)) {
     throw new Error(
       "page_handle_dialog is disabled. Enable it in the extension settings first (it is off by default because a blocked dialog cannot show an in-page confirmation).",
     );

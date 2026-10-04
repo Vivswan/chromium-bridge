@@ -53,21 +53,16 @@ export const CAPABILITIES: readonly CapabilityInfo[] = [
     tools: ["page_snapshot"],
   },
   {
-    id: "page_snapshot_precise",
-    permissions: ["debugger"],
-    tools: ["page_snapshot_precise"],
-  },
-  {
     id: "page_interact",
     permissions: ["scripting"],
     tools: [
       "page_click",
       "page_fill",
+      "page_scroll",
+      "page_wait_for",
       "page_press",
       "page_hover",
       "page_select",
-      "page_scroll",
-      "page_wait_for",
     ],
   },
   {
@@ -79,6 +74,11 @@ export const CAPABILITIES: readonly CapabilityInfo[] = [
     id: "page_eval",
     permissions: ["scripting"],
     tools: ["page_eval"],
+  },
+  {
+    id: "page_snapshot_precise",
+    permissions: ["debugger"],
+    tools: ["page_snapshot_precise"],
   },
   {
     id: "cookie_read",

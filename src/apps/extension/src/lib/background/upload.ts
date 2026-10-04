@@ -15,9 +15,8 @@
 // The path is shown UNMASKED in the confirmation on purpose: the user must see
 // exactly which local file would leave their disk.
 
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/ops.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
-import { TOOL_GATES } from "../shared/tool-gates";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
@@ -43,9 +42,10 @@ export async function pageUpload(
   // decision's true start, before its first await, and threads them in; the
   // REQUIRED parameters are what hold the invariant (tests start their own
   // decisions via withFreshPolicy plus currentPanicEpoch()).
-  // The gate field comes from the shared TOOL_GATES map, the same entry the
-  // options grid renders, so enforcement and UI cannot name different settings.
-  if (policy[TOOL_GATES.page_upload] !== true) {
+  // The grants come from the generated catalogue (the Rust tool record is
+  // their one home), so enforcement cannot name a field the policy does not
+  // carry.
+  if (TOOL_GRANTS.page_upload.some((grant) => policy[grant] !== true)) {
     throw new Error(
       "page_upload is disabled. Enable it in the extension settings first (it is off by default because attaching a local file to a page can exfiltrate private files).",
     );

@@ -13,6 +13,8 @@
 //   every Rust control frame                            -> needs a FRAME_PLANS entry
 //   the { zod } plans                                   -> must equal the generated base set
 //   classified inbound tags                             -> must equal the gated inbound plans plus the pinned CLASSIFIED_OUTBOUND_TAGS
+//   the request's typed command (R6, below)             -> its op set must equal OP_NAMES, and each op's Rust args
+//                                                          struct must equal the extension's per-op validator
 //
 // The table rules are exported and unit-tested in scripts/check-envelope-parity.test.ts; the gate itself runs
 // under import.meta.main via `moon run check-envelope` (part of `moon run ci`).
@@ -44,8 +46,11 @@ import {
   type ControlFrameKind,
   diffSchemas,
   normalizeEnvelopeSchema,
+  type SchemaOrigin,
   splitTaggedUnionSchema,
 } from "../src/packages/shared/src/json-schema-normalize";
+import { isOpName, OP_ARG_SCHEMAS, OP_NAMES } from "../src/packages/shared/src/ops.gen";
+import { splitFlattenedCommand } from "./gen-envelope";
 
 // How each control-frame tag is covered, one entry per Rust enum variant. Adding, renaming, or removing a
 // variant fails the gate until this plan says how it is covered.
@@ -243,6 +248,93 @@ export function refinementProblems(
   return problems;
 }
 
+// ---- R6: the request's typed command, per op ----------------------------------
+//
+// The Rust request carries the command as a flattened tagged union (one branch per tool, each with that
+// tool's args struct); the extension enforces one strict validator per op (OP_ARG_SCHEMAS, generated from
+// the same structs by scripts/gen-ops.ts). This rule diffs each op's two derivations after erasing exactly
+// the representation differences below, and holds the two op sets equal. It is what makes the per-op
+// validators a checked artifact rather than a trusted generator output.
+//
+//   R1 annotations           -> stripped at every node, like the envelope rules
+//   `default` (rust only)    -> serde fills it on the Rust READ side and the extension receives the explicit
+//                               value, so the instance sets agree; Zod never emits one here
+//   integers                 -> compared verbatim: the Rust args spell integers as JsInt (tools/args.rs), whose
+//                               schema carries the same JS-safe bounds z.int() claims, so a raw i64 field
+//                               (schemars int64, unbounded) fails the diff as the parser disagreement it is
+//   objects                  -> strict on both sides (deny_unknown_fields / .strict()); compared verbatim,
+//                               `properties` and `required` materialized so an empty struct and z.object({})
+//                               read alike
+
+const ANNOTATION_KEYS = new Set(["$schema", "$id", "$comment", "title", "description", "examples"]);
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Reduce one op's args schema to the canonical form R6 compares (see the rule list above). Throws on a node
+ * that is not in its origin's approved form, so drift is refused, never compared away. */
+export function normalizeCommandArgs(node: unknown, origin: SchemaOrigin, path = "$"): unknown {
+  if (!isObject(node)) throw new Error(`R6: ${path} is not a schema object (got ${show(node)})`);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (ANNOTATION_KEYS.has(key)) continue;
+    if (key === "default" && origin === "rust") continue;
+    out[key] = value;
+  }
+  if (out.type === "object") {
+    if (out.additionalProperties !== false) {
+      throw new Error(`R6: ${path} is not strict on the ${origin} side (got ${show(out)})`);
+    }
+    const properties = out.properties ?? {};
+    if (!isObject(properties)) throw new Error(`R6: ${path} has malformed properties`);
+    out.properties = Object.fromEntries(
+      Object.entries(properties)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, sub]) => [key, normalizeCommandArgs(sub, origin, `${path}.${key}`)]),
+    );
+    const required = out.required ?? [];
+    if (!Array.isArray(required)) throw new Error(`R6: ${path} has malformed required`);
+    out.required = [...(required as string[])].sort();
+  }
+  return out;
+}
+
+/** The R6 diff for one op: empty when the Rust args struct and the extension's validator accept the same
+ * frames. Pure over its inputs so scripts/check-envelope-parity.test.ts can prove the refusals fire. */
+export function commandArgsProblems(op: string, rustArgs: unknown, zodArgs: z.ZodType): string[] {
+  const rustNorm = normalizeCommandArgs(rustArgs, "rust");
+  const zodNorm = normalizeCommandArgs(z.toJSONSchema(zodArgs), "zod");
+  const diff = diffSchemas(rustNorm, zodNorm);
+  return diff.length === 0
+    ? []
+    : [
+        `command ${op}: the Rust args struct and the Zod validator have drifted apart ` +
+          `(left = Rust, right = Zod):\n  ${diff.join("\n  ")}`,
+      ];
+}
+
+/** The R6 coverage rule: the Rust command's op set and the generated OP_NAMES must be the same set, both
+ * ways, so a tool cannot exist on one side of the bridge only. */
+export function commandCoverageProblems(
+  rustOps: ReadonlySet<string>,
+  generatedOps: readonly string[],
+): string[] {
+  const problems: string[] = [];
+  const generated = new Set(generatedOps);
+  for (const op of rustOps) {
+    if (!generated.has(op)) problems.push(`command ${op}: a Rust tool with no generated validator`);
+  }
+  for (const op of generated) {
+    if (!rustOps.has(op)) problems.push(`command ${op}: a generated validator with no Rust tool`);
+  }
+  return problems;
+}
+
+function show(v: unknown): string {
+  return JSON.stringify(v) ?? String(v);
+}
+
 /** The classifier-coverage rule (see the comment on CLASSIFIED_TAGS): pure
  * over its inputs so scripts/check-envelope-parity.test.ts can prove the
  * refusals fire; the running gate passes the real classified sets and the
@@ -331,8 +423,13 @@ function main(): void {
 
   // ---- the BridgeReq/BridgeResp envelope pair ---------------------------------
 
+  // G6 (scripts/gen-envelope.ts): the typed command is split off the request
+  // so the envelope diff below sees the shape the asymmetry layer extends;
+  // the per-op halves are diffed under R6 further down.
+  const request = splitFlattenedCommand(fromRust.request, "$.request");
+
   for (const [kind, name, rustSchema, zodSchema] of [
-    ["request", "request (BridgeReq)", fromRust.request, z.toJSONSchema(BridgeReqSchema)],
+    ["request", "request (BridgeReq)", request.envelope, z.toJSONSchema(BridgeReqSchema)],
     ["response", "response (BridgeResp)", fromRust.response, z.toJSONSchema(BridgeRespSchema)],
   ] as const) {
     const diff = diffSchemas(
@@ -346,6 +443,20 @@ function main(): void {
       );
     } else {
       console.log(`${name}: Rust and Zod derivations are structurally equivalent`);
+    }
+  }
+
+  // ---- the request's typed command, per op (R6) ------------------------------
+
+  for (const problem of commandCoverageProblems(new Set(request.commands.keys()), OP_NAMES)) {
+    fail(problem);
+  }
+  for (const [op, rustArgs] of request.commands) {
+    if (!isOpName(op)) continue; // reported by the coverage rule above
+    const problems = commandArgsProblems(op, rustArgs, OP_ARG_SCHEMAS[op]);
+    for (const problem of problems) fail(problem);
+    if (problems.length === 0) {
+      console.log(`command ${op}: Rust args struct and Zod validator are structurally equivalent`);
     }
   }
 

@@ -19,8 +19,14 @@
 //   G4  every $ref inlined before emission; the emitter does not resolve them
 //   G5  every keyword and type on the supported list below, in a position the emitter models; an unmodeled
 //       keyword would have to be silently dropped, so it aborts until support lands here AND in the adversarial
-//       tests. The empty schema {} is the contract's own free-form claim (BridgeReq.args, BridgeResp.data),
-//       emitted as z.any() and still held to the parity gate's R3 rule
+//       tests. The empty schema {} is the contract's own free-form claim (BridgeResp.data, and the request
+//       envelope's args once G6 has split the command off), emitted as z.any() and still held to the parity
+//       gate's R3 rule
+//   G6  the request's command (serde `#[serde(flatten)]` of the adjacently tagged BridgeCommand) arrives as the
+//       envelope's own properties beside a `oneOf` of {op, args} branches under `unevaluatedProperties: false`.
+//       splitFlattenedCommand hands it back as the envelope (op: string, args: any) plus one args schema per op:
+//       the envelope base stays the strict object the asymmetry layer extends, and the per-op schemas go to
+//       scripts/gen-ops.ts (the extension's per-op validators) and to the parity gate's per-op diff
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -63,6 +69,77 @@ export function assertDiscriminatedUnion(branches: unknown[], path: string): voi
     return; // `candidate` discriminates every branch
   }
   throw new Error(`gen-envelope: oneOf at ${path} is not a discriminated union (G3)`);
+}
+
+/** The request's flattened command, split back into the two things the rest of the pipeline models (G6). */
+export interface FlattenedCommand {
+  /** The envelope with the command's two fields restored as plain members: `op` any string, `args` any
+   * object. The same shape the request had before the command was typed, so the asymmetry layer in
+   * envelope.ts extends it unchanged. */
+  envelope: JsonObject;
+  /** Each op's args schema (the Rust args struct, as schemars emitted it), keyed by the op const. */
+  commands: Map<string, unknown>;
+}
+
+// The branch shape is serde's adjacently tagged variant under the flatten: exactly the two members, both
+// required, the tag a string const. Anything else is a different serde shape and must not be read as a command.
+const COMMAND_MEMBERS = ["args", "op"] as const;
+
+export function splitFlattenedCommand(schema: unknown, path: string): FlattenedCommand {
+  if (
+    !isObject(schema) ||
+    schema.type !== "object" ||
+    !isObject(schema.properties) ||
+    !Array.isArray(schema.oneOf) ||
+    schema.oneOf.length === 0 ||
+    schema.unevaluatedProperties !== false ||
+    "additionalProperties" in schema ||
+    "anyOf" in schema
+  ) {
+    throw new Error(`gen-envelope: ${path} is not a flattened tagged union (G6)`);
+  }
+  for (const member of COMMAND_MEMBERS) {
+    if (member in schema.properties) {
+      throw new Error(`gen-envelope: ${path} declares ${member} beside the flattened command (G6)`);
+    }
+  }
+  const commands = new Map<string, unknown>();
+  schema.oneOf.forEach((branch, i) => {
+    const at = `${path}.oneOf[${i}]`;
+    if (!isObject(branch) || branch.type !== "object" || !isObject(branch.properties)) {
+      throw new Error(`gen-envelope: ${at} is not an object branch (G6)`);
+    }
+    for (const key of Object.keys(branch)) {
+      if (!["type", "properties", "required"].includes(key) && !ANNOTATION_KEYS.has(key)) {
+        throw new Error(`gen-envelope: ${at} carries ${key} beside the command members (G6)`);
+      }
+    }
+    const members = Object.keys(branch.properties).sort().join();
+    const required = Array.isArray(branch.required) ? [...branch.required].sort().join() : "";
+    if (members !== COMMAND_MEMBERS.join() || required !== COMMAND_MEMBERS.join()) {
+      throw new Error(`gen-envelope: ${at} is not exactly {op, args}, both required (G6)`);
+    }
+    const tag = branch.properties.op;
+    const op = isObject(tag) && tag.type === "string" ? tag.const : undefined;
+    if (typeof op !== "string") {
+      throw new Error(`gen-envelope: ${at} has no string op const (G6)`);
+    }
+    if (commands.has(op)) throw new Error(`gen-envelope: ${path} repeats op ${op} (G6)`);
+    commands.set(op, branch.properties.args);
+  });
+  const envelope: JsonObject = { ...schema };
+  delete envelope.oneOf;
+  delete envelope.unevaluatedProperties;
+  // Sorted like schemars sorts its own properties, so the emitted base stays format-stable.
+  envelope.properties = Object.fromEntries(
+    Object.entries({ ...schema.properties, op: { type: "string" }, args: {} }).sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+  );
+  const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+  envelope.required = [...required, ...COMMAND_MEMBERS];
+  envelope.additionalProperties = false;
+  return { envelope, commands };
 }
 
 // prepare (below) recurses only through positions that hold subschemas (property values, items, union
@@ -420,9 +497,14 @@ function main(): void {
 
   const pieces: string[] = [];
 
+  // G6: the typed command is split off; its per-op args schemas reach the
+  // extension through scripts/gen-ops.ts (the emit_contract route), so only
+  // the envelope is emitted here.
+  const request = splitFlattenedCommand(fromRust.request, "$.request").envelope;
+
   pieces.push(
     "// The request envelope (BridgeReq) and the response envelope (BridgeResp).",
-    `export const BridgeReqWireSchema = ${convert(prepare(fromRust.request, "$.request"), "BridgeReqWireSchema")};`,
+    `export const BridgeReqWireSchema = ${convert(prepare(request, "$.request"), "BridgeReqWireSchema")};`,
     "",
     `export const BridgeRespWireSchema = ${convert(prepare(fromRust.response, "$.response"), "BridgeRespWireSchema")};`,
     "",
