@@ -70,9 +70,10 @@ class ModernEra(E2ECase):
         warning is the user's only notice."""
         c = McpClient(self.server())
         self.assertEqual(normalized(c.discover(_id=1)), rpc_result(1, h.DISCOVER_RESULT))
-        self.assertToolsList(c.modern_tools_list(_id=2), 2, h.TOOLS_LIST_ENVELOPE)
-        # The literal pins the text; these name the warnings a client must keep seeing.
-        by_name = {t["name"]: t for t in h.TOOLS}
+        tools = self.assertToolsList(c.modern_tools_list(_id=2), 2, h.TOOLS_LIST_ENVELOPE)
+        # Checked on the served reply, so a hand re-pin of the literal that
+        # drops a warning still fails here.
+        by_name = {t["name"]: t for t in tools}
         for name, needle in DESCRIPTION_WARNINGS:
             with self.subTest(tool=name, warning=needle):
                 self.assertIn(needle.lower(), by_name[name]["description"].lower())

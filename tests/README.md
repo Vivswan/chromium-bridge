@@ -17,6 +17,7 @@ The two browser suites are TypeScript under bun, matching the extension. The pro
 - **Under [`uv`](https://docs.astral.sh/uv/)**, which provisions the interpreter pinned in the repo-root `.python-version`, the same locally and in CI (an unpinned PATH `python3` once let a 3.12/3.14 `subprocess` difference slip through).
 - **Stdlib-only; never add dependencies.** The no-deps independence is part of the strategy, and uv pins the interpreter without opening the door to packages. `uv run --no-project --isolated` keeps the run a plain script that no stray project or virtualenv can leak into.
 - **Isolated runtime dir.** Every server a suite spawns runs in a private per-run `XDG_RUNTIME_DIR`, removed at exit on every path, so the lock, socket, and pairing state never touch the developer's real bridge.
+- **Re-pinning `protocol/tools_list.json`** (the whole tools/list the catalogue test asserts) after a catalogue change: `uv run --no-project --isolated python protocol/harness.py --capture-tools-list`, then `moon run fmt-ts`. Review the diff: it is the contract change.
 
 The protocol suites and the integration test's MCP leg track the MCP 2026-07-28 migration: modern-era cases speak the stateless protocol (per-request `_meta` protocol-version + client-capabilities keys, `server/discover` discovery), while bare requests on initialize-opened connections still exercise the temporary legacy era (pinned at the `2025-06-18` shapes) until it is removed.
 

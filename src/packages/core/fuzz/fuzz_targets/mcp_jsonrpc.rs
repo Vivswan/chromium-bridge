@@ -15,9 +15,7 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut bytes = Vec::new();
     mcp_write(&mut bytes, &first).expect("a decoded JsonRpc must encode");
-    // The reader's cap counts the trailing newline the writer adds, so an
-    // input of exactly the cap re-encodes one byte over it and is rightly
-    // refused; identity is required of everything under the cap.
+    // MCP_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input re-encodes over it.
     if bytes.len() > MCP_MAX_LINE {
         return;
     }

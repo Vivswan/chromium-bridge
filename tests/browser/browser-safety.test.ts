@@ -10,8 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isolatedBrowser, ranMarkerBody, suiteExitCode, writeRanMarker } from "./browser-safety";
 
-// Every scratch dir this file creates, removed when the file is done whatever
-// its tests did; nothing is left for the OS temp cleaner.
+// Removed in afterAll so a failing test leaves nothing in the OS temp dir.
 const scratchDirs: string[] = [];
 const scratchDir = (prefix: string): string => {
   const dir = mkdtempSync(join(tmpdir(), prefix));

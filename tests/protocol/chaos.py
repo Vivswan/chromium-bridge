@@ -126,17 +126,7 @@ class ChaosCase(BridgeCase):
         self.assertEqual(h.without_id(req), FORWARDED_TAB_LIST, "the request is in flight at the host")
 
     def enrolled_broker(self):
-        """This interpreter paired as a trusted client, with a serving broker
-        and an attached browser; enrollment is reset at cleanup."""
-        self.skip_if_enrolled()
-        self.skip_unless_unix("harness attestation")
-        h.reset_enrollment()
-        self.addCleanup(h.reset_enrollment)
-        h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"])
-        broker = self.server()
-        cb = self.mcp_ready(broker)
-        nh = self.host()
-        return broker, cb, nh
+        return super().enrolled_broker(self.mcp_ready)
 
 
 class Faults(ChaosCase):

@@ -206,7 +206,8 @@ TOOLS_LIST_ENVELOPE = {"resultType": "complete", **CACHE_FIELDS}
 # The whole catalogue a client sees, in the served order: tools_list.json is
 # the binary's tools/list captured once into a literal, so a changed tool
 # (name, description, schema) fails here and the literal is re-pinned by hand.
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools_list.json")) as _f:
+TOOLS_LIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools_list.json")
+with open(TOOLS_LIST_PATH) as _f:
     TOOLS = json.load(_f)
 TOOL_NAMES = [t["name"] for t in TOOLS]
 
@@ -708,6 +709,25 @@ def audit_records():
 # The TestCase base
 # ---------------------------------------------------------------------------
 
+def capture_tools_list():
+    """Re-pin tools_list.json from the binary's own tools/list reply (run
+    `moon run fmt-ts` afterwards; the suite's catalogue test then pins it)."""
+    ensure_binary()
+    isolate("bb-capture-")
+    remove_lock()
+    srv = start_server()
+    try:
+        if wait_lock(srv) is None:
+            sys.exit("the server wrote no lock; see its stderr: " + server_stderr(srv))
+        tools = McpClient(srv).modern_tools_list(_id=1)["result"]["tools"]
+    finally:
+        reap(srv)
+    with open(TOOLS_LIST_PATH, "w") as f:
+        json.dump(tools, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"{len(tools)} tools written to {TOOLS_LIST_PATH}", file=sys.stderr)
+
+
 class BridgeCase(unittest.TestCase):
     """Spawn helpers that register their cleanup, so a failing assertion never
     leaks a server or host past the test."""
@@ -791,8 +811,24 @@ class BridgeCase(unittest.TestCase):
 
     def assertToolsList(self, reply, _id, envelope):
         """The whole tools/list reply: the full catalogue literal plus
-        `envelope` as everything else in the result."""
+        `envelope` as everything else in the result. Returns the served tools."""
         self.assertEqual(reply, rpc_result(_id, {**envelope, "tools": TOOLS}))
+        return reply["result"]["tools"]
+
+    def enrolled_broker(self, client):
+        """This interpreter paired as a trusted client, with a serving broker
+        and an attached browser; `client(server)` opens the MCP session.
+        Enrollment is reset at cleanup. Skips where the presence floor or
+        harness attestation is unavailable."""
+        self.skip_if_enrolled()
+        self.skip_unless_unix("harness attestation")
+        reset_enrollment()
+        self.addCleanup(reset_enrollment)
+        run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"])
+        srv = self.server()
+        c = client(srv)
+        nh = self.host()
+        return srv, c, nh
 
     def assertRefusedToStart(self, proc, needle=None):
         """`proc` never became the broker: no lock, exit status 1, and (when
@@ -811,3 +847,9 @@ class BridgeCase(unittest.TestCase):
         except subprocess.TimeoutExpired:
             pass
         self.assertIsNotNone(proc.poll(), msg)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["--capture-tools-list"]:
+        sys.exit("usage: harness.py --capture-tools-list")
+    capture_tools_list()
