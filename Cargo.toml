@@ -108,6 +108,9 @@ windows-sys = { version = "0.59", features = [
 # its own schemars dependency into the shipped binary for its runtime tool
 # schemas (ADR-0034) - check-gen-isolation pins that rmcp is the only path.
 schemars = "1"
+# Model checker for the broker's ref-count shutdown protocol (src/packages/core/src/broker.rs).
+# Optional behind the core's `loom` feature, which substitutes it in the test compilation only.
+loom = "0.7"
 # The version is stated alongside the path so the dependency is not a
 # version-less wildcard: `cargo deny check bans` (wildcards = "deny") treats
 # a bare path dependency as `*` and fails the supply-chain gate. "0" (any
@@ -143,9 +146,9 @@ unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 # Typography policy (no look-alike characters) extended to identifiers.
 non_ascii_idents = "deny"
-# `loom` is an explicit, self-set cfg (see the loom dev-dependency in
-# src/packages/core), not a typo; teach check-cfg about it workspace-wide.
-unexpected_cfgs = { level = "deny", check-cfg = ["cfg(loom)"] }
+# A cfg name rustc does not know (a typo, or a feature that was renamed) fails the build instead of
+# silently compiling the guarded code out.
+unexpected_cfgs = "deny"
 unused_lifetimes = "deny"
 
 [workspace.lints.clippy]

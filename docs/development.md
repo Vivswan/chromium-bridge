@@ -95,7 +95,7 @@ The full task menu, by area:
 |------|-------|
 | Aggregates | `build`, `test`, `ci`, `release`, `lint`, `fmt`, `fix` |
 | Dev loops | `dev`, `dev-web`, `extension:dev` |
-| Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc`), `build-release`, `build-repro`, `typos`, `machete`, `audit`, `fuzz-smoke` |
+| Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `build-release`, `build-repro`, `typos`, `machete`, `audit`, `fuzz-smoke` |
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared`), `gen-icons`, `check-gen`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
