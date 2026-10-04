@@ -32,14 +32,14 @@ fn ident(hash: &str) -> ClientIdentity {
     }
 }
 
-// Hash anchors are validated lowercase hex (ipc::HashDigest), so
-// the fixtures use hex stand-ins; the names say the role each plays.
-const H_SELF: &str = "aa11";
-const H_OTHER: &str = "bb22";
+// Hash anchors are measured-width lowercase hex (ipc::HashDigest); the
+// fixtures are cdhash-width stand-ins, and the names say the role each plays.
+const H_SELF: &str = "aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11";
+const H_OTHER: &str = "bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22";
 #[cfg(unix)]
-const H_KEEP: &str = "cafe";
+const H_KEEP: &str = "cafecafecafecafecafecafecafecafecafecafe";
 #[cfg(unix)]
-const H_REVOKED: &str = "dead";
+const H_REVOKED: &str = "deaddeaddeaddeaddeaddeaddeaddeaddeaddead";
 
 fn list_with(hash: &str) -> allowlist::Allowlist {
     allowlist::Allowlist {

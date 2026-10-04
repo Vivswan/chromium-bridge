@@ -314,14 +314,21 @@ mod tests {
 
     #[test]
     fn a_pid_identity_carries_the_same_hash_as_the_audit_token_path() {
-        // The pid-keyed and audit-token-keyed lookups are two kernel guest
-        // attributes for one image; both must land on the same measurement,
-        // or the ENOPROTOOPT fallback in peer_identity would attest a
-        // different value than the primary path.
+        // External fact: the kernel resolves the audit-token and pid guest
+        // attributes of one process to the same image, so the ENOPROTOOPT
+        // fallback in peer_identity attests the same value as the primary
+        // path. The token is read directly, so a fallback cannot make both
+        // sides the pid path.
+        use std::os::unix::io::AsRawFd;
+
         let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
-        let by_token = peer_identity(&BridgeStream::from(a)).unwrap();
+        let token = peer_audit_token(a.as_raw_fd()).expect("LOCAL_PEERTOKEN is supported here");
+        let token = CFData::from_buffer(&token);
+        let mut guest = GuestAttributes::new();
+        guest.set_audit_token(token.as_concrete_TypeRef());
+        let by_token = guest_identity(&guest, "peer").unwrap();
         let by_pid = pid_client_identity(std::process::id()).unwrap();
-        assert_eq!(by_pid.hash, by_token);
+        assert_eq!(by_pid, by_token);
         assert_eq!(by_pid.hash, own_identity().unwrap());
     }
 }

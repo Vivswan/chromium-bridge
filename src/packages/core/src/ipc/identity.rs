@@ -1,22 +1,24 @@
-//! The kernel-attested client identity and the two typed values it is built from. Both newtypes are parsed ONCE
-//! where a value enters the program (a measurement, a `clients.json` entry, a relayed attach frame, a CLI flag),
-//! so every later holder compares trusted values and no compare site re-validates.
-//!
-//! ```text
-//! HashDigest  -> non-empty lowercase hex, the form both platforms measure in
-//! TeamId      -> non-empty: an unsigned or ad-hoc image measures NO team id, so an empty anchor could only ever be
-//!                a permanent, silent Refuse (the hand-edited `{"kind":"team_id","value":""}` incident)
-//! ```
-//!
-//! An on-disk value in the wrong form is deliberately NOT normalized (that would mask tampering): it fails the whole
-//! decode, which every caller already fails closed on.
+//! The kernel-attested client identity and its two typed values, parsed once
+//! where a value enters (a measurement, a `clients.json` entry, a relayed attach
+//! frame, a CLI flag) so no compare site re-validates. A wrong-form on-disk
+//! value is never normalized: it fails the whole decode, which every caller
+//! fails closed on.
 
 use serde::{Deserialize, Serialize};
 
-/// A validated image digest (macOS `cdhash`, Linux `/proc/<pid>/exe` SHA256): non-empty lowercase ASCII hex.
+/// A measured image digest: a 20-byte macOS `cdhash` or a 32-byte Linux
+/// SHA-256 of `/proc/<pid>/exe`, as lowercase hex (40 or 64 characters). No
+/// other width or spelling can equal a measurement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "envelope-schema",
+    derive(schemars::JsonSchema),
+    schemars(with = "String")
+)]
 #[serde(try_from = "String")]
 pub struct HashDigest(String);
+
+const DIGEST_WIDTHS: [usize; 2] = [20, 32];
 
 impl HashDigest {
     /// The digest as its lowercase hex string.
@@ -25,32 +27,19 @@ impl HashDigest {
     }
 }
 
-impl TryFrom<&[u8]> for HashDigest {
-    type Error = String;
-
-    /// The measurement boundary's constructor: lowercase hex by construction,
-    /// so the one rule left to check is that the measurement had bytes at all.
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        if bytes.is_empty() {
-            Err("digest must be non-empty".to_string())
-        } else {
-            Ok(HashDigest(hex::encode(bytes)))
-        }
-    }
-}
-
 impl TryFrom<String> for HashDigest {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        let canonical = !value.is_empty()
+        let canonical = DIGEST_WIDTHS.contains(&(value.len() / 2))
+            && value.len().is_multiple_of(2)
             && value
                 .bytes()
                 .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
         if canonical {
             Ok(HashDigest(value))
         } else {
-            Err("hash anchor must be non-empty lowercase hex".to_string())
+            Err("hash anchor must be 40 or 64 lowercase hex characters".to_string())
         }
     }
 }
@@ -60,6 +49,21 @@ impl TryFrom<&str> for HashDigest {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         HashDigest::try_from(value.to_string())
+    }
+}
+
+impl TryFrom<&[u8]> for HashDigest {
+    type Error = String;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if DIGEST_WIDTHS.contains(&bytes.len()) {
+            Ok(HashDigest(hex::encode(bytes)))
+        } else {
+            Err(format!(
+                "digest must be 20 or 32 bytes, got {}",
+                bytes.len()
+            ))
+        }
     }
 }
 
@@ -75,9 +79,14 @@ impl std::fmt::Display for HashDigest {
     }
 }
 
-/// A macOS signing Team ID as measured from a Team-ID-signed image or pinned by
-/// an allowlist entry. Non-empty by construction (see the module doc).
+/// A macOS signing Team ID. Non-empty: an unsigned or ad-hoc image measures no
+/// team id at all, so an empty anchor could never match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "envelope-schema",
+    derive(schemars::JsonSchema),
+    schemars(with = "String")
+)]
 #[serde(try_from = "String")]
 pub struct TeamId(String);
 
@@ -120,36 +129,6 @@ impl std::fmt::Display for TeamId {
     }
 }
 
-/// Schema-identical to a plain string on purpose: the canonical-form rules are enforced by the Rust parser at
-/// the trust boundary, and the generated TS wire schema must stay exactly what it was when these fields were a
-/// `String` (the extension only ever consumes them read-only in `client_list_result`).
-#[cfg(feature = "envelope-schema")]
-macro_rules! string_schema {
-    ($t:ty) => {
-        impl schemars::JsonSchema for $t {
-            fn schema_name() -> std::borrow::Cow<'static, str> {
-                <String as schemars::JsonSchema>::schema_name()
-            }
-
-            fn schema_id() -> std::borrow::Cow<'static, str> {
-                <String as schemars::JsonSchema>::schema_id()
-            }
-
-            fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-                <String as schemars::JsonSchema>::json_schema(generator)
-            }
-
-            fn inline_schema() -> bool {
-                <String as schemars::JsonSchema>::inline_schema()
-            }
-        }
-    };
-}
-#[cfg(feature = "envelope-schema")]
-string_schema!(HashDigest);
-#[cfg(feature = "envelope-schema")]
-string_schema!(TeamId);
-
 /// A harness's kernel-attested code identity, the input to the trusted-client
 /// allowlist decision ([`crate::allowlist`]). `team_id` is present only for a
 /// Team-ID-signed image (always `None` on Linux and for ad-hoc / unsigned
@@ -178,36 +157,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hash_digest_accepts_only_non_empty_lowercase_hex() {
-        // The legitimate forms: lowercase hex of any (even) length, a 20-byte
-        // macOS cdhash or a 32-byte Linux SHA256 both pass.
-        assert!(HashDigest::try_from("deadbeef").is_ok());
-        assert!(HashDigest::try_from("ab".repeat(32)).is_ok());
-        assert!(HashDigest::try_from("0123456789abcdef").is_ok());
-        // Everything that could never match a measured lowercase-hex identity
-        // is refused at the parse boundary instead of becoming a permanent,
-        // silent Refuse.
-        for (bad, why) in [
-            ("", "empty"),
-            ("DEADBEEF", "uppercase"),
-            ("aBc1", "mixed case"),
-            ("zz", "non-hex"),
-            ("dead beef", "whitespace"),
-            ("dead-beef", "punctuation"),
-        ] {
-            assert!(HashDigest::try_from(bad).is_err(), "{why}");
-        }
-    }
-
-    #[test]
     fn a_measured_digest_parses_back_equal_to_itself() {
         // The two constructors meet: what the measurement boundary produces
         // from bytes is exactly what the parse boundary accepts from text, so
         // a measured hash written to clients.json always reads back and
         // matches. Pins the encoder's lowercase output (an external fact of
         // the hex crate), which a parse of uppercase hex would silently reject.
-        let measured = HashDigest::try_from(&[0x00u8, 0xab, 0xcd, 0xef, 0xff][..]).unwrap();
-        assert_eq!(measured.as_str(), "00abcdefff");
-        assert_eq!(HashDigest::try_from(measured.as_str()), Ok(measured));
+        for (bytes, hex) in [
+            (&[0xabu8; 20][..], "ab".repeat(20)),
+            (&[0x0fu8; 32][..], "0f".repeat(32)),
+        ] {
+            let measured = HashDigest::try_from(bytes).unwrap();
+            assert_eq!(measured.as_str(), hex);
+            assert_eq!(HashDigest::try_from(measured.as_str()), Ok(measured));
+        }
+        // Bytes of a width no platform measures are refused the same way.
+        assert!(HashDigest::try_from(&[0xabu8; 19][..]).is_err());
+        assert!(HashDigest::try_from(&[][..]).is_err());
     }
 }

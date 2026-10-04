@@ -123,9 +123,7 @@ impl Allowlist {
         Self::decode(&bytes).map(Some)
     }
 
-    /// The load boundary's parser: the one place a persisted allowlist becomes
-    /// typed. Every malformed entry (an unknown field, a non-canonical anchor
-    /// value, an unsupported version) is the same `InvalidData` failure.
+    /// The one place a persisted allowlist becomes typed.
     fn decode(bytes: &[u8]) -> io::Result<Self> {
         let list: Allowlist = serde_json::from_slice(bytes).map_err(|e| {
             io::Error::new(io::ErrorKind::InvalidData, format!("allowlist decode: {e}"))
@@ -574,9 +572,9 @@ mod tests {
         }
     }
 
-    /// A test digest from a literal that is valid lowercase hex.
-    fn hd(hex: &str) -> HashDigest {
-        HashDigest::try_from(hex).unwrap()
+    /// A 40-character test digest from a lowercase-hex seed.
+    fn hd(seed: &str) -> HashDigest {
+        HashDigest::try_from(seed.chars().cycle().take(40).collect::<String>()).unwrap()
     }
 
     /// A test team id from a non-empty literal.
@@ -714,7 +712,7 @@ mod tests {
     fn entry_serde_roundtrips_both_anchor_kinds() {
         let hash_entry = ClientEntry {
             name: "codex".into(),
-            anchor: Anchor::Hash(hd(&"ab".repeat(32))),
+            anchor: Anchor::Hash(HashDigest::try_from("ab".repeat(32)).unwrap()),
             added_unix: 42,
         };
         let team_entry = ClientEntry {
@@ -735,7 +733,7 @@ mod tests {
         // can never be confused for one another.
         assert_eq!(
             serde_json::to_value(Anchor::Hash(hd("0a"))).unwrap(),
-            serde_json::json!({ "kind": "hash", "value": "0a" })
+            serde_json::json!({ "kind": "hash", "value": "0a".repeat(20) })
         );
         assert_eq!(
             serde_json::to_value(Anchor::TeamId(tid("t"))).unwrap(),
@@ -752,7 +750,7 @@ mod tests {
         let value = serde_json::to_value(&anchor).unwrap();
         assert_eq!(
             value,
-            serde_json::json!({ "kind": "hash", "value": "deadbeef" })
+            serde_json::json!({ "kind": "hash", "value": "deadbeef".repeat(5) })
         );
         let back: Anchor = serde_json::from_value(value).unwrap();
         assert_eq!(back, anchor);
@@ -760,25 +758,16 @@ mod tests {
 
     #[test]
     fn a_malformed_on_disk_anchor_is_rejected_at_load_fail_closed() {
-        // Incident: a hand-edited `{"kind":"team_id","value":""}` loaded fine and then could never match any
-        // client, a permanent silent Refuse. Any anchor value that no measurement can ever equal (an empty team
-        // id; an uppercase, empty, or non-hex hash) now fails the decode itself, so the whole file reads as a
-        // corrupt allowlist and every caller fails closed LOUDLY. Never normalized: it is evidence of a foreign
-        // writer, not input to fix up.
+        // Incident: the hand-edited `{"kind":"team_id","value":""}` entry that loaded and then never matched.
+        const HASH_RULE: &str = "hash anchor must be 40 or 64 lowercase hex characters";
         for (kind, bad, rule) in [
-            ("team_id", "", "team id must be non-empty"),
-            (
-                "hash",
-                "DEADBEEF",
-                "hash anchor must be non-empty lowercase hex",
-            ),
-            ("hash", "", "hash anchor must be non-empty lowercase hex"),
-            ("hash", "zz", "hash anchor must be non-empty lowercase hex"),
-            (
-                "hash",
-                "aBc1",
-                "hash anchor must be non-empty lowercase hex",
-            ),
+            ("team_id", String::new(), "team id must be non-empty"),
+            ("hash", "AB".repeat(20), HASH_RULE),
+            ("hash", String::new(), HASH_RULE),
+            ("hash", "zz".repeat(20), HASH_RULE),
+            ("hash", "ab".repeat(19), HASH_RULE),
+            ("hash", format!("{}a", "ab".repeat(20)), HASH_RULE),
+            ("hash", "ab".repeat(21), HASH_RULE),
         ] {
             let anchor = serde_json::json!({ "kind": kind, "value": bad });
             // Through the full file shape at the load boundary: one bad entry
@@ -807,7 +796,7 @@ mod tests {
         // User INPUT keeps its historical convenience: uppercase hex is
         // normalized to the canonical lowercase form.
         assert_eq!(
-            resolve_anchor(&AnchorSpec::Hash("DEADBEEF".into())).unwrap(),
+            resolve_anchor(&AnchorSpec::Hash("DEADBEEF".repeat(5))).unwrap(),
             Anchor::Hash(hd("deadbeef"))
         );
         // Non-hex and empty input are refused with the same message as ever.
@@ -886,18 +875,23 @@ mod tests {
         // the anchor's adjacently-tagged {kind, value} shape.
         assert!(serde_json::from_value::<ClientEntry>(serde_json::json!({
             "name": "codex",
-            "anchor": { "kind": "hash", "value": "ab" },
+            "anchor": { "kind": "hash", "value": "ab".repeat(20) },
             "added_unix": 0,
             "surprise": true
         }))
         .is_err());
         assert!(serde_json::from_value::<Anchor>(serde_json::json!({
             "kind": "hash",
-            "value": "ab",
+            "value": "ab".repeat(20),
             "surprise": true
         }))
         .is_err());
-        // Positive control: the exact shape still parses.
+        // Positive controls: the same shapes without the extra field parse.
+        assert!(serde_json::from_value::<Anchor>(serde_json::json!({
+            "kind": "hash",
+            "value": "ab".repeat(20)
+        }))
+        .is_ok());
         assert!(serde_json::from_value::<Anchor>(serde_json::json!({
             "kind": "team_id",
             "value": "TEAMID0001"
