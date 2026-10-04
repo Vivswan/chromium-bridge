@@ -167,7 +167,23 @@ fn serialized_bytes_are_the_signed_wire_contract() {
         eval_toast_timeout_ms: Ms::try_from(JS_SAFE_INT_MAX).unwrap(),
         disabled_tools: vec!["page_eval".into(), "tab_close".into()],
     };
-    let fields = r#""cdpMode":true,"fileUploadEnabled":false,"handleDialogEnabled":true,"pageEvalEnabled":false,"confirmHighRiskClick":false,"confirmPageEval":true,"touchIdConfirm":false,"confirmTabClose":true,"warnPreciseSnapshot":false,"evalMask":true,"hostReverifyMs":1,"confirmGraceMs":2,"clickToastTimeoutMs":3,"evalToastTimeoutMs":9007199254740991,"disabledTools":["page_eval","tab_close"]"#;
+    let fields = concat!(
+        r#""cdpMode":true,"#,
+        r#""fileUploadEnabled":false,"#,
+        r#""handleDialogEnabled":true,"#,
+        r#""pageEvalEnabled":false,"#,
+        r#""confirmHighRiskClick":false,"#,
+        r#""confirmPageEval":true,"#,
+        r#""touchIdConfirm":false,"#,
+        r#""confirmTabClose":true,"#,
+        r#""warnPreciseSnapshot":false,"#,
+        r#""evalMask":true,"#,
+        r#""hostReverifyMs":1,"#,
+        r#""confirmGraceMs":2,"#,
+        r#""clickToastTimeoutMs":3,"#,
+        r#""evalToastTimeoutMs":9007199254740991,"#,
+        r#""disabledTools":["page_eval","tab_close"]"#
+    );
     assert_eq!(
         serde_json::to_string(&values).unwrap(),
         format!("{{{fields}}}")
