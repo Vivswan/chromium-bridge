@@ -40,6 +40,12 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The same gen-only bans as the root gate: a fuzz oracle must not reach for a
+# software P-256 stack or our schema-gen feature either.
+deny = [
+  { crate = "p256", reason = "dev-only in the core; never a fuzz dependency" },
+  { crate = "schemars", wrappers = ["rmcp"], reason = "runtime tool schemas come from rmcp only" },
+]
 # The fuzz crate's core dependency is `path = ".."` with no version, and
 # scripts/sync-version.ts does not maintain this manifest, so a pinned
 # version would drift on every release. Scoped to this fuzz-only config so

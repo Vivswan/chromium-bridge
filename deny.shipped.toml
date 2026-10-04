@@ -1,0 +1,20 @@
+# cargo-deny config for the SHIPPED dependency graph only.
+# Run: cargo deny --config deny.shipped.toml check bans   (moon run check-gen-isolation; in the `ci` gate)
+#
+# deny.toml is the supply-chain gate and keeps dev-dependencies in its graph so
+# their advisories and sources are checked too. This config drops them, which
+# is what lets a dev-only crate be banned outright: a ban here fails the moment
+# the crate is declared as a normal dependency anywhere in the shipped graph,
+# where a wrapper rule in deny.toml would have let a leak through the very
+# crate that legitimately uses it in dev.
+
+[graph]
+exclude-dev = true
+
+[bans]
+# A software P-256 stack has no place in a binary whose signing story is the
+# Secure Enclave; p256 exists only to sign the enclave golden-vector fixture
+# (a dev-dependency of the core).
+deny = [
+  { crate = "p256", reason = "dev-only fixture signer; the host signs with the Secure Enclave" },
+]
