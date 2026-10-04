@@ -137,8 +137,6 @@ describe("presence exchange", () => {
   });
 
   test("a busy exchange refuses the assertion and keeps the request pending for a retry", async () => {
-    // Observed in review: consuming the request before reserving the send slot lost a tap the user had
-    // already made when an enrollment exchange was in flight.
     vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
     handleWebAuthnFrame(presenceRequest as never);
     const enrolling = beginEnrollment();
@@ -157,8 +155,6 @@ describe("presence exchange", () => {
   });
 
   test("an answer to a superseded request is refused and the newer request stays pending", async () => {
-    // Observed in review: the page read request A, request B replaced it while the authenticator prompt
-    // was up, and A's answer consumed B. The answer names its nonce, so only B's answer consumes B.
     vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
     handleWebAuthnFrame(presenceRequest as never);
     const newer = { ...presenceRequest, nonce: "nonce-0003", challenge: "bmV3ZXI" };
@@ -176,8 +172,6 @@ describe("presence exchange", () => {
   });
 
   test("a failed post keeps the request pending, and the retry posts it", async () => {
-    // Observed in review: consuming the request before the post lost the tap when the port refused the
-    // frame, and the retry found nothing pending on a connection that then accepted sends.
     vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
     let accept = false;
     attach(collaborator, (frame) => {

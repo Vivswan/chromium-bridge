@@ -2,10 +2,8 @@
 //! and what the fuzz workspace's seed corpus is built from (`fuzz/src/seeds/webauthn_authdata.rs`). Never
 //! built into a shipped binary: the host only ever reads these layouts.
 
-use coset::iana;
+use coset::iana::{self, EnumI64 as _};
 use coset::{CborSerializable as _, CoseKeyBuilder};
-
-pub use coset::iana::Algorithm;
 
 /// The authenticatorData flag bits, as the spec numbers them.
 pub mod flags {
@@ -48,17 +46,24 @@ pub fn authenticator_data(
     out
 }
 
-/// A COSE EC2 P-256 key over the uncompressed SEC1 point `sec1`, under `alg` (ES256 is the only one the
-/// verifier accepts; any other produces the refused seed). A point shorter than 65 bytes yields the
-/// malformed-coordinates seed.
-pub fn cose_ec2_key(sec1: &[u8], alg: Algorithm) -> Vec<u8> {
+/// The COSE algorithm identifiers the seeds and tests spell out: ES256 is the only one the verifier accepts.
+pub const ES256: i64 = -7;
+pub const RS256: i64 = -257;
+
+/// A COSE EC2 P-256 key over the uncompressed SEC1 point `sec1`, under the COSE algorithm `alg` (an
+/// unregistered number leaves `alg` absent, itself a refused shape). A point shorter than 65 bytes yields
+/// the malformed-coordinates seed.
+pub fn cose_ec2_key(sec1: &[u8], alg: i64) -> Vec<u8> {
     let (x, y) = sec1
         .get(1..)
         .map(|xy| xy.split_at(xy.len() / 2))
         .unwrap_or((&[], &[]));
-    CoseKeyBuilder::new_ec2_pub_key(iana::EllipticCurve::P_256, x.to_vec(), y.to_vec())
-        .algorithm(alg)
-        .build()
-        .to_vec()
-        .unwrap_or_default()
+    let key = CoseKeyBuilder::new_ec2_pub_key(iana::EllipticCurve::P_256, x.to_vec(), y.to_vec());
+    match iana::Algorithm::from_i64(alg) {
+        Some(alg) => key.algorithm(alg),
+        None => key,
+    }
+    .build()
+    .to_vec()
+    .unwrap_or_default()
 }

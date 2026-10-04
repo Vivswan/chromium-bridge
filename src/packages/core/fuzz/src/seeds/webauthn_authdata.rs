@@ -3,7 +3,7 @@
 //! a point on the curve with no private scalar anywhere.
 
 use chromium_bridge_core::webauthn::encode::{
-    authenticator_data, cose_ec2_key, flags, Algorithm, P256_GENERATOR_SEC1,
+    authenticator_data, cose_ec2_key, flags, ES256, P256_GENERATOR_SEC1, RS256,
 };
 use chromium_bridge_core::webauthn::{AuthenticatorData, RpId};
 
@@ -17,7 +17,7 @@ fn reads(bytes: &[u8]) -> bool {
 pub(super) fn directory() -> Directory {
     let rp = RpId::pinned().hash();
     let id = [0xc1; 32];
-    let es256 = cose_ec2_key(&P256_GENERATOR_SEC1, Algorithm::ES256);
+    let es256 = cose_ec2_key(&P256_GENERATOR_SEC1, ES256);
     let header = |flag_bits: u8| authenticator_data(&rp, flag_bits, 7, None);
     let attested = |flag_bits: u8, id: &[u8], cose: &[u8]| {
         authenticator_data(&rp, flag_bits, 0, Some((id, cose)))
@@ -72,7 +72,7 @@ pub(super) fn directory() -> Directory {
                 attested(
                     flags::UP | flags::AT,
                     &id,
-                    &cose_ec2_key(&P256_GENERATOR_SEC1, Algorithm::RS256),
+                    &cose_ec2_key(&P256_GENERATOR_SEC1, RS256),
                 ),
                 reads,
             ),
@@ -81,7 +81,7 @@ pub(super) fn directory() -> Directory {
                 attested(
                     flags::UP | flags::AT,
                     &id,
-                    &cose_ec2_key(&P256_GENERATOR_SEC1[..63], Algorithm::ES256),
+                    &cose_ec2_key(&P256_GENERATOR_SEC1[..63], ES256),
                 ),
                 reads,
             ),

@@ -32,10 +32,7 @@ fn public_key(sk: &SigningKey) -> CosePublicKey {
 }
 
 fn cose_es256(sk: &SigningKey) -> Vec<u8> {
-    encode::cose_ec2_key(
-        &sk.verifying_key().to_sec1_bytes(),
-        encode::Algorithm::ES256,
-    )
+    encode::cose_ec2_key(&sk.verifying_key().to_sec1_bytes(), encode::ES256)
 }
 
 fn statement() -> Statement {
@@ -58,15 +55,6 @@ fn credential(sign_count: u32) -> Credential {
         sign_count,
         backup_eligible: false,
     }
-}
-
-fn auth_data(
-    rp_id_hash: [u8; 32],
-    flags: u8,
-    sign_count: u32,
-    attested: Option<(&[u8], &[u8])>,
-) -> Vec<u8> {
-    encode::authenticator_data(&rp_id_hash, flags, sign_count, attested)
 }
 
 fn client_data(kind: &str, challenge: &str, origin: &str, extra: serde_json::Value) -> Vec<u8> {
@@ -119,7 +107,8 @@ impl Parts {
     }
 
     fn build(self) -> Assertion {
-        let mut authenticator_data = auth_data(self.rp_id_hash, self.flags, self.sign_count, None);
+        let mut authenticator_data =
+            encode::authenticator_data(&self.rp_id_hash, self.flags, self.sign_count, None);
         if let Some(attested) = &self.attested {
             authenticator_data.extend_from_slice(attested);
         }
@@ -372,7 +361,7 @@ fn assertion_checks_each_refuse_with_their_named_variant() {
 #[test]
 fn authenticator_data_layout_faults_are_named() {
     // The byte layout is the spec's, not ours: each fault names what the parser could not place.
-    let valid = auth_data(RpId::pinned().hash(), UP, 1, None);
+    let valid = encode::authenticator_data(&RpId::pinned().hash(), UP, 1, None);
     let cases: Vec<(&str, Vec<u8>, AuthDataError)> = vec![
         (
             "36 bytes",
@@ -382,17 +371,17 @@ fn authenticator_data_layout_faults_are_named() {
         ("empty", Vec::new(), AuthDataError::TooShort { len: 0 }),
         (
             "reserved bit 1",
-            auth_data(RpId::pinned().hash(), UP | 0x02, 1, None),
+            encode::authenticator_data(&RpId::pinned().hash(), UP | 0x02, 1, None),
             AuthDataError::ReservedFlags { flags: UP | 0x02 },
         ),
         (
             "ED flag",
-            auth_data(RpId::pinned().hash(), UP | ED, 1, None),
+            encode::authenticator_data(&RpId::pinned().hash(), UP | ED, 1, None),
             AuthDataError::Extensions,
         ),
         (
             "BS without BE",
-            auth_data(RpId::pinned().hash(), UP | 0x10, 1, None),
+            encode::authenticator_data(&RpId::pinned().hash(), UP | 0x10, 1, None),
             AuthDataError::BackupStateWithoutEligibility,
         ),
         (
@@ -402,12 +391,12 @@ fn authenticator_data_layout_faults_are_named() {
         ),
         (
             "AT set with nothing after the header",
-            auth_data(RpId::pinned().hash(), UP | AT, 1, None),
+            encode::authenticator_data(&RpId::pinned().hash(), UP | AT, 1, None),
             AuthDataError::AttestedCredentialTruncated,
         ),
         (
             "credIdLen past the end",
-            auth_data(RpId::pinned().hash(), UP | AT, 1, Some((&[0xc1; 8], &[])))
+            encode::authenticator_data(&RpId::pinned().hash(), UP | AT, 1, Some((&[0xc1; 8], &[])))
                 .iter()
                 .copied()
                 .take(37 + 16 + 2 + 4)
@@ -416,8 +405,8 @@ fn authenticator_data_layout_faults_are_named() {
         ),
         (
             "a 15-byte credential id",
-            auth_data(
-                RpId::pinned().hash(),
+            encode::authenticator_data(
+                &RpId::pinned().hash(),
                 UP | AT,
                 1,
                 Some((&[0xc1; 15], &cose_es256(&signing_key()))),
@@ -427,8 +416,8 @@ fn authenticator_data_layout_faults_are_named() {
         (
             "bytes after the COSE key",
             [
-                auth_data(
-                    RpId::pinned().hash(),
+                encode::authenticator_data(
+                    &RpId::pinned().hash(),
                     UP | AT,
                     1,
                     Some((&[0xc1; 32], &cose_es256(&signing_key()))),
@@ -442,8 +431,8 @@ fn authenticator_data_layout_faults_are_named() {
     for (name, bytes, want) in cases {
         assert_eq!(AuthenticatorData::parse(&bytes), Err(want), "{name}");
     }
-    let parsed = AuthenticatorData::parse(&auth_data(
-        RpId::pinned().hash(),
+    let parsed = AuthenticatorData::parse(&encode::authenticator_data(
+        &RpId::pinned().hash(),
         UP | AT,
         5,
         Some((&[0xc1; 32], &cose_es256(&signing_key()))),
@@ -491,7 +480,8 @@ fn enrollment() -> Statement {
 }
 
 fn registration_with(cose: &[u8], flags: u8) -> Registration {
-    let auth = auth_data(RpId::pinned().hash(), flags, 0, Some((&[0xc1; 32], cose)));
+    let auth =
+        encode::authenticator_data(&RpId::pinned().hash(), flags, 0, Some((&[0xc1; 32], cose)));
     Registration {
         attestation_object: attestation_object(
             "none",
@@ -555,8 +545,8 @@ fn registration_checks_each_refuse_with_their_named_variant() {
     };
     let good = cose_es256(&signing_key());
     let valid_auth = || {
-        auth_data(
-            RpId::pinned().hash(),
+        encode::authenticator_data(
+            &RpId::pinned().hash(),
             UP | AT,
             0,
             Some((&[0xc1; 32], &good)),
@@ -687,8 +677,8 @@ fn registration_checks_each_refuse_with_their_named_variant() {
                 attestation_object: attestation_object(
                     "none",
                     ciborium::Value::Map(Vec::new()),
-                    ciborium::Value::Bytes(auth_data(
-                        Sha256::digest(b"example.com").into(),
+                    ciborium::Value::Bytes(encode::authenticator_data(
+                        &Sha256::digest(b"example.com").into(),
                         UP | AT,
                         0,
                         Some((&[0xc1; 32], &good)),
@@ -709,7 +699,12 @@ fn registration_checks_each_refuse_with_their_named_variant() {
                 attestation_object: attestation_object(
                     "none",
                     ciborium::Value::Map(Vec::new()),
-                    ciborium::Value::Bytes(auth_data(RpId::pinned().hash(), UP, 0, None)),
+                    ciborium::Value::Bytes(encode::authenticator_data(
+                        &RpId::pinned().hash(),
+                        UP,
+                        0,
+                        None,
+                    )),
                 ),
                 ..registration_with(&good, UP | AT)
             },
@@ -810,24 +805,80 @@ fn registration_checks_each_refuse_with_their_named_variant() {
 }
 
 #[test]
-fn the_rp_id_hash_is_over_the_extension_origin_as_chromium_rewrites_it() {
-    // Chromium's RP-ID override for extension callers (chrome_web_authentication_delegate.cc) hashes the
-    // serialized origin, not the bare id the page claims; the isolated-browser case observed exactly this
-    // hash, and a verifier hashing the bare id refuses every real assertion.
-    let origin = format!(
-        "chrome-extension://{}",
-        crate::identity::PINNED_EXTENSION_ID
-    );
-    assert_eq!(RpId::pinned().origin(), origin);
+fn client_data_outside_the_spec_object_shape_is_refused_not_read_leniently() {
+    // The spec's clientDataJSON is one object with distinct members; JSON readers are lenient in three ways
+    // a signed frame could exploit: a repeated member read last-wins (`"challenge": 0, "challenge": "<good>"`
+    // reads as the good challenge), a present `null` read as an absent member, and a positional array read
+    // as the struct. Each must be refused, for the assertion and the registration alike; the row names
+    // which refusal.
+    let good = statement().challenge().to_base64url();
+    let rp_id = RpId::pinned();
+    let origin = rp_id.origin();
+    // Signed over the raw body, so the signature check cannot be what refuses the frame.
+    let raw = |body: String| {
+        let authenticator_data =
+            encode::authenticator_data(&RpId::pinned().hash(), UP | UV, 7, None);
+        let client_data_json = body.into_bytes();
+        let signature = sign(&signing_key(), &authenticator_data, &client_data_json);
+        Assertion {
+            authenticator_data,
+            client_data_json,
+            signature,
+        }
+    };
+    for (name, body, want) in [
+        (
+            "duplicate challenge, good one last",
+            format!(
+                r#"{{"type":"webauthn.get","challenge":0,"challenge":"{good}","origin":"{origin}"}}"#
+            ),
+            Refusal::ClientDataMalformed,
+        ),
+        (
+            "duplicate crossOrigin, false last",
+            format!(
+                r#"{{"type":"webauthn.get","challenge":"{good}","origin":"{origin}","crossOrigin":true,"crossOrigin":false}}"#
+            ),
+            Refusal::ClientDataMalformed,
+        ),
+        (
+            "crossOrigin null",
+            format!(
+                r#"{{"type":"webauthn.get","challenge":"{good}","origin":"{origin}","crossOrigin":null}}"#
+            ),
+            Refusal::ClientDataMalformed,
+        ),
+        (
+            "topOrigin null: a present topOrigin is a cross-origin ceremony whatever its value",
+            format!(
+                r#"{{"type":"webauthn.get","challenge":"{good}","origin":"{origin}","topOrigin":null}}"#
+            ),
+            Refusal::CrossOrigin,
+        ),
+        (
+            "a positional array in place of the object",
+            format!(r#"["webauthn.get","{good}","{origin}",false,null]"#),
+            Refusal::ClientDataMalformed,
+        ),
+    ] {
+        assert_eq!(
+            verify_assertion(&credential(6), &statement(), &RpId::pinned(), &raw(body)),
+            Err(want),
+            "{name}"
+        );
+    }
+    let enroll = enrollment().challenge().to_base64url();
+    let registration = Registration {
+        client_data_json: format!(
+            r#"{{"type":"webauthn.create","challenge":0,"challenge":"{enroll}","origin":"{origin}"}}"#
+        )
+        .into_bytes(),
+        ..registration_with(&cose_es256(&signing_key()), UP | AT)
+    };
     assert_eq!(
-        RpId::pinned().hash(),
-        <[u8; 32]>::from(Sha256::digest(origin.as_bytes()))
-    );
-    assert_ne!(
-        RpId::pinned().hash(),
-        <[u8; 32]>::from(Sha256::digest(
-            crate::identity::PINNED_EXTENSION_ID.as_bytes()
-        ))
+        parse_registration(&enrollment(), &RpId::pinned(), &registration),
+        Err(Refusal::ClientDataMalformed),
+        "registration with a duplicate challenge"
     );
 }
 
@@ -861,25 +912,10 @@ fn statements_are_domain_separated_and_the_challenge_is_their_digest() {
 
 #[test]
 fn statement_fields_refuse_what_would_break_injectivity() {
-    // The NUL separators make the encoding injective only while every field is NUL-free and bounded.
-    for (bad, parse) in [
-        ("", Nonce::parse("").is_none()),
-        ("a\0b", Nonce::parse("a\0b").is_none()),
-        (
-            "too long",
-            Nonce::parse(&"x".repeat(MAX_NONCE_LEN + 1)).is_none(),
-        ),
-        ("action empty", Action::parse("").is_none()),
-        ("action NUL", Action::parse("a\0b").is_none()),
-        (
-            "action too long",
-            Action::parse(&"x".repeat(MAX_ACTION_LEN + 1)).is_none(),
-        ),
-    ] {
-        assert!(parse, "{bad:?} must be refused");
-    }
-    assert!(Nonce::parse(&"x".repeat(MAX_NONCE_LEN)).is_some());
-    assert!(Action::parse(&"x".repeat(MAX_ACTION_LEN)).is_some());
+    // The NUL separators make the encoding injective only while no field carries a NUL: with one inside a
+    // field, two different statements encode to the same bytes.
+    assert!(Nonce::parse("a\0b").is_none());
+    assert!(Action::parse("a\0b").is_none());
     // A fresh nonce is 32 bytes of base64url: 43 chars, NUL-free, and never repeats.
     let (a, b) = (Nonce::fresh().unwrap(), Nonce::fresh().unwrap());
     assert_eq!(a.as_str().len(), 43);

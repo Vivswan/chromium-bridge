@@ -1,16 +1,65 @@
 //! `clientDataJSON` as the WebAuthn client writes it, checked against the statement and the RP.
 
+use serde::de::{Deserializer, Error as _, MapAccess, Visitor};
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::credential::RpId;
 use super::refusal::Refusal;
 use super::statement::Statement;
 
+/// The members of the clientDataJSON object, each name once. Read through a visitor rather than a
+/// `serde_json::Value` or a derived struct, because both read a signed frame more leniently than the spec's
+/// one-object shape and a verifier must not:
+///
+/// ```text
+/// Value          "challenge": 0, "challenge": "<good>"  -> keeps the last member
+/// derived struct "crossOrigin": null                     -> reads a present null as an absent member
+/// derived struct ["webauthn.get", "<good>", "<origin>"]  -> fills the fields from a positional array
+/// ```
+struct Members(Vec<(String, Value)>);
+
+impl Members {
+    fn get(&self, name: &str) -> Option<&Value> {
+        self.0
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    }
+}
+
+impl<'de> Deserialize<'de> for Members {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Distinct;
+
+        impl<'de> Visitor<'de> for Distinct {
+            type Value = Members;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a JSON object whose member names are distinct")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Members, A::Error> {
+                let mut members: Vec<(String, Value)> = Vec::new();
+                while let Some((key, value)) = map.next_entry::<String, Value>()? {
+                    if members.iter().any(|(seen, _)| *seen == key) {
+                        return Err(A::Error::custom(format!("duplicate member {key}")));
+                    }
+                    members.push((key, value));
+                }
+                Ok(Members(members))
+            }
+        }
+
+        deserializer.deserialize_map(Distinct)
+    }
+}
+
 /// `want` is `webauthn.get` for an assertion and `webauthn.create` for a registration: the same bytes
 /// signed under the other type are refused, so a registration response cannot answer a presence request.
 ///
-/// The client may add fields this host does not read (`tokenBinding`, a forward-compatibility marker), so
-/// unknown fields are not refused; a field this host reads must have its spec type. `topOrigin` only exists
+/// The client may add members this host does not read (`tokenBinding`, a forward-compatibility marker), so
+/// unknown ones are not refused; a member this host reads must have its spec type. `topOrigin` only exists
 /// for a cross-origin ceremony, which this deployment never permits, so its presence is refused like
 /// `crossOrigin: true`.
 pub(super) fn check(
@@ -19,9 +68,9 @@ pub(super) fn check(
     statement: &Statement,
     rp_id: &RpId,
 ) -> Result<(), Refusal> {
-    let data: Value =
+    let data: Members =
         serde_json::from_slice(client_data_json).map_err(|_| Refusal::ClientDataMalformed)?;
-    let text = |field: &str| data.get(field).and_then(Value::as_str);
+    let text = |member: &str| data.get(member).and_then(Value::as_str);
     let kind = text("type").ok_or(Refusal::ClientDataMalformed)?;
     if kind != want {
         return Err(Refusal::ClientDataType {

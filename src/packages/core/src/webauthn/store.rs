@@ -1,5 +1,5 @@
 //! The store contract the verifier's callers need: which credentials a browser enrolled, and the two writes
-//! a ceremony makes. The trust-state record owns the implementation.
+//! a ceremony makes. A trait, so the verifier never names the record that holds the credentials.
 
 use crate::ipc::BrowserLabel;
 

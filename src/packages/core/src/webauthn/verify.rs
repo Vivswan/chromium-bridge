@@ -45,15 +45,8 @@ pub struct Verified {
     pub sign_count: u32,
 }
 
-/// Verify one assertion against the enrolled credential and the statement the host issued.
-///
-/// ```text
-/// authenticatorData   -> parses, no attested data, rpIdHash == sha256(rp id), UP set, backup eligibility
-///                        as enrolled, signCount advances
-/// clientDataJSON      -> type webauthn.get, challenge == base64url(sha256(statement)), origin == the
-///                        extension's, crossOrigin absent or false, no topOrigin
-/// signature           -> DER ECDSA P-256 over authenticatorData || sha256(clientDataJSON)
-/// ```
+/// Verify one assertion against the enrolled credential and the statement the host issued. The signature
+/// covers `authenticatorData || sha256(clientDataJSON)`, the spec's signing input.
 pub fn verify_assertion(
     credential: &Credential,
     statement: &Statement,
