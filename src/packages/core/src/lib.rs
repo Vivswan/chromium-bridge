@@ -15,8 +15,15 @@
 // arithmetic_side_effects and as_conversions have no such config, so the
 // test-harness build is exempted here (the non-test lib target still
 // enforces both on production code). Production exceptions require a
-// structural proof that the panic path cannot exist, not an #[allow].
-#![cfg_attr(test, allow(clippy::arithmetic_side_effects, clippy::as_conversions))]
+// structural proof that the panic path cannot exist, not a lint exception.
+#![cfg_attr(
+    test,
+    expect(
+        clippy::arithmetic_side_effects,
+        clippy::as_conversions,
+        reason = "tests assert with plain arithmetic and casts; clippy.toml has no in-tests switch for these two"
+    )
+)]
 
 #[macro_use]
 pub mod log;

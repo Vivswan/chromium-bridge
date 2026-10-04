@@ -218,7 +218,7 @@ impl Allowlist {
             Anchor::TeamId(t) if identity.team_id.as_deref() == Some(t.as_str()) => {
                 Some(c.name.clone())
             }
-            _ => None,
+            Anchor::Hash(_) | Anchor::TeamId(_) => None,
         })
     }
 

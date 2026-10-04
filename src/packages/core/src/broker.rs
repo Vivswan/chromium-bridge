@@ -643,7 +643,7 @@ enum Admitted<'a> {
 }
 
 /// The broker's own stdio harness, as admitted by
-/// [`crate::mcp_server::admit_own_harness`]: the identity it was admitted on
+/// `mcp_server::admit_own_harness`: the identity it was admitted on
 /// and the revocation epoch it was admitted under (ADR-0025).
 pub(crate) struct OwnHarness {
     pub identity: Option<ClientIdentity>,

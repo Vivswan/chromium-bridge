@@ -26,7 +26,7 @@ use super::{PolicyField, PolicyStore, PolicyValues};
 /// a tool at dispatch - the confirmation flags and the millisecond windows
 /// only ever remove capability, and `disabledTools` is its own lane - so
 /// `Grant` is a distinct type that keeps a confirmation field out of the
-/// gating table by construction. [`grants_are_the_true_permissive_fields`]
+/// gating table by construction. `grants_are_the_true_permissive_fields`
 /// pins the set against the direction catalogue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Grant {

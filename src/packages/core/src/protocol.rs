@@ -392,7 +392,6 @@ pub struct BridgeResp {
 }
 
 impl BridgeResp {
-    #[allow(dead_code)]
     pub fn ok(id: u64, data: Value) -> Self {
         BridgeResp {
             id,
@@ -401,7 +400,6 @@ impl BridgeResp {
             error: None,
         }
     }
-    #[allow(dead_code)]
     pub fn err(id: u64, msg: impl Into<String>) -> Self {
         BridgeResp {
             id,
@@ -530,7 +528,6 @@ pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()
     Ok(())
 }
 
-/// Host-handled control frames and the frame classifier; see the module docs.
 pub mod control;
 
 // ----------------------------------------------------------------------------

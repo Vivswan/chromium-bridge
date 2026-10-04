@@ -8,10 +8,10 @@
 //! binaries too; Team-ID / designated-requirement pinning is the follow-up for
 //! when a real signing identity lands. All FFI is hand-declared to avoid
 //! adding crates (keeps cargo-deny clean). See ADR-0020.
-// Quarantined unsafe: Security.framework and libc FFI (audit-token peer
-// identity, code-signature validation). unsafe_code is denied workspace-wide;
-// this module is one of the audited exceptions.
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "audited FFI quarantine: Security.framework and libc calls, each behind a safe wrapper"
+)]
 
 use std::ffi::c_void;
 use std::io;
@@ -48,9 +48,11 @@ pub(crate) fn pid_identity(pid: u32) -> io::Result<String> {
 pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientIdentity> {
     let pid = libc::pid_t::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
+    // SAFETY: `pid` is a live i32 local and KCF_NUMBER_SINT32 names exactly
+    // that width, so CFNumberCreate reads four initialized bytes.
     let num = unsafe {
         CFNumberCreate(
-            kCFAllocatorDefault,
+            default_allocator(),
             KCF_NUMBER_SINT32,
             std::ptr::from_ref(&pid).cast(),
         )
@@ -67,6 +69,8 @@ pub(crate) fn peer_pid(fd: libc::c_int) -> io::Result<u32> {
     let expected_len = libc::socklen_t::try_from(std::mem::size_of::<libc::pid_t>())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid_t size exceeds socklen_t"))?;
     let mut len = expected_len;
+    // SAFETY: `pid` and `len` are live locals sized for LOCAL_PEERPID; an
+    // invalid fd is reported through rc, never a wild write.
     let rc = unsafe {
         libc::getsockopt(
             fd,
@@ -215,7 +219,8 @@ mod cf {
 
     impl Drop for Cf {
         fn drop(&mut self) {
-            // Non-null by construction (`own` is the only constructor).
+            // SAFETY: `own` is the only constructor and rejected null, and the
+            // +1 reference it took is released exactly once, here.
             unsafe { CFRelease(self.0) };
         }
     }
@@ -223,9 +228,28 @@ mod cf {
 
 use cf::Cf;
 
+fn default_allocator() -> CFAllocatorRef {
+    // SAFETY: kCFAllocatorDefault is a CoreFoundation constant, initialized by
+    // the framework before any Rust code runs and never released.
+    unsafe { kCFAllocatorDefault }
+}
+
 enum GuestKey {
     Audit,
     Pid,
+}
+
+impl GuestKey {
+    /// The `kSecGuestAttribute*` dictionary key this guest is looked up by.
+    fn attribute(&self) -> CFStringRef {
+        match self {
+            // SAFETY: a Security.framework constant, initialized before any
+            // Rust code runs and never released.
+            GuestKey::Audit => unsafe { kSecGuestAttributeAudit },
+            // SAFETY: as above.
+            GuestKey::Pid => unsafe { kSecGuestAttributePid },
+        }
+    }
 }
 
 fn osstatus_err(context: &str, status: OSStatus) -> io::Error {
@@ -238,6 +262,7 @@ fn osstatus_err(context: &str, status: OSStatus) -> io::Error {
 /// The cdhash of THIS process's running image.
 fn own_cdhash() -> io::Result<String> {
     let mut me: SecCodeRef = std::ptr::null_mut();
+    // SAFETY: `me` is a live local the call writes the +1 reference into.
     let st = unsafe { SecCodeCopySelf(DEFAULT_FLAGS, &mut me) };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopySelf", st));
@@ -277,6 +302,8 @@ fn peer_audit_token(fd: libc::c_int) -> io::Result<[u32; AUDIT_TOKEN_LEN]> {
         )
     })?;
     let mut len = expected_len;
+    // SAFETY: `token` and `len` are live locals sized for an audit_token_t; an
+    // invalid fd is reported through rc, never a wild write.
     let rc = unsafe {
         libc::getsockopt(
             fd,
@@ -299,6 +326,8 @@ fn peer_audit_token(fd: libc::c_int) -> io::Result<[u32; AUDIT_TOKEN_LEN]> {
 }
 
 fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
+    // SAFETY: the byte view covers exactly the borrowed array, u32 has no
+    // padding, and the view lives no longer than `token`.
     let bytes = unsafe {
         std::slice::from_raw_parts(token.as_ptr().cast::<u8>(), std::mem::size_of_val(token))
     };
@@ -308,7 +337,9 @@ fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
             "audit-token size exceeds CFIndex",
         )
     })?;
-    let data = unsafe { CFDataCreate(kCFAllocatorDefault, bytes.as_ptr(), len) };
+    // SAFETY: `bytes` is a live slice and `len` is its exact length;
+    // CFDataCreate copies the bytes, so the slice may die afterwards.
+    let data = unsafe { CFDataCreate(default_allocator(), bytes.as_ptr(), len) };
     let data = Cf::own(data, "CFDataCreate for audit token")?;
     guest_cdhash(GuestKey::Audit, &data)
 }
@@ -321,9 +352,11 @@ fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
 fn pid_cdhash(pid: u32) -> io::Result<String> {
     let pid = libc::pid_t::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
+    // SAFETY: `pid` is a live i32 local and KCF_NUMBER_SINT32 names exactly
+    // that width, so CFNumberCreate reads four initialized bytes.
     let num = unsafe {
         CFNumberCreate(
-            kCFAllocatorDefault,
+            default_allocator(),
             KCF_NUMBER_SINT32,
             std::ptr::from_ref(&pid).cast(),
         )
@@ -337,17 +370,14 @@ fn pid_cdhash(pid: u32) -> io::Result<String> {
 /// raw `CFTypeRef`) makes the caller's ownership guard carry the live-object
 /// invariant that `CFDictionaryCreate`'s retaining callbacks rely on.
 fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
-    let key_ref = unsafe {
-        match key {
-            GuestKey::Audit => kSecGuestAttributeAudit,
-            GuestKey::Pid => kSecGuestAttributePid,
-        }
-    };
-    let keys: [*const c_void; 1] = [key_ref];
+    let keys: [*const c_void; 1] = [key.attribute()];
     let values: [*const c_void; 1] = [value.as_ptr()];
+    // SAFETY: `keys` and `values` are live one-element arrays and the count
+    // says one; the key is a framework constant and the value is kept alive
+    // by the caller's guard, which the CFType callbacks retain from.
     let attrs = unsafe {
         CFDictionaryCreate(
-            kCFAllocatorDefault,
+            default_allocator(),
             keys.as_ptr(),
             values.as_ptr(),
             1,
@@ -358,6 +388,8 @@ fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
     let attrs = Cf::own(attrs, "CFDictionaryCreate for guest attributes")?;
 
     let mut guest: SecCodeRef = std::ptr::null_mut();
+    // SAFETY: a null host means the system root; `attrs` is live through its
+    // guard and `guest` is a live local the +1 reference is written into.
     let st = unsafe {
         SecCodeCopyGuestWithAttributes(
             std::ptr::null_mut(),
@@ -378,17 +410,14 @@ fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
 /// (cdhash + Team ID). Builds the same one-entry guest-attribute dictionary,
 /// copies and validates the peer's `SecCode`, and reads both signing fields.
 fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::ClientIdentity> {
-    let key_ref = unsafe {
-        match key {
-            GuestKey::Audit => kSecGuestAttributeAudit,
-            GuestKey::Pid => kSecGuestAttributePid,
-        }
-    };
-    let keys: [*const c_void; 1] = [key_ref];
+    let keys: [*const c_void; 1] = [key.attribute()];
     let values: [*const c_void; 1] = [value.as_ptr()];
+    // SAFETY: `keys` and `values` are live one-element arrays and the count
+    // says one; the key is a framework constant and the value is kept alive
+    // by the caller's guard, which the CFType callbacks retain from.
     let attrs = unsafe {
         CFDictionaryCreate(
-            kCFAllocatorDefault,
+            default_allocator(),
             keys.as_ptr(),
             values.as_ptr(),
             1,
@@ -399,6 +428,8 @@ fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::
     let attrs = Cf::own(attrs, "CFDictionaryCreate for guest attributes")?;
 
     let mut guest: SecCodeRef = std::ptr::null_mut();
+    // SAFETY: a null host means the system root; `attrs` is live through its
+    // guard and `guest` is a live local the +1 reference is written into.
     let st = unsafe {
         SecCodeCopyGuestWithAttributes(
             std::ptr::null_mut(),
@@ -412,6 +443,8 @@ fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::
     }
     let _guest = Cf::own(guest.cast_const(), "SecCodeCopyGuestWithAttributes")?;
 
+    // SAFETY: `guest` is live through `_guest`; a null requirement is allowed
+    // by the API and imposes no additional requirement.
     let st = unsafe { SecCodeCheckValidity(guest, DEFAULT_FLAGS, std::ptr::null()) };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCheckValidity (harness)", st));
@@ -423,6 +456,8 @@ fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::
 /// The validity check is the running-image-bound step: it verifies the code
 /// pages match the signature of the process actually executing.
 fn validate_and_cdhash(code: SecCodeRef, what: &str) -> io::Result<String> {
+    // SAFETY: both callers hold `code` in a live guard for this call; a null
+    // requirement is allowed by the API and imposes no additional requirement.
     let st = unsafe { SecCodeCheckValidity(code, DEFAULT_FLAGS, std::ptr::null()) };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err(&format!("SecCodeCheckValidity ({what})"), st));
@@ -432,6 +467,8 @@ fn validate_and_cdhash(code: SecCodeRef, what: &str) -> io::Result<String> {
 
 fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
     let mut static_code: SecStaticCodeRef = std::ptr::null_mut();
+    // SAFETY: the caller holds `code` in a live guard; `static_code` is a live
+    // local the +1 reference is written into.
     let st = unsafe { SecCodeCopyStaticCode(code, DEFAULT_FLAGS, &mut static_code) };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyStaticCode", st));
@@ -439,21 +476,31 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
     let _static = Cf::own(static_code.cast_const(), "SecCodeCopyStaticCode")?;
 
     let mut info: CFDictionaryRef = std::ptr::null();
+    // SAFETY: `static_code` is live through `_static`; `info` is a live local
+    // the +1 reference is written into.
     let st = unsafe { SecCodeCopySigningInformation(static_code, DEFAULT_FLAGS, &mut info) };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopySigningInformation", st));
     }
     let _info = Cf::own(info, "SecCodeCopySigningInformation")?;
 
+    // SAFETY: kSecCodeInfoUnique is a Security.framework constant, initialized
+    // before any Rust code runs and never released.
+    let cdhash_key = unsafe { kSecCodeInfoUnique };
     // Borrowed reference (Get-rule): do not release.
-    let cdhash: CFDataRef = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) };
+    // SAFETY: `info` is live through `_info`, and the borrowed value is used
+    // only while `_info` lives.
+    let cdhash: CFDataRef = unsafe { CFDictionaryGetValue(info, cdhash_key) };
     if cdhash.is_null() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "code has no cdhash (unsigned?)",
         ));
     }
+    // SAFETY: `cdhash` was checked non-null and is owned by the `_info`
+    // dictionary, which outlives this read.
     let len = usize::try_from(unsafe { CFDataGetLength(cdhash) }).unwrap_or(0);
+    // SAFETY: as for the length read above.
     let ptr = unsafe { CFDataGetBytePtr(cdhash) };
     if len == 0 || ptr.is_null() {
         return Err(io::Error::new(
@@ -475,6 +522,8 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
 /// `None` and the allowlist must anchor it on the hash instead.
 fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::ClientIdentity> {
     let mut static_code: SecStaticCodeRef = std::ptr::null_mut();
+    // SAFETY: the caller holds `code` in a live guard; `static_code` is a live
+    // local the +1 reference is written into.
     let st = unsafe { SecCodeCopyStaticCode(code, DEFAULT_FLAGS, &mut static_code) };
     if st != ERR_SEC_SUCCESS {
         return Err(osstatus_err("SecCodeCopyStaticCode", st));
@@ -482,6 +531,8 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     let _static = Cf::own(static_code.cast_const(), "SecCodeCopyStaticCode")?;
 
     let mut info: CFDictionaryRef = std::ptr::null();
+    // SAFETY: `static_code` is live through `_static`; `info` is a live local
+    // the +1 reference is written into.
     let st =
         unsafe { SecCodeCopySigningInformation(static_code, SIGNING_INFORMATION_FLAGS, &mut info) };
     if st != ERR_SEC_SUCCESS {
@@ -489,15 +540,23 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     }
     let _info = Cf::own(info, "SecCodeCopySigningInformation")?;
 
+    // SAFETY: kSecCodeInfoUnique is a Security.framework constant, initialized
+    // before any Rust code runs and never released.
+    let cdhash_key = unsafe { kSecCodeInfoUnique };
     // cdhash (borrowed Get-rule references; do not release).
-    let cdhash: CFDataRef = unsafe { CFDictionaryGetValue(info, kSecCodeInfoUnique) };
+    // SAFETY: `info` is live through `_info`, and the borrowed value is used
+    // only while `_info` lives.
+    let cdhash: CFDataRef = unsafe { CFDictionaryGetValue(info, cdhash_key) };
     if cdhash.is_null() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "code has no cdhash (unsigned?)",
         ));
     }
+    // SAFETY: `cdhash` was checked non-null and is owned by the `_info`
+    // dictionary, which outlives this read.
     let len = usize::try_from(unsafe { CFDataGetLength(cdhash) }).unwrap_or(0);
+    // SAFETY: as for the length read above.
     let ptr = unsafe { CFDataGetBytePtr(cdhash) };
     if len == 0 || ptr.is_null() {
         return Err(io::Error::new(
@@ -511,7 +570,12 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     let hash = super::super::rand::hex_encode(unsafe { std::slice::from_raw_parts(ptr, len) });
 
     // Team ID is optional: ad-hoc / unsigned images simply lack it.
-    let team_ref: CFStringRef = unsafe { CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier) };
+    // SAFETY: kSecCodeInfoTeamIdentifier is a Security.framework constant,
+    // initialized before any Rust code runs and never released.
+    let team_key = unsafe { kSecCodeInfoTeamIdentifier };
+    // SAFETY: `info` is live through `_info`, and the borrowed value is copied
+    // out by cfstring_to_string before `_info` drops.
+    let team_ref: CFStringRef = unsafe { CFDictionaryGetValue(info, team_key) };
     let team_id = cfstring_to_string(team_ref).filter(|s| !s.is_empty());
 
     Ok(super::super::ClientIdentity { hash, team_id })
@@ -527,10 +591,14 @@ fn cfstring_to_string(s: CFStringRef) -> Option<String> {
     }
     let mut buf = [0i8; 256];
     let buf_len = CFIndex::try_from(buf.len()).ok()?;
+    // SAFETY: `s` was checked non-null and the caller keeps its owner alive;
+    // `buf_len` is exactly the buffer's size, so the write stays in bounds.
     let ok = unsafe { CFStringGetCString(s, buf.as_mut_ptr(), buf_len, KCF_STRING_ENCODING_UTF8) };
     if ok == 0 {
         return None;
     }
+    // SAFETY: a non-zero return from CFStringGetCString guarantees `buf` holds
+    // a NUL-terminated string within its bounds.
     let cstr = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
     cstr.to_str().ok().map(str::to_string)
 }
@@ -555,10 +623,13 @@ mod tests {
         // leaves scope (an over- or under-release would crash the test
         // process inside CoreFoundation).
         let bytes = [1u8, 2, 3];
+        // SAFETY: `bytes` is a live local array and the length is its exact
+        // size; CFDataCreate copies the bytes.
         let data =
-            unsafe { CFDataCreate(kCFAllocatorDefault, bytes.as_ptr(), bytes.len() as CFIndex) };
+            unsafe { CFDataCreate(default_allocator(), bytes.as_ptr(), bytes.len() as CFIndex) };
         let guard = Cf::own(data, "CFDataCreate").unwrap();
         assert_eq!(guard.as_ptr(), data);
+        // SAFETY: `guard` holds a live CFData by construction.
         assert_eq!(unsafe { CFDataGetLength(guard.as_ptr()) }, 3);
         drop(guard);
     }

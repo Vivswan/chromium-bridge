@@ -166,7 +166,13 @@ impl LockFile {
 /// NOT a defense against a hostile same-user process, which could always
 /// delete these files directly (the boundary against other users is the 0700
 /// directory).
-struct RuntimeMutex(#[allow(dead_code)] fs::File);
+struct RuntimeMutex(
+    #[expect(
+        dead_code,
+        reason = "held only for the kernel lock its Drop releases, never read"
+    )]
+    fs::File,
+);
 
 /// Witness that the cross-process [`RuntimeMutex`] is held: zero-sized and constructible only in this module, minted
 /// by [`with_runtime_lock`] while its guard is alive and lent by reference under a higher-ranked closure signature, so

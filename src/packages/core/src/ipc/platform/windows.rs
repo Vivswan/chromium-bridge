@@ -2,9 +2,10 @@
 //! OS randomness. Windows has no executable-image attestation (see
 //! SECURITY.md "Platform support"); the bridge falls back to secret-only
 //! authentication there.
-// Quarantined unsafe: process-handle and BCrypt FFI. unsafe_code is denied
-// workspace-wide; this module is one of the audited exceptions.
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "audited FFI quarantine: process-handle and BCrypt calls, each behind a safe wrapper"
+)]
 
 use std::io;
 
@@ -25,26 +26,32 @@ pub mod windows_process {
     }
 
     pub fn is_alive(pid: u32) -> bool {
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() {
-                return false;
-            }
-            let mut exit_code = 0;
-            let ok = GetExitCodeProcess(handle, &mut exit_code) != 0;
-            CloseHandle(handle);
-            ok && exit_code == STILL_ACTIVE
+        // SAFETY: OpenProcess takes plain integers and reports failure as a
+        // null handle, checked below.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return false;
         }
+        let mut exit_code = 0;
+        // SAFETY: `handle` is non-null and still open; `exit_code` is a live
+        // local for the write.
+        let ok = unsafe { GetExitCodeProcess(handle, &mut exit_code) } != 0;
+        // SAFETY: `handle` was opened above and is closed exactly once, here.
+        unsafe { CloseHandle(handle) };
+        ok && exit_code == STILL_ACTIVE
     }
 
     pub fn terminate(pid: u32) {
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !handle.is_null() {
-                let _ = TerminateProcess(handle, 0);
-                CloseHandle(handle);
-            }
+        // SAFETY: OpenProcess takes plain integers and reports failure as a
+        // null handle, checked below.
+        let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+        if handle.is_null() {
+            return;
         }
+        // SAFETY: `handle` is non-null and was opened with PROCESS_TERMINATE.
+        let _ = unsafe { TerminateProcess(handle, 0) };
+        // SAFETY: `handle` was opened above and is closed exactly once, here.
+        unsafe { CloseHandle(handle) };
     }
 }
 
@@ -55,6 +62,9 @@ pub(crate) fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
         .map_err(|_| io::Error::other("buffer too large for BCryptGenRandom"))?;
     // BCRYPT_USE_SYSTEM_PREFERRED_RNG lets BCryptGenRandom use the system
     // RNG without opening and managing an algorithm-provider handle.
+    // SAFETY: `buf` is a live exclusive slice and `len` is exactly its length,
+    // so the write stays in bounds; the null algorithm handle is what the
+    // system-preferred-RNG flag requires.
     let status =
         unsafe { BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), len, 0x0000_0002) };
     if status >= 0 {

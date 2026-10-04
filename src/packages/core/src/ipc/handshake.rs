@@ -452,13 +452,11 @@ mod tests {
         .unwrap();
 
         let sent: Handshake = serde_json::from_slice(&client_out[..client_out.len() - 1]).unwrap();
-        match sent {
-            Handshake::Response { mac, label } => {
-                assert_eq!(mac, expected);
-                assert_eq!(label.as_deref(), Some("chrome"));
-            }
-            _ => panic!("client should send a response"),
-        }
+        let Handshake::Response { mac, label } = sent else {
+            panic!("client should send a response, sent {sent:?}");
+        };
+        assert_eq!(mac, expected);
+        assert_eq!(label.as_deref(), Some("chrome"));
     }
 
     #[cfg(unix)]

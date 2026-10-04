@@ -1,9 +1,10 @@
 //! Linux mechanisms: image identity as the SHA256 of `/proc/<pid>/exe` (the
 //! kernel's magic symlink to the executable inode), and peer credentials via
 //! `SO_PEERCRED`.
-// Quarantined unsafe: SO_PEERCRED getsockopt FFI. unsafe_code is denied
-// workspace-wide; this module is one of the audited exceptions.
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "audited FFI quarantine: the SO_PEERCRED getsockopt call, behind a safe wrapper"
+)]
 
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -52,7 +53,7 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientId
 /// image (the pid-resolution race is noted on
 /// [`super::super::peercred::peer_pid`]). macOS does not use this: it attests
 /// the running image directly through the Security framework (see
-/// [`super::macos`]), which is bound to the running image and needs no path
+/// `platform::macos`), which is bound to the running image and needs no path
 /// re-open.
 fn exe_hash_of_pid(pid: u32) -> io::Result<String> {
     hash_file(&PathBuf::from(format!("/proc/{pid}/exe")))

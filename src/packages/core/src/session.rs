@@ -539,7 +539,7 @@ impl Session {
         self.try_call(op, tab_id, args, browser, Duration::from_secs(120))
     }
 
-    /// Like [`call`], but with no startup wait (an empty registry fails
+    /// Like [`Self::call`], but with no startup wait (an empty registry fails
     /// immediately with [`CallError::NotConnected`]) and a caller-chosen
     /// response timeout. Used by enumeration (`list_browsers`), which must
     /// stay responsive when a browser is wedged: one dead connection may cost

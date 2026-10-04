@@ -167,7 +167,7 @@ impl TerminalStdin {
 }
 
 /// What the hardware provider said. Public because it is the seam's
-/// contract: the Secure Enclave signing provider ([`macos`]) returns exactly
+/// contract: the Secure Enclave signing provider (`macos`) returns exactly
 /// this. Distinct from [`PresenceError`] so the refused/unavailable
 /// distinction - the one that decides whether the floor is reachable - is
 /// explicit at the seam.

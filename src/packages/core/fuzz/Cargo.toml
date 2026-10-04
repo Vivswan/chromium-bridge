@@ -10,15 +10,38 @@ cargo-fuzz = true
 
 # Its own workspace so the fuzz crate (nightly + libFuzzer only) never enters
 # the main `cargo build`/`cargo test` graph. The root Cargo.toml also lists it
-# under [workspace].exclude.
+# under [workspace].exclude. Excluded means the root lint tables do not reach
+# this crate, so the fleet floor entries (not the root's extra no-panic and
+# numeric lints) are re-declared here and inherited below; a change to the
+# floor is made in both files. (`fuzz_target!` expands to libFuzzer's unsafe
+# extern hooks, but the lints do not fire on external-macro expansions.)
 [workspace]
 
-# Excluded from the root workspace means the workspace-wide unsafe_code deny
-# does not reach this crate; re-declare the quarantine here so fuzz targets
-# stay unsafe-free. (`fuzz_target!` expands to libFuzzer's unsafe extern
-# hooks, but the lint does not fire on external-macro expansions.)
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+non_ascii_idents = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+missing_safety_doc = "deny"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+missing_assert_message = "deny"
+wildcard_enum_match_arm = "deny"
+match_wildcard_for_single_variants = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "allow"
+
+[lints]
+workspace = true
 
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }

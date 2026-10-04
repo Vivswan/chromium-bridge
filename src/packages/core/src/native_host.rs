@@ -219,7 +219,7 @@ fn handle_kill_release_refused() -> AdminControl {
 
 /// Record one extension-side decision in the audit trail (ADR-0030). The
 /// fields arrive by name, and the kind is already the typed, extension-owned
-/// [`crate::audit::AuditKind`]: [`classify_nm_frame`] mapped it through
+/// [`crate::audit::AuditKind`]: [`crate::protocol::control::classify_nm_frame`] mapped it through
 /// [`crate::audit::extension_kind`] and the surface is stamped HERE, so the
 /// browser leg cannot forge host-side events (an admission, a kill) into the
 /// trail. Fire-and-forget: no reply.
@@ -643,7 +643,13 @@ fn handle_presence_challenge(
             // never conflated with a window confirmation in the trail.
             let outcome = match &reply {
                 EnclaveControl::PresenceProof { .. } => "ok",
-                _ => "refused",
+                EnclaveControl::EnclaveChallenge { .. }
+                | EnclaveControl::EnclaveProof { .. }
+                | EnclaveControl::EnclaveError { .. }
+                | EnclaveControl::EnclaveRevoke { .. }
+                | EnclaveControl::EnclaveRevoked { .. }
+                | EnclaveControl::PresenceChallenge { .. }
+                | EnclaveControl::PresenceError { .. } => "refused",
             };
             let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::PresenceSign)
                 .surface(crate::audit::Surface::Host)

@@ -2,9 +2,13 @@
 //! plus process-liveness checks. The per-OS syscalls live in
 //! [`super::platform`]; this module holds the cross-platform policy (pid
 //! range validation, the EPERM-means-alive convention).
-// Quarantined unsafe: getpeereid / kill(pid, 0) FFI. unsafe_code is denied
-// workspace-wide; this module is one of the audited exceptions.
-#![allow(unsafe_code)]
+#![cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "audited FFI quarantine: getpeereid and kill(pid, 0), each behind a safe wrapper"
+    )
+)]
 
 // `io` is only touched on the Unix paths (peer credentials + kill(0)); the
 // Windows liveness check goes through platform::windows.
@@ -34,6 +38,8 @@ pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
         // peer that opened the socket.
         let mut uid: libc::uid_t = 0;
         let mut gid: libc::gid_t = 0;
+        // SAFETY: uid/gid are live locals the call writes into; an invalid fd
+        // is reported through rc, never a wild write.
         let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
         if rc != 0 {
             return Err(io::Error::last_os_error());
@@ -45,7 +51,7 @@ pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
 /// The PID of the process on the other end of a connected Unix-domain socket.
 /// On Linux [`super::attest::attest_peer`] uses it to resolve the peer's
 /// on-disk executable; on macOS it is only the fallback identity source when
-/// the kernel audit token is unavailable (see [`super::platform::macos`]).
+/// the kernel audit token is unavailable (see `platform::macos`).
 ///
 /// The kernel records this pid for the process that opened the peer end; it is
 /// stable for the connection even if that process later exits. Resolving the
@@ -78,6 +84,8 @@ pub fn pid_is_alive(pid: u32) -> bool {
         let Some(pid) = checked_pid(pid) else {
             return false;
         };
+        // SAFETY: signal 0 delivers nothing, and `pid` is positive by
+        // checked_pid, so the call names one process, never a group.
         let result = unsafe { libc::kill(pid, 0) };
         result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
@@ -132,7 +140,7 @@ mod tests {
         // Both ends of a socketpair live in this process, so the peer's uid is
         // our own euid -- exactly what the accept-loop check requires to pass.
         let (a, _b) = UnixStream::pair().unwrap();
-        assert_eq!(peer_uid(&a).unwrap(), unsafe { libc::geteuid() });
+        assert_eq!(peer_uid(&a).unwrap(), crate::sys::effective_uid());
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

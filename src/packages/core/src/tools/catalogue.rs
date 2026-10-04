@@ -701,7 +701,7 @@ mod tests {
             let has_browser = t.input_schema["properties"].get("browser").is_some();
             match t.scope {
                 Scope::Server => assert!(!has_browser, "tool {}", t.name),
-                _ => assert!(has_browser, "tool {}", t.name),
+                Scope::Tab | Scope::Page => assert!(has_browser, "tool {}", t.name),
             }
         }
     }

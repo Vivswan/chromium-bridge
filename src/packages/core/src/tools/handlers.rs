@@ -29,7 +29,7 @@ fn parse<T: serde::de::DeserializeOwned>(tool: &str, args: &Value) -> Result<T, 
     let args = match args {
         Value::Null => Value::Object(serde_json::Map::new()),
         Value::Object(_) => args.clone(),
-        other => {
+        other @ (Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_)) => {
             return Err(CallError::InvalidArgument(format!(
                 "{tool}: arguments must be an object, got {other}"
             )));

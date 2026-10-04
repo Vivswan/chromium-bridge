@@ -56,10 +56,10 @@ fn resolve_requires_an_argument_when_several_browsers_are_live() {
     // Two browsers, no argument: refuse rather than guess. The error names
     // the live labels (sorted) so the caller can pick one.
     let err = resolve_target(&["chrome", "brave"], None).unwrap_err();
-    match err {
-        CallError::AmbiguousBrowser(labels) => assert_eq!(labels, "brave, chrome"),
-        other => panic!("expected AmbiguousBrowser, got {other:?}"),
-    }
+    let CallError::AmbiguousBrowser(labels) = err else {
+        panic!("expected AmbiguousBrowser, got {err:?}");
+    };
+    assert_eq!(labels, "brave, chrome");
     // An explicit argument disambiguates.
     assert_eq!(
         resolve_target(&["chrome", "brave"], Some("brave")).unwrap(),
@@ -70,13 +70,11 @@ fn resolve_requires_an_argument_when_several_browsers_are_live() {
 #[test]
 fn resolve_rejects_an_unknown_label_naming_what_is_live() {
     let err = resolve_target(&["chrome", "brave"], Some("edge")).unwrap_err();
-    match err {
-        CallError::BrowserNotFound(want, live) => {
-            assert_eq!(want, "edge");
-            assert_eq!(live, "brave, chrome");
-        }
-        other => panic!("expected BrowserNotFound, got {other:?}"),
-    }
+    let CallError::BrowserNotFound(want, live) = err else {
+        panic!("expected BrowserNotFound, got {err:?}");
+    };
+    assert_eq!(want, "edge");
+    assert_eq!(live, "brave, chrome");
 }
 
 #[test]
