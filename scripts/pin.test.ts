@@ -128,6 +128,11 @@ const cases: Case[] = [
     tool: "proto",
     outcome: { error: /cannot read Containerfile/ },
   },
+  {
+    name: "an underscore spelling is not a tool name: the ARG mapping collapses - and _, so it would alias the dashed tool's pin",
+    tool: "cargo_machete",
+    outcome: { error: /not a tool name/ },
+  },
 ];
 
 function write(root: string, file: string, lines: string[] | undefined): void {
@@ -144,5 +149,35 @@ describe("readPin: one owner per pin across .prototools and the Containerfile", 
     } else {
       expect(() => readPin(c.tool, root)).toThrow(c.outcome.error);
     }
+  });
+});
+
+// The exit status is the contract the bootstrap steps consume (`bun scripts/pin.ts <tool> | sed ... >>
+// "$GITHUB_OUTPUT"` under pipefail): a refusal that printed its message but exited 0 would write an empty
+// pin and stay green.
+describe("the CLI's exit status", () => {
+  const cli = (...args: string[]) =>
+    Bun.spawnSync(["bun", join(import.meta.dir, "pin.ts"), ...args], {
+      cwd: join(import.meta.dir, ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+  test.each([
+    ["a pinned tool prints one line and exits 0", ["proto"], 0, /^\S+\n$/, /^$/],
+    ["a refused pin exits 1 with the reason on stderr", ["nope"], 1, /^$/, /pinned in neither/],
+    ["no tool argument is a usage error, exit 2", [], 2, /^$/, /usage:/],
+    ["two tool arguments are a usage error, exit 2", ["proto", "bun"], 2, /^$/, /usage:/],
+  ])("%s", (_name, args, status, stdout, stderr) => {
+    const run = cli(...args);
+    expect({
+      status: run.exitCode,
+      stdout: run.stdout.toString(),
+      stderr: run.stderr.toString(),
+    }).toEqual({
+      status,
+      stdout: expect.stringMatching(stdout),
+      stderr: expect.stringMatching(stderr),
+    });
   });
 });
