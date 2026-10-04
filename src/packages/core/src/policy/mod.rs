@@ -25,8 +25,8 @@ pub use cli::{
     PolicyHistoryEntryReport, PolicyHistoryReport, PolicyStatusReport, PolicyStoreState,
 };
 pub use store::{
-    clear_baseline_locked, load_history, restrict, set_signed, PolicyHistory, PolicyHistoryEntry,
-    PolicyStore, PolicyWriteError, POLICY_HISTORY_VERSION, POLICY_STORE_VERSION,
+    clear_baseline_locked, restrict, set_signed, PolicyHistory, PolicyHistoryEntry, PolicyStore,
+    PolicyWriteError,
 };
 
 use serde::{Deserialize, Serialize};

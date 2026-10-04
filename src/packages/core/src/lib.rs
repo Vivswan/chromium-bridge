@@ -42,12 +42,14 @@ pub mod kill;
 pub mod lang;
 pub mod mcp;
 pub mod mcp_server;
+pub(crate) mod migrations;
 pub mod native_host;
 pub mod policy;
 pub mod presence;
 pub mod protocol;
 pub mod registration;
 pub mod revocation;
+pub mod runtime_record;
 pub mod session;
 pub(crate) mod sys;
 #[cfg(test)]

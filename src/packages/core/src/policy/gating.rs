@@ -20,6 +20,7 @@
 use crate::error::{CallError, ToolDisabledReason};
 
 use super::{PolicyField, PolicyStore, PolicyValues};
+use crate::runtime_record::RuntimeRecord as _;
 
 /// A capability grant (ADR-0032 decision 1): one of the four host-owned fields
 /// whose permissive pole GRANTS the bridge a capability. Only a grant can gate

@@ -235,13 +235,13 @@ fn policy_get_answers_ok_false_without_a_usable_store() {
     // no baseline claim, so the extension keeps its deny baseline rather than trusting bytes nobody vouched
     // for. The push must agree with the gate's reading, never vouch ok:true for bytes the gate refuses.
     fn store(baseline: &[u8], overlay: Option<crate::policy::PolicyOverlay>) -> Vec<u8> {
-        serde_json::to_vec(&crate::policy::PolicyStore {
-            version: 1,
+        crate::policy::PolicyStore {
             baseline_b64: crate::enclave::base64_encode(baseline),
             sig_b64: None,
             key_id: None,
             overlay,
-        })
+        }
+        .encode()
         .unwrap()
     }
     let default_doc = serde_json::to_vec(&crate::policy::PolicyDoc::default()).unwrap();
