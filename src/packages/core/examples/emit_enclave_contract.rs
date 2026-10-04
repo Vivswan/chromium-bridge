@@ -1,7 +1,7 @@
 //! Emit the enclave signing contract as one JSON document on stdout: domains, field bounds, byte lengths,
 //! `enclave_error` reason codes, and golden vectors pinning the signed-message encodings across languages.
 //! `scripts/gen-ops.ts` (`moon run gen`) turns it into `enclave.gen.ts` and `enclave-fixture.gen.ts` under
-//! `src/packages/shared/src`; the JSON itself is never checked in, the Rust sources are the contract (ADR-0028).
+//! `src/packages/shared/src`; the JSON itself is never checked in, the Rust sources are the contract.
 //!
 //! The vectors are signed with the PUBLIC fixture key `FIXTURE_KEY_BYTES`, deterministic under RFC 6979 (the
 //! p256 dev-dependency) so regeneration is byte-identical and the check-gen diff gate stays quiet. A public
@@ -127,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
-    // The POLICY_DOMAIN vectors (ADR-0032 decision 3): the exact serialized
+    // The POLICY_DOMAIN vectors: the exact serialized
     // PolicyDoc bytes the signature covers, so the extension's policy golden
     // test can replay a full baseline-verify (WebCrypto over `policy_message`
     // bytes, then strict parse of the same bytes). Validated before signing:

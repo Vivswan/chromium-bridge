@@ -1,4 +1,4 @@
-//! The ref-counted, attested broker and its relay clients (ADR-0024).
+//! The ref-counted, attested broker and its relay clients.
 //!
 //! Several harnesses (Claude Code, Copilot, Codex, ...) drive one browser at once, so the first MCP-server
 //! instance to start becomes the broker: it owns the 0600 bridge socket and the lock, holds the browser
@@ -806,7 +806,7 @@ fn admit_browser(
     mut writer: BufWriter<BridgeStream>,
 ) -> Admitted<'static> {
     let label = label.unwrap_or_else(BrowserLabel::default_label);
-    // The kill switch severs the browser leg entirely (ADR-0030): while it is
+    // The kill switch severs the browser leg entirely: while it is
     // engaged -- or its state cannot be read -- no browser attach is accepted,
     // so no path to a browser exists even if a dispatch check were bypassed.
     // The refused native host exits; the extension's reconnect finds a

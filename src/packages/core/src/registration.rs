@@ -9,7 +9,7 @@
 //! target         -> THIS binary (current_exe); nothing is built, downloaded, or copied, and repairing is idempotent
 //!                   re-registration, so on a fresh machine `doctor --fix` IS the install
 //! macOS / Linux  -> Chrome's manifest has no `args` field, so each browser gets a wrapper script baking in
-//!                   `--native-host --label <browser>` (the label rides the bridge handshake, ADR-0022)
+//!                   `--native-host --label <browser>` (the label rides the bridge handshake)
 //! Windows        -> Chrome appends the extension origin to the command line, which selects native-host mode, so the
 //!                   manifest points straight at the binary and registration is an HKCU registry key; compiles but is
 //!                   unverified on a real Windows machine (docs/cli.md)

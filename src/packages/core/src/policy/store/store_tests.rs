@@ -84,7 +84,7 @@ fn a_flipped_baseline_byte_still_parses_but_changes_the_doc() {
     // The parse succeeding is fine, by design: this file is storage,
     // not authority. The signature stored beside the bytes no longer
     // covers them, and signature verification is the EXTENSION's job
-    // against its own pinned key (ADR-0032 decision 5) - the host store
+    // against its own pinned key - the host store
     // cannot self-certify, so the host does not pretend to.
     let doc = PolicyStore::load()
         .unwrap()
@@ -236,7 +236,7 @@ fn folding_the_effective_values_leaves_effective_unchanged() {
     let seeded = seed_store(3, &baseline_values, Some(overlay));
     let effective_before = seeded.effective().unwrap();
 
-    // The explicit fold act (ADR-0032 decision 3): a new revision
+    // The explicit fold act: a new revision
     // carrying the folded fields' EFFECTIVE values with exactly those
     // fields touched.
     policy_test_hook::set(signed_mock());
@@ -450,7 +450,7 @@ fn a_relaxing_overlay_is_refused_with_the_store_unchanged() {
     );
     // "Undo the restriction" equals the baseline value but RELAXES the
     // effective policy: the free lane refuses it (it is the signed
-    // lane's business, ADR-0032 decision 3).
+    // lane's business).
     let err = restrict(
         PolicyOverlay {
             page_eval_enabled: Some(true),
@@ -860,7 +860,7 @@ fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
         None,
     );
     // Turning page_eval OFF is a restriction, but the signed document
-    // carries baseline values on fields it does not touch (decision 3):
+    // carries baseline values on fields it does not touch:
     // changing it under an unrelated touched field is an unnamed edit
     // and refuses promptless, in EITHER direction.
     policy_test_hook::set(Mock::PanicIfCalled);

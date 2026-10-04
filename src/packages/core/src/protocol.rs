@@ -222,9 +222,8 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 // ----------------------------------------------------------------------------
 
 /// The newest MCP JSON-RPC protocol revision this server implements:
-/// `2026-07-28`, the stateless era (ADR-0034, superseding ADR-0007's pinned
-/// `2025-06-18`). The protocol layer itself is the official `rmcp` SDK
-/// (see [`crate::mcp`]); this pin exists so the repository keeps one source
+/// `2026-07-28`, the stateless era. The protocol layer itself is the official
+/// `rmcp` SDK (see [`crate::mcp`]); this pin exists so the repository keeps one source
 /// of truth for the revision - the contract emitter carries it into the
 /// generated TS (protocol.gen.ts), docs literals are checked against it,
 /// and a unit test (mcp/handler.rs) asserts it equals the newest revision
@@ -238,7 +237,7 @@ pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
 pub const MCP_CACHE_TTL_MS: u64 = 3_600_000;
 
 /// The `params._meta` key carrying a request's claimed protocol revision
-/// (MCP 2026-07-28, ADR-0034). rmcp owns the enforcement; these key consts
+/// (MCP 2026-07-28). rmcp owns the enforcement; these key consts
 /// exist so the TS side (protocol.gen.ts, via the contract emitter) spells
 /// each wire literal exactly once, and a unit test (mcp/handler.rs) pins
 /// every const to the key rmcp actually reads and writes.
@@ -288,7 +287,8 @@ pub enum Handshake {
 /// contents but because the connection carrying it already passed
 /// `attest_peer` (the relay is our own binary, which measures its parent
 /// honestly via `getppid`). `name` is a self-asserted label for logs only and
-/// is NEVER the authorization key. See ADR-0024.
+/// is NEVER the authorization key: any process can assert a name, so admission
+/// keys on the attested anchor alone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessId {
@@ -302,7 +302,7 @@ pub struct HarnessId {
     pub name: Option<String>,
 }
 
-/// The role-declaration frame a peer sends over the bridge socket right after the HMAC handshake (ADR-0024); reading
+/// The role-declaration frame a peer sends over the bridge socket right after the HMAC handshake; reading
 /// exactly one is mandatory and fail-closed: EOF or a malformed frame drops the connection. `Browser` is an empty
 /// struct variant, not a unit variant: serde silently skips `deny_unknown_fields` for unit variants of internally
 /// tagged enums, and the empty-struct form serializes identically while rejecting extra fields.
@@ -414,8 +414,8 @@ impl BridgeResp {
 }
 
 /// A [`BridgeResp`] parsed into the two states a response can be in: success with data, or failure with an error.
-/// The flat `{ ok, data?, error? }` triple stays the pinned wire contract (ADR-0028 derives the Zod validators and
-/// the envelope schema from [`BridgeResp`]) but can spell contradictions, and the attested-but-untrusted extension
+/// The flat `{ ok, data?, error? }` triple stays the pinned wire contract (the Zod validators and
+/// the envelope schema are derived from [`BridgeResp`]) but can spell contradictions, and the attested-but-untrusted extension
 /// must not hand the session a response it has to re-interpret.
 ///
 /// ```text

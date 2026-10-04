@@ -15,7 +15,7 @@ extend-ignore-re = [
 [default.extend-words]
 # IIFE = immediately-invoked function expression (esbuild output format).
 iif = "iif"
-# UDID = Apple's unique device identifier (provisioning profiles, ADR-0026).
+# UDID = Apple's unique device identifier (provisioning profiles).
 udid = "udid"
 
 [default.extend-identifiers]

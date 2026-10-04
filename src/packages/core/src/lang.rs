@@ -1,4 +1,4 @@
-//! The host-side shared-language store (ADR-0032 decision 7): the
+//! The host-side shared-language store: the
 //! `{ value, seq }` state for `uiLanguage`, persisted host-side while paired
 //! and pushed to the extension over the `lang_current` control frame.
 //!
@@ -9,11 +9,11 @@
 //! not. The store is a plain [`RuntimeRecord`], not a policy store: none of the
 //! policy machinery (signatures, overlays, history) applies here.
 //!
-//! Loop prevention is by sequence, not by guessing (decision 7): a receiver
+//! Loop prevention is by sequence, not by guessing: a receiver
 //! applies a push only when its `seq` is strictly greater than the last it
 //! applied, and a `lang_set` that does not change the stored value does not
 //! bump `seq` - so a set-apply-set cycle has nothing to ride on. Values
-//! outside the generated enum are refused and the previous value stands.
+//! outside [`UI_LANGUAGES`] are refused and the previous value stands.
 
 use std::io;
 
@@ -25,11 +25,11 @@ use crate::runtime_record::{Record, Rung, RuntimeRecord};
 
 /// The accepted `uiLanguage` values. This mirrors the browser-owned
 /// canonical list in `src/packages/shared/src/settings.ts` (`UI_LANGUAGES`):
-/// language stays browser-owned (ADR-0032 decision 1), so it is NOT emitted
+/// language stays browser-owned, so it is NOT emitted
 /// into the Rust core by `moon run gen` the way the policy schema is, and
 /// this list is the host's hand-kept copy of that source of truth - pinned
 /// against it by the shared suite's `tests/lang-parity.test.ts`, which reads
-/// this file. A value outside it is refused (decision 7) and the previous
+/// this file. A value outside it is refused and the previous
 /// value stands.
 pub const UI_LANGUAGES: &[&str] = &["auto", "en", "zh_CN", "zh_TW"];
 
@@ -97,7 +97,7 @@ pub fn load_current() -> io::Result<(String, u64)> {
     }
 }
 
-/// Apply a language change (ADR-0032 decision 7) and return the resulting
+/// Apply a language change and return the resulting
 /// `(value, seq)`. The caller must have validated `value` against
 /// [`is_valid_lang`] first (an out-of-enum value is refused at the frame
 /// boundary, where the previous value stands). Under ONE runtime-lock hold:
@@ -184,7 +184,7 @@ mod tests {
         set("zh_CN").unwrap();
         let epoch_after_change = lang_epoch();
         // Re-setting the same value is a no-op: seq stands, epoch stands, so a
-        // set-apply-set cycle has nothing to ride on (decision 7).
+        // set-apply-set cycle has nothing to ride on.
         let (value, seq) = set("zh_CN").unwrap();
         assert_eq!(value, "zh_CN");
         assert_eq!(seq, 1);

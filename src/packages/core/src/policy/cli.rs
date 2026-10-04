@@ -1,4 +1,4 @@
-//! CLI runners for `chromium-bridge policy` (ADR-0032 decision 5), and the versioned status/history reports
+//! CLI runners for `chromium-bridge policy`, and the versioned status/history reports
 //! `--json` prints. The reports follow the enclave-status precedent: a versioned, typed struct serialized
 //! through `serde_json::Value` (sorted keys, a frozen wire contract) with `deny_unknown_fields`.
 //!
@@ -41,8 +41,8 @@ pub enum PolicyStoreState {
     Error,
 }
 
-/// The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json` prints
-/// (ADR-0032), which the doctor row renders from. A sum tagged on `store` rather than
+/// The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json` prints,
+/// which the doctor row renders from. A sum tagged on `store` rather than
 /// a flat struct, so a `none` report smuggling an effective policy, or a `present` one missing its revision, cannot
 /// even deserialize.
 ///
@@ -157,8 +157,8 @@ pub struct PolicyErrorReport {
 
 /// The current policy status, read fail-closed from the store. Infallible: an
 /// unreadable store becomes the `error` state, never a panic or a silent
-/// default. Public so the doctor row shares exactly this read (ADR-0032
-/// decision 5: the CLI reports and doctor reports the same state).
+/// default. Public so the doctor row shares exactly this read (the CLI
+/// and doctor report the same state).
 pub fn gather_policy_status() -> PolicyStatusReport {
     match PolicyStore::load() {
         Ok(None) => PolicyStatusReport::none(),
@@ -323,7 +323,7 @@ fn render_history(r: &PolicyHistoryReport) -> String {
     out
 }
 
-// ---- The signature-only grant gate (ADR-0032 decision 5) --------------------
+// ---- The signature-only grant gate -------------------------------------------
 
 /// The enrollment-key lookup reduced to the states the grant gate branches
 /// on, so [`grant_key_gate`] is pure and unit-testable without the keychain.
@@ -339,24 +339,24 @@ enum GrantKey {
     Unusable(String),
 }
 
-/// Decide whether the CLI's signature-only grant path may proceed (ADR-0032
-/// decision 5), BEFORE any prompt could appear. Pure: the up-front refusal
+/// Decide whether the CLI's signature-only grant path may proceed, BEFORE any
+/// prompt could appear. Pure: the up-front refusal
 /// gives a clear message; the seam's own `SignatureOnly` `NoSigningKey` is the
 /// belt-and-suspenders behind it. This is the deliberate exception to
-/// ADR-0031's ladder - the CLI grant path has NO interactive floor, so where
+/// the presence ladder - the CLI grant path has NO interactive floor, so where
 /// no key exists it refuses outright rather than writing an unsigned baseline.
 fn grant_key_gate(key: GrantKey) -> Result<(), String> {
     match key {
         GrantKey::Present => Ok(()),
         GrantKey::Absent => Err(
             "no enrollment key on this machine; policy grants are signature-only \
-             and refuse without one (ADR-0032 decision 5). Enroll first with \
+             and refuse without one. Enroll first with \
              `chromium-bridge pair`."
                 .to_string(),
         ),
         GrantKey::Unsupported => Err(
             "this platform has no Secure Enclave, so a policy grant cannot be signed and the \
-             CLI refuses (non-macOS ships no grant surface, ADR-0032 decision 8)."
+             CLI refuses; the current policy is left unchanged."
                 .to_string(),
         ),
         GrantKey::Unusable(e) => Err(format!(
@@ -382,7 +382,7 @@ fn require_grant_key() -> Result<(), String> {
 // ---- Rollback planning (pure) -----------------------------------------------
 
 /// What a rollback will do, decided by diffing a past revision's effective
-/// policy against the current effective policy (ADR-0032 rollback rule).
+/// policy against the current effective policy.
 #[derive(Debug, PartialEq, Eq)]
 enum RollbackPlan {
     /// The target already equals the current effective policy.
@@ -395,7 +395,7 @@ enum RollbackPlan {
     },
     /// The target relaxes something: one signed tap mints a fresh baseline -
     /// the CURRENT baseline with only the changed fields set to the target
-    /// (decision 3: the signed document carries baseline values on fields it
+    /// (the signed document carries baseline values on fields it
     /// does not touch), the changed fields as its touched set (a superset of
     /// the relaxed fields, which is what the coverage check requires). NEVER
     /// the old signed bytes back, and never the historical effective
@@ -559,9 +559,9 @@ fn run_history(json: bool) -> i32 {
 }
 
 /// `policy set <field flags> [--json]`: the GRANT lane. The keyless refusal
-/// runs UP FRONT (decision 5), before any prompt could appear and before a
+/// runs UP FRONT, before any prompt could appear and before a
 /// floor is ever constructed. Untouched fields carry the current BASELINE
-/// values (decision 3), so the edits fold over the baseline, never the
+/// values, so the edits fold over the baseline, never the
 /// effective policy. Under `--json`, success prints the post-write status
 /// report and any refusal the versioned error object.
 fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {

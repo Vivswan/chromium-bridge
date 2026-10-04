@@ -1,9 +1,9 @@
 //! MCP server mode: the default (no args) mode. Attests and admits the
 //! spawning harness, then either becomes the broker that owns the
 //! browser-facing bridge socket or, if a broker already owns it, attaches to
-//! that broker as a relay. See [`crate::broker`] and ADR-0024. The MCP
+//! that broker as a relay. See [`crate::broker`]. The MCP
 //! protocol itself (JSON-RPC over stdio with the harness) is served by the
-//! rmcp-based layer in [`crate::mcp`] (ADR-0034), one service per harness
+//! rmcp-based layer in [`crate::mcp`], one service per harness
 //! connection, all sharing one [`Session`].
 
 use crate::broker::{self, RelayOutcome};
@@ -63,9 +63,9 @@ pub fn run() -> i32 {
 
     let session = Session::new();
 
-    // Become the broker, or attach to an existing one as a relay. Newest-wins
-    // takeover is gone (ADR-0024): a live, attested broker is coexisted with,
-    // not SIGTERMed. Bounded retries cover the races -- a broker exiting as we
+    // Become the broker, or attach to an existing one as a relay. A live,
+    // attested broker is coexisted with, never SIGTERMed: other harnesses may
+    // be relaying through it. Bounded retries cover the races -- a broker exiting as we
     // dial, or several instances starting at once.
     for _ in 0..6 {
         match ipc::listen_and_publish() {

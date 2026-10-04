@@ -119,8 +119,8 @@ test("server/discover advertises the contract", async () => {
   const discover = await client.discover();
   for (const result of [adopted, discover] as const) {
     if (!result) throw new Error("missing DiscoverResult");
-    // The exact supported set is rmcp's full built-in list (ADR-0034 keeps
-    // the SDK default); the Rust unit tests pin its newest entry to the
+    // The exact supported set is rmcp's full built-in list (the SDK default
+    // is kept on purpose); the Rust unit tests pin its newest entry to the
     // repo-wide 2026-07-28 pin, and this exact-list pin catches an rmcp
     // upgrade moving the wire.
     expect(result.supportedVersions).toEqual([

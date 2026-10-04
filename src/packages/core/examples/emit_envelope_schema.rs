@@ -36,13 +36,8 @@ fn main() -> Result<(), serde_json::Error> {
     let out = serde_json::json!({
         "request": inlined_schema_for::<BridgeReq>(),
         "response": schemars::schema_for!(BridgeResp),
-        // The host-handled control frames (ADR-0021/0025/0030/0031/0032).
-        // Emitted as the whole internally-tagged enums; the parity script
-        // splits them per `type` tag and diffs each host->extension frame
-        // against its hand-written Zod validator in
-        // src/packages/shared/src/enclave.ts (AdminControl embeds
-        // allowlist::ClientEntry, PolicyControl embeds policy::PolicyOverlay,
-        // both covered inline).
+        // The host-handled control frames, emitted as whole internally-tagged
+        // enums; scripts/gen-envelope.ts splits them per `type` tag.
         "enclave": schemars::schema_for!(EnclaveControl),
         "admin": schemars::schema_for!(AdminControl),
         "policy": schemars::schema_for!(PolicyControl),

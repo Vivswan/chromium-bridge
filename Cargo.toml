@@ -34,9 +34,8 @@ libc = "0.2.186"
 # `signal` only.
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,
-# per-request version gate, wire model) per ADR-0034 - a many-eyes library
-# replacing our hand-rolled JSON-RPC dispatch, exactly the trade ADR-0023
-# prescribes. `server` only: no HTTP stack, no client, no auth tree.
+# per-request version gate, wire model), a many-eyes library in place of
+# hand-rolled JSON-RPC dispatch. `server` only: no HTTP stack, no client, no auth tree.
 rmcp = { version = "3.4.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
 # SIGTERM/SIGINT delivery to the cleanup thread (src/packages/core/src/sys.rs). Unix only.
@@ -101,12 +100,13 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Pipes",
   "Win32_System_Threading",
 ] }
-# Schema derivation for the wire envelopes (ADR-0028): the emit_envelope_schema
-# example (behind the core's `envelope-schema` feature) feeds the CI
-# double-derivation diff against the extension's Zod validators. OUR gen
+# Schema derivation for the wire envelopes: the emit_envelope_schema
+# example (behind the core's `envelope-schema` feature) feeds
+# scripts/gen-envelope.ts, which generates the extension's Zod validators
+# (`moon run gen`; `check-gen` fails on a stale diff). OUR gen
 # feature stays out of default and release builds; note that rmcp compiles
 # its own schemars dependency into the shipped binary for its runtime tool
-# schemas (ADR-0034) - check-gen-isolation pins that rmcp is the only path.
+# schemas - check-gen-isolation pins that rmcp is the only path.
 schemars = "1"
 # Model checker for the broker's ref-count shutdown protocol (src/packages/core/src/broker.rs).
 # Optional behind the core's `loom` feature, which substitutes it in the test compilation only.

@@ -152,7 +152,7 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
 
 #[test]
 fn grant_gate_refuses_every_keyless_state_with_a_clear_message() {
-    // The security-critical decision 5 mapping, driven purely (never the
+    // The security-critical key-state mapping, driven purely (never the
     // real keychain): only a present key proceeds.
     assert!(grant_key_gate(GrantKey::Present).is_ok());
     assert!(grant_key_gate(GrantKey::Absent)
@@ -226,7 +226,7 @@ fn a_relaxing_rollback_takes_the_signed_lane_with_the_changed_fields_touched() {
         panic!("expected Relax, got {plan:?}");
     };
     // Changed fields carry the target value; untouched fields
-    // carry the BASELINE value (decision 3), so the overlay entry
+    // carry the BASELINE value, so the overlay entry
     // on confirmGraceMs survives the write instead of being
     // silently folded into the signed baseline.
     assert!(values.page_eval_enabled);

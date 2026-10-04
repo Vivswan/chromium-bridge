@@ -261,7 +261,7 @@ mod registry {
 
         // The sweep itself drains the caller (its reader thread may
         // never observe the shutdown on macOS): the caller must see
-        // Disconnected now, not its timeout (ADR-0030).
+        // Disconnected now, not its timeout.
         assert_eq!(session.shutdown_all_browsers(), 1);
         assert!(matches!(
             caller.join().unwrap(),

@@ -112,7 +112,7 @@ fn server_injected_control_frames_are_dropped_not_forwarded() {
 
 #[test]
 fn server_injected_policy_frames_are_dropped_not_forwarded() {
-    // ADR-0032: the policy/language frames are host control, so a
+    // The policy/language frames are host control, so a
     // misbehaving or substituted MCP server cannot inject a
     // `policy_current` down the server leg - the extension's ratchet
     // would refuse a forged relaxation anyway, but the frame must not
@@ -135,7 +135,7 @@ fn server_injected_policy_frames_are_dropped_not_forwarded() {
     assert!(nm_read_frame(&mut cur).unwrap().is_none());
 }
 
-/// A scratch runtime dir for the ADR-0032 frame-answer tests (the policy
+/// A scratch runtime dir for the frame-answer tests (the policy
 /// and language stores, the revocation record, and the audit trail all
 /// resolve their paths internally): the crate-wide
 /// [`crate::test_support::scratch_runtime_dir`] guard, so no test reads
@@ -317,7 +317,7 @@ fn lang_set_applies_a_valid_value_and_bumps_the_sequence() {
 
 #[test]
 fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
-    // ADR-0032 decision 7: a value outside the enum is refused and the
+    // A value outside the enum is refused and the
     // previous value stands - the reply is lang_current with the
     // UNCHANGED value+seq, and the store is untouched.
     let _dir = scratch_runtime_dir("native-host-lang-set-invalid");
@@ -336,8 +336,9 @@ fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
 
 #[test]
 fn extension_kill_release_is_refused_audited_and_does_not_release() {
-    // ADR-0032 decision 6: the extension's release path is retired. Engage
-    // the kill switch, then attempt release from the extension: the reply
+    // The extension has no release path (restoring capability is a CLI act
+    // behind the presence gate). Engage the kill switch, then attempt release
+    // from the extension: the reply
     // is a refusal (ok:false, no killed claim), the trail records it, and
     // the bridge stays killed - the refusal never calls kill::release.
     let _dir = scratch_runtime_dir("native-host-kill-release-refused");
@@ -415,7 +416,7 @@ fn revoke_on_an_unsupported_platform_reports_the_stable_reason() {
     assert_eq!(reason, "unsupported_platform");
 }
 
-// ---- ADR-0030: the control-plane unkill drain -----------------------------
+// ---- The control-plane unkill drain ---------------------------------------
 
 #[test]
 fn a_buffered_engage_across_unkill_is_drained_and_keeps_the_host_killed() {
