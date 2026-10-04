@@ -287,12 +287,7 @@ tasks:
     # SAFETY: only ever run against an isolated Chrome for Testing via
     # CHROME_BIN - never a browser holding a real session (tests/README.md).
     description: 'DOM + smoke + security proofs (needs bun + isolated Chrome via CHROME_BIN; builds the extension first)'
-    deps: ['extension:build']
-    script: |
-      set -e
-      (cd tests/browser && bun dom_test.ts)
-      bun tests/browser/ext_test.ts
-      bun tests/browser/security_browser_test.ts
+    command: 'bun tests/browser/run_all.ts'
     toolchains: ['system']
     options:
       cache: false # a gating suite (CI's browser job): gates are never cached

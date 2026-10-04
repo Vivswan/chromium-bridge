@@ -1,0 +1,44 @@
+# The browser suites, defined once: checks.yml calls this inside the all-green gate and nightly.yml reruns
+# it against that day's Chrome. Strict in both: a suite that skips or asserts nothing fails the job.
+name: Browser suites
+
+on:
+  workflow_call:
+    inputs:
+      chrome-version:
+        description: The Chrome release browser-actions/setup-chrome installs (stable, beta, or a version).
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: DOM + smoke + security proofs (Chrome ${{ inputs.chrome-version }})
+    runs-on: ubuntu-latest
+    # A hang becomes a CANCELLED job at this bound, which nightly.yml's report job counts as red; without it
+    # a wedged browser sits on GitHub's 6-hour default before anything is filed.
+    timeout-minutes: 20
+    env:
+      # The isolation guard's local default is a SKIP with exit 0 whenever CHROME_BIN is not an isolated
+      # Chrome, which would turn this required job silently green. Strict mode makes that skip a failure and
+      # can only tighten the guard; the RAN-marker canary in run_all.ts is the independent backstop.
+      BB_REQUIRE_BROWSER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-moon
+      # setup-chrome installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser.
+      - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        id: chrome
+        with:
+          chrome-version: ${{ inputs.chrome-version }}
+      - run: bun install --frozen-lockfile
+      - name: Isolation guard and canary unit tests (no browser needed)
+        run: bun test tests/browser/browser-safety.test.ts
+      # The smoke and security suites load the extension non-headless (MV3 service-worker reliability),
+      # hence the virtual display; xvfb ships on GitHub's ubuntu runners.
+      - name: Browser suites
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+        run: xvfb-run -a bun tests/browser/run_all.ts

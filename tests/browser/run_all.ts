@@ -1,43 +1,30 @@
 #!/usr/bin/env bun
-// Run all chromium-bridge tests: protocol layer (e2e.py) + DOM layer (dom_test.ts)
-// + extension smoke (ext_test.ts) + security browser proofs (security_browser_test.ts).
-// Exits 0 only if ALL tests pass.
+// The browser suite runner: the one definition behind CI (.github/workflows/browser.yml), the container
+// (scripts/container-browser-suites.sh via `moon run test-browser`), and a local run. It builds the
+// extension bundle, runs the three suites against CHROME_BIN, then requires each suite's RAN marker.
 //
-// Requirements:
-//   - Rust toolchain (cargo) for building the release binary
-//   - uv for tests/protocol/e2e.py (provisions the interpreter pinned in
-//     the repo-root .python-version)
-//   - bun + Chrome for tests/browser/dom_test.ts and tests/browser/ext_test.ts
-//     (set CHROME_BIN to override the path)
+// SAFETY: the suites launch CHROME_BIN non-headless with --load-extension, which can capture and close a
+// real browser session, so CHROME_BIN must identify as an isolated browser (tests/README.md -> Safety).
+// Without one the run SKIPs; BB_REQUIRE_BROWSER=1 (CI, the container) turns that skip into a failure.
 //
-// Each layer is independent; failures in one still let the others run so you
-// see all problems in one pass - hence failures are collected, not fatal.
+// The canary: each suite exits 0 only after finishSuite() wrote "<suite>: N passed, M failed" into
+// BB_BROWSER_CANARY_DIR. A missing marker means the suite finished no real browser run (a guard skip
+// upstream of its checks) and a zero-pass marker means it ran vacuously; both fail the run even when every
+// suite exited 0, so no drift in the guard's env var spelling can green a run on silent skips.
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extensionDir } from "./browser-safety";
+import { isolatedBrowserOrNull } from "./browser-safety";
+
+const SUITES = ["dom_test", "ext_test", "security_browser_test"] as const;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
-let failed = false;
+const strict = process.env.BB_REQUIRE_BROWSER === "1";
 
-// Locate cargo: PATH first, then the common Homebrew / rustup install spots
-// (same candidate order as the old scripts/lib.sh helper).
-function findCargo(): string {
-  for (const candidate of [
-    "cargo",
-    "/opt/homebrew/bin/cargo",
-    join(process.env.HOME ?? "", ".cargo/bin/cargo"),
-  ]) {
-    const resolved = Bun.which(candidate);
-    if (resolved) return resolved;
-  }
-  console.error("error: cargo not found. Install Rust (https://rustup.rs) or fix PATH.");
-  process.exit(2);
-}
-
-function run(cmd: string[], env?: Record<string, string>): boolean {
+function run(cmd: string[], env: Record<string, string>): boolean {
   const proc = Bun.spawnSync(cmd, {
     cwd: repo,
     stdout: "inherit",
@@ -47,75 +34,70 @@ function run(cmd: string[], env?: Record<string, string>): boolean {
   return proc.exitCode === 0;
 }
 
-const cargo = findCargo();
-// Put cargo's directory on PATH so the rustc it shells out to is discoverable.
-const cargoDir = dirname(cargo);
-if (!(process.env.PATH ?? "").split(":").includes(cargoDir)) {
-  process.env.PATH = `${cargoDir}:${process.env.PATH}`;
-}
-
-console.log("=== chromium-bridge test suite ===");
-console.log("(1/4) build release binary");
-if (!run([cargo, "build", "--release", "--manifest-path", join(repo, "Cargo.toml")])) {
-  console.error("BUILD FAILED");
+console.log("=== browser suites ===");
+console.log("(1/3) build the extension bundle");
+if (!run(["bun", "run", "--cwd", join(repo, "src/apps/extension"), "build"], {})) {
+  console.error("EXTENSION BUILD FAILED");
   process.exit(1);
 }
 
 console.log("");
-console.log("(2/4) build extension bundle (esbuild)");
-// The DOM + smoke tests exercise the BUILT build/extension/, so build it first.
-if (!existsSync(join(repo, "node_modules"))) {
-  run(["bun", "install"]);
+console.log("(2/3) isolated browser");
+const chromeBin = isolatedBrowserOrNull();
+if (!chromeBin) {
+  const reason = process.env.CHROME_BIN
+    ? `CHROME_BIN (${process.env.CHROME_BIN}) does not identify as an isolated Chrome for Testing`
+    : "CHROME_BIN is unset";
+  if (strict) {
+    console.error(`FAIL (BB_REQUIRE_BROWSER=1, the suites must run): ${reason}`);
+    process.exit(1);
+  }
+  console.log(`  SKIP  ${reason}; point it at an isolated browser, never your daily Chrome`);
+  console.log("        (see tests/README.md -> Safety)");
+  process.exit(0);
 }
-if (!run(["bun", "run", "--cwd", join(repo, "src/apps/extension"), "build"])) {
-  console.error("EXTENSION BUILD FAILED");
-  failed = true;
-}
+console.log(`  ${chromeBin}`);
+
+// A caller may name the canary dir to read the markers afterwards (compose.yaml does); the dir is cleared
+// first so a marker from an earlier run cannot vouch for this one.
+const canaryDir =
+  process.env.BB_BROWSER_CANARY_DIR ?? mkdtempSync(join(tmpdir(), "browser-canary-"));
+rmSync(canaryDir, { recursive: true, force: true });
 
 console.log("");
-console.log("(3/4) protocol-layer tests (tests/protocol/e2e.py)");
-// uv provisions the interpreter pinned in the repo-root .python-version, so
-// this run matches CI exactly. No PATH-python3 fallback by design.
-if (!Bun.which("uv")) {
-  console.error("error: uv not found - it provisions the pinned Python for tests/protocol/.");
-  console.error(
-    "install it: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: brew install uv)",
-  );
-  failed = true;
-} else if (!run(["uv", "run", "--no-project", "--isolated", join(repo, "tests/protocol/e2e.py")])) {
-  console.error("PROTOCOL TESTS FAILED");
-  failed = true;
-}
-
-console.log("");
-console.log("(4/4) DOM-layer + smoke tests");
-// SAFETY: browser tests must run against an ISOLATED browser (Chrome for
-// Testing / Chromium via CHROME_BIN), never your daily Chrome - a non-headless
-// --load-extension launch can capture and close your real session. We do NOT
-// default CHROME_BIN to the system Chrome; if it's unset, skip the browser suite.
-const chromeBin = process.env.CHROME_BIN;
-if (!existsSync(extensionDir())) {
-  console.log(`  SKIP  ${extensionDir()} missing (build step above did not run)`);
-} else if (!chromeBin) {
-  console.log("  SKIP  browser tests: set CHROME_BIN to an isolated Chrome for Testing /");
-  console.log("        Chromium binary (NOT your daily Chrome). See tests/README.md -> Safety.");
-} else if (!Bun.which(chromeBin)) {
-  console.log(`  SKIP  CHROME_BIN not executable: ${chromeBin}`);
-} else {
-  if (!run(["bun", join(here, "dom_test.ts")], { CHROME_BIN: chromeBin })) {
-    console.error("DOM TESTS FAILED");
-    failed = true;
-  }
-  if (!run(["bun", join(here, "ext_test.ts")], { CHROME_BIN: chromeBin })) {
-    console.error("SMOKE TEST FAILED");
-    failed = true;
-  }
-  if (!run(["bun", join(here, "security_browser_test.ts")], { CHROME_BIN: chromeBin })) {
-    console.error("SECURITY BROWSER PROOFS FAILED");
+console.log("(3/3) suites");
+let failed = false;
+for (const suite of SUITES) {
+  if (
+    !run(["bun", join(here, `${suite}.ts`)], {
+      CHROME_BIN: chromeBin,
+      BB_BROWSER_CANARY_DIR: canaryDir,
+    })
+  ) {
+    console.error(`${suite} FAILED`);
     failed = true;
   }
 }
 
 console.log("");
-console.log(failed ? "=== SOME TESTS FAILED ===" : "=== ALL TESTS PASSED ===");
+console.log("canary (every suite really ran)");
+for (const suite of SUITES) {
+  const marker = join(canaryDir, suite);
+  if (!existsSync(marker)) {
+    console.error(`  ${suite} left no RAN marker - it finished no real browser run (silent skip?)`);
+    failed = true;
+    continue;
+  }
+  const body = readFileSync(marker, "utf8").trim();
+  if (body.includes(": 0 passed")) {
+    console.error(`  ${suite} ran vacuously: ${body}`);
+    failed = true;
+    continue;
+  }
+  console.log(`  ${body}`);
+}
+if (!process.env.BB_BROWSER_CANARY_DIR) rmSync(canaryDir, { recursive: true, force: true });
+
+console.log("");
+console.log(failed ? "=== SOME BROWSER SUITES FAILED ===" : "=== ALL BROWSER SUITES PASSED ===");
 process.exit(failed ? 1 : 0);
