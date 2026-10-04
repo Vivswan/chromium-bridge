@@ -87,7 +87,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Full history on every job that runs moon: with CI=true moon resolves the default branch
+      # to list the touched files (even without --affected) and errors when `main` is unknown,
+      # as it is in a depth-1 pull-request checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
@@ -124,6 +129,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
       - run: moon run typecheck check-ts shared:test extension:test
@@ -143,6 +150,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
@@ -161,6 +170,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
       - run: >-
@@ -178,6 +189,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
@@ -302,6 +315,8 @@ jobs:
         suite: [e2e, adversarial, chaos]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
       - uses: ./.github/actions/release-binary
         with:
@@ -344,6 +359,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
       - run: moon run web:build web:test
