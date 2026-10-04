@@ -533,8 +533,8 @@ fn wire_types_reject_unknown_fields() {
 #[test]
 fn bridge_envelope_wire_keys_are_pinned() {
     // These Rust types ARE the canonical envelope contract; the extension's
-    // Zod validators are checked against them by the CI double-derivation
-    // diff (scripts/check-envelope-parity.ts). This test pins the exact wire
+    // Zod validators are generated from them (scripts/gen-envelope.ts, held
+    // fresh by `moon run check-gen`). This test pins the exact wire
     // field names locally, so a rename, an added field, or a snake_case Rust
     // name leaking onto the wire fails `cargo test` immediately instead of
     // waiting for the cross-language diff.

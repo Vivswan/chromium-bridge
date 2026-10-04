@@ -85,10 +85,7 @@ fn host_control_tags_mirror_the_wire_enums() {
 /// The browser->host frames the extension constructs, as the generated wire module lists them
 /// (`GENERATED_WRITER_FRAMES`, kept in step with the wire enums by `moon run check-envelope`).
 fn generated_writer_frames() -> BTreeSet<String> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../shared/src/envelope-wire.gen.ts"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../shared/src/envelope.gen.ts");
     let source = std::fs::read_to_string(path).unwrap();
     let (_, rest) = source
         .split_once("export const GENERATED_WRITER_FRAMES = {")

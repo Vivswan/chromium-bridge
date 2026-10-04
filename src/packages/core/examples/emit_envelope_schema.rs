@@ -5,17 +5,15 @@
 //! The Rust types in `protocol.rs` and `protocol/control.rs` are the canonical
 //! envelope contract. The request is emitted with its subschemas inlined (no
 //! `$defs`): its flattened `BridgeCommand` references one args struct per
-//! tool, and the consumers below split the command per op by structure,
-//! never by name. Two consumers read this output:
-//!
-//! - `scripts/gen-envelope.ts` (`moon run gen`) generates the extension's base
-//!   wire validators from it (`src/packages/shared/src/envelope-wire.gen.ts`);
-//! - `scripts/check-envelope-parity.ts` (CI + `moon run ci`) diffs it against
-//!   `z.toJSONSchema()` of the validators the extension actually enforces -
-//!   the generated bases wrapped by a hand-written asymmetry layer - after a
-//!   small, documented set of erasure rules (see the rule list in
-//!   `src/packages/shared/src/json-schema-normalize.ts`); everything outside
-//!   the approved asymmetries must match exactly.
+//! tool, and the consumer splits the command per op by structure, never by
+//! name. One consumer reads this output: `scripts/gen-envelope.ts` (`moon run
+//! gen`) generates the extension's wire validators from it
+//! (`src/packages/shared/src/envelope.gen.ts`): per envelope and control
+//! frame the faithful base and, for the frames the extension reads, the
+//! enforced validator, which is that base plus the asymmetry table in
+//! `src/packages/shared/src/envelope-asymmetries.ts`; `moon run check-gen`
+//! fails on a stale diff and `moon run check-envelope` proves each
+//! asymmetry.
 //!
 //! Built only when the `envelope-schema` feature is enabled (this example's
 //! `required-features`), so schemars stays out of every binary's dependency

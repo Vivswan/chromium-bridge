@@ -24,11 +24,11 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [features]
-# Contract-generation apparatus (ADR-0028): JSON Schema derivation for the
-# bridge envelopes, used only by the emit_envelope_schema example that feeds
-# the CI double-derivation diff (scripts/check-envelope-parity.ts). Off by
-# default and enabled by no binary; the schemars instance in shipped builds
-# comes from rmcp (its runtime tool-schema model, ADR-0034), never from this
+# Contract-generation apparatus: JSON Schema derivation for the bridge
+# envelopes, used only by the emit_envelope_schema example that feeds the
+# extension's validator generator (scripts/gen-envelope.ts, `moon run gen`).
+# Off by default and enabled by no binary; the schemars instance in shipped
+# builds comes from rmcp (its runtime tool-schema model), never from this
 # feature - check-gen-isolation enforces exactly that split.
 envelope-schema = ["dep:schemars"]
 # Fuzz-only surface: re-exports private internals (the handshake verifier, the

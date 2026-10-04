@@ -1,17 +1,20 @@
 #!/usr/bin/env bun
 
-// Generate the extension's base wire validators (src/packages/shared/src/envelope-wire.gen.ts) from the Rust
-// core's schemars-derived JSON Schemas (ADR-0028): the FAITHFUL Rust contract, strict objects, required fields
-// required, no defaults. The deliberate parser asymmetries stay hand-written in envelope.ts / enclave.ts, each
-// pinned by scripts/check-envelope-parity.ts (`moon run check-envelope`).
+// Generate the extension's wire validators (src/packages/shared/src/envelope.gen.ts) from the Rust core's
+// schemars-derived JSON Schemas: the FAITHFUL base per envelope and control frame (strict objects, required
+// fields required, no defaults), and beside each reader base the ENFORCED validator, which is that base plus
+// exactly the asymmetries declared in src/packages/shared/src/envelope-asymmetries.ts. The extension runs the
+// enforced validators; the bases exist so the asymmetry gate (scripts/check-envelope.ts) can prove each entry.
 //
-//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> prepare -> emitZod -> write
+//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> prepare ->
+//                       applyAsymmetries (readers only) -> emitZod -> write
 //   check-gen in CI  -> regenerates and fails on a stale diff
 //
 // Fail-closed generation rules; a violation aborts, because shipping a weaker parser than the Rust contract is
 // never an option. The error messages cite them by number.
-//   G1  every object declares type: "object" + additionalProperties: false, and the emitted source calls
-//       .strict() once per z.object( - neither a Rust type losing deny_unknown_fields nor an emitter bug slips through
+//   G1  every object declares type: "object" + additionalProperties: false, and the emitted source closes every
+//       z.object( with .strict() (or, on a reader under the loose-frames rule, .catchall(z.unknown())) - neither
+//       a Rust type losing deny_unknown_fields nor an emitter bug slips through
 //   G2  `default` is stripped: serde fills defaults on the Rust READ side; a .default() would hand consumers
 //       values the frame never carried (required-ness is unchanged: schemars already leaves defaulted fields optional)
 //   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
@@ -20,21 +23,30 @@
 //   G5  every keyword and type on the supported list below, in a position the emitter models; an unmodeled
 //       keyword would have to be silently dropped, so it aborts until support lands here AND in the adversarial
 //       tests. The empty schema {} is the contract's own free-form claim (BridgeResp.data, and the request
-//       envelope's args once G6 has split the command off), emitted as z.any() and still held to the parity
-//       gate's R3 rule
+//       envelope's args once G6 has split the command off), emitted as z.unknown() so consumers must narrow
 //   G6  the request's command (serde `#[serde(flatten)]` of the adjacently tagged BridgeCommand) arrives as the
 //       envelope's own properties beside a `oneOf` of {op, args} branches under `unevaluatedProperties: false`.
 //       splitFlattenedCommand hands it back as the envelope (op: string, args: any) plus one args schema per op:
-//       the envelope base stays the strict object the asymmetry layer extends, and the per-op schemas go to
-//       scripts/gen-ops.ts (the extension's per-op validators) and to the parity gate's per-op diff
+//       the envelope base stays a strict object, and the per-op schemas go to scripts/gen-ops.ts
+//   G7  every variant of every Rust control-frame enum is planned exactly once below (a reader, a writer, or a
+//       bare classification tag), so an added or renamed variant fails generation until the plan says how the
+//       extension covers it
+//   A1  an asymmetry entry names a path the prepared Rust schema has, and its node is in the shape the change
+//       expects (a `string` change on a plain string, a `string-arm` on a number, ...); a stale or misplaced
+//       entry aborts instead of sitting inert
+//   A2  a `generated-schema` entry replacing an object node is cross-checked against the schema it names: same
+//       field inventory, same base type per field, and strict where the Rust node refuses unknown fields (two
+//       Rust emitters, held equal here)
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import {
-  ANNOTATION_KEYS,
-  splitTaggedUnionSchema,
-} from "../src/packages/shared/src/json-schema-normalize";
+  ASYMMETRIES,
+  type Asymmetry,
+  type Change,
+} from "../src/packages/shared/src/envelope-asymmetries";
 
 type JsonObject = Record<string, unknown>;
 
@@ -42,10 +54,83 @@ function isObject(v: unknown): v is JsonObject {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// G3: accept the branch list only if some property is a required string
-// const in every branch with all values distinct; the union is then
-// discriminated and oneOf/anyOf coincide.
-export function assertDiscriminatedUnion(branches: unknown[], path: string): void {
+function show(v: unknown): string {
+  return JSON.stringify(v) ?? String(v);
+}
+
+// Keys that annotate a schema without constraining instances; stripped before emission (schemars puts a field's
+// doc comment here).
+export const ANNOTATION_KEYS = new Set([
+  "$schema",
+  "$id",
+  "$comment",
+  "title",
+  "description",
+  "examples",
+]);
+
+// The subset of those that are also harmless BESIDE a $ref: $id and $schema are excluded because they alter
+// $ref resolution (base URI / dialect).
+const REF_SIBLING_ANNOTATION_KEYS = new Set(["$comment", "title", "description", "examples"]);
+
+// Inline every internal $ref against the root's $defs (G4).
+function deref(node: unknown, defs: JsonObject): unknown {
+  if (Array.isArray(node)) return node.map((item) => deref(item, defs));
+  if (!isObject(node)) return node;
+  const ref = node.$ref;
+  if (typeof ref === "string") {
+    const name = ref.match(/^#\/\$defs\/(.+)$/)?.[1];
+    if (name === undefined || !(name in defs)) {
+      throw new Error(`gen-envelope: unresolvable $ref ${ref} (G4)`);
+    }
+    // A $ref node's constraint siblings would be lost by a plain inline of the target; neither derivation
+    // emits that form, so refuse it rather than silently merging. Pure-annotation siblings constrain nothing.
+    for (const key of Object.keys(node)) {
+      if (key !== "$ref" && !REF_SIBLING_ANNOTATION_KEYS.has(key)) {
+        throw new Error(
+          `gen-envelope: $ref with constraint siblings is not supported: ${ref} (G4)`,
+        );
+      }
+    }
+    return deref(defs[name], defs);
+  }
+  const out: JsonObject = {};
+  for (const [key, value] of Object.entries(node)) {
+    out[key] = deref(value, defs);
+  }
+  return out;
+}
+
+/** Split an internally-tagged (serde `tag = "type"`) enum schema into one subschema per tag, with $defs
+ * indirection inlined first. Refuses anything that is not exactly the shape schemars emits for such an enum: a
+ * top-level oneOf whose every branch is an object schema carrying a unique string `type` const. */
+export function splitTaggedUnionSchema(schema: unknown): Map<string, unknown> {
+  if (!isObject(schema)) throw new Error("gen-envelope: split expected a schema object");
+  const defs = isObject(schema.$defs) ? schema.$defs : {};
+  const inlined = deref({ ...schema, $defs: undefined }, defs) as JsonObject;
+  const variants = inlined.oneOf;
+  if (!Array.isArray(variants)) throw new Error("gen-envelope: split expected a top-level oneOf");
+  const out = new Map<string, unknown>();
+  for (const variant of variants) {
+    if (!isObject(variant) || !isObject(variant.properties)) {
+      throw new Error(`gen-envelope: split: variant is not an object schema: ${show(variant)}`);
+    }
+    const tagNode = variant.properties.type;
+    const tag = isObject(tagNode) ? tagNode.const : undefined;
+    if (typeof tag !== "string") {
+      throw new Error(
+        `gen-envelope: split: variant without a string \`type\` const: ${show(variant)}`,
+      );
+    }
+    if (out.has(tag)) throw new Error(`gen-envelope: split: duplicate tag ${tag}`);
+    out.set(tag, variant);
+  }
+  return out;
+}
+
+// G3: accept the branch list only if some property is a required string const in every branch with all values
+// distinct; the union is then discriminated and oneOf/anyOf coincide. Returns the discriminating property.
+export function assertDiscriminatedUnion(branches: unknown[], path: string): string {
   const first = branches[0];
   if (branches.length === 0 || !isObject(first) || !isObject(first.properties)) {
     throw new Error(`gen-envelope: oneOf at ${path} has no object branches (G3)`);
@@ -64,16 +149,15 @@ export function assertDiscriminatedUnion(branches: unknown[], path: string): voi
       }
       seen.add(tag);
     }
-    return; // `candidate` discriminates every branch
+    return candidate; // discriminates every branch
   }
   throw new Error(`gen-envelope: oneOf at ${path} is not a discriminated union (G3)`);
 }
 
 /** The request's flattened command, split back into the two things the rest of the pipeline models (G6). */
 export interface FlattenedCommand {
-  /** The envelope with the command's two fields restored as plain members: `op` any string, `args` any
-   * object. The same shape the request had before the command was typed, so the asymmetry layer in
-   * envelope.ts extends it unchanged. */
+  /** The envelope with the command's two fields restored as plain members: `op` any string, `args` any object.
+   * The same shape the request had before the command was typed. */
   envelope: JsonObject;
   /** Each op's args schema (the Rust args struct, as schemars emitted it), keyed by the op const. */
   commands: Map<string, unknown>;
@@ -151,6 +235,7 @@ const SUPPORTED_KEYWORDS = new Set([
   "oneOf",
   "anyOf",
   "const",
+  "enum",
   "format",
   "minimum",
   "maximum",
@@ -167,12 +252,11 @@ const SUPPORTED_TYPES = new Set([
 ]);
 
 export function prepare(node: unknown, path: string): unknown {
-  // The boolean schema `true` and the empty schema {} both mean "accept
-  // anything"; canonicalize to {} (emitted as z.any()). `false` (accept
-  // nothing) and any other non-object form have no faithful emission.
+  // The boolean schema `true` and the empty schema {} both mean "accept anything"; canonicalize to {} (emitted
+  // as z.unknown()). `false` (accept nothing) and any other non-object form have no faithful emission.
   if (node === true) return {};
   if (!isObject(node)) {
-    throw new Error(`gen-envelope: unsupported schema form at ${path}: ${JSON.stringify(node)}`);
+    throw new Error(`gen-envelope: unsupported schema form at ${path}: ${show(node)}`);
   }
   if ("$ref" in node) throw new Error(`gen-envelope: unresolved $ref at ${path} (G4)`);
 
@@ -192,16 +276,14 @@ export function prepare(node: unknown, path: string): unknown {
   }
   for (const t of types) {
     if (typeof t !== "string" || !SUPPORTED_TYPES.has(t)) {
-      throw new Error(`gen-envelope: unsupported type ${JSON.stringify(t)} at ${path} (G5)`);
+      throw new Error(`gen-envelope: unsupported type ${show(t)} at ${path} (G5)`);
     }
   }
 
-  // G5 placement: format is modeled only as schemars' integer-width claim
-  // and the numeric bounds only as z.number() bounds, so both may sit only
-  // on a numeric node (JSON Schema scopes them per instance type: the
-  // Option null-arm beside a numeric type is inert and stays allowed, but a
-  // string arm would give `format` a string-format meaning - uuid, email,
-  // ... - that this emitter does not model).
+  // G5 placement: format is modeled only as schemars' integer-width claim and the numeric bounds only as
+  // z.number() bounds, so both may sit only on a numeric node (JSON Schema scopes them per instance type: the
+  // Option null-arm beside a numeric type is inert and stays allowed, but a string arm would give `format` a
+  // string-format meaning - uuid, email, ... - that this emitter does not model).
   const numeric = types.includes("integer") || types.includes("number");
   const numericOrNull = numeric && types.every((t) => t !== "string" && t !== "boolean");
   for (const key of ["format", "minimum", "maximum"] as const) {
@@ -215,14 +297,14 @@ export function prepare(node: unknown, path: string): unknown {
     }
   }
 
-  // G1: object-shaped keywords demand the explicit, sole object type and
-  // deny_unknown_fields; an object claim is stated, never inferred.
+  // G1: object-shaped keywords demand the explicit, sole object type and deny_unknown_fields; an object claim
+  // is stated, never inferred.
   const objectish = ["properties", "required", "additionalProperties"].filter((k) => k in out);
   if (objectish.length > 0 || types.includes("object")) {
     if (types.length !== 1 || types[0] !== "object") {
       throw new Error(
         `gen-envelope: ${path} carries ${objectish.join("/")} but type is ` +
-          `${JSON.stringify(out.type)}, not "object" (G1)`,
+          `${show(out.type)}, not "object" (G1)`,
       );
     }
     if (out.additionalProperties !== false) {
@@ -247,23 +329,21 @@ export function prepare(node: unknown, path: string): unknown {
   }
 
   if ("items" in out || types.includes("array")) {
-    // The sole non-null type must be "array"; serde's Option<Vec<_>> null-arm
-    // beside it is inert (an array keyword never constrains null) and stays
-    // allowed, like the numeric Option arms above.
+    // The sole non-null type must be "array"; serde's Option<Vec<_>> null-arm beside it is inert (an array
+    // keyword never constrains null) and stays allowed, like the numeric Option arms above.
     if (types.filter((t) => t !== "null").join() !== "array") {
       throw new Error(`gen-envelope: ${path} carries items but type is not "array" (G5)`);
     }
     if (!isObject(out.items)) {
-      // Refuse missing/boolean/tuple items: z.array(z.any()) would accept
-      // elements the Rust parser refuses.
+      // Refuse missing/boolean/tuple items: z.array(z.any()) would accept elements the Rust parser refuses.
       throw new Error(`gen-envelope: array at ${path} lacks a single object items schema (G5)`);
     }
     out.items = prepare(out.items, `${path}.items`);
   }
 
-  // Unions: a combinator node must be EXACTLY one non-empty combinator -
-  // sibling constraints beside a combinator have no single faithful Zod
-  // form, and an empty union claims nothing, both weaker than the contract.
+  // Unions: a combinator node must be EXACTLY one non-empty combinator - sibling constraints beside a
+  // combinator have no single faithful Zod form, and an empty union claims nothing, both weaker than the
+  // contract.
   const [combinator, ...extraCombinators] = (["oneOf", "anyOf"] as const).filter(
     (key) => key in out,
   );
@@ -287,90 +367,263 @@ export function prepare(node: unknown, path: string): unknown {
     delete out.oneOf; // G3
   }
 
-  // G5 placement: const is modeled only as a string literal, alone or on a
-  // plain string node (the enum tags schemars emits); on any other type it
-  // would be ignored rather than enforced.
-  if ("const" in out) {
-    if (typeof out.const !== "string") {
-      throw new Error(`gen-envelope: unsupported non-string const at ${path} (G5)`);
+  // G5 placement: const and enum are modeled only as string literals, alone or on a plain string node (the
+  // enum tags schemars emits); on any other type they would be ignored rather than enforced.
+  for (const key of ["const", "enum"] as const) {
+    if (!(key in out)) continue;
+    const values = key === "enum" ? out.enum : [out.const];
+    if (
+      !Array.isArray(values) ||
+      values.length === 0 ||
+      values.some((v) => typeof v !== "string") ||
+      new Set(values).size !== values.length
+    ) {
+      throw new Error(`gen-envelope: unsupported non-string or degenerate ${key} at ${path} (G5)`);
     }
     if (types.length > 0 && (types.length !== 1 || types[0] !== "string")) {
-      throw new Error(`gen-envelope: const on a non-string node at ${path} (G5)`);
+      throw new Error(`gen-envelope: ${key} on a non-string node at ${path} (G5)`);
     }
+  }
+  if ("const" in out && "enum" in out) {
+    throw new Error(`gen-envelope: const beside enum at ${path} (G5)`);
   }
 
   return out;
 }
 
-// Emit Zod source for one prepared node. Total over the subset prepare
-// admits: every branch below is a shape prepare guarantees, and anything
-// else is a bug in prepare, so it throws rather than guesses. `override`
-// lets a caller substitute a named schema for a specific node (matched by
-// identity) instead of inlining it.
+// ---- the asymmetry pass (readers only) -----------------------------------------
+//
+// Node forms only this pass introduces (never read from the Rust schema; prepare refuses them there):
+//   minLength / maxLength / pattern on a string node   -> the `string` change
+//   $loose: true on an object node                     -> the loose-frames rule, emitted as .catchall(z.unknown())
+//   { $generated: symbol, $from: module }              -> the `generated-schema` change, emitted as the symbol
+
+const LOOSE = "$loose";
+const GENERATED = "$generated";
+const GENERATED_FROM = "$from";
+
+/** A `generated-schema` replacement the pass performed, kept for the A2 cross-check in main. */
+export interface GeneratedReplacement {
+  path: string;
+  symbol: string;
+  from: string;
+  /** The prepared Rust node the symbol stands in for: its own null arm dropped when it was an optional
+   * property, its children as prepared. */
+  rust: unknown;
+}
+
+export interface AsymmetryPass {
+  /** The transformed schema. */
+  schema: unknown;
+  replacements: GeneratedReplacement[];
+}
+
+// optional-only: serde's Option null arm on an OPTIONAL property (a null member of its type list or a null
+// branch of its union). Only there: a required nullable value or a nullable array item (Vec<Option<_>>) has no
+// omission to fall back on, so its null stays.
+function dropNullArm(node: JsonObject): JsonObject {
+  if (Array.isArray(node.type) && node.type.includes("null")) {
+    const rest = node.type.filter((t) => t !== "null");
+    return { ...node, type: rest.length === 1 ? rest[0] : rest };
+  }
+  if (Array.isArray(node.anyOf)) {
+    const rest = node.anyOf.filter((b) => !(isObject(b) && b.type === "null"));
+    if (rest.length !== node.anyOf.length) {
+      return rest.length === 1 && isObject(rest[0]) ? rest[0] : { ...node, anyOf: rest };
+    }
+  }
+  return node;
+}
+
+function applyChange(node: JsonObject, change: Change, path: string): JsonObject {
+  const refuse = (expected: string): never => {
+    throw new Error(
+      `gen-envelope: ${path} is not ${expected} (got ${show(node)}), so the ${change.change} ` +
+        "asymmetry cannot apply (A1)",
+    );
+  };
+  switch (change.change) {
+    case "string": {
+      if (node.type !== "string" || Object.keys(node).length !== 1) refuse("a plain string node");
+      const out: JsonObject = { type: "string" };
+      if (change.minLength !== undefined) out.minLength = change.minLength;
+      if (change.maxLength !== undefined) out.maxLength = change.maxLength;
+      if (change.pattern !== undefined) out.pattern = change.pattern;
+      return out;
+    }
+    case "string-arm": {
+      if (node.type !== "integer" && node.type !== "number") refuse("a numeric node");
+      return { anyOf: [node, { type: "string" }] };
+    }
+    case "tag-union-as-enum-object": {
+      const branches = node.anyOf;
+      if (!Array.isArray(branches) || branches.length < 2 || Object.keys(node).length !== 1) {
+        refuse("a union of at least two object variants");
+      }
+      const tag = assertDiscriminatedUnion(branches as unknown[], path);
+      const values = new Set<string>();
+      let content: [string, unknown] | undefined;
+      for (const branch of branches as JsonObject[]) {
+        const props = branch.properties as JsonObject;
+        const others = Object.keys(props).filter((k) => k !== tag);
+        const required = Array.isArray(branch.required) ? [...branch.required].sort() : [];
+        if (others.length !== 1 || required.join() !== [tag, others[0]].sort().join()) {
+          refuse(`a union of {${tag}, <one content field>} variants, both required`);
+        }
+        const [key] = others as [string];
+        const tagNode = props[tag] as JsonObject;
+        values.add(tagNode.const as string);
+        if (content === undefined) content = [key, props[key]];
+        else if (content[0] !== key || show(content[1]) !== show(props[key])) {
+          refuse("a union whose variants share one content field with one schema");
+        }
+      }
+      const [contentKey, contentSchema] = content as [string, unknown];
+      return {
+        type: "object",
+        properties: {
+          [tag]: { type: "string", enum: [...values] },
+          [contentKey]: contentSchema,
+        },
+        required: [tag, contentKey],
+        additionalProperties: false,
+      };
+    }
+    case "generated-schema":
+      return { [GENERATED]: change.symbol, [GENERATED_FROM]: change.from };
+  }
+}
+
+/** Apply the reader rules and this kind's asymmetry entries to a prepared schema (A1). `loose` is the
+ * loose-frames rule: true for control frames, false for the envelopes. Every entry must be consumed. */
+export function applyAsymmetries(
+  prepared: unknown,
+  kind: string,
+  entries: Readonly<Record<string, Asymmetry>>,
+  loose: boolean,
+): AsymmetryPass {
+  const consumed = new Set<string>();
+  const replacements: GeneratedReplacement[] = [];
+  const visit = (node: unknown, path: string): unknown => {
+    if (!isObject(node)) return node;
+    let out: JsonObject = node;
+    const entry = entries[path];
+    if (entry !== undefined) {
+      consumed.add(path);
+      for (const change of entry.changes) {
+        if (GENERATED in out) {
+          throw new Error(`gen-envelope: ${path} is already a generated-schema replacement (A1)`);
+        }
+        const rust = out;
+        out = applyChange(out, change, path);
+        if (change.change === "generated-schema") {
+          replacements.push({ path, symbol: change.symbol, from: change.from, rust });
+        }
+      }
+    }
+    if (GENERATED in out) return out;
+    if (isObject(out.properties)) {
+      const required = new Set(Array.isArray(out.required) ? out.required : []);
+      const props: JsonObject = {};
+      for (const [name, sub] of Object.entries(out.properties)) {
+        const field = !required.has(name) && isObject(sub) ? dropNullArm(sub) : sub;
+        props[name] = visit(field, `${path}.properties.${name}`);
+      }
+      out = { ...out, properties: props };
+      if (loose) out = { ...out, [LOOSE]: true };
+    }
+    if (isObject(out.items)) out = { ...out, items: visit(out.items, `${path}.items`) };
+    if (Array.isArray(out.anyOf)) {
+      out = { ...out, anyOf: out.anyOf.map((b, i) => visit(b, `${path}.anyOf[${i}]`)) };
+    }
+    return out;
+  };
+  const schema = visit(prepared, "$");
+  const stale = Object.keys(entries).filter((path) => !consumed.has(path));
+  if (stale.length > 0) {
+    throw new Error(
+      `gen-envelope: ${kind} asymmetry entries name paths the Rust schema does not have: ` +
+        `${stale.join(", ")} (A1)`,
+    );
+  }
+  return { schema, replacements };
+}
+
+// ---- the emitter -----------------------------------------------------------------
+
+// Emit Zod source for one prepared (and possibly asymmetry-transformed) node. Total over the subset prepare and
+// applyAsymmetries produce: anything else is a bug upstream, so it throws rather than guesses. `override` lets
+// a caller substitute a named schema for a specific node (matched by identity) instead of inlining it.
 function emitZod(node: unknown, override?: (node: unknown) => string | undefined): string {
   const custom = override?.(node);
   if (custom !== undefined) return custom;
   if (!isObject(node)) {
-    throw new Error(`gen-envelope: emitter reached an unprepared node: ${JSON.stringify(node)}`);
+    throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
   }
+  if (typeof node[GENERATED] === "string") return node[GENERATED];
   if (Array.isArray(node.anyOf)) {
-    // prepare guarantees a non-empty, pure combinator; a one-branch union
-    // is the branch itself.
+    // A non-empty, pure combinator; a one-branch union is the branch itself.
     if (node.anyOf.length === 1) return emitZod(node.anyOf[0], override);
     const branches = node.anyOf.map((branch) => emitZod(branch, override));
     return `z.union([${branches.join(", ")}])`;
   }
   if ("const" in node) return `z.literal(${JSON.stringify(node.const)})`;
+  if (Array.isArray(node.enum)) {
+    return `z.enum([${node.enum.map((v) => JSON.stringify(v)).join(", ")}])`;
+  }
   if (Array.isArray(node.type)) {
-    // serde's Option null-arm and friends: one branch per type, each keeping
-    // the node's other keywords (numeric ones and items, per G5 placement;
-    // the null branch ignores them - none constrains null).
+    // serde's Option null-arm and friends: one branch per type, each keeping the node's other keywords
+    // (numeric ones and items, per G5 placement; the null branch ignores them - none constrains null).
     const branches = node.type.map((type) => emitZod({ ...node, type }, override));
     return `z.union([${branches.join(", ")}])`;
   }
   switch (node.type) {
     case "object": {
-      // additionalProperties: false is guaranteed by G1; .strict() is its
-      // one faithful spelling. prepare always materializes `properties`.
+      // additionalProperties: false is guaranteed by G1: .strict() is its faithful spelling, and a reader under
+      // the loose-frames rule carries $loose instead. prepare always materializes `properties`.
       const required = new Set(Array.isArray(node.required) ? node.required : []);
       const fields = Object.entries(node.properties as JsonObject).map(([key, sub]) => {
         const value = emitZod(sub, override);
         return `${JSON.stringify(key)}: ${required.has(key) ? value : `${value}.optional()`}`;
       });
       const object = fields.length === 0 ? "z.object({})" : `z.object({ ${fields.join(", ")} })`;
-      return `${object}.strict()`;
+      return node[LOOSE] === true ? `${object}.catchall(z.unknown())` : `${object}.strict()`;
     }
     case "array":
       return `z.array(${emitZod(node.items, override)})`;
     case "integer":
     case "number": {
-      // schemars' integer-width formats: `integer` is already .int(); the
-      // int64 format on a plain number carries the same integer claim.
-      // Other formats (uint64, double, ...) add nothing beyond the type and
-      // the explicit bounds.
+      // schemars' integer-width formats: `integer` is already .int(); the int64 format on a plain number carries
+      // the same integer claim. Other formats (uint64, double, ...) add nothing beyond the type and the explicit
+      // bounds. z.number().int() is a JS-safe integer, the safe-integers rule of the asymmetry table.
       let out =
         node.type === "integer" || node.format === "int64" ? "z.number().int()" : "z.number()";
       if (typeof node.minimum === "number") out += `.gte(${JSON.stringify(node.minimum)})`;
       if (typeof node.maximum === "number") out += `.lte(${JSON.stringify(node.maximum)})`;
       return out;
     }
-    case "string":
-      return "z.string()";
+    case "string": {
+      let out = "z.string()";
+      if (typeof node.minLength === "number") out += `.min(${node.minLength})`;
+      if (typeof node.maxLength === "number") out += `.max(${node.maxLength})`;
+      if (typeof node.pattern === "string")
+        out += `.regex(/${node.pattern.replaceAll("/", "\\/")}/)`;
+      return out;
+    }
     case "boolean":
       return "z.boolean()";
     case "null":
       return "z.null()";
     case undefined: {
-      // The only typeless survivor of prepare is the empty any-schema.
+      // The only typeless survivor of prepare is the empty any-schema: unknown, not any, so a consumer must
+      // narrow the payload before using it (same instance set).
       if (Object.keys(node).length > 0) {
-        throw new Error(
-          `gen-envelope: emitter reached an unprepared node: ${JSON.stringify(node)}`,
-        );
+        throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
       }
-      return "z.any()";
+      return "z.unknown()";
     }
     default:
-      throw new Error(`gen-envelope: emitter has no form for type ${JSON.stringify(node.type)}`);
+      throw new Error(`gen-envelope: emitter has no form for type ${show(node.type)}`);
   }
 }
 
@@ -378,8 +631,8 @@ function count(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
-// Emit one prepared schema as Zod source, then re-assert G1 on the OUTPUT:
-// every emitted z.object( must be closed by a .strict().
+// Emit one prepared schema as Zod source, then re-assert G1 on the OUTPUT: every emitted z.object( must be
+// closed by a .strict() or, under the loose-frames rule, by .catchall(z.unknown()).
 export function convert(
   schema: unknown,
   name: string,
@@ -387,48 +640,63 @@ export function convert(
 ): string {
   const code = emitZod(schema, parserOverride);
   const objects = count(code, "z.object(");
-  const stricts = count(code, ".strict()");
-  if (objects !== stricts) {
+  const closed = count(code, ".strict()") + count(code, ".catchall(z.unknown())");
+  if (objects !== closed) {
     throw new Error(
-      `gen-envelope: ${name}: emitted ${objects} z.object( but ${stricts} .strict() (G1)`,
+      `gen-envelope: ${name}: emitted ${objects} z.object( but ${closed} strict/loose closings (G1)`,
     );
   }
   return code;
 }
 
-// The control-frame groups, keyed by the emit_envelope_schema output field
-// that carries each Rust enum (EnclaveControl / AdminControl / PolicyControl).
-const GROUPS = ["enclave", "admin", "policy"] as const;
-type Group = (typeof GROUPS)[number];
+// ---- the frame plan (G7) ---------------------------------------------------------
 
-// The host->extension frames the extension validates, and the export name of
-// each generated base schema. enclave_revoked is a bare classification tag
-// with no per-frame validator; it stays covered by
-// scripts/check-envelope-parity.ts, which also cross-checks this map against
-// its FRAME_PLANS via GENERATED_WIRE_FRAMES.
-const GENERATED_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
+// The control-frame groups, keyed by the emit_envelope_schema output field that carries each Rust enum
+// (EnclaveControl / AdminControl / PolicyControl).
+export const GROUPS = ["enclave", "admin", "policy"] as const;
+export type Group = (typeof GROUPS)[number];
+
+/** The host->extension frames the extension validates: the export names of the faithful base and of the
+ * enforced validator (the base plus the asymmetry table). The enforced validator's type is exported under the
+ * enforced name minus `Schema`. */
+export const READER_FRAMES: Record<
+  Group,
+  Readonly<Record<string, { wire: string; enforced: string }>>
+> = {
   enclave: {
-    enclave_proof: "EnclaveProofWireSchema",
-    enclave_error: "EnclaveErrorWireSchema",
-    presence_proof: "PresenceProofWireSchema",
-    presence_error: "PresenceErrorWireSchema",
+    enclave_proof: { wire: "EnclaveProofWireSchema", enforced: "EnclaveProofFrameSchema" },
+    enclave_error: { wire: "EnclaveErrorWireSchema", enforced: "EnclaveErrorFrameSchema" },
+    presence_proof: { wire: "PresenceProofWireSchema", enforced: "PresenceProofFrameSchema" },
+    presence_error: { wire: "PresenceErrorWireSchema", enforced: "PresenceErrorFrameSchema" },
   },
   admin: {
-    client_list_result: "ClientListResultWireSchema",
-    client_revoke_result: "ClientRevokeResultWireSchema",
-    kill_status_result: "KillStatusResultWireSchema",
+    client_list_result: { wire: "ClientListResultWireSchema", enforced: "ClientListResultSchema" },
+    client_revoke_result: {
+      wire: "ClientRevokeResultWireSchema",
+      enforced: "ClientRevokeResultSchema",
+    },
+    kill_status_result: { wire: "KillStatusResultWireSchema", enforced: "KillStatusResultSchema" },
   },
   policy: {
-    policy_current: "PolicyCurrentWireSchema",
-    lang_current: "LangCurrentWireSchema",
+    // The enforced policy_current validator is the generated shape plus the hand-written ok-split
+    // refinement in enclave.ts (PolicyCurrentFrameSchema), pinned by scripts/check-envelope.ts.
+    policy_current: { wire: "PolicyCurrentWireSchema", enforced: "PolicyCurrentFrameShapeSchema" },
+    lang_current: { wire: "LangCurrentWireSchema", enforced: "LangCurrentFrameSchema" },
   },
 };
 
-// The extension->host frames the extension CONSTRUCTS; the Rust serde parser is the enforcing reader, so these
-// exist only for their inferred types, and every constructor site claims conformance with `satisfies` (a drifted
-// field or typo'd tag fails to compile instead of being refused by the host at runtime).
-// scripts/check-envelope-parity.ts cross-checks this map against its "rust-parsed" plans via GENERATED_WRITER_FRAMES.
-const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
+/** Host->extension frames with no fields beyond the tag: classified by tag alone, no validator; generation
+ * refuses one that grows a field until a reader is planned for it. */
+export const BARE_TAG_FRAMES: Record<Group, readonly string[]> = {
+  enclave: ["enclave_revoked"],
+  admin: [],
+  policy: [],
+};
+
+/** The extension->host frames the extension CONSTRUCTS; the Rust serde parser is the enforcing reader, so these
+ * exist only for their inferred types, and every constructor site claims conformance with `satisfies` (a drifted
+ * field or typo'd tag fails to compile instead of being refused by the host at runtime). */
+export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   enclave: {
     enclave_challenge: "EnclaveChallengeWireSchema",
     enclave_revoke: "EnclaveRevokeWireSchema",
@@ -449,11 +717,96 @@ const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   },
 };
 
-function main(): void {
+/** G7: every Rust variant planned exactly once, every planned tag a Rust variant, every bare tag fieldless. */
+export function assertFramePlan(group: Group, variants: Map<string, unknown>): void {
+  const planned = new Map<string, string>();
+  const plan = (tag: string, how: string) => {
+    const prior = planned.get(tag);
+    if (prior !== undefined) {
+      throw new Error(
+        `gen-envelope: ${group} frame ${tag} is planned as both ${prior} and ${how} (G7)`,
+      );
+    }
+    planned.set(tag, how);
+  };
+  for (const tag of Object.keys(READER_FRAMES[group])) plan(tag, "a reader");
+  for (const tag of BARE_TAG_FRAMES[group]) plan(tag, "a bare tag");
+  for (const tag of Object.keys(WRITER_FRAMES[group])) plan(tag, "a writer");
+  for (const tag of variants.keys()) {
+    if (!planned.has(tag)) {
+      throw new Error(`gen-envelope: the Rust ${group} enum has an unplanned frame ${tag} (G7)`);
+    }
+  }
+  for (const [tag, how] of planned) {
+    const variant = variants.get(tag);
+    if (variant === undefined) {
+      throw new Error(
+        `gen-envelope: ${tag} is planned as ${how} but the Rust ${group} enum has no such frame (G7)`,
+      );
+    }
+    if (how === "a bare tag") {
+      const keys =
+        isObject(variant) && isObject(variant.properties) ? Object.keys(variant.properties) : [];
+      const fields = keys.filter((key) => key !== "type");
+      if (fields.length > 0 || !keys.includes("type")) {
+        throw new Error(`gen-envelope: bare tag ${tag} carries fields ${fields.join(", ")} (G7)`);
+      }
+    }
+  }
+}
+
+// ---- A2: the generated-schema cross-check -------------------------------------------
+
+const nonNullType = (node: unknown): string | undefined => {
+  if (!isObject(node)) return undefined;
+  const types = Array.isArray(node.type) ? node.type : [node.type];
+  return types.filter((t) => t !== "null" && t !== undefined).join("|") || undefined;
+};
+
+/** Hold a generated schema to the Rust object node it replaces: same field names, same base type per field
+ * (the null arm aside; the asymmetry table owns that), and strict where the Rust node refuses unknown fields
+ * (the loose-frames rule never reaches a replaced node, so a loose replacement would be a silent widening).
+ * Skipped for the any-schema (nothing to hold). */
+export function assertGeneratedMatches(
+  replacement: GeneratedReplacement,
+  generated: z.ZodType,
+): void {
+  const rust = replacement.rust;
+  if (!isObject(rust) || !isObject(rust.properties)) return;
+  const derived = z.toJSONSchema(generated) as JsonObject;
+  const derivedProps = isObject(derived.properties) ? derived.properties : {};
+  if (rust.additionalProperties === false && derived.additionalProperties !== false) {
+    throw new Error(
+      `gen-envelope: ${replacement.path}: ${replacement.symbol} admits unknown fields where the Rust node ` +
+        "refuses them (A2)",
+    );
+  }
+  const rustKeys = Object.keys(rust.properties).sort();
+  const derivedKeys = Object.keys(derivedProps).sort();
+  if (rustKeys.join() !== derivedKeys.join()) {
+    throw new Error(
+      `gen-envelope: ${replacement.path}: ${replacement.symbol} has fields [${derivedKeys.join(", ")}] ` +
+        `but the Rust node has [${rustKeys.join(", ")}] (A2)`,
+    );
+  }
+  for (const key of rustKeys) {
+    const want = nonNullType(rust.properties[key]);
+    const got = nonNullType(derivedProps[key]);
+    if (want !== got) {
+      throw new Error(
+        `gen-envelope: ${replacement.path}.${key}: ${replacement.symbol} says ${got} but the Rust node ` +
+          `says ${want} (A2)`,
+      );
+    }
+  }
+}
+
+// ---- main ----------------------------------------------------------------------------
+
+async function main(): Promise<void> {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-  // The Rust core is the source: run its envelope-schema emitter (same
-  // invocation as scripts/check-envelope-parity.ts).
+  // The Rust core is the source: run its envelope-schema emitter.
   const emitted = Bun.spawnSync(
     [
       "cargo",
@@ -484,83 +837,149 @@ function main(): void {
     admin: splitTaggedUnionSchema(fromRust.admin),
     policy: splitTaggedUnionSchema(fromRust.policy),
   };
+  for (const group of GROUPS) assertFramePlan(group, variants[group]);
 
   function preparedFrame(group: Group, tag: string): unknown {
-    const variant = variants[group].get(tag);
-    if (variant === undefined) {
-      throw new Error(`gen-envelope: the Rust ${group} enum has no ${tag} frame`);
-    }
-    return prepare(variant, `$.${group}.${tag}`);
+    return prepare(variants[group].get(tag), `$.${group}.${tag}`);
   }
 
-  const pieces: string[] = [];
+  const imports = new Map<string, Set<string>>();
+  const replacements: GeneratedReplacement[] = [];
+  function enforced(kind: string, prepared: unknown, loose: boolean): unknown {
+    const pass = applyAsymmetries(prepared, kind, ASYMMETRIES[kind] ?? {}, loose);
+    for (const r of pass.replacements) {
+      replacements.push(r);
+      const symbols = imports.get(r.from) ?? new Set<string>();
+      symbols.add(r.symbol);
+      imports.set(r.from, symbols);
+    }
+    return pass.schema;
+  }
+  const kindsWithEntries = new Set(Object.keys(ASYMMETRIES));
 
-  // G6: the typed command is split off; its per-op args schemas reach the
-  // extension through scripts/gen-ops.ts (the emit_contract route), so only
-  // the envelope is emitted here.
-  const request = splitFlattenedCommand(fromRust.request, "$.request").envelope;
+  const pieces: string[] = [];
+  const typeOf = (schemaName: string) => schemaName.replace(/Schema$/, "");
+
+  // G6: the typed command is split off; its per-op args schemas reach the extension through scripts/gen-ops.ts.
+  const request = prepare(
+    splitFlattenedCommand(fromRust.request, "$.request").envelope,
+    "$.request",
+  );
+  const response = prepare(fromRust.response, "$.response");
+  kindsWithEntries.delete("request");
+  kindsWithEntries.delete("response");
 
   pieces.push(
-    "// The request envelope (BridgeReq) and the response envelope (BridgeResp).",
-    `export const BridgeReqWireSchema = ${convert(prepare(request, "$.request"), "BridgeReqWireSchema")};`,
+    "// The request envelope (BridgeReq) and the response envelope (BridgeResp): the faithful bases, then the",
+    "// enforced validators the extension runs (the base plus the asymmetry table; strict like the host).",
+    `export const BridgeReqWireSchema = ${convert(request, "BridgeReqWireSchema")};`,
     "",
-    `export const BridgeRespWireSchema = ${convert(prepare(fromRust.response, "$.response"), "BridgeRespWireSchema")};`,
+    `export const BridgeRespWireSchema = ${convert(response, "BridgeRespWireSchema")};`,
+    "",
+    `export const BridgeReqSchema = ${convert(enforced("request", request, false), "BridgeReqSchema")};`,
+    "",
+    "export type BridgeReqEnvelope = z.infer<typeof BridgeReqSchema>;",
+    "",
+    `export const BridgeRespSchema = ${convert(enforced("response", response, false), "BridgeRespSchema")};`,
+    "",
+    "export type BridgeResp = z.infer<typeof BridgeRespSchema>;",
     "",
   );
 
-  // One trusted-client entry (allowlist::ClientEntry), extracted from
-  // client_list_result's `clients` items and emitted as its own export so the
-  // asymmetry layer can extend it; the embedding schema below references it by
-  // name (the parserOverride substitutes the identical node).
+  // One trusted-client entry (allowlist::ClientEntry), extracted from client_list_result's `clients` items and
+  // emitted as its own export (base and enforced); the embedding schemas reference it by name (the override
+  // substitutes the identical node).
   const clientListResult = preparedFrame("admin", "client_list_result");
-  const clientEntry = (() => {
-    if (isObject(clientListResult) && isObject(clientListResult.properties)) {
-      const clients = clientListResult.properties.clients;
+  const clientsItems = (schema: unknown): unknown => {
+    if (isObject(schema) && isObject(schema.properties)) {
+      const clients = schema.properties.clients;
       if (isObject(clients) && clients.items !== undefined) return clients.items;
     }
     throw new Error("gen-envelope: client_list_result no longer embeds a clients items schema");
-  })();
+  };
+  const clientEntry = clientsItems(clientListResult);
+  const clientListResultEnforced = enforced("client_list_result", clientListResult, true);
+  const trustedClient = clientsItems(clientListResultEnforced);
 
   pieces.push(
-    "// One trusted-client entry (allowlist::ClientEntry), embedded in",
-    "// client_list_result's `clients` array.",
+    "// One trusted-client entry (allowlist::ClientEntry), embedded in client_list_result's `clients` array.",
     `export const ClientEntryWireSchema = ${convert(clientEntry, "ClientEntryWireSchema")};`,
+    "",
+    `export const TrustedClientSchema = ${convert(trustedClient, "TrustedClientSchema")};`,
+    "",
+    "export type TrustedClient = z.infer<typeof TrustedClientSchema>;",
     "",
   );
 
-  pieces.push("// The host->extension control frames (ADR-0021/0025/0030/0031/0032).");
+  pieces.push(
+    "// The host->extension control frames: the faithful base, then the enforced reader (the base plus the",
+    "// asymmetry table, read loose under its loose-frames rule).",
+  );
   for (const group of GROUPS) {
-    for (const [tag, name] of Object.entries(GENERATED_FRAMES[group])) {
-      const schema = tag === "client_list_result" ? clientListResult : preparedFrame(group, tag);
-      const code = convert(schema, name, (node) =>
-        node === clientEntry ? "ClientEntryWireSchema" : undefined,
+    for (const [tag, names] of Object.entries(READER_FRAMES[group])) {
+      kindsWithEntries.delete(tag);
+      const base = tag === "client_list_result" ? clientListResult : preparedFrame(group, tag);
+      const reader =
+        tag === "client_list_result" ? clientListResultEnforced : enforced(tag, base, true);
+      pieces.push(
+        `export const ${names.wire} = ${convert(base, names.wire, (node) =>
+          node === clientEntry ? "ClientEntryWireSchema" : undefined,
+        )};`,
+        "",
+        `export const ${names.enforced} = ${convert(reader, names.enforced, (node) =>
+          node === trustedClient ? "TrustedClientSchema" : undefined,
+        )};`,
+        "",
+        `export type ${typeOf(names.enforced)} = z.infer<typeof ${names.enforced}>;`,
+        "",
       );
-      pieces.push(`export const ${name} = ${code};`, "");
     }
   }
+  if (kindsWithEntries.size > 0) {
+    throw new Error(
+      `gen-envelope: the asymmetry table names frames with no generated reader: ` +
+        `${[...kindsWithEntries].join(", ")} (A1)`,
+    );
+  }
 
-  const manifest = (group: Group) =>
-    Object.keys(GENERATED_FRAMES[group])
-      .map((tag) => JSON.stringify(tag))
-      .join(", ");
+  // A2: every generated-schema replacement against the module it names (imported from the generated tree
+  // gen-ops.ts wrote just before this script runs).
+  for (const replacement of replacements) {
+    const module = (await import(
+      join(root, "src/packages/shared/src", replacement.from)
+    )) as Record<string, unknown>;
+    const generated = module[replacement.symbol];
+    if (!(generated instanceof z.ZodType)) {
+      throw new Error(
+        `gen-envelope: ${replacement.from} exports no Zod schema named ${replacement.symbol} (A2)`,
+      );
+    }
+    assertGeneratedMatches(replacement, generated);
+  }
+
+  const manifest = (table: Record<Group, Readonly<Record<string, unknown>> | readonly string[]>) =>
+    GROUPS.map((group) => {
+      const tags = Array.isArray(table[group]) ? table[group] : Object.keys(table[group]);
+      return `  ${group}: [${(tags as string[]).map((tag) => JSON.stringify(tag)).join(", ")}],`;
+    });
 
   pieces.push(
-    "// Which control-frame tags have a generated base schema above.",
-    "// scripts/check-envelope-parity.ts cross-checks this against its per-frame",
-    "// coverage plan, so a frame cannot silently drop out of generation.",
+    "// Which control-frame tags have a generated reader above, and which are bare classification tags.",
+    "// scripts/check-envelope.ts holds the extension's inbound classifiers to these.",
     "export const GENERATED_WIRE_FRAMES = {",
-    `  enclave: [${manifest("enclave")}],`,
-    `  admin: [${manifest("admin")}],`,
-    `  policy: [${manifest("policy")}],`,
+    ...manifest(READER_FRAMES),
+    "} as const;",
+    "",
+    "export const BARE_TAG_FRAMES = {",
+    ...manifest(BARE_TAG_FRAMES),
     "} as const;",
     "",
   );
 
   pieces.push(
-    "// The extension->host writer frames (the extension constructs these; the",
-    "// enforcing reader is the Rust serde parser). Emitted for their inferred",
-    "// types: constructor sites claim conformance with `satisfies`, so a",
-    "// drifted field or tag is a compile error. Never used as runtime parsers.",
+    "// The extension->host writer frames (the extension constructs these; the enforcing reader is the Rust",
+    "// serde parser). Emitted for their inferred types: constructor sites claim conformance with `satisfies`,",
+    "// so a drifted field or tag is a compile error. Never used as runtime parsers.",
   );
   for (const group of GROUPS) {
     for (const [tag, name] of Object.entries(WRITER_FRAMES[group])) {
@@ -568,52 +987,44 @@ function main(): void {
       pieces.push(
         `export const ${name} = ${code};`,
         "",
-        `export type ${name.replace(/Schema$/, "")} = z.infer<typeof ${name}>;`,
+        `export type ${typeOf(name)} = z.infer<typeof ${name}>;`,
         "",
       );
     }
   }
 
-  const writerManifest = (group: Group) =>
-    Object.keys(WRITER_FRAMES[group])
-      .map((tag) => JSON.stringify(tag))
-      .join(", ");
-
   pieces.push(
     "// Which extension->host frames have a generated writer schema above.",
-    "// scripts/check-envelope-parity.ts cross-checks this against its",
-    '// "rust-parsed" plans, so a writer frame cannot silently drop out of',
-    "// generation either.",
     "export const GENERATED_WRITER_FRAMES = {",
-    `  enclave: [${writerManifest("enclave")}],`,
-    `  admin: [${writerManifest("admin")}],`,
-    `  policy: [${writerManifest("policy")}],`,
+    ...manifest(WRITER_FRAMES),
     "} as const;",
   );
 
+  const importLines = [...imports.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([from, symbols]) => `import { ${[...symbols].sort().join(", ")} } from "${from}";`);
+
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
-// protocol/control.rs;
-// AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
-// policy::PolicyOverlay) by scripts/gen-envelope.ts -
-// DO NOT EDIT. Edit the Rust types, then run \`moon run gen\`.
+// protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
+// policy::PolicyOverlay) by scripts/gen-envelope.ts - DO NOT EDIT. Edit the Rust types or
+// src/packages/shared/src/envelope-asymmetries.ts, then run \`moon run gen\`.
 //
-// The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
-// .strict()), required fields required, no defaults (see the fail-closed
-// generation rules G1-G6 in scripts/gen-envelope.ts). The extension never
-// runs the host->extension bases directly: envelope.ts and enclave.ts layer
-// the deliberate parser asymmetries on top - each pinned by
-// scripts/check-envelope-parity.ts (\`moon run check-envelope\`) and exercised
-// in tests/envelope-wire.gen.test.ts. The extension->host writer schemas
-// below exist for their inferred types only (constructor-site \`satisfies\`);
-// the enforcing reader for those frames is the Rust serde parser.
+// Per envelope and per host->extension control frame: the FAITHFUL base (*WireSchema: strict objects,
+// required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts) and the ENFORCED validator
+// the extension runs, which is the base plus exactly the asymmetry table (direction and reason per entry in
+// envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts, \`moon run check-envelope\`). The
+// policy_current reader is completed by the ok-split refinement in enclave.ts. The extension->host writer
+// schemas exist for their inferred types only (constructor-site \`satisfies\`); the enforcing reader for those
+// frames is the Rust serde parser.
 
 import { z } from "zod";
+${importLines.join("\n")}
 
 ${pieces.join("\n")}
 `;
 
-  writeFileSync(join(root, "src/packages/shared/src/envelope-wire.gen.ts"), out);
-  console.log("generated src/packages/shared/src/envelope-wire.gen.ts from the Rust wire types");
+  writeFileSync(join(root, "src/packages/shared/src/envelope.gen.ts"), out);
+  console.log("generated src/packages/shared/src/envelope.gen.ts from the Rust wire types");
 }
 
-if (import.meta.main) main();
+if (import.meta.main) await main();

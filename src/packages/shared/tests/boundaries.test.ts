@@ -3,12 +3,8 @@
 // records must all be refused or degraded, never interpreted.
 
 import { describe, expect, test } from "bun:test";
-import {
-  CompromisedMarkSchema,
-  EnclaveInboundFrameSchema,
-  EnclavePinSchema,
-  EnclaveProofFrameSchema,
-} from "../src/enclave";
+import { CompromisedMarkSchema, EnclaveInboundFrameSchema, EnclavePinSchema } from "../src/enclave";
+import { EnclaveProofFrameSchema } from "../src/envelope.gen";
 import { RuntimeMsgSchema } from "../src/runtime-msg";
 import { AllowlistSchema, PendingApprovalsSchema } from "../src/storage";
 
