@@ -1,164 +1,75 @@
-//! MCP tool definitions and their handlers.
-//!
-//! Each tool has:
-//!   - a `name` and human-readable `description` (shown to the model),
-//!   - an `inputSchema` (JSON Schema describing arguments),
-//!   - a handler that converts the arguments into a `BridgeReq` op + args
-//!     and calls the session.
-//!
-//! The extension side (background.js / content.js) recognizes the same `op`
-//! strings - keep them in sync when editing.
-//!
-//! This module is split across:
-//!   - [`catalogue`] - the [`Tool`] struct, [`all`] catalogue, and `schema` helper,
-//!   - [`capabilities`] - the negotiable capability groupings over the catalogue,
-//!   - [`handlers`] - the per-op `build_*` payload fns and arg helpers,
-//!   - this root - [`dispatch`], [`Outcome`], and the `Handler`/`HANDLERS` registry.
+//! The tool surface: the catalogue (`catalogue.rs`), the typed arguments
+//! ([`args`]), the capability groupings (`capabilities.rs`), and the two
+//! operations the MCP layer runs on them, [`ToolCall::parse`] at the request
+//! boundary and [`dispatch`] after the gates.
 
-pub mod capabilities;
+pub mod args;
+mod capabilities;
 mod catalogue;
-mod handlers;
 
 use serde_json::{json, Value};
 
 use crate::error::CallError;
 use crate::session::Session;
 
-pub use capabilities::{Capability, CAPABILITIES};
-pub use catalogue::{all, Confirmation, Permission, Risk, Scope, Tool};
-pub use handlers::DEFAULT_WAIT_TIMEOUT_MS;
-
-use handlers::{
-    build_console_get, build_cookie_get, build_empty, build_page_click, build_page_eval,
-    build_page_fill, build_page_handle_dialog, build_page_hover, build_page_navigate,
-    build_page_press, build_page_scroll, build_page_select, build_page_snapshot_precise,
-    build_page_upload, build_page_wait_for, build_storage_get, build_tab_close, build_tab_focus,
-    build_tab_open, call,
+pub use capabilities::{capabilities, Capability, CapabilityId};
+pub use catalogue::{
+    all, BridgeCommand, Confirmation, Dispatch, Permission, ResultKind, Risk, Scope, Tool, ToolId,
 };
 
-/// A registered tool handler. The bridge `op` name equals the tool `name`;
-/// `build_payload` parses the (schema-shaped) MCP args into the op's argument
-/// object - fallibly, so a missing or mistyped required argument is a typed
-/// `INVALID_ARGUMENT` refusal instead of a fabricated default riding to the
-/// extension. Responses are formatted centrally in [`dispatch`]. `HANDLERS` is
-/// the single dispatch registry - `registry_covers_catalogue` (tests) asserts
-/// it stays in lockstep with [`all`], so a new tool can't be added to the
-/// catalogue without a handler (or vice versa).
-struct Handler {
-    name: &'static str,
-    build_payload: fn(&Value) -> Result<Value, CallError>,
+/// One MCP `tools/call`, parsed: the typed command the bridge will carry and
+/// the `browser` routing argument the server consumes. The only way to build
+/// one is [`ToolCall::parse`], so a command reaching [`dispatch`] is already
+/// a catalogue tool with schema-valid arguments, and a server-local call
+/// never carries a browser.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    command: BridgeCommand,
+    browser: Option<String>,
 }
 
-const HANDLERS: &[Handler] = &[
-    Handler {
-        name: "list_browsers",
-        // Answered by the MCP server itself (see `list_browsers` below), so
-        // the built payload is never sent anywhere - but dispatch still runs
-        // this builder to validate the arguments (the object-root chokepoint),
-        // and the registry/catalogue parity test keeps covering the entry.
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "tab_list",
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "tab_focus",
-        build_payload: build_tab_focus,
-    },
-    Handler {
-        name: "tab_open",
-        build_payload: build_tab_open,
-    },
-    Handler {
-        name: "tab_close",
-        build_payload: build_tab_close,
-    },
-    Handler {
-        name: "page_snapshot",
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "page_click",
-        build_payload: build_page_click,
-    },
-    Handler {
-        name: "page_fill",
-        build_payload: build_page_fill,
-    },
-    Handler {
-        name: "page_text",
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "page_screenshot",
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "page_scroll",
-        build_payload: build_page_scroll,
-    },
-    Handler {
-        name: "page_wait_for",
-        build_payload: build_page_wait_for,
-    },
-    Handler {
-        name: "page_eval",
-        build_payload: build_page_eval,
-    },
-    Handler {
-        name: "page_snapshot_precise",
-        build_payload: build_page_snapshot_precise,
-    },
-    Handler {
-        name: "cookie_get",
-        build_payload: build_cookie_get,
-    },
-    Handler {
-        name: "storage_get",
-        build_payload: build_storage_get,
-    },
-    Handler {
-        name: "page_navigate",
-        build_payload: build_page_navigate,
-    },
-    Handler {
-        name: "page_back",
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "page_forward",
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "page_reload",
-        build_payload: build_empty,
-    },
-    Handler {
-        name: "page_press",
-        build_payload: build_page_press,
-    },
-    Handler {
-        name: "page_hover",
-        build_payload: build_page_hover,
-    },
-    Handler {
-        name: "page_select",
-        build_payload: build_page_select,
-    },
-    Handler {
-        name: "console_get",
-        build_payload: build_console_get,
-    },
-    Handler {
-        name: "page_handle_dialog",
-        build_payload: build_page_handle_dialog,
-    },
-    Handler {
-        name: "page_upload",
-        build_payload: build_page_upload,
-    },
-];
+impl ToolCall {
+    /// The record of the tool this call invokes.
+    pub fn tool(&self) -> Tool {
+        self.command.id().tool()
+    }
+
+    /// The addressed browser label; `None` when unaddressed, and always for a
+    /// server-local tool, which takes no routing argument.
+    pub fn browser(&self) -> Option<&str> {
+        self.browser.as_deref()
+    }
+
+    /// Parse one tool call at the MCP boundary, fail closed: an unknown tool,
+    /// a malformed `browser`, and an args object outside the tool's struct
+    /// (missing, mistyped, null, or unknown fields) are each a typed
+    /// `INVALID_ARGUMENT` refusal before any routing or bridge traffic.
+    ///
+    /// ```text
+    /// browser absent or null  -> unaddressed (how some clients serialize an unset optional)
+    /// browser a string        -> that label, removed from the args before the struct parse
+    /// browser anything else   -> refused: with one browser connected, a silently dropped target
+    ///                            would still route the call somewhere
+    /// server-local tool       -> `browser` is not peeled off, so its struct refuses it like any
+    ///                            other field it does not declare
+    /// ```
+    pub fn parse(name: &str, mut args: serde_json::Map<String, Value>) -> Result<Self, CallError> {
+        let id = ToolId::from_name(name).ok_or_else(|| CallError::UnknownTool(name.to_string()))?;
+        let tool = id.tool();
+        let browser = match tool.dispatch {
+            Dispatch::ServerLocal(_) => None,
+            Dispatch::Bridge { .. } => match args.remove("browser") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(label)) => Some(label),
+                Some(other) => return Err(CallError::InvalidBrowserArg(other.to_string())),
+            },
+        };
+        let command = id
+            .parse_args(Value::Object(args))
+            .map_err(|e| CallError::InvalidArgument(format!("{name}: {e}")))?;
+        Ok(ToolCall { command, browser })
+    }
+}
 
 /// The result of dispatching one tool call: exactly success-with-content or
 /// error-with-content-and-code. The taxonomy code travels only on the error
@@ -198,54 +109,45 @@ impl Outcome {
     }
 }
 
-/// Dispatch a tool call into the MCP result `content` array and the isError flag; errors are tool-level, never
-/// RPC-level. `browser` is the routing argument [`crate::mcp::handler`] already parsed once via [`extract_browser`],
-/// so no layer re-reads the raw value under different rules; it is consumed here and never forwarded in the op's own
-/// args.
-///
-/// ```text
-/// list_browsers -> answered from the connection registry, but its arguments still pass its registered builder, so
-///                  the server-local branch enforces the same object-root chokepoint as every bridge tool
-/// ```
-pub fn dispatch(session: &Session, name: &str, args: &Value, browser: Option<&str>) -> Outcome {
-    let result = match HANDLERS.iter().find(|h| h.name == name) {
-        Some(h) => (h.build_payload)(args).and_then(|payload| {
-            if name == "list_browsers" {
-                list_browsers(session)
-            } else {
-                call(session, name, None, payload, browser)
-            }
-        }),
-        None => Err(CallError::UnknownTool(name.to_string())),
+/// Run a parsed tool call and shape its result into the MCP content blocks
+/// and the isError flag; errors are tool-level, never RPC-level. The record's
+/// [`Dispatch`] decides where the call runs and how its data is rendered.
+pub fn dispatch(session: &Session, call: ToolCall) -> Outcome {
+    let tool = call.tool();
+    let ToolCall { command, browser } = call;
+    let result = match tool.dispatch {
+        Dispatch::ServerLocal(handler) => handler(session),
+        Dispatch::Bridge { .. } => session.call(command, browser.as_deref()),
     };
-
-    match result {
-        Ok(data) => {
-            // Screenshots come back as base64 PNG; expose as an image content
-            // block so the model sees the picture directly.
-            if name == "page_screenshot" {
-                if let Some(png_b64) = data.get("image").and_then(|v| v.as_str()) {
-                    return Outcome::Success {
-                        content: json!([{
-                            "type": "image",
-                            "data": png_b64,
-                            "mimeType": "image/png"
-                        }]),
-                    };
-                }
-            }
-            Outcome::Success {
-                content: json!([{ "type": "text", "text": data.to_string() }]),
-            }
+    let data = match result {
+        Ok(data) => data,
+        Err(e) => return error_outcome(&e),
+    };
+    let content = match tool.dispatch {
+        Dispatch::Bridge {
+            result: ResultKind::Image,
+            ..
+        } => match data.get("image").and_then(Value::as_str) {
+            Some(png_b64) => json!([{
+                "type": "image",
+                "data": png_b64,
+                "mimeType": "image/png"
+            }]),
+            None => json!([{ "type": "text", "text": data.to_string() }]),
+        },
+        Dispatch::Bridge {
+            result: ResultKind::Text,
+            ..
         }
-        Err(e) => error_outcome(&e),
-    }
+        | Dispatch::ServerLocal(_) => json!([{ "type": "text", "text": data.to_string() }]),
+    };
+    Outcome::Success { content }
 }
 
 /// The [`Outcome`] for a tool-level error: the stable taxonomy code prefixed
 /// to the human-readable text, `isError` set. Shared by [`dispatch`] and the
-/// pre-dispatch gates (the kill switch, ADR-0030; the `browser` argument
-/// parse) so every refusal reaches the model in one shape.
+/// pre-dispatch gates (the kill switch, the policy gate, the call parse) so
+/// every refusal reaches the model in one shape.
 pub(crate) fn error_outcome(e: &CallError) -> Outcome {
     // Prefix the stable cross-process code (error::ERROR_SPECS) so
     // clients can branch programmatically, while the text stays
@@ -253,20 +155,6 @@ pub(crate) fn error_outcome(e: &CallError) -> Outcome {
     Outcome::Error {
         content: json!([{ "type": "text", "text": format!("Error [{}]: {e}", e.code()) }]),
         code: e.code(),
-    }
-}
-
-/// Extract the `browser` routing argument. Absent and JSON `null` (how some
-/// clients serialize an unset optional) both mean "unaddressed"; any other
-/// non-string shape is rejected, because with a single browser connected a
-/// silently-dropped malformed target would still route the call somewhere.
-/// The ONE parse of this value: the MCP tool executor calls it once and both
-/// the audit route and [`dispatch`] consume the same result.
-pub(crate) fn extract_browser(args: &Value) -> Result<Option<&str>, CallError> {
-    match args.get("browser") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(CallError::InvalidBrowserArg(other.to_string())),
     }
 }
 
@@ -285,9 +173,7 @@ fn list_browsers(session: &Session) -> Result<Value, CallError> {
         .into_iter()
         .map(|label| {
             match session.try_call(
-                "tab_list",
-                None,
-                json!({}),
+                BridgeCommand::TabList(args::NoArgs {}),
                 Some(&label),
                 std::time::Duration::from_secs(5),
             ) {
@@ -307,116 +193,57 @@ fn list_browsers(session: &Session) -> Result<Value, CallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Map;
 
-    // The dispatch registry must stay in lockstep with the catalogue: every
-    // tool has exactly one handler and every handler names a real tool. This
-    // closes the only drift the catalogue tests can't see.
-    #[test]
-    fn registry_covers_catalogue() {
-        use std::collections::BTreeSet;
-        let catalogue: BTreeSet<&str> = all().iter().map(|t| t.name).collect();
-        let registry: BTreeSet<&str> = HANDLERS.iter().map(|h| h.name).collect();
-        assert_eq!(
-            catalogue, registry,
-            "every tool needs exactly one dispatch handler (and vice versa)"
-        );
-        assert_eq!(HANDLERS.len(), catalogue.len(), "duplicate handler name");
+    fn object(v: Value) -> Map<String, Value> {
+        serde_json::from_value(v).unwrap()
     }
 
-    // Arg-shaping is pure, so verify the non-trivial builders here rather than
-    // relying solely on the browser e2e (which the catalogue tests never cover).
+    // The bridge payload is the args struct serialized through: optional
+    // fields stay off the wire when absent, the one host-filled default
+    // (page_wait_for's timeoutMs) is always present, and the `browser`
+    // routing key never rides inside args. The extension's handlers read
+    // exactly these shapes.
     #[test]
-    fn build_payload_shapes() {
-        let build = |name: &str, args: Value| -> Value {
-            let h = HANDLERS.iter().find(|h| h.name == name).unwrap();
-            (h.build_payload)(&args).unwrap()
+    fn the_bridge_payload_is_the_struct_serialized_through() {
+        let payload = |name: &str, args: Value| -> Value {
+            let call = ToolCall::parse(name, object(args)).unwrap();
+            serde_json::to_value(&call.command).unwrap()["args"].clone()
         };
-        // page_fill merges ref/selector with the value.
         assert_eq!(
-            build("page_fill", json!({ "ref": "e5", "value": "hi" })),
+            payload("page_fill", json!({ "ref": "e5", "value": "hi" })),
             json!({ "ref": "e5", "value": "hi" })
         );
-        // page_wait_for defaults timeoutMs and passes selector through.
         assert_eq!(
-            build("page_wait_for", json!({ "selector": "#x" })),
-            json!({ "selector": "#x", "timeoutMs": DEFAULT_WAIT_TIMEOUT_MS })
+            payload("page_wait_for", json!({ "selector": "#x" })),
+            json!({ "selector": "#x", "timeoutMs": args::DEFAULT_WAIT_TIMEOUT_MS })
         );
-        // tab_focus forwards the (typed, required) tabId.
         assert_eq!(
-            build("tab_focus", json!({ "tabId": 7 })),
+            payload("tab_focus", json!({ "tabId": 7 })),
             json!({ "tabId": 7 })
         );
-        // Optional fields are omitted when absent.
         assert_eq!(
-            build("cookie_get", json!({ "domain": "example.com" })),
+            payload("cookie_get", json!({ "domain": "example.com" })),
             json!({ "domain": "example.com" })
         );
-        // Empty builder ignores extraneous args.
-        assert_eq!(build("page_snapshot", json!({ "junk": 1 })), json!({}));
-        // The shared `browser` routing key rides in the same args object and
-        // is never forwarded in the op payload.
         assert_eq!(
-            build(
+            payload(
                 "page_select",
                 json!({ "ref": "e2", "value": "b", "browser": "brave" })
             ),
             json!({ "ref": "e2", "value": "b" })
         );
-        // A null args value (an MCP client omitting `arguments`) means no
-        // arguments for a tool whose args are all optional.
-        assert_eq!(build("page_scroll", Value::Null), json!({}));
+        assert_eq!(payload("page_scroll", json!({})), json!({}));
     }
 
-    // The guard on the deleted sarg/iarg escape hatches: a missing or
-    // mistyped required argument is a typed INVALID_ARGUMENT refusal, never a
-    // fabricated ""/0 riding to the extension as a real-looking payload.
+    // Derived from the schemas themselves, so a future struct edit cannot
+    // outrun this: for every tool, a schema-valid argument object is
+    // accepted; removing any required field is a refusal naming that field;
+    // a wrong-typed or explicitly-null value for any declared property is a
+    // refusal (the schema advertises the type, never a nullable); and an
+    // undeclared field is a refusal (the extension's strictObject agrees).
     #[test]
-    fn builders_refuse_missing_or_mistyped_required_args() {
-        let build = |name: &str, args: Value| -> Result<Value, CallError> {
-            let h = HANDLERS.iter().find(|h| h.name == name).unwrap();
-            (h.build_payload)(&args)
-        };
-        for (tool, args) in [
-            // Absent required fields (the old builders fabricated 0/"").
-            ("tab_focus", json!({})),
-            ("tab_close", json!({})),
-            ("tab_open", json!({})),
-            ("page_eval", json!({})),
-            ("page_navigate", json!({})),
-            ("page_press", json!({})),
-            ("page_fill", json!({ "ref": "e1" })),
-            ("page_select", json!({ "selector": "#s" })),
-            ("page_handle_dialog", json!({})),
-            ("page_upload", json!({ "selector": "#f" })), // no path
-            ("page_upload", json!({ "path": "/tmp/x" })), // no selector
-            // Mistyped values (the old coercions silently dropped these).
-            ("tab_focus", json!({ "tabId": "seven" })),
-            ("tab_focus", json!({ "tabId": 7.5 })),
-            ("page_eval", json!({ "code": 42 })),
-            ("page_upload", json!({ "selector": "#f", "path": 5 })),
-            // Mistyped OPTIONAL values are refused too, not silently dropped.
-            ("cookie_get", json!({ "domain": 123 })),
-            ("page_wait_for", json!({ "timeoutMs": "soon" })),
-        ] {
-            let err = build(tool, args.clone()).unwrap_err();
-            assert!(
-                matches!(err, CallError::InvalidArgument(_)),
-                "{tool} with {args} must refuse, got {err:?}"
-            );
-            assert_eq!(err.code(), "INVALID_ARGUMENT", "{tool} with {args}");
-        }
-    }
-
-    // Lockstep with the catalogue, derived from the schemas themselves so a
-    // future schema edit cannot silently outrun its builder: for every tool,
-    // a schema-valid argument object is accepted; removing any required field
-    // is a refusal naming that field; a wrong-typed or explicitly-null value
-    // for any declared property is a refusal; and a non-object argument root
-    // is a refusal (every schema is `type: object`). The `browser` routing
-    // property is dispatch's, parsed by `extract_browser`, so it is the one
-    // schema property the builders deliberately ignore.
-    #[test]
-    fn builders_enforce_exactly_the_catalogue_required_args() {
+    fn every_tool_accepts_its_schema_and_refuses_everything_outside_it() {
         fn sample(ty: &str, tool: &str, key: &str) -> Value {
             match ty {
                 "string" => json!("x"),
@@ -433,139 +260,120 @@ mod tests {
                 other => panic!("{tool}.{key}: no mistyped value for schema type {other}"),
             }
         }
+        let refused = |name: &str, args: Map<String, Value>| -> Option<String> {
+            match ToolCall::parse(name, args) {
+                Err(CallError::InvalidArgument(msg)) => Some(msg),
+                Err(other) => panic!("{name}: refused with the wrong class {other:?}"),
+                Ok(_) => None,
+            }
+        };
         for tool in all() {
-            let h = HANDLERS
-                .iter()
-                .find(|h| h.name == tool.name)
-                .unwrap_or_else(|| panic!("no handler for {}", tool.name));
-            let build = h.build_payload;
-            let props = tool.input_schema["properties"]
-                .as_object()
-                .unwrap_or_else(|| panic!("{}: schema has no properties object", tool.name));
-            let required: Vec<&str> = tool.input_schema["required"]
-                .as_array()
-                .unwrap_or_else(|| panic!("{}: schema has no required array", tool.name))
-                .iter()
-                .map(|v| v.as_str().unwrap())
-                .collect();
+            let schema = tool.args_schema();
+            let props = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let required: Vec<&str> = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|r| r.iter().map(|v| v.as_str().unwrap()).collect())
+                .unwrap_or_default();
             let prop_type = |key: &str| -> &str {
                 props[key]["type"]
                     .as_str()
                     .unwrap_or_else(|| panic!("{}.{key}: schema property has no type", tool.name))
             };
 
-            // A full, schema-valid argument object is accepted.
-            let full: serde_json::Map<String, Value> = required
+            let full: Map<String, Value> = required
                 .iter()
                 .map(|k| ((*k).to_string(), sample(prop_type(k), tool.name, k)))
                 .collect();
-            assert!(
-                build(&Value::Object(full.clone())).is_ok(),
+            assert_eq!(
+                refused(tool.name, full.clone()),
+                None,
                 "{}: schema-valid args were refused",
                 tool.name
             );
 
-            // Each required field, removed on its own, is a refusal that
-            // names the missing field.
             for missing in &required {
                 let mut args = full.clone();
                 args.remove(*missing);
-                match build(&Value::Object(args)) {
-                    Err(CallError::InvalidArgument(msg)) => assert!(
-                        msg.contains(missing),
-                        "{}: refusal for missing {missing} does not name it: {msg}",
-                        tool.name
-                    ),
-                    other => panic!(
-                        "{}: schema requires {missing}, but the builder returned {other:?}",
-                        tool.name
-                    ),
-                }
+                let msg = refused(tool.name, args)
+                    .unwrap_or_else(|| panic!("{}: missing {missing} was accepted", tool.name));
+                assert!(
+                    msg.contains(missing),
+                    "{}: refusal for missing {missing} does not name it: {msg}",
+                    tool.name
+                );
             }
 
-            // Every declared property (except dispatch's `browser`) refuses a
-            // wrong-typed value and an explicit null - the schema advertises
-            // the type, never a nullable.
-            for (key, _) in props.iter().filter(|(k, _)| k.as_str() != "browser") {
+            for (key, _) in &props {
                 let ty = prop_type(key);
                 for bad in [mistyped(ty, tool.name, key), Value::Null] {
                     let mut args = full.clone();
                     args.insert(key.clone(), bad.clone());
                     assert!(
-                        matches!(
-                            build(&Value::Object(args)),
-                            Err(CallError::InvalidArgument(_))
-                        ),
+                        refused(tool.name, args).is_some(),
                         "{}: {key} = {bad} must be refused",
                         tool.name
                     );
                 }
             }
 
-            // A non-object argument root is refused for every tool (null is
-            // the documented omitted-arguments case and is not one).
-            for root in [json!([]), json!("args"), json!(3), json!(true)] {
-                assert!(
-                    matches!(build(&root), Err(CallError::InvalidArgument(_))),
-                    "{}: non-object arguments root {root} must be refused",
-                    tool.name
-                );
-            }
+            let mut args = full.clone();
+            args.insert("undeclared".into(), json!(1));
+            assert!(
+                refused(tool.name, args).is_some(),
+                "{}: an undeclared field must be refused",
+                tool.name
+            );
         }
     }
 
     // The `browser` routing argument is strictly typed: absent/null route as
     // "unaddressed", strings route by label, anything else is rejected before
-    // any bridge traffic (or connect-waiting) can happen.
+    // any bridge traffic (or connect-waiting) can happen. A server-local tool
+    // takes no routing argument at all, so for it `browser` is an undeclared
+    // field like any other.
     #[test]
-    fn browser_arg_must_be_a_string() {
-        assert_eq!(extract_browser(&json!({})).unwrap(), None);
-        assert_eq!(extract_browser(&json!({ "browser": null })).unwrap(), None);
+    fn browser_routing_argument_is_peeled_strictly_and_only_for_bridge_tools() {
+        let parse = |args: Value| ToolCall::parse("tab_list", object(args));
+        assert_eq!(parse(json!({})).unwrap().browser(), None);
+        assert_eq!(parse(json!({ "browser": null })).unwrap().browser(), None);
         assert_eq!(
-            extract_browser(&json!({ "browser": "brave" })).unwrap(),
+            parse(json!({ "browser": "brave" })).unwrap().browser(),
             Some("brave")
         );
         for bad in [json!(123), json!(true), json!(["chrome"]), json!({})] {
-            let err = extract_browser(&json!({ "browser": bad })).unwrap_err();
+            let err = parse(json!({ "browser": bad })).unwrap_err();
             assert!(matches!(err, CallError::InvalidBrowserArg(_)), "{bad}");
         }
+        let err =
+            ToolCall::parse("list_browsers", object(json!({ "browser": "brave" }))).unwrap_err();
+        assert!(matches!(err, CallError::InvalidArgument(_)), "{err:?}");
     }
 
     #[test]
-    fn dispatch_refuses_bad_args_without_routing() {
-        // A fresh session has no connections; a call would normally block in
-        // the 12s startup wait. Malformed args must be refused by the builder
-        // before that - this test finishing quickly is itself the assertion
-        // that no routing was attempted.
-        let session = Session::new();
-        let out = dispatch(&session, "tab_focus", &json!({}), None);
-        assert!(out.is_error());
-        assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
-        // An unknown tool is refused the same way, pre-routing.
-        let out = dispatch(&session, "no_such_tool", &json!({}), None);
-        assert!(out.is_error());
-        assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"));
+    fn an_unknown_tool_is_refused_before_any_args_are_read() {
+        let err = ToolCall::parse("no_such_tool", object(json!({ "browser": 5 }))).unwrap_err();
+        assert!(matches!(err, CallError::UnknownTool(_)), "{err:?}");
+        assert_eq!(err.code(), "INVALID_ARGUMENT");
     }
 
     #[test]
-    fn list_browsers_validates_its_arguments_before_answering_locally() {
-        // list_browsers is answered by the server itself, never sent over the
-        // bridge - which is exactly why dispatch must still run its builder:
-        // without that, the server-local branch would accept argument shapes
-        // its object schema refuses, and the "every tool" claim of the
-        // catalogue lockstep test would be hollow for this one tool.
+    fn list_browsers_answers_locally_from_an_empty_registry() {
+        // A fresh session has no connections, so a bridge tool would park in
+        // the connect wait; list_browsers is answered by the server itself
+        // and returns the (empty) registry at once.
         let session = Session::new();
-        for bad in [json!([]), json!("hi"), json!(42)] {
-            let out = dispatch(&session, "list_browsers", &bad, None);
-            assert!(out.is_error(), "non-object args {bad} must be refused");
-            assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"), "{bad}");
-        }
-        // An empty object and omitted arguments (Null) both answer from the
-        // (empty) connection registry - a normal, empty result.
-        for good in [json!({}), Value::Null] {
-            let out = dispatch(&session, "list_browsers", &good, None);
-            assert!(!out.is_error(), "{good} must answer locally");
-        }
+        let call = ToolCall::parse("list_browsers", Map::new()).unwrap();
+        let out = dispatch(&session, call);
+        assert!(!out.is_error());
+        assert_eq!(
+            out.content()[0]["text"].as_str().unwrap(),
+            json!({ "count": 0, "browsers": [] }).to_string()
+        );
     }
 
     #[test]

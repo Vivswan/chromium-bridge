@@ -17,6 +17,8 @@ use std::io::{self, BufRead, Read, Write};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::tools::BridgeCommand;
+
 // ----------------------------------------------------------------------------
 // 1. Chrome Native Messaging framing
 // ----------------------------------------------------------------------------
@@ -339,10 +341,19 @@ pub enum AttachReply {
     Unavailable { reason: String },
 }
 
-/// A request from the MCP server to the extension, newline-delimited JSON over the bridge socket. `deny_unknown_fields`
-/// guards the envelope only (`args` stays free-form, validated per-op against the tool catalogue), so adding an
-/// envelope field is a breaking protocol change an older peer rejects rather than misreads: new per-op data belongs
-/// inside `args`, a new envelope field needs a version bump.
+/// A request from the MCP server to the extension, newline-delimited JSON over the bridge socket:
+/// `{ id, op, args, tabId?, browser? }`. The whole frame fails the parse when any part is outside the contract, so
+/// a frame the reader accepts is a known tool with schema-valid arguments and nothing else on the envelope.
+///
+/// ```text
+/// op outside the catalogue, args outside its struct  -> refused by the flattened BridgeCommand (its own
+///                                                       deny_unknown_fields and the per-tool structs')
+/// a field outside the envelope                       -> refused by this struct's deny_unknown_fields, which serde
+///                                                       enforces across the flatten
+/// adding an envelope field                           -> a breaking protocol change an older peer rejects rather
+///                                                       than misreads; new per-op data belongs in the tool's args
+///                                                       struct, a new envelope field needs a version bump
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -355,18 +366,14 @@ pub struct BridgeReq {
     /// widening here         -> threads a new id type through the correlation maps: a protocol change, not a parse tweak
     /// ```
     pub id: u64,
-    pub op: String,
+    /// The tool and its typed arguments, flattened onto the envelope as the
+    /// `op` and `args` fields.
+    #[serde(flatten)]
+    pub command: BridgeCommand,
     /// Optional target tab, `tabId` on the wire (the contract and the
     /// extension use camelCase envelope fields).
     #[serde(default, rename = "tabId", skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<i64>,
-    /// The op's argument object, free-form at the envelope layer (each op's
-    /// shape is validated downstream against the tool catalogue; the
-    /// extension enforces the generated Zod validators). Required on the
-    /// wire - an op without arguments sends `{}` (see tools/handlers.rs) -
-    /// so both readers reject a frame that omits it, matching the
-    /// extension's validator.
-    pub args: Value,
     /// The label of the browser this request was routed to. The MCP server
     /// resolves the tool call's `browser` argument against its connection
     /// registry and stamps the outcome here, so the envelope records which

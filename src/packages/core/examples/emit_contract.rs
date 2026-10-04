@@ -1,10 +1,11 @@
 //! Emit the canonical cross-process contract as one JSON document on stdout:
-//! the tool catalogue, the error taxonomy, the capability groupings, the
+//! the tool catalogue (each tool's metadata, grants, and the JSON Schema of
+//! its args struct), the error taxonomy, the capability groupings, the
 //! identity constants, the protocol versions, and the extension-forwarded
 //! audit kinds. `scripts/gen-ops.ts` (run via `moon run gen`) consumes this
 //! to generate the TypeScript side (`src/packages/shared/src/*.gen.ts`); the
 //! emitted JSON itself is never checked in - the Rust sources are the
-//! contract (ADR-0028).
+//! contract.
 //!
 //! Run:
 //!   cargo run -q -p chromium-bridge-core --example emit_contract
@@ -16,21 +17,21 @@ use chromium_bridge_core::protocol::{
     BRIDGE_PROTOCOL_VERSION, MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION,
     MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
 };
-use chromium_bridge_core::tools::{all, CAPABILITIES};
+use chromium_bridge_core::tools::{all, capabilities};
 use serde_json::{json, Value};
 
 fn main() -> Result<(), serde_json::Error> {
     let tools: Vec<Value> = all()
-        .iter()
         .map(|t| {
             json!({
                 "name": t.name,
                 "risk": t.risk.as_str(),
-                "scope": t.scope.as_str(),
+                "scope": t.scope_name(),
                 "permission": t.permission.as_str(),
                 "confirmation": t.confirmation.as_str(),
+                "grants": t.grants.iter().map(|g| g.field().wire_name()).collect::<Vec<_>>(),
                 "description": t.description,
-                "inputSchema": t.input_schema,
+                "argsSchema": t.args_schema(),
             })
         })
         .collect();
@@ -47,14 +48,14 @@ fn main() -> Result<(), serde_json::Error> {
         })
         .collect();
 
-    let capabilities: Vec<Value> = CAPABILITIES
+    let capabilities: Vec<Value> = capabilities()
         .iter()
         .map(|c| {
             json!({
-                "id": c.id,
+                "id": c.id.as_str(),
                 "description": c.description,
                 "permissions": c.permissions.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
-                "tools": c.tools,
+                "tools": c.id.tools().map(|t| t.name).collect::<Vec<_>>(),
             })
         })
         .collect();

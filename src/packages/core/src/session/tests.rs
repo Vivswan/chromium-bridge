@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::args::NoArgs;
 
 /// A test generation; panics on 0, which is exactly the point -- a real
 /// [`Generation`] cannot be zero.
@@ -247,9 +248,7 @@ mod registry {
         let s2 = session.clone();
         let caller = thread::spawn(move || {
             s2.try_call(
-                "tab_list",
-                None,
-                serde_json::json!({}),
+                BridgeCommand::TabList(NoArgs {}),
                 Some("chrome"),
                 Duration::from_secs(15),
             )
@@ -288,9 +287,7 @@ mod registry {
         let s2 = session.clone();
         let caller = thread::spawn(move || {
             s2.try_call(
-                "tab_list",
-                None,
-                serde_json::json!({}),
+                BridgeCommand::TabList(NoArgs {}),
                 Some("chrome"),
                 Duration::from_secs(15),
             )
@@ -371,9 +368,7 @@ mod registry {
         let s2 = session.clone();
         let caller = thread::spawn(move || {
             s2.try_call(
-                "tab_list",
-                None,
-                serde_json::json!({}),
+                BridgeCommand::TabList(NoArgs {}),
                 Some("chrome"),
                 Duration::from_secs(10),
             )
@@ -439,9 +434,7 @@ mod registry {
         let s2 = session.clone();
         let caller = thread::spawn(move || {
             s2.try_call(
-                "tab_list",
-                None,
-                serde_json::json!({}),
+                BridgeCommand::TabList(NoArgs {}),
                 Some("chrome"),
                 Duration::from_secs(10),
             )

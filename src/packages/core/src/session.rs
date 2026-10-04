@@ -31,6 +31,7 @@ use serde_json::Value;
 use crate::error::CallError;
 use crate::ipc::{self, BrowserLabel};
 use crate::protocol::{bridge_read, bridge_write, BridgeReq, ParsedResp};
+use crate::tools::BridgeCommand;
 
 /// The label assigned to a connection whose handshake carried no label.
 /// Re-exported from the handshake module, where [`BrowserLabel`] owns the
@@ -502,17 +503,11 @@ impl Session {
         Some((label, generation.get()))
     }
 
-    /// Send a request to the addressed browser's extension and wait for the
+    /// Send a command to the addressed browser's extension and wait for the
     /// correlated response. `browser` is the tool call's optional `browser`
     /// argument; see [`resolve_target`] for how it picks a connection.
     /// Returns the response data on success, or a typed [`CallError`].
-    pub fn call(
-        &self,
-        op: &str,
-        tab_id: Option<i64>,
-        args: Value,
-        browser: Option<&str>,
-    ) -> Result<Value, CallError> {
+    pub fn call(&self, command: BridgeCommand, browser: Option<&str>) -> Result<Value, CallError> {
         // Wait briefly for the first host: the extension's service worker reconnects on a ~2s timer, so right after
         // the MCP client spawns a fresh server the first tool call can arrive before any host has re-attached. Only
         // the empty registry waits: once a browser is attached, an unknown or ambiguous target is a real error the
@@ -536,7 +531,7 @@ impl Session {
 
         // Generous response timeout: the extension may need to prompt the
         // user (Toast) for high-risk actions, which can take a while.
-        self.try_call(op, tab_id, args, browser, Duration::from_secs(120))
+        self.try_call(command, browser, Duration::from_secs(120))
     }
 
     /// Like [`Self::call`], but with no startup wait (an empty registry fails
@@ -547,9 +542,7 @@ impl Session {
     /// wait.
     pub fn try_call(
         &self,
-        op: &str,
-        tab_id: Option<i64>,
-        args: Value,
+        command: BridgeCommand,
         browser: Option<&str>,
         timeout: Duration,
     ) -> Result<Value, CallError> {
@@ -591,9 +584,8 @@ impl Session {
             }
             let req = BridgeReq {
                 id,
-                op: op.to_string(),
-                tab_id,
-                args,
+                command,
+                tab_id: None,
                 browser: Some(label),
             };
             if let Err(e) = bridge_write(&mut conn.writer, &req) {

@@ -1,4 +1,7 @@
 use super::*;
+use crate::tools::args::{
+    ElementTargetArgs, JsInt, NoArgs, PageEvalArgs, PageWaitForArgs, TabTargetArgs,
+};
 use proptest::prelude::*;
 use serde_json::Map;
 use std::io::Cursor;
@@ -36,6 +39,46 @@ fn arb_json() -> impl Strategy<Value = Value> {
 /// roundtrip comparison spuriously fail. Nested nulls are still allowed.
 fn arb_json_non_null() -> impl Strategy<Value = Value> {
     arb_json().prop_filter("non-null at top level", |v| !v.is_null())
+}
+
+/// Any integer the args accept: the whole JavaScript-safe range.
+fn arb_js_int() -> impl Strategy<Value = JsInt> {
+    (JsInt::MIN.get()..=JsInt::MAX.get()).prop_map(|v| JsInt::try_from(v).unwrap())
+}
+
+/// A sample of the typed commands, each args shape the structs spell:
+/// no fields, a required integer, a required string, optional strings, and
+/// the one host-filled default.
+fn arb_command() -> impl Strategy<Value = BridgeCommand> {
+    prop_oneof![
+        Just(BridgeCommand::TabList(NoArgs {})),
+        arb_js_int().prop_map(|tab_id| BridgeCommand::TabFocus(TabTargetArgs { tab_id })),
+        arb_string().prop_map(|code| BridgeCommand::PageEval(PageEvalArgs { code })),
+        (
+            prop::option::of(arb_string()),
+            prop::option::of(arb_string())
+        )
+            .prop_map(|(element_ref, selector)| BridgeCommand::PageClick(
+                ElementTargetArgs {
+                    element_ref,
+                    selector,
+                }
+            )),
+        (
+            prop::option::of(arb_string()),
+            prop::option::of(arb_string()),
+            prop::option::of(any::<bool>()),
+            arb_js_int(),
+        )
+            .prop_map(|(selector, text, nav, timeout_ms)| {
+                BridgeCommand::PageWaitFor(PageWaitForArgs {
+                    selector,
+                    text,
+                    nav,
+                    timeout_ms,
+                })
+            }),
+    ]
 }
 
 proptest! {
@@ -99,12 +142,11 @@ proptest! {
     #[test]
     fn bridge_req_roundtrip(
         id in any::<u64>(),
-        op in arb_string(),
+        command in arb_command(),
         tab_id in prop::option::of(any::<i64>()),
-        args in arb_json(),
         browser in prop::option::of(arb_string()),
     ) {
-        let req = BridgeReq { id, op, tab_id, args, browser };
+        let req = BridgeReq { id, command, tab_id, browser };
         let mut buf = Vec::new();
         bridge_write(&mut buf, &req).unwrap();
         let got: BridgeReq = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();

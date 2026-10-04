@@ -2,17 +2,21 @@
 //! Fuzz the internal bridge NDJSON envelope reader (server<->native host). Even
 //! an attested peer must not be able to crash the reader with malformed or
 //! oversized input, so arbitrary bytes decoded as an arbitrary JSON value must
-//! never panic. The same bytes are also decoded as [`ParsedResp`] - the type
-//! the session's production read path actually uses - so the semantic
-//! validator layered on the wire shape (the contradiction refusals in its
-//! `TryFrom`) is fuzzed too, not just serde's structural parse.
-use chromium_bridge_core::protocol::ParsedResp;
+//! never panic. The same bytes are also decoded as the two typed frames the
+//! production read paths use - [`BridgeReq`], whose flattened command refuses
+//! an op outside the catalogue or args outside its struct, and [`ParsedResp`],
+//! whose `TryFrom` refuses contradictory responses - so the semantic
+//! validators layered on the wire shape are fuzzed too, not just serde's
+//! structural parse.
+use chromium_bridge_core::protocol::{BridgeReq, ParsedResp};
 use libfuzzer_sys::fuzz_target;
 use serde_json::Value;
 use std::io::Cursor;
 
 fuzz_target!(|data: &[u8]| {
     let _: std::io::Result<Option<Value>> =
+        chromium_bridge_core::protocol::bridge_read(&mut Cursor::new(data));
+    let _: std::io::Result<Option<BridgeReq>> =
         chromium_bridge_core::protocol::bridge_read(&mut Cursor::new(data));
     let _: std::io::Result<Option<ParsedResp>> =
         chromium_bridge_core::protocol::bridge_read(&mut Cursor::new(data));

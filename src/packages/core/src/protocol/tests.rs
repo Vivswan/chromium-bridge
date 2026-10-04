@@ -1,5 +1,6 @@
 use super::control::*;
 use super::*;
+use crate::tools::args::{ElementTargetArgs, NoArgs};
 use serde_json::json;
 use std::io::Cursor;
 
@@ -90,25 +91,30 @@ fn mcp_read_skips_blank_lines_without_recursing() {
 
 #[test]
 fn bridge_envelope_roundtrip() {
+    let command = BridgeCommand::PageClick(ElementTargetArgs {
+        element_ref: Some("e3".into()),
+        selector: None,
+    });
     let req = BridgeReq {
         id: 7,
-        op: "page_click".into(),
+        command: command.clone(),
         tab_id: Some(3),
-        args: json!({ "ref": "e3" }),
         browser: Some("brave".into()),
     };
     let mut buf = Vec::new();
     bridge_write(&mut buf, &req).unwrap();
-    // The wire form uses the contract's camelCase field name, not the
-    // Rust field name.
+    // The wire form is the flat contract: the command's op and args beside
+    // the envelope fields, camelCase names, no Rust field names.
     let wire: Value = serde_json::from_slice(&buf[..buf.len() - 1]).unwrap();
     assert_eq!(wire["tabId"], 3);
     assert!(wire.get("tab_id").is_none());
+    assert_eq!(wire["op"], "page_click");
+    assert_eq!(wire["args"], json!({ "ref": "e3" }));
+    assert!(wire.get("command").is_none());
     let got: BridgeReq = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();
     assert_eq!(got.id, 7);
-    assert_eq!(got.op, "page_click");
+    assert_eq!(got.command, command);
     assert_eq!(got.tab_id, Some(3));
-    assert_eq!(got.args, json!({ "ref": "e3" }));
     assert_eq!(got.browser.as_deref(), Some("brave"));
 
     // A request without the browser field (older peer) deserializes with
@@ -122,6 +128,39 @@ fn bridge_envelope_roundtrip() {
     let mut buf = Vec::new();
     bridge_write(&mut buf, &bare).unwrap();
     assert!(!String::from_utf8(buf).unwrap().contains("browser"));
+}
+
+// The extension's parseBridgeReq refuses an op outside the catalogue and an
+// arg outside the op's strictObject; the Rust reader must agree, or the two
+// ends of the bridge accept different frames and a request the host would
+// forward is one the extension drops (or the reverse). The envelope case is
+// the control that already held before the typed command.
+#[test]
+fn bridge_req_parse_refuses_exactly_what_the_extension_refuses() {
+    for wire in [
+        r#"{"id":1,"op":"steal_cookies","args":{}}"#,
+        r#"{"id":1,"op":"tab_focus","args":{"tabId":7,"extra":true}}"#,
+        r#"{"id":1,"op":"tab_focus","args":{}}"#,
+        r#"{"id":1,"op":"tab_focus","args":{"tabId":"7"}}"#,
+        r#"{"id":1,"op":"page_click","args":{"ref":null}}"#,
+        r#"{"id":1,"op":"tab_list"}"#,
+        r#"{"id":1,"op":"tab_list","args":{},"extra":1}"#,
+    ] {
+        let err = bridge_read::<_, BridgeReq>(&mut Cursor::new(format!("{wire}\n"))).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{wire}");
+    }
+    // The same frames with the one offending part fixed parse, so the
+    // refusals above are the typed command's, not a broken reader.
+    for wire in [
+        r#"{"id":1,"op":"tab_focus","args":{"tabId":7}}"#,
+        r#"{"id":1,"op":"page_click","args":{}}"#,
+        r#"{"id":1,"op":"tab_list","args":{},"tabId":2,"browser":"brave"}"#,
+    ] {
+        let got: BridgeReq = bridge_read(&mut Cursor::new(format!("{wire}\n")))
+            .unwrap()
+            .unwrap_or_else(|| panic!("{wire}: EOF"));
+        assert_eq!(got.id, 1, "{wire}");
+    }
 }
 
 #[test]
@@ -139,7 +178,7 @@ fn bridge_read_cap_boundary_is_exact() {
     // The cap counts the whole line, newline included. A line whose length
     // equals the cap parses; one byte tighter rejects it rather than
     // truncating. This pins the off-by-one the +1 sentinel guards.
-    let mut wire = br#"{"id":1,"op":"x","args":{}}"#.to_vec();
+    let mut wire = br#"{"id":1,"op":"tab_list","args":{}}"#.to_vec();
     wire.push(b'\n');
     let total = wire.len();
 
@@ -161,9 +200,8 @@ fn bridge_read_skips_blank_lines_without_recursing() {
         &mut wire,
         &BridgeReq {
             id: 9,
-            op: "noop".into(),
+            command: BridgeCommand::TabList(NoArgs {}),
             tab_id: None,
-            args: json!({}),
             browser: None,
         },
     )
@@ -361,15 +399,11 @@ fn wire_types_reject_unknown_fields() {
         json!({ "id": "s-1", "op": "tab_list", "args": {} })
     )
     .is_err());
-    // `args` is a required envelope field: every builder sends an object
-    // (`{}` for arg-less ops, see tools/handlers.rs), and the reader
-    // rejects a frame that omits it - the same language the extension's
-    // Zod validator enforces.
+    // `args` is a required envelope field: every command serializes its
+    // struct (`{}` for arg-less ops), and the reader rejects a frame that
+    // omits it - the same language the extension's Zod validator enforces.
     assert!(serde_json::from_value::<BridgeReq>(json!({ "id": 1, "op": "tab_list" })).is_err());
     assert!(serde_json::from_value::<BridgeResp>(json!({ "id": "s-1", "ok": true })).is_err());
-    let req: BridgeReq =
-        serde_json::from_value(json!({ "id": 1, "op": "x", "args": { "free": "form" } })).unwrap();
-    assert_eq!(req.args["free"], "form");
     assert!(serde_json::from_value::<BridgeResp>(
         json!({ "id": 1, "ok": true, "data": {}, "extra": 1 })
     )
@@ -531,9 +565,8 @@ fn bridge_envelope_wire_keys_are_pinned() {
 
     let req = BridgeReq {
         id: 1,
-        op: "tab_list".into(),
+        command: BridgeCommand::TabList(NoArgs {}),
         tab_id: Some(2),
-        args: json!({}),
         browser: Some("brave".into()),
     };
     assert_eq!(
