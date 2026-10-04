@@ -10,7 +10,7 @@ import {
   presenceViolation,
   RELEASE_BUNDLE_NAME,
   tokenPresenceViolation,
-} from "./check-docs-literals";
+} from "../check-docs-literals";
 
 const HOST_ID = "com.vivswan.chromium_bridge.host";
 const KEY_LABEL = "com.vivswan.chromium-bridge.enclave.signing.v1";

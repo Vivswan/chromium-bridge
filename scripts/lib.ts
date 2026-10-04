@@ -4,7 +4,15 @@
 // self-contained on node builtins so they run before `bun install` (the release workflow builds the binary
 // first, and the nightly fuzz job never installs the workspace).
 
-import { readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,4 +62,64 @@ export function gitEnv(base: Env = process.env): Record<string, string> {
       (entry): entry is [string, string] => !entry[0].startsWith("GIT_") && entry[1] !== undefined,
     ),
   );
+}
+
+// A step output is one `name=value` line appended to the file GITHUB_OUTPUT names, and GitHub keeps the
+// LAST line for a repeated name: a value with a line break would be read as a second record, so it is
+// refused here rather than written as a different value.
+export function githubOutput(name: string, value: string, env: Env = process.env): void {
+  const file = env.GITHUB_OUTPUT;
+  if (!file) throw new Error("GITHUB_OUTPUT is not set (not running as a GitHub Actions step)");
+  if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) throw new Error(`not a step output name: ${name}`);
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`step output ${name} would span lines: ${JSON.stringify(value)}`);
+  }
+  appendFileSync(file, `${name}=${value}\n`);
+}
+
+/** A value the calling step must set in `env:`; an absent one is a miswired step, never a default. */
+export function requiredEnv(name: string, env: Env = process.env): string {
+  return env[name] ?? die(`${name} is not set`);
+}
+
+export function selectMode<T>(modes: Record<string, T>, argv: string[], script: string): T {
+  const [mode, ...extra] = argv;
+  // Object.hasOwn: `toString` is not a mode.
+  const selected =
+    mode === undefined || extra.length > 0 || !Object.hasOwn(modes, mode) ? undefined : modes[mode];
+  if (selected === undefined) {
+    console.error(`usage: bun ${script} ${Object.keys(modes).join(" | ")}`);
+    process.exit(2);
+  }
+  return selected;
+}
+
+export function runGit(cwd: string, env: Env, ...args: string[]): string {
+  const run = Bun.spawnSync(["git", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
+  if (run.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${run.stderr.toString().trim()}`);
+  }
+  return run.stdout.toString();
+}
+
+export function writeTree(root: string, files: Record<string, string>): void {
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), text);
+  }
+}
+
+/** The creator removes every scratch directory it minted, in the test file's afterEach or afterAll. */
+export class Scratch {
+  private readonly dirs: string[] = [];
+
+  dir(tag: string): string {
+    const dir = mkdtempSync(join(tmpdir(), `${tag}-`));
+    this.dirs.push(dir);
+    return dir;
+  }
+
+  remove(): void {
+    for (const dir of this.dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  }
 }

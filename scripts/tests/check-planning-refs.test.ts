@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findPlanningRefs, gitEnv, scanFiles } from "./check-planning-refs";
+import { findPlanningRefs, gitEnv, scanFiles } from "../check-planning-refs";
 
-const script = join(dirname(fileURLToPath(import.meta.url)), "check-planning-refs.ts");
+const script = join(dirname(fileURLToPath(import.meta.url)), "..", "check-planning-refs.ts");
 const scratchDirs: string[] = [];
 
 afterEach(() => {

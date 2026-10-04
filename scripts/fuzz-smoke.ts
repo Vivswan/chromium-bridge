@@ -12,9 +12,11 @@
 //   ... under --require-toolchain   -> exit 1: an exit-0 skip in the nightly job would read as a green night
 //                                      and auto-close the tracking issue
 //   --seed=N                        -> best-effort determinism only; the corpus contents dominate what gets
-//                                      explored, and the crash file is the real reproducer
+//                                      explored, and the crash file is the real reproducer. Absent or blank,
+//                                      one is drawn and logged so the pass can still be re-run as it was
 
 import { spawnSync } from "node:child_process";
+import { randomInt } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -78,6 +80,8 @@ export function parseOptions(argv: string[]): Options {
       options.failureDir = dir;
       continue;
     }
+    // nightly-fuzz.yml passes its dispatch input verbatim, blank on a scheduled run: no seed given.
+    if (arg === "--seed=") continue;
     const match = /^--(runs|max-total-time|seed)=(\d+)$/.exec(arg);
     const value = Number(match?.[2]);
     // libFuzzer parses -runs/-max_total_time as signed 32-bit and -seed as
@@ -165,7 +169,7 @@ export interface FailureInfo {
   exit: string;
   /** What crashed: the fuzz run itself, or the corpus minimization pass. */
   phase: "run" | "cmin";
-  seed: number | undefined;
+  seed: number;
   runs: number;
   maxTotalTime: number;
   /** New files cargo-fuzz left in fuzz/artifacts/<target>/, repo-relative names only. */
@@ -187,7 +191,7 @@ export const MAX_EMBED_BYTES = 3000;
 export function buildReport(info: FailureInfo): string {
   // cmin takes neither the seed nor -runs/-max_total_time, so its sentence
   // claims no configuration.
-  const configuration = `seed ${info.seed ?? "none"}, -runs=${info.runs}, -max_total_time=${info.maxTotalTime}`;
+  const configuration = `seed ${info.seed}, -runs=${info.runs}, -max_total_time=${info.maxTotalTime}`;
   const lines: string[] = [
     `# fuzz: ${info.target} crashed`,
     "",
@@ -241,7 +245,7 @@ export function buildReport(info: FailureInfo): string {
       "regenerates the seed corpus and the dictionary first):",
       "",
       "```bash",
-      `moon run fuzz-smoke -- --runs=${info.runs} --max-total-time=${info.maxTotalTime}${info.seed !== undefined ? ` --seed=${info.seed}` : ""}${info.phase === "cmin" ? " --cmin" : ""}`,
+      `moon run fuzz-smoke -- --runs=${info.runs} --max-total-time=${info.maxTotalTime} --seed=${info.seed}${info.phase === "cmin" ? " --cmin" : ""}`,
       "```",
       "",
     );
@@ -419,6 +423,9 @@ function main(): number {
     console.error(inputsError);
     return 1;
   }
+  // libFuzzer takes -seed as unsigned 32-bit, 0 meaning "random", so the drawn seed starts at 1.
+  const seed = options.seed ?? randomInt(1, 0x1_0000_0000);
+  console.log(`[fuzz-smoke] seed ${seed}`);
   for (const target of targets) {
     console.log(`[fuzz-smoke] ${target}: ${options.runs} runs (target ${host})`);
     // Pass the corpus dir explicitly (libFuzzer needs it to exist) so the
@@ -427,8 +434,12 @@ function main(): number {
     mkdirSync(resolve(core, corpus), { recursive: true });
     const runArgs = ["run", "--target", host, target, corpus];
     if (!structuredTargets.has(target)) runArgs.push(`fuzz/seeds/${target}`);
-    runArgs.push("--", `-runs=${options.runs}`, `-max_total_time=${options.maxTotalTime}`);
-    if (options.seed !== undefined) runArgs.push(`-seed=${options.seed}`);
+    runArgs.push(
+      "--",
+      `-runs=${options.runs}`,
+      `-max_total_time=${options.maxTotalTime}`,
+      `-seed=${seed}`,
+    );
     const dictionary = dictionaryFor(target);
     if (dictionary) runArgs.push(`-dict=${dictionary}`);
 
@@ -442,7 +453,7 @@ function main(): number {
       target,
       exit: describeExit(run.status, run.signal),
       phase: "run",
-      seed: options.seed,
+      seed,
       runs: options.runs,
       maxTotalTime: options.maxTotalTime,
       ...crashEvidence(artifactsDir, before),
@@ -471,7 +482,7 @@ function main(): number {
         target,
         exit: describeExit(run.status, run.signal),
         phase: "cmin",
-        seed: options.seed,
+        seed,
         runs: options.runs,
         maxTotalTime: options.maxTotalTime,
         ...evidence,

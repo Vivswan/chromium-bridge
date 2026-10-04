@@ -7,27 +7,22 @@
 // Only the tree's own .gitignore files count: --exclude-standard would also read the developer's global
 // excludes and .git/info/exclude, which no CI tool sees.
 
-import { type Env, repoRoot } from "./lib.ts";
+import { type Env, repoRoot, runGit } from "./lib.ts";
 
 export type IgnoredReport = { status: "clean" } | { status: "ignored"; files: string[] };
-
-function gitLsFiles(cwd: string, env: Env, args: string[]): string {
-  const run = Bun.spawnSync(["git", "ls-files", ...args], { cwd, env });
-  if (run.exitCode !== 0) {
-    throw new Error(`git ls-files ${args.join(" ")} failed: ${run.stderr.toString().trim()}`);
-  }
-  return run.stdout.toString();
-}
 
 /** List the tracked files under `cwd` that .gitignore matches. Throws when .gitignore itself is not
  * tracked: the file the gate reads must be in the index, or an empty result proves nothing. */
 export function checkIgnored(cwd: string, env: Env = process.env): IgnoredReport {
-  gitLsFiles(cwd, env, ["--error-unmatch", ".gitignore"]);
-  const files = gitLsFiles(cwd, env, [
+  runGit(cwd, env, "ls-files", "--error-unmatch", ".gitignore");
+  const files = runGit(
+    cwd,
+    env,
+    "ls-files",
     "--cached",
     "--ignored",
     "--exclude-per-directory=.gitignore",
-  ])
+  )
     .split("\n")
     .filter(Boolean);
   return files.length === 0 ? { status: "clean" } : { status: "ignored", files };

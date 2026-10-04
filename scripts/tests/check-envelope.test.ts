@@ -6,8 +6,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { PolicyCurrentFrameShapeSchema } from "../src/packages/shared/src/envelope.gen";
-import { ASYMMETRIES, type Asymmetry } from "../src/packages/shared/src/envelope-asymmetries";
+import { PolicyCurrentFrameShapeSchema } from "../../src/packages/shared/src/envelope.gen";
+import { ASYMMETRIES, type Asymmetry } from "../../src/packages/shared/src/envelope-asymmetries";
 import {
   asymmetryProblems,
   CLASSIFIED_TAGS,
@@ -20,8 +20,8 @@ import {
   readerRuleProblems,
   refinementCounterProblems,
   refinementProblems,
-} from "./check-envelope";
-import { GROUPS } from "./gen-envelope";
+} from "../check-envelope";
+import { GROUPS } from "../gen-envelope";
 
 const pairs = readerPairs();
 

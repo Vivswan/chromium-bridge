@@ -11,7 +11,7 @@ import {
   looksBinary,
   parseAllowlist,
   scanFile,
-} from "./check-typography";
+} from "../check-typography";
 
 // Every character under test is written as a \u escape, so this file passes
 // its own gate (and check-cjk.ts).

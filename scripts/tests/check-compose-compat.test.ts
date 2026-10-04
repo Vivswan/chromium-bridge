@@ -4,7 +4,7 @@
 // fixture is the shape compose.yaml uses, interpolations included.
 
 import { describe, expect, test } from "bun:test";
-import { nonPortableKeys } from "./check-compose-compat";
+import { nonPortableKeys } from "../check-compose-compat";
 
 const portable = {
   "x-ci": { image: "example-ci" },

@@ -1,47 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { CONTROL_FILE, checkCjk, grepEnv } from "./check-cjk";
-import { gitEnv } from "./lib.ts";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { CONTROL_FILE, checkCjk, grepEnv } from "../check-cjk";
+import { gitEnv, runGit, Scratch, writeTree } from "../lib.ts";
 
 // Hand-written scratch repositories; every CJK fixture is a \u escape so this file passes the gate itself.
 const HAN = "\u4E2D";
-const scratch: string[] = [];
-
-function git(cwd: string, ...args: string[]) {
-  const run = Bun.spawnSync(["git", ...args], { cwd, env: gitEnv() });
-  if (run.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${run.stderr.toString()}`);
-}
-
-function tempDir(tag: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `check-cjk-${tag}-`));
-  scratch.push(dir);
-  return dir;
-}
+const scratch = new Scratch();
+afterEach(() => scratch.remove());
+const tempDir = (tag: string) => scratch.dir(`check-cjk-${tag}`);
 
 function repo(files: Record<string, string>): string {
   const dir = tempDir("repo");
-  git(dir, "init", "-q");
-  for (const [path, text] of Object.entries(files)) {
-    mkdirSync(dirname(join(dir, path)), { recursive: true });
-    writeFileSync(join(dir, path), text);
-  }
-  git(dir, "add", "-A");
+  runGit(dir, gitEnv(), "init", "-q");
+  writeTree(dir, files);
+  runGit(dir, gitEnv(), "add", "-A");
   return dir;
 }
-
-afterEach(() => {
-  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("checkCjk", () => {
   test("CJK in a canonical file is reported with its path and line; the allowed files are not", () => {

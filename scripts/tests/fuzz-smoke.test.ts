@@ -13,7 +13,7 @@ import {
   newFiles,
   parseOptions,
   snapshotDir,
-} from "./fuzz-smoke";
+} from "../fuzz-smoke";
 
 function failure(overrides: Partial<FailureInfo> = {}): FailureInfo {
   return {
@@ -81,7 +81,7 @@ describe("parseOptions", () => {
       "--failure-dir=.",
       "--failure-dir=src",
     ]) {
-      const run = spawnSync("bun", [join(import.meta.dir, "fuzz-smoke.ts"), arg], {
+      const run = spawnSync("bun", [join(import.meta.dir, "..", "fuzz-smoke.ts"), arg], {
         encoding: "utf8",
       });
       expect(run.status).toBe(2);
@@ -95,6 +95,10 @@ describe("parseOptions", () => {
       runs: 2147483647,
     });
   });
+
+  test("a blank --seed= is no seed given (the nightly workflow's scheduled run), not a malformed flag", () => {
+    expect(parseOptions(["--seed="])).toMatchObject({ seed: undefined });
+  });
 });
 
 describe("toolchain-missing behavior", () => {
@@ -107,7 +111,7 @@ describe("toolchain-missing behavior", () => {
     spawnSync(
       process.execPath,
       [
-        join(import.meta.dir, "fuzz-smoke.ts"),
+        join(import.meta.dir, "..", "fuzz-smoke.ts"),
         `--failure-dir=fuzz/failures-test-${process.pid}`,
         ...args,
       ],
@@ -221,7 +225,6 @@ describe("buildReport (failure-report contract v1)", () => {
     expect(report).toContain("seed 12345");
     expect(report).toContain("-runs=200000");
     expect(report).toContain("-max_total_time=120");
-    expect(buildReport(failure({ seed: undefined }))).toContain("seed none");
   });
 
   test("embeds the base64 once, inside an executable recreate command", () => {

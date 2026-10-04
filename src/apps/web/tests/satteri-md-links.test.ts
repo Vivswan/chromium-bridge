@@ -3,9 +3,9 @@
 // mistake ships as a 404, which is what these cases guard.
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { rewriteMdHref } from "./satteri-md-links";
+import { rewriteMdHref } from "../src/lib/satteri-md-links";
 
-const REPO_ROOT = path.resolve(import.meta.dir, "../../../../..");
+const REPO_ROOT = path.resolve(import.meta.dir, "../../../..");
 const from = (rel: string) => path.join(REPO_ROOT, rel);
 const BLOB = "https://github.com/Vivswan/chromium-bridge/blob/main";
 const TREE = "https://github.com/Vivswan/chromium-bridge/tree/main";

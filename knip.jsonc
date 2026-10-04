@@ -19,7 +19,7 @@
     // imports and stay project files.
     "scripts": {
       "entry": [
-        "*.test.ts",
+        "tests/*.test.ts",
         "check-*.ts",
         "compose-run.ts",
         "dev-browser.ts",
@@ -49,7 +49,7 @@
       "project": ["**/*.ts"]
     },
     "src/apps/web": {
-      "project": ["src/**/*.{ts,mjs,astro}"]
+      "project": ["src/**/*.{ts,mjs,astro}", "tests/**/*.ts"]
     }
   }
 }

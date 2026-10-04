@@ -265,7 +265,7 @@ tasks:
 
   check-fuzz-smoke:
     description: 'Unit tests for the fuzz-smoke driver (flag parsing, failure-report contract)'
-    command: 'bun test scripts/fuzz-smoke.test.ts'
+    command: 'bun test scripts/tests/fuzz-smoke.test.ts'
 
   check-harness-driver:
     description: 'Unit test for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository)'
@@ -273,7 +273,7 @@ tasks:
 
   check-refresh-lockfiles:
     description: 'Unit test for the release-PR lockfile refresh (a bumped scratch workspace re-locks into one commit; needs cargo, git, bun)'
-    command: 'bun test scripts/refresh-lockfiles.test.ts'
+    command: 'bun test scripts/tests/refresh-lockfiles.test.ts'
 
   check-fuzz-workspace:
     description: >-
@@ -302,12 +302,7 @@ tasks:
     # local runs and CI cannot diverge (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
     # semantics). No fallback by design.
     description: 'Fail loudly if uv (which provisions the pinned Python) is missing'
-    script: |
-      if ! command -v uv >/dev/null 2>&1; then
-        echo "error: uv not found - it provisions the Python pinned in .python-version for the protocol suites" >&2
-        echo "install it via proto (proto install uv), or: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: brew install uv)" >&2
-        exit 1
-      fi
+    command: 'bun scripts/check-uv.ts'
 
   # The three protocol suites are stdlib unittest modules under tests/protocol
   # (discovery, so a new test cannot be forgotten); --no-project because the
@@ -367,24 +362,14 @@ tasks:
     command: 'bun scripts/gen-icons.ts'
 
   check-gen:
-    # The diff pathspec covers every generated module (tracked or newly written; the porcelain check catches
-    # untracked output) and nothing else: the hand-written files sharing the directory stay out of scope, so
-    # local WIP there cannot false-fail the staleness gate.
+    # scripts/check-gen.ts judges only the generated modules (tracked or newly written), so local WIP in the
+    # hand-written files sharing the directory cannot false-fail the staleness gate.
     description: 'Staleness gate for the generated shared contract modules + envelope generator fail-closed rules'
     deps: ['~:gen-shared']
     script: |
       set -e
-      git diff --exit-code -- 'src/packages/shared/src/*.gen.ts' || {
-        echo "error: generated contract code is stale - run 'moon run gen' after editing the Rust catalogue/taxonomy or wire types" >&2
-        exit 1
-      }
-      untracked="$(git status --porcelain -- 'src/packages/shared/src/*.gen.ts' | grep '^??' || true)"
-      if [ -n "$untracked" ]; then
-        echo "error: the generators wrote generated modules that are not tracked - commit them:" >&2
-        printf '%s\n' "$untracked" >&2
-        exit 1
-      fi
-      bun test scripts/gen-envelope.test.ts
+      bun scripts/check-gen.ts
+      bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts
 
   check-envelope:
     # The generated enforced validators differ from their faithful bases exactly as the asymmetry table declares
@@ -395,39 +380,16 @@ tasks:
     script: |
       set -e
       bun scripts/check-envelope.ts
-      bun test scripts/check-envelope.test.ts
+      bun test scripts/tests/check-envelope.test.ts
 
   check-gen-isolation:
-    # Gen-only tooling must stay out of the shipped binary's graph, and only `cargo tree -e normal` sees that
-    # graph: the core's self dev-dependency switches the envelope-schema feature on workspace-wide, so
-    # cargo-deny (even with dev-dependencies excluded) sees a core -> schemars edge that never links.
-    #   p256, ts-rs  -> refused anywhere in the graph
-    #   schemars     -> allowed only through rmcp (its runtime tool-schema model)
+    # Only `cargo tree -e normal` sees the shipped graph (scripts/check-gen-isolation.ts says why cargo-deny
+    # cannot): p256 and ts-rs are refused anywhere in it, schemars only through rmcp.
     description: 'Gen-only tooling (p256, ts-rs; schemars outside rmcp) stays out of the shipped binary dependency graph'
     script: |
-      set -eu
-      tree="$(cargo tree -e normal -p chromium-bridge --locked)"
-      for crate in p256 ts-rs; do
-        if printf '%s\n' "$tree" | grep -q " $crate v"; then
-          echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
-          exit 1
-        fi
-      done
-      # rmcp must be schemars's only direct dependent (depth 1 of the inverse tree). An inverse tree that
-      # does not resolve (two schemars majors: the leak itself) fails here instead of passing silently.
-      if printf '%s\n' "$tree" | grep -q " schemars v"; then
-          inverse="$(cargo tree -e normal -p chromium-bridge --locked -i schemars --prefix depth)"
-          if ! printf '%s\n' "$inverse" | grep -q '^0schemars '; then
-              echo "could not resolve the schemars inverse tree:" >&2
-              printf '%s\n' "$inverse" >&2
-              exit 1
-          fi
-          if printf '%s\n' "$inverse" | grep -E '^1[^0-9]' | grep -qv '^1rmcp '; then
-              echo "schemars reached the chromium-bridge binary graph outside rmcp:" >&2
-              printf '%s\n' "$inverse" >&2
-              exit 1
-          fi
-      fi
+      set -e
+      bun scripts/check-gen-isolation.ts
+      bun test scripts/tests/check-gen-isolation.test.ts
 
   # ----- Touch ID runbooks (macOS, USER-RUN) ---------------------------------
 
@@ -507,8 +469,13 @@ tasks:
       - '~:check-docs-policy'
       - '~:check-planning-refs'
       - '~:check-compose'
+      - '~:check-ci-scripts'
     options:
       runDepsInParallel: false
+
+  check-ci-scripts:
+    description: "Unit tests for the TypeScript behind CI's workflow steps (image digest and tag, Linux registration scenarios, mutants shard, auto-format commit, release packaging, uv check)"
+    command: 'bun test scripts/tests/ci-image.test.ts scripts/tests/linux-registration.test.ts scripts/tests/mutants-shard.test.ts scripts/tests/auto-format-commit.test.ts scripts/tests/release-package.test.ts scripts/tests/check-uv.test.ts'
 
   check-version:
     description: 'Verify the crate, JS package, and release-please versions agree'
@@ -523,14 +490,14 @@ tasks:
     script: |
       set -e
       bun scripts/check-cjk.ts
-      bun test scripts/check-cjk.test.ts
+      bun test scripts/tests/check-cjk.test.ts
 
   check-typography:
     description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
     script: |
       set -e
       bun scripts/check-typography.ts
-      bun test scripts/check-typography.test.ts
+      bun test scripts/tests/check-typography.test.ts
 
   check-toolchain:
     description: 'The bun pin copies (.prototools, package.json, .bun-version) must agree, and .prototools must leave rust to rustup and python to uv'
@@ -538,7 +505,7 @@ tasks:
 
   check-pins:
     description: 'The pin reader CI bootstraps from (scripts/pin.ts) refuses a tool pinned in both .prototools and the Containerfile, twice, or nowhere; then every pin of both files is swept through that rule'
-    script: 'bun test scripts/pin.test.ts && bun scripts/pin.ts --all'
+    script: 'bun test scripts/tests/pin.test.ts && bun scripts/pin.ts --all'
 
   check-hasher:
     description: 'No tracked file may match a .moon/workspace.yml hasher.ignorePattern (a stale-cache hole)'
@@ -549,7 +516,7 @@ tasks:
     script: |
       set -e
       bun scripts/check-ignored.ts
-      bun test scripts/check-ignored.test.ts scripts/lib.test.ts
+      bun test scripts/tests/check-ignored.test.ts scripts/tests/lib.test.ts
 
   check-yaml:
     # The managed ci.yml's yamllint job installs its own, unpinned, version (a template-sync decision), so
@@ -568,28 +535,28 @@ tasks:
     script: |
       set -e
       bun scripts/check-docs-literals.ts
-      bun test scripts/check-docs-literals.test.ts
+      bun test scripts/tests/check-docs-literals.test.ts
 
   check-docs-policy:
     description: 'Risk matrix, tool-count headlines, and settings-defaults docs match the catalogue and settings schema'
     script: |
       set -e
       bun scripts/check-docs-policy.ts
-      bun test scripts/check-docs-policy.test.ts
+      bun test scripts/tests/check-docs-policy.test.ts
 
   check-planning-refs:
     description: 'No planning references (retired design-record numbers, decision/finding/phase tags, audit codes) in the covered sources (TypeScript, Rust, TOML, Python, shell, docs, web)'
     script: |
       set -e
       bun scripts/check-planning-refs.ts
-      bun test scripts/check-planning-refs.test.ts
+      bun test scripts/tests/check-planning-refs.test.ts
 
   check-compose:
     description: 'compose.yaml + compose.podman.yaml stay within the Compose Specification subset both docker compose and podman compose implement'
     script: |
       set -e
       bun scripts/check-compose-compat.ts
-      bun test scripts/check-compose-compat.test.ts
+      bun test scripts/tests/check-compose-compat.test.ts
 
   # ----- interop suites (not in the `moon run ci` aggregate) -----------------
 

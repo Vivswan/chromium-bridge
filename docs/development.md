@@ -54,7 +54,9 @@ src/apps/web/           bun workspace member: minimal Astro site rendering the
                          not part of `moon run ci`)
 ```
 
-All tooling scripts are TypeScript run via bun and live in `scripts/`, a bun workspace member. Two of them, `scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`, stay self-contained on node builtins so they run without a `bun install`: the release workflow builds the binary before installing the workspace, and the nightly fuzz job never installs it at all.
+All tooling scripts are TypeScript run via bun and live in `scripts/`, a bun workspace member. A moon `script:` or a workflow `run:` stays a straight line of tool invocations; the moment it needs control flow, output parsing, or error handling, it is a script here with a unit test in `scripts/tests/`.
+
+Two scripts, `scripts/build-repro.ts` and `scripts/fuzz-smoke.ts`, stay self-contained on node builtins so they run without a `bun install`: the release workflow builds the binary before installing the workspace, and the nightly fuzz job never installs it at all.
 
 Rust dependencies are gated by automated supply-chain checks: `cargo deny` (license allow-list, banned sources, RUSTSEC advisories) runs in every CI gate and again in the nightly rerun, the managed ci.yml's fleet Trivy step gates `Cargo.lock` and `bun.lock` at HIGH/CRITICAL, PRs additionally get the GitHub dependency-review action (an advisory diff, via the platform-managed job in the managed ci.yml), and Dependabot watches cargo, bun, and GitHub Actions. Adding or bumping a crate fails CI on a known advisory or a license outside `deny.toml`'s allow list; there is no manual per-crate audit step. Run `moon run audit` to reproduce the cargo-deny pass locally.
 
@@ -104,8 +106,8 @@ The full task menu, by area:
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
-| Versioning | `check-version`, `check-extension-id` |
-| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-pins`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
+| Versioning | `check-version`, `check-extension-id`, `check-refresh-lockfiles` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-pins`, `check-planning-refs`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy`, `check-ci-scripts` |
 
 ## moon: the canonical command interface
 
