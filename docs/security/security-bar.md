@@ -8,7 +8,7 @@ What this project promises about your browser, and what it does not. The mechani
 
 What the bar is not: "nothing can ever touch your browser." You installed this bridge so an agent can drive your browser. The bar is the standard the project holds itself to, not a claim that it is met everywhere today.
 
-Two places fall short, one on purpose and one for now: approved low-risk reads run without a prompt, and Windows admits any process holding the run secret. [Where we deliberately stop](#where-we-deliberately-stop) and [the per-OS table](#where-the-bar-holds-today-per-os) carry both; the [threat model's residual risks](threat-model.md#residual-risks-accepted-tracked) own every accepted gap.
+Two places fall short, one on purpose and one for now. On an approved origin, reads including masked cookies and storage run without a per-action prompt, and tab titles and URLs are readable with no approval at all ([tool risk matrix](tool-risk-matrix.md)); Windows admits any process holding the run secret. [Where we deliberately stop](#where-we-deliberately-stop) and [the per-OS table](#where-the-bar-holds-today-per-os) carry both; the [threat model's residual risks](threat-model.md#residual-risks-accepted-tracked) own every accepted gap.
 
 ## Why the browser is the asset
 
@@ -40,7 +40,7 @@ The ranking is this project's judgment of real-world frequency, not a measuremen
 
 ## Where we deliberately stop
 
-- **No per-read prompts on approved sites.** Reads on an allowlisted origin run unprompted, because a prompt on nearly every step teaches the user to click through the prompts that guard the dangerous actions. Owner: the [residual risks](threat-model.md#residual-risks-accepted-tracked).
+- **No per-read prompts on approved sites.** Reads on an allowlisted origin, masked cookies and storage included, run unprompted, because a prompt on nearly every step teaches the user to click through the prompts that guard the dangerous actions. Owners: the [residual risks](threat-model.md#residual-risks-accepted-tracked) and the [tool risk matrix](tool-risk-matrix.md).
 - **A click grace window on approved sites.** After one approved submit or link click, the same origin and action kind skip the prompt for a short default window; `page_eval` never does. Owner: the [confirmation defaults in the security policy](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 - **Same-user re-execution of our own binary is accepted.** Attestation rejects a different program, not the genuine binary started by a same-user attacker. Owner: the [explicit non-goals](threat-model.md#explicit-non-goals).
 - **A compromised paired harness keeps its admitted identity.** Attestation identifies a binary, not an intention, so a paired client that turns hostile stays trusted until revoked. Owner: the harness admission entry under [new trust boundaries](threat-model.md#rebuild-delta-new-trust-boundaries).
@@ -66,7 +66,7 @@ A common design for browser automation puts convenience first. The left column d
 | --- | --- | --- |
 | Who can reach the bridge | a localhost port open to any local process | macOS and Linux: only this binary, run by this user, holding the run secret ([boundary 2](trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson)); Windows today: any local process, gated on the secret alone ([platform table](../../.github/SECURITY.md#platform-support)) |
 | The debug port and its banner | a debug port open to any local process at all times; the browser's debugging banner shows only while a client is attached, so the user sees nothing between attachments | no debug port; the banner shows only while a debugger-backed tool or the opt-in CDP mode holds an attach (the [tool risk matrix](tool-risk-matrix.md) marks which tools) |
-| Default access | full access to every site from the first call | nothing runs on a site the user has not approved, and the riskiest tools are off by default under host-owned policy ([tool risk matrix](tool-risk-matrix.md)) |
+| Default access | full access to every site from the first call | page actions and reads run only on a site the user has approved, except tab titles and URLs, which need no approval; the riskiest tools are off by default under host-owned policy ([tool risk matrix](tool-risk-matrix.md)) |
 | Per-action confirmation | none | by default, the confirmation-gated actions confirm on a window the page cannot reach (the [tool risk matrix](tool-risk-matrix.md) lists them), and the two riskiest take hardware presence on an enrolled Mac; relaxing a gate is a presence-gated policy change ([confirmation defaults](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)) |
 | Local malware | declared out of scope, and nothing is done about it | out of scope too, but the bridge refuses to be the cheapest door: on macOS and Linux a different same-user program is rejected at the socket, and once one client is paired every harness must match the allowlist, where pairing needs user presence |
 
