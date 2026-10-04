@@ -18,6 +18,22 @@ import { repoRoot } from "./lib.ts";
 
 const MOUNT_OPTIONS = new Set(["ro", "rw", "z", "Z"]);
 
+const isMapping = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// `x-` extension fields are Compose Specification keys of every object (compose.yaml keeps its YAML
+// anchors in one) and are dropped before the strict parse. Only objects: the names under services,
+// volumes, and environment are the user's, and a service called x-ci is still a service.
+function extensible<T extends z.ZodRawShape>(shape: T) {
+  return z.preprocess(
+    (value) =>
+      isMapping(value)
+        ? Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith("x-")))
+        : value,
+    z.strictObject(shape),
+  );
+}
+
 // Short syntax stays literal: compose interpolates `${...}` before it splits on ":", so a default or
 // a value carrying ":cached" would reach the engine unseen. An interpolated mount takes the long form,
 // whose options are structured fields a variable cannot reach.
@@ -44,12 +60,12 @@ const shortMount = z.string().superRefine((mount, ctx) => {
   }
 });
 
-const longMount = z.strictObject({
+const longMount = extensible({
   type: z.enum(["bind", "volume"]),
   source: z.string(),
   target: z.string(),
   read_only: z.boolean().optional(),
-  bind: z.strictObject({ selinux: z.enum(["z", "Z"]).optional() }).optional(),
+  bind: extensible({ selinux: z.enum(["z", "Z"]).optional() }).optional(),
 });
 
 // Dispatched by shape rather than a zod union, so a finding names the failing field instead of the
@@ -62,10 +78,11 @@ const mount = z.unknown().superRefine((value, ctx) => {
 
 const stringOrList = z.union([z.string(), z.array(z.string())]);
 
-const service = z.strictObject({
-  build: z
-    .strictObject({ context: z.string().optional(), dockerfile: z.string().optional() })
-    .optional(),
+const service = extensible({
+  build: extensible({
+    context: z.string().optional(),
+    dockerfile: z.string().optional(),
+  }).optional(),
   image: z.string().optional(),
   command: stringOrList.optional(),
   entrypoint: stringOrList.optional(),
@@ -81,16 +98,13 @@ const service = z.strictObject({
 });
 
 // A named volume takes engine defaults: `name:` (null) or `name: {}`.
-const namedVolume = z.union([z.null(), z.strictObject({})]);
+const namedVolume = z.union([z.null(), extensible({})]);
 
-const composeFile = z.strictObject({
+const composeFile = extensible({
   name: z.string().optional(),
   services: z.record(z.string(), service).optional(),
   volumes: z.record(z.string(), namedVolume).optional(),
 });
-
-const isMapping = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 // zod's record parser skips a `__proto__` entry instead of validating it, so a service under that
 // name would pass with any settings; it is refused before parsing, at every depth.
@@ -104,16 +118,11 @@ function reservedKeys(value: unknown, path: string): string[] {
   );
 }
 
-/** Every key or value outside the portable subset, as `path: reason` lines. Top-level `x-` extension
- * fields are Compose Specification keys both engines accept (compose.yaml keeps its YAML anchors
- * there) and are not read. */
+/** Every key or value outside the portable subset, as `path: reason` lines. */
 export function nonPortableKeys(doc: unknown): string[] {
   const reserved = reservedKeys(doc, "compose");
   if (reserved.length > 0) return reserved;
-  const withoutExtensions = isMapping(doc)
-    ? Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith("x-")))
-    : doc;
-  const result = composeFile.safeParse(withoutExtensions);
+  const result = composeFile.safeParse(doc);
   if (result.success) return [];
   return result.error.issues.map((issue) => {
     const path = issue.path

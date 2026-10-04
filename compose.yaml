@@ -1,16 +1,13 @@
-# The container test environment: the same image and mounts for the gate, the browser suites, and a
-# shell. Keys stay within the Compose Specification subset both `docker compose` and `podman compose`
-# implement (scripts/check-compose-compat.ts gates it), and the container gets no privilege, socket,
-# or host network: the isolation from the host's browsers is the point.
+# The container test environment: one image for the gate, the browser suites, and a shell, with no
+# privilege, socket, or host network. Keys stay within the Compose Specification subset both
+# `docker compose` and `podman compose` implement (scripts/check-compose-compat.ts gates it).
 #
-# `moon run ci-container` / `test-browser-container` / `shell-container` run this through
-# scripts/compose-run.ts, which supplies the three facts only the host knows:
-#   UID, GID           -> the caller's ids, so files the container writes on the bind mount are theirs
-#                         (docker on Linux; Docker Desktop and podman keep-id map ids themselves)
-#   COMPOSE_GIT_DIR    -> a linked worktree's git common dir, mounted read-only at its own absolute
-#                         path because the worktree's .git file names it by that path; a plain
-#                         checkout mounts its own .git read-only instead
-# Podman rootless adds compose.podman.yaml (compose-run.ts does when CONTAINER_ENGINE=podman).
+# Compose reads three values from the environment that only the host knows; scripts/compose-run.ts
+# (behind the moon tasks) supplies them:
+#   UID, GID          -> the caller's ids, so files written on the bind mount are theirs
+#   COMPOSE_GIT_DIR   -> a linked worktree's git common dir, mounted read-only at its own absolute
+#                        path because the worktree's .git file names it by that path
+# Podman rootless adds compose.podman.yaml.
 
 # One project name, so every checkout and worktree of the repository shares the named volumes.
 name: chromium-bridge

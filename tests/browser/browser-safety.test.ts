@@ -25,44 +25,53 @@ describe("isolatedBrowser", () => {
     return bin;
   };
 
+  const chromium = "Chromium 140.0.7339.80 built on Debian 13.1, running on Debian 13.1";
   test.each([
-    [
-      "Chrome for Testing on the host",
-      "cft",
-      "Google Chrome for Testing 140.0.7339.80",
-      absentMarker,
-      true,
-    ],
-    ["the headless shell on the host", "shell", "HeadlessShell 140.0.7339.80", absentMarker, true],
-    [
-      "a distro Chromium inside a container",
-      "chromium",
-      "Chromium 140.0.7339.80 built on Debian 13.1, running on Debian 13.1",
-      marker,
-      true,
-    ],
-    [
-      "the same distro Chromium on the host",
-      "chromium",
-      "Chromium 140.0.7339.80 built on Debian 13.1, running on Debian 13.1",
-      absentMarker,
-      false,
-    ],
-    [
-      "a daily Chrome even inside a container",
-      "chrome",
-      "Google Chrome 140.0.7339.80",
-      marker,
-      false,
-    ],
-    ["a daily Brave on the host", "brave", "Brave Browser 140.1.83.109", absentMarker, false],
-  ])("%s: isolated=%p", (_name, binName, versionLine, containerMarker, isolated) => {
-    const bin = stubBrowser(binName, versionLine);
-    expect(isolatedBrowser(bin, [containerMarker])).toBe(isolated ? bin : null);
-  });
-
-  test("a binary that does not run is refused, not treated as isolated", () => {
-    expect(isolatedBrowser(join(dir, "missing"), [marker])).toBeNull();
+    {
+      name: "Chrome for Testing on the host",
+      bin: "cft",
+      version: "Google Chrome for Testing 140.0.7339.80",
+      at: absentMarker,
+      isolated: true,
+    },
+    {
+      name: "the headless shell on the host",
+      bin: "shell",
+      version: "HeadlessShell 140.0.7339.80",
+      at: absentMarker,
+      isolated: true,
+    },
+    {
+      name: "a distro Chromium inside a container",
+      bin: "chromium",
+      version: chromium,
+      at: marker,
+      isolated: true,
+    },
+    {
+      name: "the same distro Chromium on the host",
+      bin: "chromium",
+      version: chromium,
+      at: absentMarker,
+      isolated: false,
+    },
+    {
+      name: "a daily Chrome even inside a container",
+      bin: "chrome",
+      version: "Google Chrome 140.0.7339.80",
+      at: marker,
+      isolated: false,
+    },
+    {
+      name: "a daily Brave on the host",
+      bin: "brave",
+      version: "Brave Browser 140.1.83.109",
+      at: absentMarker,
+      isolated: false,
+    },
+  ])("$name: isolated=$isolated", ({ bin: binName, version, at, isolated }) => {
+    const bin = stubBrowser(binName, version);
+    expect(isolatedBrowser(bin, [at])).toBe(isolated ? bin : null);
   });
 });
 

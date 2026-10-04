@@ -191,7 +191,7 @@ env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
 # from a linked worktree, add COMPOSE_GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 ```
 
-The isolation guard in `tests/browser/browser-safety.ts` accepts the container's `/usr/bin/chromium` only when the engine's marker file (`/.dockerenv`, `/run/.containerenv`) is present; on the host it still refuses anything but a Chrome for Testing.
+The isolation guard's container exception is stated once, in the Safety section of [`tests/README.md`](../tests/README.md#-safety---never-point-browser-tests-at-your-daily-chrome).
 
 ## Fuzzing
 

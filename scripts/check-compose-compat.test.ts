@@ -49,6 +49,14 @@ describe("nonPortableKeys", () => {
     expect(nonPortableKeys(portable)).toEqual([]);
   });
 
+  test("x- extension fields pass at every level, as the specification allows them", () => {
+    const doc = {
+      ...withService({ "x-note": "service level", build: { context: ".", "x-stage": "nested" } }),
+      volumes: { "cargo-target": { "x-owner": "ci" } },
+    };
+    expect(nonPortableKeys(doc)).toEqual([]);
+  });
+
   test.each([
     [
       "the legacy version key",
@@ -61,9 +69,9 @@ describe("nonPortableKeys", () => {
       'compose.services.ci: Unrecognized key: "develop"',
     ],
     [
-      "a privileged service, which the file exists to forbid",
-      withService({ privileged: true }),
-      'compose.services.ci: Unrecognized key: "privileged"',
+      "a service whose own name starts with x-, which is a name, not an extension field",
+      { ...portable, services: { "x-ci": { image: "example-ci", privileged: true } } },
+      'compose.services.x-ci: Unrecognized key: "privileged"',
     ],
     [
       "an inherited Object property name used as a key",

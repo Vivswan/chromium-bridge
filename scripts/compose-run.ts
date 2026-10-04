@@ -1,15 +1,12 @@
 #!/usr/bin/env bun
-// Runs one compose.yaml service with the facts only the host knows: the engine (docker, or podman with
-// its user-namespace override file), the caller's uid and gid for the bind mount, and a linked
-// worktree's git common dir, which lives outside the checkout and must be mounted at its own absolute
-// path for git inside the container to resolve the worktree's .git file.
+// Runs one compose.yaml service, supplying what only the host knows: the engine (podman adds its
+// user-namespace override file), the caller's uid and gid, and a linked worktree's git common dir,
+// which must be mounted at its own absolute path for git inside the container to resolve the
+// worktree's .git file.
 //
 //   bun scripts/compose-run.ts ci|browser|shell [command [args...]]
 //
-// A command replaces the service's configured one (`shell moon query tasks` runs that instead of
-// bash). The image is built first so a changed Containerfile or pin file takes effect on the next run;
-// an unchanged one is a cache hit. Compose reads UID, GID, and COMPOSE_GIT_DIR from the environment;
-// bash and zsh refuse `UID=...` in a shell, so the ids are set here rather than in the moon task.
+// bash and zsh refuse `UID=...` in a shell, so the ids are set here, not in the moon task.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
