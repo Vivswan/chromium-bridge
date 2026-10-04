@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // The browser suite runner: the one definition behind CI (.github/workflows/browser.yml), the container
-// (scripts/container-browser-suites.sh via `moon run test-browser`), and a local run.
+// (compose.yaml's browser service via `moon run test-browser`), and a local run.
 //
 // SAFETY: the suites launch CHROME_BIN non-headless with --load-extension, which can capture and close a
 // real browser session, so the shared guard decides once here (tests/README.md -> Safety).

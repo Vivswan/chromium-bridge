@@ -9,6 +9,12 @@ ARG CARGO_BINSTALL_VERSION=1.25.1
 ARG CARGO_NEXTEST_VERSION=0.9.146
 ARG TYPOS_VERSION=1.50.3
 ARG ACTIONLINT_VERSION=1.7.12
+# checks.yml's tooling job installs the same cargo-machete on a bare runner, read from this line by
+# scripts/pin.ts.
+ARG CARGO_MACHETE_VERSION=0.9.2
+# No default: proto's own pin is .prototools's, and no script runs in here to read it. container-image.yml
+# and scripts/compose-run.ts compute it with `bun scripts/pin.ts proto` and pass it in.
+ARG PROTO_VERSION
 
 # Chrome for Testing ships no Linux arm64 build; Debian's chromium does, and the isolation guard
 # accepts it inside a container. build-essential: cargo needs a C linker. xvfb + xauth: the
@@ -48,9 +54,10 @@ ENV HOME=/home/ci \
     BUN_INSTALL=/home/ci/.bun \
     PATH=/home/ci/.proto/shims:/home/ci/.proto/bin:/home/ci/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
+# proto and rustup read these two files natively. --chown: COPY writes root-owned entries whatever USER
+# is, and the ci user removes the directory below.
 WORKDIR /tmp/pins
-COPY .prototools rust-toolchain.toml ./
-COPY .github/workflows/checks.yml ./checks.yml
+COPY --chown=ci:ci .prototools rust-toolchain.toml ./
 
 # rustup owns rust: rust-toolchain.toml is its only pin (`rustup toolchain install` with no argument
 # installs the file's toolchain, profile and components included), and .prototools deliberately leaves
@@ -61,30 +68,19 @@ RUN curl -fsSL "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/$(
     && rm /tmp/rustup-init \
     && rustup toolchain install
 
-# proto's own pin is read before proto exists, so a TOML-tolerant scan; exactly one pin may match. The
-# installer is the release asset of that same version (it installs into PROTO_HOME/bin), not the
+# The installer is the release asset of the pinned version (it installs into PROTO_HOME/bin), not the
 # unversioned script on moonrepo.dev.
-RUN proto_version="$(sed -nE 's/^proto[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' .prototools)" \
-    && test "$(printf '%s\n' "${proto_version}" | grep -c .)" = 1 \
-    && curl -fsSL "https://github.com/moonrepo/proto/releases/download/v${proto_version}/proto_cli-installer.sh" \
+RUN curl -fsSL "https://github.com/moonrepo/proto/releases/download/v${PROTO_VERSION:?build arg from bun scripts/pin.ts proto}/proto_cli-installer.sh" \
     | bash -s -- --no-modify-path \
     && proto --version \
     && proto install
 
-# The machete pin is the `tool:` input of checks.yml's install-action step, read as YAML so a comment
-# or a look-alike cannot stand in for it; exactly one distinct pin may exist.
 RUN curl -fsSL "https://github.com/cargo-bins/cargo-binstall/releases/download/v${CARGO_BINSTALL_VERSION}/cargo-binstall-$(uname -m)-unknown-linux-gnu.tgz" \
     | tar -xz -C "${CARGO_HOME}/bin" \
-    && machete="$(bun -e ' \
-        const jobs = Object.values(Bun.YAML.parse(await Bun.file("checks.yml").text()).jobs); \
-        const tools = jobs.flatMap((job) => job.steps ?? []).map((step) => step.with?.tool); \
-        const pins = new Set(tools.filter((tool) => typeof tool === "string" && tool.startsWith("cargo-machete@")).map((tool) => tool.slice("cargo-machete@".length))); \
-        if (pins.size !== 1) throw new Error(`checks.yml must pin cargo-machete exactly once, found: ${[...pins].join(", ") || "none"}`); \
-        console.log([...pins][0]);')" \
     && cargo binstall --no-confirm --locked \
         "cargo-nextest@${CARGO_NEXTEST_VERSION}" \
         "typos-cli@${TYPOS_VERSION}" \
-        "cargo-machete@${machete}"
+        "cargo-machete@${CARGO_MACHETE_VERSION}"
 
 WORKDIR /work
 

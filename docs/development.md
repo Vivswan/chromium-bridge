@@ -13,7 +13,9 @@ proto install    # provisions bun, moon, node, uv at the pinned versions (rustup
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
-Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`). CI pins cargo-machete in checks.yml; typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision), so a local version skew can at worst surface a finding early.
+Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`).
+
+The `Containerfile` pins cargo-machete (`ARG CARGO_MACHETE_VERSION`), and checks.yml installs that version on a bare runner through `bun scripts/pin.ts cargo-machete`. typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision), so a local version skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -93,7 +95,7 @@ The full task menu, by area:
 
 | Area | Tasks |
 |------|-------|
-| Aggregates | `build`, `test`, `ci`, `release`, `lint`, `fmt`, `fix` |
+| Aggregates | `build`, `test`, `ci`, `hygiene` (the bun-side checks CI's hygiene job runs; `ci` depends on it), `release`, `lint`, `fmt`, `fix` |
 | Dev loops | `dev`, `dev-web`, `extension:dev` |
 | Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `build-release`, `build-repro`, `typos`, `machete`, `audit`, `fuzz-smoke` |
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
@@ -103,7 +105,7 @@ The full task menu, by area:
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `check-version`, `check-extension-id` |
-| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
+| Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-pins`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
 
 ## moon: the canonical command interface
 
@@ -128,9 +130,21 @@ Cache trust, and the one edge that must never be narrowed: the Rust core is the 
 
 ## Toolchain pinning (proto)
 
-`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it parses proto's own version from `.prototools` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, runs `proto install`, and on request installs rust with `setup-rust-toolchain`.
+`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain:
 
-The CI image (`Containerfile`) runs the same `proto install` at build time. Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+1. `setup-bun` installs the `.bun-version` bun, only to run the pin reader.
+2. `bun scripts/pin.ts proto` reads proto's own version, the one pin `moonrepo/setup-toolchain` cannot read.
+3. That action installs proto, and `proto install` provisions the `.prototools` tools (its bun lands on top of the first, so a bare runner carries two).
+4. With `cargo: "true"`, `setup-rust-toolchain` installs rust from `rust-toolchain.toml`.
+
+The CI image (`Containerfile`) runs the same `proto install` at build time, with the proto version arriving as its one build arg (`container-image.yml` and `scripts/compose-run.ts` compute it with `bun scripts/pin.ts proto`). Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+
+`bun scripts/pin.ts <tool>` is the one reader of a pin needed before proto exists. It scans both owner files together and fails when a tool is pinned in both, twice, or nowhere; `bun scripts/pin.ts --all` sweeps every pin of both files through the same rule, and `moon run check-pins` (under `hygiene`) runs the sweep and the reader's unit tests:
+
+| Tools | Owner file | Line shape |
+|-------|------------|------------|
+| proto, bun, moon, node, uv | `.prototools` | `tool = "x.y.z"` |
+| cargo-machete and the other image-only tools | `Containerfile` | `ARG <TOOL>_VERSION=x.y.z` |
 
 One pin also lives in a second file, and `moon run check-toolchain` (part of the gate and of CI's hygiene job) fails if the copies disagree, or if `.prototools` ever pins rust or enables proto's rust or python plugin:
 
@@ -144,7 +158,7 @@ uv is pinned only in `.prototools`, and python is owned by uv exactly as before:
 
 The Linux jobs run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main); the workflow-level `CI_IMAGE_TAG` is the one switch, and an empty value runs every job on the bare runner with the same composite action.
 
-Four jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), the browser job (Chrome from `setup-chrome`), and, until the republished image carries iproute2 for `ss`, the protocol matrix.
+Three jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), and the browser job (Chrome from `setup-chrome`).
 
 ## Working on the extension
 
@@ -180,7 +194,7 @@ The container is the isolation: it carries every gate tool at the repository's p
 | Task | Runs inside the container |
 |------|---------------------------|
 | `moon run ci-container` | `moon run ci` |
-| `moon run test-browser-container` | `xvfb-run -a moon run test-browser` (`scripts/container-browser-suites.sh`) with `BB_REQUIRE_BROWSER=1` and `BB_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, so a skipped or vacuous suite fails as in CI and the RAN markers stay readable on the host |
+| `moon run test-browser-container` | `xvfb-run -a moon run test-browser` with `BB_REQUIRE_BROWSER=1` and `BB_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, so a skipped or vacuous suite fails as in CI and the RAN markers stay readable on the host |
 | `moon run shell-container` | an interactive `bash` at `/work` |
 
 Docker is the default engine; `CONTAINER_ENGINE=podman moon run ci-container` switches. The first run builds the image (minutes, once); the checkout is bind-mounted at `/work`, so a build lands in the gitignored `build/` on the host like a native one.
@@ -203,9 +217,10 @@ Named volumes keep the Linux artifacts out of the host checkout and make reruns 
 | `node-modules` | `/work/node_modules` | the Linux install (the entrypoint runs `bun install --frozen-lockfile`) |
 | `moon-cache` | `/work/.moon/cache` | moon state for the container's runs |
 
-Podman rootless maps the host user to container root, so `compose.podman.yaml` adds `userns_mode: keep-id:uid=1000,gid=1000`, mapping the host user onto the image's user instead; the tasks pass that file when `CONTAINER_ENGINE=podman`. Running compose by hand needs the same facts the task supplies (`scripts/compose-run.ts`):
+Podman rootless maps the host user to container root, so `compose.podman.yaml` adds `userns_mode: keep-id:uid=1000,gid=1000`, mapping the host user onto the image's user instead; the tasks pass that file when `CONTAINER_ENGINE=podman`. Running compose by hand needs the same facts the task supplies (`scripts/compose-run.ts`), the image's one build arg included:
 
 ```sh
+env UID="$(id -u)" GID="$(id -g)" docker compose build --build-arg "PROTO_VERSION=$(bun scripts/pin.ts proto)" shell
 env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
 # from a linked worktree, use the launcher instead: bun scripts/compose-run.ts shell
 ```
