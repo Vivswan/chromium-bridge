@@ -32,7 +32,7 @@ runs:
     - if: steps.present.outcome == 'failure'
       id: pin
       shell: bash
-      run: bun scripts/pin.ts proto | sed 's/^/proto=/' >> "$GITHUB_OUTPUT"
+      run: bun scripts/pin.ts proto --output proto
     - if: steps.present.outcome == 'failure'
       uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
       with:

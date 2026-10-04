@@ -33,25 +33,15 @@ jobs:
       # The repo's pinned biome (a devDependency, resolved from bun.lock) -
       # not a floating registry fetch - so this formats exactly like
       # `moon run fix` and the extension job's biome gate.
+      - run: bun install --frozen-lockfile
       - name: Format (biome)
-        run: |
-          bun install --frozen-lockfile
-          bun x biome check --write .
+        run: bun x biome check --write .
 
       - name: Commit and push changes
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          if git diff --quiet; then
-            echo "nothing to format"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "style: apply automated formatting"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"$HEAD_REF"
-          fi
+        run: bun scripts/auto-format-commit.ts
       # The label is a one-shot request: remove it even when a step failed,
       # so a broken run cannot loop.
       - name: Remove the fix-lint label

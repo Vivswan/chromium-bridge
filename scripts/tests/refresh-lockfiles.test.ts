@@ -1,20 +1,16 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { gitEnv, repoRoot } from "./lib.ts";
-import { COMMIT_SUBJECT, refreshLockfiles } from "./refresh-lockfiles.ts";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { gitEnv, repoRoot, Scratch, writeTree } from "../lib.ts";
+import { COMMIT_SUBJECT, refreshLockfiles } from "../refresh-lockfiles.ts";
 
 // release-please bumps the manifests and no lockfile, and `cargo --locked` refuses a lockfile whose member
 // version lags its manifest (exit 101): the release PR failed every --locked step until the hook re-locked.
 // The scratch workspace is hand-written and dependency-free, so cargo and bun need no registry.
 
 const env = gitEnv();
-const scratch: string[] = [];
-
-afterEach(() => {
-  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+const scratch = new Scratch();
+afterEach(() => scratch.remove());
 
 function run(cwd: string, ...cmd: string[]): { exitCode: number; stdout: string; stderr: string } {
   const child = Bun.spawnSync(cmd, { cwd, env, stdout: "pipe", stderr: "pipe" });
@@ -49,13 +45,6 @@ function manifests(version: string): Record<string, string> {
   };
 }
 
-function write(dir: string, files: Record<string, string>) {
-  for (const [path, text] of Object.entries(files)) {
-    mkdirSync(dirname(join(dir, path)), { recursive: true });
-    writeFileSync(join(dir, path), text);
-  }
-}
-
 const CARGO_MANIFESTS = ["Cargo.toml", "core/fuzz/Cargo.toml"];
 
 /** Exit codes of `cargo metadata --locked` per manifest: 0 fresh, 101 when the lockfile lags. */
@@ -77,9 +66,8 @@ function lockedExits(dir: string): number[] {
 
 /** A committed scratch repository whose lockfiles match version 0.1.0. */
 function lockedRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), "refresh-lockfiles-"));
-  scratch.push(dir);
-  write(dir, manifests("0.1.0"));
+  const dir = scratch.dir("refresh-lockfiles");
+  writeTree(dir, manifests("0.1.0"));
   // The CI image installs rustup with no default toolchain, so outside the repo tree cargo has nothing to
   // run ("rustup could not choose a version of cargo"); the scratch workspace carries the repo's pin.
   writeFileSync(
@@ -100,7 +88,7 @@ function lockedRepo(): string {
 
 test("a bumped workspace re-locks into one lockfile-only commit; a fresh one gets no commit", async () => {
   const dir = lockedRepo();
-  write(dir, manifests("0.2.0"));
+  writeTree(dir, manifests("0.2.0"));
   expect(lockedExits(dir), "the incident: the bump alone fails --locked on both manifests").toEqual(
     [101, 101],
   );

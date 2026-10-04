@@ -8,6 +8,7 @@
 //   .prototools    proto = "0.58.2"                  -> bun scripts/pin.ts proto
 //   Containerfile  ARG CARGO_MACHETE_VERSION=0.9.2    -> bun scripts/pin.ts cargo-machete
 //   every pin of both files through the same rule    -> bun scripts/pin.ts --all   (moon run check-pins)
+//   the pin as a step output, `--output <name>`       -> bun scripts/pin.ts proto --output proto
 //
 // .prototools goes through Bun's TOML parser, which already refuses a repeated key (indented or not) and
 // keeps a key under [settings] out of the root. The Containerfile is scanned as text because Docker lets
@@ -15,7 +16,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { repoRoot } from "./lib.ts";
+import { githubOutput, repoRoot } from "./lib.ts";
 
 export const ownerFiles = [".prototools", "Containerfile"] as const;
 
@@ -46,8 +47,8 @@ function prototoolsPins(root: Record<string, unknown>, tool: string): string[] {
   if (typeof value !== "string" || value === "") {
     throw new Error(`pin: .prototools pins ${tool} to an empty or non-string value`);
   }
-  // A multi-line TOML string would print as two lines, and the consumers' `>> "$GITHUB_OUTPUT"` would
-  // keep the last `proto=` record.
+  // A multi-line TOML string is two lines where every consumer expects one (a step output record, a build
+  // arg), so it is refused along with any other whitespace.
   if (/\s/.test(value)) {
     throw new Error(`pin: .prototools pins ${tool} to a value with whitespace`);
   }
@@ -119,16 +120,20 @@ export function readAllPins(root = repoRoot): Map<string, string> {
 }
 
 if (import.meta.main) {
-  const tool = process.argv[2];
-  if (!tool || process.argv.length !== 3) {
-    console.error("usage: bun scripts/pin.ts <tool> | --all");
+  const usage = "usage: bun scripts/pin.ts <tool> [--output <name>] | --all";
+  const [tool, flag, outputName, ...extra] = process.argv.slice(2);
+  const outputForm = flag === "--output" && outputName !== undefined && extra.length === 0;
+  if (!tool || (flag !== undefined && !outputForm) || (tool === "--all" && flag !== undefined)) {
+    console.error(usage);
     process.exit(2);
   }
   try {
     if (tool === "--all") {
       for (const [name, version] of readAllPins()) console.log(`${name} ${version}`);
     } else {
-      console.log(readPin(tool));
+      const pin = readPin(tool);
+      if (outputForm) githubOutput(outputName, pin);
+      console.log(pin);
     }
   } catch (error) {
     console.error((error as Error).message);

@@ -65,21 +65,7 @@ jobs:
           cargo: "true"
 
       - name: Verify tag matches Cargo version
-        shell: bash
-        run: |
-          TAG="$RELEASE_TAG"
-          # Fail closed on an unexpected tag shape before any later step uses it
-          # in a filename. Env-indirection already blocks shell injection; this
-          # keeps the tag to the release grammar (vMAJOR.MINOR.PATCH[-suffix]).
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
-            echo "refusing malformed release tag: $TAG"
-            exit 1
-          fi
-          VER="${TAG#v}"          # strip leading v
-          CORE="${VER%%-*}"       # strip any -dev/-rc pre-release suffix
-          CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
-          [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
+        run: bun scripts/release-package.ts verify-tag
 
       - name: Build binary (deterministic)
         # build-repro.ts pins SOURCE_DATE_EPOCH and remaps build paths so the
@@ -96,57 +82,7 @@ jobs:
 
       - name: Package release archive
         id: pkg
-        shell: bash
-        run: |
-          TAG="$RELEASE_TAG"
-          NAME="chromium-bridge-${TAG}-${PLATFORM}-${ARCH}"
-          mkdir -p "$NAME/extension"
-          cp -r build/extension/chrome-mv3 "$NAME/extension/dist"
-          cp LICENSE.md README.md "$NAME/"
-          # RELEASE.txt records which release this archive came from, so a
-          # user can pick the matching published checksum / provenance
-          # attestation when verifying by hand (SECURITY.md "Release artifact
-          # integrity"). Registration itself is `chromium-bridge doctor --fix`,
-          # run from the extracted binary.
-          {
-            echo "repo=${GITHUB_REPOSITORY}"
-            echo "tag=${TAG}"
-            echo "platform=${PLATFORM}"
-            echo "arch=${ARCH}"
-          } > "$NAME/RELEASE.txt"
-          if [ "$PLATFORM" = "windows" ]; then
-            cp target/release/chromium-bridge.exe "$NAME/"
-            BIN_FILE="chromium-bridge.exe"
-            7z a -tzip "$NAME.zip" "$NAME" > /dev/null
-            sha256sum "$NAME.zip" > "$NAME.zip.sha256"
-            ARCHIVE="$NAME.zip"
-          else
-            cp target/release/chromium-bridge "$NAME/"
-            BIN_FILE="chromium-bridge"
-            tar czf "$NAME.tar.gz" "$NAME"
-            if command -v shasum >/dev/null 2>&1; then
-              shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
-            else
-              sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
-            fi
-            ARCHIVE="$NAME.tar.gz"
-          fi
-          # Per-binary checksum, published as its own release asset, so the
-          # shipped binary can be verified after extraction (the
-          # archive-level .sha256 can't be checked at that point). Hash
-          # from inside $NAME so the recorded file name is the bare binary.
-          if command -v shasum >/dev/null 2>&1; then
-            (cd "$NAME" && shasum -a 256 "$BIN_FILE") > "$NAME.binary.sha256"
-          else
-            (cd "$NAME" && sha256sum "$BIN_FILE") > "$NAME.binary.sha256"
-          fi
-          {
-            echo "name=$NAME"
-            echo "archive=$ARCHIVE"
-            echo "sha256file=$ARCHIVE.sha256"
-            echo "binary=$NAME/$BIN_FILE"
-            echo "binsha256file=$NAME.binary.sha256"
-          } >> "$GITHUB_OUTPUT"
+        run: bun scripts/release-package.ts archive
 
       # The built extension bundle is platform-independent, so ONLY the
       # macos/arm64 leg builds the standalone zip - every leg uploading the
@@ -156,20 +92,7 @@ jobs:
       - name: Package standalone extension zip
         id: extzip
         if: matrix.platform == 'macos'
-        run: |
-          TAG="$RELEASE_TAG"
-          NAME="chromium-bridge-extension-${TAG}"
-          # Zip the built bundle with a top-level `dist/` folder so users can
-          # point "Load unpacked" straight at the extracted directory.
-          rm -rf dist-zip && mkdir dist-zip
-          cp -r build/extension/chrome-mv3 dist-zip/dist
-          (cd dist-zip && zip -r "../$NAME.zip" dist)
-          if command -v shasum >/dev/null 2>&1; then
-            shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256"
-          else
-            sha256sum "$NAME.zip" > "$NAME.zip.sha256"
-          fi
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+        run: bun scripts/release-package.ts extension-zip
 
       # Per-asset attestation on top of the managed publish stage's global
       # attestation.json: that stage only attests release ASSETS, and the
@@ -251,20 +174,13 @@ jobs:
         with:
           # Build the SBOM from the exact released code.
           ref: ${{ inputs.tag }}
+      # Only the tag check runs under this bun; scripts/release-package.ts imports nothing installed.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
 
       - name: Verify tag matches Cargo version
-        shell: bash
-        run: |
-          TAG="$RELEASE_TAG"
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
-            echo "refusing malformed release tag: $TAG"
-            exit 1
-          fi
-          VER="${TAG#v}"
-          CORE="${VER%%-*}"
-          CARGO_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          echo "tag=$TAG core=$CORE cargo=$CARGO_VER"
-          [ "$CORE" = "$CARGO_VER" ] || { echo "tag core $CORE != Cargo version $CARGO_VER"; exit 1; }
+        run: bun scripts/release-package.ts verify-tag
 
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -311,20 +227,19 @@ jobs:
       contents: write # edit the draft release
     env:
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ inputs.tag }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      # The checkout carries only the script; the token stays out of it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
       - name: Flag suffixed tags as prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
-            echo "refusing malformed release tag: $TAG"
-            exit 1
-          fi
-          case "$TAG" in
-            *-*) gh release edit "$TAG" --prerelease ;;
-            *) echo "final release tag; nothing to flag" ;;
-          esac
+        run: bun scripts/release-package.ts prerelease
 
   # Re-encodes the old publish gate inside the hook: the managed publish
   # stage only sees this workflow's aggregate result, and a SKIPPED job
@@ -332,22 +247,17 @@ jobs:
   # packaging job) would otherwise slip through to publication. This job
   # always runs (unless the run is cancelled) and fails unless every job
   # succeeded. sbom is continue-on-error, so its failure already reads as
-  # success here; a skip or cancellation blocks.
+  # success here; a skip or cancellation blocks. Both conditions read every
+  # entry of `needs`, so a job added to the list is folded in by itself.
   release-ready:
     name: allowed to publish?
     needs: [binaries, sbom, mark-prerelease]
     if: ${{ !cancelled() }}
     permissions: {}
     runs-on: ubuntu-latest
-    env:
-      BINARIES: ${{ needs.binaries.result }}
-      SBOM: ${{ needs.sbom.result }}
-      PRERELEASE_FLAG: ${{ needs.mark-prerelease.result }}
     steps:
-      - name: Assert every job landed in an allowed state
-        run: |
-          fail=0
-          [ "$BINARIES" = "success" ] || { echo "binaries: $BINARIES"; fail=1; }
-          [ "$SBOM" = "success" ] || { echo "sbom: $SBOM"; fail=1; }
-          [ "$PRERELEASE_FLAG" = "success" ] || { echo "mark-prerelease: $PRERELEASE_FLAG"; fail=1; }
-          [ "$fail" -eq 0 ] || { echo "refusing to let the release publish"; exit 1; }
+      - name: Refuse unless every job succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: echo "::error::refusing to let the release publish, job results $RESULTS" && exit 1

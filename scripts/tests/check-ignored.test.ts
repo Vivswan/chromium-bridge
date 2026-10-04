@@ -1,35 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { checkIgnored } from "./check-ignored";
-import { gitEnv } from "./lib.ts";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { checkIgnored } from "../check-ignored";
+import { gitEnv, runGit, Scratch, writeTree } from "../lib.ts";
 
 // Hand-written scratch repositories mirroring the incident: a .gitignore pattern that names a directory the
 // tree tracks source under.
-const scratch: string[] = [];
-
-function git(cwd: string, ...args: string[]) {
-  const run = Bun.spawnSync(["git", ...args], { cwd, env: gitEnv() });
-  if (run.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${run.stderr.toString()}`);
-}
+const scratch = new Scratch();
+afterEach(() => scratch.remove());
 
 function repo(files: Record<string, string>, forced: string[] = []): string {
-  const dir = mkdtempSync(join(tmpdir(), "check-ignored-"));
-  scratch.push(dir);
-  git(dir, "init", "-q");
-  for (const [path, text] of Object.entries(files)) {
-    mkdirSync(dirname(join(dir, path)), { recursive: true });
-    writeFileSync(join(dir, path), text);
-  }
-  git(dir, "add", "-A");
-  for (const path of forced) git(dir, "add", "-f", path);
+  const dir = scratch.dir("check-ignored");
+  runGit(dir, gitEnv(), "init", "-q");
+  writeTree(dir, files);
+  runGit(dir, gitEnv(), "add", "-A");
+  for (const path of forced) runGit(dir, gitEnv(), "add", "-f", path);
   return dir;
 }
-
-afterEach(() => {
-  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("checkIgnored", () => {
   test("a tracked file under an ignored directory is reported; untracked ignored files are not", () => {

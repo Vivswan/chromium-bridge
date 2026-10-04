@@ -1,28 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { gitEnv } from "./lib";
+import { gitEnv, githubOutput, runGit, Scratch } from "../lib";
 
 // The incident: a pre-commit hook in a linked worktree exports GIT_DIR (that worktree's private gitdir) and
 // GIT_INDEX_FILE; a scratch `git init` inheriting them re-initialised the shared repository as bare.
-const scratch: string[] = [];
-
-function git(cwd: string, env: Record<string, string>, ...args: string[]): string {
-  const run = Bun.spawnSync(["git", ...args], { cwd, env });
-  if (run.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${run.stderr.toString()}`);
-  return run.stdout.toString().trim();
-}
-
-function tempDir(tag: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `lib-gitenv-${tag}-`));
-  scratch.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+const scratch = new Scratch();
+afterEach(() => scratch.remove());
+const tempDir = (tag: string) => scratch.dir(`lib-${tag}`);
+const git = (cwd: string, env: Record<string, string>, ...args: string[]) =>
+  runGit(cwd, env, ...args).trim();
 
 describe("gitEnv", () => {
   test("a scratch git init under a worktree hook's GIT_DIR leaves the hook's repository untouched", () => {
@@ -62,5 +49,23 @@ describe("gitEnv", () => {
     expect(git(victim, clean, "config", "--get", "core.bare")).toBe("false");
     expect(readFileSync(join(victim, ".git", "HEAD"), "utf8")).toBe(headBefore);
     expect(git(safe, gitEnv(hookEnv), "rev-parse", "--git-dir")).toBe(".git");
+  });
+});
+
+// GitHub reads GITHUB_OUTPUT as one `name=value` record per line and keeps the last record for a name, a
+// format nothing on our side enforces: a value carrying a line break would silently become a second record.
+describe("githubOutput", () => {
+  test("records append in order as single lines, and a value with a line break is refused before any write", () => {
+    const dir = tempDir("output");
+    const file = join(dir, "output");
+    const env = { GITHUB_OUTPUT: file };
+    githubOutput("name", "ghcr.io/example-user/repo-ci", env);
+    githubOutput("tag", "0123456789ab", env);
+    expect(() => githubOutput("proto", "0.58.2\n9.9.9", env)).toThrow(/proto would span lines/);
+    expect(() => githubOutput("bad name", "x", env)).toThrow(/not a step output name/);
+    expect(readFileSync(file, "utf8")).toBe(
+      "name=ghcr.io/example-user/repo-ci\ntag=0123456789ab\n",
+    );
+    expect(() => githubOutput("name", "x", {})).toThrow(/GITHUB_OUTPUT is not set/);
   });
 });

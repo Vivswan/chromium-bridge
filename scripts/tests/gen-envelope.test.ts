@@ -17,7 +17,7 @@ import {
   prepare,
   splitFlattenedCommand,
   splitTaggedUnionSchema,
-} from "./gen-envelope";
+} from "../gen-envelope";
 
 const strictObject = (properties: Record<string, unknown>, required: string[]) => ({
   type: "object",

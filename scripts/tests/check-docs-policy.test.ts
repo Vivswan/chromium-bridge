@@ -6,7 +6,7 @@ import {
   securityDefaultsViolations,
   settingsKeyViolations,
   toolCountViolations,
-} from "./check-docs-policy";
+} from "../check-docs-policy";
 
 const row = (name: string, risk: string, perm: string, protection = "-") =>
   `| \`${name}\` | ${risk} | reads | writes | no | \`${perm}\` | ${protection} |`;

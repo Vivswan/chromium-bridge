@@ -78,19 +78,14 @@ jobs:
       # workspace's own Cargo.lock on this job.
       - name: Generate the seed corpus
         run: cargo run --locked --manifest-path src/packages/core/fuzz/Cargo.toml --example seeds
+      # --seed is the dispatch input verbatim, blank on a scheduled run, and the driver draws and logs a
+      # seed of its own then. --require-toolchain: a missing toolchain must fail here, not skip; an exit-0
+      # skip would read as a green night and auto-close the tracking issue without having fuzzed anything.
       - name: Fuzz every target (bounded pass; crashes are collected, not fatal per target)
         env:
           SEED: ${{ inputs.seed }}
           RUNS: ${{ inputs.iterations || '200000' }}
-        run: |
-          if [ -z "$SEED" ]; then
-            SEED="$RANDOM$RANDOM"
-          fi
-          echo "fuzzing with seed $SEED, $RUNS runs per target"
-          # --require-toolchain: a missing toolchain must fail here, not
-          # skip - an exit-0 skip would read as a green night and auto-close
-          # the tracking issue without having fuzzed anything.
-          bun scripts/fuzz-smoke.ts --runs="$RUNS" --max-total-time=120 --cmin --seed="$SEED" --require-toolchain
+        run: bun scripts/fuzz-smoke.ts --runs="$RUNS" --max-total-time=120 --cmin --seed="$SEED" --require-toolchain
       # Save even on failure: a crash night's corpus growth is coverage worth
       # keeping, and crash inputs land in artifacts/, never in the corpus, so
       # this cannot poison future restores.

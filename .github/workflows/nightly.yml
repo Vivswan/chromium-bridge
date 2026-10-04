@@ -71,22 +71,10 @@ jobs:
         with:
           tool: cargo-mutants
       - name: cargo mutants (missed mutants and timeouts reported, not fatal)
-        run: |
-          rc=0
-          cargo mutants --no-shuffle --shard "${{ matrix.shard }}/${{ strategy.job-total }}" || rc=$?
-          echo "== outcome summary =="
-          for f in missed timeout unviable; do
-            if [ -s "mutants.out/$f.txt" ]; then
-              echo "-- $f --"
-              cat "mutants.out/$f.txt"
-            fi
-          done
-          # Exit 2 (missed mutants) and exit 3 (mutant timeouts) both mean a
-          # mutant survived the test suite: informational here. Anything else
-          # (baseline build/test failure, usage error) is real.
-          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ] && [ "$rc" -ne 3 ]; then
-            exit "$rc"
-          fi
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ strategy.job-total }}
+        run: bun scripts/mutants-shard.ts
 
   # The captured frames (uploaded green or red) are the run's real output: `--mint-seeds <dir>` turns them into
   # mcp_jsonrpc fuzz seeds outside the repo. The registry's *-live-fakellm entries additionally drive a full
@@ -108,12 +96,19 @@ jobs:
       - run: cargo build --release
       # Latest on purpose, not pinned: the whole point of this canary is to
       # observe what CURRENT harness releases send. Best-effort: a harness
-      # whose install fails is skipped by the driver; --require-any below
-      # keeps an install-failed (or config-entry-only) run from reading green.
-      - name: Install harness CLIs (best-effort, deliberately unpinned)
-        run: |
-          npm install -g @anthropic-ai/claude-code || echo "::warning::@anthropic-ai/claude-code install failed"
-          npm install -g @openai/codex || echo "::warning::@openai/codex install failed"
+      # whose install fails is skipped by the driver (continue-on-error marks
+      # the step, not the job); --require-any below keeps an install-failed
+      # (or config-entry-only) run from reading green.
+      - name: Install Claude Code (best-effort, deliberately unpinned)
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install Codex (best-effort, deliberately unpinned)
+        continue-on-error: true
+        run: npm install -g @openai/codex
+      # setup-moon puts proto's npm first on PATH, and that npm installs into proto's node prefix, whose
+      # bin directory is not on PATH; the driver resolves the CLIs by walking PATH alone.
+      - name: Put the global npm bin directory on PATH
+        run: echo "$(npm prefix -g)/bin" >> "$GITHUB_PATH"
       - name: Harness smoke (fails unless a harness completes a live MCP connection)
         run: bun tests/harness/run.ts --require-any
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

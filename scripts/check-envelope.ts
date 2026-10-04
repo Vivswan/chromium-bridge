@@ -16,7 +16,7 @@
 //   refinements, in no derived schema        -> pinned in FRAME_REFINEMENTS by count and by probe
 //   the approved asymmetries                 -> printed as a table (scope, direction, reason, proof) for the reviewer
 //
-// The rules are exported and unit-tested in scripts/check-envelope.test.ts; the gate itself runs under
+// The rules are exported and unit-tested in scripts/tests/check-envelope.test.ts; the gate itself runs under
 // import.meta.main via `moon run check-envelope` (part of `moon run ci`).
 
 import { z } from "zod";
@@ -477,7 +477,7 @@ function countCustomChecks(schema: z.core.$ZodType): number {
 
 /** Known schemas with a known refinement count, held against a counter: the failure a dead counter would otherwise
  * produce is an unpinned frame growing a refinement unnoticed, its count of 0 matching its empty pin list. Run at
- * module load against countCustomChecks; exported so scripts/check-envelope.test.ts can prove the refusal on a dead
+ * module load against countCustomChecks; exported so scripts/tests/check-envelope.test.ts can prove the refusal on a dead
  * counter. */
 export function refinementCounterProblems(count: (schema: z.ZodType) => number): string[] {
   const probes: readonly [string, z.ZodType, number][] = [
@@ -505,7 +505,7 @@ export function refinementCounterProblems(count: (schema: z.ZodType) => number):
 const counterProblems = refinementCounterProblems(countCustomChecks);
 if (counterProblems.length > 0) throw new Error(counterProblems.join("\n"));
 
-/** The refinement-pin rule (see FRAME_REFINEMENTS): pure over its inputs so scripts/check-envelope.test.ts can prove
+/** The refinement-pin rule (see FRAME_REFINEMENTS): pure over its inputs so scripts/tests/check-envelope.test.ts can prove
  * the refusals fire; the running gate passes each enforced reader with its pins (an unpinned reader gets the empty
  * list, holding it to zero refinements). Returns the failures, empty meaning the schema carries exactly the pinned
  * number of custom refinements and each probe behaves. */

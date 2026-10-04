@@ -91,11 +91,11 @@ RUN rm -rf /tmp/pins \
         "${CARGO_HOME}/registry" "${BUN_INSTALL}/install/cache" \
     && chmod -R a+rwX /home/ci /work
 
-COPY scripts/container-entrypoint.sh /usr/local/bin/container-entrypoint
-
 # LEFTHOOK=0: the git hooks belong to the host checkout, and the git dir is mounted read-only.
 ENV CHROME_BIN=/usr/bin/chromium \
     LEFTHOOK=0
 
-ENTRYPOINT ["container-entrypoint"]
+# The node_modules named volume starts empty and holds the Linux install, which the host's macOS or
+# Windows install cannot stand in for, so every service installs before its command.
+ENTRYPOINT ["bash", "-euo", "pipefail", "-c", "bun install --frozen-lockfile && exec \"$@\"", "container-entrypoint"]
 CMD ["bash"]

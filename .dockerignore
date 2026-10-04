@@ -1,7 +1,5 @@
-# Build context for Containerfile: only the two files proto and rustup read natively, and the entrypoint
-# it copies. Everything else (node_modules, target, .git, the sources) reaches the container through
-# compose.yaml's bind mount.
+# Build context for Containerfile: only the two files proto and rustup read natively. Everything else
+# (node_modules, target, .git, the sources) reaches the container through compose.yaml's bind mount.
 *
 !.prototools
 !rust-toolchain.toml
-!scripts/container-entrypoint.sh

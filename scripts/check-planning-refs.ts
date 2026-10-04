@@ -35,7 +35,7 @@ export const COVERED: readonly string[] = [
   "*.py",
 ];
 
-export const FIXTURES: readonly string[] = ["scripts/check-planning-refs.test.ts"];
+export const FIXTURES: readonly string[] = ["scripts/tests/check-planning-refs.test.ts"];
 
 export const WAITING: readonly string[] = [
   "src/packages/core/src/enclave/challenge.rs",

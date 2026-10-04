@@ -5,13 +5,13 @@
 // hand-written shapes of those inputs.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readAllPins, readPin } from "./pin.ts";
+import { Scratch, writeTree } from "../lib.ts";
+import { readAllPins, readPin } from "../pin.ts";
 
-const scratch = mkdtempSync(join(tmpdir(), "pin-test-"));
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+const scratch = new Scratch();
+afterAll(() => scratch.remove());
 
 const prototools = [
   "# header comment",
@@ -34,14 +34,19 @@ function fixture(files: {
   prototools?: string[] | undefined;
   containerfile?: string[] | undefined;
 }) {
-  const root = mkdtempSync(join(scratch, "case-"));
+  const root = scratch.dir("pin-test");
   const lines = {
     ".prototools": "prototools" in files ? files.prototools : prototools,
     Containerfile: "containerfile" in files ? files.containerfile : containerfile,
   };
-  for (const [file, content] of Object.entries(lines)) {
-    if (content) writeFileSync(join(root, file), `${content.join("\n")}\n`);
-  }
+  writeTree(
+    root,
+    Object.fromEntries(
+      Object.entries(lines)
+        .filter(([, content]) => content)
+        .map(([file, content]) => [file, `${(content as string[]).join("\n")}\n`]),
+    ),
+  );
   return root;
 }
 
@@ -205,13 +210,14 @@ describe("readAllPins: every pin of both files through the one-owner rule", () =
   });
 });
 
-// The exit status is the contract the bootstrap steps consume (`bun scripts/pin.ts <tool> | sed ... >>
-// "$GITHUB_OUTPUT"` under pipefail): a refusal that printed its message but exited 0 would write an empty
-// pin and stay green.
+// The exit status and the step-output record are the contract the bootstrap steps consume (`bun
+// scripts/pin.ts <tool> --output <name>`): a refusal that printed its message but exited 0, or that still
+// wrote a record, would hand the step an empty pin and stay green.
 describe("the CLI's exit status", () => {
-  const cli = (...args: string[]) =>
-    Bun.spawnSync(["bun", join(import.meta.dir, "pin.ts"), ...args], {
-      cwd: join(import.meta.dir, ".."),
+  const cli = (args: string[], env: Record<string, string> = {}) =>
+    Bun.spawnSync(["bun", join(import.meta.dir, "..", "pin.ts"), ...args], {
+      cwd: join(import.meta.dir, "../.."),
+      env: { ...process.env, ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -228,8 +234,10 @@ describe("the CLI's exit status", () => {
     ["a refused pin exits 1 with the reason on stderr", ["nope"], 1, /^$/, /pinned in neither/],
     ["no tool argument is a usage error, exit 2", [], 2, /^$/, /usage:/],
     ["two tool arguments are a usage error, exit 2", ["proto", "bun"], 2, /^$/, /usage:/],
+    ["--output without a name is a usage error, exit 2", ["proto", "--output"], 2, /^$/, /usage:/],
+    ["--all takes no --output, exit 2", ["--all", "--output", "x"], 2, /^$/, /usage:/],
   ])("%s", (_name, args, status, stdout, stderr) => {
-    const run = cli(...args);
+    const run = cli(args);
     expect({
       status: run.exitCode,
       stdout: run.stdout.toString(),
@@ -238,6 +246,22 @@ describe("the CLI's exit status", () => {
       status,
       stdout: expect.stringMatching(stdout),
       stderr: expect.stringMatching(stderr),
+    });
+  });
+
+  test("--output <name> appends the `name=pin` record for a pinned tool and no record for a refused one", () => {
+    const file = join(scratch.dir("pin-test-output"), "output");
+    const env = { GITHUB_OUTPUT: file };
+    const pinned = cli(["proto", "--output", "proto"], env);
+    const refused = cli(["nope", "--output", "nope"], env);
+    expect({
+      pinned: pinned.exitCode,
+      refused: refused.exitCode,
+      records: readFileSync(file, "utf8"),
+    }).toEqual({
+      pinned: 0,
+      refused: 1,
+      records: `proto=${pinned.stdout.toString().trim()}\n`,
     });
   });
 });
