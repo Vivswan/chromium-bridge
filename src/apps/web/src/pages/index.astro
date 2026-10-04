@@ -187,7 +187,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             explicit interactive confirmation where no enrollment key exists.
             The gate is hard-wired; there is no flag, env var, or grace window
             that skips it.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#enrollment-and-user-presence">security rationale</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#harness-admission-and-the-client-allowlist">security rationale</a>
         </div>
         <div class="g-cell">
           <h3>On an enrolled Mac, approval is your presence.</h3>
@@ -197,7 +197,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             password - that no page, script, or remote client can forge.
             Without that hardware, the verdict is a click in the extension's
             own window.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#enrollment-and-user-presence">security rationale</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
         </div>
         <div class="g-cell">
           <h3>Credentials go one way, masked on top.</h3>
@@ -228,7 +228,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             design: a failed write drops that record and the next one carries
             a visible gap count, because bookkeeping must never block a
             decision.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#revocation-and-the-kill-switch">security rationale</a>
+          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/threat-model.md">threat model</a>
         </div>
       </div>
 

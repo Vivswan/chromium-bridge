@@ -171,7 +171,7 @@ Several browsers can be connected at once; on macOS/Linux each gets its own nati
 | `cookie_get` | Read cookies for the active tab, incl. `httpOnly`; allowlisted hosts only | high |
 | `storage_get` | Read the page's `localStorage` / `sessionStorage` (same-origin) | high |
 
-No write tools by design; cookie/storage writes are out of scope: a forged httpOnly cookie is a session-fixation risk (the [security rationale](./docs/security/rationale.md#extension-gates-and-tool-scope) has the full reason).
+No write tools by design; cookie/storage writes are out of scope: a forged httpOnly cookie is a session-fixation risk (the [tool risk matrix](./docs/security/tool-risk-matrix.md) has the full reason).
 
 ## How it works
 

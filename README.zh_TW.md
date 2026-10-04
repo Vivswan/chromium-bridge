@@ -165,7 +165,7 @@ CLI 只依賴二進位檔本身, 在桌面機器、無介面機器和 CI 上都�
 | `storage_get` | 讀取頁面的 `localStorage` / `sessionStorage` (同源) | 高 |
 
 設計上沒有寫入工具; Cookie/儲存寫入不在範圍內: 偽造的 httpOnly Cookie 是工作階段固定攻擊的風險
-(完整理由見[安全決策理由](./docs/security/rationale.md#extension-gates-and-tool-scope))。
+(完整理由見[工具風險矩陣](./docs/security/tool-risk-matrix.md))。
 
 ## 運作原理
 

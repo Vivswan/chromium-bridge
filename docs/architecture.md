@@ -267,11 +267,11 @@ The full treatment is in [docs/security/](./security/); this is the map.
 | Bridge socket | 0600 Unix-domain socket in a 0700 dir; peer-UID check; mutual executable attestation; HMAC challenge-response; role-declaring attach | [host identity](./security/rationale.md#host-identity-and-attestation) |
 | Any-side revocation | Monotonic epoch in `revocation.json`, re-read at every enforcement point; both credential halves deleted on unpair | [revocation](./security/rationale.md#revocation-and-the-kill-switch) |
 | Enrollment (host <-> extension) | Secure Enclave key, presence-gated signing, extension-side pin, fingerprint comparison | [enrollment](./security/rationale.md#enrollment-and-user-presence) |
-| Site allowlist | Per-origin approval + `chrome.permissions.request`; page cannot self-approve | [extension gates](./security/rationale.md#extension-gates-and-tool-scope) |
-| High-risk confirmation | Extension-owned window off the page-reachable DOM; deny on timeout/close | [extension gates](./security/rationale.md#extension-gates-and-tool-scope) |
+| Site allowlist | Per-origin approval + `chrome.permissions.request`; page cannot self-approve | [trust boundaries](./security/trust-boundaries.md) |
+| High-risk confirmation | Extension-owned window off the page-reachable DOM; deny on timeout/close | [trust boundaries](./security/trust-boundaries.md) |
 | Crown-jewel confirmation | `page_eval` / `page_upload` approval is a Secure Enclave Touch ID signature on an enrolled Mac | [user presence](./security/rationale.md#enrollment-and-user-presence) |
 | Kill switch + audit | Fail-closed latch enforced at four layers; presence-gated release; log-after-decide trail | [kill switch](./security/rationale.md#revocation-and-the-kill-switch) |
-| Masking | Cookie/storage/eval/page-text egress masked in the SW, once for both page backends | [tool scope](./security/rationale.md#extension-gates-and-tool-scope) |
+| Masking | Cookie/storage/eval/page-text egress masked in the SW, once for both page backends | [tool risk matrix](./security/tool-risk-matrix.md) |
 | Protocol safety | NM 1 MB outbound limit; single-writer + flush; stderr panic hook; fuzzed parsers | (section 3.1) |
 
 ## 7. Key constraints (pitfalls hit and handled)
