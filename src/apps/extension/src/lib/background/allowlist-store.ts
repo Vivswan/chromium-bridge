@@ -3,6 +3,7 @@
 // The allowlist lives in browser.storage.local (survives SW restarts). A new
 // origin surfaces a badge + pending request that the popup resolves.
 
+import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { AllowlistSchema, type PendingApproval } from "@chromium-bridge/shared/storage";
 import { browser } from "wxt/browser";
 import {
@@ -161,7 +162,7 @@ function settlePending(id: string, allowed: boolean): boolean {
 export async function resolvePendingAllow(
   id: string,
   allow: boolean,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<RuntimeResponse<"resolve_allow">> {
   // Claim before the allowlist I/O below: with the claim taken only after
   // an await, the deadline could settle this request false mid-persist and
   // an approval would land AFTER its denial.
@@ -194,9 +195,7 @@ export async function resolvePendingAllow(
 // Manual add from the options page. We only persist the glob - MV3 forbids
 // browser.permissions.request outside a user-gesture context, so the actual
 // host permission is requested on first visit via ensureAllowed().
-export async function addAllow(
-  input: string,
-): Promise<{ ok: boolean; list?: string[]; error?: string }> {
+export async function addAllow(input: string): Promise<RuntimeResponse<"add_allow">> {
   const glob = canonicalOriginGlob(input);
   if (!glob) return { ok: false, error: `not a valid http(s) origin: ${input}` };
   const list = await getAllowlist();

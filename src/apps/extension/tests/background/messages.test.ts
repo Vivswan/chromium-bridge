@@ -1,14 +1,22 @@
-// Sender gating: the runtime router refuses EVERY message from a
-// non-extension-page sender, and confirm_* from anything but the confirmation
-// window. A content script sends the router nothing, so a content-script sender
-// for any of these is a compromised renderer reaching for the trust state
-// (allowlist, pin, enrollment status) and must be refused. Without this gate a
-// content script on an approved origin could add_allow{evil.com}.
+// Sender gating, derived from the contract: the router refuses EVERY declared
+// message from a non-extension-page sender, and every confirm-window message
+// from any other extension page. A content script sends the router nothing,
+// so a content-script sender for any of these is a compromised renderer
+// reaching for trust state (allowlist, pin, enrollment status). Without this
+// gate a content script on an approved origin could add_allow{evil.com}.
 
-import { type RuntimeMsg, RuntimeMsgSchema } from "@chromium-bridge/shared/runtime-msg";
-import { beforeEach, describe, expect, test } from "vitest";
+import {
+  RUNTIME_CONTRACT,
+  type RuntimeMsg,
+  type RuntimeMsgType,
+  type RuntimeRequest,
+  runtimeResponseSchema,
+} from "@chromium-bridge/shared/runtime-msg";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";
+import { resetPanicForTests } from "@/lib/background/confirm/service";
+import { resetKillForTests } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
 
 const EXT_ID = "test-ext-id";
@@ -19,23 +27,56 @@ const contentScriptSender = {
   id: EXT_ID,
   url: "https://evil.example/attack",
 } as Browser.runtime.MessageSender;
-// An extension-page sender (options/popup).
 const optionsSender = {
   id: EXT_ID,
   url: `chrome-extension://${EXT_ID}/options.html`,
 } as Browser.runtime.MessageSender;
-// The confirmation window specifically.
 const confirmSender = {
   id: EXT_ID,
   url: `chrome-extension://${EXT_ID}/confirm.html?id=x`,
 } as Browser.runtime.MessageSender;
 
-function call(msg: RuntimeMsg, sender: Browser.runtime.MessageSender): { resp: unknown } {
-  const out: { resp: unknown } = { resp: undefined };
-  route(msg, sender, (r) => {
-    out.resp = r;
+const REFUSED_PAGE = { ok: false, error: "this action is only accepted from extension pages" };
+const REFUSED_CONFIRM = { ok: false, error: "confirmations are confirm-window-only" };
+
+// One well-formed request per contract entry. The mapped type makes a message
+// type without a sample a compile error, and the roster below is read from
+// the samples, so a new message cannot escape the gate tests (the extension
+// typecheck covers this file, so the mapped type is enforced in CI).
+const REQUESTS: { [K in RuntimeMsgType]: RuntimeRequest<K> } = {
+  resolve_allow: { type: "resolve_allow", id: "allow_1", allow: true },
+  get_allowlist: { type: "get_allowlist" },
+  add_allow: { type: "add_allow", glob: "https://evil.example/*" },
+  remove_allow: { type: "remove_allow", glob: "https://good.example/*" },
+  get_status: { type: "get_status" },
+  get_enrollment: { type: "get_enrollment" },
+  get_clients: { type: "get_clients" },
+  revoke_client: { type: "revoke_client", name: "claude-code" },
+  get_kill: { type: "get_kill" },
+  set_kill: { type: "set_kill", on: true },
+  get_audit: { type: "get_audit" },
+  sweep_pending: { type: "sweep_pending" },
+  lang_choose: { type: "lang_choose", value: "en" },
+  enroll_pair: { type: "enroll_pair" },
+  enroll_verify: { type: "enroll_verify" },
+  enroll_approve: { type: "enroll_approve" },
+  enroll_reject: { type: "enroll_reject" },
+  enroll_revoke: { type: "enroll_revoke" },
+  confirm_ready: { type: "confirm_ready", id: "x" },
+  confirm_resolve: { type: "confirm_resolve", id: "x", approved: true },
+  confirm_deny_kill: { type: "confirm_deny_kill" },
+};
+
+const EVERY_REQUEST: RuntimeMsg[] = Object.values(REQUESTS);
+const CONFIRM_ONLY = EVERY_REQUEST.filter(
+  (msg) => RUNTIME_CONTRACT[msg.type].gate === "confirm-window",
+);
+
+/** The response the router eventually delivers for one message. */
+function answer(msg: RuntimeMsg, sender: Browser.runtime.MessageSender): Promise<unknown> {
+  return new Promise((resolve) => {
+    route(msg, sender, resolve);
   });
-  return out;
 }
 
 beforeEach(() => {
@@ -43,142 +84,78 @@ beforeEach(() => {
   (fakeBrowser.runtime as unknown as Record<string, unknown>).id = EXT_ID;
 });
 
-// Every message a content script could try, and the mutating ones especially.
-const GATED: RuntimeMsg[] = [
-  { type: "get_allowlist" },
-  { type: "add_allow", glob: "https://evil.example/*" },
-  { type: "remove_allow", glob: "https://good.example/*" },
-  { type: "resolve_allow", id: "allow_1", allow: true },
-  { type: "get_status" },
-  { type: "get_enrollment" },
-  // The ADR-0025 trusted-client admin surface: enumeration and revocation of
-  // the trust set are extension-page only, like every other trust action.
-  { type: "get_clients" },
-  { type: "revoke_client", name: "claude-code" },
-  // The ADR-0030 kill switch and audit ring: reading the state, engaging the
-  // switch, and reading the trail are all extension-page only. set_kill is
-  // engage-only by schema (ADR-0032 decision 6: a release cannot even be
-  // expressed at this boundary; the host refuses kill_release regardless).
-  { type: "get_kill" },
-  { type: "set_kill", on: true },
-  // The confirm window's deny-and-kill panic exit: gated twice (extension
-  // page, then confirm window specifically); this pins the first gate.
-  { type: "confirm_deny_kill" },
-  { type: "get_audit" },
-  // The pending-approval mirror sweep: display-state only, but it writes
-  // storage the popup renders, so it stays extension-page gated like the rest.
-  { type: "sweep_pending" },
-  // The ADR-0032 decision-7 language choice: a relayed lang_set is only a
-  // cosmetic nuisance, but a page must still not be able to speak to the
-  // host through the SW, so it stays extension-page gated like the rest.
-  { type: "lang_choose", value: "en" },
-  { type: "enroll_pair" },
-  { type: "enroll_verify" },
-  { type: "enroll_approve" },
-  { type: "enroll_reject" },
-  { type: "enroll_revoke" },
-];
+afterEach(() => {
+  // confirm_deny_kill latches confirmations to auto-deny and arms the kill
+  // exchange; neither may leak into the next case.
+  resetPanicForTests();
+  resetKillForTests();
+});
 
-/** Invoke the router and resolve with the response the handler eventually
- * delivers. route() calls sendResponse synchronously for sync handlers and
- * later for async ones, so resolving with it as the callback covers both. */
-function callAsync(msg: RuntimeMsg, sender: Browser.runtime.MessageSender): Promise<unknown> {
-  return new Promise((resolve) => {
-    route(msg, sender, resolve);
+describe("router sender gating", () => {
+  test.each(EVERY_REQUEST)("refuses $type from a content-script sender", async (msg) => {
+    await expect(answer(msg, contentScriptSender)).resolves.toEqual(REFUSED_PAGE);
   });
-}
 
-describe("router sender gating (#32)", () => {
-  for (const msg of GATED) {
-    test(`refuses ${msg.type} from a content-script sender`, () => {
-      const { resp } = call(msg, contentScriptSender);
-      expect(resp).toEqual({
-        ok: false,
-        error: "this action is only accepted from extension pages",
-      });
-    });
-  }
+  test.each(CONFIRM_ONLY)(
+    "refuses $type from an extension page that is not the confirm window",
+    async (msg) => {
+      await expect(answer(msg, optionsSender)).resolves.toEqual(REFUSED_CONFIRM);
+    },
+  );
+
+  // TypeScript lets a handler return fields the response schema never
+  // declared (spreads and non-literal returns escape excess property checks),
+  // and the pages' parse strips them, so a delivered-but-undeclared field
+  // would drift with no failure anywhere. The confirm window passes both
+  // gates, so it exercises every handler with no host attached.
+  test.each(EVERY_REQUEST)(
+    "$type answered to the confirm window is exactly its declared response",
+    async (msg) => {
+      const resp = await answer(msg, confirmSender);
+      expect(runtimeResponseSchema(msg.type).parse(resp)).toEqual(resp);
+    },
+  );
 
   test("a content script CANNOT seed the allowlist via add_allow", async () => {
-    call({ type: "add_allow", glob: "https://evil.example/*" }, contentScriptSender);
-    // Give any (refused) async path a tick; nothing should have been written.
-    await new Promise((r) => setTimeout(r, 0));
+    await answer(REQUESTS.add_allow, contentScriptSender);
     const { allowlist } = await fakeBrowser.storage.local.get("allowlist");
     expect(allowlist ?? []).toEqual([]);
   });
 
-  test("an extension page (options) is allowed for get_allowlist and gets the list", async () => {
+  test("an extension page can read and add to the allowlist (the legit path is unbroken)", async () => {
     await fakeBrowser.storage.local.set({ allowlist: ["https://good.example/*"] });
-    const resp = (await callAsync({ type: "get_allowlist" }, optionsSender)) as { list?: string[] };
-    expect(resp.list).toEqual(["https://good.example/*"]);
-  });
-
-  test("an extension page can add to the allowlist (the legit path is unbroken)", async () => {
-    const resp = (await callAsync(
-      { type: "add_allow", glob: "https://ok.example/deep/path" },
-      optionsSender,
-    )) as { ok?: boolean; list?: string[] };
-    expect(resp.ok).toBe(true);
-    expect(resp.list).toEqual(["https://ok.example/*"]);
-  });
-
-  test("an extension page's lang_choose routes; with no live host it stays local", async () => {
-    // No port is attached in this suite, so the relay reports sent:false -
-    // the choice stays a local storage write (the picker's own), which is
-    // the designed offline posture (ADR-0032 decision 7).
-    const resp = await callAsync({ type: "lang_choose", value: "zh_CN" }, optionsSender);
-    expect(resp).toEqual({ ok: true, sent: false });
-  });
-
-  test("confirm_ready/confirm_resolve require the confirm window, not any extension page", () => {
-    // From the options page (an extension page) - refused as confirm-window-only.
-    expect(call({ type: "confirm_ready", id: "x" }, optionsSender).resp).toEqual({
-      ok: false,
-      error: "confirmations are confirm-window-only",
+    await expect(answer(REQUESTS.get_allowlist, optionsSender)).resolves.toEqual({
+      ok: true,
+      list: ["https://good.example/*"],
     });
-    expect(call({ type: "confirm_resolve", id: "x", approved: true }, optionsSender).resp).toEqual({
-      ok: false,
-      error: "confirmations are confirm-window-only",
-    });
-    // The deny-and-kill panic exit is confirm-window-only like the rest: any
-    // other extension page already has its own kill affordance (set_kill) and
-    // must not be able to answer a confirmation through this side door.
-    expect(call({ type: "confirm_deny_kill" }, optionsSender).resp).toEqual({
-      ok: false,
-      error: "confirmations are confirm-window-only",
-    });
-    // From a content script - refused by the top-level gate first.
-    expect(
-      call({ type: "confirm_resolve", id: "x", approved: true }, contentScriptSender).resp,
-    ).toEqual({ ok: false, error: "this action is only accepted from extension pages" });
+    await expect(
+      answer({ type: "add_allow", glob: "https://ok.example/deep/path" }, optionsSender),
+    ).resolves.toEqual({ ok: true, list: ["https://good.example/*", "https://ok.example/*"] });
   });
 
-  test("the confirm window is accepted for confirm_ready", () => {
-    // No pending confirmation, so payload is null - but NOT the refusal.
-    const { resp } = call({ type: "confirm_ready", id: "x" }, confirmSender);
-    expect(resp).toEqual({ payload: null });
+  test("lang_choose with no live host stays a local choice: ok with sent:false", async () => {
+    // No port is attached in this suite, so the relay reports sent:false and
+    // the picker's own local write is the whole effect (the offline posture).
+    await expect(answer({ type: "lang_choose", value: "zh_CN" }, optionsSender)).resolves.toEqual({
+      ok: true,
+      sent: false,
+    });
+  });
+
+  test("the confirm window is accepted for confirm_ready: no pending payload is null, not a refusal", async () => {
+    await expect(answer(REQUESTS.confirm_ready, confirmSender)).resolves.toEqual({
+      ok: true,
+      payload: null,
+    });
   });
 
   test("sweep_pending re-derives the mirror through the SW (ghost record swept)", async () => {
     // The popup found an unparsable pendingAllow record and asked the SW to
-    // sweep it. The SW's serialized mirror path removes it (no live requests
-    // in this worker); the popup itself never writes storage - a popup-side
+    // sweep it; the popup itself never writes storage, since a popup-side
     // remove could race a freshly minted live request and strand its resolver.
     await fakeBrowser.storage.local.set({ pendingAllow: { id: "old-shape", glob: "x" } });
-    const resp = await callAsync({ type: "sweep_pending" }, optionsSender);
-    expect(resp).toEqual({ ok: true });
+    await expect(answer(REQUESTS.sweep_pending, optionsSender)).resolves.toEqual({ ok: true });
     const { pendingAllow } = await fakeBrowser.storage.local.get("pendingAllow");
     expect(pendingAllow).toBeUndefined();
-  });
-});
-
-describe("kill switch message shape (ADR-0032 decision 6)", () => {
-  test("set_kill is engage-only by schema: a release cannot even be expressed", () => {
-    // The host refuses kill_release from the extension regardless; this pins
-    // the nearer boundary too - the runtime message schema admits no
-    // on:false, so no extension surface can ever ask the SW to relay a
-    // release.
-    expect(RuntimeMsgSchema.safeParse({ type: "set_kill", on: true }).success).toBe(true);
-    expect(RuntimeMsgSchema.safeParse({ type: "set_kill", on: false }).success).toBe(false);
   });
 });

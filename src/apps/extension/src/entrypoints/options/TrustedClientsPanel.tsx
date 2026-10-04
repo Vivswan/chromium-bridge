@@ -1,7 +1,8 @@
+import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
-import { type ClientListView, send } from "@/lib/messages";
+import { send } from "@/lib/messages";
 
 // The ADR-0025 trusted-client panel: the MCP-client harnesses this machine's
 // bridge admits (ADR-0024), with a revoke per entry. Revoking takes effect
@@ -12,12 +13,12 @@ import { type ClientListView, send } from "@/lib/messages";
 // panel shows a not-connected state when no host is up.
 export function TrustedClientsPanel() {
   const { t } = useI18n();
-  const [view, setView] = useState<ClientListView | null>(null);
+  const [view, setView] = useState<RuntimeResponse<"get_clients"> | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setView((await send<ClientListView>({ type: "get_clients" })) ?? null);
+    setView(await send({ type: "get_clients" }));
   }, []);
 
   useEffect(() => {
@@ -28,8 +29,8 @@ export function TrustedClientsPanel() {
     if (!window.confirm(t("clients.revoke_confirm", [name]))) return;
     setBusy(true);
     setActionError(null);
-    const r = await send<{ ok: boolean; error?: string }>({ type: "revoke_client", name });
-    if (!r?.ok) setActionError(t("clients.revoke_failed", [r?.error ?? t("clients.no_reply")]));
+    const r = await send({ type: "revoke_client", name });
+    if (!r.ok) setActionError(t("clients.revoke_failed", [r.error]));
     await refresh();
     setBusy(false);
   };
@@ -52,7 +53,7 @@ export function TrustedClientsPanel() {
           stays reserved for kill/deny/compromised), fail-closed wording. */}
       {view && !view.ok && (
         <div role="status" className="mt-2 text-xs font-semibold text-pending">
-          {t("clients.error", [view.error ?? t("clients.no_reply")])}
+          {t("clients.error", [view.error])}
         </div>
       )}
 
@@ -60,13 +61,13 @@ export function TrustedClientsPanel() {
         <p className="consequence mt-2">{t("clients.unenrolled")}</p>
       )}
 
-      {view?.ok && view.enrolled && (view.clients?.length ?? 0) === 0 && (
+      {view?.ok && view.enrolled && view.clients.length === 0 && (
         <div className="mt-2 text-xs text-text-3">{t("clients.empty")}</div>
       )}
 
-      {view?.ok && view.enrolled && (view.clients?.length ?? 0) > 0 && (
+      {view?.ok && view.enrolled && view.clients.length > 0 && (
         <ul className="m-0 mt-1 list-none p-0">
-          {view.clients?.map((c) => (
+          {view.clients.map((c) => (
             <li
               key={c.name}
               className="flex items-center gap-3 border-b border-edge py-2 last:border-b-0"

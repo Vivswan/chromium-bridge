@@ -26,8 +26,8 @@ import type {
   EnclaveChallengeWire,
   EnclaveRevokeWire,
 } from "@chromium-bridge/shared/envelope-wire.gen";
+import type { EnrollmentStatus, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { browser } from "wxt/browser";
-import type { EnrollmentStatus } from "../enrollment-status";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
 import { getEffectivePolicy } from "./effective-policy";
@@ -125,7 +125,9 @@ function clearOutstanding(): void {
   }
 }
 
-async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; error?: string }> {
+async function issueChallenge(
+  mode: "pair" | "verify",
+): Promise<RuntimeResponse<"enroll_pair" | "enroll_verify">> {
   if (!postFrame) return { ok: false, error: "native host not connected" };
   if (outstanding) return { ok: false, error: "a challenge is already outstanding" };
   const nonce = generateNonce();
@@ -527,7 +529,7 @@ async function handleError(frame: EnclaveInboundFrame): Promise<void> {
 
 // ---- user actions (routed from messages.ts) -------------------------------------
 
-export function startPairing(): Promise<{ ok: boolean; error?: string }> {
+export function startPairing(): Promise<RuntimeResponse<"enroll_pair">> {
   return serialized(async () => {
     if (!(await platformCanEnroll())) {
       return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
@@ -548,7 +550,7 @@ export function startPairing(): Promise<{ ok: boolean; error?: string }> {
   });
 }
 
-export function verifyPinnedNow(): Promise<{ ok: boolean; error?: string }> {
+export function verifyPinnedNow(): Promise<RuntimeResponse<"enroll_verify">> {
   return serialized(async () => {
     if (!(await platformCanEnroll())) {
       return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
@@ -561,7 +563,7 @@ export function verifyPinnedNow(): Promise<{ ok: boolean; error?: string }> {
   });
 }
 
-export function approvePending(): Promise<{ ok: boolean; error?: string }> {
+export function approvePending(): Promise<RuntimeResponse<"enroll_approve">> {
   return serialized(async () => {
     const pending = await pinStore.getPending();
     if (!pending) return { ok: false, error: "no pairing awaiting approval" };
@@ -592,7 +594,7 @@ export function approvePending(): Promise<{ ok: boolean; error?: string }> {
   });
 }
 
-export function rejectPending(): Promise<{ ok: boolean; error?: string }> {
+export function rejectPending(): Promise<RuntimeResponse<"enroll_reject">> {
   return serialized(async () => {
     // A stale reject (the pending record is gone, e.g. already approved in
     // another tab) must not pretend it revoked anything.
@@ -618,7 +620,7 @@ export function rejectPending(): Promise<{ ok: boolean; error?: string }> {
  * Pairing does not auto-restart afterwards (paused), so revoking never
  * triggers a surprise Touch ID prompt; the user starts the next ceremony
  * from the options page. */
-export function revokePin(): Promise<{ ok: boolean }> {
+export function revokePin(): Promise<RuntimeResponse<"enroll_revoke">> {
   return serialized(async () => {
     clearOutstanding();
     // Read the pin BEFORE clearing the store: its keyId is the prior identity
@@ -658,6 +660,7 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
   const pending = await pinStore.getPending();
   const lastError = await pinStore.getLastError();
   const base = {
+    ok: true as const,
     platformSupported,
     lastError: lastError ?? undefined,
     paused: await pinStore.getPaused(),

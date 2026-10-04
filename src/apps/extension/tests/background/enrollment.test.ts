@@ -1,6 +1,7 @@
 import { ENCLAVE_FIXTURE_KEY_ID } from "@chromium-bridge/shared/enclave.gen";
 import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
 import { POLICY_DEFAULTS } from "@chromium-bridge/shared/policy.gen";
+import type { EnrollmentStatus } from "@chromium-bridge/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import * as pinStore from "@/lib/background/enclave-pin";
@@ -27,7 +28,6 @@ import {
 } from "@/lib/background/enrollment";
 import * as policySync from "@/lib/background/policy-sync";
 import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
-import type { EnrollmentStatus } from "@/lib/enrollment-status";
 
 /** Assert the status is in `state` and narrow to that arm's fields. */
 function inState<S extends EnrollmentStatus["state"]>(
@@ -38,11 +38,11 @@ function inState<S extends EnrollmentStatus["state"]>(
   return st as Extract<EnrollmentStatus, { state: S }>;
 }
 
-// Type-level pins for the SHARED EnrollmentStatus union (lib/enrollment-status.ts,
-// consumed verbatim by the popup/options views): the
-// invalid combinations are unrepresentable, not merely unproduced.
+// Type-level pins for the contract's EnrollmentStatus union (the get_enrollment
+// response, consumed verbatim by the popup/options views): the invalid
+// combinations are unrepresentable, not merely unproduced.
 function enrollmentStatusTypePins(): EnrollmentStatus[] {
-  const base = { platformSupported: true } as const;
+  const base = { ok: true, platformSupported: true } as const;
   return [
     // @ts-expect-error a pinned status is structurally never blocked
     { ...base, state: "pinned", blocked: true, keyId: "k", fingerprint: "f", pinnedAt: 1 },
@@ -677,8 +677,7 @@ describe("ceremony state machine", () => {
     const key = await genKey();
     await pairAndPin(key);
     const res = await startPairing();
-    expect(res.ok).toBe(false);
-    expect(res.error).toContain("revoke");
+    expect(res).toEqual({ ok: false, error: expect.stringContaining("revoke") });
   });
 
   test("a stored requireEnrollment=false neither opens the gate nor skips the ceremony (retired, ADR-0032)", async () => {
@@ -998,8 +997,7 @@ describe("platform scoping (non-Enclave platforms)", () => {
   test("on windows, pairing and verify actions refuse rather than challenge", async () => {
     mockOs = "win";
     const pair = await startPairing();
-    expect(pair.ok).toBe(false);
-    expect(pair.error).toContain("unavailable");
+    expect(pair).toEqual({ ok: false, error: expect.stringContaining("unavailable") });
     const verify = await verifyPinnedNow();
     expect(verify.ok).toBe(false);
     expect(posted.length).toBe(0);

@@ -19,9 +19,9 @@ import {
   AdminInboundFrameSchema,
   ClientListResultSchema,
   ClientRevokeResultSchema,
-  type TrustedClient,
 } from "@chromium-bridge/shared/enclave";
 import type { ClientListWire, ClientRevokeWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 
 /** How long the host has to answer an admin control frame before the request
  * fails closed. Generous for a local round-trip; nothing here can raise a
@@ -29,13 +29,8 @@ import type { ClientListWire, ClientRevokeWire } from "@chromium-bridge/shared/e
  * see ADR-0021/0025). */
 const ADMIN_REQUEST_TIMEOUT_MS = 10_000;
 
-/** Success carries the list, failure carries the reason - never both, never
- * neither. Mirrored (hand-written, UI side) in lib/messages.ts. */
-export type ClientListView =
-  | { ok: true; enrolled: boolean; clients: TrustedClient[] }
-  | { ok: false; error: string };
-
-export type RevokeClientView = { ok: true } | { ok: false; error: string };
+type ClientListView = RuntimeResponse<"get_clients">;
+type RevokeClientView = RuntimeResponse<"revoke_client">;
 
 /** True for the two ADR-0025 admin result frame tags. */
 export function isAdminFrame(msg: unknown): msg is AdminInboundFrame {

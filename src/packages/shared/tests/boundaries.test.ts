@@ -13,42 +13,32 @@ import { RuntimeMsgSchema } from "../src/runtime-msg";
 import { AllowlistSchema, PendingApprovalsSchema } from "../src/storage";
 
 describe("RuntimeMsgSchema", () => {
-  test("accepts every message the popup/options/content actually send", () => {
-    const good = [
-      { type: "resolve_allow", id: "allow_1", allow: true },
-      { type: "get_allowlist" },
-      { type: "add_allow", glob: "https://example.com/*" },
-      { type: "remove_allow", glob: "https://example.com/*" },
-      { type: "get_status" },
-      { type: "get_enrollment" },
-      { type: "confirm_ready", id: "confirm_1" },
-      { type: "confirm_resolve", id: "confirm_1", approved: false },
-      { type: "enroll_pair" },
-      { type: "enroll_verify" },
-      { type: "enroll_approve" },
-      { type: "enroll_reject" },
-      { type: "enroll_revoke" },
-    ];
-    for (const msg of good) expect(RuntimeMsgSchema.safeParse(msg).success).toBe(true);
-  });
-
-  test("refuses unknown types and malformed payloads", () => {
-    const bad = [
-      null,
-      "get_status",
-      { type: "unknown_type" },
-      { type: "capture_visible_tab" }, // removed: screenshots are SW-captured
-      { type: "confirm_resolve", id: "confirm_1" }, // missing approved
-      { type: "confirm_ready", id: "" }, // empty id
-      { type: "resolve_allow", id: "x" }, // missing allow
-      { type: "resolve_allow", id: "", allow: true }, // empty id
-      { type: "add_allow" }, // missing glob
-      { type: "add_allow", glob: "" }, // empty glob
-      { type: "add_allow", glob: 42 },
-      { type: "get_status", extra: 1 }, // strict: no unknown fields
-      { type: "enroll_pair", now: true },
-    ];
-    for (const msg of bad) expect(RuntimeMsgSchema.safeParse(msg).success).toBe(false);
+  // The router's one parse is all that stands between an extension-page
+  // message and a trust-state mutation; a loosened field here (an optional
+  // made of a required one, a loose object admitting extras, a release arm on
+  // the kill switch) would silently widen what a page may ask for.
+  test.each([
+    { name: "not an object", msg: null },
+    { name: "a bare type string", msg: "get_status" },
+    { name: "an unknown type", msg: { type: "unknown_type" } },
+    { name: "a retired type (screenshots are SW-captured)", msg: { type: "capture_visible_tab" } },
+    { name: "confirm_resolve without approved", msg: { type: "confirm_resolve", id: "confirm_1" } },
+    { name: "confirm_ready with an empty id", msg: { type: "confirm_ready", id: "" } },
+    { name: "resolve_allow without allow", msg: { type: "resolve_allow", id: "x" } },
+    { name: "resolve_allow with an empty id", msg: { type: "resolve_allow", id: "", allow: true } },
+    { name: "add_allow without glob", msg: { type: "add_allow" } },
+    { name: "add_allow with an empty glob", msg: { type: "add_allow", glob: "" } },
+    { name: "add_allow with a non-string glob", msg: { type: "add_allow", glob: 42 } },
+    { name: "an unknown field (strict)", msg: { type: "get_status", extra: 1 } },
+    { name: "enroll_pair with an unknown field", msg: { type: "enroll_pair", now: true } },
+    {
+      name: "a kill release (the host refuses it; engage-only by shape)",
+      msg: { type: "set_kill", on: false },
+    },
+    { name: "revoke_client with a non-label name", msg: { type: "revoke_client", name: "../etc" } },
+    { name: "lang_choose outside the enum", msg: { type: "lang_choose", value: "fr" } },
+  ])("refuses $name", ({ msg }) => {
+    expect(RuntimeMsgSchema.safeParse(msg).success).toBe(false);
   });
 });
 
