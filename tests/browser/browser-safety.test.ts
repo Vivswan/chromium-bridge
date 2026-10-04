@@ -1,14 +1,79 @@
-// Unit tests for the suite-ran canary in browser-safety.ts. No browser is
-// launched here - the guard is exercised as a real subprocess whose CHROME_BIN
-// is unset, so it always takes the refusal path - making this file safe to run
-// anywhere (CI runs it in the browser job next to the suites it guards).
+// Unit tests for the isolation guard and the suite-ran canary in browser-safety.ts. No browser is
+// launched here: the guard's browsers are stub scripts that print a version line, and the canary
+// runs as a real subprocess with CHROME_BIN unset, so this file is safe to run anywhere (CI runs it
+// in the browser job next to the suites it guards).
 
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ranMarkerBody, suiteExitCode, writeRanMarker } from "./browser-safety";
+import { isolatedBrowser, ranMarkerBody, suiteExitCode, writeRanMarker } from "./browser-safety";
+
+describe("isolatedBrowser", () => {
+  // External facts the guard rests on: Chrome for Testing reports "Google Chrome for Testing <ver>",
+  // Debian's chromium reports "Chromium <ver> built on Debian ...", and the engines leave a marker
+  // file in every container (/.dockerenv for Docker, /run/.containerenv for Podman). Each case runs a
+  // stub browser that prints one such line, with the marker present or absent.
+  const dir = mkdtempSync(join(tmpdir(), "bb-isolated-"));
+  const marker = join(dir, "containerenv");
+  writeFileSync(marker, "");
+  const absentMarker = join(dir, "no-such-marker");
+  const stubBrowser = (name: string, versionLine: string): string => {
+    const bin = join(dir, name);
+    writeFileSync(bin, `#!/bin/sh\necho ${JSON.stringify(versionLine)}\n`, { mode: 0o755 });
+    return bin;
+  };
+
+  const chromium = "Chromium 140.0.7339.80 built on Debian 13.1, running on Debian 13.1";
+  test.each([
+    {
+      name: "Chrome for Testing on the host",
+      bin: "cft",
+      version: "Google Chrome for Testing 140.0.7339.80",
+      at: absentMarker,
+      isolated: true,
+    },
+    {
+      name: "the headless shell on the host",
+      bin: "shell",
+      version: "HeadlessShell 140.0.7339.80",
+      at: absentMarker,
+      isolated: true,
+    },
+    {
+      name: "a distro Chromium inside a container",
+      bin: "chromium",
+      version: chromium,
+      at: marker,
+      isolated: true,
+    },
+    {
+      name: "the same distro Chromium on the host",
+      bin: "chromium",
+      version: chromium,
+      at: absentMarker,
+      isolated: false,
+    },
+    {
+      name: "a daily Chrome even inside a container",
+      bin: "chrome",
+      version: "Google Chrome 140.0.7339.80",
+      at: marker,
+      isolated: false,
+    },
+    {
+      name: "a daily Brave on the host",
+      bin: "brave",
+      version: "Brave Browser 140.1.83.109",
+      at: absentMarker,
+      isolated: false,
+    },
+  ])("$name: isolated=$isolated", ({ bin: binName, version, at, isolated }) => {
+    const bin = stubBrowser(binName, version);
+    expect(isolatedBrowser(bin, [at])).toBe(isolated ? bin : null);
+  });
+});
 
 describe("suiteExitCode", () => {
   test("a suite with passing checks and no failures is green", () => {

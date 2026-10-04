@@ -20,6 +20,7 @@
       "entry": [
         "*.test.ts",
         "check-envelope-parity.ts",
+        "compose-run.ts",
         "dev-browser.ts",
         "dev.ts",
         "gen-envelope.ts",

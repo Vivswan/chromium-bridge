@@ -1,0 +1,112 @@
+# The CI image compose.yaml runs. Every input is pinned (repository pin files read at build time, a
+# digest, a Debian snapshot, the ARGs below), so the hash of the build inputs identifies the image.
+# OCI instructions only, so buildah builds it too.
+FROM docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+
+ARG DEBIAN_SNAPSHOT=20261001T000000Z
+ARG RUSTUP_VERSION=1.29.1
+ARG CARGO_BINSTALL_VERSION=1.25.1
+ARG CARGO_NEXTEST_VERSION=0.9.146
+ARG TYPOS_VERSION=1.50.3
+ARG ACTIONLINT_VERSION=1.7.12
+ARG NODE_VERSION=24.21.0
+
+# Chrome for Testing ships no Linux arm64 build; Debian's chromium does, and the isolation guard
+# accepts it inside a container. build-essential: cargo needs a C linker. xvfb + xauth: the
+# non-headless browser suites. The snapshot is reached over http because the slim image has no CA
+# bundle yet (apt verifies the archive signatures regardless), and its Release files are past their
+# Valid-Until by design.
+RUN sed -i \
+        -e "s|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
+        -e "s|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \
+        /etc/apt/sources.list.d/debian.sources \
+    && test "$(grep -c "^URIs: http://snapshot.debian.org/archive/debian[-a-z]*/${DEBIAN_SNAPSHOT}$" /etc/apt/sources.list.d/debian.sources)" = "$(grep -c '^URIs:' /etc/apt/sources.list.d/debian.sources)" \
+    && apt-get -o Acquire::Check-Valid-Until=false update \
+    && apt-get -o Acquire::Check-Valid-Until=false install -y --no-install-recommends \
+        bash ca-certificates curl git unzip xz-utils \
+        build-essential pkg-config \
+        chromium xvfb xauth fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node runs the vitest suites (`vitest run` scripts); no pin file provisions it, and Debian's package
+# is too old for them.
+RUN case "$(dpkg --print-architecture)" in amd64) node_arch=x64 ;; arm64) node_arch=arm64 ;; *) exit 1 ;; esac \
+    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+    | tar -xJ -C /usr/local --strip-components=1 --exclude='*/CHANGELOG.md' --exclude='*/LICENSE' --exclude='*/README.md'
+
+# actionlint's release assets use Debian's architecture names (amd64, arm64).
+RUN curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
+    | tar -xz -C /usr/local/bin actionlint
+
+# safe.directory lives in the system gitconfig, not in GIT_CONFIG_* variables: moon runs git with a
+# scrubbed environment, and the bind-mounted checkout is owned by the host uid, not ours.
+RUN groupadd --gid 1000 ci \
+    && useradd --uid 1000 --gid ci --create-home --shell /bin/bash ci \
+    && mkdir -p /work && chown ci:ci /work \
+    && git config --system safe.directory '*'
+
+USER ci
+# Explicit tool homes: compose may run the container as a uid other than 1000 (docker on Linux passes
+# the host's), and the homes must still resolve.
+ENV HOME=/home/ci \
+    PROTO_HOME=/home/ci/.proto \
+    CARGO_HOME=/home/ci/.cargo \
+    RUSTUP_HOME=/home/ci/.rustup \
+    BUN_INSTALL=/home/ci/.bun \
+    PATH=/home/ci/.proto/shims:/home/ci/.proto/bin:/home/ci/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+
+WORKDIR /tmp/pins
+COPY .prototools rust-toolchain.toml ./
+COPY .github/workflows/checks.yml ./checks.yml
+
+# rustup first: proto's rust plugin drives rustup rather than installing it, and only rustup reads the
+# profile and components in rust-toolchain.toml (`rustup toolchain install` with no argument installs
+# the file's toolchain).
+RUN curl -fsSL "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/$(uname -m)-unknown-linux-gnu/rustup-init" -o /tmp/rustup-init \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none \
+    && rm /tmp/rustup-init \
+    && rustup toolchain install
+
+# proto's own pin is read before proto exists, so a TOML-tolerant scan; exactly one pin may match. The
+# installer is the release asset of that same version (it installs into PROTO_HOME/bin), not the
+# unversioned script on moonrepo.dev.
+RUN proto_version="$(sed -nE 's/^proto[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' .prototools)" \
+    && test "$(printf '%s\n' "${proto_version}" | grep -c .)" = 1 \
+    && curl -fsSL "https://github.com/moonrepo/proto/releases/download/v${proto_version}/proto_cli-installer.sh" \
+    | bash -s -- --no-modify-path \
+    && proto --version \
+    && proto install
+
+# The machete pin is the `tool:` input of checks.yml's install-action step, read as YAML so a comment
+# or a look-alike cannot stand in for it; exactly one distinct pin may exist.
+RUN curl -fsSL "https://github.com/cargo-bins/cargo-binstall/releases/download/v${CARGO_BINSTALL_VERSION}/cargo-binstall-$(uname -m)-unknown-linux-gnu.tgz" \
+    | tar -xz -C "${CARGO_HOME}/bin" \
+    && machete="$(bun -e ' \
+        const jobs = Object.values(Bun.YAML.parse(await Bun.file("checks.yml").text()).jobs); \
+        const tools = jobs.flatMap((job) => job.steps ?? []).map((step) => step.with?.tool); \
+        const pins = new Set(tools.filter((tool) => typeof tool === "string" && tool.startsWith("cargo-machete@")).map((tool) => tool.slice("cargo-machete@".length))); \
+        if (pins.size !== 1) throw new Error(`checks.yml must pin cargo-machete exactly once, found: ${[...pins].join(", ") || "none"}`); \
+        console.log([...pins][0]);')" \
+    && cargo binstall --no-confirm --locked \
+        "cargo-nextest@${CARGO_NEXTEST_VERSION}" \
+        "typos-cli@${TYPOS_VERSION}" \
+        "cargo-machete@${machete}"
+
+WORKDIR /work
+
+# compose.yaml mounts named volumes at these paths; a volume inherits the mode of the directory it
+# covers, and the tool homes must stay writable when the container runs as a uid other than 1000.
+RUN rm -rf /tmp/pins \
+    && mkdir -p /work/node_modules /work/target /work/.moon/cache \
+        "${CARGO_HOME}/registry" "${BUN_INSTALL}/install/cache" \
+    && chmod -R a+rwX /home/ci /work
+
+COPY scripts/container-entrypoint.sh /usr/local/bin/container-entrypoint
+
+# LEFTHOOK=0: the git hooks belong to the host checkout, and the git dir is mounted read-only.
+ENV CHROME_BIN=/usr/bin/chromium \
+    LEFTHOOK=0
+
+ENTRYPOINT ["container-entrypoint"]
+CMD ["bash"]

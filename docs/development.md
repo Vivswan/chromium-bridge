@@ -154,6 +154,45 @@ bun tests/browser/run_all.ts          # all three (skips browser tests if Chrome
 CHROME_BIN=/path/to/chrome bun tests/browser/run_all.ts
 ```
 
+## Running the gate and the browser suites in a container
+
+The container is the isolation: it carries every gate tool at the repository's pins plus a distro Chromium, and no browser or process on the host is in its reach. `Containerfile` builds it; `compose.yaml` runs it, within the Compose Specification subset both `docker compose` and `podman compose` implement (`moon run check-compose`, in the gate, holds it there).
+
+| Task | Runs inside the container |
+|------|---------------------------|
+| `moon run ci-container` | `moon run ci` |
+| `moon run test-browser-container` | `scripts/container-browser-suites.sh`: `xvfb-run -a moon run test-browser` with `BB_REQUIRE_BROWSER=1` (a skipped suite fails as in CI), then CI's RAN-marker canary over `tmp/browser-canary/` |
+| `moon run shell-container` | an interactive `bash` at `/work` |
+
+Docker is the default engine; `CONTAINER_ENGINE=podman moon run ci-container` switches. The first run builds the image (minutes, once); the checkout is bind-mounted at `/work`, so a build lands in the gitignored `build/` on the host like a native one.
+
+```text
+$ moon run test-browser-container
+...
+dom_test: 79 passed, 0 failed
+ext_test: 20 passed, 0 failed
+security_browser_test: 14 passed, 0 failed
+```
+
+Named volumes keep the Linux artifacts out of the host checkout and make reruns warm; `docker compose down -v` (or `podman compose down -v`) drops them all:
+
+| Volume | Mounted at | Holds |
+|--------|------------|-------|
+| `cargo-registry` | `/home/ci/.cargo/registry` | downloaded crates |
+| `cargo-target` | `/work/target` | the Linux build, hiding the host's `target/` |
+| `bun-cache` | `/home/ci/.bun/install/cache` | downloaded packages |
+| `node-modules` | `/work/node_modules` | the Linux install (the entrypoint runs `bun install --frozen-lockfile`) |
+| `moon-cache` | `/work/.moon/cache` | moon state for the container's runs |
+
+Podman rootless maps the host user to container root, so `compose.podman.yaml` adds `userns_mode: keep-id:uid=1000,gid=1000`, mapping the host user onto the image's user instead; the tasks pass that file when `CONTAINER_ENGINE=podman`. Running compose by hand needs the same facts the task supplies (`scripts/compose-run.ts`):
+
+```sh
+env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
+# from a linked worktree, use the launcher instead: bun scripts/compose-run.ts shell
+```
+
+The isolation guard's container exception is stated once, in the Safety section of [`tests/README.md`](../tests/README.md#-safety---never-point-browser-tests-at-your-daily-chrome).
+
 ## Fuzzing
 
 `src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with ten targets. Five fuzz the wire-frame decoders (`nm_frame`, `mcp_jsonrpc`, `bridge_envelope`, `handshake`, `attach`); five fuzz the semantic validators behind them (`handshake_verify`, `classify_frame`, `enclave_der`, `enclave_challenge`, `registration_manifest`). Where a correctness property exists, the semantic targets assert it instead of only checking for panics: the MAC verifier must accept a correctly computed MAC, the challenge and presence messages must stay domain-separated, and manifest ownership must answer `Foreign` for anything not provably ours. (The `handshake_verify` target also drives the full server handshake over in-memory I/O; the server generates a fresh nonce per handshake and the response MAC must bind it, so a static fuzzed response can only exercise the fail-closed rejection path there. The accept path is covered by the same target's MAC oracle and the socketpair unit tests in `handshake.rs`.)

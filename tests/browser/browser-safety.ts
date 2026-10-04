@@ -8,7 +8,7 @@
 // the binary itself: `CHROME_BIN --version`. Chrome for Testing reports
 // "Google Chrome for Testing <ver>" and the headless shell reports a
 // "HeadlessShell" build; a daily Chrome/Brave/Chromium reports its own name and
-// is refused. This is identification (does this binary self-report as CfT?),
+// is refused on the host (the container rule below is the one exception). This is identification (does this binary self-report as CfT?),
 // not adversarial authentication: a deliberately hostile wrapper could print an
 // accepted string and then launch a real browser. It exists to stop an
 // ACCIDENTAL real-browser launch (an unset or wrong CHROME_BIN), which is the
@@ -16,10 +16,17 @@
 // or loading a profile.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ISOLATED_VERSION = /Chrome for Testing|HeadlessShell/;
+
+// Inside a container no browser can hold the user's session, so a distro Chromium (`Chromium <ver>
+// built on Debian ...`, the CI image's browser) is isolated by construction there, and only there.
+// The engines' own marker files are the evidence (Docker, then Podman); the host has neither, so the
+// host-side rule above is unchanged, and no env var or path can stand in for the marker.
+const CONTAINER_MARKERS: readonly string[] = ["/.dockerenv", "/run/.containerenv"];
+const CONTAINER_VERSION = /^Chromium\b/;
 
 /** The unpacked extension bundle the browser suites load: the built
  * chrome-mv3 output by default, overridable with BB_EXT_DIR. One home for
@@ -33,18 +40,27 @@ export function extensionDir(): string {
   );
 }
 
-/** Returns the isolated browser path, or null if CHROME_BIN is unset or does
- * not identify (by its own --version) as an isolated Chrome for Testing. */
-export function isolatedBrowserOrNull(): string | null {
-  const bin = process.env.CHROME_BIN;
-  if (!bin) return null;
+/** The isolation verdict for one binary, by its own --version. */
+export function isolatedBrowser(
+  bin: string,
+  containerMarkers: readonly string[] = CONTAINER_MARKERS,
+): string | null {
   let version = "";
   try {
     version = execFileSync(bin, ["--version"], { encoding: "utf8", timeout: 10000 }).trim();
   } catch {
     return null; // not runnable / not a browser
   }
-  return ISOLATED_VERSION.test(version) ? bin : null;
+  if (ISOLATED_VERSION.test(version)) return bin;
+  const inContainer = containerMarkers.some((marker) => existsSync(marker));
+  return inContainer && CONTAINER_VERSION.test(version) ? bin : null;
+}
+
+/** Returns the isolated browser path, or null if CHROME_BIN is unset or does
+ * not identify as an isolated browser. */
+export function isolatedBrowserOrNull(): string | null {
+  const bin = process.env.CHROME_BIN;
+  return bin ? isolatedBrowser(bin) : null;
 }
 
 /** Exit(0) with a SKIP message unless CHROME_BIN identifies as isolated.

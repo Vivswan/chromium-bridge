@@ -1,0 +1,76 @@
+# The container test environment: one image for the gate, the browser suites, and a shell, with no
+# privilege, socket, or host network. Keys stay within the Compose Specification subset both
+# `docker compose` and `podman compose` implement (scripts/check-compose-compat.ts gates it).
+#
+# Compose reads these values from the environment; only the host knows them, and scripts/compose-run.ts
+# (behind the moon tasks) supplies them:
+#   UID, GID             -> the caller's ids, so files written on the bind mount are theirs
+#   COMPOSE_GIT_DIR      -> the git common dir, mounted read-only at /work-git (a linked worktree keeps
+#                           it outside the checkout)
+#   COMPOSE_GIT_POINTER  -> in a linked worktree, a file naming that mount point, covering the host's
+#                           .git file whose path git in the container could not resolve
+# Podman rootless adds compose.podman.yaml.
+
+# One project name, so every checkout and worktree of the repository shares the named volumes.
+name: chromium-bridge
+
+x-ci: &ci
+  build:
+    context: .
+    dockerfile: Containerfile
+  image: chromium-bridge-ci
+  user: "${UID:-1000}:${GID:-1000}"
+  working_dir: /work
+  init: true
+  shm_size: 1gb
+  volumes:
+    - ./:/work:z
+    # Long form: an interpolated mount keeps its options as fields a variable cannot reach. The host
+    # path is the source only; the target is fixed, so a Windows path never becomes a Linux mount point.
+    - type: bind
+      source: ${COMPOSE_GIT_DIR:-./.git}
+      target: /work-git
+      read_only: true
+      bind:
+        selinux: z
+    # In a linked worktree the launcher's pointer file names the git dir by its mount point above and
+    # covers the host's .git file; in a plain checkout this mounts .git over itself.
+    - type: bind
+      source: ${COMPOSE_GIT_POINTER:-./.git}
+      target: /work/.git
+      read_only: true
+      bind:
+        selinux: z
+    - cargo-registry:/home/ci/.cargo/registry
+    - cargo-target:/work/target
+    - bun-cache:/home/ci/.bun/install/cache
+    - node-modules:/work/node_modules
+    - moon-cache:/work/.moon/cache
+
+services:
+  ci:
+    <<: *ci
+    command: ["moon", "run", "ci"]
+
+  browser:
+    <<: *ci
+    environment:
+      # A skipped suite fails as in CI, and every finished suite leaves its RAN marker where the host
+      # can read it after the run (tmp/ is gitignored); the script requires all three.
+      BB_REQUIRE_BROWSER: "1"
+      BB_BROWSER_CANARY_DIR: /work/tmp/browser-canary
+    command: ["scripts/container-browser-suites.sh"]
+
+  shell:
+    <<: *ci
+    stdin_open: true
+    tty: true
+    command: ["bash"]
+
+# Linux artifacts stay out of the host checkout, and reruns start warm.
+volumes:
+  cargo-registry:
+  cargo-target:
+  bun-cache:
+  node-modules:
+  moon-cache:
