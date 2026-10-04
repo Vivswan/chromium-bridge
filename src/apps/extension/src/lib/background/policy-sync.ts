@@ -317,7 +317,7 @@ async function maybeAdoptExtensionLanguage(attachment: PortAttachment | null): P
 export function chooseLanguage(value: UiLanguageValue): Promise<boolean> {
   const send = frameChain.then(async () => {
     const attachment = port;
-    if (!attachment || !attachment.langSeen) return false;
+    if (!attachment?.langSeen) return false;
     if (!(await langLanePinned())) return false;
     // The pinned read awaited: only the still-live attachment may emit.
     if (attachment !== port) return false;
