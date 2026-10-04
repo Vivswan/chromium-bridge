@@ -123,33 +123,27 @@ fn der_read_integer(input: &[u8]) -> Result<(&[u8], &[u8]), EnclaveError> {
 
 /// Minimal strict-DER encoder for ECDSA-Sig-Value, used to build test vectors
 /// and roundtrip against the parser (also from the macOS software-key tests
-/// in [`super::key`]). Test-only on purpose: the production path never needs
-/// to *emit* DER.
-#[cfg(test)]
-pub(super) fn raw_to_der(r: &[u8; 32], s: &[u8; 32]) -> Vec<u8> {
-    fn integer(v: &[u8; 32]) -> Vec<u8> {
-        let mut trimmed: &[u8] = v;
-        while trimmed.len() > 1 && trimmed[0] == 0 {
-            trimmed = &trimmed[1..];
-        }
-        let pad = trimmed[0] & 0x80 != 0;
-        let mut out = vec![0x02, (trimmed.len() + usize::from(pad)) as u8];
+/// in [`super::key`]) and to generate the fuzz seeds. Never built into a
+/// shipped binary: the production path never needs to *emit* DER.
+#[cfg(any(test, feature = "fuzzing"))]
+pub fn raw_to_der(r: &[u8; 32], s: &[u8; 32]) -> Vec<u8> {
+    fn integer(scalar: &[u8; 32]) -> Vec<u8> {
+        // Minimal encoding keeps at least one byte, and a leading 0x00 only as a sign pad.
+        let zeros = scalar.iter().take_while(|b| **b == 0).count().min(31);
+        let value = scalar.get(zeros..).unwrap_or_default();
+        let pad = value.first().is_some_and(|b| b & 0x80 != 0);
+        let len = value.len().saturating_add(usize::from(pad));
+        let mut out = vec![0x02, u8::try_from(len).unwrap_or(u8::MAX)];
         if pad {
             out.push(0x00);
         }
-        out.extend_from_slice(trimmed);
+        out.extend_from_slice(value);
         out
     }
     let body: Vec<u8> = [integer(r), integer(s)].concat();
-    let mut out = vec![0x30];
-    if body.len() < 0x80 {
-        out.push(body.len() as u8);
-    } else {
-        out.push(0x81);
-        out.push(body.len() as u8);
-    }
-    out.extend(body);
-    out
+    // Two 33-byte INTEGERs make the largest body, 70 bytes: always the one-byte short length form.
+    let len = u8::try_from(body.len()).unwrap_or(u8::MAX);
+    [vec![0x30, len], body].concat()
 }
 
 #[cfg(test)]

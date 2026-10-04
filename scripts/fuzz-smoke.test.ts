@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildReport,
   describeExit,
   type FailureInfo,
+  generatedInputsError,
   isSafeFailureDir,
   MAX_EMBED_BYTES,
   newFiles,
@@ -240,10 +241,10 @@ describe("buildReport (failure-report contract v1)", () => {
     expect(report).toContain("nm_frame fuzz/artifacts/nm_frame/crash-abc123");
   });
 
-  test("instructs pinning the input as a regression seed", () => {
+  test("instructs pinning the input as a generator case, never a file in the generated seeds dir", () => {
     const report = buildReport(failure());
-    expect(report).toContain("cp src/packages/core/fuzz/artifacts/nm_frame/crash-abc123");
-    expect(report).toContain("fuzz/seeds/nm_frame");
+    expect(report).toContain("src/packages/core/fuzz/src/seeds/nm_frame.rs");
+    expect(report).not.toContain("fuzz/seeds/nm_frame/");
   });
 
   test("structured targets get regression-test advice instead of a seed pin", () => {
@@ -255,7 +256,7 @@ describe("buildReport (failure-report contract v1)", () => {
   test("no crash file: the replay block re-runs the pass's exact configuration", () => {
     const report = buildReport(failure({ crashFiles: [], crashBase64: undefined }));
     expect(report).toContain(
-      "bun scripts/fuzz-smoke.ts --runs=200000 --max-total-time=120 --seed=12345",
+      "moon run fuzz-smoke -- --runs=200000 --max-total-time=120 --seed=12345",
     );
     expect(report).not.toContain("fuzz/artifacts/nm_frame/");
   });
@@ -269,7 +270,7 @@ describe("buildReport (failure-report contract v1)", () => {
     expect(report.split("\n")[2]).not.toContain("seed");
     // ...but the re-run command reproduces the full pass, including the cmin stage.
     expect(report).toContain(
-      "bun scripts/fuzz-smoke.ts --runs=200000 --max-total-time=120 --seed=12345 --cmin",
+      "moon run fuzz-smoke -- --runs=200000 --max-total-time=120 --seed=12345 --cmin",
     );
   });
 
@@ -287,5 +288,39 @@ describe("buildReport (failure-report contract v1)", () => {
     );
     expect(report.length).toBeLessThan(8_000);
     expect(report.split("\n").length).toBeLessThan(60);
+  });
+});
+
+describe("generatedInputsError", () => {
+  // The seeds and the JSON dictionary are generated (`moon run fuzz-seeds`) and gitignored, so a fresh
+  // checkout has neither; a run that silently dropped them would fuzz without the corpus the nightly
+  // had and print the same green line (the #152 review thread). The driver must refuse and name the task.
+  test("a checkout without the generated corpus is refused, naming the generator task", () => {
+    const core = mkdtempSync(join(tmpdir(), "fuzz-smoke-core-"));
+    try {
+      const targets = ["nm_frame", "enclave_der", "handshake_verify"];
+      const refused = generatedInputsError(core, targets);
+      expect(refused).toContain("moon run fuzz-seeds");
+      for (const path of [
+        "fuzz/seeds/nm_frame",
+        "fuzz/seeds/enclave_der",
+        "fuzz/dictionaries/json_protocol.dict",
+        "fuzz/dictionaries/der.dict",
+      ]) {
+        expect(refused).toContain(path);
+      }
+      // The structured target takes no seeds and no dictionary, so nothing is demanded for it.
+      expect(refused).not.toContain("handshake_verify");
+
+      // Positive control: the complete layout is accepted.
+      for (const dir of ["fuzz/seeds/nm_frame", "fuzz/seeds/enclave_der", "fuzz/dictionaries"]) {
+        mkdirSync(join(core, dir), { recursive: true });
+      }
+      writeFileSync(join(core, "fuzz/dictionaries/json_protocol.dict"), '"{"\n');
+      writeFileSync(join(core, "fuzz/dictionaries/der.dict"), '"\\x30"\n');
+      expect(generatedInputsError(core, targets)).toBeUndefined();
+    } finally {
+      rmSync(core, { recursive: true, force: true });
+    }
   });
 });

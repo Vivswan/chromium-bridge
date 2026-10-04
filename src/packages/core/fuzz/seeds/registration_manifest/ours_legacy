@@ -1,9 +1,0 @@
-{
-  "name": "com.vivswan.chromium_bridge.host",
-  "description": "Chromium Bridge native messaging host",
-  "path": "/usr/local/bin/chromium-bridge",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://mkjjlmjbcljpcfkfadfmhblmmddkdihf/"
-  ]
-}

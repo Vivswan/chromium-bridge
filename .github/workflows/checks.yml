@@ -88,6 +88,10 @@ jobs:
       # else exercises the fuzz workspace's own Cargo.lock.
       - if: runner.os == 'Linux'
         run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
+      # The fuzz workspace's own tests (moon test-fuzz): every generated seed through its target
+      # in-process, held to its reader's verdict. Stable rust, no libFuzzer.
+      - if: runner.os == 'Linux'
+        run: cargo test --locked --manifest-path src/packages/core/fuzz/Cargo.toml
 
   # Built once; the suites that drive the binary download it (.github/actions/release-binary). On the bare
   # runner rather than in the image: a binary linked against the runner's older glibc runs inside the newer

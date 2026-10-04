@@ -27,6 +27,9 @@ pub use cli::{
     EnclaveStatusReport,
 };
 pub use config::HostConfig;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub use der::raw_to_der;
 pub use der::{der_to_raw_signature, SIG_LEN};
 pub use key::{respond_to_challenge, respond_to_presence_challenge, EnrollmentKey};
 pub use pubkey::{EnclavePublicKey, PUBKEY_LEN};

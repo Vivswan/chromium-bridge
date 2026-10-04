@@ -8,13 +8,15 @@ license-file = "../../../../LICENSE.md"
 [package.metadata]
 cargo-fuzz = true
 
-# Its own workspace so the fuzz crate (nightly + libFuzzer only) never enters
-# the main `cargo build`/`cargo test` graph. The root Cargo.toml also lists it
-# under [workspace].exclude. Excluded means the root lint tables do not reach
-# this crate, so the fleet floor entries (not the root's extra no-panic and
-# numeric lints) are re-declared here and inherited below; a change to the
-# floor is made in both files. (`fuzz_target!` expands to libFuzzer's unsafe
-# extern hooks, but the lints do not fire on external-macro expansions.)
+# Its own workspace so the fuzz crate never enters the main `cargo build`/
+# `cargo test` graph (the binaries need nightly + libFuzzer; the library, its
+# tests, and the seed generator example build on stable). The root Cargo.toml
+# also lists it under [workspace].exclude. Excluded means the root lint tables
+# do not reach this crate, so the fleet floor entries (not the root's extra
+# no-panic and numeric lints) are re-declared here and inherited below; a
+# change to the floor is made in both files. (`fuzz_target!` expands to
+# libFuzzer's unsafe extern hooks, but the lints do not fire on external-macro
+# expansions.)
 [workspace]
 
 [workspace.lints.rust]

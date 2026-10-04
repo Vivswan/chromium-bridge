@@ -58,6 +58,7 @@ tasks:
       - '~:check-fuzz-smoke'
       - '~:check-harness-driver'
       - '~:check-fuzz-workspace'
+      - '~:test-fuzz'
       - '~:check-gen'
       - '~:check-envelope'
       - '~:check-gen-isolation'
@@ -255,8 +256,17 @@ tasks:
     options:
       runInCI: false
 
+  fuzz-seeds:
+    description: 'Generate the fuzz seed corpus and JSON dictionary from the production types (fuzz/src/seeds/; stable rust)'
+    command: 'cargo run --locked --manifest-path src/packages/core/fuzz/Cargo.toml --example seeds'
+    options:
+      cache: false
+      runInCI: false
+
   fuzz-smoke:
     description: 'Bounded fuzz smoke over every cargo-fuzz target (needs nightly + cargo-fuzz; skips if missing)'
+    deps:
+      - '~:fuzz-seeds'
     command: 'bun scripts/fuzz-smoke.ts'
     options:
       runInCI: false
@@ -274,6 +284,12 @@ tasks:
       Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets
       cannot rot outside the main build; CI runs the same check in checks.yml's rust job
     command: 'cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
+
+  test-fuzz:
+    description: >-
+      The fuzz workspace's own tests (stable rust): every generated seed runs through its target
+      in-process and its reader agrees with its label
+    command: 'cargo test --locked --manifest-path src/packages/core/fuzz/Cargo.toml'
 
   doc:
     description: >-

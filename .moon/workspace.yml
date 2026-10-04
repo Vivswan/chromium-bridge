@@ -42,6 +42,8 @@ hasher:
     - '**/fuzz/corpus/**'
     - '**/fuzz/coverage/**'
     - '**/fuzz/failures/**'
+    - '**/fuzz/seeds/**'
+    - '**/fuzz/dictionaries/json_protocol.dict'
     - '**/target/**'
     - '**/tests/.chrome-for-testing/**'
     - '**/tests/chrome/**'

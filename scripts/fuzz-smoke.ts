@@ -43,7 +43,7 @@ export interface Options {
 /**
  * The --failure-dir directory is recursively DELETED at startup, so it must stay inside the core package's
  * fuzz/failures* namespace: an absolute path, a `.`/`..` or empty segment, or a plain name like `src` or
- * `fuzz/seeds` could point the delete at tracked checkout contents.
+ * `fuzz/fuzz_targets` could point the delete at tracked checkout contents.
  */
 export function isSafeFailureDir(path: string): boolean {
   const segments = path.split("/");
@@ -108,6 +108,33 @@ const defaultDictionary = "fuzz/dictionaries/json_protocol.dict";
 // stop meaning what it meant; their reports steer to a regression unit test
 // instead of a seed.
 const structuredTargets = noDictionary;
+
+/** The dictionary a target's run passes libFuzzer, repo-relative to the core package; none for structured targets. */
+function dictionaryFor(target: string): string | undefined {
+  if (noDictionary.has(target)) return undefined;
+  return dictionaryOverrides.get(target) ?? defaultDictionary;
+}
+
+/**
+ * Why the pass cannot run on this checkout, or undefined when every input is present: each byte target's
+ * seed directory and the dictionary its run passes. The seeds and the JSON dictionary are generated
+ * (`moon run fuzz-seeds`) and gitignored, so a fresh checkout has neither; skipping them silently would
+ * fuzz without the corpus the nightly had and still print the same green line.
+ */
+export function generatedInputsError(core: string, targets: string[]): string | undefined {
+  const missing = new Set<string>();
+  for (const target of targets) {
+    if (structuredTargets.has(target)) continue;
+    for (const path of [`fuzz/seeds/${target}`, dictionaryFor(target)]) {
+      if (path !== undefined && !existsSync(resolve(core, path))) missing.add(path);
+    }
+  }
+  if (missing.size === 0) return undefined;
+  return [
+    "error: the fuzz inputs below are missing; the seeds and the JSON dictionary are generated, so run `moon run fuzz-seeds` first (or `moon run fuzz-smoke`, which does):",
+    ...[...missing].map((path) => `  ${path}`),
+  ].join("\n");
+}
 
 /** The filenames in `dir` with their mtimes (empty map when it is absent). */
 export function snapshotDir(dir: string): Map<string, number> {
@@ -210,10 +237,11 @@ export function buildReport(info: FailureInfo): string {
   } else {
     lines.push(
       "cargo-fuzz left no new crash file (an OOM or timeout kill can do",
-      "that); re-run this pass's exact configuration instead:",
+      "that); re-run this pass's exact configuration instead (the moon task",
+      "regenerates the seed corpus and the dictionary first):",
       "",
       "```bash",
-      `bun scripts/fuzz-smoke.ts --runs=${info.runs} --max-total-time=${info.maxTotalTime}${info.seed !== undefined ? ` --seed=${info.seed}` : ""}${info.phase === "cmin" ? " --cmin" : ""}`,
+      `moon run fuzz-smoke -- --runs=${info.runs} --max-total-time=${info.maxTotalTime}${info.seed !== undefined ? ` --seed=${info.seed}` : ""}${info.phase === "cmin" ? " --cmin" : ""}`,
       "```",
       "",
     );
@@ -228,16 +256,18 @@ export function buildReport(info: FailureInfo): string {
     );
   } else if (primary) {
     lines.push(
-      "Pin the input as a regression seed so every future run (nightly and",
-      "local smoke) replays it first, which is what makes the tracking",
-      "issue's auto-close on a later green night trustworthy:",
+      "Pin the input as a labelled seed in the generator so every future run (nightly",
+      "and local smoke) replays it first, which is what makes the tracking issue's",
+      "auto-close on a later green night trustworthy. fuzz/seeds/ is generated and",
+      "gitignored (a file copied there is erased by the next run), so the pin is a case:",
       "",
-      "```bash",
-      `mkdir -p src/packages/core/fuzz/seeds/${info.target}`,
-      `cp src/packages/core/fuzz/artifacts/${info.target}/${primary} src/packages/core/fuzz/seeds/${info.target}/`,
+      "```text",
+      `src/packages/core/fuzz/src/seeds/${info.target}.rs: add a Seed::refused (or Seed::accepted)`,
+      "case built from the production type this input mutates, with the reader that must",
+      "refuse it; `moon run test-fuzz` holds it to that label.",
       "```",
       "",
-      "then commit the new seed file with the fix.",
+      "then commit the case with the fix.",
     );
   }
 
@@ -256,12 +286,6 @@ function main(): number {
   if (!failureRoot.startsWith(`${core}/`) || failureRoot === core) {
     console.error(`error: failure dir escapes ${core}: ${failureRoot}`);
     return 2;
-  }
-
-  function dictionaryFor(target: string): string | undefined {
-    if (noDictionary.has(target)) return undefined;
-    const dictionary = dictionaryOverrides.get(target) ?? defaultDictionary;
-    return existsSync(resolve(core, dictionary)) ? dictionary : undefined;
   }
 
   // Run one cargo +nightly fuzz subcommand. A spawn error (cargo itself
@@ -390,15 +414,19 @@ function main(): number {
   }
 
   const failed: string[] = [];
+  const inputsError = generatedInputsError(core, targets);
+  if (inputsError !== undefined) {
+    console.error(inputsError);
+    return 1;
+  }
   for (const target of targets) {
     console.log(`[fuzz-smoke] ${target}: ${options.runs} runs (target ${host})`);
     // Pass the corpus dir explicitly (libFuzzer needs it to exist) so the
-    // committed seeds can ride along as a second corpus dir libFuzzer merges in.
+    // generated seeds (moon run fuzz-seeds) ride along as a second corpus dir libFuzzer merges in.
     const corpus = `fuzz/corpus/${target}`;
     mkdirSync(resolve(core, corpus), { recursive: true });
     const runArgs = ["run", "--target", host, target, corpus];
-    const seeds = `fuzz/seeds/${target}`;
-    if (existsSync(resolve(core, seeds))) runArgs.push(seeds);
+    if (!structuredTargets.has(target)) runArgs.push(`fuzz/seeds/${target}`);
     runArgs.push("--", `-runs=${options.runs}`, `-max_total_time=${options.maxTotalTime}`);
     if (options.seed !== undefined) runArgs.push(`-seed=${options.seed}`);
     const dictionary = dictionaryFor(target);
