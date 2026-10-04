@@ -202,13 +202,13 @@ mod tests {
     use syn::visit::Visit;
 
     use super::*;
-    use crate::allowlist::{Allowlist, Anchor, ClientEntry};
+    use crate::allowlist::{Anchor, ClientEntry};
     use crate::enclave::{base64_encode, HostConfig};
     use crate::ipc::HashDigest;
     use crate::lang::LangStore;
     use crate::policy::{PolicyHistory, PolicyHistoryEntry, PolicyOverlay, PolicyStore};
-    use crate::revocation::Revocation;
     use crate::test_support::scratch_runtime_dir;
+    use crate::trust::{Clients, Trust};
 
     /// The facts the trait cannot force on a record: a `deny_unknown_fields` body, a `PartialEq` over
     /// every persisted field, the cap honoured before parsing, and the 0600 mode the writer promises.
@@ -549,26 +549,16 @@ mod tests {
         let mut exercised = BTreeSet::new();
         exercise(
             &mut exercised,
-            Allowlist {
-                clients: vec![ClientEntry {
+            Trust::fixture(
+                5,
+                true,
+                Clients::Paired(vec![ClientEntry {
                     name: "codex".into(),
                     anchor: Anchor::Hash(HashDigest::try_from("ab".repeat(20)).unwrap()),
                     added_unix: 7,
-                }],
-            },
-        );
-        exercise(
-            &mut exercised,
-            Revocation {
-                epoch: 5,
-                clients_epoch: 2,
-                host_key_epoch: 3,
-                policy_epoch: 4,
-                lang_epoch: 1,
-                clients_enrolled: true,
-                killed: true,
-                kill_epoch: 5,
-            },
+                }]),
+            )
+            .with_markers(5, 3, 4, 1),
         );
         exercise(
             &mut exercised,

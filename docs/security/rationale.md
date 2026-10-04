@@ -9,8 +9,8 @@ This page keeps the security rules whose reason the code cannot show: for each t
 | Admission keys on the attested anchor (signing Team ID or image hash); the client name is a log label only | Admit by the self-asserted client name (`CHROMIUM_BRIDGE_CLIENT_NAME`) | A name is a string any process can put in an environment variable; the anchor is what the kernel and the Security framework testify to about the running image |
 | A Team-ID-signed client is paired with an explicit `pair-client --team-id` anchor (`--this-parent` always pins the image hash); a hash anchor is for unsigned or ad-hoc builds and for Linux | Pin the exact image hash for every client | A free Apple Development certificate re-signs about weekly and changes the `cdhash` each time, so a hash anchor would need a weekly re-pair; a control that nags weekly gets disabled |
 | The first process to spawn the server is never enrolled automatically | Trust on first use | A silent first-use grant hands the slot to whichever process races first; enrollment is the user's act |
-| No `clients.json` and no enrollment latch means admission is not enforced, logged at ERROR on every start; a damaged or unreadable file refuses everyone, and so does an absent file once the latch is set | Read a damaged or deleted file as "unenrolled" | A load failure read as unenrolled fails open |
-| Revoking the last client leaves an empty file that admits nobody | Delete the file when the last entry goes | An absent file is how a first install starts; "the user revoked every client" must read as locked, never as reset |
+| No client paired yet (`"clients": null` in `trust.json`, or no record at all) means admission is not enforced, logged at ERROR on every start; a damaged or unreadable record refuses everyone | Read a damaged file as "unenrolled" | A load failure read as unenrolled fails open |
+| Revoking the last client leaves an empty list that admits nobody | Reset the list to `null` when the last entry goes | `null` is how a first install starts; "the user revoked every client" must read as locked, never as reset |
 
 ## Host identity and attestation
 
@@ -23,7 +23,7 @@ This page keeps the security rules whose reason the code cannot show: for each t
 
 | Rule | Rejected design | Why |
 | --- | --- | --- |
-| The revocation epoch is compared for inequality, never for order | Re-decide only when the counter advances | A tamperer can write any value; a file rolled back to an older epoch still forces a re-decide, so lowering the number cannot suppress a revocation |
+| Admission is re-decided from a fresh read of the trust record on every request; the epoch is a change notice for the watchers, compared for inequality, never order | Re-decide only when the counter advances | A tamperer can write any value, and a bump that failed to persist leaves the counter stale, so a decision gated on the counter can serve a revoked client; a decision taken from the record itself cannot |
 | A host that starts while killed stays up in control-plane mode | Refuse the browser attach and let the host exit | The extension respawns the host every two seconds, so a kill would become a crash loop whose only exit is the CLI; control-plane mode keeps status and engage reachable |
 | The extension's kill mirror allows on absent and refuses on malformed | Treat an absent mirror as killed | A fresh install has never heard from a host and the host enforces regardless; garbage where a record should be is evidence someone wrote there |
 

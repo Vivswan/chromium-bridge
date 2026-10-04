@@ -135,7 +135,7 @@ fn set_locked(lock: &ipc::RuntimeLockToken, value: &str) -> io::Result<(String, 
         seq,
     };
     next.write(lock)?;
-    if let Err(e) = crate::revocation::bump_locked(lock, crate::revocation::Scope::Lang) {
+    if let Err(e) = crate::trust::Trust::mutate_locked(lock, crate::trust::Scope::Lang, |_| {}) {
         log_warn!(
             "lang",
             "language written but the language epoch bump failed ({e}); a connected \
@@ -152,7 +152,7 @@ mod tests {
     use crate::test_support::scratch_runtime_dir;
 
     fn lang_epoch() -> u64 {
-        crate::revocation::Revocation::current().unwrap().lang_epoch
+        crate::trust::TrustState::current().unwrap().lang_epoch()
     }
 
     #[test]

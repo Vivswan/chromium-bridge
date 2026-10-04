@@ -1,21 +1,16 @@
 //! Host-side trusted-client allowlist: which MCP-client harnesses (Claude Code, Copilot, Codex, ...) may drive
-//! the browser through this bridge (ADR-0024).
+//! the browser through this bridge. The list lives in the trust record ([`crate::trust`]); this module owns
+//! the entry types, the pairing and revocation writes, and their CLI handlers.
 //!
-//! Peer attestation (ADR-0019/0020) proves a bridge peer is our own binary but says nothing about who drives
-//! the MCP server over its stdio, so the broker checks the harness's kernel-attested identity
-//! ([`ClientIdentity`], measured by [`crate::ipc::attest_parent`]) against this persisted set before serving
-//! its tool calls. Admission keys on the [`Anchor`], never the human-facing `name`: a harness cannot admit
-//! itself by claiming to be `claude-code`.
+//! Peer attestation proves a bridge peer is our own binary but says nothing about who drives the MCP server
+//! over its stdio, so the broker checks the harness's kernel-attested identity ([`crate::ipc::ClientIdentity`], measured by
+//! [`crate::ipc::attest_parent`]) against the paired entries before serving its tool calls
+//! ([`crate::trust::TrustState::decide`]). Admission keys on the [`Anchor`], never the human-facing `name`.
 //!
 //! ```text
 //! Team-ID-signed client        -> Anchor::TeamId, stable across the weekly re-sign of a free Apple
 //!                                 Development certificate (which changes the cdhash)
 //! unsigned / ad-hoc dev build  -> Anchor::Hash, re-pair after every renewal
-//!
-//! file absent, latch clear  -> unenrolled: admission not enforced, logged loudly (the same-user residual stays open)
-//! file absent, latch set    -> tampering: the revocation record's clients_enrolled latch says clients were paired,
-//!                              so admission fails closed (load_enforced)
-//! file present              -> enforced: only a matching identity is admitted; an unmeasurable identity fails closed
 //! ```
 
 use std::io;
@@ -24,10 +19,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{AnchorSpec, PairClientArgs};
-use crate::ipc::{self, ClientIdentity, HashDigest, TeamId};
+use crate::ipc::{self, HashDigest, TeamId};
 use crate::presence::{self, PresenceAttestation};
-use crate::revocation::Revocation;
-use crate::runtime_record::{Record, Rung, RuntimeRecord};
+use crate::trust::{Clients, Scope, Trust, TrustState};
 
 /// The authorization key of an allowlist entry: the unforgeable thing a
 /// harness's attested identity must match. Never the name. Both payloads are
@@ -69,173 +63,57 @@ pub struct ClientEntry {
     pub added_unix: u64,
 }
 
-/// The persisted allowlist (`clients.json`). Its mere *presence* on disk means admission is
-/// enforced (see [`decide`]); an empty `clients` list is therefore a fully
-/// locked bridge, not an open one. Loading a present-but-damaged file is an error, NOT a
-/// silent `None`: treating it as unenrolled would fail *open*, so callers fail closed on the error.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Allowlist {
-    pub clients: Vec<ClientEntry>,
-}
-
-impl Record for Allowlist {
-    const FILE: &'static str = "clients.json";
-    const MAX_BYTES: usize = 256 * 1024;
-    const MIGRATIONS: &'static [Rung] = crate::migrations::clients::LADDER;
-}
-
-/// The admission verdict for a harness. Kept separate from acting on it so the
-/// policy is a pure, exhaustively-tested function ([`decide`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Decision {
-    /// No allowlist exists yet (unenrolled). Admit, but harness admission is not yet load-bearing and the
-    /// caller must log that loudly.
-    AdmitUnenrolled,
-    /// An allowlist exists and the harness's attested identity matched an
-    /// entry. Carries the matched entry's name for logging/audit.
-    Admit { name: String },
-    /// An allowlist exists and the harness did not match (or could not be
-    /// measured at all). Fail closed: do not serve this harness.
-    Refuse,
-}
-
-impl Allowlist {
-    /// Whether `identity` matches any entry. Returns the matched entry's name.
-    /// A `Hash` anchor matches the measured hash; a `TeamId` anchor matches a
-    /// measured Team ID. Comparisons are plain equality: these are not secrets.
-    fn matched_name(&self, identity: &ClientIdentity) -> Option<String> {
-        self.clients.iter().find_map(|c| match &c.anchor {
-            Anchor::Hash(h) if *h == identity.hash => Some(c.name.clone()),
-            Anchor::TeamId(t) if identity.team_id.as_ref() == Some(t) => Some(c.name.clone()),
-            Anchor::Hash(_) | Anchor::TeamId(_) => None,
-        })
+/// Add or replace a client in one atomic write of the trust record. Module-private on purpose: the ONLY entry point is
+/// [`pair_client_with_presence`], which runs the presence ladder and audits every outcome, so no allowlist
+/// mutation can skip the trail and no path can enroll without a [`PresenceAttestation`], which only
+/// [`presence::require_presence`] mints (pairing GRANTS capability).
+fn pair(name: &str, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
+    // The attestation is structural evidence, consumed here; the audit record that names its path is written
+    // by the caller, log-after-decide.
+    let _ = auth;
+    if !crate::ipc::validate_label(name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid client name (want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric)",
+        ));
     }
-
-    /// Add or replace a client (the same `name` replaces, so a re-pair does not accumulate stale anchors),
-    /// persisted atomically under the runtime lock. Module-private on purpose: the ONLY entry point is
-    /// [`pair_client_with_presence`], which runs the presence ladder and audits every outcome, so no allowlist
-    /// mutation can skip the trail (ADR-0030) and no path can enroll without a [`PresenceAttestation`], which
-    /// only [`presence::require_presence`] mints (pairing GRANTS capability, ADR-0031).
-    ///
-    /// The one-way enrollment latch (ADR-0025) is set BEFORE the list is written, so a partial failure fails closed:
-    /// ```text
-    /// latch ok, clients.json write fails  -> the next admission sees latch + no list and refuses as tampering
-    ///                                        (re-running `pair-client` completes the write)
-    /// the reverse order                    -> a usable list with no deletion evidence: `rm clients.json` reverts to open
-    /// ```
-    fn pair(name: &str, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
-        // The attestation is structural evidence, consumed here; the audit
-        // record that names its path is written by the caller
-        // (pair_client_with_presence), log-after-decide.
-        let _ = auth;
-        if !crate::ipc::validate_label(name) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid client name (want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric)",
-            ));
-        }
-        ipc::with_runtime_lock(|lock| {
-            let mut list = Self::load()?.unwrap_or_default();
-            list.clients.retain(|c| c.name != name);
-            list.clients.push(ClientEntry {
+    ipc::with_runtime_lock(|lock| {
+        Trust::mutate_locked(lock, Scope::Clients, |trust| {
+            trust.pair(ClientEntry {
                 name: name.to_string(),
                 anchor,
                 added_unix: now_unix(),
-            });
-            // Latch first (fail closed on a partial write), then the list.
-            crate::revocation::latch_clients_enrolled_locked(lock)?;
-            list.write(lock)
+            })
         })
-    }
+    })?;
+    Ok(())
+}
 
-    /// Remove the client with `name`; returns whether an entry was removed. The file stays in place even when
-    /// empty: an empty file still means enrolled (nobody admitted), the fail-closed reading of "revoked every
-    /// client". Audited HERE, not by the caller, so revocation cannot rewrite trust state without a trail entry (ADR-0030).
-    ///
-    /// The list rewrite is the authoritative act; the epoch bump only accelerates the broker's per-request fast
-    /// path. The runtime lock serializes the two writes against other WRITERS only, so list-first ordering and
-    /// the broker's unconditional watcher, not the lock, are what keep its lock-free readers safe.
-    /// ```text
-    /// list rewritten  -> re-attach refused at once; the watcher re-decides every poll regardless of the epoch
-    /// bump fails      -> logged; the live connection drops within a poll instead of on its next call
-    /// ```
-    pub fn revoke(name: &str, surface: crate::audit::Surface) -> io::Result<bool> {
-        let removed = ipc::with_runtime_lock(|lock| {
-            let Some(mut list) = Self::load()? else {
-                return Ok(false);
-            };
-            let before = list.clients.len();
-            list.clients.retain(|c| c.name != name);
-            let removed = list.clients.len() != before;
-            if removed {
-                list.write(lock)?;
-                if let Err(e) =
-                    crate::revocation::bump_locked(lock, crate::revocation::Scope::Clients)
-                {
-                    log_error!(
-                        "allowlist",
-                        "client '{name}' revoked (removed from clients.json), but the \
-                         revocation epoch bump failed ({e}); the broker's per-request fast \
-                         path will not accelerate, but its watcher still drops the \
-                         connection within a poll and re-attach is already refused"
-                    );
-                }
-            }
-            Ok(removed)
-        })?;
-        if removed {
-            // Log-after-decide (ADR-0030): the list rewrite + epoch bump are
-            // done, and the lock above is released.
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
-                    .surface(surface)
-                    .name(name)
-                    .outcome("ok"),
-            );
+/// Remove the client with `name`; returns whether an entry was removed. The list stays in place even when
+/// empty: an empty list still means paired (nobody admitted), the fail-closed reading of "revoked every
+/// client". Audited HERE, not by the caller, so revocation cannot rewrite trust state without a trail entry.
+/// A live broker re-decides every request from the record, so the revoked client's next call is refused.
+pub fn revoke(name: &str, surface: crate::audit::Surface) -> io::Result<bool> {
+    let removed = ipc::with_runtime_lock(|lock| {
+        let named = |c: &ClientEntry| c.name == name;
+        let Clients::Paired(current) = TrustState::current()?.clients().clone() else {
+            return Ok(false);
+        };
+        if !current.iter().any(named) {
+            return Ok(false);
         }
-        Ok(removed)
+        Trust::mutate_locked(lock, Scope::Clients, |trust| trust.revoke(name))?;
+        Ok(true)
+    })?;
+    if removed {
+        crate::audit::record(
+            crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
+                .surface(surface)
+                .name(name)
+                .outcome("ok"),
+        );
     }
-}
-
-/// The admission decision. Pure: given the loaded allowlist (or `None` for
-/// unenrolled) and the measured harness identity (or `None` when measurement
-/// failed), decide whether to serve the harness. Enforcement is fail-closed
-/// once enrolled -- an unmeasured identity is refused, never admitted.
-pub fn decide(list: Option<&Allowlist>, identity: Option<&ClientIdentity>) -> Decision {
-    match list {
-        None => Decision::AdmitUnenrolled,
-        Some(l) => match identity.and_then(|id| l.matched_name(id)) {
-            Some(name) => Decision::Admit { name },
-            None => Decision::Refuse,
-        },
-    }
-}
-
-/// Load the allowlist for an ADMISSION decision, honoring the tamper-evidence latch (ADR-0025): with the latch set,
-/// an ABSENT `clients.json` is a deletion, not the bootstrap posture, and fails closed instead of reverting to open.
-/// Takes the whole [`Revocation`] and reads `clients_enrolled` itself, so a caller cannot hand-pick an adjacent flag
-/// (`killed`) and silently reopen what the latch closed.
-pub fn load_enforced(rev: &Revocation) -> io::Result<Option<Allowlist>> {
-    apply_latch(Allowlist::load()?, rev)
-}
-
-/// The pure core of [`load_enforced`]: the latch turns "absent list" from
-/// bootstrap into tampering. Factored out so the fail-closed matrix is
-/// unit-testable without touching the runtime directory. Reads the latch
-/// from the record for the same no-wrong-flag reason as [`load_enforced`].
-fn apply_latch(list: Option<Allowlist>, rev: &Revocation) -> io::Result<Option<Allowlist>> {
-    match list {
-        Some(list) => Ok(Some(list)),
-        None if rev.clients_enrolled => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "clients.json is missing but this machine has enrolled trusted clients \
-             (the revocation record's enrollment latch is set); treating the deletion \
-             as tampering and failing closed. Re-pair with `chromium-bridge pair-client` \
-             to rebuild the allowlist.",
-        )),
-        None => Ok(None),
-    }
+    Ok(removed)
 }
 
 fn now_unix() -> u64 {
@@ -245,7 +123,7 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-// ---- The presence-gated pairing API (ADR-0031) ------------------------------
+// ---- The presence-gated pairing API -----------------------------------------
 
 /// Why a presence-gated pairing did not happen. Both variants leave the
 /// allowlist untouched.
@@ -274,7 +152,7 @@ impl std::fmt::Display for PairClientError {
     }
 }
 
-/// Pair a trusted client behind the user-presence gate (ADR-0031): the one entry point every surface uses to
+/// Pair a trusted client behind the user-presence gate: the one entry point every surface uses to
 /// GRANT harness capability. Runs the presence ladder, then writes the allowlist, and audits each outcome after
 /// the fact (refusal, write, write failure) with the rung that decided it; returns the attesting path so the
 /// surface can tell the user which proof authorized the pairing. Revocation stays friction-free on purpose:
@@ -319,10 +197,8 @@ pub fn pair_client_with_presence(
         Anchor::Hash(h) => format!("hash {h}"),
         Anchor::TeamId(t) => format!("Team ID {t}"),
     };
-    match Allowlist::pair(name, anchor, auth) {
+    match pair(name, anchor, auth) {
         Ok(()) => {
-            // Log-after-decide (ADR-0030): the pairing is persisted; the
-            // record names the presence rung that authorized it.
             audit::record(
                 AuditRecord::new(AuditKind::PairClient)
                     .surface(surface)
@@ -431,13 +307,12 @@ const THIS_PARENT_UNAVAILABLE_ON_WINDOWS: &str = concat!(
 
 /// `revoke-client`: remove a trusted client. Returns a process exit code.
 pub fn run_revoke_client(name: &str) -> i32 {
-    match Allowlist::revoke(name, crate::audit::Surface::Cli) {
+    match revoke(name, crate::audit::Surface::Cli) {
         Ok(true) => {
             println!("revoked trusted client '{name}'");
             println!(
-                "a live broker drops this client's connections and refuses its re-attach \
-                 (immediately if the revocation epoch advanced, otherwise within the \
-                 broker's next check)"
+                "a live broker refuses this client's next request and its re-attach; an idle \
+                 connection is dropped within a second"
             );
             0
         }
@@ -452,52 +327,43 @@ pub fn run_revoke_client(name: &str) -> i32 {
     }
 }
 
-/// `list-clients`: print the trusted-client allowlist. Returns a process exit
-/// code. Consults the tamper-evidence latch (ADR-0025): an absent allowlist on
-/// a machine whose latch is set is reported as tampering, not as unenrolled.
+/// `list-clients`: print the trusted-client allowlist. Returns a process exit code.
 pub fn run_list_clients() -> i32 {
-    let rev = match crate::revocation::Revocation::current() {
-        Ok(rev) => rev,
+    let trust = match TrustState::current() {
+        Ok(trust) => trust,
         Err(e) => {
-            eprintln!("list-clients: could not read the revocation record: {e}");
+            eprintln!("list-clients: could not read the trust record: {e}");
             eprintln!("(treating the trust state as suspect; fail closed)");
             return 1;
         }
     };
-    match load_enforced(&rev) {
-        Ok(None) => {
+    match trust.clients() {
+        Clients::NeverPaired => {
             println!(
                 "no trusted-client allowlist yet (UNENROLLED: harness admission not enforced)"
             );
-            0
         }
-        Ok(Some(list)) => {
-            if list.clients.is_empty() {
-                println!(
-                    "trusted-client allowlist is EMPTY (enrolled: every harness fails closed)"
-                );
-            } else {
-                println!("trusted clients ({}):", list.clients.len());
-                for c in &list.clients {
-                    let anchor = match &c.anchor {
-                        Anchor::Hash(h) => format!("hash {h}"),
-                        Anchor::TeamId(t) => format!("Team ID {t}"),
-                    };
-                    println!("  {}  ({anchor})", c.name);
-                }
+        Clients::Paired(clients) if clients.is_empty() => {
+            println!("trusted-client allowlist is EMPTY (enrolled: every harness fails closed)");
+        }
+        Clients::Paired(clients) => {
+            println!("trusted clients ({}):", clients.len());
+            for c in clients {
+                let anchor = match &c.anchor {
+                    Anchor::Hash(h) => format!("hash {h}"),
+                    Anchor::TeamId(t) => format!("Team ID {t}"),
+                };
+                println!("  {}  ({anchor})", c.name);
             }
-            0
-        }
-        Err(e) => {
-            eprintln!("list-clients: {e}");
-            1
         }
     }
+    0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_record::RuntimeRecord as _;
 
     /// On Windows `--this-parent` can never pair: a console stdin has no pipe
     /// creator for the server to key on, and a piped stdin is refused by the
@@ -510,15 +376,6 @@ mod tests {
         assert!(err.contains("--hash") && err.contains("--team-id"), "{err}");
     }
 
-    /// A measured identity from literals: a valid lowercase-hex hash and an
-    /// optional non-empty team id.
-    fn id(hash: &str, team: Option<&str>) -> ClientIdentity {
-        ClientIdentity {
-            hash: hd(hash),
-            team_id: team.map(tid),
-        }
-    }
-
     /// A 40-character test digest from a lowercase-hex seed.
     fn hd(seed: &str) -> HashDigest {
         HashDigest::try_from(seed.chars().cycle().take(40).collect::<String>()).unwrap()
@@ -527,147 +384,6 @@ mod tests {
     /// A test team id from a non-empty literal.
     fn tid(team: &str) -> TeamId {
         TeamId::try_from(team).unwrap()
-    }
-
-    /// A revocation record whose enrollment latch is `latched`, everything
-    /// else at the bootstrap default.
-    fn rev_with_latch(latched: bool) -> Revocation {
-        Revocation {
-            clients_enrolled: latched,
-            ..Revocation::default()
-        }
-    }
-
-    fn list_of(entries: Vec<ClientEntry>) -> Allowlist {
-        Allowlist { clients: entries }
-    }
-
-    #[test]
-    fn unenrolled_admits_but_flags_pre_enrollment() {
-        // No file -> None -> AdmitUnenrolled regardless of identity (even an
-        // unmeasured one). This is the documented pre-enrollment residual.
-        assert_eq!(decide(None, None), Decision::AdmitUnenrolled);
-        assert_eq!(
-            decide(None, Some(&id("abc", None))),
-            Decision::AdmitUnenrolled
-        );
-    }
-
-    #[test]
-    fn enrolled_refuses_an_unmeasured_identity() {
-        // Enrolled + cannot measure -> fail closed, never admit.
-        let l = list_of(vec![ClientEntry {
-            name: "claude-code".into(),
-            anchor: Anchor::Hash(hd("abc")),
-            added_unix: 0,
-        }]);
-        assert_eq!(decide(Some(&l), None), Decision::Refuse);
-    }
-
-    #[test]
-    fn hash_anchor_matches_exact_hash_only() {
-        let l = list_of(vec![ClientEntry {
-            name: "codex".into(),
-            anchor: Anchor::Hash(hd("deadbeef")),
-            added_unix: 0,
-        }]);
-        assert_eq!(
-            decide(Some(&l), Some(&id("deadbeef", None))),
-            Decision::Admit {
-                name: "codex".into()
-            }
-        );
-        // A different hash (e.g. after a re-sign) no longer matches the Hash
-        // anchor -- the re-pair path exists for exactly this.
-        assert_eq!(
-            decide(Some(&l), Some(&id("cafef00d", None))),
-            Decision::Refuse
-        );
-    }
-
-    #[test]
-    fn team_id_anchor_survives_a_hash_change() {
-        // A Team-ID anchor matches on team id regardless of the (changed)
-        // cdhash: the point of anchoring on Team ID across a weekly re-sign.
-        let l = list_of(vec![ClientEntry {
-            name: "claude-code".into(),
-            anchor: Anchor::TeamId(tid("TEAMID0001")),
-            added_unix: 0,
-        }]);
-        assert_eq!(
-            decide(Some(&l), Some(&id("0e51a", Some("TEAMID0001")))),
-            Decision::Admit {
-                name: "claude-code".into()
-            }
-        );
-        // Wrong team id -> refuse. A matching cdhash is irrelevant to a
-        // Team-ID anchor.
-        assert_eq!(
-            decide(Some(&l), Some(&id("0e51a", Some("OTHERTEAM")))),
-            Decision::Refuse
-        );
-        // No team id measured at all (ad-hoc build) -> refuse against a
-        // Team-ID anchor.
-        assert_eq!(decide(Some(&l), Some(&id("0e51a", None))), Decision::Refuse);
-    }
-
-    #[test]
-    fn empty_enrolled_list_admits_nobody() {
-        // A present-but-empty allowlist is enrolled: it fails every harness
-        // closed rather than reverting to the open pre-enrollment posture.
-        let l = list_of(vec![]);
-        assert_eq!(
-            decide(Some(&l), Some(&id("a11", Some("any")))),
-            Decision::Refuse
-        );
-    }
-
-    #[test]
-    fn a_name_is_never_an_authorization_key() {
-        // Two clients; a harness whose measured identity matches NEITHER anchor
-        // is refused even though its (untrusted, unused here) name might equal
-        // an entry. The decision only ever consults anchors.
-        let l = list_of(vec![
-            ClientEntry {
-                name: "claude-code".into(),
-                anchor: Anchor::Hash(hd("c1a0de")),
-                added_unix: 0,
-            },
-            ClientEntry {
-                name: "codex".into(),
-                anchor: Anchor::TeamId(tid("TEAMX")),
-                added_unix: 0,
-            },
-        ]);
-        assert_eq!(
-            decide(Some(&l), Some(&id("1a905e7", None))),
-            Decision::Refuse
-        );
-        // The genuine hash for claude-code admits under its name.
-        assert_eq!(
-            decide(Some(&l), Some(&id("c1a0de", None))),
-            Decision::Admit {
-                name: "claude-code".into()
-            }
-        );
-    }
-
-    #[test]
-    fn entry_serde_roundtrips_both_anchor_kinds() {
-        let hash_entry = ClientEntry {
-            name: "codex".into(),
-            anchor: Anchor::Hash(HashDigest::try_from("ab".repeat(32)).unwrap()),
-            added_unix: 42,
-        };
-        let team_entry = ClientEntry {
-            name: "claude-code".into(),
-            anchor: Anchor::TeamId(tid("TEAMID0001")),
-            added_unix: 7,
-        };
-        let list = list_of(vec![hash_entry.clone(), team_entry.clone()]);
-        let bytes = serde_json::to_vec(&list).unwrap();
-        let back: Allowlist = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(back.clients, vec![hash_entry, team_entry]);
     }
 
     #[test]
@@ -714,58 +430,29 @@ mod tests {
         ] {
             let anchor = serde_json::json!({ "kind": kind, "value": bad });
             // Through the full file shape at the load boundary: one bad entry
-            // poisons the whole list with the same tampering-class error as
+            // poisons the whole record with the same tampering-class error as
             // any other decode failure, and the error names the rule.
             let file = serde_json::json!({
-                "version": Allowlist::VERSION,
+                "version": Trust::VERSION,
+                "epoch": 1,
+                "killed": false,
+                "kill_epoch": 0,
+                "host_key_epoch": 0,
+                "policy_epoch": 0,
+                "lang_epoch": 0,
                 "clients": [
                     { "name": "good", "anchor": { "kind": "team_id", "value": "TEAMID0001" }, "added_unix": 0 },
                     { "name": "bad", "anchor": anchor, "added_unix": 0 },
                 ],
             });
-            let err = Allowlist::decode(&serde_json::to_vec(&file).unwrap())
+            let err = Trust::decode(&serde_json::to_vec(&file).unwrap())
                 .expect_err(&format!("{kind} anchor value {bad:?} must be refused"));
             assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{kind} {bad:?}");
             assert!(
-                err.to_string().starts_with("clients.json: ") && err.to_string().contains(rule),
+                err.to_string().starts_with("trust.json: ") && err.to_string().contains(rule),
                 "{kind} {bad:?}: {err}"
             );
         }
-    }
-
-    #[test]
-    fn latch_turns_an_absent_list_into_tampering() {
-        // Unlatched + absent: the legitimate bootstrap (fresh install).
-        assert!(apply_latch(None, &rev_with_latch(false)).unwrap().is_none());
-        // Latched + absent: a client allowlist existed here, so its absence is
-        // a deletion -> fail closed (the ADR-0024 silent-revert residual).
-        let err = apply_latch(None, &rev_with_latch(true)).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        // A present list passes through untouched regardless of the latch.
-        let list = list_of(vec![]);
-        assert!(apply_latch(Some(list.clone()), &rev_with_latch(false))
-            .unwrap()
-            .is_some());
-        assert!(apply_latch(Some(list), &rev_with_latch(true))
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn the_latch_is_the_enrollment_flag_not_an_adjacent_one() {
-        // The record's other booleans must not be able to play the latch:
-        // `killed: true` on an unenrolled machine keeps the bootstrap posture
-        // for an absent list (the kill switch has its own enforcement point)...
-        let mut killed_only = rev_with_latch(false);
-        killed_only.killed = true;
-        killed_only.epoch = 9;
-        killed_only.kill_epoch = 9;
-        assert!(apply_latch(None, &killed_only).unwrap().is_none());
-        // ...and `clients_enrolled: true` fails closed even with every other
-        // flag at its default. Taking the whole record makes picking the
-        // wrong field impossible at the call sites, and this pins WHICH field
-        // the function itself reads.
-        assert!(apply_latch(None, &rev_with_latch(true)).is_err());
     }
 
     #[test]

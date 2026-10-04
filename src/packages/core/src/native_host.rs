@@ -27,8 +27,8 @@ use crate::protocol::control::{
     HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
-use crate::revocation::{Revocation, REVOCATION_POLL};
 use crate::runtime_record::RuntimeRecord as _;
+use crate::trust::{Clients, TrustState, POLL_INTERVAL};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -78,46 +78,35 @@ fn revoke_host_key() -> EnclaveControl {
     }
 }
 
-/// Handle a `client_list` frame: report the trusted-client allowlist, honoring
-/// the tamper-evidence latch (an absent-but-latched list is an error, not
-/// "unenrolled").
+/// Handle a `client_list` frame: report the trusted-client allowlist from one read of the trust record. An
+/// unreadable record answers `ok: false` with the error and no enrollment claim.
 fn admin_client_list() -> AdminControl {
-    let rev = match Revocation::current() {
-        Ok(rev) => rev,
-        Err(e) => {
-            return AdminControl::ClientListResult {
-                ok: false,
+    match TrustState::current() {
+        Ok(trust) => match trust.clients() {
+            Clients::Paired(clients) => AdminControl::ClientListResult {
+                ok: true,
+                enrolled: true,
+                clients: clients.clone(),
+                error: None,
+            },
+            Clients::NeverPaired => AdminControl::ClientListResult {
+                ok: true,
                 enrolled: false,
                 clients: Vec::new(),
-                error: Some(format!("revocation record unreadable: {e}")),
-            };
-        }
-    };
-    match crate::allowlist::load_enforced(&rev) {
-        Ok(Some(list)) => AdminControl::ClientListResult {
-            ok: true,
-            enrolled: true,
-            clients: list.clients,
-            error: None,
-        },
-        Ok(None) => AdminControl::ClientListResult {
-            ok: true,
-            enrolled: false,
-            clients: Vec::new(),
-            error: None,
+                error: None,
+            },
         },
         Err(e) => AdminControl::ClientListResult {
             ok: false,
-            enrolled: true,
+            enrolled: false,
             clients: Vec::new(),
-            error: Some(e.to_string()),
+            error: Some(format!("trust record unreadable: {e}")),
         },
     }
 }
 
-/// Handle a `client_revoke` frame: remove one trusted client.
-/// `Allowlist::revoke` rewrites the list and bumps the revocation epoch in one
-/// critical section, so a live broker drops that client's connections.
+/// Handle a `client_revoke` frame: remove one trusted client. The rewrite is one atomic write of the trust
+/// record, so a live broker refuses that client's next request.
 fn admin_client_revoke(name: &str) -> AdminControl {
     if !ipc::validate_label(name) {
         return AdminControl::ClientRevokeResult {
@@ -125,9 +114,9 @@ fn admin_client_revoke(name: &str) -> AdminControl {
             error: Some("invalid client name".into()),
         };
     }
-    // The RevokeClient audit record is written inside Allowlist::revoke
+    // The RevokeClient audit record is written inside allowlist::revoke
     // (log-after-decide), so no revoke surface can forget the trail entry.
-    match crate::allowlist::Allowlist::revoke(name, crate::audit::Surface::Extension) {
+    match crate::allowlist::revoke(name, crate::audit::Surface::Extension) {
         Ok(true) => {
             log_info!("native-host", "extension revoked trusted client '{name}'");
             AdminControl::ClientRevokeResult {
@@ -345,137 +334,147 @@ fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
     }
 }
 
-/// The revocation epochs the watch compares between polls, by name: a
-/// positional tuple here would let a silent swap cross one epoch's check with
-/// another's push, so each epoch travels under its own field.
+/// The trust-record fields the watch compares between polls, each keying one push.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WatchedEpochs {
-    /// `Revocation::host_key_epoch` - bumps when the enrollment key is revoked.
-    host_key: u64,
-    /// `Revocation::kill_epoch` - bumps on every kill-switch transition.
-    kill: u64,
-    /// `Revocation::policy_epoch` - bumps on every host-owned policy change
-    /// (ADR-0032 decision 4), driving the `policy_current` push.
-    policy: u64,
-    /// `Revocation::lang_epoch` - bumps on every shared-language change
-    /// (ADR-0032 decision 7), driving the `lang_current` push.
-    lang: u64,
+struct Watched {
+    /// Moves when the enrollment key is revoked.
+    host_key_epoch: u64,
+    /// Moves on every kill transition, either direction, driving the `kill_status_result` push.
+    kill_epoch: u64,
+    /// Moves on every host-owned policy change, driving the `policy_current` push.
+    policy_epoch: u64,
+    /// Moves on every shared-language change, driving the `lang_current` push.
+    lang_epoch: u64,
 }
 
-impl WatchedEpochs {
-    fn of(rev: &Revocation) -> Self {
-        WatchedEpochs {
-            host_key: rev.host_key_epoch,
-            kill: rev.kill_epoch,
-            policy: rev.policy_epoch,
-            lang: rev.lang_epoch,
+impl Watched {
+    fn of(trust: &TrustState) -> Self {
+        Watched {
+            host_key_epoch: trust.host_key_epoch(),
+            kill_epoch: trust.kill_epoch(),
+            policy_epoch: trust.policy_epoch(),
+            lang_epoch: trust.lang_epoch(),
         }
     }
 }
 
-/// Watch the revocation record while this host runs and push out-of-band transitions (host-key revocation, kill,
+/// Watch the trust record while this host runs and push out-of-band transitions (host-key revocation, kill,
 /// policy, language) to the extension. With `unkill_observed` (a killed bridge's control-plane mode) an observed
 /// release is HANDED to the loop via the flag rather than exiting here: exiting would drop control frames still
 /// buffered on stdin, including a `kill_engage` the extension was already told was sent (see [`drain_then_decide`]).
 ///
 /// ```text
 /// host-key triggers  -> need a RECORDED revocation (host_key_epoch > 0) AND a keychain-confirmed absent key, so a
-///                       scribbled-on revocation file cannot fake one (ADR-0025)
+///                       scribbled-on trust record cannot fake one
 /// observed release   -> pushed BEFORE the flag is raised, so the mirror is not left engaged across the respawn gap
 /// ```
-fn spawn_revocation_watch(
+fn spawn_trust_watch(
     out: Arc<Mutex<BufWriter<io::Stdout>>>,
     unkill_observed: Option<Arc<AtomicBool>>,
 ) {
     thread::spawn(move || {
-        // A policy-capable host identifies itself at every connect (ADR-0032 decision 4; push_kill_status says
-        // why the kill state stays quiet instead): unconditional, before the revocation-record read below.
+        // A policy-capable host identifies itself at every connect (push_kill_status says why the kill state
+        // stays quiet instead): unconditional, before the trust-record read below.
         push_policy_current(&out);
         push_lang_current(&out);
         // Startup posture: bad news is announced now (a key revoked or a kill
         // engaged while no host was running); a healthy kill state stays quiet.
-        let mut last: Option<WatchedEpochs> = match Revocation::current() {
-            Ok(rev) => {
-                if rev.host_key_epoch > 0 && enrollment_key_is_gone() {
+        let mut last: Option<Watched> = match TrustState::current() {
+            Ok(trust) => {
+                if trust.host_key_epoch() > 0 && enrollment_key_is_gone() {
                     push_revoked(&out);
                 }
-                if rev.killed {
+                if trust.killed() {
                     push_kill_status(&out);
                 }
-                Some(WatchedEpochs::of(&rev))
+                Some(Watched::of(&trust))
             }
             Err(e) => {
-                log_warn!("native-host", "revocation record unreadable: {e}");
+                log_warn!("native-host", "trust record unreadable: {e}");
                 push_kill_status(&out); // pushes ok:false (unknown, fail closed)
                 None
             }
         };
         loop {
-            // Re-read every `revocation::REVOCATION_POLL` to notice an
-            // out-of-band host-key revocation while connected (the startup
-            // check covers revocations from when no host was running).
-            thread::sleep(REVOCATION_POLL);
-            match Revocation::current() {
-                Ok(rev) => {
-                    let cur = WatchedEpochs::of(&rev);
-                    if let Some(prev) = last {
-                        if prev.host_key != cur.host_key
-                            && rev.host_key_epoch > 0
-                            && enrollment_key_is_gone()
-                        {
-                            push_revoked(&out);
-                        }
-                        if prev.kill != cur.kill {
-                            push_kill_status(&out);
-                            if !rev.killed {
-                                if let Some(flag) = &unkill_observed {
-                                    log_info!(
-                                        "native-host",
-                                        "kill switch released; handing the transition \
-                                         to the control-plane loop"
-                                    );
-                                    flag.store(true, Ordering::Release);
-                                }
-                            }
-                        }
-                        // ADR-0032: an out-of-band policy or language change
-                        // (a CLI/app edit, or a second browser's host) moves
-                        // its epoch; push the fresh state on the same tick.
-                        if prev.policy != cur.policy {
-                            push_policy_current(&out);
-                        }
-                        if prev.lang != cur.lang {
-                            push_lang_current(&out);
-                        }
-                    } else {
-                        // Recovered from an unreadable record: re-run the
-                        // startup posture. Every watched state (host-key
-                        // revocation, kill, policy, language) was
-                        // unobservable across the gap, so a change made
-                        // during it would otherwise be silently absorbed
-                        // into the rebuilt baseline and stay unannounced
-                        // until the next connect.
-                        if rev.host_key_epoch > 0 && enrollment_key_is_gone() {
-                            push_revoked(&out);
-                        }
-                        push_kill_status(&out);
-                        push_policy_current(&out);
-                        push_lang_current(&out);
-                    }
-                    last = Some(cur);
-                }
-                Err(e) => {
-                    // Log (and push the unknown state) on the transition to
-                    // unreadable once, not every tick.
-                    if last.is_some() {
-                        log_warn!("native-host", "revocation record unreadable: {e}");
-                        push_kill_status(&out);
-                        last = None;
-                    }
-                }
-            }
+            thread::sleep(POLL_INTERVAL);
+            last = watch_tick(
+                last,
+                TrustState::current(),
+                &out,
+                unkill_observed.as_deref(),
+            );
         }
     });
+}
+
+/// One poll of the watch: push what changed since `last` and hand an observed release to the control-plane loop
+/// through `unkill_observed`. Returns the state the next poll compares against, `None` after an unreadable read
+/// so the next readable one re-runs the startup posture.
+///
+/// ```text
+/// unreadable                     -> once per gap: log, push the unknown kill state
+/// readable after unreadable      -> every watched state was unobservable across the gap: push all of them, and a
+///                                   released record hands over the release too (the documented recovery from an
+///                                   unreadable record is deleting it, which reads as the released bootstrap)
+/// kill marker moved, not killed  -> the release handoff, after the push so the mirror is not left engaged
+/// ```
+fn watch_tick(
+    last: Option<Watched>,
+    read: io::Result<TrustState>,
+    out: &Mutex<BufWriter<io::Stdout>>,
+    unkill_observed: Option<&AtomicBool>,
+) -> Option<Watched> {
+    let trust = match read {
+        Ok(trust) => trust,
+        Err(e) => {
+            if last.is_some() {
+                log_warn!("native-host", "trust record unreadable: {e}");
+                push_kill_status(out);
+            }
+            return None;
+        }
+    };
+    let cur = Watched::of(&trust);
+    // Lazy: the keychain is asked only when the host-key marker moved (or across a gap), not on every poll of a
+    // machine whose marker stays non-zero forever after a revoke.
+    let key_gone = || trust.host_key_epoch() > 0 && enrollment_key_is_gone();
+    let released = match last {
+        Some(prev) => {
+            if prev.host_key_epoch != cur.host_key_epoch && key_gone() {
+                push_revoked(out);
+            }
+            let kill_moved = prev.kill_epoch != cur.kill_epoch;
+            if kill_moved {
+                push_kill_status(out);
+            }
+            if prev.policy_epoch != cur.policy_epoch {
+                push_policy_current(out);
+            }
+            if prev.lang_epoch != cur.lang_epoch {
+                push_lang_current(out);
+            }
+            kill_moved && !trust.killed()
+        }
+        None => {
+            if key_gone() {
+                push_revoked(out);
+            }
+            push_kill_status(out);
+            push_policy_current(out);
+            push_lang_current(out);
+            !trust.killed()
+        }
+    };
+    if released {
+        if let Some(flag) = unkill_observed {
+            log_info!(
+                "native-host",
+                "kill switch released; handing the transition to the control-plane loop"
+            );
+            flag.store(true, Ordering::Release);
+        }
+    }
+    Some(cur)
 }
 
 // ---- ADR-0031: per-action user-presence signing ------------------------------
@@ -846,7 +845,7 @@ fn run_control_plane() -> i32 {
     // The watch raises this flag on an observed release; leaving this mode
     // is the LOOP's decision, after the drain (see drain_then_decide).
     let unkill_observed = Arc::new(AtomicBool::new(false));
-    spawn_revocation_watch(
+    spawn_trust_watch(
         Arc::clone(&stdout_writer),
         Some(Arc::clone(&unkill_observed)),
     );
@@ -1029,11 +1028,11 @@ pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
     // mutex around one buffered writer keeps frames whole; every write flushes.
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
 
-    // ADR-0025/0030: notify the extension when the enrollment key has been
+    // Notify the extension when the enrollment key has been
     // revoked out-of-band, and keep its kill mirror fed (at startup and on
     // every observed transition). No unkill flag: in bridge mode an engaged
     // kill ends this process via the broker severing the socket.
-    spawn_revocation_watch(Arc::clone(&stdout_writer), None);
+    spawn_trust_watch(Arc::clone(&stdout_writer), None);
 
     // Thread A: stdin -> socket
     let ctrl_out = Arc::clone(&stdout_writer);

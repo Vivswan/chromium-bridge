@@ -18,12 +18,13 @@
 //! The broker trusts a relay's harness hash/Team-ID because the relay passed `attest_peer`: it is our binary,
 //! which measures its parent honestly. The harness *name* is a log label only; authorization keys on the hash/Team-ID.
 //!
-//! Residual, named in ADR-0024: `getppid` names who spawned the relay, not who writes its stdin, and it is measured
-//! ONCE at process start (mcp_server's `admit_own_harness`), then cached in `EpochGuard`.
+//! Residual: `getppid` names who spawned the relay, not who writes its stdin, and it is measured ONCE at process
+//! start (mcp_server's `admit_own_harness`); the identity is then re-decided against the trust record on every
+//! request ([`crate::trust::TrustState::decide`]).
 //! ```text
 //! reparented before the measurement                         -> measured as the reaper: refused once clients are
-//!                                                              enrolled and the reaper is not allowlisted, admitted
-//!                                                              while unenrolled (allowlist::decide ignores identity)
+//!                                                              paired and the reaper is not allowlisted, admitted
+//!                                                              while unenrolled (decide ignores the identity)
 //! parent exits mid-session, another process holds the stdin -> continues under the admitted identity
 //! pid reused around the measurement                         -> the same race
 //! ```
@@ -31,19 +32,18 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::allowlist::{self, Decision};
 use crate::audit;
 use crate::ipc::{self, BridgeStream, BrowserLabel, ClientIdentity};
 use crate::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, AttachReply, AttachRequest, HarnessId, JsonRpc,
     MCP_MAX_LINE,
 };
-use crate::revocation::{Revocation, REVOCATION_POLL};
 use crate::session::Session;
+use crate::trust::{Admission, Posture, TrustState, POLL_INTERVAL};
 
 // ---- DoS limits (generalizing the fail-closed-timeout posture) -------------
 
@@ -73,9 +73,22 @@ const RATE_REFILL_PER_SEC: f64 = 128.0;
 // ---- Ref-count coordinator (loom-checked) ----------------------------------
 
 #[cfg(all(test, feature = "loom"))]
-use loom::sync::{Condvar, Mutex};
+use loom::sync::{Condvar, Mutex, MutexGuard};
 #[cfg(not(all(test, feature = "loom")))]
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, MutexGuard};
+
+/// The broker's one lock poisoning policy: recover. SECURITY.md's lock poisoning section owns the reasons.
+struct Lock<T>(Mutex<T>);
+
+impl<T> Lock<T> {
+    fn new(value: T) -> Self {
+        Lock(Mutex::new(value))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, T> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// The broker's harness ref-count and its shutdown gate. Counts live harness
 /// clients (the broker's own stdio harness plus attached relays); browser
@@ -93,7 +106,7 @@ struct RefCount {
     ///
     /// [`try_acquire`]: RefCount::try_acquire
     /// [`wait_zero`]: RefCount::wait_zero
-    state: Mutex<CountState>,
+    state: Lock<CountState>,
     reached_zero: Condvar,
     max: usize,
 }
@@ -128,7 +141,7 @@ impl RefCount {
     /// broker's own stdio harness -- is counted by acquiring a slot.
     fn new(max: usize) -> Self {
         RefCount {
-            state: Mutex::new(CountState {
+            state: Lock::new(CountState {
                 live: 0,
                 terminal: false,
             }),
@@ -141,11 +154,7 @@ impl RefCount {
     /// (returns `None`) if the broker is at capacity or has already committed
     /// to shutting down (`terminal`).
     fn try_acquire(&self) -> Option<HarnessSlot<'_>> {
-        // A poisoned count is untrustworthy state: refuse the attach (the
-        // client redials) rather than admit past an unknowable count.
-        let Ok(mut g) = self.state.lock() else {
-            return None;
-        };
+        let mut g = self.state.lock();
         if g.terminal || g.live >= self.max {
             return None;
         }
@@ -159,12 +168,7 @@ impl RefCount {
     /// Remove a client (the [`HarnessSlot`] Drop path). Wakes
     /// [`wait_zero`](RefCount::wait_zero) when the count reaches zero.
     fn decr(&self) {
-        // Recover from poison rather than skip: failing to release a slot
-        // would wedge wait_zero and keep the broker alive forever.
-        let mut g = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut g = self.state.lock();
         debug_assert!(g.live > 0, "decr underflow");
         // saturating_sub: a (never-observed) double-release must not wrap the
         // count in release builds and wedge the zero detection forever.
@@ -179,17 +183,12 @@ impl RefCount {
     /// [`try_acquire`](RefCount::try_acquire)), so the caller can tear the
     /// broker down without racing a fresh attach.
     fn wait_zero(&self) {
-        // Shutdown path: recover from poison and keep waiting -- refusing here
-        // would abandon the terminal latch and let a racing relay revive us.
-        let mut g = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut g = self.state.lock();
         while g.live != 0 {
             g = self
                 .reached_zero
                 .wait(g)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
         }
         g.terminal = true;
     }
@@ -226,79 +225,34 @@ impl RateLimiter {
     }
 }
 
-// ---- Revocation-epoch enforcement (ADR-0025) --------------------------------
+// ---- Admission enforcement -------------------------------------------------
 
-// The broker's watcher thread re-reads the revocation epoch every
-// `revocation::REVOCATION_POLL`, so a revocation reaches even an IDLE
-// connection without waiting for its next request. Requests themselves are
-// checked inline (immediately), so that interval only bounds the lifetime of
-// an idle revoked connection.
-
-/// Per-connection revocation-epoch guard (ADR-0025): before EVERY dispatched request it re-reads the persisted
-/// epoch and, on a change, re-decides admission against the freshly loaded allowlist; an unreadable record or
-/// allowlist drops the connection, never serves on stale trust.
-/// ```text
-/// relay (backstopped)        -> an unchanged epoch skips the allowlist read; `watch_tick` drops a revoked relay
-///                               within a poll interval even when idle and even if the epoch bump never persisted
-/// own harness (no backstop)  -> re-decides on every request; an idle revoked own harness stays connected (it is
-///                               driving nothing) and is refused on its very next request
-/// ```
-struct EpochGuard {
-    /// The harness's attested identity, captured at admission. `None` means
-    /// it could not be measured (admitted only while unenrolled).
-    identity: Option<ClientIdentity>,
-    /// The revocation epoch this connection was last (re-)admitted under.
-    seen_epoch: u64,
-    /// Whether the watcher sweeps this connection ([`ClientRegistry`]). The broker's OWN stdio harness is not in
-    /// the registry (stdin/stdout has no socket to shut down), so its guard re-decides on EVERY request.
-    backstopped: bool,
-}
-
-/// One admitted peer of a serve loop, bundling the resources its role
-/// entitles it to. The role is a single admission-time choice: a relay is
-/// rate-limited AND carries a backstopped guard (the watcher sweeps it), the
-/// broker's own stdio harness is unlimited AND carries an un-backstopped
-/// guard (it re-decides every request). [`serve_jsonrpc`] takes one of these
-/// instead of independent limiter/guard/label parameters, so a serve loop
-/// with a relay's limiter but the own harness's guard - or any other
-/// crossing - is unrepresentable rather than kept coherent by its two call
-/// sites.
+/// One admitted peer of a serve loop: the identity and posture it was admitted with, plus the rate limiter
+/// only a relay carries. One value per role, so a serve loop cannot cross one role's limiter with the other's
+/// identity. The relay is also swept by the watcher ([`ClientRegistry`]); the own harness has no socket to
+/// shut down, so an idle revoked own harness stays connected (it is driving nothing) until its next request.
 enum ServedPeer {
-    /// The broker's own stdio harness.
-    OwnHarness { guard: EpochGuard },
-    /// An attached relay client.
+    OwnHarness {
+        identity: Option<ClientIdentity>,
+        posture: Posture,
+    },
     Relay {
-        guard: EpochGuard,
+        identity: Option<ClientIdentity>,
+        posture: Posture,
         limiter: RateLimiter,
     },
 }
 
 impl ServedPeer {
-    /// The broker's own stdio harness: un-backstopped guard, no rate limit.
-    fn own_harness(own: OwnHarness) -> ServedPeer {
-        ServedPeer::OwnHarness {
-            guard: EpochGuard {
-                identity: own.identity,
-                seen_epoch: own.epoch,
-                backstopped: false,
-            },
-        }
-    }
-
-    /// An admitted relay: backstopped guard (the watcher sweeps its
-    /// registry slot) plus a fresh per-connection rate limiter.
-    fn relay(identity: Option<ClientIdentity>, admitted_epoch: u64) -> ServedPeer {
+    fn relay(identity: Option<ClientIdentity>, posture: Posture) -> ServedPeer {
         ServedPeer::Relay {
-            guard: EpochGuard {
-                identity,
-                seen_epoch: admitted_epoch,
-                backstopped: true,
-            },
+            identity,
+            posture,
             limiter: RateLimiter::new(),
         }
     }
 
-    /// The role's name for logs and the guard's refusal text.
+    /// The role's name for logs and the refusal text.
     fn who(&self) -> &'static str {
         match self {
             ServedPeer::OwnHarness { .. } => "the broker's own harness",
@@ -307,86 +261,76 @@ impl ServedPeer {
     }
 }
 
-impl EpochGuard {
-    /// Enforce the epoch before serving one request. Reads the revocation
-    /// record and (for a backstopped connection, only when the epoch moved)
-    /// the allowlist from disk.
-    fn recheck(&mut self, who: &str) -> io::Result<()> {
-        // Read order matters: the revocation record FIRST, then the
-        // allowlist. A revocation writes the allowlist and bumps the epoch in
-        // one critical section (allowlist first); reading the epoch first
-        // means we can never cache a NEW epoch against a STALE list, so a
-        // revoke is enforced no later than the first read that observes its
-        // bump.
-        let rev = Revocation::current();
-        self.recheck_with(who, rev, allowlist::load_enforced)
-    }
+/// Why a served connection is no longer served.
+enum Refusal {
+    Revoked,
+    /// The record enforced admission when the connection was admitted and now reads as the open bootstrap:
+    /// it was deleted or hand-edited under a live session.
+    BootstrapReverted,
+}
 
-    /// The decision core of [`recheck`](Self::recheck), with the two disk
-    /// reads injected so the fail-closed matrix is unit-testable without a
-    /// runtime directory.
-    fn recheck_with(
-        &mut self,
-        who: &str,
-        rev: io::Result<Revocation>,
-        load: impl FnOnce(&Revocation) -> io::Result<Option<allowlist::Allowlist>>,
-    ) -> io::Result<()> {
-        let rev = rev.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("revocation record unreadable ({e}); failing closed"),
-            )
-        })?;
-        // A backstopped connection may skip the allowlist read on an unchanged
-        // epoch (the watcher covers a stuck epoch). An un-backstopped one (the
-        // own harness) always re-decides, so a failed epoch bump cannot leave
-        // it served.
-        if self.backstopped && rev.epoch == self.seen_epoch {
-            return Ok(());
-        }
-        let list = load(&rev).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("allowlist unreadable after an epoch bump ({e}); failing closed"),
-            )
-        })?;
-        match allowlist::decide(list.as_ref(), self.identity.as_ref()) {
-            Decision::Refuse => Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "{who} was revoked (epoch {} -> {})",
-                    self.seen_epoch, rev.epoch
-                ),
-            )),
-            Decision::Admit { name } => {
-                log_info!(
-                    "broker",
-                    "{who} re-admitted as trusted client '{name}' after epoch bump ({} -> {})",
-                    self.seen_epoch,
-                    rev.epoch
-                );
-                self.seen_epoch = rev.epoch;
-                Ok(())
-            }
-            Decision::AdmitUnenrolled => {
-                // Still the (loudly logged at startup) unenrolled posture.
-                self.seen_epoch = rev.epoch;
-                Ok(())
-            }
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refusal::Revoked => f.write_str("was revoked"),
+            Refusal::BootstrapReverted => f.write_str(
+                "was admitted under an enforced record that now reads as the open bootstrap",
+            ),
         }
     }
 }
 
+/// The one continued-service rule, shared by the per-request gate and the watcher sweep: a connection is never
+/// served under a weaker posture than it was admitted with. Ending the connection on a bootstrap revert is
+/// what keeps `rm trust.json` loud: the respawned instance re-admits under the ERROR-logged bootstrap.
+fn refusal(
+    trust: &TrustState,
+    identity: Option<&ClientIdentity>,
+    posture: &Posture,
+) -> Option<Refusal> {
+    match (posture, trust.decide(identity)) {
+        (_, Admission::Refused) => Some(Refusal::Revoked),
+        (Posture::Trusted { .. }, Admission::Admit(Posture::Unenrolled)) => {
+            Some(Refusal::BootstrapReverted)
+        }
+        (Posture::Unenrolled, Admission::Admit(_))
+        | (Posture::Trusted { .. }, Admission::Admit(Posture::Trusted { .. })) => None,
+    }
+}
+
+/// The per-request gate. The record is read fresh for every request, so a revocation or a corrupted record is
+/// enforced on the very next request, never a poll interval later.
+fn request_admission(
+    who: &str,
+    identity: Option<&ClientIdentity>,
+    posture: &Posture,
+    trust: io::Result<TrustState>,
+) -> io::Result<()> {
+    let trust = trust.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("trust record unreadable ({e}); failing closed"),
+        )
+    })?;
+    match refusal(&trust, identity, posture) {
+        None => Ok(()),
+        Some(why) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{who} {why} (trust epoch {})", trust.epoch()),
+        )),
+    }
+}
+
 /// The broker's registry of live RELAY connections, so a revocation can reach
-/// an idle connection: the watcher thread sweeps it on every epoch bump and
-/// shuts down the socket of any harness the fresh allowlist refuses, which
-/// ends that relay's serve loop (its own [`EpochGuard`] would equally refuse
-/// its next request; the sweep covers the no-request case). Slots are removed
-/// only by their [`RegistrySlot`] guard's Drop (held by the serve worker) --
-/// the sweep never removes, so occupancy bookkeeping stays in exactly one
-/// place, and by construction rather than by convention.
+/// an idle connection: the watcher thread sweeps it every tick and shuts down
+/// the socket of any harness the current record refuses, which ends that
+/// relay's serve loop (its own per-request gate would equally refuse its next
+/// request; the sweep covers the no-request case). Slots are removed only by
+/// their [`RegistrySlot`] guard's Drop (held by the serve worker) -- the sweep
+/// never removes, so occupancy bookkeeping stays in exactly one place, and by
+/// construction rather than by convention.
 struct ClientRegistry {
-    slots: Mutex<RegistryInner>,
+    slots: Lock<RegistryInner>,
 }
 
 struct RegistryInner {
@@ -396,6 +340,7 @@ struct RegistryInner {
 
 struct RegisteredClient {
     identity: Option<ClientIdentity>,
+    posture: Posture,
     /// A clone of the connection's stream, held only to `shutdown()` it.
     stream: BridgeStream,
 }
@@ -419,7 +364,7 @@ impl Drop for RegistrySlot<'_> {
 impl ClientRegistry {
     fn new() -> Self {
         ClientRegistry {
-            slots: Mutex::new(RegistryInner {
+            slots: Lock::new(RegistryInner {
                 next_id: 1,
                 clients: HashMap::new(),
             }),
@@ -429,52 +374,40 @@ impl ClientRegistry {
     fn register(
         &self,
         identity: Option<ClientIdentity>,
+        posture: Posture,
         stream: BridgeStream,
     ) -> Option<RegistrySlot<'_>> {
-        // Refuse on poison: this registry is the kill switch's reach, and the
-        // thread most likely to have poisoned it is the sweep watcher itself.
-        // Admitting a relay the (possibly dead) sweeper can never sever would
-        // be fail-open; the caller rejects the connection instead.
-        let Ok(mut inner) = self.slots.lock() else {
-            return None;
-        };
+        let mut inner = self.slots.lock();
         let id = inner.next_id;
         // A wrapped id could collide with a live slot and let deregister
         // remove the wrong client; refuse the attach instead (fail closed).
         let next_id = id.checked_add(1)?;
         inner.next_id = next_id;
-        inner
-            .clients
-            .insert(id, RegisteredClient { identity, stream });
+        inner.clients.insert(
+            id,
+            RegisteredClient {
+                identity,
+                posture,
+                stream,
+            },
+        );
         Some(RegistrySlot { registry: self, id })
     }
 
     /// Release path, called only by [`RegistrySlot`]'s Drop.
     fn deregister(&self, id: u64) {
-        // Recover from poison so slots cannot leak.
-        self.slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clients
-            .remove(&id);
+        self.slots.lock().clients.remove(&id);
     }
 
-    /// Shut down every registered relay whose identity `refuse` matches.
-    /// Returns how many connections were dropped.
-    fn sweep(&self, refuse: impl Fn(Option<&ClientIdentity>) -> bool) -> usize {
-        // The kill switch must bite even after a panic poisoned the registry:
-        // severing sockets is safe on inconsistent bookkeeping, whereas
-        // refusing to sever would leave clients attached.
-        let inner = self
-            .slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    /// Shut down every registered relay `refuse` matches. Returns how many connections were dropped.
+    fn sweep(&self, refuse: impl Fn(Option<&ClientIdentity>, &Posture) -> bool) -> usize {
+        let inner = self.slots.lock();
         // Explicit loop: the shutdown is enforcement and must not hide as an
         // iterator-adapter side effect. The count only feeds a log line, so
         // clamping on (unreachable) overflow is fine.
         let mut dropped: usize = 0;
         for client in inner.clients.values() {
-            if refuse(client.identity.as_ref()) {
+            if refuse(client.identity.as_ref(), &client.posture) {
                 let _ = client.stream.shutdown(std::net::Shutdown::Both);
                 dropped = dropped.saturating_add(1);
             }
@@ -484,81 +417,60 @@ impl ClientRegistry {
 }
 
 /// The watcher loop body, factored from the polling thread so the fail-closed matrix is testable: re-decide every
-/// live relay against the current allowlist and enforce the kill switch on the browser leg (ADR-0030). The re-decide
-/// is UNCONDITIONAL, not gated on an epoch change: a revocation whose epoch bump failed to persist (disk full, a
-/// rename error) leaves the counter stale, and a change-gated sweep would then serve the revoked client indefinitely.
+/// live relay against the current record and enforce the kill switch on the browser leg. The re-decide is
+/// UNCONDITIONAL, not gated on an epoch change: the record is the authority, and a sweep gated on the counter
+/// would serve a client delisted by a hand edit that left the counter alone.
 ///
 /// ```text
-/// sweeping clients.json every tick -> bounds that exposure to one poll interval
-/// drop_browsers                    -> idempotent, so calling it every tick is harmless
-/// returned epoch                   -> only deduplicates the "dropped N" log line; None on a failed read keeps the
-///                                     caller's logging cursor
+/// sweeping every tick -> bounds an idle revoked relay's exposure to one poll interval
+/// drop_browsers       -> idempotent, so calling it every tick is harmless
+/// returned epoch      -> only deduplicates the "dropped N" log line; None on a failed read keeps the caller's
+///                        logging cursor
 /// ```
 fn watch_tick(
     registry: &ClientRegistry,
     last_seen: u64,
-    rev: io::Result<Revocation>,
-    load: impl FnOnce(&Revocation) -> io::Result<Option<allowlist::Allowlist>>,
+    trust: io::Result<TrustState>,
     drop_browsers: impl FnOnce() -> usize,
 ) -> Option<u64> {
-    let rev = match rev {
-        Ok(rev) => rev,
+    let trust = match trust {
+        Ok(trust) => trust,
         Err(e) => {
-            // Fail closed: with the revocation record unreadable, no relay's
-            // admission can be re-validated (the enrollment latch that governs
-            // an absent allowlist is unknown) and the kill state is unknowable,
-            // so neither the relays nor the browser leg may keep a connection.
-            let dropped = registry.sweep(|_| true);
+            // Fail closed: with the record unreadable no relay's admission can be re-validated and the kill
+            // state is unknowable, so neither the relays nor the browser leg may keep a connection.
+            let dropped = registry.sweep(|_, _| true);
             let browsers = drop_browsers();
             if dropped > 0 || browsers > 0 {
                 log_error!(
                     "broker",
-                    "revocation record unreadable ({e}); dropped {dropped} relay and \
+                    "trust record unreadable ({e}); dropped {dropped} relay and \
                      {browsers} browser connection(s) (fail closed)"
                 );
             }
             return None;
         }
     };
-    if rev.killed {
+    if trust.killed() {
         let browsers = drop_browsers();
         if browsers > 0 {
             log_error!(
                 "broker",
-                "kill switch engaged (epoch {}); severed {browsers} browser connection(s)",
-                rev.epoch
+                "kill switch engaged (trust epoch {}); severed {browsers} browser connection(s)",
+                trust.epoch()
             );
         }
     }
-    match load(&rev) {
-        Ok(list) => {
-            let dropped = registry.sweep(|identity| {
-                matches!(allowlist::decide(list.as_ref(), identity), Decision::Refuse)
-            });
-            // Log only when something was dropped AND the epoch moved since the
-            // last drop, so a steady state (nobody to drop) and a stuck-epoch
-            // sweep do not spam the log every second.
-            if dropped > 0 && rev.epoch != last_seen {
-                log_info!(
-                    "broker",
-                    "revocation epoch {}; dropped {dropped} revoked relay connection(s)",
-                    rev.epoch
-                );
-            }
-            Some(rev.epoch)
-        }
-        Err(e) => {
-            let dropped = registry.sweep(|_| true);
-            if dropped > 0 {
-                log_error!(
-                    "broker",
-                    "allowlist unreadable ({e}); dropped {dropped} relay connection(s) \
-                     (fail closed)"
-                );
-            }
-            None
-        }
+    let dropped = registry.sweep(|identity, posture| refusal(&trust, identity, posture).is_some());
+    // Log only when something was dropped AND the epoch moved since the last drop, so a relay still
+    // deregistering mid-dispatch does not repeat the line every second.
+    if dropped > 0 && trust.epoch() != last_seen {
+        log_info!(
+            "broker",
+            "trust epoch {}; dropped {dropped} revoked relay connection(s)",
+            trust.epoch()
+        );
     }
+    Some(trust.epoch())
 }
 
 // ---- Broker ----------------------------------------------------------------
@@ -569,7 +481,7 @@ struct Broker {
     /// Connections currently in the handshake/attach phase, bounding accept-time
     /// fan-out ([`MAX_PENDING_ATTACH`]).
     pending: AtomicUsize,
-    /// Live relay connections, swept on revocation-epoch bumps (ADR-0025).
+    /// Live relay connections, swept against the trust record every watcher tick.
     registry: ClientRegistry,
 }
 
@@ -630,8 +542,7 @@ enum Admitted<'a> {
     Client {
         reader: BufReader<BridgeStream>,
         writer: BufWriter<BridgeStream>,
-        /// The relay role's serve-loop resources: per-request revocation
-        /// epoch guard (ADR-0025) plus its rate limiter, bundled by
+        /// The relay role's serve-loop resources: its admitted identity plus its rate limiter, bundled by
         /// [`ServedPeer::relay`] so the role cannot be re-assembled wrong.
         peer: ServedPeer,
         /// This connection's registry + ref-count occupancy (RAII).
@@ -642,18 +553,15 @@ enum Admitted<'a> {
     Rejected,
 }
 
-/// The broker's own stdio harness, as admitted by
-/// `mcp_server::admit_own_harness`: the identity it was admitted on
-/// and the revocation epoch it was admitted under (ADR-0025).
-pub(crate) struct OwnHarness {
-    pub identity: Option<ClientIdentity>,
-    pub epoch: u64,
-}
-
-/// Run as the broker: own the accepted socket, serve this instance's own stdio
-/// harness, accept browser and relay attaches, and exit when the last harness
-/// detaches. Returns the process exit code.
-pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: OwnHarness) -> i32 {
+/// Run as the broker: own the accepted socket, serve this instance's own stdio harness, accept browser and
+/// relay attaches, and exit when the last harness detaches. `own_identity` and `own_posture` are what
+/// `mcp_server::admit_own_harness` admitted this instance's harness with. Returns the process exit code.
+pub(crate) fn run_broker(
+    listener: ipc::BridgeListener,
+    session: Session,
+    own_identity: Option<ClientIdentity>,
+    own_posture: Posture,
+) -> i32 {
     let broker = Arc::new(Broker {
         session,
         refcount: RefCount::new(MAX_HARNESS_CLIENTS),
@@ -675,22 +583,19 @@ pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: O
         return 1;
     };
 
-    // Watch the revocation epoch so a revoke reaches IDLE relay connections
-    // too (requests are guarded inline), and so a kill severs the browser leg
-    // within a tick even when nobody is calling (ADR-0030). The thread dies
-    // with the process.
+    // Watch the trust record so a revoke reaches IDLE relay connections too (requests are gated inline), and
+    // so a kill severs the browser leg within a tick even when nobody is calling. The thread dies with the
+    // process.
     {
         let broker = Arc::clone(&broker);
-        let mut last_seen = own.epoch;
+        let mut last_seen = 0;
         thread::spawn(move || loop {
-            thread::sleep(REVOCATION_POLL);
-            if let Some(seen) = watch_tick(
-                &broker.registry,
-                last_seen,
-                Revocation::current(),
-                allowlist::load_enforced,
-                || broker.session.shutdown_all_browsers(),
-            ) {
+            thread::sleep(POLL_INTERVAL);
+            if let Some(seen) =
+                watch_tick(&broker.registry, last_seen, TrustState::current(), || {
+                    broker.session.shutdown_all_browsers()
+                })
+            {
                 last_seen = seen;
             }
         });
@@ -702,18 +607,15 @@ pub(crate) fn run_broker(listener: ipc::BridgeListener, session: Session, own: O
         thread::spawn(move || accept_loop(&broker, listener));
     }
 
-    // Serve THIS instance's own harness on stdin/stdout, exactly as the server
-    // did before: read JSON-RPC, dispatch against the shared session, respond.
-    // Its epoch guard covers the broker's own harness: if it is revoked, the
-    // serve loop ends (its harness sees EOF and a respawned instance is
-    // refused at admission) while attached relays keep being served until
-    // they detach. The role - un-backstopped guard, no rate limit - is one
-    // constructor call, so it cannot be assembled crossed.
+    // A revoked own harness ends only this loop: attached relays keep being served until they detach.
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
-    let mut peer = ServedPeer::own_harness(own);
+    let mut peer = ServedPeer::OwnHarness {
+        identity: own_identity,
+        posture: own_posture,
+    };
     let _ = serve_jsonrpc(&broker.session, &mut reader, &mut writer, &mut peer);
 
     // Own harness gone (stdin EOF). Release our slot, then wait until every
@@ -958,25 +860,6 @@ fn admit_client<'a>(
 ) -> Admitted<'a> {
     let identity = harness.as_ref().map(ClientIdentity::from);
 
-    // Register for revocation sweeps BEFORE deciding admission, so an epoch
-    // bump can never land in a decide->register window where the sweep would
-    // miss this connection and then consider its epoch already handled. The
-    // returned slot deregisters on Drop, so every rejection path below
-    // releases it by construction.
-    let sweep_handle = match writer.get_ref().try_clone() {
-        Ok(s) => s,
-        Err(e) => {
-            log_warn!("broker", "clone stream for the revocation registry: {e}");
-            return Admitted::Rejected;
-        }
-    };
-    let Some(slot) = broker.registry.register(identity.clone(), sweep_handle) else {
-        log_warn!(
-            "broker",
-            "revocation registry unavailable (poisoned or ids exhausted); refusing relay"
-        );
-        return Admitted::Rejected;
-    };
     // Reply-and-log refusal helper; resource release is the guards' Drop.
     fn reject_relay(
         writer: &mut BufWriter<BridgeStream>,
@@ -990,30 +873,14 @@ fn admit_client<'a>(
         Admitted::Rejected
     }
 
-    // Admission decision (ADR-0024/0025). Read order is load-bearing: the
-    // revocation record FIRST, then the allowlist -- a revocation writes the
-    // allowlist and then bumps the epoch, so this order can never pair a new
-    // epoch with a stale list. Failures to read either are fail-closed.
-    let rev = match Revocation::current() {
-        Ok(rev) => rev,
+    let trust = match TrustState::current() {
+        Ok(trust) => trust,
         Err(e) => {
             return reject_relay(
                 &mut writer,
-                &format!("cannot read the revocation record: {e}"),
+                &format!("cannot read the trust record: {e}"),
                 Some(AttachReply::Refused {
-                    reason: "revocation record unreadable".into(),
-                }),
-            );
-        }
-    };
-    let list = match allowlist::load_enforced(&rev) {
-        Ok(l) => l,
-        Err(e) => {
-            return reject_relay(
-                &mut writer,
-                &format!("cannot read the allowlist: {e}"),
-                Some(AttachReply::Refused {
-                    reason: "allowlist unreadable".into(),
+                    reason: "trust record unreadable".into(),
                 }),
             );
         }
@@ -1028,8 +895,8 @@ fn admit_client<'a>(
         .and_then(|h| h.name.as_deref())
         .filter(|n| ipc::validate_label(n))
         .map(str::to_string);
-    match allowlist::decide(list.as_ref(), identity.as_ref()) {
-        Decision::Refuse => {
+    let posture = match trust.decide(identity.as_ref()) {
+        Admission::Refused => {
             audit::record(
                 audit::AuditRecord::new(audit::AuditKind::HarnessRefuse)
                     .surface(audit::Surface::Broker)
@@ -1048,11 +915,11 @@ fn admit_client<'a>(
                 }),
             );
         }
-        Decision::AdmitUnenrolled => {
+        Admission::Admit(Posture::Unenrolled) => {
             log_error!(
                 "broker",
-                "SECURITY: relay admitted WITHOUT harness attestation -- no trusted-client \
-                 allowlist exists yet (unenrolled). Any same-user process that runs our binary \
+                "SECURITY: relay admitted WITHOUT harness attestation -- no trusted client has \
+                 been paired yet (unenrolled). Any same-user process that runs our binary \
                  can drive the browser through this relay. Run `chromium-bridge pair-client` to \
                  enroll trusted clients and turn on enforcement. See SECURITY.md."
             );
@@ -1062,8 +929,9 @@ fn admit_client<'a>(
                     .name(reported_name.as_deref().unwrap_or("-"))
                     .outcome("unenrolled"),
             );
+            Posture::Unenrolled
         }
-        Decision::Admit { name } => {
+        Admission::Admit(Posture::Trusted { name }) => {
             log_info!("broker", "relay admitted for trusted client '{name}'");
             audit::record(
                 audit::AuditRecord::new(audit::AuditKind::HarnessAdmit)
@@ -1071,8 +939,27 @@ fn admit_client<'a>(
                     .name(&name)
                     .outcome("ok"),
             );
+            Posture::Trusted { name }
         }
-    }
+    };
+
+    let sweep_handle = match writer.get_ref().try_clone() {
+        Ok(s) => s,
+        Err(e) => {
+            log_warn!("broker", "clone stream for the revocation registry: {e}");
+            return Admitted::Rejected;
+        }
+    };
+    let Some(slot) = broker
+        .registry
+        .register(identity.clone(), posture.clone(), sweep_handle)
+    else {
+        log_warn!(
+            "broker",
+            "revocation registry ids exhausted; refusing relay"
+        );
+        return Admitted::Rejected;
+    };
 
     // Capacity + terminal check. Refuse-as-unavailable (retryable) rather than
     // deny, so a relay that lost the race to a shutting-down or full broker
@@ -1100,9 +987,7 @@ fn admit_client<'a>(
     Admitted::Client {
         reader,
         writer,
-        // The relay role in one constructor: backstopped guard (the watcher
-        // sweeps this connection's registry slot) plus its rate limiter.
-        peer: ServedPeer::relay(identity, rev.epoch),
+        peer: ServedPeer::relay(identity, posture),
         admission,
     }
 }
@@ -1118,8 +1003,8 @@ fn clear_read_timeout(writer: &BufWriter<BridgeStream>) {
 /// this connection's [`crate::mcp::Connection`]. The gates run HERE, before a message reaches the protocol
 /// engine, so adopting rmcp moved none of them; a parse error answers `-32700` and continues, EOF ends the loop.
 /// ```text
-/// relay over its rate limit                              -> connection dropped (fail closed)
-/// revoked, or revocation record / allowlist unreadable   -> loop ends before dispatch (ADR-0025)
+/// relay over its rate limit                 -> connection dropped (fail closed)
+/// revoked, or the trust record unreadable   -> loop ends before dispatch
 /// ```
 fn serve_jsonrpc<R: BufRead, W: Write>(
     session: &Session,
@@ -1146,12 +1031,15 @@ fn serve_jsonrpc<R: BufRead, W: Write>(
                 continue;
             }
         };
-        // The rate limit is the relay role's resource, carried on its
-        // variant; the own harness structurally has none to consult. Checked
-        // before the (costlier) revocation re-decide.
-        let guard = match peer {
-            ServedPeer::OwnHarness { guard } => guard,
-            ServedPeer::Relay { guard, limiter } => {
+        // The rate limit is the relay role's resource, carried on its variant; the own harness structurally
+        // has none to consult. Checked before the (costlier) trust re-decide.
+        let (identity, posture) = match peer {
+            ServedPeer::OwnHarness { identity, posture } => (identity, posture),
+            ServedPeer::Relay {
+                identity,
+                posture,
+                limiter,
+            } => {
                 if !limiter.allow() {
                     log_warn!(
                         "broker",
@@ -1159,12 +1047,10 @@ fn serve_jsonrpc<R: BufRead, W: Write>(
                     );
                     return Err(io::Error::other("relay rate limit exceeded"));
                 }
-                guard
+                (identity, posture)
             }
         };
-        // Revocation-epoch enforcement, before any dispatch. Fail closed:
-        // drop the connection.
-        if let Err(e) = guard.recheck(who) {
+        if let Err(e) = request_admission(who, identity.as_ref(), posture, TrustState::current()) {
             log_error!("broker", "dropping {who}: {e}");
             return Err(e);
         }

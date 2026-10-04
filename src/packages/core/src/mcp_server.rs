@@ -6,11 +6,11 @@
 //! rmcp-based layer in [`crate::mcp`] (ADR-0034), one service per harness
 //! connection, all sharing one [`Session`].
 
-use crate::allowlist::{self, Decision};
 use crate::broker::{self, RelayOutcome};
 use crate::ipc;
 use crate::protocol::{install_stderr_panic_hook, HarnessId};
 use crate::session::Session;
+use crate::trust::{Admission, Posture, TrustState};
 
 /// The environment variable a harness may set to name itself
 /// (claude-code/copilot/codex/...). Self-asserted and used for logs and the
@@ -80,10 +80,8 @@ pub fn run() -> i32 {
                 return broker::run_broker(
                     listener,
                     session,
-                    broker::OwnHarness {
-                        identity: harness.client_identity(),
-                        epoch: harness.epoch,
-                    },
+                    harness.client_identity(),
+                    harness.posture,
                 );
             }
             Ok(ipc::PublishOutcome::LostRace(cur)) => {
@@ -117,13 +115,12 @@ pub fn run() -> i32 {
 
 /// The result of admitting our own spawning harness. `None` from
 /// [`admit_own_harness`] means refused (the caller exits non-zero); an
-/// admitted harness whose `identity` is `None` could not be measured but
-/// admission was permitted (unenrolled / Windows). `epoch` is the revocation
-/// epoch the admission was decided under (ADR-0025): the broker's own-harness
-/// epoch guard starts from it, and re-decides on any bump.
+/// admitted harness whose `id` is `None` could not be measured but
+/// admission was permitted (unenrolled / Windows).
 struct Harness {
     id: Option<HarnessId>,
-    epoch: u64,
+    /// The posture it was admitted under; the broker never serves it under a weaker one.
+    posture: Posture,
 }
 
 impl Harness {
@@ -131,18 +128,16 @@ impl Harness {
         self.id.clone()
     }
 
-    /// The measured identity in the allowlist's input shape, for the broker's
-    /// own-harness revocation rechecks.
+    /// The measured identity in the admission decision's input shape, for the broker's per-request re-decide.
     fn client_identity(&self) -> Option<ipc::ClientIdentity> {
         self.id.as_ref().map(ipc::ClientIdentity::from)
     }
 }
 
-/// Measure and admit the harness that spawned this MCP-server instance over
-/// stdio. Returns `Some(Harness)` when serving is permitted (with the harness
-/// identity to report if we become a relay), or `None` when it is refused (the
-/// caller fails closed). On an unreadable allowlist or revocation record this
-/// fails closed via `process::exit(1)` rather than degrading to unenrolled.
+/// Measure and admit the harness that spawned this MCP-server-mode instance over stdio. Returns
+/// `Some(Harness)` when serving is permitted (with the harness identity to report if we become a relay), or
+/// `None` when it is refused (the caller fails closed). On an unreadable trust record this fails closed via
+/// `process::exit(1)` rather than degrading to unenrolled.
 fn admit_own_harness() -> Option<Harness> {
     let name = client_name_from_env();
 
@@ -154,32 +149,19 @@ fn admit_own_harness() -> Option<Harness> {
         }
     };
 
-    // Read order is load-bearing (ADR-0025): the revocation record FIRST,
-    // then the allowlist, so a concurrent revoke can never be observed as a
-    // new epoch paired with a stale list. Both reads fail closed.
-    let rev = match crate::revocation::Revocation::current() {
-        Ok(rev) => rev,
+    let trust = match TrustState::current() {
+        Ok(trust) => trust,
         Err(e) => {
             log_error!(
                 "mcp",
-                "cannot read the revocation record ({e}); refusing to serve (fail closed)"
-            );
-            std::process::exit(1);
-        }
-    };
-    let list = match allowlist::load_enforced(&rev) {
-        Ok(l) => l,
-        Err(e) => {
-            log_error!(
-                "mcp",
-                "cannot read the trusted-client allowlist ({e}); refusing to serve (fail closed)"
+                "cannot read the trust record ({e}); refusing to serve (fail closed)"
             );
             std::process::exit(1);
         }
     };
 
-    match allowlist::decide(list.as_ref(), identity.as_ref()) {
-        Decision::Refuse => {
+    let posture = match trust.decide(identity.as_ref()) {
+        Admission::Refused => {
             log_error!(
                 "mcp",
                 "this harness is not in the trusted-client allowlist; refusing to serve \
@@ -194,11 +176,11 @@ fn admit_own_harness() -> Option<Harness> {
             );
             return None;
         }
-        Decision::AdmitUnenrolled => {
+        Admission::Admit(Posture::Unenrolled) => {
             log_error!(
                 "mcp",
-                "SECURITY: harness admission is NOT enforced -- no trusted-client allowlist \
-                 exists yet (unenrolled). Any same-user process that runs our binary can drive \
+                "SECURITY: harness admission is NOT enforced -- no trusted client has been \
+                 paired yet (unenrolled). Any same-user process that runs our binary can drive \
                  the browser. Run `chromium-bridge pair-client` to enroll trusted clients and \
                  turn on enforcement. See SECURITY.md."
             );
@@ -231,8 +213,9 @@ fn admit_own_harness() -> Option<Harness> {
                     .name(name.as_deref().unwrap_or("-"))
                     .outcome("unenrolled"),
             );
+            Posture::Unenrolled
         }
-        Decision::Admit { name: matched } => {
+        Admission::Admit(Posture::Trusted { name: matched }) => {
             log_info!("mcp", "harness admitted as trusted client '{matched}'");
             crate::audit::record(
                 crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessAdmit)
@@ -240,18 +223,16 @@ fn admit_own_harness() -> Option<Harness> {
                     .name(&matched)
                     .outcome("ok"),
             );
+            Posture::Trusted { name: matched }
         }
-    }
+    };
 
     let id = identity.map(|id| HarnessId {
         hash: id.hash,
         team_id: id.team_id,
         name,
     });
-    Some(Harness {
-        id,
-        epoch: rev.epoch,
-    })
+    Some(Harness { id, posture })
 }
 
 /// The self-asserted client name from [`CLIENT_NAME_ENV`], validated like a

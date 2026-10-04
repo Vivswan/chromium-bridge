@@ -1,5 +1,6 @@
 use super::*;
 use crate::protocol::BRIDGE_MAX_LINE;
+use crate::trust::{Clients, Trust, TrustState};
 use std::io::Cursor;
 
 #[test]
@@ -501,4 +502,52 @@ fn the_loop_handles_buffered_frames_before_exiting_on_unkill() {
     );
     assert_eq!(exit, PlaneExit::Unkilled);
     assert_eq!(handled, vec![serde_json::json!({"type": "kill_status"})]);
+}
+
+/// The review incident: a host that started on an unreadable trust record (control-plane mode) saw the operator's
+/// documented recovery, deleting the record, as a readable released bootstrap and pushed killed:false to the
+/// extension, yet never handed the release to the control-plane loop, which kept dropping bridge frames until
+/// Chrome respawned the host. The same gap followed killed -> unreadable -> released. A recovered record that is
+/// still killed hands nothing over.
+#[test]
+fn a_released_record_recovered_after_an_unreadable_gap_hands_the_release_to_the_loop() {
+    // The push helpers read the policy, language and trust stores from the runtime dir.
+    let _dir = scratch_runtime_dir("native-host-recovered-release");
+    let out = Mutex::new(BufWriter::new(io::stdout()));
+    let released = || Ok(TrustState::from(Trust::default()));
+    let killed = || {
+        Ok(TrustState::from(Trust::fixture(
+            1,
+            true,
+            Clients::NeverPaired,
+        )))
+    };
+    let unreadable = || Err(io::Error::other("corrupt"));
+
+    let flag = AtomicBool::new(false);
+    let last = watch_tick(None, unreadable(), &out, Some(&flag));
+    assert!(last.is_none() && !flag.load(Ordering::Acquire));
+    let last = watch_tick(last, released(), &out, Some(&flag));
+    assert!(last.is_some());
+    assert!(
+        flag.load(Ordering::Acquire),
+        "unreadable at start, then released: the loop must be told"
+    );
+
+    let flag = AtomicBool::new(false);
+    let last = watch_tick(None, killed(), &out, Some(&flag));
+    let last = watch_tick(last, unreadable(), &out, Some(&flag));
+    assert!(last.is_none() && !flag.load(Ordering::Acquire));
+    watch_tick(last, released(), &out, Some(&flag));
+    assert!(
+        flag.load(Ordering::Acquire),
+        "killed, unreadable, then released: the loop must be told"
+    );
+
+    let flag = AtomicBool::new(false);
+    watch_tick(None, killed(), &out, Some(&flag));
+    assert!(
+        !flag.load(Ordering::Acquire),
+        "a recovered record that is still killed hands nothing over"
+    );
 }

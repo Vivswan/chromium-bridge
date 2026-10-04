@@ -211,7 +211,7 @@ fn dispose_locked(
              next policy write"
         );
     }
-    if let Err(e) = crate::revocation::bump_locked(lock, crate::revocation::Scope::HostKey) {
+    if let Err(e) = crate::trust::Trust::mutate_locked(lock, crate::trust::Scope::HostKey, |_| {}) {
         log_warn!(
             "enclave",
             "enrollment key deleted but the host-key revocation epoch bump failed \

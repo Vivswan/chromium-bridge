@@ -16,7 +16,7 @@ RECOVERS, with no hang, no fd or process leak, no corruption, no panic.
   C6   peer death in the connect/handshake window     LIVE  no stale slot, accept loop alive
   C7   stale lock + socket from an ungraceful exit    LIVE  next server rebinds
   C9   relay attach/drop churn                        LIVE  broker ref-count stays healthy
-  C10  revoke mid-session                             LIVE  epoch guard drops the harness
+  C10  revoke mid-session                             LIVE  the admission gate drops the harness
   C12  kill mid-dispatch                              LIVE  in-flight call fails fast and typed
   C13  audit sink failure during decisions            LIVE  log-after-decide, gap counted
   C8   MV3 service-worker death mid-op               REF   browser-gated: only a real browser evicts
@@ -327,7 +327,7 @@ class Coexistence(ChaosCase):
 
 class Enforcement(ChaosCase):
     def test_c10_revoke_mid_dispatch(self):
-        """A revoke mid-session drops the harness at the per-request epoch guard
+        """A revoke mid-session drops the harness at the per-request admission gate
         (EOF, broker exits), and a re-paired client gets a fresh, serving
         broker: no wedged socket owner is left behind."""
         broker, cb, nh = self.enrolled_broker()

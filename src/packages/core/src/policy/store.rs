@@ -269,9 +269,9 @@ pub fn set_signed(
     //   host-key epoch     -> a disposal completing mid-prompt; it clears the baseline, so a first write sees None
     //                         before AND after and the store guard alone would land a baseline signed by a dead key
     // Read before the prompt and fail closed on an unreadable record: no sheet for a write that cannot land.
-    let host_key_epoch = crate::revocation::Revocation::current()
+    let host_key_epoch = crate::trust::TrustState::current()
         .map_err(PolicyWriteError::Io)?
-        .host_key_epoch;
+        .host_key_epoch();
     let (store_observation, baseline_anchor, effective_anchor) =
         match PolicyStore::load().map_err(PolicyWriteError::Io)? {
             Some(store) => {
@@ -403,7 +403,7 @@ struct StoreObservation {
 }
 
 /// Everything [`set_signed`] observed before its prompt: the store state
-/// (`None` when no store exists) plus the revocation record's host-key
+/// (`None` when no store exists) plus the trust record's host-key
 /// epoch. The epoch travels separately from the store observation because
 /// the guard it feeds must fire even when both sides of the store
 /// comparison are `None` - a disposal completing during the prompt clears
@@ -488,9 +488,9 @@ fn write_baseline_locked(
     key_id: String,
     touched: &[PolicyField],
 ) -> Result<(), PolicyWriteError> {
-    let host_key_epoch = crate::revocation::Revocation::current()
+    let host_key_epoch = crate::trust::TrustState::current()
         .map_err(PolicyWriteError::Io)?
-        .host_key_epoch;
+        .host_key_epoch();
     if host_key_epoch != observed.host_key_epoch {
         return Err(PolicyWriteError::Conflict);
     }
@@ -604,16 +604,13 @@ fn restrict_locked(
     Ok(())
 }
 
-/// Bump the revocation record's policy epoch inside the caller's runtime-lock
-/// hold (ADR-0032 decision 4), so the native host's watch pushes
-/// `policy_current` to a connected extension on the next tick. Best-effort by
-/// the same contract as the host-key bump: the epoch is a change notice, not
-/// authority (the signed baseline just written is the authority), so a failed
-/// bump loses only the proactive push - a connected extension still picks the
-/// change up on its next connect - and is logged, never fatal to the write it
-/// trails.
+/// Bump the trust record's policy epoch inside the caller's runtime-lock hold, so the native host's watch
+/// pushes `policy_current` to a connected extension on the next tick. Best-effort by the same contract as the
+/// host-key bump: the epoch is a change notice, not authority (the signed baseline just written is the
+/// authority), so a failed bump loses only the proactive push - a connected extension still picks the change
+/// up on its next connect - and is logged, never fatal to the write it trails.
 fn bump_policy_epoch_locked(lock: &ipc::RuntimeLockToken) {
-    if let Err(e) = crate::revocation::bump_locked(lock, crate::revocation::Scope::Policy) {
+    if let Err(e) = crate::trust::Trust::mutate_locked(lock, crate::trust::Scope::Policy, |_| {}) {
         log_warn!(
             "policy",
             "policy written but the policy epoch bump failed ({e}); a connected \

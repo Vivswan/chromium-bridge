@@ -32,16 +32,16 @@ The same events are also appended to a durable, size-capped `audit.log` (0600, i
 
 ## Kill switch: state, and recovering an unreadable record
 
-`chromium-bridge kill` halts all bridge activity until an explicit, user-present release; the behavior and the release paths are documented in [cli.md](./cli.md#kill-switch-kill--unkill). The latch lives in `revocation.json` in the runtime directory, the same record that carries the revocation epoch.
+`chromium-bridge kill` halts all bridge activity until an explicit, user-present release; the behavior and the release paths are documented in [cli.md](./cli.md#kill-switch-kill--unkill). The latch lives in `trust.json` in the runtime directory, the record that also carries the trusted-client allowlist.
 
 Every enforcement point reads that record fail-closed, so if it becomes unreadable (corrupt JSON, unknown fields, bad permissions), the bridge stops serving everything: tool calls are refused with `BRIDGE_KILLED`, browser connections are severed, fresh instances refuse to start, and both `kill` and `unkill` refuse to write (releasing from a state you cannot read would fail open, and rebuilding the file silently would mask tampering). `doctor` reports the unreadable state and exits non-zero.
 
 Recovery is deliberately manual:
 
 1. Run `chromium-bridge doctor` to confirm the state and find the runtime directory.
-2. Look at `revocation.json` before touching it. If you cannot explain the corruption (a crash mid-write, a disk incident), treat it as a possible tampering indicator and see [incident-response.md](./security/incident-response.md) before proceeding.
-3. Delete `revocation.json` **and** `clients.json` from the runtime directory. Deleting only one is itself detected as tampering; dropping both is a factory reset of harness trust, back to the loudly-logged unenrolled bootstrap.
-4. Re-pair each trusted client (`chromium-bridge pair-client`), and re-engage the kill switch if you had it on. The extension's enrollment pin is not affected (the host key never lived in these files).
+2. Look at `trust.json` before touching it. If you cannot explain the corruption (a crash mid-write, a disk incident), treat it as a possible tampering indicator and see [incident-response.md](./security/incident-response.md) before proceeding.
+3. Delete `trust.json` from the runtime directory. That is a factory reset of harness trust, back to the loudly-logged unenrolled bootstrap; the paired clients go with it.
+4. Re-pair each trusted client (`chromium-bridge pair-client`), and re-engage the kill switch if you had it on. The extension's enrollment pin is not affected (the host key never lived in this record).
 
 ## Host-owned policy: the doctor rows
 
@@ -56,7 +56,7 @@ One of the host's durable audit kinds belongs to this surface: every policy tran
 
 ## The runtime directory and the lock file
 
-The bridge rendezvous lives in a 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/chromium-bridge`, else `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge`, with XDG-cache fallback; Windows: `%LOCALAPPDATA%\chromium-bridge`). It holds the lock file (`run.lock`, 0600: the broker's pid, endpoint, and per-run secret), the bridge socket itself on Unix, the trusted-client allowlist (`clients.json`), the revocation/kill record (`revocation.json`), the host-owned policy store and its history ring (`policy.json`, `policy-history.json`), the shared language preference (`lang.json`), and the audit trail (`audit.log`).
+The bridge rendezvous lives in a 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/chromium-bridge`, else `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge`, with XDG-cache fallback; Windows: `%LOCALAPPDATA%\chromium-bridge`). It holds the lock file (`run.lock`, 0600: the broker's pid, endpoint, and per-run secret), the bridge socket on Unix, the trust record (`trust.json`), the host-owned policy store and its history ring (`policy.json`, `policy-history.json`), the shared language preference (`lang.json`), and the audit trail (`audit.log`).
 
 Peers read the lock file, connect to the endpoint, and must pass the kernel checks and the HMAC challenge-response before the mandatory attach frame (see [architecture.md section 3.3](./architecture.md#33-internal-bridge-protocol-broker---native-hosts-and-relays) and [trust-boundaries.md](./security/trust-boundaries.md)).
 
