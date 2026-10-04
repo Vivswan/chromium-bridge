@@ -83,9 +83,7 @@ def copy_of_binary(name):
 
 
 def pair(*args, env=None):
-    """Pair a trusted client through the CLI presence floor, inside the
-    isolated runtime dir only."""
-    h.require_isolated(env)
+    """Pair a trusted client through the CLI presence floor."""
     h.run_with_cli_presence(["pair-client", *args], env=env)
 
 
@@ -252,7 +250,7 @@ class Surface(AdversarialCase):
             served = Served(nh, TAB)
             reply = json.dumps(c.call("tab_list", {}, _id=5))
             served.request()
-        doc = subprocess.run([h.BIN, "doctor"], capture_output=True, text=True, env=env)
+        doc = h.run_cli(["doctor"], env=env)
         h.reap(nh)
         h.reap(srv)
         host_err = h.host_stderr(nh) if nh is not None else ""
@@ -307,8 +305,7 @@ class Revocation(AdversarialCase):
         srv, c, nh = self.enrolled_broker()
         self.assertRoundTrip(c, nh, 50)
         before = h.read_trust()["epoch"]
-        subprocess.run([h.BIN, "revoke-client", "--name", "pytest"], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        h.run_cli(["revoke-client", "--name", "pytest"], check=True)
         self.assertGreater(h.read_trust()["epoch"], before, "the epoch moved with the allowlist")
         c.send({"jsonrpc": "2.0", "id": 51, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
@@ -368,7 +365,7 @@ class KillSwitch(AdversarialCase):
         srv, c, nh = self.enrolled_broker()
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         self.assertRoundTrip(c, nh, 60)
-        subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        h.run_cli(["kill"], check=True)
         rev = h.read_trust()
         self.assertEqual((rev["killed"], rev["kill_epoch"]), (True, rev["epoch"]),
                          "the kill landed with its epoch bump in one record")
@@ -406,7 +403,7 @@ class KillSwitch(AdversarialCase):
         self.assertEqual(len(errored), 1, "the errored release attempt is audited once")
         self.assertIn("auth=cli_confirm", errored[0]["detail"])
         self.assertIn("write refused", errored[0]["detail"])
-        doc = subprocess.run([h.BIN, "doctor"], capture_output=True, text=True)
+        doc = h.run_cli(["doctor"])
         self.assertEqual(doc.returncode, 1, doc.stdout)
         self.assertIn("UNREADABLE", doc.stdout)
 
@@ -419,9 +416,9 @@ class KillSwitch(AdversarialCase):
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         h.remove_lock()
         already = len(h.audit_records())
-        subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        h.run_cli(["kill"], check=True)
         self.assertIs(h.read_trust()["killed"], True)
-        piped = subprocess.run([h.BIN, "unkill"], input="release\n", capture_output=True, text=True)
+        piped = h.run_cli(["unkill"], input="release\n")
         self.assertEqual(piped.returncode, 1, piped.stderr)
         self.assertIn("not a terminal", piped.stderr)
         self.assertIs(h.read_trust()["killed"], True, "engaged after the piped attempt")
