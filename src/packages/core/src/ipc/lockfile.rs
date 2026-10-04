@@ -281,33 +281,19 @@ pub(crate) fn read_capped(path: &std::path::Path, max: usize) -> io::Result<Opti
     Ok(Some(bytes))
 }
 
-/// Write `bytes` to `path` atomically via a same-directory temp file. On Unix
-/// the temp file is created exclusively (O_EXCL) with mode 0600: any
-/// pre-planted file at the temp path is removed first and never reused, so a
-/// looser mode on a planted file can never carry over to the secret-bearing
-/// lock. If the removal races with a re-plant, `create_new` fails closed
-/// instead of adopting the foreign file.
+/// Write `bytes` to `path` atomically via a same-directory temp file that is
+/// created exclusively (0600 on Unix) under a fresh random name and renamed
+/// over the destination, so a pre-planted entry is never adopted or followed
+/// and a looser mode on a planted file at the destination does not carry
+/// over to the secret-bearing lock. Not fsynced: the lock describes a live
+/// process, so a crash loses nothing a reboot would not also discard.
 pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
-    let mut tmp = path.to_path_buf();
-    tmp.set_extension("lock.tmp");
-    #[cfg(unix)]
-    {
-        let _ = fs::remove_file(&tmp);
-        let mut f = crate::fsguard::create_private_excl(&tmp)?;
-        f.write_all(bytes)?;
-        f.flush()?;
-    }
-    #[cfg(windows)]
-    {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.flush()?;
-    }
-    fs::rename(&tmp, path)?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("target path has no parent directory"))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.persist(path)?;
     Ok(())
 }
 
@@ -410,29 +396,36 @@ mod tests {
         );
     }
 
+    /// tempfile creates 0600 and rename replaces the destination inode: two
+    /// external facts the secret-bearing lock relies on, neither enforced by
+    /// the compiler.
     #[cfg(unix)]
     #[test]
-    fn lock_write_never_reuses_a_preplanted_loose_tmp() {
+    fn lock_write_is_owner_only_and_replaces_a_planted_loose_lock() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = ScratchDir::new("preplanted-tmp");
+        let dir = ScratchDir::new("planted-lock");
         let path = dir.0.join("run.lock");
-        let mut tmp = path.clone();
-        tmp.set_extension("lock.tmp");
 
-        // An attacker pre-plants a world-readable temp file at our temp path.
-        // The old open(create=true) would reuse it, keeping its 0644 mode on
-        // the secret-bearing lock after the rename.
-        fs::write(&tmp, b"planted").unwrap();
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o644)).unwrap();
+        // A world-readable file planted at the destination must be replaced,
+        // never written through (which would keep its 0644 mode on the secret).
+        fs::write(&path, b"planted").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
 
         write_private_atomic(&path, b"{\"secret\":\"s\"}").unwrap();
 
-        // The planted file was replaced, not adopted: content is ours and no
-        // group/other bits survive.
         assert_eq!(fs::read(&path).unwrap(), b"{\"secret\":\"s\"}");
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode & 0o077, 0, "lock mode {mode:o} leaks group/other bits");
-        assert!(!tmp.exists());
+        assert_eq!(mode, 0o600, "lock mode {mode:o} is not owner-only");
+        // No temp file is left beside the lock.
+        let leftovers: Vec<_> = fs::read_dir(&dir.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n != "run.lock")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "stray files beside the lock: {leftovers:?}"
+        );
     }
 }
