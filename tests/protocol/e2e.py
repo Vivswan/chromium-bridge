@@ -1500,10 +1500,9 @@ def test_admin_control_frames():
 def test_policy_control_frames():
     """Phase 2 of ADR-0032: the native host PUSHES policy_current and
     lang_current unsolicited at connect (decision 4/7's never-speak-first
-    identification), ANSWERS the four extension-originated frames (policy_get
-    -> policy_current, lang_get/lang_set -> lang_current, legacy_settings ->
-    recorded pending, no reply), and still DROPS the host->extension pushes
-    when they arrive from the browser leg. Uses an isolated runtime dir; no
+    identification), ANSWERS the three extension-originated frames (policy_get
+    -> policy_current, lang_get/lang_set -> lang_current), and still DROPS the
+    host->extension pushes when they arrive from the browser leg. Uses an isolated runtime dir; no
     pairing and no presence-gated path is involved (policy_get answers ok:false
     on the empty store, and the language lane never prompts), so this runs even
     on an enrolled Mac. The symmetric server-leg drop is unit-pinned in
@@ -1541,25 +1540,9 @@ def test_policy_control_frames():
               and push.get("value") == "en" and push.get("seq") == 0,
               "the host pushes lang_current at connect (the default en, seq 0)")
 
-        # legacy_settings is fire-and-forget (Phase 4 records the pending
-        # import): no reply. Prove it by driving a real tool op right after -
-        # the first non-push frame must be the tool op, never a stray reply.
-        nm_write(nh, {"type": "legacy_settings", "bag": {"groupTabs": True}})
         c = McpClient(mcp)
         c.initialize()
         c.initialized()
-        c.send({"jsonrpc": "2.0", "id": 91, "method": "tools/call",
-                "params": {"name": "tab_list", "arguments": {}}})
-        frame = nm_read(nh)  # skips any connect/tick pushes
-        check(frame is not None and frame.get("op") == "tab_list",
-              "legacy_settings is answered with no reply (first frame is the tool op)")
-        nm_write(nh, {"id": frame["id"], "ok": True,
-                      "data": [{"id": 1, "title": "After Policy", "url": "u",
-                                "active": True}]})
-        r = c.recv()
-        content = json.loads(r["result"]["content"][0]["text"])
-        check(content[0]["title"] == "After Policy",
-              "round trip completes; legacy_settings was neither forwarded nor answered")
 
         # policy_get -> policy_current, answered by the host. ok:false on the
         # empty store (fail closed), never a silent default.

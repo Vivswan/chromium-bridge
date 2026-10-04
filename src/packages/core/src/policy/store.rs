@@ -633,42 +633,7 @@ fn write_baseline_locked(
         key_id: Some(key_id),
         overlay: normalize_overlay(overlay),
     };
-    if prev.is_none() {
-        // First baseline: durably CLOSE the import window BEFORE committing it, in the same critical section, and
-        // refuse the whole write if that fails (Io is retryable: the user re-taps once I/O is fixed); closing after
-        // the write would let revision 1 land with the window still open post-disposal, the forged-bag hole the
-        // tombstone exists to close. The Consuming record RETAINS the bag, so a crash between here and the write
-        // below leaves the window closed and the bag re-offered; the finalize after the write disposes of it.
-        crate::pending_import::begin_consume_locked(lock).map_err(PolicyWriteError::Io)?;
-    }
     next.write(lock).map_err(PolicyWriteError::Io)?;
-    if prev.is_none() {
-        // Finalize the mid-consume record to the bagless tombstone only over a DURABLE baseline: the store's atomic
-        // write does not fsync while the tombstone write does, so without fsync-first a power loss after the finalize
-        // could keep the tombstone and take back the baseline (Consumed, no baseline, no bag). attest_baseline_durable
-        // fsyncs and mints the proof finalize_consume_locked demands, so the wrong order does not compile.
-        //   attest_baseline_durable fails -> the Consuming record stands and the reconcile heals it
-        //   finalize fails                -> the same, or the tombstone already landed with only its fsync lost
-        //   either                        -> the window stays closed; the landed baseline is NOT repainted as a failed write
-        match crate::pending_import::attest_baseline_durable(lock) {
-            Ok(proof) => {
-                if let Err(e) = crate::pending_import::finalize_consume_locked(lock, proof) {
-                    log_warn!(
-                        "policy",
-                        "first baseline written but the pending-import finalize failed ({e}); \
-                         the import window stays closed with the bag retained in the \
-                         mid-consume record until a reconcile heals it"
-                    );
-                }
-            }
-            Err(e) => log_warn!(
-                "policy",
-                "first baseline written but could not be fsynced ({e}); deferring the \
-                 pending-import finalize so the retained bag outlives any power loss \
-                 that takes the baseline back"
-            ),
-        }
-    }
     bump_policy_epoch_locked(lock);
     if let Some(prev) = &prev {
         push_history_locked(lock, prev);

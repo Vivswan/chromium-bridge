@@ -24,8 +24,7 @@ libc = "0.2.186"
 rmcp = { version = "3.4.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: correctly rounded float parsing, so a JSON number the
-# core stores (the pending-import bag is arbitrary JSON) reads back as the
-# same f64 it wrote. The default best-effort parse drifts by an ulp on some
+# core stores reads back as the same f64 it wrote. The default best-effort parse drifts by an ulp on some
 # inputs, which breaks the write/read-back identity the store relies on.
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = { version = "0.11", default-features = false }

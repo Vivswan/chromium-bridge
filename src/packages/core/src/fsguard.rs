@@ -1,8 +1,8 @@
 //! The crate's one private-file idiom: files and directories in a user-private location (the 0700 runtime directory,
 //! the wrapper install dir) are created, and the append/lock handles opened, through these helpers, so the
 //! symlink/TOCTOU reasoning for those opens lives once. These paths sit in directories a same-user process can write
-//! to before we do. Reads (`ipc::read_capped`, `enclave::config`) and the fsync reopens in `pending_import` take
-//! plain opens that follow a symlink at the final component; nothing here covers them.
+//! to before we do. Reads (`ipc::read_capped`, `enclave::config`) take plain opens that follow a symlink at the
+//! final component; nothing here covers them.
 //!
 //! ```text
 //! pre-planted symlink     -> opens pass `O_NOFOLLOW`; exclusive creates refuse any existing entry; dirs refuse a symlink leaf
@@ -63,9 +63,8 @@ fn open_private(opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> {
 /// symlink is refused, never adopted or followed - so no re-assert is needed:
 /// the file cannot exist with a mode we did not give it.
 ///
-/// Unix-only: its callers (`ipc::write_private_atomic`,
-/// `pending_import::write_pending_new`) take a plain create-new/truncate open
-/// on Windows, where there are no Unix modes to pin.
+/// Unix-only: its caller (`ipc::write_private_atomic`) takes a plain
+/// create-new/truncate open on Windows, where there are no Unix modes to pin.
 #[cfg(unix)]
 pub(crate) fn create_private_excl(path: &Path) -> io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;

@@ -195,13 +195,13 @@ impl KillStatus {
     }
 }
 
-/// Why the host has no usable policy to report (ADR-0032 decision 4): the structured `reason` on a
-/// `policy_current { ok: false }` frame, which decides whether the extension sends its one-shot `legacy_settings`.
+/// Why the host has no usable policy to report: the structured `reason` on a
+/// `policy_current { ok: false }` frame.
 ///
 /// ```text
-/// absent                    -> a capable host that genuinely has no baseline yet: the extension sends legacy_settings
-/// damaged, unreadable       -> the extension stays on its deny baseline
-/// field missing (old host)  -> reads as "never send": fail closed on absence of the signal
+/// absent                    -> a capable host that genuinely has no baseline yet
+/// damaged, unreadable       -> the store is present but unusable; the extension keeps the posture it already
+///                              has (the deny baseline pre-cutover, its stored effective policy after)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyUnavailableReason {
@@ -296,7 +296,6 @@ impl PolicyStatus {
 /// policy_get         -> policy_current; sent only on a connection where the host has already pushed a
 ///                       policy frame (never speak first, decision 4): an old host would `Forward` it and
 ///                       the MCP server's strict `BridgeResp` parse would tear the browser leg down
-/// legacy_settings    -> no reply; recorded host-side as a pending import, never applied (decision 8)
 /// lang_get/lang_set  -> lang_current { value, seq }; `seq` suppresses the sender's own echo (decision 7)
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,17 +319,13 @@ pub enum PolicyControl {
         /// fails the whole frame parse, fail closed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         overlay: Option<crate::policy::PolicyOverlay>,
-        /// Why no policy is available, when `ok: false` (ADR-0032 decision 4): the [`PolicyUnavailableReason`] wire
-        /// token, absent on `ok: true`. OPTIONAL, so an old host omits it and the extension reads a missing field as
-        /// "never send" (fail closed).
+        /// Why no policy is available, when `ok: false`: the [`PolicyUnavailableReason`] wire token, absent on
+        /// `ok: true`. OPTIONAL: an old host omits it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: the snapshotted legacy settings bag for the
-    /// first-run import (recorded pending, never applied).
-    LegacySettings { bag: Value },
     /// Extension -> host: request the current shared language.
     LangGet {},
     /// Extension -> host: a user-gesture language change.
@@ -394,7 +389,6 @@ control_wire_tags!(AdminControl, ADMIN_CONTROL_TAGS, {
 control_wire_tags!(PolicyControl, POLICY_CONTROL_TAGS, {
     PolicyGet => "policy_get",
     PolicyCurrent => "policy_current",
-    LegacySettings => "legacy_settings",
     LangGet => "lang_get",
     LangSet => "lang_set",
     LangCurrent => "lang_current",
@@ -504,9 +498,7 @@ const _: () = {
 /// [`PolicyControl`] frames the extension sends and the host must answer with
 /// a reply of a matching type. Carried by [`FrameDisposition::MalformedPolicy`]
 /// so the malformed-reply builder matches exhaustively - the same discipline
-/// as [`AdminKind`]. `LegacySettings` is deliberately NOT here: it is
-/// fire-and-forget (recorded pending, never answered), so a malformed one is
-/// dropped with no reply, exactly like a malformed `audit_event`.
+/// as [`AdminKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyKind {
     PolicyGet,
@@ -665,12 +657,6 @@ pub enum FrameDisposition {
     /// A well-formed `policy_get` (ADR-0032 decision 4): answer with
     /// `policy_current` from the host store.
     PolicyGet,
-    /// A well-formed `legacy_settings` (ADR-0032 decision 8): the snapshotted
-    /// legacy settings bag, recorded host-side as a pending import
-    /// ([`crate::pending_import`], first-bag-wins) and never applied.
-    /// Fire-and-forget, no reply. Routed off the forward path (an old host
-    /// would have classified it `Forward`, tearing the browser leg down).
-    LegacySettings { bag: Value },
     /// A well-formed `lang_get` (ADR-0032 decision 7): answer with
     /// `lang_current` from the language store.
     LangGet,
@@ -683,14 +669,6 @@ pub enum FrameDisposition {
     /// malformed `lang_set` replies `lang_current` with the value+seq that
     /// stand, decision 7), do not forward.
     MalformedPolicy(PolicyKind),
-    /// Carries the `legacy_settings` type but does not parse as that frame (a
-    /// missing or mistyped bag): dropped, never forwarded - fire-and-forget
-    /// owes no reply - but audited as a `dropped_malformed` receipt
-    /// (native_host), because the drop may be a version-skewed legitimate
-    /// extension losing its ONE migration send. Carries only the frame's
-    /// compact byte count: the content failed to parse and is never quoted
-    /// into any log or trail.
-    MalformedLegacySettings { bytes: usize },
 }
 
 /// Resolve `tag` to its `'static` copy in the derived host-control tag set
@@ -796,15 +774,6 @@ pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
         "policy_get" => match serde_json::from_value(frame.clone()) {
             Ok(PolicyControl::PolicyGet {}) => FrameDisposition::PolicyGet,
             _ => FrameDisposition::MalformedPolicy(PolicyKind::PolicyGet),
-        },
-        "legacy_settings" => match serde_json::from_value(frame.clone()) {
-            Ok(PolicyControl::LegacySettings { bag }) => FrameDisposition::LegacySettings { bag },
-            // Fire-and-forget has no reply contract; a malformed bag is dropped,
-            // never forwarded, and audited with only its size (the frame may be a
-            // legitimate extension's one migration send, lost to version skew).
-            _ => FrameDisposition::MalformedLegacySettings {
-                bytes: serde_json::to_vec(frame).map(|b| b.len()).unwrap_or(0),
-            },
         },
         "lang_get" => match serde_json::from_value(frame.clone()) {
             Ok(PolicyControl::LangGet {}) => FrameDisposition::LangGet,

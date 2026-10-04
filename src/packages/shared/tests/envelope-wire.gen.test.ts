@@ -45,7 +45,6 @@ import {
   LangCurrentWireSchema,
   LangGetWireSchema,
   LangSetWireSchema,
-  LegacySettingsWireSchema,
   PolicyCurrentWireSchema,
   PolicyGetWireSchema,
   PresenceChallengeWireSchema,
@@ -271,11 +270,11 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
   }
 
   test("policy_current reason: wire accepts any string, the wrapper pins the enum", () => {
-    // The generated wire base is faithful to the host's
-    // Option<String>, but the enforced wrapper narrows reason to the
-    // {absent,damaged,unreadable} enum the send-once gates on. An out-of-enum
-    // string is accepted by the base and refused by the wrapper (fail closed),
-    // and a missing reason (old host) is accepted by both.
+    // The generated wire base is faithful to the host's Option<String>, but
+    // the enforced wrapper narrows reason to the {absent,damaged,unreadable}
+    // enum. An out-of-enum string is accepted by the base and refused by the
+    // wrapper (fail closed), and a missing reason (old host) is accepted by
+    // both.
     const base = { type: "policy_current", ok: false, error: "e" };
     for (const reason of ["absent", "damaged", "unreadable"]) {
       expect(PolicyCurrentFrameSchema.safeParse({ ...base, reason }).success).toBe(true);
@@ -301,9 +300,9 @@ describe("generated wire schemas and their wrapped validators fail closed", () =
     // Pinned in FRAME_REFINEMENTS (scripts/check-envelope-parity.ts): on the
     // wire every field is an Option, so the base ACCEPTS these; the wrapper's
     // superRefine refuses everything outside the two shapes into_frame emits
-    // - mixtures of the arms, and an arm missing its mandatory field. The
-    // legacy-settings send-once gates on `ok === false && reason === "absent"`, so a
-    // reason must never ride a frame that also claims success.
+    // - mixtures of the arms, and an arm missing its mandatory field. A
+    // reason explains only the failure arm, so it must never ride a frame
+    // that also claims success.
     const outsideTheSplit = [
       // Mixtures: a field from the other arm.
       { type: "policy_current", ok: true, baseline: "YmFzZQ==", reason: "absent" },
@@ -654,10 +653,6 @@ describe("generated writer schemas admit exactly the frames the extension constr
       valid: { type: "audit_event", kind: "confirm_denied", tool: "page_eval", cid: "c-1" },
     },
     { schema: PolicyGetWireSchema, valid: { type: "policy_get" } },
-    {
-      schema: LegacySettingsWireSchema,
-      valid: { type: "legacy_settings", bag: { pageEvalEnabled: true } },
-    },
     { schema: LangGetWireSchema, valid: { type: "lang_get" } },
     { schema: LangSetWireSchema, valid: { type: "lang_set", value: "zh_CN" } },
   ];

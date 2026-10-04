@@ -120,7 +120,6 @@ fn server_injected_policy_frames_are_dropped_not_forwarded() {
     let input = concat!(
         "{\"type\":\"policy_current\",\"ok\":true,\"baseline\":\"YmFzZQ==\",\"sig\":\"c2ln\"}\n",
         "{\"type\":\"policy_get\"}\n",
-        "{\"type\":\"legacy_settings\",\"bag\":{}}\n",
         "{\"type\":\"lang_get\"}\n",
         "{\"type\":\"lang_set\",\"value\":\"en\"}\n",
         "{\"type\":\"lang_current\",\"value\":\"en\",\"seq\":1}\n",
@@ -149,9 +148,9 @@ fn audit_text() -> String {
 
 #[test]
 fn policy_frames_from_the_browser_are_answered_or_dropped() {
-    // ADR-0032 phase 2: the four extension-originated frames are ANSWERED
-    // by the host (policy_get, legacy_settings, lang_get, lang_set) - each
-    // classifies to its own disposition, never Drop, never Forward (an
+    // The three extension-originated frames are ANSWERED by the host
+    // (policy_get, lang_get, lang_set) - each classifies to its own
+    // disposition, never Drop, never Forward (an
     // old-style forward would tear the browser leg down on the MCP
     // server's strict BridgeResp parse). The two host->extension pushes
     // (policy_current, lang_current) arriving FROM the browser stay
@@ -161,10 +160,6 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
     let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     for (frame, is_drop) in [
         (serde_json::json!({ "type": "policy_get" }), false),
-        (
-            serde_json::json!({ "type": "legacy_settings", "bag": {} }),
-            false,
-        ),
         (serde_json::json!({ "type": "lang_get" }), false),
         (
             serde_json::json!({ "type": "lang_set", "value": "zh_CN" }),
@@ -197,84 +192,6 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
         let verdict = handle_control_frame(frame, &out).unwrap();
         assert!(matches!(verdict, Inbound::Handled));
     }
-}
-
-#[test]
-fn legacy_settings_receipts_are_audited_and_only_recording_bumps_the_epoch() {
-    // Finding 2: every receipt outcome lands in the audit trail (kind
-    // legacy_import_receipt, host-owned) with the outcome and byte count
-    // but NEVER the bag, and only the Recorded arm bumps the policy
-    // epoch (which is what makes an open app re-probe and surface the
-    // arrival through its import nav entry).
-    let _dir = scratch_runtime_dir("native-host-legacy-receipt-audit");
-    let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
-    let policy_epoch = || {
-        crate::revocation::Revocation::current()
-            .unwrap()
-            .policy_epoch
-    };
-    let send = |bag: serde_json::Value| {
-        let frame = serde_json::json!({ "type": "legacy_settings", "bag": bag });
-        assert!(matches!(
-            handle_control_frame(frame, &out).unwrap(),
-            Inbound::Handled
-        ));
-    };
-
-    // Recorded: audited, epoch bumped.
-    send(serde_json::json!({ "pageEvalEnabled": true, "marker": "sekritbagvalue" }));
-    let text = audit_text();
-    assert!(text.contains("legacy_import_receipt"), "{text}");
-    assert!(text.contains("\"outcome\":\"recorded\""), "{text}");
-    assert!(
-        !text.contains("sekritbagvalue") && !text.contains("pageEvalEnabled"),
-        "the audit trail must never carry bag contents: {text}"
-    );
-    let after_record = policy_epoch();
-    assert!(after_record > 0, "recording must bump the policy epoch");
-
-    // First-bag-wins drop: audited, no bump.
-    send(serde_json::json!({ "later": true }));
-    assert!(audit_text().contains("\"outcome\":\"dropped_already_pending\""));
-    assert_eq!(policy_epoch(), after_record);
-
-    // Post-consume drop: audited, no bump (consume itself bumps nothing;
-    // the policy write that drives it audits and bumps separately).
-    crate::pending_import::consume().unwrap();
-    let epoch_after_consume = policy_epoch();
-    send(serde_json::json!({ "replant": true }));
-    assert!(audit_text().contains("\"outcome\":\"dropped_consumed\""));
-    assert_eq!(policy_epoch(), epoch_after_consume);
-
-    // Oversize drop: audited with the byte count, no bump.
-    let huge = "x".repeat(crate::pending_import::LEGACY_BAG_MAX_BYTES + 1);
-    send(serde_json::json!({ "blob": huge }));
-    let text = audit_text();
-    assert!(text.contains("\"outcome\":\"dropped_oversize\""), "{text}");
-    assert!(
-        !text.contains("xxxxxxxxxx"),
-        "no bag bytes in the trail: {text}"
-    );
-    assert_eq!(policy_epoch(), epoch_after_consume);
-
-    // Unreadable store: the error outcome is audited too.
-    std::fs::write(crate::pending_import::path(), b"{ not json").unwrap();
-    send(serde_json::json!({ "after": "corruption" }));
-    assert!(audit_text().contains("\"outcome\":\"error\""));
-
-    // Malformed frame (no parsable bag): audited as dropped_malformed
-    // with the size only - the unparsed content never reaches the trail.
-    let malformed = serde_json::json!({ "type": "legacy_settings", "surprisemarker": true });
-    assert!(matches!(
-        handle_control_frame(malformed, &out).unwrap(),
-        Inbound::Handled
-    ));
-    let text = audit_text();
-    assert!(text.contains("\"outcome\":\"dropped_malformed\""), "{text}");
-    assert!(
-        !text.contains("surprisemarker"),
-        "unparsed frame content must never reach the trail: {text}"
-    );
 }
 
 #[test]
@@ -404,7 +321,7 @@ fn policy_get_answers_ok_false_unreadable_on_a_damaged_store_envelope() {
     // version here, an I/O failure in general) is distinct from an absent
     // or a content-damaged store - it answers reason=unreadable, so the
     // extension keeps its deny baseline and never mistakes it for the
-    // absent state that triggers the legacy import.
+    // absent state.
     let _dir = scratch_runtime_dir("native-host-policy-get-unreadable");
     std::fs::write(
         crate::policy::PolicyStore::path(),

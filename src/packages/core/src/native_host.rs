@@ -354,8 +354,7 @@ fn malformed_policy_reply(kind: PolicyKind) -> Option<PolicyControl> {
         PolicyKind::PolicyGet => Some(
             PolicyStatus::Unavailable {
                 // A malformed REQUEST is not a store-availability state, so it
-                // carries no structured reason: the extension must not read a
-                // bad-frame reply as "no baseline, send the legacy import".
+                // carries no structured reason.
                 reason: None,
                 error: "malformed policy_get frame".into(),
             }
@@ -672,60 +671,6 @@ fn handle_presence_challenge(
     Ok(())
 }
 
-/// Handle one `legacy_settings` receipt (ADR-0032 decision 8): record the bag
-/// as the pending import and audit what the receipt turned into. The audit
-/// record (log-after-decide, written outside the runtime lock
-/// `record_if_absent` takes and releases) is what keeps a dropped bag visible
-/// to the user - the one import this host will ever offer must not vanish
-/// into a stderr line. It carries the outcome and the bag's compact byte
-/// count, NEVER the bag itself (the user's settings stay out of every log
-/// and trail).
-fn handle_legacy_settings(bag: Value) {
-    let bag_bytes = serde_json::to_vec(&bag).map(|b| b.len()).unwrap_or(0);
-    let outcome = match crate::pending_import::record_if_absent(bag) {
-        Ok(crate::pending_import::RecordOutcome::Recorded) => {
-            log_info!("native-host", "recorded the legacy settings pending import");
-            "recorded"
-        }
-        Ok(crate::pending_import::RecordOutcome::AlreadyPresent) => {
-            log_info!(
-                "native-host",
-                "legacy_settings received but a pending import already exists; dropped \
-                 (first-bag-wins)"
-            );
-            "dropped_already_pending"
-        }
-        Ok(crate::pending_import::RecordOutcome::AlreadyConsumed) => {
-            log_warn!(
-                "native-host",
-                "legacy_settings received after the import was consumed; dropped \
-                 (the import window is closed)"
-            );
-            "dropped_consumed"
-        }
-        Ok(crate::pending_import::RecordOutcome::Oversize { bytes }) => {
-            log_warn!(
-                "native-host",
-                "legacy_settings bag is {bytes} bytes, over the pending-import cap; dropped"
-            );
-            "dropped_oversize"
-        }
-        Err(e) => {
-            log_warn!(
-                "native-host",
-                "legacy_settings could not be recorded ({e}); dropped"
-            );
-            "error"
-        }
-    };
-    crate::audit::record(
-        crate::audit::AuditRecord::new(crate::audit::AuditKind::LegacyImportReceipt)
-            .surface(crate::audit::Surface::Host)
-            .outcome(outcome)
-            .detail(&format!("{bag_bytes} bytes")),
-    );
-}
-
 /// What one inbound native-messaging frame turned into.
 enum Inbound {
     /// A host-handled control frame: the reply (if any) has been written.
@@ -794,14 +739,6 @@ fn handle_control_frame(
             write_control_reply(out, &policy_current_reply())?;
             Ok(Inbound::Handled)
         }
-        FrameDisposition::LegacySettings { bag } => {
-            // ADR-0032 decision 8: the snapshotted legacy bag is recorded as a
-            // pending import (first-bag-wins), never applied. The frame
-            // owes no reply; the write fails closed (an oversize or unwritable
-            // receipt is logged and dropped, never crashes, never forwarded).
-            handle_legacy_settings(bag);
-            Ok(Inbound::Handled)
-        }
         FrameDisposition::LangGet => {
             if let Some(reply) = lang_current_frame() {
                 write_control_reply(out, &reply)?;
@@ -823,24 +760,6 @@ fn handle_control_frame(
             if let Some(reply) = malformed_policy_reply(kind) {
                 write_control_reply(out, &reply)?;
             }
-            Ok(Inbound::Handled)
-        }
-        FrameDisposition::MalformedLegacySettings { bytes } => {
-            // The one receipt kind whose loss the user can never re-trigger:
-            // a frame carrying the legacy_settings type that fails the parse
-            // may be a version-skewed legitimate extension spending its ONE
-            // migration send, so the drop is audited (size only - the
-            // content did not parse and is never quoted), not just logged.
-            log_warn!(
-                "native-host",
-                "malformed legacy_settings frame from browser; dropped"
-            );
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::LegacyImportReceipt)
-                    .surface(crate::audit::Surface::Host)
-                    .outcome("dropped_malformed")
-                    .detail(&format!("{bytes} bytes")),
-            );
             Ok(Inbound::Handled)
         }
         FrameDisposition::AuditEvent(fields) => {
@@ -1136,19 +1055,6 @@ pub fn run() -> i32 {
             "cannot establish own executable identity: {e}"
         );
         return 1;
-    }
-
-    // Self-heal a stranded mid-consume pending-import record: a Consuming record whose baseline landed but whose
-    // finalize crashed has no other seam left to finish it (revision-2+ writes never revisit the store). Best-effort
-    // and idempotent, so a failure must not stop the host: the worst partial outcome is a visible-but-unsynced
-    // tombstone over an already-fsynced baseline, where roll-forward and roll-back are both correct states.
-    //   runs BEFORE the kill fork below -> the control-plane-only mode heals too
-    if let Err(e) = crate::pending_import::reconcile_consuming() {
-        log_warn!(
-            "native-host",
-            "pending-import reconcile failed ({e}); a stranded mid-consume record, \
-             if any, stays until the next host start or pending-import read"
-        );
     }
 
     // ADR-0030: while the kill switch is engaged -- or its state cannot be

@@ -436,7 +436,6 @@ fn every_control_variant_tag_is_derived_and_recognized() {
             reason: None,
             error: None,
         },
-        PolicyControl::LegacySettings { bag: json!({}) },
         PolicyControl::LangGet {},
         PolicyControl::LangSet { value: "en".into() },
         PolicyControl::LangCurrent {
@@ -517,9 +516,9 @@ fn every_control_variant_tag_is_derived_and_recognized() {
 
 #[test]
 fn policy_frames_are_answered_or_dropped_and_recognized_as_host_control() {
-    // ADR-0032 phase 2: the four extension-originated frames are ANSWERED
-    // by the host (policy_get, legacy_settings, lang_get, lang_set), so
-    // they classify to their own dispositions - never Drop, never Forward
+    // The three extension-originated frames are ANSWERED by the host
+    // (policy_get, lang_get, lang_set), so they classify to their own
+    // dispositions - never Drop, never Forward
     // (an old-style forward would tear the browser leg down on the MCP
     // server's strict BridgeResp parse). The two host->extension pushes
     // (policy_current, lang_current) arriving FROM the browser stay
@@ -539,14 +538,10 @@ fn policy_frames_are_answered_or_dropped_and_recognized_as_host_control() {
             "tag {tag} must never classify as Forward"
         );
     }
-    // The four answered frames map to their own dispositions.
+    // The three answered frames map to their own dispositions.
     assert!(matches!(
         classify_nm_frame(&json!({ "type": "policy_get" })),
         FrameDisposition::PolicyGet
-    ));
-    assert!(matches!(
-        classify_nm_frame(&json!({ "type": "legacy_settings", "bag": { "groupTabs": true } })),
-        FrameDisposition::LegacySettings { .. }
     ));
     assert!(matches!(
         classify_nm_frame(&json!({ "type": "lang_get" })),
@@ -565,8 +560,7 @@ fn policy_frames_are_answered_or_dropped_and_recognized_as_host_control() {
         );
     }
     // Malformed extension-originated frames take their typed malformed arm
-    // (a reply is owed) rather than Forward - except legacy_settings,
-    // which is fire-and-forget and drops (audited, with the size only).
+    // (a reply is owed) rather than Forward.
     assert!(matches!(
         classify_nm_frame(&json!({ "type": "policy_get", "extra": 1 })),
         FrameDisposition::MalformedPolicy(PolicyKind::PolicyGet)
@@ -578,12 +572,6 @@ fn policy_frames_are_answered_or_dropped_and_recognized_as_host_control() {
     assert!(matches!(
         classify_nm_frame(&json!({ "type": "lang_set" })),
         FrameDisposition::MalformedPolicy(PolicyKind::LangSet)
-    ));
-    let bagless = json!({ "type": "legacy_settings" });
-    let expected = serde_json::to_vec(&bagless).unwrap().len();
-    assert!(matches!(
-        classify_nm_frame(&bagless),
-        FrameDisposition::MalformedLegacySettings { bytes } if bytes == expected
     ));
 }
 
@@ -715,7 +703,6 @@ fn envelope_schema_inputs_are_pinned_and_pairwise_disjoint() {
     let policy: &[&str] = &[
         "policy_get",
         "policy_current",
-        "legacy_settings",
         "lang_get",
         "lang_set",
         "lang_current",

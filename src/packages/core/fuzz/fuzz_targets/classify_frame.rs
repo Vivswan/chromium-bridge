@@ -26,14 +26,12 @@ fuzz_target!(|data: &[u8]| {
         | FrameDisposition::AuditEvent { .. }
         | FrameDisposition::DropForeignAuditKind { .. }
         | FrameDisposition::PolicyGet
-        | FrameDisposition::LegacySettings { .. }
         | FrameDisposition::LangGet
         | FrameDisposition::LangSet { .. }
         | FrameDisposition::Drop(_)
         | FrameDisposition::Malformed
         | FrameDisposition::MalformedPresence
         | FrameDisposition::MalformedAdmin(_)
-        | FrameDisposition::MalformedPolicy(_)
-        | FrameDisposition::MalformedLegacySettings { .. } => {}
+        | FrameDisposition::MalformedPolicy(_) => {}
     }
 });

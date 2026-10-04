@@ -1,8 +1,6 @@
 // Salvage semantics for the slimmed, browser-owned settings schema (ADR-0032):
 // reads from storage must never surface a shape the schema does not
 // vouch for, and a bad field must not take the healthy fields down with it.
-// The retired policy fields' legacy schemas are covered by
-// legacy-settings.test.ts.
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULTS, SettingsSchema, salvageSetting, salvageSettings } from "../src/settings";

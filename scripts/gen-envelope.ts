@@ -369,7 +369,6 @@ const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   },
   policy: {
     policy_get: "PolicyGetWireSchema",
-    legacy_settings: "LegacySettingsWireSchema",
     lang_set: "LangSetWireSchema",
     lang_get: "LangGetWireSchema",
   },

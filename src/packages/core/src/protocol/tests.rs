@@ -480,10 +480,6 @@ fn wire_types_reject_unknown_fields() {
                     "overlay": { "pageEvalEnabled": false } }),
         ),
         (
-            json!({ "type": "legacy_settings", "bag": {}, "extra": 1 }),
-            json!({ "type": "legacy_settings", "bag": {} }),
-        ),
-        (
             json!({ "type": "lang_get", "extra": 1 }),
             json!({ "type": "lang_get" }),
         ),

@@ -89,15 +89,6 @@ pub enum AuditKind {
     /// only, NOT in [`EXTENSION_AUDIT_KINDS`]: the browser leg must not be
     /// able to plant policy-transition records.
     PolicyWrite,
-    /// Host: one `legacy_settings` receipt against the pending-import store (ADR-0032 decision 8), so a
-    /// bag arriving after the window closed, or a frame that never parsed, is visible in the trail instead
-    /// of lost to a stderr line nobody reads. The detail is a byte count only, never content.
-    /// Host-recorded only, NOT in [`EXTENSION_AUDIT_KINDS`]: the browser leg must not plant receipts for
-    /// bags the host never saw.
-    ///
-    ///   outcome -> `recorded`, `dropped_oversize`, `dropped_already_pending`, `dropped_consumed`,
-    ///              `dropped_malformed`, or `error`
-    LegacyImportReceipt,
     /// Extension: a confirmation surface was shown to the user.
     ConfirmShown,
     /// Extension: the user approved a confirmation.
@@ -814,7 +805,6 @@ mod tests {
             "tool_call",
             "presence_sign",
             "policy_write",
-            "legacy_import_receipt",
         ] {
             assert_eq!(extension_kind(host_only), None, "{host_only}");
         }

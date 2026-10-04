@@ -36,14 +36,14 @@ describe("classifierCoverageProblems", () => {
   });
 
   test("a writer-only tag added to a classification array is refused", () => {
-    // THE regression this rule exists for: legacy_settings is a real policy
+    // THE regression this rule exists for: policy_get is a real policy
     // frame with a "rust-parsed" plan (extension->host, no inbound
     // validator); classifying it inbound must fail the gate, not silently
     // route host frames nothing validates.
-    const classified = new Set([...CLASSIFIED_TAGS.policy, "legacy_settings"]);
+    const classified = new Set([...CLASSIFIED_TAGS.policy, "policy_get"]);
     const problems = classifierCoverageProblems("policy", classified, rustTags("policy"));
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("legacy_settings");
+    expect(problems[0]).toContain("policy_get");
     expect(problems[0]).toContain("no plan gives it an inbound validator");
   });
 

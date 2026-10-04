@@ -56,7 +56,6 @@ export const CONTROL_FRAME_KINDS = [
   "audit_event",
   "policy_get",
   "policy_current",
-  "legacy_settings",
   "lang_get",
   "lang_set",
   "lang_current",
@@ -192,8 +191,8 @@ const OPTIONAL_NONEMPTY_STRING: Reconciliation = {
 };
 
 // policy_current.reason: Option<String> on the host side (the serde null arm), pinned by the extension to the
-// {absent,damaged,unreadable} enum because the send-once gates on reason==absent, so a value outside the enum reads
-// as "not the absent signal". The enum is zod-side only, so canonical drops it like NONEMPTY_STRING drops minLength.
+// {absent,damaged,unreadable} enum so a value outside it fails the frame parse. The enum is zod-side only, so
+// canonical drops it like NONEMPTY_STRING drops minLength.
 const POLICY_REASON_FIELD: Reconciliation = {
   rust: { type: ["string", "null"] },
   zod: { type: "string", enum: ["absent", "damaged", "unreadable"] },
@@ -341,7 +340,6 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
   kill_release: {},
   audit_event: {},
   policy_get: {},
-  legacy_settings: {},
   lang_get: {},
   lang_set: {},
 };

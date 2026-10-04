@@ -231,9 +231,9 @@ export const PolicyOverlaySchema = z.strictObject({
 
 export type PolicyOverlay = z.infer<typeof PolicyOverlaySchema>;
 
-// Frozen (including the nested array): salvage hands these instances out as
-// fallbacks, so a caller mutating its "copy" must throw instead of quietly
-// rewriting the defaults for everyone after it.
+// Frozen (including the nested array): the pre-cutover posture hands this
+// instance out as the effective policy, so a caller mutating its "copy" must
+// throw instead of quietly rewriting the defaults for everyone after it.
 export const POLICY_DEFAULTS: Readonly<PolicyValues> = deepFreeze(
   PolicyValuesSchema.parse({
     cdpMode: false,
@@ -259,26 +259,6 @@ function deepFreeze<T>(value: T): T {
     if (typeof inner === "object" && inner !== null) deepFreeze(inner);
   }
   return Object.freeze(value);
-}
-
-/**
- * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY: a corrupt field in the snapshotted chrome.storage
- * bag falls back to its deny-baseline default, and the import review SHOWS that fallback to the user, who signs
- * it under their tap; it is never silently enforced.
- *
- * NEVER parse the stored effective policy with this: a per-field default fallback moves a corrupt field
- * toward its permissive pole relative to a user-restricted policy, the "garbage in, defaults out" relaxation
- * the fail-closed store forbids. The stored effective policy is read with parseStoredPolicyValues below.
- */
-export function salvagePolicyValues(stored: unknown): PolicyValues {
-  const bag: Record<string, unknown> =
-    typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
-  return Object.fromEntries(
-    Object.entries(PolicyValuesSchema.shape).map(([key, schema]) => {
-      const parsed = schema.safeParse(bag[key]);
-      return [key, parsed.success ? parsed.data : POLICY_DEFAULTS[key as PolicyFieldName]];
-    }),
-  ) as PolicyValues;
 }
 
 /**
