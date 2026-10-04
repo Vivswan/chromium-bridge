@@ -29,9 +29,12 @@ pub fn run() -> i32 {
     // NEW broker's, and removing them would take the working bridge down.
     // Installed first, before anything is bound or published: a signal that
     // lands earlier takes the default disposition and leaves nothing behind.
-    install_signal_cleanup(|| {
+    if let Err(e) = install_signal_cleanup(|| {
         ipc::LockFile::remove_if_owned();
-    });
+    }) {
+        log_error!("mcp", "cannot install the SIGTERM/SIGINT cleanup: {e}");
+        return 1;
+    }
 
     // Capture our own executable identity up front, before binding or dialing,
     // so peer attestation compares against the genuine binary rather than one
@@ -266,11 +269,14 @@ fn client_name_from_env() -> Option<String> {
 /// Run `f` on a dedicated thread when SIGTERM or SIGINT arrives, then exit
 /// ([`crate::sys::spawn_signal_cleanup`]). Windows has no equivalent here;
 /// the next server start clears a stale lock.
-fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
+fn install_signal_cleanup<F: Fn() + Send + 'static>(f: F) -> std::io::Result<()> {
     #[cfg(unix)]
-    crate::sys::spawn_signal_cleanup(f);
+    {
+        crate::sys::spawn_signal_cleanup(f)
+    }
     #[cfg(not(unix))]
     {
         let _ = f;
+        Ok(())
     }
 }

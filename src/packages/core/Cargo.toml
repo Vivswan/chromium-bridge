@@ -76,6 +76,7 @@ security-framework.workspace = true
 security-framework-sys.workspace = true
 
 [target.'cfg(unix)'.dependencies]
+nix.workspace = true
 signal-hook.workspace = true
 
 [target.'cfg(windows)'.dependencies]

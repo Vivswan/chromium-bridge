@@ -30,6 +30,10 @@ getrandom = { version = "0.4", features = ["std"] }
 hex = "0.4"
 hmac = "0.13"
 libc = "0.2.186"
+# Safe sigmask wrapper: the signal-cleanup thread unblocks SIGTERM/SIGINT in
+# case the parent handed down a mask that blocks them (a blocked signal never
+# reaches signal-hook's handler). `signal` only.
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,
 # per-request version gate, wire model) per ADR-0034 - a many-eyes library
 # replacing our hand-rolled JSON-RPC dispatch, exactly the trade ADR-0023

@@ -44,24 +44,21 @@ pub(crate) fn ignore_sigpipe() {
 /// Run `f` on a dedicated thread when SIGTERM or SIGINT arrives, then exit.
 /// signal-hook's handler only writes to a self-pipe; the thread wakes from
 /// the iterator and runs the cleanup in ordinary thread context, free of
-/// async-signal-safety limits, so it may touch the filesystem. If the
-/// handler cannot be registered, the server keeps running without signal
-/// cleanup and says so: a signal then takes the default disposition and the
-/// next server start clears the stale lock.
+/// async-signal-safety limits, so it may touch the filesystem. The two
+/// signals are unblocked on the calling thread after the handler is in
+/// place: a parent that blocked them before exec hands its mask down, and a
+/// blocked signal would stay pending forever instead of reaching the
+/// handler. Later threads inherit the unblocked mask.
 #[cfg(unix)]
-pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
+pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) -> std::io::Result<()> {
+    use nix::sys::signal::{SigSet, Signal};
     use signal_hook::consts::signal::{SIGINT, SIGTERM};
 
-    let mut signals = match signal_hook::iterator::Signals::new([SIGTERM, SIGINT]) {
-        Ok(signals) => signals,
-        Err(e) => {
-            log_warn!(
-                "mcp",
-                "could not register the SIGTERM/SIGINT handler ({e}); a signal will exit without cleanup"
-            );
-            return;
-        }
-    };
+    let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT])?;
+    let mut unblock = SigSet::empty();
+    unblock.add(Signal::SIGTERM);
+    unblock.add(Signal::SIGINT);
+    unblock.thread_unblock()?;
     std::thread::spawn(move || {
         // `forever` yields only once a registered signal has arrived; the
         // iterator ends only if the handle is closed, which nothing does.
@@ -72,4 +69,5 @@ pub(crate) fn spawn_signal_cleanup<F: Fn() + Send + 'static>(f: F) {
         f();
         std::process::exit(0);
     });
+    Ok(())
 }
