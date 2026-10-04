@@ -85,7 +85,7 @@ jobs:
         # build-repro.ts pins SOURCE_DATE_EPOCH and remaps build paths so the
         # binary is bit-for-bit reproducible from the tag with the pinned
         # toolchain; see SECURITY.md "Release artifact integrity". It is
-        # self-contained (no bun install needed; setup-bun above suffices).
+        # self-contained (no bun install needed; the bun setup-moon provisions suffices).
         shell: bash
         run: bun scripts/build-repro.ts
 
