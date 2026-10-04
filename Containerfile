@@ -52,10 +52,11 @@ ENV HOME=/home/ci \
     PATH=/home/ci/.proto/shims:/home/ci/.proto/bin:/home/ci/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
 # scripts/pin.sh resolves both pin files from its own parent directory, so the copy keeps the checkout's
-# layout.
+# layout. --chown: COPY writes root-owned entries whatever USER is, and the ci user could not later delete
+# a root-owned scripts/ directory under /tmp/pins.
 WORKDIR /tmp/pins
-COPY Containerfile .prototools rust-toolchain.toml ./
-COPY scripts/pin.sh scripts/pin.sh
+COPY --chown=ci:ci Containerfile .prototools rust-toolchain.toml ./
+COPY --chown=ci:ci scripts/pin.sh scripts/pin.sh
 
 # rustup owns rust: rust-toolchain.toml is its only pin (`rustup toolchain install` with no argument
 # installs the file's toolchain, profile and components included), and .prototools deliberately leaves

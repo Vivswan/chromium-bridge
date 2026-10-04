@@ -12,6 +12,12 @@ tool="${1:?usage: scripts/pin.sh <tool>}"
 root="$(dirname "${BASH_SOURCE[0]}")/.."
 arg="$(tr 'a-z-' 'A-Z_' <<<"$tool")_VERSION"
 
+# A reader that cannot open one owner file must not certify the other's pin as the only one (a failing
+# sed inside the substitution below would otherwise pass unnoticed).
+for file in .prototools Containerfile; do
+  [ -r "$root/$file" ] || { echo "pin.sh: cannot read $root/$file" >&2; exit 1; }
+done
+
 versions="$(
   sed -nE "/^\[/q; s/^${tool}[[:space:]]*=[[:space:]]*\"([^\"]+)\".*$/\1/p" "$root/.prototools"
   sed -nE "s/^ARG ${arg}=([^[:space:]]+)[[:space:]]*$/\1/p" "$root/Containerfile"
