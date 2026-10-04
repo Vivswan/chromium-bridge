@@ -297,28 +297,30 @@ tasks:
         exit 1
       fi
 
+  # The three protocol suites are stdlib unittest modules under tests/protocol
+  # (discovery, so a new test cannot be forgotten); --no-project because the
+  # harness is stdlib-only by design (its independence from our code and from
+  # any package is the point) - never add dependencies to it.
   test-e2e:
-    # --no-project: the harness is stdlib-only by design (its independence from our code and from any
-    # package is the point); never add dependencies to it.
     description: 'Protocol-layer e2e tests (drives the real release binary)'
     deps:
       - '~:check-uv'
       - '~:build-release'
-    command: 'uv run --no-project --isolated tests/protocol/e2e.py'
+    command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p e2e.py -v'
 
   test-adversarial:
     description: "Adversarial break-in suite (CI's protocol matrix; drives the real release binary)"
     deps:
       - '~:check-uv'
       - '~:build-release'
-    command: 'uv run --no-project --isolated tests/protocol/adversarial.py'
+    command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p adversarial.py -v'
 
   test-chaos:
     description: "Fault-injection chaos suite (CI's protocol matrix; drives the real release binary)"
     deps:
       - '~:check-uv'
       - '~:build-release'
-    command: 'uv run --no-project --isolated tests/protocol/chaos.py'
+    command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p chaos.py -v'
 
   # ----- contract codegen (the Rust core is the single source) --------------
 
@@ -381,24 +383,24 @@ tasks:
       bun test scripts/check-envelope-parity.test.ts
 
   check-gen-isolation:
-    # Gen-only tooling must stay out of every shipped binary graph; p256 matters most, since a software P-256
-    # stack has no business in a binary whose signing story is the Secure Enclave.
-    #   host: p256      -> refused anywhere in the graph
-    #   host: schemars  -> allowed only through rmcp, which uses schemars 1 at runtime; our own gen-only
-    #                      envelope-schema feature (also schemars 1) must stay out
-    description: 'Gen-only tooling (schemars via non-rmcp paths, p256) stays out of the shipped binary dependency graph'
+    # Gen-only tooling must stay out of the shipped binary's graph, and only `cargo tree -e normal` sees that
+    # graph: the core's self dev-dependency switches the envelope-schema feature on workspace-wide, so
+    # cargo-deny (even with dev-dependencies excluded) sees a core -> schemars edge that never links.
+    #   p256, ts-rs  -> refused anywhere in the graph
+    #   schemars     -> allowed only through rmcp (its runtime tool-schema model)
+    description: 'Gen-only tooling (p256, ts-rs; schemars outside rmcp) stays out of the shipped binary dependency graph'
     script: |
       set -eu
       tree="$(cargo tree -e normal -p chromium-bridge --locked)"
-      if printf '%s\n' "$tree" | grep -q p256; then
-          echo "p256 leaked into the chromium-bridge binary dependency graph" >&2
+      for crate in p256 ts-rs; do
+        if printf '%s\n' "$tree" | grep -q " $crate v"; then
+          echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
           exit 1
-      fi
-      # Every path from schemars up to the host binary must go through rmcp: the depth-1 entries of the
-      # inverse tree are schemars's direct dependents, and rmcp must be the only one. Fail closed: if
-      # schemars is in the graph, the inverse tree must resolve (an ambiguous spec, two schemars majors, is
-      # exactly the leak this gate exists to catch).
-      if printf '%s\n' "$tree" | grep -q schemars; then
+        fi
+      done
+      # rmcp must be schemars's only direct dependent (depth 1 of the inverse tree). An inverse tree that
+      # does not resolve (two schemars majors: the leak itself) fails here instead of passing silently.
+      if printf '%s\n' "$tree" | grep -q " schemars v"; then
           inverse="$(cargo tree -e normal -p chromium-bridge --locked -i schemars --prefix depth)"
           if ! printf '%s\n' "$inverse" | grep -q '^0schemars '; then
               echo "could not resolve the schemars inverse tree:" >&2

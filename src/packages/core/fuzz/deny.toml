@@ -40,6 +40,14 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Gen-only crates must not enter the fuzz graph either (the shipped binary's
+# own gate is `moon run check-gen-isolation`, a cargo tree walk: cargo-deny
+# cannot see that graph in the root workspace, where the core's self
+# dev-dependency switches the envelope-schema feature on workspace-wide).
+deny = [
+  { crate = "p256", reason = "a software P-256 stack never signs for the bridge; the host uses the Secure Enclave" },
+  { crate = "schemars", wrappers = ["rmcp"], reason = "runtime tool schemas come from rmcp only" },
+]
 # The fuzz crate's core dependency is `path = ".."` with no version, and
 # scripts/sync-version.ts does not maintain this manifest, so a pinned
 # version would drift on every release. Scoped to this fuzz-only config so

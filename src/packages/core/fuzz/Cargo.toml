@@ -53,9 +53,10 @@ chromium-bridge-core = { path = "..", features = ["fuzzing"] }
 debug = 1
 
 # One binary per wire parser at a trust boundary. Each feeds arbitrary bytes to
-# the real decoder and asserts (implicitly, via libFuzzer catching a panic or
-# abort) that no input crashes it -- the robustness guarantee for a parser that
-# runs on a security boundary under `panic = "abort"`.
+# the real decoder; libFuzzer catches any panic or abort (the no-crash guarantee
+# for a parser on a security boundary under `panic = "abort"`), and the targets
+# add an oracle where one exists: decode -> encode -> decode identity for the
+# serde messages, a documented invariant for the verifiers.
 [[bin]]
 name = "nm_frame"
 path = "fuzz_targets/nm_frame.rs"

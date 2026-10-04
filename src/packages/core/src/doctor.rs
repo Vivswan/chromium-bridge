@@ -540,10 +540,11 @@ mod tests {
         use std::os::unix::net::UnixListener;
 
         // A live Unix-domain listener: probe must succeed.
-        let dir = std::env::temp_dir().join(format!("bb-doctor-probe-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let sock = dir.join("run.sock");
-        let _ = std::fs::remove_file(&sock);
+        let dir = tempfile::Builder::new()
+            .prefix("bb-doctor-probe-")
+            .tempdir()
+            .unwrap();
+        let sock = dir.path().join("run.sock");
         let listener = UnixListener::bind(&sock).unwrap();
         let path = sock.to_string_lossy().into_owned();
         assert!(probe(&path));
