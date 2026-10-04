@@ -50,10 +50,10 @@ import { getEffectivePolicy } from "@/lib/background/effective-policy";
 // The MOCKED capability probe (the factory above), so a test can park or
 // fail one round's setup on demand.
 import { platformCanEnroll } from "@/lib/background/enrollment";
+import { applyPolicy } from "../applied-policy";
 
-// The decision-start reads a real caller performs (pre-cutover here, so the
-// legacy settings govern): unwrap the state-typed snapshot for the routing
-// predicate.
+// The decision-start reads a real caller performs: unwrap the state-typed
+// snapshot for the routing predicate.
 async function freshValues() {
   const policy = await getEffectivePolicy();
   if (policy.state === "blocked") throw new Error(policy.reason);
@@ -483,7 +483,6 @@ describe("service routing and the window-approval refusal", () => {
   test("hardware payloads cannot be approved through resolveConfirm", async () => {
     const key = await genKey();
     await pinKey(key);
-    await fakeBrowser.storage.local.set({ touchIdConfirm: true });
     const sent: Array<{ nonce: string; context: string }> = [];
     attachPort((frame) => {
       sent.push(frame as { nonce: string; context: string });
@@ -524,7 +523,6 @@ describe("service routing and the window-approval refusal", () => {
   test("denial through the window stays possible for hardware payloads", async () => {
     const key = await genKey();
     await pinKey(key);
-    await fakeBrowser.storage.local.set({ touchIdConfirm: true });
     attachPort(() => true);
     const display = displayStub();
     installConfirmationProvider(display.provider);
@@ -548,7 +546,7 @@ describe("service routing and the window-approval refusal", () => {
   test("opted out falls back to the window provider (no hardware flag)", async () => {
     const key = await genKey();
     await pinKey(key);
-    await fakeBrowser.storage.local.set({ touchIdConfirm: false });
+    await applyPolicy({ touchIdConfirm: false }, key.keyId);
     const display = displayStub();
     installConfirmationProvider(display.provider);
     installPresenceProvider(new EnclavePresenceProvider(display.provider));
@@ -573,7 +571,6 @@ describe("service routing and the window-approval refusal", () => {
   test("kinds other than eval/upload never route to hardware", async () => {
     const key = await genKey();
     await pinKey(key);
-    await fakeBrowser.storage.local.set({ touchIdConfirm: true });
     const display = displayStub();
     installConfirmationProvider(display.provider);
     installPresenceProvider(new EnclavePresenceProvider(display.provider));

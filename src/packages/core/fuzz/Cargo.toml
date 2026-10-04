@@ -136,9 +136,3 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "pending_import"
-path = "fuzz_targets/pending_import.rs"
-test = false
-doc = false
-bench = false

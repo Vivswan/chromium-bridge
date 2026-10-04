@@ -31,7 +31,7 @@ use crate::enclave::{base64_decode, EnclaveError, EnrollmentKey};
 #[serde(rename_all = "lowercase")]
 pub enum PolicyStoreState {
     /// No policy baseline on this machine yet (pre-cutover; the extension
-    /// keeps enforcing its legacy local settings).
+    /// keeps enforcing its deny baseline).
     None,
     /// A baseline exists and parsed.
     Present,
@@ -53,7 +53,7 @@ pub enum PolicyStoreState {
 #[serde(tag = "store", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PolicyStatusReport {
     /// No policy baseline on this machine yet (pre-cutover, healthy; the
-    /// extension keeps enforcing its legacy local settings).
+    /// extension keeps enforcing its deny baseline).
     None {
         /// Schema version. `1` today; a newer value must be refused before
         /// any field below is read (fail closed).
@@ -232,8 +232,8 @@ fn render_status(r: &PolicyStatusReport) -> String {
     match r {
         PolicyStatusReport::None { .. } => {
             out.push_str(
-                "store:      none yet (pre-cutover; the extension keeps enforcing its legacy\n            \
-                 local settings until a baseline is signed via\n            \
+                "store:      none yet (pre-cutover; the extension keeps enforcing its deny\n            \
+                 baseline until a baseline is signed via\n            \
                  `chromium-bridge policy set`)\n",
             );
         }
@@ -501,7 +501,6 @@ pub fn run_policy(args: &[String]) -> i32 {
     match cmd {
         PolicyCommand::Show { json } => run_show(json),
         PolicyCommand::History { json } => run_history(json),
-        PolicyCommand::PendingImport { json } => run_pending_import(json),
         PolicyCommand::Set {
             overlay,
             touched,
@@ -588,76 +587,6 @@ fn run_history(json: bool) -> i32 {
             1
         }
     }
-}
-
-/// `policy pending-import [--json]`: the pending legacy import's state (ADR-0032 decision 8), the same
-/// fail-closed read `doctor` consumes. The ONE write here is the
-/// idempotent self-heal [`crate::pending_import::reconcile_consuming`], finalizing a STRANDED mid-consume
-/// record whose baseline already landed, so a crashed finalize unsticks instead of re-offering an import
-/// that can only refuse; a failed heal never blocks the read.
-///
-/// ```text
-/// --json  -> the versioned `crate::pending_import::PendingImportReport` through `Value`, the ONLY mode that prints the bag
-/// prose   -> state without bag content (the bag is reviewed from the --json form, not dumped on a terminal)
-/// ```
-fn run_pending_import(json: bool) -> i32 {
-    if let Err(e) = crate::pending_import::reconcile_consuming() {
-        eprintln!("policy pending-import: reconcile of a stranded mid-consume record failed: {e}");
-    }
-    let report = crate::pending_import::gather_pending_import();
-    if json {
-        match serde_json::to_value(&report) {
-            Ok(value) => {
-                println!("{value}");
-                0
-            }
-            Err(e) => {
-                eprintln!("policy pending-import --json failed to serialize the report: {e}");
-                1
-            }
-        }
-    } else {
-        print!("{}", render_pending_import(&report));
-        0
-    }
-}
-
-/// The human `policy pending-import` text. Never includes the bag (see
-/// [`run_pending_import`]); a present bag is reported by size only.
-fn render_pending_import(r: &crate::pending_import::PendingImportReport) -> String {
-    use crate::pending_import::PendingImportReport;
-    let mut out = String::from("chromium-bridge policy pending-import\n");
-    match r {
-        PendingImportReport::None { .. } => {
-            out.push_str("state:      none (no legacy settings recorded)\n");
-        }
-        PendingImportReport::Present { bag, .. } => {
-            let bytes = serde_json::to_vec(bag).map(|b| b.len()).unwrap_or(0);
-            out.push_str(&format!(
-                "state:      present ({bytes} bytes recorded; re-run with --json to review it)\n"
-            ));
-        }
-        PendingImportReport::Consuming { bag, .. } => {
-            let bytes = serde_json::to_vec(bag).map(|b| b.len()).unwrap_or(0);
-            out.push_str(&format!(
-                "state:      consuming ({bytes} bytes retained; a first signed baseline began \
-                 the one-time\n            import, so the window is closed to new bags - re-run \
-                 with --json to\n            review what was recorded)\n"
-            ));
-        }
-        PendingImportReport::Consumed { .. } => {
-            out.push_str(
-                "state:      consumed (the one-time import already happened; the window \
-                 is closed)\n",
-            );
-        }
-        PendingImportReport::Error { detail, .. } => {
-            out.push_str(&format!(
-                "state:      present but UNREADABLE ({detail}) - failing closed\n"
-            ));
-        }
-    }
-    out
 }
 
 /// `policy set <field flags> [--json]`: the GRANT lane. The keyless refusal

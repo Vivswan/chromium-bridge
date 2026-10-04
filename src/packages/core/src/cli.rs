@@ -31,10 +31,6 @@ pub mod argv {
     pub const POLICY_RESTRICT: &str = "restrict";
     /// `policy history [--json]`: the superseded-revision ring.
     pub const POLICY_HISTORY: &str = "history";
-    /// `policy pending-import [--json]`: the recorded legacy-settings bag
-    /// awaiting import (ADR-0032 decision 8). READ-ONLY:
-    /// consuming happens only when the first baseline signs.
-    pub const POLICY_PENDING_IMPORT: &str = "pending-import";
     /// `policy rollback --revision <n>`: re-derive a past revision's effective
     /// policy as a FRESH write (never a replay of the old signed artifact).
     pub const POLICY_ROLLBACK: &str = "rollback";
@@ -399,10 +395,6 @@ pub enum PolicyCommand {
     Show { json: bool },
     /// `policy history [--json]`: the superseded-revision ring.
     History { json: bool },
-    /// `policy pending-import [--json]`: the pending legacy import's state
-    /// (ADR-0032 decision 8). READ-ONLY - it never records, consumes, or
-    /// repairs anything; `--json` is the only mode that prints the bag.
-    PendingImport { json: bool },
     /// `policy set <field flags> [--json]`: the GRANT lane. `overlay`
     /// carries the user's per-field edits and `touched` names exactly the
     /// fields they set; the handler folds `overlay` over the current
@@ -438,9 +430,6 @@ pub fn policy_args(args: &[String]) -> Result<PolicyCommand, String> {
         Some(argv::POLICY_HISTORY) => Ok(PolicyCommand::History {
             json: policy_json_flag(&mut it, argv::POLICY_HISTORY)?,
         }),
-        Some(argv::POLICY_PENDING_IMPORT) => Ok(PolicyCommand::PendingImport {
-            json: policy_json_flag(&mut it, argv::POLICY_PENDING_IMPORT)?,
-        }),
         Some(argv::POLICY_SET) => {
             let (overlay, touched, json) = policy_field_edits(&mut it, argv::POLICY_SET, true)?;
             Ok(PolicyCommand::Set {
@@ -459,13 +448,11 @@ pub fn policy_args(args: &[String]) -> Result<PolicyCommand, String> {
             Ok(PolicyCommand::Rollback { revision, json })
         }
         Some(other) => Err(format!(
-            "unknown policy subcommand {other:?}; expected: show, set, restrict, history, \
-             pending-import, rollback"
+            "unknown policy subcommand {other:?}; expected: show, set, restrict, history, rollback"
         )),
-        None => Err(
-            "policy needs a subcommand: show, set, restrict, history, pending-import, or rollback"
-                .to_string(),
-        ),
+        None => {
+            Err("policy needs a subcommand: show, set, restrict, history, or rollback".to_string())
+        }
     }
 }
 
@@ -753,9 +740,6 @@ pub fn print_help() {
          {pad}(no Touch ID; only ever removes capability)\n    \
          chromium-bridge policy history [--json]\n\
          {pad}Print the superseded-revision ring\n    \
-         chromium-bridge policy pending-import [--json]\n\
-         {pad}Print the pending legacy-import state (read-only;\n\
-         {pad}--json is the only mode that prints the bag)\n    \
          chromium-bridge policy rollback --revision <n> [--json]\n\
          {pad}Re-apply revision <n>'s effective policy as a FRESH\n\
          {pad}write (tighten-only rides restrict free; any\n\
@@ -1005,14 +989,6 @@ mod tests {
             PolicyCommand::History { json: true }
         );
         assert_eq!(
-            ok(&["policy", "pending-import"]),
-            PolicyCommand::PendingImport { json: false }
-        );
-        assert_eq!(
-            ok(&["policy", "pending-import", "--json"]),
-            PolicyCommand::PendingImport { json: true }
-        );
-        assert_eq!(
             ok(&["policy", "rollback", "--revision", "7"]),
             PolicyCommand::Rollback {
                 revision: 7,
@@ -1104,8 +1080,6 @@ mod tests {
         // Stray args on the read subcommands, and a missing rollback revision.
         assert!(err(&["policy", "show", "extra"]).contains("unexpected argument"));
         assert!(err(&["policy", "show", "--json", "--json"]).contains("more than once"));
-        assert!(err(&["policy", "pending-import", "extra"]).contains("unexpected argument"));
-        assert!(err(&["policy", "pending-import", "--json", "--json"]).contains("more than once"));
         assert!(err(&["policy", "rollback"]).contains("requires --revision"));
         assert!(err(&["policy", "rollback", "--revision", "x"]).contains("revision number"));
     }

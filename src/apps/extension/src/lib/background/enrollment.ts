@@ -39,14 +39,7 @@ import {
   verifyProofAgainstPin,
 } from "./enclave-verify";
 import { killGate } from "./kill";
-import {
-  currentConnectionToken,
-  currentPinGeneration,
-  notePinProvenOnConnection,
-  onPinPinned,
-  onPinRevoked,
-  policyDispatchGate,
-} from "./policy-sync";
+import { onPinPinned, onPinRevoked, policyDispatchGate } from "./policy-sync";
 import { hardenStorageAccess } from "./trusted-storage";
 
 // ---- frame plumbing ---------------------------------------------------------
@@ -102,15 +95,6 @@ interface Outstanding {
   context: string;
   mode: "pair" | "verify";
   timer: ReturnType<typeof setTimeout>;
-  /** The policy-sync connection the challenge went out on: a verify success
-   * is per-connection identity evidence (ADR-0032 decision 8 send-once), and
-   * the token is what stops a proof verified after a reconnect from
-   * crediting the NEW connection. */
-  connection: object | null;
-  /** The pin epoch at challenge-send time, stamped into the evidence with
-   * the token: a re-pair during the challenge window (even same-key) moves
-   * the epoch, and the stale proof then credits nothing. */
-  generation: number;
 }
 
 let outstanding: Outstanding | null = null;
@@ -144,8 +128,6 @@ async function issueChallenge(mode: "pair" | "verify"): Promise<{ ok: boolean; e
     context,
     mode,
     timer,
-    connection: currentConnectionToken(),
-    generation: currentPinGeneration(),
   };
   if (!postFrame({ type: "enclave_challenge", nonce, context } satisfies EnclaveChallengeWire)) {
     clearOutstanding();
@@ -223,7 +205,7 @@ async function readGateState(): Promise<Gate> {
   // an op must not race ahead of the connect push and run under a cached
   // policy the host has since tightened. Pre-cutover (the flag, in the
   // storage confined above, was never set) the barrier is inert and the
-  // legacy local settings govern.
+  // deny baseline governs.
   const policy = await policyDispatchGate();
   if (!policy.allowed) return policy;
   // Enrollment is unconditionally required where the platform can enroll
@@ -478,10 +460,6 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
   if (res.ok) {
     await pinStore.setLastVerifiedAt(Date.now());
     await pinStore.clearLastError();
-    // A fresh-nonce proof of the PINNED key just verified: per-connection identity evidence for the
-    // legacy-settings send-once (ADR-0032 decision 8). The token pins it to the connection the challenge went
-    // out on, the generation to the pin epoch at challenge time; if either has moved, this credits nobody.
-    notePinProvenOnConnection(current.connection, pin.keyId, current.generation);
     console.log("[bb] pinned key verified");
   } else {
     // Positive cryptographic evidence that whatever answered does not hold
@@ -631,7 +609,7 @@ export function revokePin(): Promise<{ ok: boolean }> {
     // Hand the identity over BEFORE clearAll, so no SW death can land in a gap where both copies are gone.
     // Revoke RETAINS the policy ratchet record (ADR-0032 decision 3): a same-key re-pair must still refuse an
     // old-baseline replay, and the record stays inert (deny baseline + closed barrier) while unpinned. The
-    // cutover flag survives too: post-reset means the deny baseline plus the barrier, never legacy policy.
+    // cutover flag survives too: post-reset means the closed barrier, never the open pre-cutover posture.
     await onPinRevoked(revokedKeyId);
     await pinStore.clearAll();
     await pinStore.setPaused(true);

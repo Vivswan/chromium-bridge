@@ -138,7 +138,7 @@ describe("the unpinned relaxation approval surface", () => {
   test("declining in the window refuses the push: no state change, no cutover", async () => {
     await pushAndAnswer(unsignedFrame(0), false);
     expect(await getStoredPolicyState()).toBeNull();
-    expect(await getPolicySnapshotForTests()).toEqual({ kind: "legacy" });
+    expect(await getPolicySnapshotForTests()).toEqual({ kind: "preCutover" });
   });
 
   test("one approval per push, never blanket: the next relaxing push prompts again", async () => {

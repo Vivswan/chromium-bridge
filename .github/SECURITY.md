@@ -131,7 +131,7 @@ How relaxing works:
 - **Never silent.** The extension's options page no longer carries these toggles.
 - **Always in force.** The site allowlist (per-origin) and the global kill switch apply regardless of the policy.
 
-The `pageEvalEnabled` baseline is a deliberate flip. The pre-migration local setting defaulted to `true`, and still does on a pre-cutover install: the extension keeps enforcing its legacy settings until a first policy applies (indefinitely on non-macOS). The host-owned baseline denies it until an explicit grant.
+The `pageEvalEnabled` baseline denies `page_eval` until an explicit grant: a pre-cutover install enforces the deny baseline, and so does every applied policy that does not grant it.
 
 ## Masking is heuristic and best-effort
 

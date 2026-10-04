@@ -1,10 +1,7 @@
-// ADR-0032: the CDP session registry's teardown listener is
-// policy-driven, not a raw legacy-settings watch. Pre-cutover the legacy
-// cdpMode toggle tears sessions down exactly as before; post-cutover an
+// The CDP session registry's teardown listener is policy-driven: an
 // accepted policy push whose effective cdpMode is false must tear live
 // sessions down on the PUSH path (the accepted push writes the policy
-// storage keys, which the listener watches), and a legacy toggle alone must
-// no longer rip down sessions the policy still grants.
+// storage keys, which the listener watches).
 
 import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -52,15 +49,7 @@ beforeEach(() => {
 });
 
 describe("cdp registry teardown is policy-driven (ADR-0032 S2)", () => {
-  test("pre-cutover: the legacy cdpMode toggle still tears everything down", async () => {
-    await fakeBrowser.storage.local.set({ cdpMode: true });
-    const teardown = await freshRegistry();
-    await fakeBrowser.storage.local.set({ cdpMode: false });
-    await vi.waitFor(() => expect(teardown).toHaveBeenCalled());
-  });
-
-  test("post-cutover deny: a policy push restricting cdpMode tears down on the push path although legacy says on", async () => {
-    await fakeBrowser.storage.local.set({ cdpMode: true }); // legacy: on
+  test("a policy push restricting cdpMode tears down on the push path", async () => {
     const teardown = await freshRegistry();
     // The accepted push's writes: cutover armed, record with cdpMode false.
     await fakeBrowser.storage.local.set({
@@ -70,19 +59,6 @@ describe("cdp registry teardown is policy-driven (ADR-0032 S2)", () => {
     await vi.waitFor(() => expect(teardown).toHaveBeenCalled());
   });
 
-  test("post-cutover grant: a legacy toggle cannot rip down sessions the policy still grants", async () => {
-    await fakeBrowser.storage.local.set({
-      cdpMode: true,
-      bridgePolicyCutover: true,
-      bridgePolicyState: record({ cdpMode: true }),
-    });
-    const teardown = await freshRegistry();
-    await fakeBrowser.storage.local.set({ cdpMode: false }); // legacy flips off
-    // Give the async handler a beat; the policy-resolved mode is still true.
-    await new Promise((r) => setTimeout(r, 10));
-    expect(teardown).not.toHaveBeenCalled();
-  });
-
   test("a decision that raced a restriction cannot register a persistent session (SFX-3)", async () => {
     // The leak this closes: a decision snapshotted cdpMode:true, a
     // restricting push landed (teardownAll fired) while a confirmation held
@@ -90,7 +66,6 @@ describe("cdp registry teardown is policy-driven (ADR-0032 S2)", () => {
     // nothing would ever tear the NEW session down. The creation-point
     // recheck refuses instead.
     await fakeBrowser.storage.local.set({
-      cdpMode: true, // the stale legacy grant the decision started under
       bridgePolicyCutover: true,
       bridgePolicyState: record({ cdpMode: false }),
     });

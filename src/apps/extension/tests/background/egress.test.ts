@@ -11,6 +11,7 @@ import { fakeBrowser } from "wxt/testing/fake-browser";
 import { withFreshPolicy } from "@/lib/background/effective-policy";
 import { maskOpResult } from "@/lib/background/egress";
 import type { StorageReadResult } from "@/lib/dom/page-api";
+import { applyPolicy } from "./applied-policy";
 
 // Each call is its own decision: no dispatch threads a snapshot through
 // these tests, so every mask starts one via the standalone entry.
@@ -56,7 +57,7 @@ describe("storage_get is ALWAYS masked", () => {
   });
 
   test("masks even when evalMask was opted out (independent toggles)", async () => {
-    await fakeBrowser.storage.local.set({ evalMask: false });
+    await applyPolicy({ evalMask: false });
     const out = (await mask("storage_get", {
       key: "k",
       found: true,
@@ -126,7 +127,7 @@ describe("page_eval is masked by default, raw only on explicit opt-out", () => {
   });
 
   test("evalMask=false leaves eval results raw", async () => {
-    await fakeBrowser.storage.local.set({ evalMask: false });
+    await applyPolicy({ evalMask: false });
     const out = await mask("page_eval", SECRETS.jwt);
     expect(out).toBe(SECRETS.jwt);
   });

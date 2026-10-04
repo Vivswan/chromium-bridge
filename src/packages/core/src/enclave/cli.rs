@@ -202,9 +202,6 @@ fn dispose_locked(
         Err(e) => return Ok(Err(e)),
     };
     HostConfig::remove();
-    // pending-import.json is deliberately NOT cleared here: a pending bag is user preference data, not an artifact of
-    // the deleted key, so it survives disposal like the policy history ring. Its consumed tombstone must survive too,
-    // or the import window would reopen right as the baseline below clears, letting a compromised extension plant a forged bag.
     if let Err(e) = crate::policy::clear_baseline_locked(lock) {
         log_warn!(
             "enclave",

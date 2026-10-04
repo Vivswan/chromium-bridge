@@ -2,12 +2,10 @@
 // schema, their defaults, and the salvage helper that recovers a usable
 // Settings from whatever is actually in storage.
 //
-// Only fields the browser itself owns live here (ADR-0032): the site-scope
-// opt-in, tab grouping, and the display language. The 15 policy fields are
-// host-owned (the generated policy contract in policy.gen.ts governs them
-// post-cutover), their legacy schemas live in legacy-settings.ts for the two
-// permanent pre-cutover consumers, and `requireEnrollment` is retired -
-// enrollment is simply required.
+// Only fields the browser itself owns live here: the site-scope opt-in, tab
+// grouping, and the display language. The 15 policy fields are host-owned
+// (the generated policy contract in policy.gen.ts governs them), and
+// `requireEnrollment` is retired - enrollment is simply required.
 //
 // The Settings type is inferred from the schema, and DEFAULTS is derived by
 // parsing an empty bag - so a new setting is added in exactly one place.

@@ -15,6 +15,7 @@ import { withFreshPolicy } from "@/lib/background/effective-policy";
 import type { PageBackend } from "@/lib/background/page-backend";
 import type { ResolvedTab } from "@/lib/background/tabs";
 import type { ClickProbe } from "@/lib/dom/page-api";
+import { applyPolicy } from "../applied-policy";
 
 // Each call here is its OWN decision (there is no dispatch threading a
 // per-request snapshot through these tests), so it starts one explicitly:
@@ -100,7 +101,7 @@ describe("page_click", () => {
   });
 
   test("confirmGraceMs=0 reconfirms every click", async () => {
-    await fakeBrowser.storage.local.set({ confirmGraceMs: 0 });
+    await applyPolicy({ confirmGraceMs: 0 });
     const asked = autoProvider(true);
     await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
     await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
@@ -108,7 +109,7 @@ describe("page_click", () => {
   });
 
   test("confirmHighRiskClick=false skips the gate (explicit opt-out)", async () => {
-    await fakeBrowser.storage.local.set({ confirmHighRiskClick: false });
+    await applyPolicy({ confirmHighRiskClick: false });
     const asked = autoProvider(false);
     await preflight("page_click", { selector: "#x" }, TAB, fakeBackend(SUBMIT));
     expect(asked.length).toBe(0);
@@ -134,8 +135,12 @@ describe("page_press / page_select confirm on every call", () => {
 });
 
 describe("page_eval", () => {
+  // The deny baseline keeps page_eval off; these decisions run under an
+  // applied policy that grants it.
+  beforeEach(() => applyPolicy({ pageEvalEnabled: true }));
+
   test("the kill switch refuses before any prompt", async () => {
-    await fakeBrowser.storage.local.set({ pageEvalEnabled: false });
+    await applyPolicy({ pageEvalEnabled: false });
     const asked = autoProvider(true);
     await expect(
       preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
@@ -163,7 +168,7 @@ describe("page_eval", () => {
   });
 
   test("confirmPageEval=false runs unprompted (explicit opt-out)", async () => {
-    await fakeBrowser.storage.local.set({ confirmPageEval: false });
+    await applyPolicy({ pageEvalEnabled: true, confirmPageEval: false });
     const asked = autoProvider(false);
     await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(0);

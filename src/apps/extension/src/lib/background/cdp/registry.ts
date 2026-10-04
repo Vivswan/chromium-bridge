@@ -122,15 +122,12 @@ export function installCdpLifecycleListeners(): void {
     if (typeof source.tabId === "number") cdpRegistry.handleExternalDetach(source.tabId);
   });
 
-  // cdpMode turned off -> detach everything so the banner goes away. A policy push that restricts
-  // cdpMode lands here too, because the push writes the policy storage keys. The legacy "cdpMode" key
-  // stays a trigger on purpose: nothing writes it anymore, but pre-cutover tampering or the post-cutover
-  // cleanup deleting it (legacy-cleanup.ts) still fires this, harmlessly - the handler re-reads the
-  // EFFECTIVE policy and only ever tears down, never grants.
+  // A policy push that restricts cdpMode -> detach everything so the banner goes away: the push writes
+  // the policy storage keys, and the handler re-reads the EFFECTIVE policy and only ever tears down,
+  // never grants.
   browser.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    const relevant = "cdpMode" in changes || POLICY_STORAGE_KEYS.some((key) => key in changes);
-    if (!relevant) return;
+    if (!POLICY_STORAGE_KEYS.some((key) => key in changes)) return;
     void (async () => {
       const effective = await getEffectivePolicy();
       // A blocked posture counts as no grant: teardown is restriction-only,

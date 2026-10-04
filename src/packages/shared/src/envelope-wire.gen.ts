@@ -223,12 +223,6 @@ export const PolicyGetWireSchema = z.object({ "type": z.literal("policy_get") })
 
 export type PolicyGetWire = z.infer<typeof PolicyGetWireSchema>;
 
-export const LegacySettingsWireSchema = z
-  .object({ "bag": z.any(), "type": z.literal("legacy_settings") })
-  .strict();
-
-export type LegacySettingsWire = z.infer<typeof LegacySettingsWireSchema>;
-
 export const LangSetWireSchema = z
   .object({ "type": z.literal("lang_set"), "value": z.string() })
   .strict();
@@ -253,5 +247,5 @@ export const GENERATED_WRITER_FRAMES = {
     "kill_release",
     "audit_event",
   ],
-  policy: ["policy_get", "legacy_settings", "lang_set", "lang_get"],
+  policy: ["policy_get", "lang_set", "lang_get"],
 } as const;

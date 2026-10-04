@@ -15,15 +15,32 @@ const dbg = vi.hoisted(() => ({
   detach: vi.fn<() => Promise<void>>(() => Promise.resolve()),
   sendCommand: vi.fn(() => Promise.resolve({})),
 }));
-vi.mock("wxt/browser", () => ({
-  browser: {
-    debugger: dbg,
-    // registry.get's restriction-only policy recheck reads storage;
-    // answer every read with a legacy cdpMode grant so these lifecycle tests
-    // exercise the attach protocol, not the policy gate.
-    storage: { local: { get: () => Promise.resolve({ cdpMode: true }) } },
-  },
-}));
+vi.mock("wxt/browser", async () => {
+  const { POLICY_DEFAULTS } = await import("@chromium-bridge/shared/policy.gen");
+  return {
+    browser: {
+      debugger: dbg,
+      // registry.get's restriction-only policy recheck reads storage; answer
+      // every read with an applied policy granting cdpMode so these lifecycle
+      // tests exercise the attach protocol, not the policy gate.
+      storage: {
+        local: {
+          get: () =>
+            Promise.resolve({
+              bridgePolicyCutover: true,
+              bridgePolicyState: {
+                scope: null,
+                effective: { ...POLICY_DEFAULTS, disabledTools: [], cdpMode: true },
+                revision: 1,
+                baselineB64: "ZG9j",
+                at: 1,
+              },
+            }),
+        },
+      },
+    },
+  };
+});
 
 import { withCdpAttach } from "@/lib/background/cdp/attach";
 import { cdpRegistry } from "@/lib/background/cdp/registry";

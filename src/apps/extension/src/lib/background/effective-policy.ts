@@ -1,39 +1,36 @@
-// The ONE effective-policy resolution the enforcement sites consume (ADR-0032
-// decision 8). Post-cutover: the host-pushed, verified, ratcheted
-// effective policy from policy-sync while ACTIVE. Pre-cutover: the legacy
-// chrome.storage settings, salvaged field-by-field exactly as the
-// pre-migration getSetting always did - the shipped legacy system,
-// byte-for-byte, now read through the permanent legacy-settings module
-// (settings.ts owns only the browser-owned fields).
+// The ONE effective-policy resolution the enforcement sites consume.
+// Post-cutover: the host-pushed, verified, ratcheted effective policy from
+// policy-sync while ACTIVE. Pre-cutover (no host policy has ever been
+// accepted): the deny baseline, POLICY_DEFAULTS.
 //
 // STATE-TYPED: a blocked posture (awaitingBaseline / compromised) is
 // NOT consumable as policy values - the sum type carries a reason instead of
 // a PolicyValues, so no caller can enforce against the deny-baseline
-// defaults outside the dispatch barrier. The invariant "POLICY_DEFAULTS only
-// ever behind a refusing gate" is held by this type, not by call-site
-// discipline: dispatch refuses from its single read, the connect-path
-// re-verification skips loudly, and the cdp teardown maps blocked to
-// no-grant (restriction-only).
+// defaults once a policy has applied. POLICY_DEFAULTS is consumable only
+// pre-cutover, where nothing was ever accepted that the defaults could
+// relax; after the cutover it only ever sits behind a refusing gate (the
+// defaults are NOT the restrictive pole on every field). That invariant is
+// held by this type, not by call-site discipline: dispatch refuses from its
+// single read, the connect-path re-verification skips loudly, and the cdp
+// teardown maps blocked to no-grant (restriction-only).
 //
-// Per-decision snapshot (ADR-0032 decision 4): every multi-read decision
-// calls this ONCE at its start and completes under the returned values -
-// dispatch snapshots per request and threads it through the confirmation
-// gate, the SW-op handlers, and egress masking - so a policy push landing
-// mid-confirmation can never relax, or otherwise alter, an in-flight
-// decision. An accepted push applies from the next decision on.
+// Per-decision snapshot: every multi-read decision calls this ONCE at its
+// start and completes under the returned values - dispatch snapshots per
+// request and threads it through the confirmation gate, the SW-op handlers,
+// and egress masking - so a policy push landing mid-confirmation can never
+// relax, or otherwise alter, an in-flight decision. An accepted push applies
+// from the next decision on.
 
-import { salvageLegacySetting } from "@chromium-bridge/shared/legacy-settings";
-import { POLICY_FIELDS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { unreachable } from "@chromium-bridge/shared/util";
-import { browser } from "wxt/browser";
-import { getPolicyPosture, POLICY_CUTOVER_KEY } from "./policy-sync";
+import { getPolicyPosture } from "./policy-sync";
 
 /** One immutable snapshot of the effective policy, resolved through the
  * cutover flag. `blocked` carries no values on purpose: enforcing anything
- * in that state - even the deny baseline, which is NOT the restrictive pole
- * on every field - would be a decision the barrier should have refused. */
+ * in that state - even the deny baseline - would be a decision the barrier
+ * should have refused. */
 export type EffectivePolicy =
-  | { state: "legacy"; values: PolicyValues }
+  | { state: "preCutover"; values: PolicyValues }
   | { state: "active"; values: PolicyValues }
   | { state: "blocked"; reason: string };
 
@@ -47,25 +44,8 @@ export async function getEffectivePolicy(): Promise<EffectivePolicy> {
       return { state: "active", values: posture.effective };
     case "blocked":
       return { state: "blocked", reason: posture.reason };
-    case "legacy": {
-      const values = await legacyPolicyValues();
-      if (values === null) {
-        // The cutover key appeared between the posture read above and the
-        // legacy-keys read (a first accepted push arming mid-decision, or a
-        // torn write). Belt-and-braces single-snapshot coherence: refuse
-        // this decision fail-closed rather than enforce legacy values under
-        // a cutover that has already begun; the next decision re-resolves
-        // through the posture, which will read the flag itself.
-        return {
-          state: "blocked",
-          reason:
-            "the policy cutover flag appeared while resolving the legacy settings " +
-            "(mid-decision arming); refusing this decision - the next one re-resolves " +
-            "through the policy posture (ADR-0032 decision 4)",
-        };
-      }
-      return { state: "legacy", values };
-    }
+    case "preCutover":
+      return { state: "preCutover", values: POLICY_DEFAULTS };
     default:
       return unreachable(posture);
   }
@@ -75,43 +55,11 @@ export async function getEffectivePolicy(): Promise<EffectivePolicy> {
  * per-request threading (in practice: tests): take this decision's own
  * fresh snapshot and run `fn` entirely under it, refusing outright when the
  * posture is blocked. The enforcement sites take a REQUIRED PolicyValues
- * parameter, so the one-snapshot-per-decision invariant (ADR-0032 decision
- * 4) is held by their signatures; this wrapper is the explicit way to start
- * a new decision when dispatch did not. */
+ * parameter, so the one-snapshot-per-decision invariant is held by their
+ * signatures; this wrapper is the explicit way to start a new decision when
+ * dispatch did not. */
 export async function withFreshPolicy<T>(fn: (policy: PolicyValues) => Promise<T>): Promise<T> {
   const policy = await getEffectivePolicy();
   if (policy.state === "blocked") throw new Error(policy.reason);
   return fn(policy.values);
-}
-
-/** The pre-cutover values: the 15 policy fields read from the legacy
- * settings bag under their (identical) legacy names, each salvaged by its
- * own legacy schema (legacy-settings.ts) - the exact per-field validation
- * the pre-migration getSetting applied, so pre-cutover behavior cannot
- * drift from what shipped. The cutover flag rides the SAME storage.get
- * (single-snapshot coherence): a flag present in the snapshot means the
- * legacy posture this decision started from is already stale, and `null`
- * tells the caller to refuse instead of enforcing legacy values
- * post-cutover. The object literal is typed PolicyValues, so a policy
- * field this mapping misses fails to compile. */
-async function legacyPolicyValues(): Promise<PolicyValues | null> {
-  const bag = await browser.storage.local.get([...POLICY_FIELDS, POLICY_CUTOVER_KEY]);
-  if (bag[POLICY_CUTOVER_KEY] !== undefined) return null;
-  return {
-    cdpMode: salvageLegacySetting("cdpMode", bag.cdpMode),
-    fileUploadEnabled: salvageLegacySetting("fileUploadEnabled", bag.fileUploadEnabled),
-    handleDialogEnabled: salvageLegacySetting("handleDialogEnabled", bag.handleDialogEnabled),
-    pageEvalEnabled: salvageLegacySetting("pageEvalEnabled", bag.pageEvalEnabled),
-    confirmHighRiskClick: salvageLegacySetting("confirmHighRiskClick", bag.confirmHighRiskClick),
-    confirmPageEval: salvageLegacySetting("confirmPageEval", bag.confirmPageEval),
-    touchIdConfirm: salvageLegacySetting("touchIdConfirm", bag.touchIdConfirm),
-    confirmTabClose: salvageLegacySetting("confirmTabClose", bag.confirmTabClose),
-    warnPreciseSnapshot: salvageLegacySetting("warnPreciseSnapshot", bag.warnPreciseSnapshot),
-    evalMask: salvageLegacySetting("evalMask", bag.evalMask),
-    hostReverifyMs: salvageLegacySetting("hostReverifyMs", bag.hostReverifyMs),
-    confirmGraceMs: salvageLegacySetting("confirmGraceMs", bag.confirmGraceMs),
-    clickToastTimeoutMs: salvageLegacySetting("clickToastTimeoutMs", bag.clickToastTimeoutMs),
-    evalToastTimeoutMs: salvageLegacySetting("evalToastTimeoutMs", bag.evalToastTimeoutMs),
-    disabledTools: salvageLegacySetting("disabledTools", bag.disabledTools),
-  };
 }

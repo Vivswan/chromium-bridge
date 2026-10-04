@@ -208,9 +208,8 @@ export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
   baseline: z.string().min(1).optional(),
   sig: z.string().min(1).optional(),
   overlay: PolicyOverlaySchema.optional(),
-  // ASYMMETRY (reason): the host field is Option<String>; the extension pins it to the structured enum.
-  // The send-once gate fires only on `ok === false && reason === "absent"`, so a value outside the enum or
-  // a missing field (an old host) reads as "not the absent signal": never send, fail closed.
+  // ASYMMETRY (reason): the host field is Option<String>; the extension pins it to the structured enum,
+  // so a value outside it fails the frame parse. A missing field (an old host) is accepted.
   reason: z.enum(["absent", "damaged", "unreadable"]).optional(),
   // ASYMMETRY (error): no null arm, as above.
   error: z.string().optional(),
@@ -219,8 +218,8 @@ export const PolicyCurrentFrameSchema = PolicyCurrentWireSchema.extend({
   // ASYMMETRY (ok-split): a refinement never shows up in z.toJSONSchema, so the structural gate cannot see
   // it and it is pinned in FRAME_REFINEMENTS (scripts/check-envelope-parity.ts) instead. On the wire every
   // field is an Option, so the base validates per-field and would pass shapes PolicyStatus::into_frame
-  // (protocol/control.rs) can never emit. This encodes the only two real host shapes, so the send-once
-  // condition above can never be met or confused by a frame that also claims success.
+  // (protocol/control.rs) can never emit. This encodes the only two real host shapes, so a reason can
+  // never ride a frame that also claims success.
   //   ok: true   -> REQUIRES baseline (sig/overlay optional); never reason or error
   //   ok: false  -> REQUIRES error (reason optional, an old host omits it); never baseline, sig, or overlay
   .superRefine((frame, ctx) => {
@@ -326,11 +325,6 @@ export const AUDIT_EVENT_KINDS = [
   // policy writes authoritatively; these record the EXTENSION's refusals.
   "policy_refused",
   "policy_compromised",
-  // ADR-0032, local-only: the one-time legacy_settings bag send (the
-  // decision-8 migration offer). The host audits every receipt outcome
-  // authoritatively (recorded or dropped, the legacy_import_receipt kind);
-  // this records the EXTENSION's send.
-  "legacy_settings_sent",
 ] as const;
 
 export type AuditEventKind = (typeof AUDIT_EVENT_KINDS)[number];

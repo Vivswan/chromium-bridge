@@ -86,7 +86,6 @@ export const FRAME_PLANS: Record<Group, Readonly<Record<string, FramePlan>>> = {
   policy: {
     policy_get: "rust-parsed",
     policy_current: { zod: PolicyCurrentFrameSchema },
-    legacy_settings: "rust-parsed",
     lang_get: "rust-parsed",
     lang_set: "rust-parsed",
     lang_current: { zod: LangCurrentFrameSchema },
@@ -151,8 +150,8 @@ export const FRAME_REFINEMENTS: Readonly<
   Partial<Record<ControlFrameKind, readonly RefinementPin[]>>
 > = {
   // The policy_current ok-split (enclave.ts): PolicyStatus::into_frame (protocol/control.rs) emits exactly two
-  // flat shapes, and policy-sync.ts offers the legacy bag only on `ok === false && reason === "absent"`, so a
-  // reason must never be able to ride a frame that also claims success.
+  // flat shapes, and `reason` explains only the failure arm, so a reason must never be able to ride a frame
+  // that also claims success.
   //   ok: true   -> requires `baseline`, never carries `reason` or `error`
   //   ok: false  -> requires `error`, never carries `baseline`, `sig`, or `overlay`
   policy_current: [

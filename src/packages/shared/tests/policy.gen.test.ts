@@ -21,7 +21,6 @@ import {
   PolicyOverlaySchema,
   PolicyValuesSchema,
   parseStoredPolicyValues,
-  salvagePolicyValues,
 } from "../src/policy.gen";
 
 // A well-formed v1 document: the deny-baseline values under default scoping.
@@ -55,40 +54,9 @@ describe("POLICY_DIRECTIONS", () => {
 });
 
 describe("POLICY_DEFAULTS", () => {
-  test("is the deny baseline: pageEvalEnabled off, unlike settings.ts", () => {
-    // The deliberate divergence from the legacy settings.ts default of
-    // true (ADR-0032 decision 4): with no applied policy, page_eval is off.
-    expect(POLICY_DEFAULTS.pageEvalEnabled).toBe(false);
-  });
-
   test("is deep-frozen, nested array included", () => {
     expect(Object.isFrozen(POLICY_DEFAULTS)).toBe(true);
     expect(Object.isFrozen(POLICY_DEFAULTS.disabledTools)).toBe(true);
-  });
-});
-
-describe("salvagePolicyValues", () => {
-  test("a non-object bag yields the defaults", () => {
-    expect(salvagePolicyValues(null)).toEqual(POLICY_DEFAULTS);
-    expect(salvagePolicyValues("junk")).toEqual(POLICY_DEFAULTS);
-  });
-
-  test("field-by-field: bad fields fall back, healthy fields survive", () => {
-    const salvaged = salvagePolicyValues({
-      ...POLICY_DEFAULTS,
-      cdpMode: true,
-      confirmGraceMs: "corrupted",
-      disabledTools: ["page_upload"],
-    });
-    expect(salvaged.cdpMode).toBe(true);
-    expect(salvaged.confirmGraceMs).toBe(POLICY_DEFAULTS.confirmGraceMs);
-    expect(salvaged.disabledTools).toEqual(["page_upload"]);
-  });
-
-  test("an unknown key is dropped", () => {
-    const salvaged = salvagePolicyValues({ ...POLICY_DEFAULTS, requireEnrollment: false });
-    expect("requireEnrollment" in salvaged).toBe(false);
-    expect(Object.keys(salvaged).sort()).toEqual([...POLICY_FIELDS].sort());
   });
 });
 

@@ -27,7 +27,6 @@
 | `chromium-bridge policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline: one Touch ID tap. Signature-only; refuses up front where no enrollment key exists. |
 | `chromium-bridge policy restrict <field flags>` | policy (free lane) | Applies an unsigned restriction overlay; no prompt, because it can only remove capability. |
 | `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
-| `chromium-bridge policy pending-import [--json]` | read + self-heal | Prints the pending legacy-import state (finalizing a stranded mid-consume record first); `--json` is the only mode that prints the bag. |
 | `chromium-bridge policy rollback --revision <n> [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay. |
 | `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
 | `chromium-bridge --help` | help | Usage information. |
@@ -131,14 +130,13 @@ If either command reports that the revocation record is unreadable, see the reco
 
 ## Host-owned policy (policy)
 
-`chromium-bridge policy` is the host-owned policy surface ([ADR-0032](./adr/0032-host-owned-policy-settings.md)). The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync-adr-0032); the doctor rows are in [operations.md](./operations.md#host-owned-policy-the-doctor-rows-and-the-pending-import).
+`chromium-bridge policy` is the host-owned policy surface ([ADR-0032](./adr/0032-host-owned-policy-settings.md)). The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync-adr-0032); the doctor rows are in [operations.md](./operations.md#host-owned-policy-the-doctor-rows).
 
 ```text
 chromium-bridge policy show [--json]              # read-only: store state + effective policy
 chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (Touch ID)
 chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
 chromium-bridge policy history [--json]           # read-only: superseded revisions
-chromium-bridge policy pending-import [--json]    # the one-shot legacy import's state
 chromium-bridge policy rollback --revision <n> [--json]
 ```
 
@@ -150,7 +148,7 @@ chromium-bridge policy rollback --revision <n> [--json]
 
 **Rollback never replays.** `policy rollback --revision <n>` re-derives that revision's effective policy, diffs it against the current one, and applies the difference as a FRESH write: a rollback that only tightens rides the free restrict lane with no prompt; one that relaxes anything is one fresh Touch ID tap, exactly like any other grant. The old signed artifact is never written back - a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
 
-**`--json` contracts.** `show`, `history`, `pending-import`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed). `pending-import` never records or consumes a live import; the one write it may perform is the idempotent self-heal - finalizing a stranded mid-consume record whose baseline already landed - so a read unsticks a crashed finalize. `--json` is the ONLY mode that prints the recorded bag: the prose rendering deliberately reports state and byte count without bag content, because the bag is reviewed from the `--json` form, not dumped on a terminal.
+**`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).
 
 Every policy transition is audited with the surface and, for grants, the presence rung that authorized the signature (`auth=touch_id`).
 

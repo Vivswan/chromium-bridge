@@ -153,42 +153,6 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
 }
 
 #[test]
-fn pending_import_prose_reports_every_state_without_the_bag() {
-    use crate::pending_import::PendingImportReport;
-    // Prose mode NEVER prints the bag - stdout is only the payload under
-    // --json - so a secret-looking value in the recorded bag must not
-    // appear in the rendering, only its size.
-    let present = render_pending_import(&PendingImportReport::Present {
-        v: 1,
-        bag: serde_json::json!({ "secretish": "hunter2" }),
-    });
-    assert!(present.contains("present"), "got: {present}");
-    assert!(!present.contains("hunter2"), "got: {present}");
-    assert!(!present.contains("secretish"), "got: {present}");
-    // The mid-consume arm retains a bag too (P4G-4): same no-content rule.
-    let consuming = render_pending_import(&PendingImportReport::Consuming {
-        v: 1,
-        bag: serde_json::json!({ "secretish": "hunter2" }),
-    });
-    assert!(consuming.contains("consuming"), "got: {consuming}");
-    assert!(consuming.contains("closed to new bags"), "got: {consuming}");
-    assert!(!consuming.contains("hunter2"), "got: {consuming}");
-    assert!(!consuming.contains("secretish"), "got: {consuming}");
-    assert!(
-        render_pending_import(&PendingImportReport::None { v: 1 }).contains("none"),
-        "the healthy no-receipt state renders as none"
-    );
-    assert!(render_pending_import(&PendingImportReport::Consumed { v: 1 }).contains("consumed"));
-    let error = render_pending_import(&PendingImportReport::Error {
-        v: 1,
-        detail: "version 99 is not supported".into(),
-    });
-    assert!(error.contains("UNREADABLE"), "got: {error}");
-    assert!(error.contains("failing closed"), "got: {error}");
-    assert!(error.contains("version 99"), "got: {error}");
-}
-
-#[test]
 fn grant_gate_refuses_every_keyless_state_with_a_clear_message() {
     // The security-critical decision 5 mapping, driven purely (never the
     // real keychain): only a present key proceeds.

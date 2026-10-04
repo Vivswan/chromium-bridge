@@ -9,7 +9,6 @@ import {
 } from "@/lib/background/confirm/service";
 import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
-import { installLegacyCleanup } from "@/lib/background/legacy-cleanup";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
 import { registerUnpinnedRelaxationApprover } from "@/lib/background/policy-approval";
 import { connectNative } from "@/lib/background/port";
@@ -53,14 +52,6 @@ export default defineBackground(() => {
   // CDP mode (ADR-0017): tear down debugger sessions when a tab closes, when
   // Chrome detaches us, or when the effective cdpMode grant goes away.
   installCdpLifecycleListeners();
-
-  // ADR-0032: ONE startup sweep that deletes the retired legacy
-  // policy keys (+ requireEnrollment) from storage, only when the one-way
-  // cutover has armed AND the legacy bag shipped (legacySettingsSent) - no
-  // storage watch, by design (legacy-cleanup.ts: startup-only closes the
-  // read/delete race by construction). Pre-cutover (no accepted push yet,
-  // e.g. an old host) and armed-but-never-shipped both delete nothing.
-  installLegacyCleanup();
 
   // The off-DOM confirmation surface (ADR-0027). Without a provider the
   // confirmation service denies everything, so install it before any bridge

@@ -92,13 +92,11 @@
 # Policy and language control frame tags and keys (PolicyControl, ADR-0032)
 "\"policy_get\""
 "\"policy_current\""
-"\"legacy_settings\""
 "\"lang_get\""
 "\"lang_set\""
 "\"lang_current\""
 "\"baseline\""
 "\"overlay\""
-"\"bag\""
 "\"value\""
 "\"seq\""
 

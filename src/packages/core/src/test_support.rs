@@ -38,7 +38,7 @@ pub(crate) struct RuntimeDirGuard {
 }
 
 /// A fresh [`RuntimeDirGuard`] for `name`. Callers tag the name with their
-/// module (`pending-import-first-bag-wins`, `policy-set-signed`, ...) so a
+/// module (`policy-set-signed`, `native-host-answered-or-dropped`, ...) so a
 /// leftover directory from a crashed run is attributable.
 pub(crate) fn scratch_runtime_dir(name: &str) -> RuntimeDirGuard {
     let serial = env_lock().lock().unwrap_or_else(|e| e.into_inner());
