@@ -144,7 +144,7 @@ uv is pinned only in `.prototools`, and python is owned by uv exactly as before:
 
 The Linux jobs run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main); the workflow-level `CI_IMAGE_TAG` is the one switch, and an empty value runs every job on the bare runner with the same composite action.
 
-Three jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), and the browser job (Chrome from `setup-chrome`).
+Four jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), the browser job (Chrome from `setup-chrome`), and, until the republished image carries iproute2 for `ss`, the protocol matrix.
 
 ## Working on the extension
 
