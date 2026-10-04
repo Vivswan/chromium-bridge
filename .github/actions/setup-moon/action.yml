@@ -1,12 +1,14 @@
 # proto's own version is the one pin moonrepo/setup-toolchain cannot read from .prototools (it looks in
-# .moon/toolchains.yml). The CI image (Containerfile) already carries proto and moon, so `proto install`
-# there only catches a pin that moved after the image was published.
+# .moon/toolchains.yml). rust is rustup's alone: proto's rust plugin registers a toolchain without a rustc,
+# which makes setup-rust-toolchain believe rust-toolchain.toml is already installed. The CI image
+# (Containerfile) already carries proto and moon, so `proto install` there only catches a pin that moved
+# after the image was published.
 name: Set up moon
-description: Installs proto, moon, and the tools pinned in .prototools; optionally the rust-toolchain.toml profile and components plus the cargo cache.
+description: Installs proto, moon, and the tools pinned in .prototools; optionally rust from rust-toolchain.toml with the cargo cache.
 
 inputs:
   cargo:
-    description: Also prepare for cargo, the rust-toolchain.toml profile and components via setup-rust-toolchain plus the cargo cache; proto installs the bare pinned toolchain either way.
+    description: Also install rust from rust-toolchain.toml (setup-rust-toolchain) and restore the cargo cache.
     required: false
     default: "false"
 

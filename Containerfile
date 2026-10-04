@@ -52,9 +52,9 @@ WORKDIR /tmp/pins
 COPY .prototools rust-toolchain.toml ./
 COPY .github/workflows/checks.yml ./checks.yml
 
-# rustup first: proto's rust plugin drives rustup rather than installing it, and only rustup reads the
-# profile and components in rust-toolchain.toml (`rustup toolchain install` with no argument installs
-# the file's toolchain).
+# rustup owns rust: rust-toolchain.toml is its only pin (`rustup toolchain install` with no argument
+# installs the file's toolchain, profile and components included), and .prototools deliberately leaves
+# rust to it.
 RUN curl -fsSL "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/$(uname -m)-unknown-linux-gnu/rustup-init" -o /tmp/rustup-init \
     && chmod +x /tmp/rustup-init \
     && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none \

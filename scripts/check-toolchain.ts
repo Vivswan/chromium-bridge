@@ -1,12 +1,11 @@
 #!/usr/bin/env bun
-// The toolchain pins that live in two files must agree, or local runs and CI use different tools:
-//   rust  .prototools (what `proto install` pre-installs) vs rust-toolchain.toml, the authority: rustup,
-//         IDEs, and CI read it, and it carries the components and profile proto cannot express
+// The one toolchain pin that lives in two files must agree, or local runs and CI use different tools:
 //   bun   .prototools vs package.json packageManager vs the template-managed .bun-version (what the
 //         platform's bun jobs run)
 // proto, moon, node, and uv are pinned in .prototools alone and CI reads them from there
-// (.github/actions/setup-moon, the Containerfile). python stays uv's (.python-version): proto's plugin
-// allow-list must not name it, or two provisioners own one interpreter.
+// (.github/actions/setup-moon, the Containerfile); rust is pinned in rust-toolchain.toml alone. python
+// stays uv's (.python-version) and rust stays rustup's: proto's plugin allow-list must name neither, or
+// two provisioners own one tool.
 //
 // Run via `moon run check-toolchain` (part of the ci gate).
 
@@ -39,15 +38,6 @@ function pin(tool: string): string {
   return value;
 }
 
-const rustToolchain = readFileSync(join(repoRoot, "rust-toolchain.toml"), "utf8");
-const channel = rustToolchain.match(/^channel\s*=\s*"([^"]+)"/m)?.[1];
-if (!channel) {
-  fail("rust-toolchain.toml has no channel pin");
-} else if (pin("rust") !== channel) {
-  fail(`.prototools rust (${pin("rust")}) != rust-toolchain.toml channel (${channel})`);
-}
-console.log(`rust   ${channel ?? "<missing>"} (authority: rust-toolchain.toml)`);
-
 const rootPkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
   packageManager?: string;
 };
@@ -66,11 +56,24 @@ if (bunVersionFile !== pin("bun")) {
 }
 console.log(`bun    ${bunVersionFile} (.bun-version, template-managed)`);
 
+if (pins.has("rust")) {
+  fail(
+    ".prototools pins rust - rust-toolchain.toml is its only pin (proto's install breaks rustup's)",
+  );
+}
 const builtinPlugins = prototools.match(/builtin-plugins\s*=\s*\[([^\]]*)\]/)?.[1] ?? "";
 if (!builtinPlugins) {
-  fail(".prototools settings.builtin-plugins allow-list is missing (proto would provision python)");
-} else if (/python/.test(builtinPlugins)) {
-  fail(".prototools builtin-plugins includes python - python is owned by uv (.python-version)");
+  fail(
+    ".prototools settings.builtin-plugins allow-list is missing (proto would provision python and rust)",
+  );
+} else {
+  for (const tool of ["python", "rust"]) {
+    if (builtinPlugins.includes(tool)) {
+      fail(
+        `.prototools builtin-plugins includes ${tool} - ${tool === "python" ? "python is owned by uv (.python-version)" : "rust is owned by rustup (rust-toolchain.toml)"}`,
+      );
+    }
+  }
 }
 
 if (!failed) console.log("toolchain pins consistent");

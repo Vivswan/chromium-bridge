@@ -1,12 +1,11 @@
 # proto is the bootstrap toolchain manager: `proto install` in a fresh checkout provisions every pin
 # below, and CI provisions from this same file (.github/actions/setup-moon in every job; the Containerfile
-# at image build).
+# at image build). rust is deliberately absent: rust-toolchain.toml is its only pin, read by rustup, IDEs,
+# and CI's setup-rust-toolchain, and proto's rust plugin would register a toolchain without a rustc that
+# makes rustup believe the pin is installed.
 #
-# Two pins are necessarily duplicated, and scripts/check-toolchain.ts (`moon run check-toolchain`, in the
-# ci gate) fails if a pair disagrees:
-#   rust  rust-toolchain.toml is the AUTHORITATIVE pin (rustup, IDEs, and CI's setup-rust-toolchain read
-#         it natively, and it carries the components + profile); the pin here only tells proto which
-#         toolchain to pre-install.
+# One pin is necessarily duplicated, and scripts/check-toolchain.ts (`moon run check-toolchain`, in the ci
+# gate) fails if the copies disagree:
 #   bun   package.json's packageManager field and the template-managed .bun-version.
 # uv keeps owning python: the protocol suites run under the interpreter pinned in .python-version via
 # `uv run --no-project --isolated`, so proto never provisions python (the allow-list below excludes it).
@@ -18,11 +17,10 @@ proto = "0.58.2"
 bun = "1.4.2"
 moon = "2.4.5"
 node = "24.21.0"
-rust = "1.96.1"
 uv = "0.11.26"
 
 [settings]
 # Only the tools we pin. Without this allow-list, `proto install` would also detect .python-version and
-# install its own python, and two provisioners for one interpreter is exactly the drift this file exists
-# to prevent.
-builtin-plugins = ["bun", "moon", "node", "rust", "uv"]
+# rust-toolchain.toml and install its own python and rust: two provisioners for one interpreter is exactly
+# the drift this file exists to prevent, and proto's rust install breaks rustup's (see the header).
+builtin-plugins = ["bun", "moon", "node", "uv"]

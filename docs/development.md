@@ -4,12 +4,12 @@ This document covers the local dev loop, the build/test toolchain, and the relea
 
 ## Prerequisites
 
-[proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one `proto install` in a fresh checkout provisions every tool pinned in the repo-root `.prototools` (bun, moon, node, a rustup pre-install of the pinned rust, uv). Install proto once and make sure `~/.proto/shims` and `~/.proto/bin` are on your PATH.
+[proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one `proto install` in a fresh checkout provisions every tool pinned in the repo-root `.prototools` (bun, moon, node, uv); rust is rustup's alone, from `rust-toolchain.toml`. Install proto once and make sure `~/.proto/shims` and `~/.proto/bin` are on your PATH.
 
-One prerequisite proto does not cover: `rustup` itself must already be installed (proto's rust plugin manages toolchains *through* rustup rather than installing it), so a truly fresh machine needs [rustup.rs](https://rustup.rs) first. Then:
+One prerequisite proto does not cover: `rustup` itself must already be installed (proto deliberately leaves rust to it: proto's rust plugin registers a toolchain rustup then believes is installed), so a truly fresh machine needs [rustup.rs](https://rustup.rs) first. Then:
 
 ```sh
-proto install    # provisions bun, moon, node, rust, uv at the pinned versions
+proto install    # provisions bun, moon, node, uv at the pinned versions (rustup owns rust)
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
@@ -17,7 +17,7 @@ Four gate tools have no first-party proto plugin and are installed once by hand:
 
 | Tool | Used for | Notes |
 |------|----------|-------|
-| [proto](https://moonrepo.dev/proto) | toolchain bootstrap | provisions everything pinned in `.prototools`, locally and in CI (`.github/actions/setup-moon`); the two pins that also live elsewhere (rust, bun) are cross-checked by `moon run check-toolchain` |
+| [proto](https://moonrepo.dev/proto) | toolchain bootstrap | provisions everything pinned in `.prototools`, locally and in CI (`.github/actions/setup-moon`); the one pin that also lives elsewhere (bun) is cross-checked by `moon run check-toolchain` |
 | [moon](https://moonrepo.dev) | task runner | the canonical command interface: every dev task is a moon task. `moon run help` lists them; `moon run <task>` runs one |
 | Rust (cargo) | the `chromium-bridge` binary | pinned by `rust-toolchain.toml` (the authoritative pin; rustup and IDEs read it); `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
 | bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned in `.prototools` (and mirrored in `package.json` `packageManager`) |
@@ -128,13 +128,12 @@ Cache trust, and the one edge that must never be narrowed: the Rust core is the 
 
 ## Toolchain pinning (proto)
 
-`.prototools` pins proto itself, bun, moon, node, rust, and uv; `proto install` provisions them all. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it parses proto's own version from `.prototools` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, then runs `proto install`.
+`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it parses proto's own version from `.prototools` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, runs `proto install`, and on request installs rust with `setup-rust-toolchain`.
 
 The CI image (`Containerfile`) runs the same `proto install` at build time. Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
 
-Two pins also live in a second file, and `moon run check-toolchain` (part of the gate and of CI's hygiene job) fails if a pair disagrees:
+One pin also lives in a second file, and `moon run check-toolchain` (part of the gate and of CI's hygiene job) fails if the copies disagree, or if `.prototools` ever pins rust or enables proto's rust or python plugin:
 
-- **rust**: `rust-toolchain.toml` is the authoritative pin - rustup, IDEs, and CI's `setup-rust-toolchain` read it natively, and it carries the components + profile. The `.prototools` entry only pre-installs that toolchain.
 - **bun**: mirrored in `package.json` `packageManager` and the template-managed `.bun-version`.
 
 uv is pinned only in `.prototools`, and python is owned by uv exactly as before: the protocol suites run under the interpreter pinned in `.python-version` via `uv run --no-project --isolated`. proto deliberately never provisions python (`settings.builtin-plugins` in `.prototools`).
