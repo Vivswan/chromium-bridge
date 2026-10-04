@@ -10,6 +10,8 @@ Because it operates the browser you are already signed into, an agent can do wha
 
 That power is also the risk. Read [Security first](#security-first) before you install.
 
+The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS and Linux with Windows planned ([the security bar](./docs/security/security-bar.md) states it, and where it stops).
+
 Translations: [Simplified Chinese](./README.zh_CN.md), [Traditional Chinese](./README.zh_TW.md).
 
 ## Security first

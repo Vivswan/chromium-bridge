@@ -58,6 +58,7 @@ Out of scope:
 
 See [docs/security/](../docs/security/) for the full picture:
 
+- [security-bar.md](../docs/security/security-bar.md): the bar in one line, the attackers it answers, where it stops, and the per-OS status. Read it first.
 - [threat-model.md](../docs/security/threat-model.md): actors, assets, what's trusted vs not, residual risks.
 - [trust-boundaries.md](../docs/security/trust-boundaries.md): the process/protocol boundaries and how each is enforced.
 - [tool-risk-matrix.md](../docs/security/tool-risk-matrix.md): every tool's blast radius and protections.
@@ -292,6 +293,7 @@ Such a PR must:
 1. carry the [security-change](ISSUE_TEMPLATE/security-change.yml) checklist,
 2. update the [tool risk matrix](../docs/security/tool-risk-matrix.md), and (if it moves a trust boundary) the [threat model](../docs/security/threat-model.md),
 3. add a **negative** security test (proving the boundary holds), in addition to the positive one.
+4. name which row of [the security bar](../docs/security/security-bar.md) it moves and in which direction, or state that no row moves and why.
 
 The fuzzing rule for bespoke parsing at a trust boundary in the Rust core:
 

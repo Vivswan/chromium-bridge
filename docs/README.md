@@ -17,6 +17,7 @@ This directory is the **single source of truth** for the chromium-bridge project
 | [privacy-policy.md](./privacy-policy.md) | The extension's privacy policy ([Simplified](./privacy-policy.zh_CN.md) / [Traditional Chinese](./privacy-policy.zh_TW.md)) | Users, store review |
 | [chrome-web-store.md](./chrome-web-store.md) | Decision checklist for publishing to the Chrome Web Store: pinned-ID migration, review risks, prerequisites | Maintainers (decision) |
 | [wsl.md](./wsl.md) | The two WSL modes: Windows Chrome interop and WSLg | Users on WSL |
+| [security/security-bar.md](./security/security-bar.md) | The security bar: the one-line promise, the attackers it answers, where it stops, the per-OS status | Everyone (read first) |
 | [security/threat-model.md](./security/threat-model.md) | Assets, actors, threats, mitigations, residual risks | Reviewers, reporters |
 | [security/trust-boundaries.md](./security/trust-boundaries.md) | Each protocol hop and how it is enforced | Reviewers |
 | [security/tool-risk-matrix.md](./security/tool-risk-matrix.md) | Every tool's blast radius and protections | Reviewers |
