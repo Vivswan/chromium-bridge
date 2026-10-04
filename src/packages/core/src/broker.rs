@@ -72,9 +72,9 @@ const RATE_REFILL_PER_SEC: f64 = 128.0;
 
 // ---- Ref-count coordinator (loom-checked) ----------------------------------
 
-#[cfg(loom)]
+#[cfg(all(test, feature = "loom"))]
 use loom::sync::{Condvar, Mutex};
-#[cfg(not(loom))]
+#[cfg(not(all(test, feature = "loom")))]
 use std::sync::{Condvar, Mutex};
 
 /// The broker's harness ref-count and its shutdown gate. Counts live harness
@@ -1301,20 +1301,21 @@ fn pump_lines<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, cap: usize) 
     }
 }
 
-// Two cfg attributes rather than cfg(all(test, not(loom))): the meaning is
-// identical, and the bare #[cfg(test)] is what lets clippy's
+// Two cfg attributes rather than cfg(all(test, not(feature = "loom"))): the
+// meaning is identical, and the bare #[cfg(test)] is what lets clippy's
 // allow-unwrap-in-tests recognize the module's helper fns as test code.
 #[cfg(test)]
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 mod tests;
 
-/// Loom model-check of the broker's ref-count shutdown protocol. Run with:
-/// `RUSTFLAGS="--cfg loom" cargo test -p chromium-bridge-core --lib loom_model`.
-/// Under `--cfg loom` the [`RefCount`] `Mutex`/`Condvar` are loom's instrumented
-/// versions, and loom exhaustively explores the thread interleavings that could
-/// break the two invariants the broker's lifetime depends on: the shutdown
-/// decision happens exactly when the client count reaches zero, and no client
-/// can attach after that decision has latched (which would strand a relay on a
-/// broker that is about to unlink its socket).
-#[cfg(all(test, loom))]
+/// Loom model-check of the broker's ref-count shutdown protocol. Run with
+/// `moon run core:test-loom` (`cargo test -p chromium-bridge-core --lib
+/// --features loom loom_model`). In that test build the [`RefCount`]
+/// `Mutex`/`Condvar` are loom's instrumented versions, and loom exhaustively
+/// explores the thread interleavings that could break the two invariants the
+/// broker's lifetime depends on: the shutdown decision happens exactly when the
+/// client count reaches zero, and no client can attach after that decision has
+/// latched (which would strand a relay on a broker that is about to unlink its
+/// socket).
+#[cfg(all(test, feature = "loom"))]
 mod loom_model;

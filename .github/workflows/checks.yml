@@ -79,6 +79,9 @@ jobs:
         run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # The loom model check of the broker ref-count (core/moon.yml's test-loom). Platform-independent, like fmt.
+      - if: runner.os == 'Linux'
+        run: cargo test -p chromium-bridge-core --lib --features loom loom_model
       - if: runner.os == 'Linux'
         run: cargo doc --workspace --no-deps --document-private-items
         env:

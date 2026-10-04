@@ -44,6 +44,7 @@ tasks:
       - '~:machete'
       - 'core:test'
       - 'core:test-doc'
+      - 'core:test-loom'
       - '~:doc'
       - '~:typecheck'
       - '~:check-ts'
@@ -83,10 +84,11 @@ tasks:
       runDepsInParallel: false
 
   test-rust:
-    description: 'Rust unit + integration tests (cargo-nextest), plus doctests'
+    description: 'Rust unit + integration tests (cargo-nextest), doctests, and the loom model check'
     deps:
       - 'core:test'
       - 'core:test-doc'
+      - 'core:test-loom'
     options:
       runDepsInParallel: false
 
