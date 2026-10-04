@@ -4,10 +4,12 @@ This document covers the local dev loop, the build/test toolchain, and the relea
 
 ## Prerequisites
 
-[proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one `proto install` in a fresh checkout provisions every tool pinned in the repo-root `.prototools` (bun, moon, a rustup pre-install of the pinned rust, uv). One prerequisite proto does not cover: `rustup` itself must already be installed (proto's rust plugin manages toolchains *through* rustup rather than installing it) - a truly fresh machine needs [rustup.rs](https://rustup.rs) first. Install proto once, make sure `~/.proto/shims` and `~/.proto/bin` are on your PATH, then:
+[proto](https://moonrepo.dev/proto) is the bootstrap toolchain manager: one `proto install` in a fresh checkout provisions every tool pinned in the repo-root `.prototools` (bun, moon, node, uv); rust is rustup's alone, from `rust-toolchain.toml`. Install proto once and make sure `~/.proto/shims` and `~/.proto/bin` are on your PATH.
+
+One prerequisite proto does not cover: `rustup` itself must already be installed (proto deliberately leaves rust to it: proto's rust plugin registers a toolchain rustup then believes is installed), so a truly fresh machine needs [rustup.rs](https://rustup.rs) first. Then:
 
 ```sh
-proto install    # provisions bun, moon, rust, uv at the pinned versions
+proto install    # provisions bun, moon, node, uv at the pinned versions (rustup owns rust)
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
@@ -15,10 +17,11 @@ Four gate tools have no first-party proto plugin and are installed once by hand:
 
 | Tool | Used for | Notes |
 |------|----------|-------|
-| [proto](https://moonrepo.dev/proto) | toolchain bootstrap | provisions everything pinned in `.prototools`; the pins are cross-checked by `moon run check-toolchain` |
+| [proto](https://moonrepo.dev/proto) | toolchain bootstrap | provisions everything pinned in `.prototools`, locally and in CI (`.github/actions/setup-moon`); the one pin that also lives elsewhere (bun) is cross-checked by `moon run check-toolchain` |
 | [moon](https://moonrepo.dev) | task runner | the canonical command interface: every dev task is a moon task. `moon run help` lists them; `moon run <task>` runs one |
 | Rust (cargo) | the `chromium-bridge` binary | pinned by `rust-toolchain.toml` (the authoritative pin; rustup and IDEs read it); `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
 | bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned in `.prototools` (and mirrored in `package.json` `packageManager`) |
+| node | the vitest suites (`extension:test`, `web:test`) | pinned only in `.prototools`; proto provisions it, so no job or image installs its own |
 | [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. uv itself is pinned only in `.prototools`. The suites are stdlib-only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates typos in the managed ci.yml and machete in checks.yml |
@@ -104,9 +107,13 @@ The full task menu, by area:
 
 ## moon: the canonical command interface
 
-Every task has one definition with declared inputs: the repo-wide tasks and runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`, `extension`, `web`) live in a `moon.yml` next to their code, and CI runs the same tasks (the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` wherever the step is more than a single thin command).
+Every task has one definition with declared inputs: the repo-wide tasks and runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`, `extension`, `web`) live in a `moon.yml` next to their code.
 
-**Gates are never cached.** The `ci` aggregate, every task reachable from it, every `check-*` task, the python suites, and the runbook/ceremony tasks all set `options.cache: false` in their moon.yml: a gate that a cache hit can satisfy is not a gate, because a wrong hash (moon cannot hash gitignored inputs like the generated `.wxt/tsconfig.json`, and a mistaken `hasher.ignorePattern` would silently drop tracked files from every hash) would let unverified code land. `moon run ci` therefore always executes the full suite, in the fixed order its `deps` list declares (`runDepsInParallel: false`). The underlying tools (cargo, tsc, vite, bun) keep their own incremental caches, so warm reruns stay fast.
+CI runs the same tasks: the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` wherever a task exists for the step. The Rust OS matrix keeps raw cargo verbs, and the `runInCI: false` suites such as `test-interop` are invoked directly, since moon does not resolve them when `CI=true`.
+
+**Gates are never cached.** Every task is uncached by the workspace default (`taskOptions.cache: false` in `.moon/tasks/all.yml`): a gate that a cache hit can satisfy is not a gate, because a wrong hash would let unverified code land, and moon cannot hash gitignored inputs like the generated `.wxt/tsconfig.json`, while a mistaken `hasher.ignorePattern` would silently drop tracked files from every hash.
+
+The two tasks that opt back in (`web:build`, `shared:typecheck`) are not gate steps. `moon run ci` therefore always executes the full suite, in the fixed order its `deps` list declares (`runDepsInParallel: false`). The underlying tools (cargo, tsc, vite, bun) keep their own incremental caches, so warm reruns stay fast.
 
 What moon still buys beyond one task vocabulary:
 
@@ -121,13 +128,23 @@ Cache trust, and the one edge that must never be narrowed: the Rust core is the 
 
 ## Toolchain pinning (proto)
 
-`.prototools` pins proto itself, bun, moon, rust, and uv; `proto install` provisions them all, and CI provisions the same way (the `moonrepo/setup-toolchain` action, pinned by commit SHA, installs proto + moon and the jobs `proto install` what they need). Four pins are necessarily duplicated, and `moon run check-toolchain` (part of the gate and of CI's version-consistency job) fails if any pair disagrees (for proto and moon it checks every setup-toolchain invocation in checks.yml individually, and that each is pinned to a full commit SHA):
+`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it parses proto's own version from `.prototools` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, runs `proto install`, and on request installs rust with `setup-rust-toolchain`.
 
-- **rust**: `rust-toolchain.toml` is the authoritative pin - rustup, IDEs, and CI's `setup-rust-toolchain` read it natively, and it carries the components + profile. The `.prototools` entry only pre-installs that toolchain.
-- **bun**: mirrored in `package.json` `packageManager` (read by `setup-bun` in the CI jobs that do not go through proto).
-- **proto/moon**: `checks.yml` passes explicit `proto-version` / `moon-version` inputs (the action cannot read the proto pin from `.prototools`).
+The CI image (`Containerfile`) runs the same `proto install` at build time. Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+
+One pin also lives in a second file, and `moon run check-toolchain` (part of the gate and of CI's hygiene job) fails if the copies disagree, or if `.prototools` ever pins rust or enables proto's rust or python plugin:
+
+- **bun**: mirrored in `package.json` `packageManager` and the template-managed `.bun-version`.
 
 uv is pinned only in `.prototools`, and python is owned by uv exactly as before: the protocol suites run under the interpreter pinned in `.python-version` via `uv run --no-project --isolated`. proto deliberately never provisions python (`settings.builtin-plugins` in `.prototools`).
+
+## CI layout
+
+`checks.yml` defines each concern once: a Rust OS matrix (ubuntu, macOS, Windows), one `build-release` job whose binary the protocol matrix (`e2e`, `adversarial`, `chaos`), `interop`, and `linux-install` download as an artifact, and the browser suites through the reusable `browser.yml` (input `chrome-version`), which `nightly.yml` calls too.
+
+The Linux jobs run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main); the workflow-level `CI_IMAGE_TAG` is the one switch, and an empty value runs every job on the bare runner with the same composite action.
+
+Four jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), the browser job (Chrome from `setup-chrome`), and, until the republished image carries iproute2 for `ss`, the protocol matrix.
 
 ## Working on the extension
 
@@ -143,16 +160,18 @@ Load `build/extension/chrome-mv3` as an unpacked extension in `chrome://extensio
 
 ## Testing
 
-Three suites, all wired into `tests/browser/run_all.ts` (and CI):
+The protocol suites (`tests/protocol/e2e.py`, `adversarial.py`, `chaos.py`) drive the real release binary as subprocesses over the actual wire protocols, no browser needed: `moon run test-e2e` (in the gate), `test-adversarial`, `test-chaos`. The three browser suites share one runner, `tests/browser/run_all.ts`, which CI's `browser.yml`, the container, and `moon run test-browser` all invoke:
 
-- **Protocol** (`tests/protocol/e2e.py`) - drives the real release binary as subprocesses over the actual wire protocols. No browser needed.
 - **DOM** (`tests/browser/dom_test.ts`, bun) - injects the built content script (`build/extension/chrome-mv3/content-scripts/content.js`) into a headless Chrome page via CDP and exercises every content-script op.
 - **Smoke** (`tests/browser/ext_test.ts`, bun + puppeteer-core) - launches Chrome with `build/extension/chrome-mv3` loaded and checks the service worker boots. Set `BB_EXT_DIR` to point at a different unpacked extension.
+- **Security proofs** (`tests/browser/security_browser_test.ts`) - the browser-side half of the security model, against the same loaded extension.
 
 ```sh
-bun tests/browser/run_all.ts          # all three (skips browser tests if Chrome absent)
-CHROME_BIN=/path/to/chrome bun tests/browser/run_all.ts
+bun tests/browser/run_all.ts                           # builds the extension, then the three suites
+CHROME_BIN=/path/to/isolated/chrome bun tests/browser/run_all.ts
 ```
+
+Without an isolated `CHROME_BIN` the runner skips; the two CI switches that make a skip or a vacuous suite fail are stated once, in the Safety section of [`tests/README.md`](../tests/README.md#-safety---never-point-browser-tests-at-your-daily-chrome).
 
 ## Running the gate and the browser suites in a container
 
@@ -161,7 +180,7 @@ The container is the isolation: it carries every gate tool at the repository's p
 | Task | Runs inside the container |
 |------|---------------------------|
 | `moon run ci-container` | `moon run ci` |
-| `moon run test-browser-container` | `scripts/container-browser-suites.sh`: `xvfb-run -a moon run test-browser` with `BB_REQUIRE_BROWSER=1` (a skipped suite fails as in CI), then CI's RAN-marker canary over `tmp/browser-canary/` |
+| `moon run test-browser-container` | `xvfb-run -a moon run test-browser` (`scripts/container-browser-suites.sh`) with `BB_REQUIRE_BROWSER=1` and `BB_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, so a skipped or vacuous suite fails as in CI and the RAN markers stay readable on the host |
 | `moon run shell-container` | an interactive `bash` at `/work` |
 
 Docker is the default engine; `CONTAINER_ENGINE=podman moon run ci-container` switches. The first run builds the image (minutes, once); the checkout is bind-mounted at `/work`, so a build lands in the gitignored `build/` on the host like a native one.

@@ -1,27 +1,14 @@
-# Repo-owned CI checks, called by the managed ci.yml inside the all-green
-# gate: every job here must pass before all-green goes green. Generated once
-# by the fleet sync and never overwritten by it, so edit
-# freely. Jobs added here are gated automatically (all-green sees this
-# workflow's aggregate result) - no needs-list maintenance.
+# Repo-owned CI checks, called by the managed ci.yml inside the all-green gate: every job here must pass
+# before all-green goes green, and a job added here is gated automatically.
 #
-# Two limits from running inside the `checks` caller: jobs here get no
-# secrets and are capped at the caller's permissions (contents: read), and
-# all-green only sees the aggregate result, so a job skipped by its own
-# `if:` does not fail the gate. A check that needs secrets, more
-# permissions, or must never be skippable, belongs in its own workflow wired
-# into the ruleset via .github/settings.yml.
+# Two limits from running inside the `checks` caller: jobs get no secrets and are capped at the caller's
+# permissions (contents: read), and all-green only sees the aggregate result, so a job skipped by its own
+# `if:` does not fail the gate. A check that needs secrets, more permissions, or must never be skippable
+# belongs in its own workflow wired into the ruleset via .github/settings.yml.
 #
-# moon (moon.yml at the repo root) is the canonical command interface: jobs
-# whose steps are multi-step task definitions (extension, contract, e2e,
-# adversarial, chaos) run `moon run <task>` so the definition lives
-# in exactly one place, with proto (pinned by the setup-toolchain action)
-# providing moon + the tools from .prototools. Jobs that are a single thin
-# command (rust matrix, tooling, cjk, web, browser, linux-install,
-# version-consistency) keep the raw invocation - the moon
-# task wraps the same command, so coverage is identical either way and those
-# jobs skip the proto install. Every gate task sets cache: false, and CI
-# runners start with no .moon/cache anyway: no gate step can be satisfied
-# from a cache.
+# moon (moon.yml at the repo root) is the command interface; .github/actions/setup-moon provisions it and
+# the pinned tools in every job. The rust matrix keeps the raw cargo verbs: the moon tasks wrap the same
+# commands, and nextest is not on the bare runners.
 
 name: Checks
 
@@ -31,101 +18,113 @@ on:
 permissions:
   contents: read
 
+env:
+  # The CI image tag the Linux jobs run in (container-image.yml publishes :latest and :<input hash> from
+  # main; the package must be public, since these jobs hold no packages:read). `latest` rather than the
+  # hash: a PR that moves a pin would otherwise wait for an image that only its own merge can publish, and
+  # inside the image `proto install` and rustup pick the moved pin up anyway. The image job resolves the tag
+  # to its digest once, so every job pins the same content. Empty runs every Linux job on the bare runner,
+  # where setup-moon provisions the same toolchain.
+  CI_IMAGE_TAG: latest
+
 jobs:
-  rust:
-    name: Rust (fmt, clippy, test, build)
+  # The image's own user cannot write the runner-owned workspace, hence root. Every consumer carries a
+  # zizmor unpinned-images ignore: the audit is static and cannot follow the expression to the digest
+  # resolved here, which is the pin.
+  image:
+    name: CI image
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    outputs:
+      container: ${{ steps.container.outputs.container }}
+    steps:
+      - id: container
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -z "$CI_IMAGE_TAG" ]; then
+            exit 0
+          fi
+          image="ghcr.io/${REPOSITORY,,}-ci"
+          digest="$(docker buildx imagetools inspect "${image}:${CI_IMAGE_TAG}" --format '{{.Manifest.Digest}}')"
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::could not resolve ${image}:${CI_IMAGE_TAG} to a digest (got '${digest}')"; exit 1 ;;
+          esac
+          printf 'container={"image":"%s@%s","options":"--user root"}\n' "$image" "$digest" >> "$GITHUB_OUTPUT"
+
+  # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) loopback-TCP
+  # code; neither is visible to the Linux build, which alone runs fmt (platform-independent) and the
+  # fuzz-workspace check.
+  rust:
+    name: Rust (${{ matrix.os }})
+    needs: image
+    runs-on: ${{ matrix.os }}
+    container: ${{ fromJSON(matrix.container || '""') }} # zizmor: ignore[unpinned-images]
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            container: ${{ needs.image.outputs.container }}
+          - os: macos-14
+          - os: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-moon
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      # Reads the pinned channel + components from rust-toolchain.toml.
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # The fuzz crate is its own cargo workspace with its own target/
-          # (root [workspace].exclude); cache both so the fuzz-check step
-          # below stays cheap.
-          workspaces: |
-            .
-            src/packages/core/fuzz
-      - run: cargo fmt --check
+          cargo: "true"
+      - if: runner.os == 'Linux'
+        run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      - run: cargo build --release
-      - run: cargo doc --workspace --no-deps --document-private-items
+      - if: runner.os == 'Linux'
+        run: cargo doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
-      # The fuzz crate is excluded from the root workspace, so nothing above
-      # compiles it, and its targets have silently rotted once already
-      # (nightly-fuzz.yml is the only job that runs them, off the PR path).
-      # A cargo check on the pinned stable toolchain is enough to catch that
-      # class at PR time (verified: the crate compiles on stable; RUNNING the
-      # targets still needs nightly + cargo-fuzz and stays in nightly-fuzz.yml).
-      # --locked because nothing else exercises the fuzz workspace's own
-      # Cargo.lock: without it a lock left behind by a root dependency bump
-      # re-resolves here to whatever crates.io serves that day.
-      # Locally: `moon run check-fuzz-workspace`.
-      - run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
+      # The fuzz crate is excluded from the root workspace, so nothing above compiles it, and its targets
+      # rotted unnoticed once (nightly-fuzz.yml is the only job that runs them). --locked because nothing
+      # else exercises the fuzz workspace's own Cargo.lock.
+      - if: runner.os == 'Linux'
+        run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
 
-  # The enclave/attestation code is cfg(target_os = "macos") and invisible to
-  # the ubuntu jobs; without this job it would only ever be compiled at
-  # release time. fmt is skipped (platform-independent, covered above).
-  rust-macos:
-    name: Rust (clippy, test) on macOS
-    runs-on: macos-14
+  # Built once; the suites that drive the binary download it (.github/actions/release-binary). On the bare
+  # runner rather than in the image: a binary linked against the runner's older glibc runs inside the newer
+  # image and on the runner alike, while the reverse direction is not guaranteed.
+  build-release:
+    name: Release binary (Linux)
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Full history on every job that runs moon: with CI=true moon resolves the default branch
+      # to list the touched files (even without --affected) and errors when `main` is unknown,
+      # as it is in a depth-1 pull-request checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
         with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+          cargo: "true"
+      - run: moon run build-release
+      - uses: ./.github/actions/release-binary
+        with:
+          mode: upload
 
-  # Same platform-gap reasoning for the cfg(windows) loopback-TCP code.
-  rust-windows:
-    name: Rust (build, clippy, test) on Windows
-    runs-on: windows-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo build --all-targets
-      # Windows-only lints (e.g. an import dead under cfg(windows)) must fail
-      # CI here, matching the clippy gates on the other platforms.
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-
-  # Informational only: continue-on-error keeps a coverage-tooling failure
-  # from failing this workflow's aggregate result (the all-green gate), and
-  # there is no threshold, so it can never block a merge. It exists to make
-  # coverage visible in the run log; gating comes later, deliberately, if the
-  # numbers prove stable.
+  # Informational only: continue-on-error keeps a coverage-tooling failure from failing the all-green
+  # aggregate, and there is no threshold. Gating comes later, deliberately, if the numbers prove stable.
   coverage:
     name: Coverage (cargo-llvm-cov, informational)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-moon
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+          cargo: "true"
       - run: rustup component add llvm-tools-preview
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
@@ -134,132 +133,94 @@ jobs:
 
   extension:
     name: Extension (typecheck, lint, format, test, build)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      # moon is the canonical command interface (single task definitions in
-      # moon.yml); this SHA-pinned vendor action installs proto + moon and
-      # caches ~/.proto. The versions are passed explicitly because the
-      # action cannot read the proto pin from .prototools itself;
-      # scripts/check-toolchain.ts (version-consistency job + the ci gate)
-      # fails if these inputs and the .prototools pins ever disagree. Other
-      # tools are then provisioned from .prototools via `proto install`.
-      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
-        with:
-          proto-version: "0.58.2"
-          moon-version: "2.4.5"
-      - run: proto install bun
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
-      - name: Typecheck (extension, tests, scripts, src/packages/shared)
-        run: moon run typecheck
-      - name: Biome (lint + format)
-        run: moon run check-ts
-      - name: src/packages/shared tests (generated catalogue, boundary validators)
-        run: moon run shared:test
-      - run: moon run extension:test
+      - run: moon run typecheck check-ts shared:test extension:test
       - run: moon run extension:build
-      # With build/extension/ present, check-extension-id.ts also re-asserts
-      # the built manifest's security surface (key, permissions, host access);
-      # the version-consistency job runs it build-free and covers only the
-      # source-level identity parity.
-      - name: Built-manifest security surface
-        run: moon run check-extension-id
+      # With build/extension/ present, check-extension-id also asserts the built manifest's security surface
+      # (key, permissions, host access); the hygiene job runs it build-free for the source-level parity only.
+      - run: moon run check-extension-id
 
-  # The Rust core is the canonical cross-process contract (ADR-0028); this job
-  # holds the two checks that need BOTH toolchains: the generated TS -
-  # including the generated envelope wire validators -
-  # must be exactly what the Rust emitters produce today (regenerate + diff),
-  # and the hand-written asymmetry layer over those validators must stay
-  # within the pinned parser asymmetries (double-derivation diff via
-  # schemars, which stays behind a gen-only feature - the shipped binary
-  # graph is asserted clean).
+  # The two checks that need BOTH toolchains: the generated TS must be exactly what the Rust emitters produce
+  # today, and the hand-written layer over the generated wire validators must stay within the pinned parser
+  # asymmetries. check-gen rewrites the generated modules, so it runs alone before the readers.
   contract:
     name: Contract (gen idempotency, envelope asymmetry gate)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
         with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Pinned versions must match .prototools (see the extension job).
-      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
-        with:
-          proto-version: "0.58.2"
-          moon-version: "2.4.5"
-      - run: proto install bun
+          cargo: "true"
       - run: bun install --frozen-lockfile
-      # check-gen regenerates the shared *.gen.ts modules (including the
-      # envelope wire validators), fails on a
-      # stale diff, and runs the envelope generator's fail-closed rules
-      # (G1-G5).
-      - name: Generated TS in sync with the Rust core (src/packages/shared *.gen.ts)
-        run: moon run check-gen
-      - name: Envelope asymmetry gate (schemars vs z.toJSONSchema)
-        run: moon run check-envelope
-      - name: Gen-only tooling (schemars, p256) stays out of the shipped binary's graph
-        run: moon run check-gen-isolation
+      - run: moon run check-gen
+      - run: moon run check-envelope check-gen-isolation
 
-  version-consistency:
-    name: Version and extension ID consistency
+  # Every bun-side check that needs no build: version and extension-ID parity, the pin cross-checks, CJK
+  # containment, the typography mirror of the managed ci.yml gate, the nightly drivers' tests, docs parity,
+  # and the compose subset. check-docs-policy imports the settings schema, hence the install.
+  hygiene:
+    name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      - run: bun scripts/check-version.ts
-      - run: bun scripts/check-extension-id.ts
-      # The duplicated toolchain pins (.prototools vs rust-toolchain.toml,
-      # package.json packageManager, and checks.yml's proto-version /
-      # moon-version inputs) must agree - the same-file drift this job
-      # already guards for versions.
-      - run: bun scripts/check-toolchain.ts
-      # No tracked file may match a .moon/workspace.yml hasher.ignorePattern
-      # (that would silently drop it from every moon task hash).
-      - run: bun scripts/check-moon-hasher.ts
-      # No tracked file may be matched by .gitignore: the managed region is
-      # rewritten from upstream templates, and Biome and knip honor the file.
-      - run: bun scripts/check-gitignore-tracked.ts
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
+      - run: bun install --frozen-lockfile
+      - run: >-
+          moon run check-version check-extension-id check-toolchain check-hasher check-ignored
+          check-cjk check-typography check-fuzz-smoke check-harness-driver
+          check-docs-literals check-docs-policy check-compose
 
-  # typos is not here: the managed ci.yml's standard-checks job runs the
-  # fleet's typos action over the same _typos.toml (the local gate keeps its
-  # `moon run typos`).
+  # typos is not here: the managed ci.yml's standard-checks job runs the fleet's typos action over the same
+  # _typos.toml (the local gate keeps its `moon run typos`).
   tooling:
     name: Tooling hygiene (cargo-machete)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
+        with:
+          cargo: "true"
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
-          # Pinned: the tool's verdict gates the build. Bump deliberately.
+          # The Containerfile reads this pin for the CI image; keep it in the `tool:` input of this step.
           tool: cargo-machete@0.9.2
-      - run: cargo machete
+      - run: moon run machete
 
+  # Needs no toolchain, only the binary, so it stays on the bare runner.
   linux-install:
     name: Linux registration (doctor --fix / uninstall, isolated XDG directories)
+    needs: build-release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/release-binary
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - run: cargo build --release
+          mode: download
       - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
         run: |
           tmp="$(mktemp -d)"
@@ -349,240 +310,74 @@ jobs:
             test ! -e "$tmp/data/chromium-bridge/run-host-$b.sh"
           done
 
-  e2e:
-    name: Protocol e2e (Python)
+  # The suites hardcode target/release/chromium-bridge and build it only when missing, so the downloaded
+  # binary is the one they drive. --upstream none skips the task's build-release dep (the artifact stands in
+  # for it) and check-uv (a missing uv fails the run loudly anyway). On the bare runner until the published
+  # image is rebuilt with iproute2: adversarial.py's A11 enumerates listeners with `ss`.
+  protocol:
+    name: Protocol suite (${{ matrix.suite }}, Python)
+    needs: build-release
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [e2e, adversarial, chaos]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
+      - uses: ./.github/actions/release-binary
         with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Pinned versions must match .prototools (see the extension job).
-      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
-        with:
-          proto-version: "0.58.2"
-          moon-version: "2.4.5"
-      # uv is pinned ONLY in .prototools (single authority); it then
-      # provisions the exact interpreter pinned in .python-version - the
-      # same one local runs get. Its resolution semantics decide which
-      # interpreter a gating suite runs under; bump deliberately.
-      - run: proto install uv
-      # test-e2e = check-uv + cargo build --release + the suite (moon.yml).
-      - run: moon run test-e2e
-
-  adversarial:
-    name: Adversarial break-in (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Same pinned proto/uv setup as the e2e job (see the comments there).
-      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
-        with:
-          proto-version: "0.58.2"
-          moon-version: "2.4.5"
-      - run: proto install uv
-      - run: moon run test-adversarial
-
-  chaos:
-    name: Fault-injection chaos (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Same pinned proto/uv setup as the e2e job (see the comments there).
-      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
-        with:
-          proto-version: "0.58.2"
-          moon-version: "2.4.5"
-      - run: proto install uv
-      - run: moon run test-chaos
+          mode: download
+      - env:
+          SUITE: ${{ matrix.suite }}
+        run: moon run "test-${SUITE}" --upstream none
 
   interop:
     name: MCP SDK v2 client interop (bun)
+    needs: [image, build-release]
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: ./.github/actions/setup-moon
+      - uses: ./.github/actions/release-binary
         with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
+          mode: download
       - run: bun install --frozen-lockfile
-      - run: cargo build --release
-      # Invoke the suite directly rather than via `moon run test-interop`:
-      # moon's CI mode does not resolve runInCI:false tasks, and the task
-      # keeps runInCI:false on purpose (affected-only `moon ci` runs must
-      # not trip on a suite that needs the release binary). Same pattern as
-      # nightly.yml's harness-smoke job invoking its driver directly.
+      # moon does not resolve runInCI:false tasks when CI=true, and test-interop, test-browser, and
+      # harness-smoke keep that flag so affected-only `moon ci` runs never need the release binary or a
+      # browser; CI invokes those suites' commands directly (here, browser.yml, nightly.yml).
       - run: bun test tests/interop/sdk-client.test.ts
 
   browser:
-    name: DOM + smoke + security proofs (Chrome)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
-        id: chrome
-        with:
-          chrome-version: stable
-      - run: bun install --frozen-lockfile
-      - run: bun run --cwd src/apps/extension build
-      - name: Typecheck tests
-        run: bun run --cwd tests/browser typecheck
-      - name: Suite-ran canary unit tests (no browser needed)
-        run: bun test tests/browser/browser-safety.test.ts
-      - name: DOM-layer tests
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-          # In CI the suites must actually run: the isolation guard's local
-          # default (SKIP, exit 0, when CHROME_BIN is not an isolated Chrome
-          # for Testing) would turn this required job silently green. Strict
-          # mode makes a skip a failure; it can only tighten the guard.
-          BB_REQUIRE_BROWSER: "1"
-          # Every suite drops a RAN marker here on completion; the canary
-          # step below requires all three, so no drift (a renamed
-          # BB_REQUIRE_BROWSER, a future guard bug) can green this job on
-          # silent skips.
-          BB_BROWSER_CANARY_DIR: ${{ runner.temp }}/browser-canary
-        run: bun tests/browser/dom_test.ts
-      - name: Extension smoke test
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-          BB_REQUIRE_BROWSER: "1"
-          BB_BROWSER_CANARY_DIR: ${{ runner.temp }}/browser-canary
-        # The smoke test needs a non-headless browser (MV3 SW reliability), so
-        # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
-        run: xvfb-run -a bun tests/browser/ext_test.ts
-      - name: Browser security proofs (ADR-0027)
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-          BB_REQUIRE_BROWSER: "1"
-          BB_BROWSER_CANARY_DIR: ${{ runner.temp }}/browser-canary
-        # Non-headless --load-extension like the smoke test, hence xvfb.
-        run: xvfb-run -a bun tests/browser/security_browser_test.ts
-      - name: Browser canary (every suite really ran)
-        run: |
-          status=0
-          for suite in dom_test ext_test security_browser_test; do
-            marker="${RUNNER_TEMP}/browser-canary/${suite}"
-            if [ ! -f "$marker" ]; then
-              echo "::error::${suite} left no RAN marker - it finished no real browser run (silent skip?)"
-              status=1
-            elif grep -q ': 0 passed' "$marker"; then
-              # finishSuite already exits 1 on a zero-pass run; this is the
-              # independent backstop should that in-suite verdict ever regress.
-              echo "::error::${suite} ran vacuously: $(cat "$marker")"
-              status=1
-            else
-              cat "$marker"
-            fi
-          done
-          exit "$status"
+    name: Browser suites
+    uses: ./.github/workflows/browser.yml
+    with:
+      chrome-version: stable
 
-  # The public web app (src/apps/web: the landing page plus Astro over the
-  # repo's markdown docs) must keep building. Build-only here: the deploy is
-  # the managed ci.yml's site leg, which runs .github/actions/site-build.
+  # The public web app (src/apps/web) must keep building. Build-only here: the deploy is the managed ci.yml's
+  # site leg, which runs .github/actions/site-build.
   web:
     name: web app builds
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
-      - run: bun run --cwd src/apps/web build
-      - run: bun run --cwd src/apps/web test
+      - run: moon run web:build web:test
 
-  cjk:
-    name: CJK containment (zh text only in locale files)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      # Dependency-free (node builtins only), so no bun install.
-      - run: bun scripts/check-cjk.ts
-      # The local typography mirror (scripts/check-typography.ts backs the
-      # moon-gate check; CI's authoritative typography job is the managed
-      # ci.yml's platform action). Running the mirror + its tests here keeps
-      # the local tooling from rotting unnoticed.
-      - name: Local typography mirror stays healthy
-        run: |
-          bun scripts/check-typography.ts
-          bun test scripts/check-typography.test.ts
-      # Same rationale for the fuzz-smoke driver: its failure-report writer
-      # feeds the nightly fuzz job's issue filing, so its tests run in the
-      # gate even though the fuzzing itself is nightly-only.
-      - name: Fuzz-smoke and harness-smoke driver tests
-        run: |
-          bun test scripts/fuzz-smoke.test.ts
-          bun test tests/harness/run.test.ts
-
-  # The cargo deny pass gates merges: a new advisory lands as a red PR check,
-  # not a silent scheduled failure. nightly.yml calls the same reusable
-  # workflow daily for advisories disclosed between pushes. A job calling a
-  # reusable workflow fails if any called job fails, so this single job
-  # aggregates the audit legs for all-green.
+  # The cargo deny pass gates merges: a new advisory lands as a red PR check, not a silent scheduled failure.
+  # nightly.yml calls the same reusable workflow daily. A job calling a reusable workflow fails if any called
+  # job fails, so this single job aggregates the audit legs for all-green.
   audits:
     name: Security audits
     uses: ./.github/workflows/audits.yml
-
-  # Docs-parity gates (SSoT audit, ADR-0028 follow-up): the living docs'
-  # hand-stated identifiers, protocol versions, env vars, tool tables, and
-  # settings defaults are diffed against the canonical Rust/TS sources, so a
-  # rename or a policy change cannot leave AGENTS.md / SECURITY.md / README* /
-  # docs/ quietly wrong. Same steps as `moon run check-docs-literals` /
-  # `check-docs-policy` in the local ci gate; each script's own unit tests
-  # (the it-fails-on-a-synthetic-violation proofs) ride along.
-  docs-parity:
-    name: Docs parity (literals, tool tables, settings defaults)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      # check-docs-policy imports the settings schema (zod) and the generated
-      # catalogue metadata from the workspace, hence the install.
-      - run: bun install --frozen-lockfile
-      - run: bun scripts/check-docs-literals.ts
-      - run: bun test scripts/check-docs-literals.test.ts
-      - run: bun scripts/check-docs-policy.ts
-      - run: bun test scripts/check-docs-policy.test.ts

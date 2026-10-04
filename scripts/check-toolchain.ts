@@ -1,28 +1,13 @@
 #!/usr/bin/env bun
-// Verify the duplicated toolchain pins agree. proto (.prototools) is the
-// bootstrap toolchain manager, but four of its pins are necessarily
-// duplicated elsewhere, and a silent disagreement would mean local runs and
-// CI use different tools:
+// The one toolchain pin that lives in two files must agree, or local runs and CI use different tools:
+//   bun   .prototools vs package.json packageManager vs the template-managed .bun-version (what the
+//         platform's bun jobs run)
+// proto, moon, node, and uv are pinned in .prototools alone and CI reads them from there
+// (.github/actions/setup-moon, the Containerfile); rust is pinned in rust-toolchain.toml alone. python
+// stays uv's (.python-version) and rust stays rustup's: proto's plugin allow-list must name neither, or
+// two provisioners own one tool.
 //
-//   rust  - rust-toolchain.toml is the AUTHORITATIVE pin (rustup, IDEs, and
-//           CI's setup-rust-toolchain read it natively, and it carries the
-//           components + profile that proto cannot express). The .prototools
-//           rust entry only pre-installs that toolchain and must match.
-//   bun   - package.json's packageManager field (read by setup-bun in the
-//           CI jobs that do not go through proto) and the template-managed
-//           .bun-version (what the platform's bun-module jobs run) must
-//           both match.
-//   proto/moon - .github/workflows/checks.yml passes explicit proto-version /
-//           moon-version inputs to moonrepo/setup-toolchain (the action
-//           cannot read the proto pin from .prototools itself); every
-//           occurrence must match the .prototools pins.
-//
-// uv is pinned ONLY in .prototools (single authority - nothing to diff),
-// and python is owned by uv via .python-version (proto's builtin-plugins
-// allow-list deliberately excludes python; asserted here too).
-//
-// Run via `moon run check-toolchain` (part of the ci gate) and CI's
-// version-consistency job.
+// Run via `moon run check-toolchain` (part of the ci gate).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,17 +38,6 @@ function pin(tool: string): string {
   return value;
 }
 
-// rust: .prototools must match rust-toolchain.toml's channel (the authority).
-const rustToolchain = readFileSync(join(repoRoot, "rust-toolchain.toml"), "utf8");
-const channel = rustToolchain.match(/^channel\s*=\s*"([^"]+)"/m)?.[1];
-if (!channel) {
-  fail("rust-toolchain.toml has no channel pin");
-} else if (pin("rust") !== channel) {
-  fail(`.prototools rust (${pin("rust")}) != rust-toolchain.toml channel (${channel})`);
-}
-console.log(`rust   ${channel ?? "<missing>"} (authority: rust-toolchain.toml)`);
-
-// bun: .prototools must match package.json's packageManager.
 const rootPkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
   packageManager?: string;
 };
@@ -76,76 +50,30 @@ if (!bunFromPkg) {
 }
 console.log(`bun    ${bunFromPkg ?? "<missing>"} (package.json packageManager)`);
 
-// bun again: the template-managed .bun-version is what CI's bun-module jobs
-// actually run, so a local pin that drifts from it typechecks against a bun
-// the gate never uses.
 const bunVersionFile = readFileSync(join(repoRoot, ".bun-version"), "utf8").trim();
 if (bunVersionFile !== pin("bun")) {
   fail(`.prototools bun (${pin("bun")}) != .bun-version (${bunVersionFile})`);
 }
 console.log(`bun    ${bunVersionFile} (.bun-version, template-managed)`);
 
-// proto + moon: EVERY moonrepo/setup-toolchain step in checks.yml must be
-// SHA-pinned and carry both explicit version inputs in its `with:` block,
-// each matching the .prototools pin - checked per step (not "some match
-// exists somewhere") so a single drifting or de-pinned job cannot hide
-// behind the others. Parsed as real YAML (Bun.YAML), not regex-scraped, so
-// look-alike text in env blocks, comments, or multiline scalars cannot
-// stand in for an actual action input.
-const checksYml = readFileSync(join(repoRoot, ".github/workflows/checks.yml"), "utf8");
-interface WorkflowStep {
-  uses?: string;
-  with?: Record<string, unknown>;
+if (pins.has("rust")) {
+  fail(
+    ".prototools pins rust - rust-toolchain.toml is its only pin (proto's install breaks rustup's)",
+  );
 }
-const workflow = Bun.YAML.parse(checksYml) as {
-  jobs?: Record<string, { steps?: WorkflowStep[] }>;
-};
-let invocations = 0;
-for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-  for (const step of job.steps ?? []) {
-    // Action owner/repo are case-insensitive on GitHub - match accordingly
-    // so a re-cased `Moonrepo/Setup-Toolchain@...` cannot evade the check.
-    if (
-      typeof step.uses !== "string" ||
-      !step.uses.toLowerCase().startsWith("moonrepo/setup-toolchain@")
-    ) {
-      continue;
-    }
-    invocations += 1;
-    const where = `checks.yml job '${jobName}' setup-toolchain step`;
-    const ref = step.uses.slice(step.uses.indexOf("@") + 1);
-    // Exactly a 40-hex commit SHA - a tag, branch, or sha-with-suffix ref
-    // is mutable and must not pass.
-    if (!/^[0-9a-f]{40}$/.test(ref)) {
-      fail(`${where} is not pinned to a full commit SHA (got '${ref}')`);
-    }
-    for (const tool of ["proto", "moon"] as const) {
-      const wanted = pin(tool);
-      const got = step.with?.[`${tool}-version`];
-      if (typeof got !== "string" || got.length === 0) {
-        fail(`${where} has no ${tool}-version input in its with: block (must pin it to ${wanted})`);
-      } else if (got !== wanted) {
-        fail(`${where} ${tool}-version (${got}) != .prototools ${tool} (${wanted})`);
-      }
-    }
-  }
-}
-if (invocations === 0) {
-  fail("checks.yml never uses moonrepo/setup-toolchain (expected the moon-running jobs to)");
-}
-console.log(
-  `proto  ${pin("proto")} / moon ${pin("moon")} (${invocations} SHA-pinned checks.yml step(s))`,
-);
-
-// uv: pinned only in .prototools; just assert the pin exists.
-console.log(`uv     ${pin("uv")} (.prototools is the single authority)`);
-
-// python stays uv-owned: proto must not have the python plugin enabled.
 const builtinPlugins = prototools.match(/builtin-plugins\s*=\s*\[([^\]]*)\]/)?.[1] ?? "";
 if (!builtinPlugins) {
-  fail(".prototools settings.builtin-plugins allow-list is missing (proto would provision python)");
-} else if (/python/.test(builtinPlugins)) {
-  fail(".prototools builtin-plugins includes python - python is owned by uv (.python-version)");
+  fail(
+    ".prototools settings.builtin-plugins allow-list is missing (proto would provision python and rust)",
+  );
+} else {
+  for (const tool of ["python", "rust"]) {
+    if (builtinPlugins.includes(tool)) {
+      fail(
+        `.prototools builtin-plugins includes ${tool} - ${tool === "python" ? "python is owned by uv (.python-version)" : "rust is owned by rustup (rust-toolchain.toml)"}`,
+      );
+    }
+  }
 }
 
 if (!failed) console.log("toolchain pins consistent");

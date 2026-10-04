@@ -3,12 +3,11 @@ name: Nightly checks
 # Scheduled, never PR-gating: everything here is too slow for a PR, depends on the outside world, or reruns
 # a PR-time check against that day's world so a quiet repository still learns about a break.
 #
-#   browser        -> the PR job's subset (checks.yml `browser`, inside all-green): same pinned action SHAs and
-#                     DOM + smoke steps, without the security proofs and the RAN-marker canary, against that
-#                     day's Chrome `stable`
+#   browser        -> the PR job's suites (browser.yml, the one definition), against that day's Chrome `stable`
 #   mutants        -> the full cargo-mutants pass, sharded
 #   harness-smoke  -> real agent-harness CLIs (Claude Code, Codex) at their CURRENT releases connect to our
-#                     stdio MCP server; frames are captured and the opening method logged (the ADR-0034 canary)
+#                     stdio MCP server; frames are captured and the opening method logged (the canary for
+#                     retiring the legacy-initialize shim)
 #   audits         -> the same cargo deny pass that gates every merge (checks.yml -> audits.yml), rerun daily
 #                     so an advisory disclosed between pushes surfaces here instead of at the next PR
 #   setup-chrome   -> installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser
@@ -43,35 +42,10 @@ permissions:
 
 jobs:
   browser:
-    name: DOM + smoke (Chrome, scheduled)
-    runs-on: ubuntu-latest
-    # A hang becomes a CANCELLED job at this bound, which the report job
-    # counts as red - without it a wedged browser test sits on GitHub's
-    # 6-hour default before anything is filed.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
-        id: chrome
-        with:
-          chrome-version: stable
-      - run: bun install --frozen-lockfile
-      - run: bun run --cwd src/apps/extension build
-      - name: Typecheck tests
-        run: bun run --cwd tests/browser typecheck
-      - name: DOM-layer tests
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        run: bun tests/browser/dom_test.ts
-      - name: Extension smoke test
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        # The smoke test needs a non-headless browser (MV3 SW reliability), so
-        # give it a virtual display. xvfb ships on GitHub's ubuntu runners.
-        run: xvfb-run -a bun tests/browser/ext_test.ts
+    name: Browser suites (Chrome stable, scheduled)
+    uses: ./.github/workflows/browser.yml
+    with:
+      chrome-version: stable
 
   # Missed mutants (exit 2) and mutant timeouts (exit 3) are reported, not fatal: they measure test quality
   # and get fixed deliberately, whereas a baseline build/test failure is a real break.
@@ -90,10 +64,9 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: ./.github/actions/setup-moon
         with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+          cargo: "true"
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
           tool: cargo-mutants
@@ -129,14 +102,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The driver is self-contained (node builtins only), so no bun install.
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-moon
         with:
-          bun-version-file: package.json
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+          cargo: "true"
       - run: cargo build --release
       # Latest on purpose, not pinned: the whole point of this canary is to
       # observe what CURRENT harness releases send. Best-effort: a harness

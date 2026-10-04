@@ -29,9 +29,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
+      - uses: ./.github/actions/setup-moon
       # The repo's pinned biome (a devDependency, resolved from bun.lock) -
       # not a floating registry fetch - so this formats exactly like
       # `moon run fix` and the extension job's biome gate.

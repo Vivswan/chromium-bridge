@@ -1,15 +1,14 @@
 # Root project: the ci gate, the repo-wide aggregates, contract codegen, the python protocol suites, and the
-# Touch ID runbooks. Unscoped task names resolve here via .moon/workspace.yml's defaultProject.
-#
-# The ci aggregate, everything reachable from it, the check-* tasks, the python suites, and the runbooks all set
-# `options.cache: false`: moon's hasher cannot see gitignored inputs (the generated .wxt/tsconfig.json) and a
-# mistaken hasher.ignorePatterns entry drops tracked files from every hash, so a cache hit could let unverified
-# code land. The tools underneath (cargo, tsc, vite, bun) keep their own incremental caches, so warm reruns stay
-# fast; affected-only `moon ci` is a local convenience, never the gate.
+# Touch ID runbooks. Unscoped task names resolve here via .moon/workspace.yml's defaultProject. Every task is
+# uncached by the workspace default (.moon/tasks/all.yml says why).
 #
 # The build, ci, test, test-rust, test-ts, release, and gen aggregates set `runDepsInParallel: false`, so their
 # steps run in the listed order and a tree-mutating step (gen-shared rewrites the checked-in *.gen.ts modules)
 # can never race a reader (biome, tsc) in a parallel lane. lint's two deps still run in parallel; neither writes.
+#
+# `runInCI: false` marks a task `moon ci` must never pick up: tree-mutating ones, user-run ceremonies, and
+# suites that need a browser, a release binary, or a harness CLI. moon resolves none of them when CI=true, so
+# CI invokes those suites' commands directly (checks.yml interop, browser.yml, nightly.yml harness-smoke).
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'typescript'
@@ -21,9 +20,7 @@ tasks:
   help:
     description: 'List every task with its description (the front door; raw JSON: `moon query tasks`)'
     command: 'bun scripts/help.ts'
-    toolchains: ['system']
     options:
-      cache: false
       runInCI: false
 
   # ----- main aggregates ----------------------------------------------------
@@ -35,22 +32,11 @@ tasks:
       - 'extension:build'
       - 'web:build'
     script: 'bunx tsc -p scripts && cargo build --workspace'
-    toolchains: ['system']
     options:
-      cache: false
       runDepsInParallel: false
 
   ci:
-    # THE GATE - the cross-platform steps every change must pass locally:
-    # rust fmt/clippy/nextest+doctests/rustdoc, typos/machete, TS typecheck/biome/
-    # tests/extension build, protocol e2e, the excluded fuzz workspace's
-    # locked check, and the contract + hygiene checks. CI runs MORE on top: the
-    # macOS/Windows rust matrices, dependency review, linux-install, the
-    # adversarial/chaos suites, the browser suites (isolated Chrome), and
-    # the web build. Every dep here is uncached (see the header) and
-    # runs in this exact order, sequentially - the gate always executes
-    # fully; there is nothing a cache or a scheduler can skip or reorder.
-    description: 'THE GATE: the local cross-platform gate steps (CI layers more jobs on top - see the comment); uncached, sequential, always full'
+    description: 'THE GATE: the local cross-platform gate steps (CI layers the OS matrix, linux-install, the adversarial/chaos suites, the browser suites, and the web build on top); uncached, sequential, always full'
     deps:
       - 'core:fmt-check'
       - 'core:lint'
@@ -83,9 +69,7 @@ tasks:
       - '~:check-docs-literals'
       - '~:check-docs-policy'
       - '~:check-compose'
-    toolchains: ['system']
     options:
-      cache: false
       runDepsInParallel: false
 
   test:
@@ -94,9 +78,7 @@ tasks:
       - 'core:test'
       - 'core:test-doc'
       - '~:test-e2e'
-    toolchains: ['system']
     options:
-      cache: false
       runDepsInParallel: false
 
   test-rust:
@@ -104,9 +86,7 @@ tasks:
     deps:
       - 'core:test'
       - 'core:test-doc'
-    toolchains: ['system']
     options:
-      cache: false
       runDepsInParallel: false
 
   release:
@@ -117,18 +97,14 @@ tasks:
       - '~:ci'
     script: |
       echo "Release checks passed. Releases are cut by release-please: merge the rolling release PR (chore(main): release X.Y.Z) on a green main."
-    toolchains: ['system']
     options:
-      cache: false
       runDepsInParallel: false
 
   install:
     description: 'USER-RUN: build the release binary, then register it with your browsers (doctor --fix)'
     deps: ['~:build-release']
     command: './target/release/chromium-bridge doctor --fix'
-    toolchains: ['system']
     options:
-      cache: false # user-run: must really run
       runInCI: false
 
   # ----- dev loops (local only; never in CI) --------------------------------
@@ -136,19 +112,14 @@ tasks:
   dev:
     description: 'Dev everything: extension (WXT) + web app (Astro) + a dev browser in one terminal; Ctrl-C stops all'
     command: 'bun scripts/dev.ts'
-    toolchains: ['system']
     preset: 'server'
 
   dev-web:
-    # Deliberately NOT persistent: the web project's dev script manages the
-    # astro dev daemon itself (`astro dev stop; ASTRO_DEV_BACKGROUND=1 astro
-    # dev`) - it backgrounds the server and exits, so as a moon task it is a
-    # plain one-shot command, not a `persistent` server task.
+    # Not a `persistent` server task: the web project's dev script backgrounds the astro dev daemon itself
+    # (`astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev`) and exits, so here it is a plain one-shot command.
     description: 'Docs site dev server only; replaces any already-running astro dev (`dev` supersets this)'
     command: 'bun run --cwd src/apps/web dev'
-    toolchains: ['system']
     options:
-      cache: false # dev loop
       runInCI: false
 
   # ----- quality ------------------------------------------------------------
@@ -156,102 +127,67 @@ tasks:
   fmt:
     description: 'Format everything in place: Rust (cargo fmt) + TS/JS/JSON (Biome)'
     script: 'set -e; cargo fmt; bunx biome format --write .'
-    toolchains: ['system']
     options:
-      cache: false # mutates the tree
-      runInCI: false # tree-mutating: never eligible for `moon ci` affected runs
+      runInCI: false
 
   fmt-ts:
     description: 'Format TS/JS/JSON in place (Biome; what `bun run format` delegates to)'
     command: 'bunx biome format --write .'
-    toolchains: ['system']
     options:
-      cache: false # mutates the tree
-      runInCI: false # tree-mutating: never eligible for `moon ci` affected runs
+      runInCI: false
 
   fix:
     description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt'
     script: 'set -e; bunx biome check --write .; cargo fmt'
-    toolchains: ['system']
     options:
-      cache: false # mutates the tree
-      runInCI: false # tree-mutating: never eligible for `moon ci` affected runs
+      runInCI: false
 
   lint:
-    # Depends on core:lint + lint-ts, not check-ts: check-ts (biome ci)
-    # already covers Biome lint inside the ci gate, so this aggregate exists
-    # for humans who want "lint everything" in one verb.
+    # lint-ts rather than check-ts: check-ts (biome ci) already covers Biome lint inside the ci gate, so this
+    # aggregate exists for humans who want "lint everything" in one verb.
     description: 'Lint everything, denying warnings: Rust (clippy) + TS/JS/JSON (Biome)'
     deps:
       - 'core:lint'
       - '~:lint-ts'
-    toolchains: ['system']
-    options:
-      cache: false # a check task: gates are never cached
 
   lint-ts:
     description: 'Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)'
     command: 'bunx biome lint .'
-    toolchains: ['system']
     inputs: ['**/*', '!**/node_modules/**']
-    options:
-      cache: false # a check task: gates are never cached
 
   check-ts:
     description: 'Lint + format-check all TS/JS/JSON (biome ci; what `bun run check` delegates to)'
     command: 'bunx biome ci .'
-    toolchains: ['system']
     inputs: ['**/*', '!**/node_modules/**']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   fmt-check-ts:
     description: 'Verify TS/JS/JSON formatting (Biome; what `bun run format:check` delegates to)'
     command: 'bunx biome format .'
-    toolchains: ['system']
     inputs: ['**/*', '!**/node_modules/**']
-    options:
-      cache: false # a check task: gates are never cached
 
   typos:
     description: 'Source-code spell check (CI gate; config in _typos.toml)'
     command: 'typos'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   machete:
     description: 'Detect unused Cargo dependencies (CI gate)'
     command: 'cargo machete'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   audit:
     description: 'Supply-chain checks over the root workspace (needs cargo-deny; CI audits.yml adds the fuzz workspace)'
     command: 'cargo deny check'
-    toolchains: ['system']
-    options:
-      cache: false # a check task: gates are never cached
 
   # ----- rust builds --------------------------------------------------------
 
   build-release:
     description: 'Build the release binary'
     command: 'cargo build --release'
-    toolchains: ['system']
-    options:
-      # cargo owns target/ and its own incremental cache; a moon cache hit
-      # must never stand in for a missing build artifact.
-      cache: false
 
   build-repro:
     description: 'Deterministic release build (path-remapped, --locked)'
     command: 'bun scripts/build-repro.ts'
-    toolchains: ['system']
     options:
-      cache: false # release ceremony: must really run
-      runInCI: false # ceremony: only ever run deliberately, never by `moon ci`
+      runInCI: false
 
   # ----- typescript aggregates ----------------------------------------------
 
@@ -265,11 +201,6 @@ tasks:
       bunx tsc -p tests/harness
       bunx tsc -p scripts
       bunx tsc -p src/packages/shared
-    toolchains: ['system']
-    options:
-      # In the ci gate, and the extension tsconfig extends the generated
-      # (gitignored, unhashable) .wxt/tsconfig.json: never cache this.
-      cache: false
 
   test-ts:
     description: 'Unit-test shared + extension + web (the `bun run test` set)'
@@ -278,25 +209,16 @@ tasks:
       - 'extension:test'
       - 'web:test'
       - '~:check-harness-driver'
-    toolchains: ['system']
     options:
-      cache: false
       runDepsInParallel: false
 
   test-browser:
-    # SAFETY: only ever run against an isolated Chrome for Testing via
-    # CHROME_BIN - never a browser holding a real session (tests/README.md).
+    # SAFETY: only ever run against an isolated Chrome for Testing via CHROME_BIN, never a browser holding a
+    # real session (tests/README.md). The runner builds the extension and owns the suite-ran canary.
     description: 'DOM + smoke + security proofs (needs bun + isolated Chrome via CHROME_BIN; builds the extension first)'
-    deps: ['extension:build']
-    script: |
-      set -e
-      (cd tests/browser && bun dom_test.ts)
-      bun tests/browser/ext_test.ts
-      bun tests/browser/security_browser_test.ts
-    toolchains: ['system']
+    command: 'bun tests/browser/run_all.ts'
     options:
-      cache: false # a gating suite (CI's browser job): gates are never cached
-      runInCI: false # needs an isolated Chrome; CI's browser job provides its own
+      runInCI: false
 
   # ----- container test environment (compose.yaml; never in CI) --------------
   # The container is the isolation: no host browser, host toolchain, or host process is in its reach.
@@ -306,25 +228,19 @@ tasks:
   ci-container:
     description: 'THE GATE inside the container test environment (docker; CONTAINER_ENGINE=podman switches)'
     command: 'bun scripts/compose-run.ts ci'
-    toolchains: ['system']
     options:
-      cache: false # a gate run: gates are never cached
-      runInCI: false # CI runs the gate natively; the container is the local isolation
+      runInCI: false
 
   test-browser-container:
     description: 'Browser suites inside the container under xvfb with BB_REQUIRE_BROWSER=1 (a skipped suite fails as in CI); no test Chrome on the host'
     command: 'bun scripts/compose-run.ts browser'
-    toolchains: ['system']
     options:
-      cache: false # a gating suite run: gates are never cached
-      runInCI: false # local-verification convenience; CI's browser job is canonical
+      runInCI: false
 
   shell-container:
     description: 'Interactive bash inside the container test environment, the checkout bind-mounted at /work'
     command: 'bun scripts/compose-run.ts shell'
-    toolchains: ['system']
     options:
-      cache: false # interactive: must really run
       runInCI: false
       interactive: true
 
@@ -336,41 +252,28 @@ tasks:
     command: 'bun tests/browser/integration_e2e.ts'
     env:
       BB_REAL_E2E: '1'
-    toolchains: ['system']
     options:
-      cache: false # a gating suite: gates are never cached
-      runInCI: false # opt-in; needs an isolated Chrome
+      runInCI: false
 
   fuzz-smoke:
     description: 'Bounded fuzz smoke over every cargo-fuzz target (needs nightly + cargo-fuzz; skips if missing)'
     command: 'bun scripts/fuzz-smoke.ts'
-    toolchains: ['system']
     options:
-      cache: false
       runInCI: false
 
   check-fuzz-smoke:
     description: 'Unit tests for the fuzz-smoke driver (flag parsing, failure-report contract)'
     command: 'bun test scripts/fuzz-smoke.test.ts'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-harness-driver:
     description: 'Unit test for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository)'
     command: 'bun test tests/harness/run.test.ts'
-    toolchains: ['system']
-    options:
-      cache: false # a check task: gates are never cached
 
   check-fuzz-workspace:
     description: >-
       Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets
       cannot rot outside the main build; CI runs the same check in checks.yml's rust job
     command: 'cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
-    toolchains: ['system']
-    options:
-      cache: false
 
   doc:
     description: >-
@@ -379,17 +282,13 @@ tasks:
     command: 'cargo doc --workspace --no-deps --document-private-items'
     env:
       RUSTDOCFLAGS: '-D warnings'
-    toolchains: ['system']
-    options:
-      cache: false
 
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
 
   check-uv:
-    # The protocol suites run under the exact interpreter pinned in
-    # .python-version, provisioned by uv, so local runs and CI cannot diverge
-    # (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
-    # semantics). No fallback by design - fail loudly with an install hint.
+    # The protocol suites run under the exact interpreter pinned in .python-version, provisioned by uv, so
+    # local runs and CI cannot diverge (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
+    # semantics). No fallback by design.
     description: 'Fail loudly if uv (which provisions the pinned Python) is missing'
     script: |
       if ! command -v uv >/dev/null 2>&1; then
@@ -397,53 +296,38 @@ tasks:
         echo "install it via proto (proto install uv), or: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: brew install uv)" >&2
         exit 1
       fi
-    toolchains: ['system']
-    options:
-      cache: false # a check task: gates are never cached
 
   test-e2e:
-    # --no-project: the harness is stdlib-only by design (its independence
-    # from our code and from any package is the point) - never add
-    # dependencies to it.
+    # --no-project: the harness is stdlib-only by design (its independence from our code and from any
+    # package is the point); never add dependencies to it.
     description: 'Protocol-layer e2e tests (drives the real release binary)'
     deps:
       - '~:check-uv'
       - '~:build-release'
     command: 'uv run --no-project --isolated tests/protocol/e2e.py'
-    toolchains: ['system']
-    options:
-      cache: false # a gating suite: gates are never cached
 
   test-adversarial:
-    description: "Adversarial break-in suite (CI's adversarial job; drives the real release binary)"
+    description: "Adversarial break-in suite (CI's protocol matrix; drives the real release binary)"
     deps:
       - '~:check-uv'
       - '~:build-release'
     command: 'uv run --no-project --isolated tests/protocol/adversarial.py'
-    toolchains: ['system']
-    options:
-      cache: false # a gating suite: gates are never cached
 
   test-chaos:
-    description: "Fault-injection chaos suite (CI's chaos job; drives the real release binary)"
+    description: "Fault-injection chaos suite (CI's protocol matrix; drives the real release binary)"
     deps:
       - '~:check-uv'
       - '~:build-release'
     command: 'uv run --no-project --isolated tests/protocol/chaos.py'
-    toolchains: ['system']
-    options:
-      cache: false # a gating suite: gates are never cached
 
-  # ----- contract codegen (the Rust core is the single source, ADR-0028) ----
+  # ----- contract codegen (the Rust core is the single source) --------------
 
   gen:
     description: 'Regenerate ALL generated TS from Rust: the shared contract modules'
     deps:
       - '~:gen-shared'
-    toolchains: ['system']
     options:
-      cache: false # mutates the tree
-      runInCI: false # tree-mutating: never eligible for `moon ci` affected runs
+      runInCI: false
       runDepsInParallel: false
 
   gen-shared:
@@ -462,24 +346,15 @@ tasks:
         src/packages/shared/src/envelope-wire.gen.ts \
         src/packages/shared/src/audit.gen.ts \
         src/packages/shared/src/policy.gen.ts
-    toolchains: ['system']
-    options:
-      cache: false # mutates the tree; check-gen diffs its output
 
   gen-icons:
     description: 'Render the extension icon rasters from the assets/icon/ SVGs (build artifacts, gitignored)'
     command: 'bun scripts/gen-icons.ts'
-    toolchains: ['system']
-    options:
-      cache: false # cheap, and a dep of gate tasks: never cached
 
   check-gen:
-    # The checked-in generated TS must match what the Rust core emits today,
-    # and the envelope generator's fail-closed rules (G1-G5) must hold. The
-    # diff pathspec covers every generated module (*.gen.ts, tracked or
-    # newly written - the porcelain check catches untracked output); the
-    # hand-written files sharing the directory are deliberately out of
-    # scope, so local WIP there cannot false-fail the staleness gate.
+    # The diff pathspec covers every generated module (tracked or newly written; the porcelain check catches
+    # untracked output) and nothing else: the hand-written files sharing the directory stay out of scope, so
+    # local WIP there cannot false-fail the staleness gate.
     description: 'Staleness gate for the generated shared contract modules + envelope generator fail-closed rules'
     deps: ['~:gen-shared']
     script: |
@@ -495,32 +370,22 @@ tasks:
         exit 1
       fi
       bun test scripts/gen-envelope.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-envelope:
-    # Envelope asymmetry gate: the hand-written layer over the generated
-    # wire schemas (Rust schemars vs Zod z.toJSONSchema) must stay within
-    # the pinned parser asymmetries; base freshness is check-gen's job.
-    # The bun test run covers the gate's classifier-coverage rule against
-    # tables a live run cannot mutate (writer-only tag classified, pin gone
-    # stale).
+    # Base freshness of the generated schemas is check-gen's job; the bun test covers the classifier-coverage
+    # rule against tables a live run cannot mutate (writer-only tag classified, pin gone stale).
     description: 'Envelope asymmetry gate: hand-written Zod layer stays within the pinned parser asymmetries'
     script: |
       set -e
       bun scripts/check-envelope-parity.ts
       bun test scripts/check-envelope-parity.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-gen-isolation:
     # Gen-only tooling must stay out of every shipped binary graph; p256 matters most, since a software P-256
     # stack has no business in a binary whose signing story is the Secure Enclave.
     #   host: p256      -> refused anywhere in the graph
-    #   host: schemars  -> allowed only through rmcp, which uses schemars 1 at runtime (ADR-0034); our own
-    #                      gen-only envelope-schema feature (also schemars 1) must stay out
+    #   host: schemars  -> allowed only through rmcp, which uses schemars 1 at runtime; our own gen-only
+    #                      envelope-schema feature (also schemars 1) must stay out
     description: 'Gen-only tooling (schemars via non-rmcp paths, p256) stays out of the shipped binary dependency graph'
     script: |
       set -eu
@@ -529,12 +394,10 @@ tasks:
           echo "p256 leaked into the chromium-bridge binary dependency graph" >&2
           exit 1
       fi
-      # Every path from schemars up to the host binary must go through rmcp:
-      # the depth-1 entries of the inverse tree are schemars's direct
-      # dependents, and rmcp must be the only one. Fail closed: if schemars
-      # is in the graph, the inverse tree must resolve (an ambiguous spec -
-      # two schemars majors, exactly the leak this gate exists to catch -
-      # errors rather than passing silently).
+      # Every path from schemars up to the host binary must go through rmcp: the depth-1 entries of the
+      # inverse tree are schemars's direct dependents, and rmcp must be the only one. Fail closed: if
+      # schemars is in the graph, the inverse tree must resolve (an ambiguous spec, two schemars majors, is
+      # exactly the leak this gate exists to catch).
       if printf '%s\n' "$tree" | grep -q schemars; then
           inverse="$(cargo tree -e normal -p chromium-bridge --locked -i schemars --prefix depth)"
           if ! printf '%s\n' "$inverse" | grep -q '^0schemars '; then
@@ -548,37 +411,25 @@ tasks:
               exit 1
           fi
       fi
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   # ----- Touch ID runbooks (macOS, USER-RUN) ---------------------------------
 
   touchid-proof:
-    # Touch ID proof for the host (USER-RUN: raises a real Touch ID prompt).
-    # Builds the release binary, then enrolls the enclave key with it; on
-    # success the machine is genuinely enrolled. Undo with the same binary's
-    # `revoke` subcommand. The data-protection keychain refuses an ad-hoc
-    # build (src/packages/core/src/enclave/macos.rs), so the binary must be
-    # codesigned with an application identifier first; no task does that
-    # signing yet.
+    # Raises a real Touch ID prompt and, on success, genuinely enrolls the machine (undo: the same binary's
+    # `revoke`). The data-protection keychain refuses an ad-hoc build (src/packages/core/src/enclave/macos.rs),
+    # so the binary must be codesigned with an application identifier first; no task does that signing yet.
     description: 'USER-RUN runbook: enroll the enclave key via the release host binary (raises a real Touch ID prompt)'
     deps: ['~:build-release']
     script: './target/release/chromium-bridge pair'
-    toolchains: ['system']
     options:
-      cache: false # Touch ID ceremony: must really run
       runInCI: false
       interactive: true
 
   touchid-gates:
-    # Touch ID gate demo (USER-RUN, macOS: raises a REAL Touch ID prompt).
-    # Runs the per-action presence gate - the one page_eval / page_upload
-    # use - so you can watch the Enclave sign under Touch ID, then prints
-    # the three capability-grant commands (pair-client, unkill, policy set)
-    # for you to run in your own terminal: those require a real interactive
-    # TTY by design (anti tap-phishing), which a task runner cannot provide.
-    # Needs an enrolled Enclave key (run `moon run touchid-proof` first).
+    # Runs the per-action presence gate (the one page_eval / page_upload use) under a real Touch ID prompt,
+    # then prints the three capability-grant commands for you to run yourself: those require a real
+    # interactive TTY by design (anti tap-phishing), which a task runner cannot provide. Needs an enrolled
+    # Enclave key (`moon run touchid-proof` first).
     description: 'USER-RUN runbook: demo the Touch ID presence gates (runs the per-action gate; prints the rest)'
     deps: ['~:build-release']
     script: |
@@ -599,7 +450,7 @@ tasks:
       echo "     \"\$BIN\" revoke-client --name touchid-demo                                    # instant, no prompt"
       echo "     \"\$BIN\" kill && \"\$BIN\" unkill                                              # kill instant; unkill = Touch ID"
       echo
-      echo "== 4/4 policy grant (signed GRANT lane, ADR-0032) =="
+      echo "== 4/4 policy grant (signed GRANT lane) =="
       echo "   'policy set' mints a fresh SIGNED baseline, so it is signature-only:"
       echo "   the Touch ID sheet has no floor to fall through to. Run these yourself"
       echo "   in this terminal - approve the first, DECLINE the second:"
@@ -614,9 +465,7 @@ tasks:
       echo
       echo "touchid-gates: the per-action gate above raised a live Touch ID prompt;"
       echo "the three capability-grant gates need a real terminal - commands printed above."
-    toolchains: ['system']
     options:
-      cache: false # Touch ID ceremony: must really run
       runInCI: false
       interactive: true
 
@@ -625,31 +474,20 @@ tasks:
   sync-version:
     description: 'Propagate the Cargo.toml version into the JS package manifests'
     command: 'bun scripts/sync-version.ts'
-    toolchains: ['system']
     options:
-      cache: false # mutates the tree
-      runInCI: false # tree-mutating: never eligible for `moon ci` affected runs
+      runInCI: false
 
   check-version:
     description: 'Verify the crate, JS package, and release-please versions agree'
     command: 'bun scripts/check-version.ts'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-extension-id:
     description: 'Verify the pinned key, extension ID, and built manifest agree'
     command: 'bun scripts/check-extension-id.ts'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-cjk:
     description: 'Verify CJK text stays inside the zh locale files and translated docs'
     command: 'bun scripts/check-cjk.ts'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-typography:
     description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
@@ -657,52 +495,30 @@ tasks:
       set -e
       bun scripts/check-typography.ts
       bun test scripts/check-typography.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-toolchain:
-    description: 'The duplicated toolchain pins (.prototools vs rust-toolchain.toml, package.json, checks.yml) must agree'
+    description: 'The bun pin copies (.prototools, package.json, .bun-version) must agree, and .prototools must leave rust to rustup and python to uv'
     command: 'bun scripts/check-toolchain.ts'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-hasher:
     description: 'No tracked file may match a .moon/workspace.yml hasher.ignorePattern (a stale-cache hole)'
     command: 'bun scripts/check-moon-hasher.ts'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-ignored:
     description: 'No tracked file may be matched by .gitignore (Biome and knip would skip it silently)'
     command: 'bun scripts/check-gitignore-tracked.ts'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-yaml:
-    # The local yamllint version is pinned here; the managed ci.yml's
-    # yamllint job installs its own (unpinned - a template-sync decision,
-    # ADR-0033), so bump this pin when CI surfaces a rule this version
-    # lacks. uvx comes with uv (proto-provisioned).
+    # The managed ci.yml's yamllint job installs its own, unpinned, version (a template-sync decision), so
+    # bump this pin when CI surfaces a rule this version lacks. uvx comes with uv (proto-provisioned).
     description: 'Lint every YAML file (yamllint, strict; the local version pin)'
     command: 'uvx yamllint@1.38.0 -s .'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-actions:
-    # actionlint is a residual-gap tool like typos (no first-party proto
-    # plugin): `brew install actionlint` once (docs/development.md). The
-    # managed ci.yml runs its own actionlint job, so a local version skew
-    # can at worst surface a finding early.
+    # actionlint has no first-party proto plugin: `brew install actionlint` once (docs/development.md). The
+    # managed ci.yml runs its own actionlint job, so a local version skew can at worst surface a finding early.
     description: 'Lint the GitHub Actions workflows (actionlint; install once with `brew install actionlint`)'
     command: 'actionlint'
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-docs-literals:
     description: 'Living docs state the canonical identifiers, paths, and protocol versions exactly'
@@ -710,9 +526,6 @@ tasks:
       set -e
       bun scripts/check-docs-literals.ts
       bun test scripts/check-docs-literals.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-docs-policy:
     description: 'Risk matrix, tool-count headlines, and settings-defaults docs match the catalogue and settings schema'
@@ -720,9 +533,6 @@ tasks:
       set -e
       bun scripts/check-docs-policy.ts
       bun test scripts/check-docs-policy.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   check-compose:
     description: 'compose.yaml + compose.podman.yaml stay within the Compose Specification subset both docker compose and podman compose implement'
@@ -730,42 +540,29 @@ tasks:
       set -e
       bun scripts/check-compose-compat.ts
       bun test scripts/check-compose-compat.test.ts
-    toolchains: ['system']
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   # ----- interop suites (not in the `moon run ci` aggregate) -----------------
 
   test-interop:
-    # Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2
-    # (@modelcontextprotocol/client, spec 2026-07-28) over stdio - the one
-    # real third-party modern client. Gated in CI by checks.yml's interop
-    # job, which invokes the underlying command directly (moon's CI mode
-    # does not resolve runInCI:false tasks); runInCI stays false so
-    # affected-only `moon ci` runs do not trip on a suite that needs the
-    # release binary.
+    # Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2 (@modelcontextprotocol/client,
+    # spec 2026-07-28) over stdio, the one real third-party modern client.
     description: 'MCP client SDK v2 interop suite (official @modelcontextprotocol/client over stdio; CI runs it via checks.yml)'
     deps:
       - '~:build-release'
     command: 'bun test tests/interop/sdk-client.test.ts'
-    toolchains: ['system']
     options:
-      cache: false # a check suite: never cached
-      runInCI: false # checks.yml invokes the command directly (see above)
+      runInCI: false
 
   # ----- agent-harness interop smoke (nightly workflow; not in the ci gate) --
 
   harness-smoke:
-    # Needs the claude and codex CLIs on PATH, so nightly.yml's harness-smoke job installs them and runs
-    # `bun tests/harness/run.ts` directly: moon does not resolve runInCI:false tasks when CI=true. Each
-    # harness's opening method is logged as the ADR-0034 canary for retiring the legacy-initialize shim;
-    # extra flags pass through (`moon run harness-smoke -- --mint-seeds <dir outside the repo>`).
+    # Needs the claude and codex CLIs on PATH (nightly.yml's harness-smoke job installs them). Each harness's
+    # opening method is logged as the canary for retiring the legacy-initialize shim; extra flags pass through
+    # (`moon run harness-smoke -- --mint-seeds <dir outside the repo>`).
     description: >-
       Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server and run a
-      fake-LLM live tool call (logs the ADR-0034 opening-method canary)
+      fake-LLM live tool call (logs the opening-method canary)
     deps: ['~:build-release']
     command: 'bun tests/harness/run.ts'
-    toolchains: ['system']
     options:
-      cache: false # a gating suite for the nightly workflow: never cached
-      runInCI: false # needs harness CLIs; nightly.yml's harness-smoke job provides them
+      runInCI: false

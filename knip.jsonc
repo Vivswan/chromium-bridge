@@ -13,13 +13,14 @@
       "project": ["tests/harness/**/*.ts"]
     },
     // Launch points knip cannot see for itself: moon task commands (it reads
-    // package scripts and workflow steps, not moon.yml) and the scripts other
-    // scripts spawn by path (dev.ts starts dev-browser.ts). Helpers such as
-    // lib.ts are reached through imports and stay project files.
+    // package scripts and workflow steps, not moon.yml; every check-*.ts is a
+    // moon check task) and the scripts other scripts spawn by path (dev.ts
+    // starts dev-browser.ts). Helpers such as lib.ts are reached through
+    // imports and stay project files.
     "scripts": {
       "entry": [
         "*.test.ts",
-        "check-envelope-parity.ts",
+        "check-*.ts",
         "compose-run.ts",
         "dev-browser.ts",
         "dev.ts",

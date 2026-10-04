@@ -1,5 +1,5 @@
 # moon tasks for src/packages/shared (contract-derived types + validators).
-# moon is the canonical command interface (phase two); shared:test is a step
+# moon is the canonical command interface; shared:test is a step
 # of the root ci gate.
 #
 # Inputs include the inherited rust-contract file group (.moon/tasks/all.yml):
@@ -15,19 +15,6 @@ tasks:
   typecheck:
     description: 'Type-check src/packages/shared alone (the repo-wide pass is the root typecheck task)'
     command: 'bun run typecheck'
-    toolchains: ['system']
-    inputs:
-      - '**/*'
-      - '!**/node_modules/**'
-      - '/tsconfig.base.json'
-      - '/package.json'
-      - '/bun.lock'
-      - '@group(rust-contract)'
-
-  test:
-    description: 'Unit-test src/packages/shared: generated catalogue, boundary validators'
-    command: 'bun run test'
-    toolchains: ['system']
     inputs:
       - '**/*'
       - '!**/node_modules/**'
@@ -36,14 +23,24 @@ tasks:
       - '/bun.lock'
       - '@group(rust-contract)'
     options:
-      cache: false # in the ci gate: gates are never cached
+      cache: true
+
+  test:
+    description: 'Unit-test src/packages/shared: generated catalogue, boundary validators'
+    command: 'bun run test'
+    inputs:
+      - '**/*'
+      - '!**/node_modules/**'
+      - '/tsconfig.base.json'
+      - '/package.json'
+      - '/bun.lock'
+      - '@group(rust-contract)'
 
   lint:
     description: "Biome lint for the shared package"
     # Same invocation shape as the repo-wide gate (`bunx biome lint .` from
     # the root), scoped to this project so config resolution is identical.
     command: 'bunx biome lint $projectSource'
-    toolchains: ['system']
     inputs:
       - '**/*'
       - '!**/node_modules/**'

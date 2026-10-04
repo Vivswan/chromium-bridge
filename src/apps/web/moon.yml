@@ -1,5 +1,4 @@
-# moon tasks for the Astro site (moon is the canonical command interface,
-# phase two).
+# moon tasks for the Astro site (moon is the canonical command interface).
 #
 # There is deliberately NO dev task HERE: `bun run dev` in this project
 # manages the astro dev daemon (`astro dev stop; ASTRO_DEV_BACKGROUND=1
@@ -18,7 +17,6 @@ tasks:
   build:
     description: "Build the web app (src/apps/web: Astro over the repo's markdown docs)"
     command: 'bun run build'
-    toolchains: ['system']
     inputs:
       # The site renders the repo's own markdown (src/lib/docs.ts globs the
       # root and docs/ trees), imports the workspace version from the root
@@ -35,23 +33,21 @@ tasks:
       - '$ASTRO_BASE'
     outputs:
       - '/build/web'
+    options:
+      cache: true
 
   test:
     description: "Unit-test src/apps/web: the markdown link rewriter's classification"
     command: 'bun run test'
-    toolchains: ['system']
     inputs:
       - '**/*'
       - '!**/node_modules/**'
       - '/package.json'
       - '/bun.lock'
-    options:
-      cache: false # a check task: gates are never cached
 
   lint:
     description: "Biome lint for the web app workspace"
     command: 'bunx biome lint $projectSource'
-    toolchains: ['system']
     inputs:
       - '**/*'
       - '!**/node_modules/**'
