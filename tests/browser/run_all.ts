@@ -12,16 +12,19 @@
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedBrowserOrSkip, isolatedBrowserOrNull } from "./browser-safety";
 
 const SUITES = ["dom_test", "ext_test", "security_browser_test"] as const;
 
 /** The caller-named canary dir, if any. An empty value is the shell's way of unsetting a variable
- * (`BB_BROWSER_CANARY_DIR= bun ...`), so it means "none", never a dir named "". */
+ * (`BB_BROWSER_CANARY_DIR= bun ...`), so it means "none", never a dir named "". A relative path is made
+ * absolute here, since the suites write the markers from the repo root and the runner reads them from
+ * wherever it was started. */
 export function callerCanaryDir(env: NodeJS.ProcessEnv): string | undefined {
-  return env.BB_BROWSER_CANARY_DIR || undefined;
+  const dir = env.BB_BROWSER_CANARY_DIR;
+  return dir ? resolve(dir) : undefined;
 }
 
 function isolatedBrowserForCanary(dir: string): string {
