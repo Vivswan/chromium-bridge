@@ -4,7 +4,7 @@ Every tool chromium-bridge exposes, with its risk level, what it can read/change
 
 Risk levels: **Low** (read-only, no sensitive data), **Medium** (reads page content or navigates), **High** (writes to the page, or reads credentials), **Critical** (arbitrary code / maximal blast radius).
 
-The protections listed are the defaults. The confirmation gates are host-owned policy fields (`confirmHighRiskClick`, `confirmTabClose`, `confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`), edited in the Chromium Bridge app or with `chromium-bridge policy`, never from the extension; relaxing one is an explicit, signed choice with the residual risks tabulated in [SECURITY.md](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
+The protections listed are the defaults. The confirmation gates are host-owned policy fields (`confirmHighRiskClick`, `confirmTabClose`, `confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`), edited with `chromium-bridge policy` (`set` signs a grant, `restrict` is free), never from the extension; relaxing one is an explicit, signed choice with the residual risks tabulated in [SECURITY.md](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 
 | Tool | Risk | Reads | Writes / effect | Credentials? | Chrome perm | User protection |
 |------|------|-------|-----------------|--------------|-------------|-----------------|
