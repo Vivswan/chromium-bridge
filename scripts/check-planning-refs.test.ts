@@ -107,8 +107,10 @@ describe("findPlanningRefs", () => {
     expect(findPlanningRefs("x.ts", text).map((h) => h.line)).toEqual([4, 5]);
   });
 
-  test("a file the parser rejects fails the gate instead of being skipped", () => {
-    expect(() => findPlanningRefs("x.ts", "test(\n")).toThrow(/x\.ts: cannot parse as TypeScript/);
+  test("a file the parser rejects is a hit at the failing line, not a crash", () => {
+    expect(findPlanningRefs("x.ts", "export const a = 1;\ntest(\n")).toEqual([
+      { path: "x.ts", line: 3, pattern: "cannot parse (Unexpected token)", text: "" },
+    ]);
   });
 
   test("the reasons that replaced the tags, and look-alike prose, are clean", () => {
@@ -174,17 +176,18 @@ test("the CLI exits 1 on a tracked covered tag and 0 once it is gone", () => {
 // A git hook exports GIT_DIR and GIT_INDEX_FILE. The CLI, given an explicit root, must still read THAT
 // root's index and leave the hook's repository untouched: the first hook run of an earlier form of this
 // file staged a planted page into the real index. Here the hook's repository is a second scratch repo and
-// the CLI inherits its variables unstripped, so the isolation under test is the script's own.
-test("an explicit root is scanned, not the hook's repository named by GIT_DIR and GIT_INDEX_FILE", () => {
+// the CLI inherits its variables unstripped, so the isolation under test is the script's own. Under a hook
+// the STAGED content is judged: the page is tagged in the index and clean in the working tree, so the
+// hook run exits 1 while the same tree outside a hook exits 0.
+test("under a hook an explicit root is judged by its own staged content, not the hook's repository", () => {
   const target = scratch();
   const setup = gitEnv();
   execFileSync("git", ["-C", target, "init", "-q"], { stdio: "pipe", env: setup });
   mkdirSync(join(target, "docs"));
-  writeFileSync(
-    join(target, "docs", "guide.md"),
-    "# Guide\n\nThe gate refuses (ADR-0032 decision 4).\n",
-  );
+  const page = join(target, "docs", "guide.md");
+  writeFileSync(page, "# Guide\n\nThe gate refuses (ADR-0032 decision 4).\n");
   execFileSync("git", ["-C", target, "add", "docs/guide.md"], { stdio: "pipe", env: setup });
+  writeFileSync(page, "# Guide\n\nThe gate refuses until this connection's push verified.\n");
 
   const hookRepo = scratch();
   execFileSync("git", ["-C", hookRepo, "init", "-q"], { stdio: "pipe", env: setup });
@@ -192,14 +195,43 @@ test("an explicit root is scanned, not the hook's repository named by GIT_DIR an
   const hookIndex = join(hookGitDir, "index");
   const headBefore = readFileSync(join(hookGitDir, "HEAD"), "utf8");
 
-  const run = spawnSync("bun", [script, target], {
+  const hooked = spawnSync("bun", [script, target], {
     encoding: "utf8",
     env: { ...setup, GIT_DIR: hookGitDir, GIT_INDEX_FILE: hookIndex },
   });
-  expect({ status: run.status, stdout: run.stdout }).toEqual({ status: 1, stdout: "" });
-  expect(run.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
+  expect({ status: hooked.status, stdout: hooked.stdout }).toEqual({ status: 1, stdout: "" });
+  expect(hooked.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
   expect({
     hookIndexExists: existsSync(hookIndex),
     head: readFileSync(join(hookGitDir, "HEAD"), "utf8"),
   }).toEqual({ hookIndexExists: false, head: headBefore });
+
+  const plain = spawnSync("bun", [script, target], { encoding: "utf8", env: setup });
+  expect({ status: plain.status, stderr: plain.stderr }).toEqual({ status: 0, stderr: "" });
+
+  // git's own pre-commit hook exports GIT_INDEX_FILE without GIT_DIR in an ordinary checkout, so that
+  // variable alone must already select the staged content.
+  const plainHook = spawnSync("bun", [script, target], {
+    encoding: "utf8",
+    env: { ...setup, GIT_INDEX_FILE: hookIndex },
+  });
+  expect(plainHook.status).toBe(1);
+  expect(plainHook.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
+});
+
+// `git cat-file --batch` reads one request per line, so a tracked path with a newline in it would turn
+// into two requests and shift every later answer onto the wrong path. The scan refuses such a path.
+test("a tracked path containing a newline fails the staged scan instead of misreading it", () => {
+  const root = scratch();
+  const env = gitEnv();
+  execFileSync("git", ["-C", root, "init", "-q"], { stdio: "pipe", env });
+  mkdirSync(join(root, "docs"));
+  const odd = "docs/a.md\nb.md";
+  writeFileSync(join(root, "docs", "a.md"), "clean\n");
+  writeFileSync(join(root, "docs", "b.md"), "clean\n");
+  writeFileSync(join(root, odd), "tagged (ADR-0032 decision 4)\n");
+  execFileSync("git", ["-C", root, "add", "docs/a.md", "docs/b.md", odd], { stdio: "pipe", env });
+  expect(() => scanFiles(root, ["docs/a.md", odd, "docs/b.md"], "index", env)).toThrow(
+    /a tracked path with a newline cannot be scanned/,
+  );
 });

@@ -75,14 +75,25 @@ function calleeName(node: Node): string | null {
   return e.type === "Identifier" ? (e.name as string) : null;
 }
 
-/** Every test/describe/it title in a script, with the 1-based line its title starts on. */
-export function testTitles(path: string, text: string): Array<{ line: number; title: string }> {
-  if (!SCRIPT_EXTENSIONS.test(path)) return [];
+/** Every test/describe/it title in a script, with the 1-based line its title starts on. A parse failure
+ * is returned as a hit at the failing line, so the gate reports it and exits 1 like any other finding. */
+export function testTitles(
+  path: string,
+  text: string,
+): { titles: Array<{ line: number; title: string }>; parseFailure: Hit | null } {
+  if (!SCRIPT_EXTENSIONS.test(path)) return { titles: [], parseFailure: null };
   let ast: Node;
   try {
     ast = parse(text, { sourceType: "module", plugins: ["typescript", "jsx"] }) as unknown as Node;
   } catch (e) {
-    throw new Error(`${path}: cannot parse as TypeScript: ${(e as Error).message}`);
+    const err = e as Error & { loc?: { line: number } };
+    const line = err.loc?.line ?? 1;
+    const reason = err.message.replace(/\s*\(\d+:\d+\)$/, "");
+    const offending = (text.split("\n")[line - 1] ?? "").trim();
+    return {
+      titles: [],
+      parseFailure: { path, line, pattern: `cannot parse (${reason})`, text: offending },
+    };
   }
   const found: Array<{ line: number; title: string }> = [];
   const walk = (node: unknown): void => {
@@ -102,7 +113,7 @@ export function testTitles(path: string, text: string): Array<{ line: number; ti
     }
   };
   walk(ast);
-  return found;
+  return { titles: found, parseFailure: null };
 }
 
 export interface Hit {
@@ -122,7 +133,9 @@ export function findPlanningRefs(path: string, text: string): Hit[] {
     const match = PATTERNS.find(([, re]) => re.test(raw));
     if (match) flagged.set(index, match[0]);
   });
-  for (const { line, title } of testTitles(path, text)) {
+  const { titles, parseFailure } = testTitles(path, text);
+  if (parseFailure) return [parseFailure];
+  for (const { line, title } of titles) {
     if (!TITLE_CODE.test(title)) continue;
     const index = line - 1;
     if (!flagged.has(index)) flagged.set(index, TITLE_CODE_NAME);
@@ -140,7 +153,9 @@ export function findPlanningRefs(path: string, text: string): Hit[] {
 /** The environment for a git child aimed at a repository OTHER than the one a running git hook is
  * committing: the caller's, minus the GIT_* variables the hook exports (GIT_DIR, GIT_INDEX_FILE, ...).
  * Inherited, they would make `git -C <root>` read and WRITE the hook's repository instead of root. The
- * hook's own repository keeps them, so a commit built on an alternate index is scanned as staged. */
+ * hook's own repository keeps them, so a commit built on an alternate index is scanned as staged; the
+ * hook itself is still detected from the caller's GIT_INDEX_FILE, so an explicit root under a hook is
+ * judged by its own index too. */
 export function gitEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
 }
@@ -160,14 +175,66 @@ export function coveredFiles(root: string, env: NodeJS.ProcessEnv = process.env)
     .sort();
 }
 
-export function scanFiles(root: string, paths: readonly string[]): Hit[] {
-  return paths.flatMap((p) => findPlanningRefs(p, readFileSync(resolve(root, p), "utf8")));
+/** Where file content is read from. Under a git hook the commit is judged, so content comes from the index
+ * the hook is committing (a tag staged over a clean working tree would otherwise pass pre-commit and land);
+ * everywhere else the working tree is what the developer is looking at. */
+export type ContentSource = "worktree" | "index";
+
+/** Each path's content from the index, in one `git cat-file --batch` round trip (binary-safe by byte
+ * length). The batch protocol is line-based, so a path carrying a newline would be read as two requests
+ * and shift every answer after it; such a path fails the gate outright rather than being misread. A
+ * tracked path the index cannot produce is a broken index, so it throws too. */
+function indexContents(
+  root: string,
+  paths: readonly string[],
+  env: NodeJS.ProcessEnv,
+): Map<string, string> {
+  const unreadable = paths.find((p) => p.includes("\n"));
+  if (unreadable !== undefined) {
+    throw new Error(
+      `${JSON.stringify(unreadable)}: a tracked path with a newline cannot be scanned`,
+    );
+  }
+  const out = execFileSync("git", ["-C", root, "cat-file", "--batch"], {
+    env,
+    input: paths.map((p) => `:${p}\n`).join(""),
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const contents = new Map<string, string>();
+  let cursor = 0;
+  for (const path of paths) {
+    const headerEnd = out.indexOf(0x0a, cursor);
+    const header = out.subarray(cursor, headerEnd).toString("utf8");
+    const size = Number(header.split(" ")[2]);
+    if (header.endsWith(" missing") || !Number.isInteger(size)) {
+      throw new Error(`${path}: not in the index (${header})`);
+    }
+    contents.set(path, out.subarray(headerEnd + 1, headerEnd + 1 + size).toString("utf8"));
+    cursor = headerEnd + 1 + size + 1;
+  }
+  return contents;
+}
+
+export function scanFiles(
+  root: string,
+  paths: readonly string[],
+  source: ContentSource = "worktree",
+  env: NodeJS.ProcessEnv = process.env,
+): Hit[] {
+  const staged = source === "index" ? indexContents(root, paths, env) : null;
+  return paths.flatMap((p) =>
+    findPlanningRefs(p, staged ? (staged.get(p) ?? "") : readFileSync(resolve(root, p), "utf8")),
+  );
 }
 
 function main(rootArg: string | undefined): number {
   const root = rootArg ? resolve(rootArg) : resolve(fileURLToPath(import.meta.url), "../..");
-  const files = coveredFiles(root, rootArg ? gitEnv() : process.env);
-  const hits = scanFiles(root, files);
+  const env = rootArg ? gitEnv() : process.env;
+  // git's pre-commit hook exports GIT_INDEX_FILE (GIT_DIR only in some layouts), so that one variable is
+  // the hook signal; a developer who exported it by hand is judged by that index, which is what they named.
+  const underHook = process.env.GIT_INDEX_FILE !== undefined;
+  const files = coveredFiles(root, env);
+  const hits = scanFiles(root, files, underHook ? "index" : "worktree", env);
   for (const hit of hits) {
     console.error(`${hit.path}:${hit.line}: ${hit.pattern}: ${hit.text}`);
   }
