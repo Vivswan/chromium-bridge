@@ -354,7 +354,7 @@ class Revocation(AdversarialCase):
         pair("--name", "pytest", "--this-parent")
         h.reset_enrollment()
         srv = self.server()
-        self.assertIn("harness admission is NOT enforced", h.server_stderr(srv))
+        self.assertIn("harness admitted WITHOUT attestation enforcement", h.server_stderr(srv))
 
 
 class KillSwitch(AdversarialCase):

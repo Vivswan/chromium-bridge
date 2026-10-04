@@ -43,7 +43,7 @@ use crate::protocol::{
     MCP_MAX_LINE,
 };
 use crate::session::Session;
-use crate::trust::{Admission, Posture, TrustState, POLL_INTERVAL};
+use crate::trust::{Admission, AdmittingSurface, Posture, TrustState, POLL_INTERVAL};
 
 // ---- DoS limits (generalizing the fail-closed-timeout posture) -------------
 
@@ -895,15 +895,14 @@ fn admit_client<'a>(
         .and_then(|h| h.name.as_deref())
         .filter(|n| ipc::validate_label(n))
         .map(str::to_string);
-    let posture = match trust.decide(identity.as_ref()) {
+    let admission = trust.decide(identity.as_ref());
+    admission.announce(
+        AdmittingSurface::Relay,
+        reported_name.as_deref(),
+        identity.as_ref(),
+    );
+    let posture = match admission {
         Admission::Refused => {
-            audit::record(
-                audit::AuditRecord::new(audit::AuditKind::HarnessRefuse)
-                    .surface(audit::Surface::Broker)
-                    .name(reported_name.as_deref().unwrap_or("-"))
-                    .outcome("refused")
-                    .detail("not in the trusted-client allowlist"),
-            );
             return reject_relay(
                 &mut writer,
                 &format!(
@@ -915,32 +914,7 @@ fn admit_client<'a>(
                 }),
             );
         }
-        Admission::Admit(Posture::Unenrolled) => {
-            log_error!(
-                "broker",
-                "SECURITY: relay admitted WITHOUT harness attestation -- no trusted client has \
-                 been paired yet (unenrolled). Any same-user process that runs our binary \
-                 can drive the browser through this relay. Run `chromium-bridge pair-client` to \
-                 enroll trusted clients and turn on enforcement. See SECURITY.md."
-            );
-            audit::record(
-                audit::AuditRecord::new(audit::AuditKind::HarnessAdmit)
-                    .surface(audit::Surface::Broker)
-                    .name(reported_name.as_deref().unwrap_or("-"))
-                    .outcome("unenrolled"),
-            );
-            Posture::Unenrolled
-        }
-        Admission::Admit(Posture::Trusted { name }) => {
-            log_info!("broker", "relay admitted for trusted client '{name}'");
-            audit::record(
-                audit::AuditRecord::new(audit::AuditKind::HarnessAdmit)
-                    .surface(audit::Surface::Broker)
-                    .name(&name)
-                    .outcome("ok"),
-            );
-            Posture::Trusted { name }
-        }
+        Admission::Admit(posture) => posture,
     };
 
     let sweep_handle = match writer.get_ref().try_clone() {

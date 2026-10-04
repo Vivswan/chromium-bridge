@@ -27,6 +27,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::allowlist::{Anchor, ClientEntry};
+use crate::audit::{self, AuditKind, AuditRecord};
 use crate::ipc::{ClientIdentity, RuntimeLockToken};
 use crate::runtime_record::{Ladder, Record, RuntimeRecord};
 
@@ -283,6 +284,102 @@ fn anchor_matches(anchor: &Anchor, identity: &ClientIdentity) -> bool {
     match anchor {
         Anchor::Hash(h) => *h == identity.hash,
         Anchor::Signer(t) => identity.signer.as_ref() == Some(t),
+    }
+}
+
+/// The two surfaces that admit a harness. Each carries its audit surface and its log tag, so an admission
+/// cannot be audited under one surface and logged under another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmittingSurface {
+    /// The broker's relay endpoint, admitting a harness another server process attested.
+    Relay,
+    /// An MCP-server-mode process, admitting the harness that spawned it over stdio.
+    Stdio,
+}
+
+impl AdmittingSurface {
+    fn audit(self) -> audit::Surface {
+        match self {
+            AdmittingSurface::Relay => audit::Surface::Broker,
+            AdmittingSurface::Stdio => audit::Surface::Host,
+        }
+    }
+
+    fn log_tag(self) -> &'static str {
+        match self {
+            AdmittingSurface::Relay => "broker",
+            AdmittingSurface::Stdio => "mcp",
+        }
+    }
+}
+
+impl Admission {
+    /// Audit this verdict and log the admitted postures, the same way on every surface, so neither surface can
+    /// drift to a quieter unenrolled admission. `reported_name` is the harness's self-asserted label, already
+    /// validated by the caller; `identity` is the measured anchor set, printed on an unenrolled admission so
+    /// the operator can pair this harness with `--hash` or `--signer` where `--this-parent` cannot measure it
+    /// (Windows, or a harness that spawns the server over a pipe).
+    pub fn announce(
+        &self,
+        surface: AdmittingSurface,
+        reported_name: Option<&str>,
+        identity: Option<&ClientIdentity>,
+    ) {
+        let tag = surface.log_tag();
+        let label = reported_name.unwrap_or("-");
+        match self {
+            Admission::Refused => audit::record(
+                AuditRecord::new(AuditKind::HarnessRefuse)
+                    .surface(surface.audit())
+                    .name(label)
+                    .outcome("refused")
+                    .detail("not in the trusted-client allowlist"),
+            ),
+            Admission::Admit(Posture::Unenrolled) => {
+                log_error!(
+                    tag,
+                    "SECURITY: harness admitted WITHOUT attestation enforcement -- no trusted client has \
+                     been paired yet (unenrolled). Any same-user process that runs our binary can drive \
+                     the browser. Run `chromium-bridge pair-client` to enroll trusted clients and turn on \
+                     enforcement. See SECURITY.md."
+                );
+                // The subject is printed bare, not as a shell argument: an X.500 subject can carry quotes
+                // and commas, and quoting differs per shell.
+                if let Some(id) = identity {
+                    let signer = id
+                        .signer
+                        .as_ref()
+                        .map(|s| format!(", signer [{s}]"))
+                        .unwrap_or_default();
+                    log_error!(
+                        tag,
+                        "this harness measured as hash {}{signer}; pair it with `pair-client --hash {}`{}",
+                        id.hash,
+                        id.hash,
+                        if id.signer.is_some() {
+                            " or `--signer` with that value, quoted for your shell"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                audit::record(
+                    AuditRecord::new(AuditKind::HarnessAdmit)
+                        .surface(surface.audit())
+                        .name(label)
+                        .outcome("unenrolled"),
+                );
+            }
+            Admission::Admit(Posture::Trusted { name }) => {
+                log_info!(tag, "harness admitted as trusted client '{name}'");
+                audit::record(
+                    AuditRecord::new(AuditKind::HarnessAdmit)
+                        .surface(surface.audit())
+                        .name(name)
+                        .outcome("ok"),
+                );
+            }
+        }
     }
 }
 

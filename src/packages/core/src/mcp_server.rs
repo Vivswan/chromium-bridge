@@ -10,7 +10,7 @@ use crate::broker::{self, RelayOutcome};
 use crate::ipc;
 use crate::protocol::{install_stderr_panic_hook, HarnessId};
 use crate::session::Session;
-use crate::trust::{Admission, Posture, TrustState};
+use crate::trust::{Admission, AdmittingSurface, Posture, TrustState};
 
 /// The environment variable a harness may set to name itself
 /// (claude-code/copilot/codex/...). Self-asserted and used for logs and the
@@ -160,71 +160,17 @@ fn admit_own_harness() -> Option<Harness> {
         }
     };
 
-    let posture = match trust.decide(identity.as_ref()) {
-        Admission::Refused => {
-            log_error!(
-                "mcp",
-                "this harness is not in the trusted-client allowlist; refusing to serve \
-                 (fail closed). Pair it first: `chromium-bridge pair-client --name <label>`."
-            );
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessRefuse)
-                    .surface(crate::audit::Surface::Host)
-                    .name(name.as_deref().unwrap_or("-"))
-                    .outcome("refused")
-                    .detail("not in the trusted-client allowlist"),
-            );
-            return None;
-        }
-        Admission::Admit(Posture::Unenrolled) => {
-            log_error!(
-                "mcp",
-                "SECURITY: harness admission is NOT enforced -- no trusted client has been \
-                 paired yet (unenrolled). Any same-user process that runs our binary can drive \
-                 the browser. Run `chromium-bridge pair-client` to enroll trusted clients and \
-                 turn on enforcement. See SECURITY.md."
-            );
-            // The measured anchors, so the operator can pair this harness with
-            // `--hash` or `--signer` where `--this-parent` cannot measure it
-            // (Windows, or any harness that spawns the server over a pipe).
-            // The subject is printed bare, not as a shell argument: an X.500
-            // subject can carry quotes and commas, and quoting differs per shell.
-            if let Some(id) = &identity {
-                let signer = id
-                    .signer
-                    .as_ref()
-                    .map(|s| format!(", signer [{s}]"))
-                    .unwrap_or_default();
-                log_error!(
-                    "mcp",
-                    "this harness measured as hash {}{signer}; pair it with `pair-client --hash {}`{}",
-                    id.hash,
-                    id.hash,
-                    if id.signer.is_some() {
-                        " or `--signer` with that value, quoted for your shell"
-                    } else {
-                        ""
-                    }
-                );
-            }
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessAdmit)
-                    .surface(crate::audit::Surface::Host)
-                    .name(name.as_deref().unwrap_or("-"))
-                    .outcome("unenrolled"),
-            );
-            Posture::Unenrolled
-        }
-        Admission::Admit(Posture::Trusted { name: matched }) => {
-            log_info!("mcp", "harness admitted as trusted client '{matched}'");
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessAdmit)
-                    .surface(crate::audit::Surface::Host)
-                    .name(&matched)
-                    .outcome("ok"),
-            );
-            Posture::Trusted { name: matched }
-        }
+    let admission = trust.decide(identity.as_ref());
+    if admission == Admission::Refused {
+        log_error!(
+            "mcp",
+            "this harness is not in the trusted-client allowlist; refusing to serve \
+             (fail closed). Pair it first: `chromium-bridge pair-client --name <label>`."
+        );
+    }
+    admission.announce(AdmittingSurface::Stdio, name.as_deref(), identity.as_ref());
+    let Admission::Admit(posture) = admission else {
+        return None;
     };
 
     let id = identity.map(|id| HarnessId {
