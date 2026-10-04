@@ -18,9 +18,11 @@ for file in .prototools Containerfile; do
   [ -r "$root/$file" ] || { echo "pin.sh: cannot read $root/$file" >&2; exit 1; }
 done
 
+# Leading whitespace is legal before a TOML key or table header and before a Dockerfile instruction, so
+# the scan allows it everywhere, or an indented duplicate would slip past the one-owner check.
 versions="$(
-  sed -nE "/^\[/q; s/^${tool}[[:space:]]*=[[:space:]]*\"([^\"]+)\".*$/\1/p" "$root/.prototools"
-  sed -nE "s/^ARG ${arg}=([^[:space:]]+)[[:space:]]*$/\1/p" "$root/Containerfile"
+  sed -nE "/^[[:space:]]*\[/q; s/^[[:space:]]*${tool}[[:space:]]*=[[:space:]]*\"([^\"]+)\".*$/\1/p" "$root/.prototools"
+  sed -nE "s/^[[:space:]]*ARG[[:space:]]+${arg}=([^[:space:]]+)[[:space:]]*$/\1/p" "$root/Containerfile"
 )"
 
 case "$versions" in
