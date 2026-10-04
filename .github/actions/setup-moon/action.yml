@@ -6,11 +6,23 @@
 # (Containerfile) already carries proto and moon, so `proto install` there only catches a pin that moved
 # after the image was published.
 name: Set up moon
-description: Installs proto, moon, and the tools pinned in .prototools; optionally rust from rust-toolchain.toml with the cargo cache.
+description: |
+  Installs proto, moon, and every tool .prototools pins, on a bare runner or inside the CI image.
+
+  On a bare runner it bootstraps the toolchain itself. Inside the CI image it only re-runs the install, which catches a pin moved after the image was published. The step order lives in docs/development.md, "Toolchain pinning".
+
+  With cargo set to "true" it also installs rust from rust-toolchain.toml through rustup and restores the cargo cache for both cargo workspaces.
+
+  After it, proto's shims are on PATH, so later steps call moon, bun, and the other pinned tools directly.
+
+  The caller's obligations:
+    - check out the repository first, since the pin files and scripts/pin.ts are read from it
+    - install the repository's pinned rust through the cargo input, never through proto (a job that wants another toolchain installs it itself afterwards)
+    - grant no extra permissions, since the installs and the caches need none beyond the job's own token
 
 inputs:
   cargo:
-    description: Also install rust from rust-toolchain.toml (setup-rust-toolchain) and restore the cargo cache.
+    description: Also install rust from rust-toolchain.toml and restore the cargo cache ("false" skips both).
     required: false
     default: "false"
 

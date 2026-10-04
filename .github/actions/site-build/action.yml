@@ -4,14 +4,20 @@
 # (src/apps/web/src/lib/site-identity.ts); the docs it renders live under
 # /docs/<slug>/ of that build.
 name: Build the website
-description: Builds the Astro site (src/apps/web) for the fleet's site leg.
+description: |
+  Builds the Astro site in src/apps/web for the fleet's site leg and names the directory to publish.
+
+  The caller's obligations:
+    - check out the repository first
+    - pass base-path and origin exactly as the site is served, which the fleet's reusable-site.yml supplies
+    - publish the dist output directory at the site root
 
 inputs:
   base-path:
-    description: The URL path the site is served under (/<repo>/, or / with a custom domain).
+    description: The URL path the site is served under, /<repo>/ or / with a custom domain.
     required: true
   origin:
-    description: The site origin (https://<owner>.github.io, or https://<domain>).
+    description: The site origin, such as https://<owner>.github.io or https://<domain>.
     required: true
 
 outputs:

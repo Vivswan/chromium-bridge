@@ -1,11 +1,19 @@
 # The release binary is built once per run (checks.yml build-release) and handed to the jobs that drive it
 # as a run artifact. An artifact loses the executable bit, so the download restores it.
 name: Release binary
-description: Uploads the Linux release binary as a run artifact, or downloads it into target/release.
+description: |
+  Carries the Linux release binary between the jobs of one run as an artifact.
+
+  Both modes use target/release/chromium-bridge, and the download restores the executable bit.
+
+  The caller's obligations:
+    - upload from a Linux job that built target/release/chromium-bridge first
+    - download only in a job that needs the uploading job, since an absent artifact fails the step
+    - use the artifact within the run, as it is retained for one day
 
 inputs:
   mode:
-    description: upload (after the build) or download (before a suite that drives the binary).
+    description: upload after the build, or download before a suite that drives the binary.
     required: true
 
 runs:
