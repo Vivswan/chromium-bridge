@@ -19,7 +19,7 @@ Some files arrive from [Vivswan/repo-platform](https://github.com/Vivswan/repo-p
 This is a small, security-sensitive project (it drives a real logged-in browser), so changes are held to a high bar for correctness and for preserving the safety model.
 
 - Read [docs/development.md](./docs/development.md) for the dev loop and [docs/architecture.md](./docs/architecture.md) for the design.
-- Behavioral or security-model changes should reference (or add) an [ADR](./docs/adr/). Don't quietly weaken a confirmation/allowlist boundary.
+- Behavioral or security-model changes state their reason in the PR body and, when they change a load-bearing decision, update its row in [docs/security/rationale.md](./docs/security/rationale.md). Don't quietly weaken a confirmation/allowlist boundary.
 - The local gate is `moon run ci` (see [Workflow](#workflow)) - run it, not individual commands, before pushing.
 
 ## Workflow

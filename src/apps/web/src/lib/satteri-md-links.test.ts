@@ -22,7 +22,7 @@ describe("rewriteMdHref", () => {
       ".github/SECURITY.md",
       `${BLOB}/.github/ISSUE_TEMPLATE/security-change.yml`,
     ],
-    ["./adr/", "docs/architecture.md", `${TREE}/docs/adr`],
+    ["./security/", "docs/architecture.md", `${TREE}/docs/security`],
     ["../.github/agents.md", "docs/cli.md", `${BLOB}/.github/agents.md`],
   ])("%s from %s -> %s", (href, source, expected) => {
     expect(rewriteMdHref(href, from(source), "/cb/")).toBe(expected);

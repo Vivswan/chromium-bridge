@@ -141,7 +141,6 @@ export function OptionsApp() {
         <SettingRow
           title={t("settings.group_tabs_title")}
           desc={t("settings.group_tabs_desc")}
-          more={t("settings.group_tabs_more")}
           checked={settings.groupTabs}
           dangerOn="unchecked"
           onChange={(v) => void update("groupTabs", v)}

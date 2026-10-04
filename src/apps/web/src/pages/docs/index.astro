@@ -13,7 +13,6 @@ const groups: Array<{ name: string; match: (slug: string) => boolean }> = [
   },
   { name: "Security", match: (s) => s.startsWith("security/") },
   { name: "Translations (zh_CN / zh_TW)", match: (s) => s.includes(".zh_") },
-  { name: "Architecture Decision Records", match: (s) => s.startsWith("adr/") },
 ];
 
 const grouped = groups.map((g) => ({

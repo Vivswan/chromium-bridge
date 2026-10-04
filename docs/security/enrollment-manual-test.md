@@ -1,6 +1,6 @@
 # Enrollment manual test (Touch ID path)
 
-The presence-gated parts of the enrollment ceremony (ADR-0021) cannot run in CI: they require a Secure Enclave, a codesigned binary, and a human at the keyboard. Everything else about enrollment is covered by automated tests (`cargo test` for the DER converter, challenge validation, and frame serde; `tests/protocol/e2e.py::test_enclave_control_frames` for the host's local handling of control frames). This script covers the rest. Run it on a Mac with Touch ID before any release that touches `src/packages/core/src/enclave/`, the control-frame filter, or the keychain ACL.
+The presence-gated parts of the enrollment ceremony cannot run in CI: they require a Secure Enclave, a codesigned binary, and a human at the keyboard. Everything else about enrollment is covered by automated tests (`cargo test` for the DER converter, challenge validation, and frame serde; `tests/protocol/e2e.py::test_enclave_control_frames` for the host's local handling of control frames). This script covers the rest. Run it on a Mac with Touch ID before any release that touches `src/packages/core/src/enclave/`, the control-frame filter, or the keychain ACL.
 
 ## Prerequisites
 
@@ -26,7 +26,7 @@ Each step lists the action and the required result. Any deviation is a failure; 
    - `"$BIN" enclave-status` now shows the key present, the SAME fingerprint, and `enrolled=true granularity=session`.
    - `ls -l "$HOME/Library/Application Support/chromium-bridge/config.json"`: mode is `-rw-------`.
 
-3. **Pair refuses a pre-existing key.** `"$BIN" pair` again. Exits 1 with a message that a key already exists and that re-enrollment requires `pair --reset`. No Touch ID prompt, no new key, no changed fingerprint in `enclave-status`. (`pair` never adopts a key it did not mint in that run; that is the planted-key defense, see ADR-0021.)
+3. **Pair refuses a pre-existing key.** `"$BIN" pair` again. Exits 1 with a message that a key already exists and that re-enrollment requires `pair --reset`. No Touch ID prompt, no new key, no changed fingerprint in `enclave-status`. (`pair` never adopts a key it did not mint in that run; that is the planted-key defense.)
 
 4. **Decline fails closed.** `"$BIN" pair --reset`, and when the Touch ID prompt appears, press Cancel.
    - Output says pairing was not approved and rolled back; exit code 1.

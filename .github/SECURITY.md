@@ -62,19 +62,19 @@ See [docs/security/](../docs/security/) for the full picture:
 - [trust-boundaries.md](../docs/security/trust-boundaries.md): the process/protocol boundaries and how each is enforced.
 - [tool-risk-matrix.md](../docs/security/tool-risk-matrix.md): every tool's blast radius and protections.
 
-The design record for the current model is the ADR set [0019](../docs/adr/0019-authenticated-ipc.md), [0020](../docs/adr/0020-kernel-attested-peer-identity.md), [0021](../docs/adr/0021-enrollment-ceremony.md), and [0023](../docs/adr/0023-workspace-monorepo-tauri-app.md) through [0031](../docs/adr/0031-touch-id-confirmations-and-presence-grants.md).
+The reasons behind the current model, and the alternatives each decision rejected, are in [rationale.md](../docs/security/rationale.md).
 
 Key invariants:
 
 - **stdout is protocol.** The binary never prints diagnostics there; only framed/NDJSON messages (a stray write corrupts the stream).
 - **Read-only credential access.** Cookies/storage can be read (masked), never written. There is no `cookie_set`/`storage_set` by design.
 - **Approve-per-origin.** Page ops need an allowlisted origin.
-- **Confirm high-risk.** Submit/link clicks, key presses, selects, tab close, uploads, and `page_eval` confirm on an extension-owned window the page cannot reach. On an enrolled Mac, `page_eval` and `page_upload` approval is a Secure Enclave user-presence signature (Touch ID or the login password, [ADR-0031](../docs/adr/0031-touch-id-confirmations-and-presence-grants.md)).
+- **Confirm high-risk.** Submit/link clicks, key presses, selects, tab close, uploads, and `page_eval` confirm on an extension-owned window the page cannot reach. On an enrolled Mac, `page_eval` and `page_upload` approval is a Secure Enclave user-presence signature (Touch ID or the login password).
 - **Gates are on by default.** Each is a documented setting, and relaxing one is an explicit, informed choice (see the defaults table below).
-- **Bridge auth.** No bridge connection is served until it passes the four gates below, in order ([ADR-0019](../docs/adr/0019-authenticated-ipc.md), [ADR-0020](../docs/adr/0020-kernel-attested-peer-identity.md), [ADR-0024](../docs/adr/0024-multi-client-attested-pairing-and-broker.md)).
-- **Harness admission.** Once the trusted-client allowlist exists, no MCP client is served unless its attested code identity matches an entry; authorization keys on the attested anchor, never a self-asserted name ([ADR-0024](../docs/adr/0024-multi-client-attested-pairing-and-broker.md)).
-- **Any-side revocation.** A monotonic epoch is re-read at every enforcement point; revoking from any surface drops live connections and refuses re-attach, fail-closed ([ADR-0025](../docs/adr/0025-any-side-revocation-epoch.md)).
-- **Fail-closed kill switch.** One latch halts everything from any trusted surface; release demands proof of user presence and refuses on an unreadable record ([ADR-0030](../docs/adr/0030-global-kill-switch-and-audit.md)).
+- **Bridge auth.** No bridge connection is served until it passes the four gates below, in order.
+- **Harness admission.** Once the trusted-client allowlist exists, no MCP client is served unless its attested code identity matches an entry; authorization keys on the attested anchor, never a self-asserted name.
+- **Any-side revocation.** A monotonic epoch is re-read at every enforcement point; revoking from any surface drops live connections and refuses re-attach, fail-closed.
+- **Fail-closed kill switch.** One latch halts everything from any trusted surface; release demands proof of user presence and refuses on an unreadable record.
 - **Log-after-decide audit.** Security decisions (admissions, refusals, confirmations, revocations, kill transitions, tool calls) are recorded to stderr and a durable 0600 `audit.log`. Recording can never gate or fail a decision; a failed write drops the record visibly (a `dropped` counter) rather than blocking.
 
 The bridge auth gates, in order:
@@ -104,17 +104,17 @@ What that means on Windows:
 - The server logs a prominent warning at startup. Treat the bridge accordingly there.
 - The full scoping is in the [threat model](../docs/security/threat-model.md) and [trust boundaries](../docs/security/trust-boundaries.md) docs.
 
-The Touch ID presence gates are macOS-only by nature; other platforms use the documented interactive fail-closed floors ([ADR-0031](../docs/adr/0031-touch-id-confirmations-and-presence-grants.md)).
+The Touch ID presence gates are macOS-only by nature; other platforms use the documented interactive fail-closed floors.
 
 ## page_eval and confirmation defaults (fail-safe)
 
-`page_eval` runs arbitrary JavaScript in a real, logged-in page, so its defaults are set to fail safe (ADR-0008, updated by ADR-0027/0031):
+`page_eval` runs arbitrary JavaScript in a real, logged-in page, so its defaults are set to fail safe:
 
 - **Every `page_eval` call reconfirms.** The confirmation shows the full code, target URL, and tab title; on an enrolled Mac it is a Touch ID prompt.
 - **No silent-eval window.** `page_eval` is deliberately excluded from the same-origin grace window, so one approval never covers a later, different payload.
 - **The grace window is click-only.** `confirmGraceMs` (default 60000 ms) lets a repeated same-origin click/submit skip re-prompting within the window. Those clicks are lower-risk and observable in the UI.
 
-These are host-owned POLICY defaults (ADR-0032): the table shows the signed policy contract's deny baseline, which governs once a host policy applies. A power user can still relax a field, and doing so is an explicit, informed choice:
+These are host-owned POLICY defaults: the table shows the signed policy contract's deny baseline, which governs once a host policy applies. A power user can still relax a field, and doing so is an explicit, informed choice:
 
 | Setting | Default | Relaxing it means | Residual risk you accept |
 |---------|---------|-------------------|--------------------------|
@@ -211,9 +211,9 @@ Known gaps, stated plainly:
 - **Signing will change the check.** Once a distribution signing identity lands, released binaries will no longer be byte-identical to local rebuilds and verification will move to comparing cdhashes.
 - **Install-time hostility is out of scope.** A hostile process already running as the same user during install is handled at runtime by the bridge's peer attestation and harness admission, not at install time.
 
-### Dependency supply chain (ADR-0035)
+### Dependency supply chain
 
-Dependency review is fully automated; there is no manual per-crate audit step ([ADR-0035](../docs/adr/0035-automated-supply-chain-review.md)).
+Dependency review is fully automated; there is no manual per-crate audit step. A single maintainer cannot read the rmcp dependency tree line by line, and a gate that is always satisfied by an exemption asserts little.
 
 | Layer | Runs | Catches |
 |-------|------|---------|
@@ -225,15 +225,15 @@ Dependency review is fully automated; there is no manual per-crate audit step ([
 Boundaries of that stack:
 
 - The dependency-review action only has a diff to review on pull_request events; direct pushes stay covered by cargo-deny and Trivy in the same gate plus the nightly rerun.
-- License enforcement is cargo-deny's alone; the reason the action does not mirror the allow-list is in ADR-0035.
+- License enforcement is cargo-deny's alone. The dependency-review action reads licenses from GitHub's dependency graph, which misreports real `Cargo.lock` entries (the deprecated slash syntax, crates missing from the resolved graph), so a mirrored allow-list would fail legitimate bumps.
 - The nightly rerun exists so advisories disclosed between pushes still surface; a red night files the `nightly-failure` tracking issue.
 - Two JS cases the retired `bun audit --audit-level=high` leg gated and Trivy does not: dev-only packages in `bun.lock` (Trivy runs without `--include-dev-deps`) and HIGH/CRITICAL advisories with no fixed version (Trivy runs with `ignore-unfixed`). Both are accepted cuts: the first because those packages run only in the local and CI toolchain, the second because a bump cannot fix it and a red gate would only block unrelated work. Dependabot alerts still cover both; the fleet's nightly Trivy scan additionally reports the unfixed production advisories.
 
-What this asserts is "no unwaived known advisory and an allowed license", not "a human audited this code". The RUSTSEC exceptions reviewed into `deny.toml`'s ignore list stay waived. The residual risk (a novel malicious crate or undiscovered flaw with no published advisory) is recorded in ADR-0035.
+What this asserts is "no unwaived known advisory and an allowed license", not "a human audited this code". The RUSTSEC exceptions reviewed into `deny.toml`'s ignore list stay waived. The residual risk: a novel malicious crate, or an undiscovered flaw with no published advisory, enters the build with no human audit in its way. `deny.toml` refuses unknown registries and git sources, and PR review still sees every `Cargo.lock` diff.
 
-### CI supply chain under the fleet template (ADR-0033)
+### CI supply chain under the fleet template
 
-CI configuration is fleet-managed ([ADR-0033](../docs/adr/0033-adopt-repo-platform-fleet-template.md)):
+CI configuration is fleet-managed:
 
 - The managed ci.yml is a skeleton that calls the fleet's reusable workflows and actions at `@stable`, a moving tag in the fleet repository that names a green `main` commit. The fleet repository's own post-green job moves it after each push to `main` that passes its gate.
 - Third-party actions are pinned to commit SHAs on both sides.
@@ -243,11 +243,11 @@ The moving `stable` tag is a real, accepted widening of the CI supply chain:
 - A compromise of the fleet repository executes in this repository's CI, in jobs holding security-events, pages, id-token, contents, and pull-requests write.
 - The acceptance rests on a trust assumption, not a technical boundary: the fleet repository stays under the same owner's control. The fleet repository's ruleset blocks deletion of the tag only; a `uses:` here executes whatever the tag names, so an out-of-band move by a push-access holder is caught by nothing at write time.
 - The mover, its gates, and the remaining trusts are recorded in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/build-provenance.md).
-- The rest of the accepted residuals live in ADR-0033.
+- auto-format.yml pushes with `GITHUB_TOKEN`, whose commits trigger no CI, so a formatted PR head has no all-green result until someone re-runs CI. Fail-safe: the merge stays blocked.
 
 ## Identifiers (rebrand, 2026-07)
 
-The project renamed from the upstream `browser-bridge` to `chromium-bridge` ([ADR-0023](../docs/adr/0023-workspace-monorepo-tauri-app.md)). The security-relevant identifiers are now:
+The project renamed from the upstream `browser-bridge` to `chromium-bridge`; the identifiers are our own, so upstream fixes are ported by hand instead of merged. The security-relevant identifiers are now:
 
 | Identifier | Value | Note |
 |------------|-------|------|
@@ -311,10 +311,10 @@ Extra review care applies to these security-critical surfaces:
 - `src/packages/core/src/presence/`
 - `src/packages/core/src/enclave/`
 - `src/packages/core/src/registration.rs`
-- `src/packages/core/src/mcp/` (the rmcp seam, ADR-0034)
+- `src/packages/core/src/mcp/` (the rmcp seam)
 - the extension's allowlist/eval/confirmation code
 - `src/apps/extension/wxt.config.ts`
 
-### ADR-0032: the host-owned policy residual ledger
+### The host-owned policy residual ledger
 
-The host-owned policy work ([ADR-0032](../docs/adr/0032-host-owned-policy-settings.md)) records every accepted residual it introduced in one place, the [residual ledger in the threat model](../docs/security/threat-model.md#host-owned-policy-adr-0032-residual-ledger). A change that touches one of those mechanisms updates its ledger entry there; this file deliberately does not duplicate the entries.
+The host-owned policy work records every accepted residual it introduced in one place, the [residual ledger in the threat model](../docs/security/threat-model.md#host-owned-policy-residual-ledger). A change that touches one of those mechanisms updates its ledger entry there; this file deliberately does not duplicate the entries.

@@ -8,12 +8,12 @@
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
 // The newest MCP JSON-RPC protocol revision the Rust server serves
-// (protocol.rs MCP_PROTOCOL_VERSION, per docs/adr/0034): advertised by
-// `server/discover` in `supportedVersions`.
+// (protocol.rs MCP_PROTOCOL_VERSION): advertised by `server/discover` in
+// `supportedVersions`.
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
 
-// The `_meta` key strings of the stateless era (ADR-0034), single-sourced
-// from protocol.rs. Every stateless request's `params._meta` MUST carry
+// The `_meta` key strings of the stateless era, single-sourced from
+// protocol.rs. Every stateless request's `params._meta` MUST carry
 // BOTH the protocol version and the client capabilities (an empty object
 // suffices); the server/discover result carries the server identity under
 // the serverInfo key.

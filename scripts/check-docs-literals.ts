@@ -184,17 +184,14 @@ export function familyViolations(
 }
 
 /** MCP-version check: on lines mentioning MCP, every date-shaped token must be
- * the canonical protocol version. Filename tokens (ADR titles like
- * 0007-mcp-protocol-version-2025-06-18.md keep their minting date forever)
- * are stripped before scanning. */
+ * the canonical protocol version. */
 export function mcpLineViolations(doc: string, text: string, canonical: string): Violation[] {
   const out: Violation[] = [];
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
     if (!line.includes("MCP")) continue;
-    const prose = line.replace(/[A-Za-z0-9._/-]*\.md\b/g, "");
-    for (const m of prose.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) {
+    for (const m of line.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) {
       if (m[0] !== canonical) {
         out.push({
           doc,
@@ -393,8 +390,8 @@ if (import.meta.main) {
   const auditLimit = auditDefaultLimit(rust("audit.rs"));
   const keys = browserKeys(rust("browsers.rs"));
 
-  // Scope: living markdown only. ADRs are point-in-time records; CHANGELOG.md
-  // is release history; sources and tests have their own gates. The security
+  // Scope: living markdown only. CHANGELOG.md is release history; sources and
+  // tests have their own gates. The security
   // policy sits in GitHub's community-health directory, so it is named here -
   // the rest of .github/ (agent instructions, templates) stays out of scope.
   const docs = execFileSync("git", ["ls-files", "*.md", "docs/**/*.md"], {
@@ -406,7 +403,6 @@ if (import.meta.main) {
       (p) =>
         p !== "" &&
         p !== "CHANGELOG.md" &&
-        !p.startsWith("docs/adr/") &&
         (!p.includes("/") || p.startsWith("docs/") || p === ".github/SECURITY.md"),
     );
 
@@ -461,11 +457,7 @@ if (import.meta.main) {
     for (const f of families) {
       violations.push(...familyViolations(doc, text, f.label, f.family, f.allowed));
     }
-    // docs/README.md's ADR index restates historical ADR titles in prose;
-    // every other doc's MCP-version mentions must be current.
-    if (doc !== "docs/README.md") {
-      violations.push(...mcpLineViolations(doc, text, mcpVersion));
-    }
+    violations.push(...mcpLineViolations(doc, text, mcpVersion));
     violations.push(...bridgeVersionLineViolations(doc, text, bridgeVersion));
   }
 

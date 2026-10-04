@@ -198,12 +198,6 @@ describe("mcpLineViolations", () => {
     expect(v).toHaveLength(1);
     expect(v[0]?.message).toContain("2025-06-18");
   });
-
-  test("ADR filenames keep their minting date without tripping the check", () => {
-    const text =
-      "| MCP | `2026-03-26` ([ADR-0007](./adr/0007-mcp-protocol-version-2025-06-18.md)) |";
-    expect(mcpLineViolations("d.md", text, "2026-03-26")).toEqual([]);
-  });
 });
 
 describe("bridgeVersionLineViolations", () => {
