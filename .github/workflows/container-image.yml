@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - Containerfile
+      - .dockerignore
       - .prototools
       - rust-toolchain.toml
       - .github/workflows/checks.yml
@@ -39,7 +40,7 @@ jobs:
         # GHCR coordinates are lowercase; the owner's login and the repository name need not be.
         run: |
           echo "name=ghcr.io/${OWNER,,}/${REPO,,}-ci" >> "$GITHUB_OUTPUT"
-          echo "tag=$(cat Containerfile .prototools rust-toolchain.toml .github/workflows/checks.yml scripts/container-entrypoint.sh | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(cat Containerfile .dockerignore .prototools rust-toolchain.toml .github/workflows/checks.yml scripts/container-entrypoint.sh | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

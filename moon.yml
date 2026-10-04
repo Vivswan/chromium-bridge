@@ -298,9 +298,9 @@ tasks:
       runInCI: false # needs an isolated Chrome; CI's browser job provides its own
 
   # ----- container test environment (compose.yaml; never in CI) --------------
-  # The container is the isolation: no host browser, toolchain, or process is in its reach, and the
-  # engine (docker, or podman via CONTAINER_ENGINE=podman) is the only host dependency. The first run
-  # builds the image from Containerfile. scripts/compose-run.ts supplies what only the host knows.
+  # The container is the isolation: no host browser, host toolchain, or host process is in its reach.
+  # The host side needs the engine (docker, or podman via CONTAINER_ENGINE=podman) plus the bun, git,
+  # and moon that run these tasks. scripts/compose-run.ts supplies what only the host knows.
 
   ci-container:
     description: 'THE GATE inside the container test environment (docker; CONTAINER_ENGINE=podman switches)'

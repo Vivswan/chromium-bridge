@@ -40,8 +40,7 @@ export function extensionDir(): string {
   );
 }
 
-/** Returns `bin` when it identifies (by its own --version) as an isolated
- * browser, else null; `containerMarkers` is injectable for the unit test. */
+/** The isolation verdict for one binary, by its own --version. */
 export function isolatedBrowser(
   bin: string,
   containerMarkers: readonly string[] = CONTAINER_MARKERS,

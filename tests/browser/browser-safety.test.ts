@@ -1,7 +1,7 @@
-// Unit tests for the suite-ran canary in browser-safety.ts. No browser is
-// launched here - the guard is exercised as a real subprocess whose CHROME_BIN
-// is unset, so it always takes the refusal path - making this file safe to run
-// anywhere (CI runs it in the browser job next to the suites it guards).
+// Unit tests for the isolation guard and the suite-ran canary in browser-safety.ts. No browser is
+// launched here: the guard's browsers are stub scripts that print a version line, and the canary
+// runs as a real subprocess with CHROME_BIN unset, so this file is safe to run anywhere (CI runs it
+// in the browser job next to the suites it guards).
 
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
