@@ -26,7 +26,16 @@ export type Change =
   | { change: "tag-union-as-enum-object" }
   /** The node is replaced by a schema another generated module already owns; the generator cross-checks an
    * object node's field inventory and field types against that schema. */
-  | { change: "generated-schema"; symbol: string; from: string };
+  | { change: "generated-schema"; symbol: string; from: string }
+  /** A whole frame (the `$` path) whose boolean `discriminant` selects which Option fields a host-emitted frame
+   * carries: the generator emits one arm per value as a `z.discriminatedUnion`, each arm requiring its
+   * `required` fields and refusing its `forbidden` ones. Applied after the field-level changes, so an arm
+   * inherits them. */
+  | {
+      change: "ok-split";
+      discriminant: string;
+      arms: readonly { when: boolean; required: readonly string[]; forbidden: readonly string[] }[];
+    };
 
 export type Asymmetry = {
   direction: AsymmetryDirection;
@@ -99,6 +108,45 @@ const SIGNED_ARTIFACT: Asymmetry = {
   changes: [{ change: "string", minLength: 1 }],
   probes: { refuses: [""] },
 };
+
+/** The verdict frames the host builds from one typed value (`KillStatus`, `PolicyStatus`, `EnrollOutcome`,
+ * `PresenceOutcome` in protocol/control.rs): on the wire every field is an Option, so the faithful base admits
+ * mixtures the producer can never emit. The split names the two shapes; `okSplit` builds an entry from them. */
+function okSplit(
+  frame: string,
+  ok: { required: readonly string[]; forbidden: readonly string[] },
+  refused: { required: readonly string[]; forbidden: readonly string[] },
+  probes: Asymmetry["probes"],
+): Asymmetry {
+  const arm = (
+    when: boolean,
+    rule: { required: readonly string[]; forbidden: readonly string[] },
+  ) =>
+    [
+      `ok: ${when}`,
+      rule.required.length > 0 ? `always carries ${rule.required.join(", ")}` : "",
+      rule.forbidden.length > 0 ? `never carries ${rule.forbidden.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  return {
+    direction: "narrow",
+    reason:
+      `${frame} is emitted from one typed verdict: ${arm(true, ok)}; ${arm(false, refused)}; a mixture is not ` +
+      "the host's frame.",
+    changes: [
+      {
+        change: "ok-split",
+        discriminant: "ok",
+        arms: [
+          { when: true, ...ok },
+          { when: false, ...refused },
+        ],
+      },
+    ],
+    probes,
+  };
+}
 
 const HOST_MINTED: Asymmetry = {
   direction: "narrow",
@@ -188,12 +236,65 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
   },
   enroll_result: {
     "$.properties.credential_id": HOST_MINTED,
+    $: okSplit(
+      "enroll_result",
+      { required: ["credential_id"], forbidden: ["reason"] },
+      { required: ["reason"], forbidden: ["credential_id"] },
+      {
+        refuses: [
+          { type: "enroll_result", ok: true },
+          { type: "enroll_result", ok: true, credential_id: "Y3JlZC1h", reason: "r" },
+          { type: "enroll_result", ok: false },
+          { type: "enroll_result", ok: false, credential_id: "Y3JlZC1h", reason: "r" },
+        ],
+        accepts: [
+          { type: "enroll_result", ok: true, credential_id: "Y3JlZC1h" },
+          { type: "enroll_result", ok: false, reason: "attestation_format" },
+        ],
+      },
+    ),
+  },
+  presence_result: {
+    $: okSplit(
+      "presence_result",
+      { required: [], forbidden: ["reason"] },
+      { required: ["reason"], forbidden: [] },
+      {
+        refuses: [
+          { type: "presence_result", ok: true, reason: "r" },
+          { type: "presence_result", ok: false },
+        ],
+        accepts: [
+          { type: "presence_result", ok: true },
+          { type: "presence_result", ok: false, reason: "sign_count_not_increased" },
+        ],
+      },
+    ),
   },
   presence_request: {
     "$.properties.challenge": HOST_MINTED,
     "$.properties.action": HOST_MINTED,
   },
   policy_current: {
+    $: okSplit(
+      "policy_current",
+      { required: ["baseline"], forbidden: ["error"] },
+      { required: ["error"], forbidden: ["baseline", "sig", "overlay"] },
+      {
+        refuses: [
+          { type: "policy_current", ok: true, baseline: "e30=", error: "boom" },
+          { type: "policy_current", ok: true },
+          { type: "policy_current", ok: false, baseline: "e30=", error: "boom" },
+          { type: "policy_current", ok: false, sig: "c2ln", error: "boom" },
+          { type: "policy_current", ok: false, overlay: {}, error: "boom" },
+          { type: "policy_current", ok: false },
+        ],
+        accepts: [
+          { type: "policy_current", ok: true, baseline: "e30=", sig: "c2ln", overlay: {} },
+          { type: "policy_current", ok: false, error: "no policy baseline" },
+        ],
+      },
+    ),
     "$.properties.baseline": SIGNED_ARTIFACT,
     "$.properties.sig": SIGNED_ARTIFACT,
     "$.properties.overlay": {

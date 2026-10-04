@@ -8,9 +8,8 @@
 // required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts) and the ENFORCED validator
 // the extension runs, which is the base plus exactly the asymmetry table (direction and reason per entry in
 // envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts, `moon run check-envelope`). The
-// policy_current reader is completed by the ok-split refinement in enclave.ts. The extension->host writer
-// schemas exist for their inferred types only (constructor-site `satisfies`); the enforcing reader for those
-// frames is the Rust serde parser.
+// extension->host writer schemas exist for their inferred types only (constructor-site `satisfies`); the
+// enforcing reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 import { OpArgsSchema } from "./ops.gen";
@@ -243,18 +242,30 @@ export const PolicyCurrentWireSchema = z
   })
   .strict();
 
-export const PolicyCurrentFrameShapeSchema = z
-  .object({
-    "baseline": z.string().min(1).optional(),
-    "error": z.string().optional(),
-    "ok": z.boolean(),
-    "overlay": PolicyOverlaySchema.optional(),
-    "sig": z.string().min(1).optional(),
-    "type": z.literal("policy_current"),
-  })
-  .catchall(z.unknown());
+export const PolicyCurrentFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "baseline": z.string().min(1),
+      "error": z.undefined().optional(),
+      "ok": z.literal(true),
+      "overlay": PolicyOverlaySchema.optional(),
+      "sig": z.string().min(1).optional(),
+      "type": z.literal("policy_current"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "baseline": z.undefined().optional(),
+      "error": z.string(),
+      "ok": z.literal(false),
+      "overlay": z.undefined().optional(),
+      "sig": z.undefined().optional(),
+      "type": z.literal("policy_current"),
+    })
+    .catchall(z.unknown()),
+]);
 
-export type PolicyCurrentFrameShape = z.infer<typeof PolicyCurrentFrameShapeSchema>;
+export type PolicyCurrentFrame = z.infer<typeof PolicyCurrentFrameSchema>;
 
 export const LangCurrentWireSchema = z
   .object({
@@ -307,14 +318,24 @@ export const EnrollResultWireSchema = z
   })
   .strict();
 
-export const EnrollResultFrameSchema = z
-  .object({
-    "credential_id": z.string().min(1).optional(),
-    "ok": z.boolean(),
-    "reason": z.string().optional(),
-    "type": z.literal("enroll_result"),
-  })
-  .catchall(z.unknown());
+export const EnrollResultFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "credential_id": z.string().min(1),
+      "ok": z.literal(true),
+      "reason": z.undefined().optional(),
+      "type": z.literal("enroll_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "credential_id": z.undefined().optional(),
+      "ok": z.literal(false),
+      "reason": z.string(),
+      "type": z.literal("enroll_result"),
+    })
+    .catchall(z.unknown()),
+]);
 
 export type EnrollResultFrame = z.infer<typeof EnrollResultFrameSchema>;
 
@@ -348,13 +369,18 @@ export const PresenceResultWireSchema = z
   })
   .strict();
 
-export const PresenceResultFrameSchema = z
-  .object({
-    "ok": z.boolean(),
-    "reason": z.string().optional(),
-    "type": z.literal("presence_result"),
-  })
-  .catchall(z.unknown());
+export const PresenceResultFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "ok": z.literal(true),
+      "reason": z.undefined().optional(),
+      "type": z.literal("presence_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({ "ok": z.literal(false), "reason": z.string(), "type": z.literal("presence_result") })
+    .catchall(z.unknown()),
+]);
 
 export type PresenceResultFrame = z.infer<typeof PresenceResultFrameSchema>;
 

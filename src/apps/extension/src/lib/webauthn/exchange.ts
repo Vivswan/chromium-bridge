@@ -16,14 +16,14 @@ import {
   type EnrollFinishWire,
   type EnrollOptionsFrame,
   EnrollOptionsFrameSchema,
+  EnrollResultFrameSchema,
   type PresenceAssertWire,
   type PresenceRequestFrame,
   PresenceRequestFrameSchema,
+  PresenceResultFrameSchema,
 } from "@chromium-bridge/shared/envelope.gen";
 import {
   type PresenceAnswer,
-  parseEnrollResult,
-  parsePresenceResult,
   type RegistrationResponse,
   type WebAuthnInboundFrame,
   WebAuthnInboundFrameSchema,
@@ -138,9 +138,11 @@ export function beginEnrollment(): Promise<EnrollBeginView> {
           ? { ok: true, options: parsed.data }
           : { ok: false, error: "malformed enroll_options from host" };
       }
-      const verdict = parseEnrollResult(frame);
-      if (!verdict || verdict.ok) return { ok: false, error: "malformed enroll_result from host" };
-      return { ok: false, error: verdict.reason };
+      const result = EnrollResultFrameSchema.safeParse(frame);
+      if (!result.success || result.data.ok) {
+        return { ok: false, error: "malformed enroll_result from host" };
+      }
+      return { ok: false, error: result.data.reason };
     },
   );
 }
@@ -151,9 +153,11 @@ export function finishEnrollment(response: RegistrationResponse): Promise<Enroll
     { type: "enroll_finish", ...response } satisfies EnrollFinishWire,
     ["enroll_result"],
     (frame): EnrollFinishView => {
-      const verdict = parseEnrollResult(frame);
-      if (!verdict) return { ok: false, error: "malformed enroll_result from host" };
-      return verdict.ok ? verdict : { ok: false, error: verdict.reason };
+      const result = EnrollResultFrameSchema.safeParse(frame);
+      if (!result.success) return { ok: false, error: "malformed enroll_result from host" };
+      return result.data.ok
+        ? { ok: true, credentialId: result.data.credential_id }
+        : { ok: false, error: result.data.reason };
     },
   );
 }
@@ -180,9 +184,9 @@ export function assertPresence(answer: PresenceAnswer): Promise<PresenceAssertVi
     { type: "presence_assert", ...response } satisfies PresenceAssertWire,
     ["presence_result"],
     (frame): PresenceAssertView => {
-      const verdict = parsePresenceResult(frame);
-      if (!verdict) return { ok: false, error: "malformed presence_result from host" };
-      return verdict.ok ? verdict : { ok: false, error: verdict.reason };
+      const result = PresenceResultFrameSchema.safeParse(frame);
+      if (!result.success) return { ok: false, error: "malformed presence_result from host" };
+      return result.data.ok ? { ok: true } : { ok: false, error: result.data.reason };
     },
     () => {
       pendingRequest = null;

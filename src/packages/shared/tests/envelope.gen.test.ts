@@ -6,7 +6,6 @@
 
 import { describe, expect, test } from "bun:test";
 import type { z } from "zod";
-import { PolicyCurrentFrameSchema } from "../src/enclave";
 import {
   AuditEventWireSchema,
   BridgeReqSchema,
@@ -35,6 +34,7 @@ import {
   LangCurrentWireSchema,
   LangGetWireSchema,
   LangSetWireSchema,
+  PolicyCurrentFrameSchema,
   PolicyCurrentWireSchema,
   PolicyGetWireSchema,
   PresenceChallengeWireSchema,
@@ -157,7 +157,7 @@ const WIRE_CASES: ReadonlyArray<{
     schema: PolicyCurrentWireSchema,
     enforced: PolicyCurrentFrameSchema,
     // The ok:true arm of the ok-split: baseline required, sig/overlay optional. error rides the ok:false arm
-    // exclusively (the pinned superRefine refuses the mixtures); its coverage is the dedicated tests below.
+    // exclusively (the generated union refuses the mixtures); its coverage is the dedicated tests below.
     valid: {
       type: "policy_current",
       ok: true,
@@ -271,41 +271,6 @@ describe("generated wire schemas and their enforced validators fail closed", () 
       expect(PolicyCurrentWireSchema.safeParse({ ...base, error: hostile }).success).toBe(false);
       expect(PolicyCurrentFrameSchema.safeParse({ ...base, error: hostile }).success).toBe(false);
     }
-  });
-
-  test("policy_current ok-split (superRefine): only the two real host shapes parse", () => {
-    // Pinned in FRAME_REFINEMENTS (scripts/check-envelope.ts): on the wire every field is an Option, so the
-    // base ACCEPTS these; the refinement refuses everything outside the two shapes into_frame emits - mixtures
-    // of the arms, and an arm missing its mandatory field.
-    const outsideTheSplit = [
-      { type: "policy_current", ok: true, baseline: "YmFzZQ==", error: "e" },
-      { type: "policy_current", ok: false, error: "e", baseline: "YmFzZQ==" },
-      { type: "policy_current", ok: false, error: "e", sig: "c2ln" },
-      { type: "policy_current", ok: false, error: "e", overlay: {} },
-      { type: "policy_current", ok: true },
-      { type: "policy_current", ok: true, sig: "c2ln" },
-      { type: "policy_current", ok: false },
-    ];
-    for (const frame of outsideTheSplit) {
-      expect(PolicyCurrentWireSchema.safeParse(frame).success).toBe(true);
-      expect(PolicyCurrentFrameSchema.safeParse(frame).success).toBe(false);
-    }
-    expect(
-      PolicyCurrentFrameSchema.safeParse({
-        type: "policy_current",
-        ok: true,
-        baseline: "YmFzZQ==",
-        sig: "c2ln",
-        overlay: {},
-      }).success,
-    ).toBe(true);
-    expect(
-      PolicyCurrentFrameSchema.safeParse({
-        type: "policy_current",
-        ok: false,
-        error: "no policy baseline on this host",
-      }).success,
-    ).toBe(true);
   });
 
   test("rejects nested extras (client entry, anchor) on the base", () => {

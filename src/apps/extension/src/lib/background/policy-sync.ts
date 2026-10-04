@@ -26,13 +26,16 @@
 
 import {
   KEY_ID_HEX,
-  PolicyCurrentFrameSchema,
   type PolicyInboundFrame,
   PolicyInboundFrameSchema,
   type StoredPolicyState,
   StoredPolicyStateSchema,
 } from "@chromium-bridge/shared/enclave";
-import { LangCurrentFrameSchema, type LangSetWire } from "@chromium-bridge/shared/envelope.gen";
+import {
+  LangCurrentFrameSchema,
+  type LangSetWire,
+  PolicyCurrentFrameSchema,
+} from "@chromium-bridge/shared/envelope.gen";
 import {
   PolicyDocSchema,
   type PolicyValues,
@@ -838,7 +841,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
   // spread, iterate, or forward the frame object.
   const { ok, baseline, sig, overlay, error } = parsed.data;
 
-  if (ok !== true || baseline === undefined) {
+  if (!ok) {
     // Nothing to verify and nothing changes; a policy-capable peer gone silent or wrong NEVER opens the gate.
     return refuse(`host provided no baseline${error ? ` (${error})` : ""}`);
   }
