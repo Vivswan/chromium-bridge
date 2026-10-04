@@ -27,12 +27,12 @@ fn killed_rev(epoch: u64) -> Revocation {
 
 fn ident(hash: &str) -> ClientIdentity {
     ClientIdentity {
-        hash: hash.into(),
+        hash: ipc::HashDigest::try_from(hash).unwrap(),
         team_id: None,
     }
 }
 
-// Hash anchors are validated lowercase hex (allowlist::HashDigest), so
+// Hash anchors are validated lowercase hex (ipc::HashDigest), so
 // the fixtures use hex stand-ins; the names say the role each plays.
 const H_SELF: &str = "aa11";
 const H_OTHER: &str = "bb22";

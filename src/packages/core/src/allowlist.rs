@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ipc::{self, ClientIdentity};
+use crate::ipc::{self, ClientIdentity, HashDigest, TeamId};
 use crate::presence::{self, PresenceAttestation};
 use crate::revocation::Revocation;
 
@@ -38,84 +38,10 @@ const ALLOWLIST_VERSION: u32 = 1;
 /// than slurped into memory.
 const ALLOWLIST_MAX_BYTES: usize = 256 * 1024;
 
-/// A validated image digest for [`Anchor::Hash`]: non-empty lowercase ASCII hex, the form both platforms measure in
-/// (`ipc::rand::hex_encode`) and [`resolve_anchor`] normalizes user input into, so a digest that could never equal a
-/// measurement is refused at the parse boundary instead of becoming a permanent, silent `Refuse`. An on-disk value in
-/// the wrong form is deliberately NOT normalized (that would mask tampering): it fails the whole `clients.json` decode,
-/// which callers already fail closed on.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct HashDigest(String);
-
-impl HashDigest {
-    /// The digest as its lowercase hex string.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for HashDigest {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let canonical = !value.is_empty()
-            && value
-                .bytes()
-                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        if canonical {
-            Ok(HashDigest(value))
-        } else {
-            Err("hash anchor must be non-empty lowercase hex".to_string())
-        }
-    }
-}
-
-impl TryFrom<&str> for HashDigest {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        HashDigest::try_from(value.to_string())
-    }
-}
-
-impl From<HashDigest> for String {
-    fn from(digest: HashDigest) -> String {
-        digest.0
-    }
-}
-
-impl std::fmt::Display for HashDigest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// Schema-identical to a plain string on purpose: the canonical-form rule is
-/// enforced by the Rust parser at the trust boundary (ADR-0028's single
-/// source), and the generated TS wire schema must stay exactly what it was
-/// when this field was a `String` - the extension only ever consumes these
-/// values read-only in `client_list_result`.
-#[cfg(feature = "envelope-schema")]
-impl schemars::JsonSchema for HashDigest {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        <String as schemars::JsonSchema>::schema_name()
-    }
-
-    fn schema_id() -> std::borrow::Cow<'static, str> {
-        <String as schemars::JsonSchema>::schema_id()
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <String as schemars::JsonSchema>::json_schema(generator)
-    }
-
-    fn inline_schema() -> bool {
-        <String as schemars::JsonSchema>::inline_schema()
-    }
-}
-
 /// The authorization key of an allowlist entry: the unforgeable thing a
-/// harness's attested identity must match. Never the name.
+/// harness's attested identity must match. Never the name. Both payloads are
+/// parsed at the decode boundary ([`crate::ipc::HashDigest`],
+/// [`crate::ipc::TeamId`]), so a value no measurement can equal never loads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(
@@ -133,7 +59,7 @@ pub enum Anchor {
     /// Pin the macOS signing Team ID. Stable across the weekly re-sign of a
     /// free Apple Development certificate, so it survives renewals without a
     /// re-pair. Only available when the client image is Team-ID signed.
-    TeamId(String),
+    TeamId(TeamId),
 }
 
 /// One trusted client. The `name` is a validated, human-facing label for the
@@ -194,7 +120,14 @@ impl Allowlist {
         let Some(bytes) = ipc::read_capped(&Self::path(), ALLOWLIST_MAX_BYTES)? else {
             return Ok(None);
         };
-        let list: Allowlist = serde_json::from_slice(&bytes).map_err(|e| {
+        Self::decode(&bytes).map(Some)
+    }
+
+    /// The load boundary's parser: the one place a persisted allowlist becomes
+    /// typed. Every malformed entry (an unknown field, a non-canonical anchor
+    /// value, an unsupported version) is the same `InvalidData` failure.
+    fn decode(bytes: &[u8]) -> io::Result<Self> {
+        let list: Allowlist = serde_json::from_slice(bytes).map_err(|e| {
             io::Error::new(io::ErrorKind::InvalidData, format!("allowlist decode: {e}"))
         })?;
         if list.version != ALLOWLIST_VERSION {
@@ -206,7 +139,7 @@ impl Allowlist {
                 ),
             ));
         }
-        Ok(Some(list))
+        Ok(list)
     }
 
     /// Whether `identity` matches any entry. Returns the matched entry's name.
@@ -214,10 +147,8 @@ impl Allowlist {
     /// measured Team ID. Comparisons are plain equality: these are not secrets.
     fn matched_name(&self, identity: &ClientIdentity) -> Option<String> {
         self.clients.iter().find_map(|c| match &c.anchor {
-            Anchor::Hash(h) if h.as_str() == identity.hash => Some(c.name.clone()),
-            Anchor::TeamId(t) if identity.team_id.as_deref() == Some(t.as_str()) => {
-                Some(c.name.clone())
-            }
+            Anchor::Hash(h) if *h == identity.hash => Some(c.name.clone()),
+            Anchor::TeamId(t) if identity.team_id.as_ref() == Some(t) => Some(c.name.clone()),
             Anchor::Hash(_) | Anchor::TeamId(_) => None,
         })
     }
@@ -526,7 +457,7 @@ pub fn run_pair_client(argv: &[String]) -> i32 {
 
 /// Turn a CLI anchor spec into a concrete [`Anchor`], measuring this
 /// invocation's parent when asked (`--this-parent`). The one validation path
-/// for user-supplied anchors, so a malformed hash is refused identically
+/// for user-supplied anchors, so a malformed value is refused identically
 /// wherever one arrives.
 pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
     use crate::cli::AnchorSpec;
@@ -539,23 +470,15 @@ pub fn resolve_anchor(spec: &crate::cli::AnchorSpec) -> Result<Anchor, String> {
                 .map_err(|_| "--hash must be non-empty lowercase hex".to_string())?;
             Ok(Anchor::Hash(digest))
         }
-        AnchorSpec::TeamId(t) => {
-            if t.is_empty() {
-                return Err("--team-id must be non-empty".into());
-            }
-            Ok(Anchor::TeamId(t.clone()))
-        }
+        AnchorSpec::TeamId(t) => TeamId::try_from(t.clone())
+            .map(Anchor::TeamId)
+            .map_err(|e| format!("--team-id: {e}")),
         AnchorSpec::ThisParent => {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 let id = ipc::attest_parent()
                     .map_err(|e| format!("could not attest the parent process: {e}"))?;
-                // Both platforms hex-encode measurements in lowercase, so a
-                // failure here means the attested value is not a digest at
-                // all: refuse it rather than normalize it.
-                let digest = HashDigest::try_from(id.hash)
-                    .map_err(|e| format!("attested parent hash is not a canonical digest: {e}"))?;
-                Ok(Anchor::Hash(digest))
+                Ok(Anchor::Hash(id.hash))
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             {
@@ -642,16 +565,23 @@ pub fn run_list_clients() -> i32 {
 mod tests {
     use super::*;
 
+    /// A measured identity from literals: a valid lowercase-hex hash and an
+    /// optional non-empty team id.
     fn id(hash: &str, team: Option<&str>) -> ClientIdentity {
         ClientIdentity {
-            hash: hash.to_string(),
-            team_id: team.map(str::to_string),
+            hash: hd(hash),
+            team_id: team.map(tid),
         }
     }
 
     /// A test digest from a literal that is valid lowercase hex.
     fn hd(hex: &str) -> HashDigest {
         HashDigest::try_from(hex).unwrap()
+    }
+
+    /// A test team id from a non-empty literal.
+    fn tid(team: &str) -> TeamId {
+        TeamId::try_from(team).unwrap()
     }
 
     /// A revocation record whose enrollment latch is `latched`, everything
@@ -719,11 +649,11 @@ mod tests {
         // cdhash: the point of anchoring on Team ID across a weekly re-sign.
         let l = list_of(vec![ClientEntry {
             name: "claude-code".into(),
-            anchor: Anchor::TeamId("TEAMID0001".into()),
+            anchor: Anchor::TeamId(tid("TEAMID0001")),
             added_unix: 0,
         }]);
         assert_eq!(
-            decide(Some(&l), Some(&id("hash-after-resign", Some("TEAMID0001")))),
+            decide(Some(&l), Some(&id("0e51a", Some("TEAMID0001")))),
             Decision::Admit {
                 name: "claude-code".into()
             }
@@ -731,15 +661,12 @@ mod tests {
         // Wrong team id -> refuse. A matching cdhash is irrelevant to a
         // Team-ID anchor.
         assert_eq!(
-            decide(Some(&l), Some(&id("hash-after-resign", Some("OTHERTEAM")))),
+            decide(Some(&l), Some(&id("0e51a", Some("OTHERTEAM")))),
             Decision::Refuse
         );
         // No team id measured at all (ad-hoc build) -> refuse against a
         // Team-ID anchor.
-        assert_eq!(
-            decide(Some(&l), Some(&id("hash-after-resign", None))),
-            Decision::Refuse
-        );
+        assert_eq!(decide(Some(&l), Some(&id("0e51a", None))), Decision::Refuse);
     }
 
     #[test]
@@ -748,7 +675,7 @@ mod tests {
         // closed rather than reverting to the open pre-enrollment posture.
         let l = list_of(vec![]);
         assert_eq!(
-            decide(Some(&l), Some(&id("anything", Some("any")))),
+            decide(Some(&l), Some(&id("a11", Some("any")))),
             Decision::Refuse
         );
     }
@@ -766,7 +693,7 @@ mod tests {
             },
             ClientEntry {
                 name: "codex".into(),
-                anchor: Anchor::TeamId("TEAMX".into()),
+                anchor: Anchor::TeamId(tid("TEAMX")),
                 added_unix: 0,
             },
         ]);
@@ -792,7 +719,7 @@ mod tests {
         };
         let team_entry = ClientEntry {
             name: "claude-code".into(),
-            anchor: Anchor::TeamId("TEAMID0001".into()),
+            anchor: Anchor::TeamId(tid("TEAMID0001")),
             added_unix: 7,
         };
         let list = list_of(vec![hash_entry.clone(), team_entry.clone()]);
@@ -811,27 +738,9 @@ mod tests {
             serde_json::json!({ "kind": "hash", "value": "0a" })
         );
         assert_eq!(
-            serde_json::to_value(Anchor::TeamId("t".into())).unwrap(),
+            serde_json::to_value(Anchor::TeamId(tid("t"))).unwrap(),
             serde_json::json!({ "kind": "team_id", "value": "t" })
         );
-    }
-
-    #[test]
-    fn hash_digest_accepts_only_non_empty_lowercase_hex() {
-        // The legitimate forms: lowercase hex of any (even) length -- a
-        // 20-byte macOS cdhash or a 32-byte Linux SHA256 both pass.
-        assert!(HashDigest::try_from("deadbeef").is_ok());
-        assert!(HashDigest::try_from("ab".repeat(32)).is_ok());
-        assert!(HashDigest::try_from("0123456789abcdef").is_ok());
-        // Everything that could never match a measured lowercase-hex identity
-        // is refused at the parse boundary instead of becoming a permanent,
-        // silent Refuse.
-        assert!(HashDigest::try_from("").is_err(), "empty");
-        assert!(HashDigest::try_from("DEADBEEF").is_err(), "uppercase");
-        assert!(HashDigest::try_from("aBc1").is_err(), "mixed case");
-        assert!(HashDigest::try_from("zz").is_err(), "non-hex");
-        assert!(HashDigest::try_from("dead beef").is_err(), "whitespace");
-        assert!(HashDigest::try_from("dead-beef").is_err(), "punctuation");
     }
 
     #[test]
@@ -850,27 +759,45 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_on_disk_hash_anchor_is_rejected_fail_closed() {
-        // A wrong-form on-disk value (uppercase, empty, non-hex) fails the decode itself, so the whole file
-        // reads as a corrupt allowlist and every caller fails closed LOUDLY, instead of parsing fine and never
-        // matching the lowercase measurement (a permanent, silent Refuse). Never normalized: it is evidence of
-        // a foreign writer, not input to fix up.
-        for bad in ["DEADBEEF", "", "zz", "aBc1"] {
-            let anchor = serde_json::json!({ "kind": "hash", "value": bad });
-            assert!(
-                serde_json::from_value::<Anchor>(anchor.clone()).is_err(),
-                "anchor value {bad:?} must be refused"
-            );
-            // And through the full file shape: one bad entry poisons the
-            // whole list, exactly like any other decode failure.
+    fn a_malformed_on_disk_anchor_is_rejected_at_load_fail_closed() {
+        // Incident: a hand-edited `{"kind":"team_id","value":""}` loaded fine and then could never match any
+        // client, a permanent silent Refuse. Any anchor value that no measurement can ever equal (an empty team
+        // id; an uppercase, empty, or non-hex hash) now fails the decode itself, so the whole file reads as a
+        // corrupt allowlist and every caller fails closed LOUDLY. Never normalized: it is evidence of a foreign
+        // writer, not input to fix up.
+        for (kind, bad, rule) in [
+            ("team_id", "", "team id must be non-empty"),
+            (
+                "hash",
+                "DEADBEEF",
+                "hash anchor must be non-empty lowercase hex",
+            ),
+            ("hash", "", "hash anchor must be non-empty lowercase hex"),
+            ("hash", "zz", "hash anchor must be non-empty lowercase hex"),
+            (
+                "hash",
+                "aBc1",
+                "hash anchor must be non-empty lowercase hex",
+            ),
+        ] {
+            let anchor = serde_json::json!({ "kind": kind, "value": bad });
+            // Through the full file shape at the load boundary: one bad entry
+            // poisons the whole list with the same tampering-class error as
+            // any other decode failure, and the error names the rule.
             let file = serde_json::json!({
                 "version": 1,
                 "clients": [
-                    { "name": "good", "anchor": { "kind": "team_id", "value": "T" }, "added_unix": 0 },
+                    { "name": "good", "anchor": { "kind": "team_id", "value": "TEAMID0001" }, "added_unix": 0 },
                     { "name": "bad", "anchor": anchor, "added_unix": 0 },
                 ],
             });
-            assert!(serde_json::from_value::<Allowlist>(file).is_err());
+            let err = Allowlist::decode(&serde_json::to_vec(&file).unwrap())
+                .expect_err(&format!("{kind} anchor value {bad:?} must be refused"));
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{kind} {bad:?}");
+            assert!(
+                err.to_string().starts_with("allowlist decode: ") && err.to_string().contains(rule),
+                "{kind} {bad:?}: {err}"
+            );
         }
     }
 

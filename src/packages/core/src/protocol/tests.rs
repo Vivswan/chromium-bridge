@@ -219,8 +219,8 @@ fn attach_frames_roundtrip_and_are_tagged() {
     // is optional and is a log label only.
     let client = AttachRequest::Client {
         harness: Some(HarnessId {
-            hash: "abc123".into(),
-            team_id: Some("TEAMID0001".into()),
+            hash: crate::ipc::HashDigest::try_from("abc123").unwrap(),
+            team_id: Some(crate::ipc::TeamId::try_from("TEAMID0001").unwrap()),
             name: Some("claude-code".into()),
         }),
     };
@@ -229,7 +229,9 @@ fn attach_frames_roundtrip_and_are_tagged() {
     assert_eq!(v["harness"]["hash"], "abc123");
     assert_eq!(v["harness"]["team_id"], "TEAMID0001");
     let back: AttachRequest = serde_json::from_value(v).unwrap();
-    assert!(matches!(back, AttachRequest::Client { harness: Some(h) } if h.hash == "abc123"));
+    assert!(
+        matches!(back, AttachRequest::Client { harness: Some(h) } if h.hash.as_str() == "abc123")
+    );
 
     // A client attach with no measurable harness omits the field.
     let bare = AttachRequest::Client { harness: None };
@@ -296,8 +298,8 @@ fn wire_types_reject_unknown_fields() {
             json!({ "attach": "client" }),
         ),
         (
-            json!({ "attach": "client", "harness": { "hash": "h", "extra": 1 } }),
-            json!({ "attach": "client", "harness": { "hash": "h" } }),
+            json!({ "attach": "client", "harness": { "hash": "ab", "extra": 1 } }),
+            json!({ "attach": "client", "harness": { "hash": "ab" } }),
         ),
     ] {
         assert!(
@@ -309,7 +311,7 @@ fn wire_types_reject_unknown_fields() {
 
     // HarnessId directly.
     assert!(serde_json::from_value::<HarnessId>(
-        json!({ "hash": "h", "team_id": "t", "name": "n", "extra": 1 })
+        json!({ "hash": "ab", "team_id": "t", "name": "n", "extra": 1 })
     )
     .is_err());
 

@@ -16,6 +16,7 @@
 use std::ffi::c_void;
 use std::io;
 
+use super::super::identity::{ClientIdentity, HashDigest, TeamId};
 use super::super::socket::BridgeStream;
 
 /// Error message for an unmeasurable self identity, used by
@@ -23,19 +24,19 @@ use super::super::socket::BridgeStream;
 pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot compute own code-directory hash";
 
 /// This process's own executable identity: the cdhash of its running image.
-pub(crate) fn own_identity() -> io::Result<String> {
+pub(crate) fn own_identity() -> io::Result<HashDigest> {
     own_cdhash()
 }
 
 /// The peer's running-image identity, measured the same way as
 /// [`own_identity`].
-pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<String> {
+pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
     peer_cdhash(stream)
 }
 
 /// The running-image identity of an arbitrary process named by pid. Carries
 /// the pid-reuse race documented on [`super::super::peercred::peer_pid`].
-pub(crate) fn pid_identity(pid: u32) -> io::Result<String> {
+pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
     pid_cdhash(pid)
 }
 
@@ -45,7 +46,7 @@ pub(crate) fn pid_identity(pid: u32) -> io::Result<String> {
 /// [`pid_identity`] this identifies the guest by pid (not audit token), so it
 /// carries the narrow pid-reuse race recorded in ADR-0020; the running
 /// signature is still validated via `SecCodeCheckValidity`.
-pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientIdentity> {
+pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     let pid = libc::pid_t::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
     // SAFETY: `pid` is a live i32 local and KCF_NUMBER_SINT32 names exactly
@@ -260,7 +261,7 @@ fn osstatus_err(context: &str, status: OSStatus) -> io::Error {
 }
 
 /// The cdhash of THIS process's running image.
-fn own_cdhash() -> io::Result<String> {
+fn own_cdhash() -> io::Result<HashDigest> {
     let mut me: SecCodeRef = std::ptr::null_mut();
     // SAFETY: `me` is a live local the call writes the +1 reference into.
     let st = unsafe { SecCodeCopySelf(DEFAULT_FLAGS, &mut me) };
@@ -280,7 +281,7 @@ fn own_cdhash() -> io::Result<String> {
 /// `SecCodeCheckValidity` but reopens the narrow pid-reuse race (ADR-0020).
 /// Any OTHER audit-token failure (short read, permission error) fails closed
 /// rather than silently downgrading.
-fn peer_cdhash(stream: &BridgeStream) -> io::Result<String> {
+fn peer_cdhash(stream: &BridgeStream) -> io::Result<HashDigest> {
     use std::os::unix::io::AsRawFd;
 
     let fd = stream.as_raw_fd();
@@ -325,7 +326,7 @@ fn peer_audit_token(fd: libc::c_int) -> io::Result<[u32; AUDIT_TOKEN_LEN]> {
     Ok(token)
 }
 
-fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
+fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<HashDigest> {
     // SAFETY: the byte view covers exactly the borrowed array, u32 has no
     // padding, and the view lives no longer than `token`.
     let bytes = unsafe {
@@ -349,7 +350,7 @@ fn peer_cdhash_via_audit(token: &[u32; AUDIT_TOKEN_LEN]) -> io::Result<String> {
 /// [`peer_cdhash`], and the pid-keyed identity behind
 /// [`super::super::attest::attest_pid`]; identifying by pid (rather than
 /// audit token) reopens the narrow pid-reuse race recorded in ADR-0020.
-fn pid_cdhash(pid: u32) -> io::Result<String> {
+fn pid_cdhash(pid: u32) -> io::Result<HashDigest> {
     let pid = libc::pid_t::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
     // SAFETY: `pid` is a live i32 local and KCF_NUMBER_SINT32 names exactly
@@ -369,7 +370,7 @@ fn pid_cdhash(pid: u32) -> io::Result<String> {
 /// validate its running signature, and return its cdhash. Taking `&Cf` (not a
 /// raw `CFTypeRef`) makes the caller's ownership guard carry the live-object
 /// invariant that `CFDictionaryCreate`'s retaining callbacks rely on.
-fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
+fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<HashDigest> {
     let keys: [*const c_void; 1] = [key.attribute()];
     let values: [*const c_void; 1] = [value.as_ptr()];
     // SAFETY: `keys` and `values` are live one-element arrays and the count
@@ -409,7 +410,7 @@ fn guest_cdhash(key: GuestKey, value: &Cf) -> io::Result<String> {
 /// Like [`guest_cdhash`], but returns the guest's full client identity
 /// (cdhash + Team ID). Builds the same one-entry guest-attribute dictionary,
 /// copies and validates the peer's `SecCode`, and reads both signing fields.
-fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::ClientIdentity> {
+fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<ClientIdentity> {
     let keys: [*const c_void; 1] = [key.attribute()];
     let values: [*const c_void; 1] = [value.as_ptr()];
     // SAFETY: `keys` and `values` are live one-element arrays and the count
@@ -455,7 +456,7 @@ fn guest_client_identity(key: GuestKey, value: &Cf) -> io::Result<super::super::
 /// Validate a dynamic `SecCode`'s running signature, then return its cdhash.
 /// The validity check is the running-image-bound step: it verifies the code
 /// pages match the signature of the process actually executing.
-fn validate_and_cdhash(code: SecCodeRef, what: &str) -> io::Result<String> {
+fn validate_and_cdhash(code: SecCodeRef, what: &str) -> io::Result<HashDigest> {
     // SAFETY: both callers hold `code` in a live guard for this call; a null
     // requirement is allowed by the API and imposes no additional requirement.
     let st = unsafe { SecCodeCheckValidity(code, DEFAULT_FLAGS, std::ptr::null()) };
@@ -465,7 +466,7 @@ fn validate_and_cdhash(code: SecCodeRef, what: &str) -> io::Result<String> {
     cdhash_of_code(code)
 }
 
-fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
+fn cdhash_of_code(code: SecCodeRef) -> io::Result<HashDigest> {
     let mut static_code: SecStaticCodeRef = std::ptr::null_mut();
     // SAFETY: the caller holds `code` in a live guard; `static_code` is a live
     // local the +1 reference is written into.
@@ -512,7 +513,7 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
     // and were just checked non-null/non-zero; the borrow must not outlive
     // `_info`, so the slice is hex-encoded before this function returns.
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-    Ok(super::super::rand::hex_encode(bytes))
+    HashDigest::try_from(bytes).map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e))
 }
 
 /// Read a validated `SecCode`'s full signing identity: its `cdhash` (required)
@@ -520,7 +521,7 @@ fn cdhash_of_code(code: SecCodeRef) -> io::Result<String> {
 /// dictionary carries the Team ID; `kSecCodeInfoUnique` (the cdhash) is present
 /// regardless. An unsigned / ad-hoc image has no Team ID, so `team_id` is
 /// `None` and the allowlist must anchor it on the hash instead.
-fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::ClientIdentity> {
+fn signing_identity_of_code(code: SecCodeRef) -> io::Result<ClientIdentity> {
     let mut static_code: SecStaticCodeRef = std::ptr::null_mut();
     // SAFETY: the caller holds `code` in a live guard; `static_code` is a live
     // local the +1 reference is written into.
@@ -567,7 +568,8 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     // SAFETY: ptr/len come from the CFData owned by the `_info` guard above,
     // and were just checked non-null/non-zero; the borrow must not outlive
     // `_info`, so the slice is consumed by hex_encode within this expression.
-    let hash = super::super::rand::hex_encode(unsafe { std::slice::from_raw_parts(ptr, len) });
+    let hash = HashDigest::try_from(unsafe { std::slice::from_raw_parts(ptr, len) })
+        .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e))?;
 
     // Team ID is optional: ad-hoc / unsigned images simply lack it.
     // SAFETY: kSecCodeInfoTeamIdentifier is a Security.framework constant,
@@ -576,9 +578,9 @@ fn signing_identity_of_code(code: SecCodeRef) -> io::Result<super::super::Client
     // SAFETY: `info` is live through `_info`, and the borrowed value is copied
     // out by cfstring_to_string before `_info` drops.
     let team_ref: CFStringRef = unsafe { CFDictionaryGetValue(info, team_key) };
-    let team_id = cfstring_to_string(team_ref).filter(|s| !s.is_empty());
+    let team_id = cfstring_to_string(team_ref).and_then(|s| TeamId::try_from(s).ok());
 
-    Ok(super::super::ClientIdentity { hash, team_id })
+    Ok(ClientIdentity { hash, team_id })
 }
 
 /// Copy a `CFString` into an owned Rust `String` (UTF-8), or `None` if the

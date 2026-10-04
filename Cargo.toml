@@ -28,6 +28,7 @@ serde = { version = "1", features = ["derive"] }
 # same f64 it wrote. The default best-effort parse drifts by an ulp on some
 # inputs, which breaks the write/read-back identity the store relies on.
 serde_json = { version = "1", features = ["float_roundtrip"] }
+hex = "0.4"
 sha2 = { version = "0.11", default-features = false }
 thiserror = "2.0.18"
 # rmcp's async runtime. The security core itself stays synchronous; tokio

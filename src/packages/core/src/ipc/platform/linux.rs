@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
 
+use super::super::identity::{ClientIdentity, HashDigest};
 use super::super::socket::BridgeStream;
 
 /// Error message for an unmeasurable self identity, used by
@@ -18,19 +19,19 @@ use super::super::socket::BridgeStream;
 pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot hash own executable";
 
 /// This process's own executable identity: the SHA256 of its on-disk image.
-pub(crate) fn own_identity() -> io::Result<String> {
+pub(crate) fn own_identity() -> io::Result<HashDigest> {
     exe_hash_of_pid(std::process::id())
 }
 
 /// The peer's running-image identity, measured the same way as
 /// [`own_identity`].
-pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<String> {
+pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
     exe_hash_of_pid(super::super::peercred::peer_pid(stream)?)
 }
 
 /// The running-image identity of an arbitrary process named by pid. Carries
 /// the pid-reuse race documented on [`super::super::peercred::peer_pid`].
-pub(crate) fn pid_identity(pid: u32) -> io::Result<String> {
+pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
     exe_hash_of_pid(pid)
 }
 
@@ -39,28 +40,27 @@ pub(crate) fn pid_identity(pid: u32) -> io::Result<String> {
 /// system, so there is no Team ID to read here and the anchor is always the
 /// hash; `team_id` is therefore always `None`. Carries the same pid-reuse race
 /// as [`pid_identity`].
-pub(crate) fn pid_client_identity(pid: u32) -> io::Result<super::super::ClientIdentity> {
-    Ok(super::super::ClientIdentity {
+pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
+    Ok(ClientIdentity {
         hash: exe_hash_of_pid(pid)?,
         team_id: None,
     })
 }
 
-/// SHA256 (lowercase hex) of a running process's on-disk executable, named by
-/// pid. We hash `/proc/<pid>/exe`, the kernel's magic symlink to the actual
-/// executable inode: it follows to the real backing file even if the path was
-/// later replaced, so once the pid is resolved the digest reflects the running
-/// image (the pid-resolution race is noted on
-/// [`super::super::peercred::peer_pid`]). macOS does not use this: it attests
-/// the running image directly through the Security framework (see
-/// `platform::macos`), which is bound to the running image and needs no path
-/// re-open.
-fn exe_hash_of_pid(pid: u32) -> io::Result<String> {
+/// SHA256 of a running process's on-disk executable, named by pid. We hash
+/// `/proc/<pid>/exe`, the kernel's magic symlink to the actual executable
+/// inode: it follows to the real backing file even if the path was later
+/// replaced, so once the pid is resolved the digest reflects the running image
+/// (the pid-resolution race is noted on [`super::super::peercred::peer_pid`]).
+/// macOS does not use this: it attests the running image directly through the
+/// Security framework (see `platform::macos`), which is bound to the running
+/// image and needs no path re-open.
+fn exe_hash_of_pid(pid: u32) -> io::Result<HashDigest> {
     hash_file(&PathBuf::from(format!("/proc/{pid}/exe")))
 }
 
-/// Stream a file through SHA256 and return the lowercase hex digest.
-fn hash_file(path: &std::path::Path) -> io::Result<String> {
+/// Stream a file through SHA256.
+fn hash_file(path: &std::path::Path) -> io::Result<HashDigest> {
     let mut f = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
@@ -79,7 +79,8 @@ fn hash_file(path: &std::path::Path) -> io::Result<String> {
         })?;
         hasher.update(chunk);
     }
-    Ok(super::super::rand::hex_encode(hasher.finalize().as_slice()))
+    HashDigest::try_from(hasher.finalize().as_slice())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// Peer credentials of a connected Unix-domain socket via `SO_PEERCRED`.
