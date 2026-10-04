@@ -91,26 +91,6 @@ pub struct ManifestStatus {
     pub location: String,
 }
 
-/// The wire form of [`RegState`], as a serde derive with `rename_all = "snake_case"` would write it:
-/// `"ok"` for a unit arm, `{"stale": "<why>"}` for one carrying its reason.
-impl Serialize for RegState {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            RegState::Missing => serializer.serialize_unit_variant("RegState", 0, "missing"),
-            RegState::Ok => serializer.serialize_unit_variant("RegState", 1, "ok"),
-            RegState::Stale(why) => {
-                serializer.serialize_newtype_variant("RegState", 2, "stale", why)
-            }
-            RegState::Foreign(why) => {
-                serializer.serialize_newtype_variant("RegState", 3, "foreign", why)
-            }
-            RegState::Unreadable(why) => {
-                serializer.serialize_newtype_variant("RegState", 4, "unreadable", why)
-            }
-        }
-    }
-}
-
 impl ManifestStatus {
     fn healthy(&self) -> bool {
         self.state == RegState::Ok
