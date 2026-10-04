@@ -1,5 +1,5 @@
-# moon tasks for the MV3 extension. moon is the canonical command interface
-# (phase two); extension:build and extension:test are steps of the root ci
+# moon tasks for the MV3 extension. moon is the canonical command interface;
+# extension:build and extension:test are steps of the root ci
 # gate.
 #
 # Inputs include src/packages/shared (imported as source via workspace:*) and
@@ -28,7 +28,6 @@ tasks:
     # never be an undeclared input.
     description: 'Build the extension bundle (src/ -> build/extension/; generates icons first)'
     command: 'bun run build'
-    toolchains: ['system']
     inputs:
       - '**/*'
       - '!**/node_modules/**'
@@ -41,19 +40,15 @@ tasks:
       # nothing else, and declaring a gitignored dir the command deletes and
       # rewrites races moon's hasher.
       - '/build/extension'
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   dev:
     description: 'WXT dev mode: rebuild on change'
     command: 'bun run dev'
-    toolchains: ['system']
     preset: 'server'
 
   test:
     description: "Unit-test the extension's shared modules (vitest + fakeBrowser; no real browser)"
     command: 'bun run test'
-    toolchains: ['system']
     inputs:
       - '**/*'
       - '!**/node_modules/**'
@@ -61,22 +56,14 @@ tasks:
       - '@group(rust-contract)'
       # The theme-parity test reads the landing page's palette copy.
       - '/src/apps/web/src/styles/landing.css'
-    options:
-      cache: false # in the ci gate: gates are never cached
 
   typecheck:
     description: "Type-check the extension (tsc against the WXT-generated tsconfig)"
-    # tsconfig.json extends the generated .wxt/tsconfig.json (gitignored, so
-    # invisible to moon's hasher); never cache against an unhashed input.
     command: 'bun run typecheck'
-    toolchains: ['system']
-    options:
-      cache: false
 
   lint:
     description: "Biome lint for the extension workspace"
     command: 'bunx biome lint $projectSource'
-    toolchains: ['system']
     inputs:
       - '**/*'
       - '!**/node_modules/**'
