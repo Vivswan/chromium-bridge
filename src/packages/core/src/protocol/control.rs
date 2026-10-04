@@ -1,8 +1,6 @@
 //! Host-handled control frames on the native-messaging channel: enclave enrollment and presence,
 //! client-allowlist admin, kill switch and audit, policy and shared language. [`classify_nm_frame`]
-//! routes each inbound frame: a [`HostRequest`] is answered by the host itself, any other frame wearing
-//! a control tag is answered or dropped by tag, and only [`FrameDisposition::Forward`] reaches the MCP
-//! server.
+//! routes each inbound frame; [`FrameDisposition`] states what reaches the MCP server.
 
 use std::fmt;
 
@@ -281,9 +279,8 @@ pub enum PolicyControl {
 }
 
 /// The wire `type` tag of every host-handled control frame: the variants of [`EnclaveControl`],
-/// [`AdminControl`], and [`PolicyControl`], spelled by serde. Both pumps key on this one set: a frame
-/// wearing one of these tags is never forwarded to the MCP server, and one arriving from the server is
-/// dropped as an injection ([`host_control_type`]). The `host_control_tags_mirror_the_wire_enums` test
+/// [`AdminControl`], and [`PolicyControl`], spelled by serde. Both pumps key on this one set
+/// ([`FrameDisposition`], [`host_control_type`]); the `host_control_tags_mirror_the_wire_enums` test
 /// holds this list to those three enums.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
@@ -313,7 +310,44 @@ pub enum HostControlTag {
     LangCurrent,
 }
 
+/// Which way a control frame travels. The browser->host set is the [`HostRequest`] roster; the
+/// `host_request_variants_match_their_wire_enum_variants` test holds the three equal: this table, the
+/// HostRequest variants, and the writer types the extension generates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    BrowserToHost,
+    HostToBrowser,
+}
+
 impl HostControlTag {
+    /// Which way a frame wearing this tag travels. Exhaustive on purpose: a new tag must say.
+    pub fn direction(self) -> Direction {
+        match self {
+            HostControlTag::EnclaveChallenge
+            | HostControlTag::EnclaveRevoke
+            | HostControlTag::PresenceChallenge
+            | HostControlTag::ClientList
+            | HostControlTag::ClientRevoke
+            | HostControlTag::KillStatus
+            | HostControlTag::KillEngage
+            | HostControlTag::KillRelease
+            | HostControlTag::AuditEvent
+            | HostControlTag::PolicyGet
+            | HostControlTag::LangGet
+            | HostControlTag::LangSet => Direction::BrowserToHost,
+            HostControlTag::EnclaveProof
+            | HostControlTag::EnclaveError
+            | HostControlTag::EnclaveRevoked
+            | HostControlTag::PresenceProof
+            | HostControlTag::PresenceError
+            | HostControlTag::ClientListResult
+            | HostControlTag::ClientRevokeResult
+            | HostControlTag::KillStatusResult
+            | HostControlTag::PolicyCurrent
+            | HostControlTag::LangCurrent => Direction::HostToBrowser,
+        }
+    }
+
     /// What the host owes a browser frame wearing this tag that does not parse as its [`HostRequest`]: the
     /// matching result frame with `ok: false` (or an `invalid_challenge` error) where a reply contract
     /// exists, so the extension's pending request resolves instead of timing out. Exhaustive on purpose: a
@@ -511,7 +545,9 @@ pub enum HostRequest {
     },
 }
 
-/// How the native host's stdin->socket pump must treat one inbound frame.
+/// How the native host's stdin->socket pump must treat one inbound frame. Only `Forward` reaches the
+/// MCP server: a frame wearing any [`HostControlTag`] is answered or dropped here, and one arriving FROM
+/// the server is dropped as an injection ([`host_control_type`]).
 #[derive(Debug)]
 pub enum FrameDisposition {
     /// Not a control frame: forward to the MCP server unchanged. Bridge requests carry `op` (no `type`),
@@ -527,8 +563,7 @@ pub enum FrameDisposition {
 }
 
 /// Classify one native-messaging frame for the pump. Pure, so the handled-vs-forwarded decision is
-/// unit-testable without a socket. The frame is parsed once; a known tag can never fall through to
-/// `Forward`.
+/// unit-testable without a socket.
 pub fn classify_nm_frame(frame: &Value) -> FrameDisposition {
     let Some(tag) = host_control_type(frame) else {
         return FrameDisposition::Forward;

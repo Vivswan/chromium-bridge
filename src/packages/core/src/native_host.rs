@@ -671,7 +671,6 @@ fn handle_request(request: HostRequest, out: &Arc<Mutex<BufWriter<io::Stdout>>>)
             detail,
             cid,
         } => {
-            // The surface is stamped HERE, so the browser leg records only its own decisions.
             let mut rec = crate::audit::AuditRecord::new(kind.into())
                 .surface(crate::audit::Surface::Extension);
             rec.outcome = outcome;
