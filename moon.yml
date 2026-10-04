@@ -527,7 +527,7 @@ tasks:
     script: |
       set -e
       bun scripts/check-ignored.ts
-      bun test scripts/check-ignored.test.ts
+      bun test scripts/check-ignored.test.ts scripts/lib.test.ts
 
   check-yaml:
     # The managed ci.yml's yamllint job installs its own, unpinned, version (a template-sync decision), so

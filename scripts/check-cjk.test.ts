@@ -10,7 +10,7 @@ const HAN = "\u4E2D";
 const scratch: string[] = [];
 
 function git(cwd: string, ...args: string[]) {
-  const run = Bun.spawnSync(["git", ...args], { cwd, env: gitEnv });
+  const run = Bun.spawnSync(["git", ...args], { cwd, env: gitEnv() });
   if (run.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${run.stderr.toString()}`);
 }
 
@@ -38,7 +38,7 @@ describe("checkCjk", () => {
       "README.zh_CN.md": `${HAN}\n`,
       "docs/sub/probe.zh_CN.md": `${HAN}\n`,
     });
-    expect(checkCjk(dir, gitEnv)).toEqual({
+    expect(checkCjk(dir, gitEnv())).toEqual({
       status: "hits",
       hits: `README.md:3:probe ${HAN} line`,
     });
@@ -51,16 +51,16 @@ describe("checkCjk", () => {
       "docs/sub/probe.zh_CN.md": `${HAN}\n`,
       "src/apps/extension/src/lib/native-language-names.ts": `export const zh = "${HAN}";\n`,
     });
-    expect(checkCjk(dir, gitEnv)).toEqual({ status: "clean" });
+    expect(checkCjk(dir, gitEnv())).toEqual({ status: "clean" });
   });
 
   test("a control file without CJK fails the gate instead of passing it vacuously", () => {
     const dir = repo({ [CONTROL_FILE]: "title: plain\n", "README.md": "# Title\n" });
-    expect(() => checkCjk(dir, gitEnv)).toThrow("engine is blind");
+    expect(() => checkCjk(dir, gitEnv())).toThrow("engine is blind");
   });
 
   test("a missing control file fails the gate, never a clean verdict", () => {
     const dir = repo({ "README.md": "# Title\n" });
-    expect(() => checkCjk(dir, gitEnv)).toThrow("engine is blind");
+    expect(() => checkCjk(dir, gitEnv())).toThrow("engine is blind");
   });
 });

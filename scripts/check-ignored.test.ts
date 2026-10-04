@@ -10,7 +10,7 @@ import { gitEnv } from "./lib.ts";
 const scratch: string[] = [];
 
 function git(cwd: string, ...args: string[]) {
-  const run = Bun.spawnSync(["git", ...args], { cwd, env: gitEnv });
+  const run = Bun.spawnSync(["git", ...args], { cwd, env: gitEnv() });
   if (run.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${run.stderr.toString()}`);
 }
 
@@ -37,7 +37,7 @@ describe("checkIgnored", () => {
       { ".gitignore": "lib/\n", "src/lib/mod.ts": "export {};\n", "lib/scratch.txt": "x\n" },
       ["src/lib/mod.ts"],
     );
-    expect(checkIgnored(dir, gitEnv)).toEqual({ status: "ignored", files: ["src/lib/mod.ts"] });
+    expect(checkIgnored(dir, gitEnv())).toEqual({ status: "ignored", files: ["src/lib/mod.ts"] });
   });
 
   test("a repo-owned negation below the pattern (last match wins) clears the shadowed file", () => {
@@ -45,12 +45,12 @@ describe("checkIgnored", () => {
       ".gitignore": "lib/\n!src/**/lib/\n",
       "src/lib/mod.ts": "export {};\n",
     });
-    expect(checkIgnored(dir, gitEnv)).toEqual({ status: "clean" });
+    expect(checkIgnored(dir, gitEnv())).toEqual({ status: "clean" });
   });
 
   test("an untracked .gitignore fails the gate instead of judging an empty rule set", () => {
     const dir = repo({ "src/mod.ts": "export {};\n" });
     writeFileSync(join(dir, ".gitignore"), "src/\n");
-    expect(() => checkIgnored(dir, gitEnv)).toThrow("error-unmatch");
+    expect(() => checkIgnored(dir, gitEnv())).toThrow("error-unmatch");
   });
 });
