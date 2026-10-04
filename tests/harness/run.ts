@@ -844,7 +844,7 @@ export function mintSeeds(captureDir: string, seedsDir: string): number {
     for (const line of readFileSync(join(captureDir, file), "utf8").split("\n")) {
       if (line.trim() === "") continue;
       // A seed is a single protocol frame; anything huge (a screenshot
-      // payload in a future capture) does not belong in the committed corpus.
+      // payload in a future capture) is reference material no fuzz seed should carry.
       if (Buffer.byteLength(line, "utf8") > 64 * 1024) continue;
       let frame: unknown;
       try {

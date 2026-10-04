@@ -18,7 +18,7 @@ $ bun tests/harness/run.ts --mint-seeds src/packages/core/fuzz/seeds/mcp_jsonrpc
 error: refusing to write captured frames inside the repository: /repo/src/packages/core/fuzz/seeds/mcp_jsonrpc
 ```
 
-- A capture is measured from a real client, so minted frames are reference material only. The committed corpus in `src/packages/core/fuzz/seeds/mcp_jsonrpc/` is hand-authored: write a seed with the same wire shape and synthetic `clientInfo`, never copy a capture.
+- A capture is measured from a real client, so minted frames are reference material only. The fuzz corpus is generated from the production types (`src/packages/core/fuzz/src/seeds/mcp_jsonrpc.rs`): add a seed there as a case with the same wire shape and synthetic `clientInfo`, never copy a capture.
 
 ## The legacy-era canary
 
