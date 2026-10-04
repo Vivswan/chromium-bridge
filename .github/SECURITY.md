@@ -293,7 +293,7 @@ Such a PR must:
 1. carry the [security-change](ISSUE_TEMPLATE/security-change.yml) checklist,
 2. update the [tool risk matrix](../docs/security/tool-risk-matrix.md), and (if it moves a trust boundary) the [threat model](../docs/security/threat-model.md),
 3. add a **negative** security test (proving the boundary holds), in addition to the positive one.
-4. name which row of [the security bar](../docs/security/security-bar.md) it moves, and in which direction.
+4. name which row of [the security bar](../docs/security/security-bar.md) it moves and in which direction, or state that no row moves and why.
 
 The fuzzing rule for bespoke parsing at a trust boundary in the Rust core:
 

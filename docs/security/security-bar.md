@@ -6,9 +6,9 @@ What this project promises about your browser, and what it does not. The mechani
 
 **A program you installed cannot use your browser without you noticing.**
 
-What the bar is not: "nothing can ever touch your browser." You installed this bridge so an agent can drive your browser. The promise is that it acts under your approvals.
+What the bar is not: "nothing can ever touch your browser." You installed this bridge so an agent can drive your browser. The bar is the standard the project holds itself to, not a claim that it is met everywhere today.
 
-The gaps the project accepts are owned by the [threat model's residual risks](threat-model.md#residual-risks-accepted-tracked); this page names the ones that shape the bar, and the OS where the bar does not hold yet.
+Two places fall short, one on purpose and one for now: approved low-risk reads run without a prompt, and Windows admits any process holding the run secret. [Where we deliberately stop](#where-we-deliberately-stop) and [the per-OS table](#where-the-bar-holds-today-per-os) carry both; the [threat model's residual risks](threat-model.md#residual-risks-accepted-tracked) own every accepted gap.
 
 ## Why the browser is the asset
 
@@ -35,7 +35,7 @@ The ranking is this project's judgment of real-world frequency, not a measuremen
 | Rank | Attacker | What answers it | Owner |
 | --- | --- | --- | --- |
 | 1 | prompt injection from a page the agent is reading | the site allowlist; confirmations on an extension-owned window off the page's DOM; masking of what leaves the browser | [primary threats](threat-model.md#primary-threats--mitigations), [boundary 4](trust-boundaries.md#boundary-4-extension---web-page--chrome-api--content-script--dom) |
-| 2 | sloppy or compromised software you installed (an npm package, another MCP server, an IDE extension), running as your user | attestation of the harness that spawned the server; the paired-client allowlist, enforced once one client is paired; pairing gated on user presence | [boundary 1](trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20), [new trust boundaries](threat-model.md#rebuild-delta-new-trust-boundaries) |
+| 2 | sloppy or compromised software you installed that is not the paired harness (an npm package, another MCP server, an IDE extension), running as your user under a different executable identity | attestation of the harness that spawned the server; the paired-client allowlist, enforced once one client is paired; pairing gated on user presence | [boundary 1](trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20), [new trust boundaries](threat-model.md#rebuild-delta-new-trust-boundaries) |
 | 3 | persistent malware already running as you | out of scope by design; the project only refuses to make its job easier | [explicit non-goals](threat-model.md#explicit-non-goals) |
 
 ## Where we deliberately stop
@@ -43,6 +43,7 @@ The ranking is this project's judgment of real-world frequency, not a measuremen
 - **No per-read prompts on approved sites.** Reads on an allowlisted origin run unprompted, because a prompt on nearly every step teaches the user to click through the prompts that guard the dangerous actions. Owner: the [residual risks](threat-model.md#residual-risks-accepted-tracked).
 - **A click grace window on approved sites.** After one approved submit or link click, the same origin and action kind skip the prompt for a short default window; `page_eval` never does. Owner: the [confirmation defaults in the security policy](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 - **Same-user re-execution of our own binary is accepted.** Attestation rejects a different program, not the genuine binary started by a same-user attacker. Owner: the [explicit non-goals](threat-model.md#explicit-non-goals).
+- **A compromised paired harness keeps its admitted identity.** Attestation identifies a binary, not an intention, so a paired client that turns hostile stays trusted until revoked. Owner: the harness admission entry under [new trust boundaries](threat-model.md#rebuild-delta-new-trust-boundaries).
 - **A software presence fallback is labelled where hardware presence is absent.** Without a Secure Enclave key, presence is a software confirmation, which stops silent and scripted acts but not a hostile same-user process. Owner: the kill switch entry under [new trust boundaries](threat-model.md#rebuild-delta-new-trust-boundaries).
 
 ## Where the bar holds today, per OS
@@ -71,4 +72,4 @@ A common design for browser automation puts convenience first. The left column d
 
 ## The rule for future changes
 
-This page adds one rule to the review bar: every security-relevant change states which row of this page it moves, and in which direction. The [review bar in the security policy](../../.github/SECURITY.md#security-relevant-changes-review-bar) defines which changes count.
+This page adds one rule to the review bar: every security-relevant change names the row of this page it moves and the direction, or states that no row moves and why. The [review bar in the security policy](../../.github/SECURITY.md#security-relevant-changes-review-bar) defines which changes count.
