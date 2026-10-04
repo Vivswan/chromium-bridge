@@ -80,7 +80,7 @@ export const TrustedClientSchema = z
     "anchor": z
       .object({ "kind": z.enum(["hash", "signer"]), "value": z.string().min(1) })
       .catchall(z.unknown()),
-    "name": z.string().min(1),
+    "name": z.string(),
   })
   .catchall(z.unknown());
 

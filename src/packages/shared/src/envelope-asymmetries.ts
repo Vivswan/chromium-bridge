@@ -144,12 +144,14 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
   },
   client_list_result: {
     "$.properties.clients.items.properties.name": {
-      direction: "narrow",
+      direction: "widen",
       reason:
-        "A blank client label fails the frame early; the host's own parse (allowlist::ClientName) refuses it " +
-        "at load too.",
-      changes: [{ change: "string", minLength: 1 }],
-      probes: { refuses: [""] },
+        "The extension only displays the name, so the plain string skips the label grammar (1-32 chars of " +
+        "[A-Za-z0-9._-], starting alphanumeric) the host's ClientName parse enforces when it loads the allowlist " +
+        "it forwards.",
+      changes: [],
+      evidence: "parser",
+      probes: { accepts: ["", "bad name!", "x".repeat(33), "-flag"] },
     },
     "$.properties.clients.items.properties.anchor": {
       direction: "widen",
