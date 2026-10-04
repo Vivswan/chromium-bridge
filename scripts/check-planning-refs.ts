@@ -31,7 +31,6 @@ export const COVERED: readonly string[] = [
 export const WAITING: readonly string[] = [
   "src/packages/shared/src/json-schema-normalize.ts",
   "src/packages/shared/tests/json-schema-normalize.test.ts",
-  "src/packages/shared/src/envelope-wire.gen.ts",
   "docs/security/threat-model.md",
 ];
 
