@@ -1,0 +1,507 @@
+#!/usr/bin/env bun
+// The page probe: the two readings a docs reviewer otherwise takes by eye, made exact.
+//   a paragraph or list item over the word cap (default 70)  -> finding, exit 1
+//   a repository path the prose names that does not exist    -> finding, exit 1
+// Block structure comes from Bun's Markdown renderer, so what counts as prose
+// is what Markdown renders as a paragraph or a tight list item: headings,
+// code (fenced or indented), tables, raw HTML, and images contribute nothing.
+// Front matter is blanked before rendering; a BEGIN/END GENERATED region
+// (render-architecture-map.ts writes one) is dropped where the renderer sees
+// its markers as HTML blocks, so a marker quoted inside a fence is code and
+// changes nothing.
+// A path is a backticked token with a slash and an extension (or ./, ../, a
+// trailing slash), or a relative link destination; placeholders (<...>),
+// globs, owner/repo slugs, and bare file names are left alone, since a page
+// may name files the reader will create.
+//
+// --baseline <file> holds the findings the pages carried before their rewrite,
+// one `page:line` per line. The gate fails in both directions: a finding not
+// in the baseline, and a baseline line that no longer fires (stale allowance).
+// The rewrite empties the file; an empty baseline is the probe plain.
+
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { linkFile, readPage } from "./markdown-page";
+import { realpath, withinRoot } from "./repo-paths";
+
+export const DEFAULT_MAX_WORDS = 70;
+
+export interface Finding {
+  readonly file: string;
+  /** One-based line where the unit or token starts. */
+  readonly line: number;
+  readonly message: string;
+}
+
+export interface ProbeOptions {
+  /** Repository root every slash path resolves against. */
+  readonly root: string;
+  readonly maxWords: number;
+  /** false: word counts only, for pages that describe another repository's files. */
+  readonly paths: boolean;
+  /** Extra directories a slash path also resolves against: a shipped tree that mirrors the layout the page describes. */
+  readonly bases?: readonly string[];
+}
+
+export interface Unit {
+  readonly kind: "paragraph" | "item";
+  readonly line: number;
+  /** The prose as the reader sees it: link labels and code spans kept, markup gone. */
+  readonly text: string;
+}
+
+export interface Scan {
+  readonly units: Unit[];
+  readonly codespans: { readonly text: string; readonly line: number }[];
+  readonly links: { readonly href: string; readonly line: number }[];
+}
+
+// Marker bytes the renderer callbacks emit; blocks nest, inlines do not. P and L are prose
+// (paragraph, list item); N is a block whose paths and links are checked but whose words are not counted.
+const OPEN = "\u0001";
+const INLINE_END = "\u0002";
+const BLOCK_END = "\u0003";
+const isBlockKind = (ch: string | undefined) => ch === "P" || ch === "L" || ch === "N";
+
+/** The page with front matter blanked, line for line, so line numbers still match the file. */
+function blankFrontMatter(text: string): string[] {
+  const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
+  const out = [...lines];
+  // Only a closed block is front matter; a lone --- is a thematic break and the page is prose.
+  if (lines[0] === "---") {
+    const close = lines.indexOf("---", 1);
+    if (close !== -1) for (let i = 0; i <= close; i++) out[i] = "";
+  }
+  return out;
+}
+
+const ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+};
+const unescapeEntities = (s: string) =>
+  s.replace(/&(?:amp|lt|gt|quot|#39);/g, (m) => ENTITIES[m] ?? m);
+
+function ownText(s: string): string {
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i] as string;
+    if (ch === OPEN && isBlockKind(s[i + 1])) depth++;
+    else if (ch === BLOCK_END) depth--;
+    else if (depth === 0) out += ch;
+  }
+  return out;
+}
+
+function nestedBlocks(s: string): string[] {
+  const blocks: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === OPEN && isBlockKind(s[i + 1])) {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === BLOCK_END) {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        blocks.push(s.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return blocks;
+}
+
+/** Cuts each BEGIN region through the END marker of the same name; a BEGIN with no matching END, or a stray END, hides nothing. */
+function dropGeneratedRegions(stream: string): string {
+  let out = stream;
+  const begin = new RegExp(`${OPEN}G([^${BLOCK_END}]*)${BLOCK_END}`);
+  for (let m = begin.exec(out); m; m = begin.exec(out)) {
+    const close = `${OPEN}g${m[1]}${BLOCK_END}`;
+    const at = out.indexOf(close, m.index + m[0].length);
+    out =
+      at === -1
+        ? out.slice(0, m.index) + out.slice(m.index + m[0].length)
+        : out.slice(0, m.index) + out.slice(at + close.length);
+  }
+  return out.replace(new RegExp(`${OPEN}g[^${BLOCK_END}]*${BLOCK_END}`, "g"), "");
+}
+
+const ONE_LINE_COMMENT = /^ {0,3}<!--.*-->\s*$/;
+const LINK_MARK = new RegExp(`${OPEN}A[^${INLINE_END}]*${INLINE_END}`, "g");
+const CODESPAN_MARK = new RegExp(`${OPEN}C([^${INLINE_END}]*)${INLINE_END}`, "g");
+const HTML_MARK = new RegExp(`${OPEN}H([^${INLINE_END}]*)${INLINE_END}`, "g");
+const INLINE_COMMENT = /^<!--[\s\S]*-->$/;
+// The chunk is a whole tag by provenance, so the name alone decides; attributes may hold any character.
+const BREAK_TAG = /^<br(?![\w-])/i;
+const INLINE_TAG = /^<\/?[a-zA-Z][\s\S]*>$/;
+
+/**
+ * Bun's text callback receives raw HTML as a chunk of its own (inline, block, and inside code spans
+ * alike), while escaped text (`&lt;!--`, `\<!--`) arrives split at the `<`. The chunk is the
+ * provenance a regex over the joined text would lose, so the text callback marks it and each owner
+ * decides what the mark means:
+ *   html callback      -> unwraps the marks and reads the GENERATED region markers
+ *   codespan callback  -> unwraps the marks; code is literal
+ *   paragraph (here)   -> a whole comment is nothing, a <br> a space, any other whole tag nothing
+ */
+function inlineHtml(chunk: string): string {
+  if (INLINE_COMMENT.test(chunk)) return "";
+  if (BREAK_TAG.test(chunk)) return " ";
+  if (INLINE_TAG.test(chunk)) return "";
+  return chunk;
+}
+
+export function scanPage(text: string): Scan {
+  const lines = blankFrontMatter(text);
+  const nothing = () => "";
+  const same = (c: string) => c;
+  const stream = Bun.markdown.render(lines.join("\n"), {
+    text: (c: string) => (c.startsWith("<") ? `${OPEN}H${c}${INLINE_END}` : c),
+    strong: same,
+    emphasis: same,
+    strikethrough: same,
+    blockquote: same,
+    list: same,
+    heading: (c: string) => `${OPEN}N${c}${BLOCK_END}`,
+    code: nothing,
+    table: (c: string) => `${OPEN}N${c}${BLOCK_END}`,
+    html: (c: string) => {
+      // Only the documented marker comment, with its name, opens or closes a region.
+      const raw = c.replace(HTML_MARK, "$1");
+      const begin = /^\s*<!-- BEGIN GENERATED: (\S+)/.exec(raw);
+      const end = /^\s*<!-- END GENERATED: (\S+)/.exec(raw);
+      if (begin) return `${OPEN}G${begin[1]}${BLOCK_END}`;
+      if (end) return `${OPEN}g${end[1]}${BLOCK_END}`;
+      return "";
+    },
+    hr: nothing,
+    image: nothing,
+    codespan: (c: string) => `${OPEN}C${c.replace(HTML_MARK, "$1")}${INLINE_END}`,
+    link: (c: string, attrs: { href?: string }) => `${OPEN}A${attrs.href ?? ""}${INLINE_END}${c}`,
+    paragraph: (c: string) => `${OPEN}P${c}${BLOCK_END}`,
+    listItem: (c: string) => `${OPEN}L${c}${BLOCK_END}`,
+  });
+
+  const prose = dropGeneratedRegions(stream);
+
+  const scan: Scan = { units: [], codespans: [], links: [] };
+  let cursor = 0;
+  // Rendered text has lost its markup (**bold**, [label](url) with the url between label and text),
+  // so a line matches when it carries the unit's first two words, letters and digits only. Fenced,
+  // indented, and comment lines are skipped: a path quoted in one before the prose that names it
+  // would otherwise claim the finding's line, and with it the baseline key.
+  const searchable = readPage(lines.join("\n")).text.map((line) =>
+    line === undefined || ONE_LINE_COMMENT.test(line) ? "" : line,
+  );
+  const letters = (text: string) => text.replace(/[^A-Za-z0-9]+/g, "");
+  const locate = (needle: string): number => {
+    const probes = unescapeEntities(needle).split(/\s+/).map(letters).filter(Boolean).slice(0, 2);
+    if (probes.length === 0) return cursor;
+    for (let i = cursor; i < searchable.length; i++) {
+      const line = letters(searchable[i] ?? "");
+      if (probes.every((probe) => line.includes(probe))) return i;
+    }
+    return cursor;
+  };
+  const visit = (block: string) => {
+    const prose = block[1] !== "N";
+    const kind = block[1] === "L" ? "item" : "paragraph";
+    const inner = block.slice(2, -1);
+    const own = ownText(inner);
+    const plain = own
+      .replace(LINK_MARK, "")
+      .replace(CODESPAN_MARK, "$1")
+      .replace(HTML_MARK, (_mark, raw: string) => inlineHtml(raw));
+    const firstLine = plain.split("\n").find((l) => l.trim() !== "") ?? "";
+    const line = locate(firstLine);
+    if (prose && plain.trim() !== "") {
+      scan.units.push({ kind, line: line + 1, text: unescapeEntities(plain) });
+    }
+    for (const m of own.matchAll(CODESPAN_MARK)) {
+      const code = unescapeEntities(m[1] ?? "");
+      scan.codespans.push({ text: code, line: locate(`\`${code}\``) + 1 });
+    }
+    for (const m of own.matchAll(new RegExp(`${OPEN}A([^${INLINE_END}]*)${INLINE_END}`, "g"))) {
+      const href = unescapeEntities(m[1] ?? "");
+      scan.links.push({ href, line: locate(href) + 1 });
+    }
+    // The next unit starts after this one, so a repeated opening line finds its own line, not this one again.
+    if (plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
+    for (const nested of nestedBlocks(inner)) visit(nested);
+  };
+  for (const block of nestedBlocks(prose)) visit(block);
+  return scan;
+}
+
+export function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const EXTENSION = /\.[a-z0-9]{1,10}$/i;
+
+export function pathCandidate(token: string): string | null {
+  let path = token
+    .trim()
+    .replace(/[.,;:]+$/, "")
+    .replace(/:\d+(?:-\d+)?$/, "")
+    .replace(/[.,;:]+$/, "");
+  if (path === "" || /[<>*?${}|\s~[\]]/.test(path) || SCHEME.test(path) || /^[-/]/.test(path))
+    return null;
+  if (path.startsWith("./") || path.startsWith("../") || path.endsWith("/")) {
+    path = path.replace(/\/$/, "");
+    return path === "" || path === "." || path === ".." ? null : path;
+  }
+  return path.includes("/") && EXTENSION.test(path) ? path : null;
+}
+
+/**
+ * The page's directory, every directory up to the root, then the extra bases: a page under
+ * docs/security/ may name `docs/cli.md` or `cli.md`.
+ */
+function bases(root: string, pageDir: string, extra: readonly string[]): string[] {
+  const out = [pageDir];
+  for (let dir = pageDir; dir !== root && dir.startsWith(root); dir = dirname(dir))
+    out.push(dirname(dir));
+  return [...out, ...extra];
+}
+
+/**
+ * A slash path is checked only when its first segment exists at one of the bases:
+ * `agents/openai.yaml` in a page about some other layout names nothing here and is left alone,
+ * while `docs/gone.md` under a real `docs/` is the stale pointer the probe exists for.
+ */
+function verdict(
+  root: string,
+  pageDir: string,
+  extra: readonly string[],
+  path: string,
+): "ok" | "missing" | "foreign" | "outside" {
+  const dirs =
+    path.startsWith("./") || path.startsWith("../") ? [pageDir] : bases(root, pageDir, extra);
+  const hits = dirs.map((base) => resolve(base, path)).filter((file) => existsSync(file));
+  if (hits.some((file) => withinRoot(root, file))) return "ok";
+  if (hits.length > 0) return "outside";
+  const first = path.split("/")[0] ?? "";
+  const anchored =
+    first === "." || first === ".." || dirs.some((base) => existsSync(resolve(base, first)));
+  return anchored ? "missing" : "foreign";
+}
+
+export function probePage(text: string, file: string, options: ProbeOptions): Finding[] {
+  const findings: Finding[] = [];
+  const pageDir = dirname(resolve(options.root, file));
+  const scan = scanPage(text);
+  for (const unit of scan.units) {
+    const words = wordCount(unit.text);
+    if (words > options.maxWords) {
+      const noun = unit.kind === "item" ? "list item" : "paragraph";
+      findings.push({
+        file,
+        line: unit.line,
+        message: `${noun} of ${words} words; the cap is ${options.maxWords}. Split it, or turn its facts into bullets, a table, or numbered steps`,
+      });
+    }
+  }
+  if (!options.paths) return findings;
+  for (const { text: code, line } of scan.codespans) {
+    const path = pathCandidate(code);
+    const state = path ? verdict(options.root, pageDir, options.bases ?? [], path) : "foreign";
+    if (state === "missing") findings.push({ file, line, message: `\`${path}\` does not exist` });
+    if (state === "outside")
+      findings.push({ file, line, message: `\`${path}\` escapes the repository` });
+  }
+  for (const { href, line } of scan.links) {
+    const target = linkFile(href);
+    if (target === "" || SCHEME.test(target) || isAbsolute(target)) continue;
+    const resolved = resolve(pageDir, target);
+    if (!withinRoot(options.root, resolved)) {
+      findings.push({ file, line, message: `link target ${target} escapes the repository` });
+    } else if (!existsSync(resolved)) {
+      findings.push({ file, line, message: `link target ${target} does not exist` });
+    }
+  }
+  return findings.sort((a, b) => a.line - b.line);
+}
+
+// --- the baseline --------------------------------------------------------------
+
+const BASELINE_ENTRY = /^(\S.*):(\d+)$/;
+
+export function readBaseline(text: string, label: string): Set<string> {
+  const keys = new Set<string>();
+  text.split("\n").forEach((raw, index) => {
+    const line = raw.replace(/\r$/, "").trim();
+    if (line === "" || line.startsWith("#")) return;
+    if (!BASELINE_ENTRY.test(line)) {
+      throw new Error(`${label}:${index + 1}: a baseline entry is page:line, got "${line}"`);
+    }
+    keys.add(line);
+  });
+  return keys;
+}
+
+export interface Judgment {
+  /** Findings the baseline does not allow. */
+  readonly fresh: Finding[];
+  /** Baseline entries no finding fires at any more. */
+  readonly stale: string[];
+  readonly allowed: number;
+}
+
+export function judge(findings: readonly Finding[], baseline: ReadonlySet<string>): Judgment {
+  const fired = new Set<string>();
+  const fresh: Finding[] = [];
+  for (const finding of findings) {
+    const key = `${finding.file}:${finding.line}`;
+    if (baseline.has(key)) fired.add(key);
+    else fresh.push(finding);
+  }
+  const stale = [...baseline].filter((key) => !fired.has(key)).sort();
+  return { fresh, stale, allowed: findings.length - fresh.length };
+}
+
+// --- CLI -----------------------------------------------------------------------
+
+const USAGE = [
+  // The file names itself, so a vendored copy under another name prints a command that exists there.
+  `usage: ${basename(fileURLToPath(import.meta.url))} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] [--baseline <file>] <page.md | glob>...`,
+  "  --root        the repository root paths resolve against (default: cwd)",
+  "  --base        a directory under the root that paths also resolve against (repeatable)",
+  "  --max-words   the cap on a paragraph or list item (default: 70)",
+  "  --shape-only  word counts only; skip the check that named paths exist",
+  "  --baseline    a file of page:line entries allowed to fire; one that no longer fires fails too",
+  "  a page argument with a * is a glob, expanded under the root; one that matches nothing is an error",
+  "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
+].join("\n");
+
+interface CliOptions {
+  readonly root: string;
+  readonly bases: readonly string[];
+  readonly maxWords: number;
+  readonly paths: boolean;
+  readonly baseline: string | undefined;
+  /** Root-relative, posix, sorted, globs expanded. */
+  readonly pages: readonly string[];
+}
+
+const toPosix = (path: string): string => path.split(sep).join("/");
+
+/** A page argument as the root-relative label the findings and the baseline use. */
+function pageLabel(root: string, page: string): string {
+  const absolute = realpath(resolve(root, page));
+  if (!statSync(absolute, { throwIfNoEntry: false })?.isFile())
+    throw new Error(`${page} is not a readable file`);
+  return toPosix(relative(root, absolute)) || page;
+}
+
+/** Each page argument, globs expanded under the root. A pattern matching nothing is a renamed tree, so it fails rather than passing vacuously. */
+export function expandPages(root: string, args: readonly string[]): string[] {
+  const pages = new Set<string>();
+  for (const arg of args) {
+    if (!arg.includes("*")) {
+      pages.add(pageLabel(root, arg));
+      continue;
+    }
+    const matches = [...new Bun.Glob(arg).scanSync({ cwd: root, onlyFiles: true })];
+    if (matches.length === 0) throw new Error(`${arg} matches no file under ${root}`);
+    for (const match of matches) pages.add(toPosix(match));
+  }
+  return [...pages].sort();
+}
+
+export function parseArgs(argv: readonly string[]): CliOptions {
+  let root = realpath(process.cwd());
+  let maxWords = DEFAULT_MAX_WORDS;
+  let paths = true;
+  let baseline: string | undefined;
+  const baseArgs: string[] = [];
+  const pageArgs: string[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index] ?? "";
+    const value = () => {
+      const next = argv[++index];
+      if (next === undefined) throw new Error(`${arg} needs a value\n${USAGE}`);
+      return next;
+    };
+    if (arg === "--root") {
+      root = realpath(value());
+      if (!statSync(root, { throwIfNoEntry: false })?.isDirectory())
+        throw new Error(`--root ${root} is not a directory`);
+    } else if (arg === "--base") {
+      baseArgs.push(value());
+    } else if (arg === "--max-words") {
+      maxWords = Number(value());
+      if (!Number.isInteger(maxWords) || maxWords < 1)
+        throw new Error(`--max-words needs a positive integer\n${USAGE}`);
+    } else if (arg === "--baseline") baseline = value();
+    else if (arg === "--shape-only") paths = false;
+    else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}\n${USAGE}`);
+    else pageArgs.push(arg);
+  }
+  if (pageArgs.length === 0) throw new Error(USAGE);
+  // Resolved after the loop so a --root given later still governs every --base, the baseline, and the globs.
+  const bases = baseArgs.map((arg) => {
+    const base = realpath(resolve(root, arg));
+    if (!statSync(base, { throwIfNoEntry: false })?.isDirectory())
+      throw new Error(`--base ${base} is not a directory`);
+    if (!withinRoot(root, base)) throw new Error(`--base ${base} is outside the root ${root}`);
+    return base;
+  });
+  if (baseline !== undefined) {
+    baseline = resolve(root, baseline);
+    if (!statSync(baseline, { throwIfNoEntry: false })?.isFile())
+      throw new Error(`--baseline ${baseline} is not a readable file`);
+  }
+  return { root, bases, maxWords, paths, baseline, pages: expandPages(root, pageArgs) };
+}
+
+if (import.meta.main) {
+  let options: CliOptions;
+  let judgment: Judgment;
+  let baselineLabel = "";
+  try {
+    options = parseArgs(process.argv.slice(2));
+    const findings: Finding[] = [];
+    for (const page of options.pages) {
+      findings.push(...probePage(readFileSync(resolve(options.root, page), "utf8"), page, options));
+    }
+    if (options.baseline === undefined) {
+      judgment = { fresh: findings, stale: [], allowed: 0 };
+    } else {
+      baselineLabel = toPosix(relative(options.root, options.baseline));
+      judgment = judge(
+        findings,
+        readBaseline(readFileSync(options.baseline, "utf8"), baselineLabel),
+      );
+    }
+  } catch (error) {
+    console.error(`docs-probe: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+  const { fresh, stale, allowed } = judgment;
+  if (fresh.length === 0 && stale.length === 0) {
+    const allowance = allowed > 0 ? `; ${allowed} finding(s) allowed by ${baselineLabel}` : "";
+    console.log(
+      `docs-probe: ${options.pages.length} page(s) clean (cap ${options.maxWords} words)${allowance}`,
+    );
+    process.exit(0);
+  }
+  console.error(
+    `docs-probe: ${fresh.length} finding(s) outside the baseline, ${stale.length} stale baseline line(s)`,
+  );
+  for (const finding of fresh)
+    console.error(`  ${finding.file}:${finding.line}: ${finding.message}`);
+  for (const key of stale)
+    console.error(
+      `  ${key}: no finding fires here any more; remove the line from ${baselineLabel}`,
+    );
+  process.exit(1);
+}
