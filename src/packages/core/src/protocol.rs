@@ -165,10 +165,17 @@ pub const MCP_MAX_LINE: usize = 64 * 1024 * 1024;
 /// on EOF (client gone -> shut down). The line is bounded to [`MCP_MAX_LINE`];
 /// an overrun fails closed with `InvalidData` rather than buffering unbounded.
 pub fn mcp_read<R: io::BufRead>(r: &mut R) -> io::Result<Option<JsonRpc>> {
-    mcp_read_capped(r, MCP_MAX_LINE)
+    ndjson_read_capped(r, MCP_MAX_LINE, "mcp")
 }
 
-fn mcp_read_capped<R: io::BufRead>(r: &mut R, max_line: usize) -> io::Result<Option<JsonRpc>> {
+/// `leg` names the peer in the error text. Blank lines are skipped in a loop, never by
+/// recursion: a peer that floods blank lines must not grow the stack, which under panic=abort
+/// would abort the process.
+fn ndjson_read_capped<R: io::BufRead, T: for<'de> Deserialize<'de>>(
+    r: &mut R,
+    max_line: usize,
+    leg: &str,
+) -> io::Result<Option<T>> {
     // Take bounds how many bytes read_until will pull in. The +1 sentinel
     // byte lets a full-but-legal line (exactly at the cap) be told apart
     // from one that ran past it: only an overrun leaves line.len() above
@@ -176,10 +183,12 @@ fn mcp_read_capped<R: io::BufRead>(r: &mut R, max_line: usize) -> io::Result<Opt
     let take_cap = u64::try_from(max_line)
         .ok()
         .and_then(|cap| cap.checked_add(1))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "mcp line cap out of range"))?;
-    // Loop (not recurse) over skipped blank lines: a client flooding blank
-    // lines must not grow the stack, which under panic=abort would abort the
-    // process.
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{leg} line cap out of range"),
+            )
+        })?;
     loop {
         let mut line = Vec::new();
         let n = (&mut *r).take(take_cap).read_until(b'\n', &mut line)?;
@@ -189,18 +198,20 @@ fn mcp_read_capped<R: io::BufRead>(r: &mut R, max_line: usize) -> io::Result<Opt
         if line.len() > max_line {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "mcp frame exceeds the line-length cap",
+                format!("{leg} frame exceeds the line-length cap"),
             ));
         }
-        // Trim a trailing newline; tolerate CRLF.
         while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
             line.pop();
         }
         if line.is_empty() {
             continue;
         }
-        let msg: JsonRpc = serde_json::from_slice(&line).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("mcp json decode: {e}"))
+        let msg = serde_json::from_slice(&line).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{leg} json decode: {e}"),
+            )
         })?;
         return Ok(Some(msg));
     }
@@ -475,52 +486,7 @@ pub const BRIDGE_MAX_LINE: usize = 64 * 1024 * 1024;
 pub fn bridge_read<R: io::BufRead, T: for<'de> Deserialize<'de>>(
     r: &mut R,
 ) -> io::Result<Option<T>> {
-    bridge_read_capped(r, BRIDGE_MAX_LINE)
-}
-
-fn bridge_read_capped<R: io::BufRead, T: for<'de> Deserialize<'de>>(
-    r: &mut R,
-    max_line: usize,
-) -> io::Result<Option<T>> {
-    // Take bounds how many bytes read_until will pull in. The +1 sentinel
-    // byte lets a full-but-legal line (exactly at the cap) be told apart
-    // from one that ran past it: only an overrun leaves line.len() above
-    // max_line.
-    let take_cap = u64::try_from(max_line)
-        .ok()
-        .and_then(|cap| cap.checked_add(1))
-        .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "bridge line cap out of range")
-        })?;
-    // Loop (not recurse) over skipped blank lines: a peer that floods blank
-    // lines must not grow the stack, which under panic=abort would abort the
-    // process.
-    loop {
-        let mut line = Vec::new();
-        let n = (&mut *r).take(take_cap).read_until(b'\n', &mut line)?;
-        if n == 0 {
-            return Ok(None);
-        }
-        if line.len() > max_line {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "bridge frame exceeds the line-length cap",
-            ));
-        }
-        while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
-            line.pop();
-        }
-        if line.is_empty() {
-            continue;
-        }
-        let msg = serde_json::from_slice(&line).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("bridge json decode: {e}"),
-            )
-        })?;
-        return Ok(Some(msg));
-    }
+    ndjson_read_capped(r, BRIDGE_MAX_LINE, "bridge")
 }
 
 pub fn bridge_write<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {

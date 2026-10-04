@@ -392,20 +392,29 @@ fn policy_field_wire_names_carry_no_comma() {
 #[test]
 fn the_deny_baseline_sits_at_every_boolean_restrictive_pole() {
     // The deny mechanism is grants-off plus confirmations-on, a consistency
-    // between the Default table and the catalogue's poles that neither can
-    // express alone: a new boolean field with a permissive default fails
-    // here. The windows are usability defaults, not poles, and hostReverifyMs
-    // keeps its decided permissive default (see `Default for PolicyValues`).
+    // between the Default table and the catalogue's declared directions that
+    // neither can express alone: a new boolean field with a permissive
+    // default fails here. The windows are usability defaults, not poles, and
+    // hostReverifyMs keeps its decided permissive default (see `Default for
+    // PolicyValues`); the deny list has no restrictive end to sit at.
     let base = PolicyValues::default();
     for field in PolicyField::ALL {
-        if let FieldKind::Bool(f) = field.kind() {
-            assert_eq!(
-                base.get_bool(f),
-                f.pole() == BoolPole::FalsePermissive,
-                "{} must default to its restrictive pole",
-                field.wire_name()
-            );
-        }
+        let FieldKind::Bool(f) = field.kind() else {
+            continue;
+        };
+        let restrictive = match direction(*field) {
+            Direction::Bool(BoolPole::TruePermissive) => false,
+            Direction::Bool(BoolPole::FalsePermissive) => true,
+            Direction::Ms(_) | Direction::ShrinksPermissiveSet => {
+                panic!("{}: boolean field declared non-boolean", field.wire_name())
+            }
+        };
+        assert_eq!(
+            base.get_bool(f),
+            restrictive,
+            "{} must default to its restrictive pole",
+            field.wire_name()
+        );
     }
 }
 

@@ -1,6 +1,5 @@
 //! The on-disk policy store, the history ring, and the write seams: two
-//! [`RuntimeRecord`]s behind public seams, and log-after-decide audit outside the
-//! lock.
+//! [`RuntimeRecord`]s behind public seams.
 
 use std::io;
 
@@ -251,7 +250,7 @@ impl std::fmt::Display for PolicyWriteError {
 /// retained overlay       -> survives minus its entries on the `touched` fields, which the tap covers
 ///                           (the touched set travels inside the signed bytes)
 /// ```
-/// Returns the presence rung that authorized the write. Every sign outcome is audited, log-after-decide, outside the lock.
+/// Returns the presence rung that authorized the write. Every sign outcome is audited.
 pub fn set_signed(
     values: PolicyValues,
     touched: Vec<PolicyField>,
@@ -363,8 +362,6 @@ pub fn set_signed(
             surface,
         ),
         PolicySignOutcome::Refused(e) => {
-            // Log-after-decide: the refusal has already happened; the
-            // no-downgrade rule makes it terminal, never a floor.
             crate::audit::record(
                 crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
                     .surface(surface)
@@ -429,11 +426,8 @@ fn next_revision(observed: Option<u64>) -> Result<u64, PolicyWriteError> {
         .ok_or(PolicyWriteError::RevisionOverflow)
 }
 
-/// The locked half of a grant write plus its audit record: take the runtime
-/// lock, land the baseline through [`write_baseline_locked`], then record
-/// the outcome outside the lock (audit I/O never runs inside a critical
-/// section). The hardware tap is the only rung that reaches here, so the
-/// audit record names `touch_id`.
+/// The locked half of a grant write plus its audit record. The hardware tap
+/// is the only rung that reaches here, so the audit record names `touch_id`.
 fn commit_signed_baseline(
     observed: PrePromptObservation,
     doc_bytes: &[u8],
@@ -543,11 +537,10 @@ pub fn restrict(
         Ok(inner) => inner,
         Err(e) => Err(PolicyWriteError::Io(e)),
     };
-    // Log-after-decide, outside the lock. auth=none is deliberate:
-    // restrictions are free, and the trail must never suggest a presence
-    // rung vouched for one. Refusals and write failures are audited too;
-    // only the promptless preconditions (NoBaseline, Invalid) stay
-    // unaudited, the pair_client InvalidName precedent.
+    // auth=none is deliberate: restrictions are free, and the trail must
+    // never suggest a presence rung vouched for one. Only the promptless
+    // preconditions (NoBaseline, Invalid) stay unaudited, the pair_client
+    // InvalidName precedent.
     let record =
         crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite).surface(surface);
     match &result {

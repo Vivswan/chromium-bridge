@@ -67,7 +67,7 @@ impl Grant {
 
 /// The host-side dispatch verdict for `tool` against the loaded effective policy. Pure over the load result so
 /// the fail-closed matrix is unit-testable without the runtime directory, exactly as [`crate::kill::verdict`] is
-/// over the revocation read. The three load states carry the crux:
+/// over the trust record read. The three load states carry the crux:
 ///
 /// ```text
 /// `Ok(None)`             -> no policy store yet (pre-cutover): allow; the gate bites only once a policy exists
@@ -129,7 +129,7 @@ fn load_effective() -> Result<Option<PolicyValues>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{direction, BoolPole, Direction};
+    use crate::policy::{direction, BoolPole, Direction, FieldKind};
     use crate::tools::{all, ToolId};
     use std::collections::BTreeSet;
 
@@ -209,78 +209,74 @@ mod tests {
     }
 
     #[test]
-    fn each_grant_off_refuses_exactly_its_gated_tools_and_allows_others() {
-        // With every other grant on, turning one grant off refuses exactly the
-        // tools that grant gates and no others.
+    fn each_grant_off_refuses_exactly_its_gated_tools_and_names_the_grant() {
+        // Pins the gate to the catalogue's `required_grants`: a tool listing a
+        // grant the gate never reads, or the reverse, fails here.
         for grant in [
             Grant::CdpMode,
             Grant::FileUpload,
             Grant::HandleDialog,
             Grant::PageEval,
         ] {
+            let FieldKind::Bool(field) = grant.field().kind() else {
+                panic!("grant {grant:?} is not a boolean field");
+            };
             let mut eff = all_grants_on();
-            match grant {
-                Grant::CdpMode => eff.cdp_mode = false,
-                Grant::FileUpload => eff.file_upload_enabled = false,
-                Grant::HandleDialog => eff.handle_dialog_enabled = false,
-                Grant::PageEval => eff.page_eval_enabled = false,
-            }
+            *eff.bool_mut(field) = false;
             for tool in all() {
                 let gated = tool.required_grants().any(|g| g == grant);
-                let refused = verdict(&tool, Ok(Some(eff.clone()))).is_err();
-                assert_eq!(
-                    refused, gated,
-                    "with {grant:?} off, {} refused={refused} but gated={gated}",
-                    tool.name
-                );
+                let outcome = verdict(&tool, Ok(Some(eff.clone())));
+                match (gated, outcome) {
+                    (false, Ok(())) => {}
+                    (
+                        true,
+                        Err(CallError::ToolDisabled {
+                            tool: refused,
+                            reason: ToolDisabledReason::GrantOff(named),
+                        }),
+                    ) => {
+                        assert_eq!(refused, tool.name, "with {grant:?} off");
+                        assert_eq!(
+                            named,
+                            grant.field().wire_name(),
+                            "with {grant:?} off, {} must name that grant",
+                            tool.name
+                        );
+                    }
+                    (gated, outcome) => panic!(
+                        "with {grant:?} off, {} gated={gated} but verdict={outcome:?}",
+                        tool.name
+                    ),
+                }
             }
         }
     }
 
     #[test]
-    fn a_grant_off_refusal_names_the_grant() {
-        let mut eff = all_grants_on();
-        eff.page_eval_enabled = false;
-        let err = verdict(&ToolId::PageEval.tool(), Ok(Some(eff))).unwrap_err();
-        assert!(matches!(
-            err,
-            CallError::ToolDisabled {
-                reason: ToolDisabledReason::GrantOff("pageEvalEnabled"),
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn disabled_tools_membership_refuses_only_the_listed_tool() {
-        let mut eff = all_grants_on();
-        eff.disabled_tools = vec!["tab_list".to_string()];
-        let err = verdict(&ToolId::TabList.tool(), Ok(Some(eff.clone()))).unwrap_err();
-        assert!(matches!(
-            err,
-            CallError::ToolDisabled {
-                reason: ToolDisabledReason::InDisabledList,
-                ..
-            }
-        ));
-        assert_eq!(err.code(), "TOOL_DISABLED");
-        // A tool absent from the list, and otherwise ungated, still runs.
-        assert!(verdict(&ToolId::TabFocus.tool(), Ok(Some(eff))).is_ok());
-    }
-
-    #[test]
-    fn a_disabled_tool_gates_even_a_debugger_tool_with_its_grants_on() {
-        // disabledTools is independent of the grant gates: a tool with every
-        // grant on is still refused when the policy disables it by name.
-        let mut eff = all_grants_on();
-        eff.disabled_tools = vec!["page_upload".to_string()];
-        let err = verdict(&ToolId::PageUpload.tool(), Ok(Some(eff))).unwrap_err();
-        assert!(matches!(
-            err,
-            CallError::ToolDisabled {
-                reason: ToolDisabledReason::InDisabledList,
-                ..
-            }
-        ));
+    fn a_disabled_tools_entry_refuses_that_tool_whatever_its_grants_say() {
+        // The two rows are an ungated tool and a grant-gated one: the lane
+        // must bite independently of the grant gates.
+        for listed in [ToolId::TabList, ToolId::PageUpload] {
+            let mut eff = all_grants_on();
+            eff.disabled_tools = vec![listed.tool().name.to_string()];
+            let err = verdict(&listed.tool(), Ok(Some(eff.clone())))
+                .err()
+                .unwrap_or_else(|| panic!("{listed:?} listed must be refused"));
+            assert!(
+                matches!(
+                    err,
+                    CallError::ToolDisabled {
+                        reason: ToolDisabledReason::InDisabledList,
+                        ..
+                    }
+                ),
+                "{listed:?}: {err:?}"
+            );
+            assert_eq!(err.code(), "TOOL_DISABLED", "{listed:?}");
+            assert!(
+                verdict(&ToolId::TabFocus.tool(), Ok(Some(eff))).is_ok(),
+                "{listed:?} listed: an unlisted tool must still run"
+            );
+        }
     }
 }

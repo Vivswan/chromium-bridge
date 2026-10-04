@@ -42,7 +42,7 @@ pub struct Report {
     /// `Browser::ALL` order - or the reason the check could not run at all
     /// (e.g. no HOME).
     pub manifests: Result<Vec<ManifestStatus>, String>,
-    /// The global kill switch. `Ok(bool)` from a readable revocation record;
+    /// The global kill switch. `Ok(bool)` from a readable trust record;
     /// `Err(text)` when the record is unreadable (in which case every
     /// enforcement point is failing closed).
     pub kill: Result<bool, String>,

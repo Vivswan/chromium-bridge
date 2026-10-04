@@ -462,8 +462,6 @@ fn a_relaxing_overlay_is_refused_with_the_store_unchanged() {
     assert!(matches!(err, PolicyWriteError::NotARestriction));
     assert_eq!(PolicyStore::load().unwrap().unwrap(), seeded);
     assert!(PolicyHistory::load().unwrap().is_none());
-    // The refusal is in the trail (log-after-decide), naming the
-    // offending posture.
     let trail = audit_text();
     assert!(trail.contains("\"outcome\":\"refused\""), "{trail}");
     assert!(
@@ -782,24 +780,6 @@ fn a_tampered_overlay_that_relaxes_the_baseline_refuses_every_read() {
 }
 
 #[test]
-fn clearing_the_baseline_bumps_the_policy_epoch_once() {
-    let _dir = scratch_runtime_dir("policy-clear-epoch");
-    seed_store(1, &PolicyValues::default(), None);
-    let before = crate::trust::TrustState::current().unwrap().policy_epoch();
-    ipc::with_runtime_lock(clear_baseline_locked).unwrap();
-    assert!(PolicyStore::load().unwrap().is_none());
-    let after = crate::trust::TrustState::current().unwrap().policy_epoch();
-    assert!(
-        after > before,
-        "a connected host only pushes the cleared state if the epoch moved"
-    );
-    // Clearing an already-absent store is a no-op: no epoch churn.
-    ipc::with_runtime_lock(clear_baseline_locked).unwrap();
-    let again = crate::trust::TrustState::current().unwrap().policy_epoch();
-    assert_eq!(again, after);
-}
-
-#[test]
 fn a_relaxation_outside_the_touched_set_refuses_before_any_prompt() {
     let _dir = scratch_runtime_dir("policy-touched-coverage");
     let _reset = policy_test_hook::ResetOnDrop;
@@ -988,44 +968,103 @@ fn clear_baseline_is_a_noop_without_a_store() {
 }
 
 #[test]
-fn a_signed_write_bumps_the_policy_epoch() {
-    let _dir = scratch_runtime_dir("policy-policy-epoch-signed");
-    let _reset = policy_test_hook::ResetOnDrop;
-    let before = crate::trust::TrustState::current().unwrap().policy_epoch();
-    policy_test_hook::set(signed_mock());
-    set_signed(
-        PolicyValues {
-            page_eval_enabled: true,
-            ..PolicyValues::default()
+fn every_policy_write_moves_the_policy_epoch_and_a_noop_clear_holds_it() {
+    // The native host pushes a policy change only when the epoch moved, so
+    // each write that changes what the bridge enforces must move it, and a
+    // clear of an already-cleared store must leave the moved marker exactly
+    // where it was (no push churn).
+    enum Epoch {
+        Moves,
+        Holds,
+    }
+    struct Case {
+        name: &'static str,
+        start: fn(),
+        write: fn(),
+        epoch: Epoch,
+    }
+    fn seed_relaxed() {
+        seed_store(
+            1,
+            &PolicyValues {
+                page_eval_enabled: true,
+                ..PolicyValues::default()
+            },
+            None,
+        );
+    }
+    fn seed_deny() {
+        seed_store(1, &PolicyValues::default(), None);
+    }
+    fn clear() {
+        ipc::with_runtime_lock(clear_baseline_locked).unwrap();
+    }
+    let cases = [
+        Case {
+            name: "signed write",
+            start: || {},
+            write: || {
+                policy_test_hook::set(signed_mock());
+                set_signed(
+                    PolicyValues {
+                        page_eval_enabled: true,
+                        ..PolicyValues::default()
+                    },
+                    vec![PolicyField::PageEvalEnabled],
+                    Surface::Core,
+                )
+                .unwrap();
+            },
+            epoch: Epoch::Moves,
         },
-        vec![PolicyField::PageEvalEnabled],
-        Surface::Core,
-    )
-    .unwrap();
-    let after = crate::trust::TrustState::current().unwrap().policy_epoch();
-    assert!(after > before, "a signed write must bump the policy epoch");
-}
-
-#[test]
-fn a_restriction_bumps_the_policy_epoch() {
-    let _dir = scratch_runtime_dir("policy-policy-epoch-restrict");
-    seed_store(
-        1,
-        &PolicyValues {
-            page_eval_enabled: true,
-            ..PolicyValues::default()
+        Case {
+            name: "restriction",
+            start: seed_relaxed,
+            write: || {
+                restrict(
+                    PolicyOverlay {
+                        page_eval_enabled: Some(false),
+                        ..PolicyOverlay::default()
+                    },
+                    Surface::Cli,
+                )
+                .unwrap();
+            },
+            epoch: Epoch::Moves,
         },
-        None,
-    );
-    let before = crate::trust::TrustState::current().unwrap().policy_epoch();
-    restrict(
-        PolicyOverlay {
-            page_eval_enabled: Some(false),
-            ..PolicyOverlay::default()
+        Case {
+            name: "clear with a store",
+            start: seed_deny,
+            write: clear,
+            epoch: Epoch::Moves,
         },
-        Surface::Cli,
-    )
-    .unwrap();
-    let after = crate::trust::TrustState::current().unwrap().policy_epoch();
-    assert!(after > before, "a restriction must bump the policy epoch");
+        Case {
+            name: "clear of an already-cleared store",
+            start: || {
+                seed_deny();
+                clear();
+            },
+            write: clear,
+            epoch: Epoch::Holds,
+        },
+    ];
+    for case in cases {
+        let _dir = scratch_runtime_dir("policy-epoch");
+        let _reset = policy_test_hook::ResetOnDrop;
+        (case.start)();
+        let before = crate::trust::TrustState::current().unwrap().policy_epoch();
+        (case.write)();
+        let after = crate::trust::TrustState::current().unwrap().policy_epoch();
+        match case.epoch {
+            Epoch::Moves => assert!(after > before, "{} must move the epoch", case.name),
+            Epoch::Holds => {
+                assert!(
+                    before > 0,
+                    "{}: the control marker must already have moved",
+                    case.name
+                );
+                assert_eq!(after, before, "{} must hold the epoch", case.name);
+            }
+        }
+    }
 }
