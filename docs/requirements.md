@@ -104,7 +104,7 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 | **NFR-2 Resources** | release binary < 1MB; resident MCP server memory < 20MB |
 | **NFR-3 Zero runtime dependencies** | The user's machine needs Rust only at compile time; no Python/Node/any runtime at run time; no native dependencies beyond libc |
 | **NFR-4 Robustness** | Recovers the connection automatically after the SW's 5-minute restart, a native host crash, or a Chrome restart |
-| **NFR-5 Auditability** | Every security-relevant decision (authorization, confirmation, rejection) has its reason in `security/rationale.md` and its history in the PR that landed it; extension permission declarations are minimal |
+| **NFR-5 Auditability** | Every security-relevant decision (authorization, confirmation, rejection) is recorded under `security/` (its mechanism and residual in the trust-boundaries page and the threat model, the rules a change could reverse in `rationale.md`) with its history in the PR that landed it; extension permission declarations are minimal |
 | **NFR-6 PATH independence** | The host manifest uses absolute paths; no dependency on the user's shell PATH (known constraint: the user's PATH lacks `/opt/homebrew/bin`) |
 
 ## 6. Scope boundaries
