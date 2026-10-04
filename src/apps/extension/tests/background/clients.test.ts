@@ -34,7 +34,7 @@ const listResult = {
   ok: true,
   enrolled: true,
   clients: [
-    { name: "claude-code", anchor: { kind: "team_id", value: "TEAMID0001" }, added_unix: 42 },
+    { name: "claude-code", anchor: { kind: "signer", value: "SIGNER0001" }, added_unix: 42 },
   ],
 };
 
@@ -67,7 +67,7 @@ describe("client list", () => {
     if (!view.ok) throw new Error("unreachable");
     expect(view.enrolled).toBe(true);
     expect(view.clients[0]?.name).toBe("claude-code");
-    expect(view.clients[0]?.anchor.kind).toBe("team_id");
+    expect(view.clients[0]?.anchor.kind).toBe("signer");
   });
 
   test("surfaces a host-side failure (tamper case) as ok:false", async () => {

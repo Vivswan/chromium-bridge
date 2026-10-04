@@ -144,18 +144,20 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
   },
   client_list_result: {
     "$.properties.clients.items.properties.name": {
-      direction: "narrow",
+      direction: "widen",
       reason:
-        "A blank client label fails the frame early; the host validates labels when it pairs a client, not " +
-        "when it loads the allowlist it forwards, so this line is the extension's own.",
-      changes: [{ change: "string", minLength: 1 }],
-      probes: { refuses: [""] },
+        "The extension only displays the name, so the plain string skips the label grammar (1-32 chars of " +
+        "[A-Za-z0-9._-], starting alphanumeric) the host's ClientName parse enforces when it loads the allowlist " +
+        "it forwards.",
+      changes: [],
+      evidence: "parser",
+      probes: { accepts: ["", "bad name!", "x".repeat(33), "-flag"] },
     },
     "$.properties.clients.items.properties.anchor": {
       direction: "widen",
       reason:
         "The extension only displays the anchor, so one object with a kind enum skips the HashDigest grammar " +
-        "(lowercase hex, 20 or 32 bytes) the host's parse enforces (TeamId is non-empty on both sides); " +
+        "(lowercase hex, 20 or 32 bytes) the host's parse enforces (SignerId is non-empty on both sides); " +
         "admission is decided by the host, whose own parse refuses a malformed value when it loads the " +
         "allowlist.",
       changes: [{ change: "tag-union-as-enum-object" }],

@@ -188,13 +188,13 @@ impl TrustStatus {
 #[cfg(windows)]
 pub fn publisher_anchor(
     status: TrustStatus,
-) -> std::io::Result<Option<super::super::identity::TeamId>> {
+) -> std::io::Result<Option<super::super::identity::SignerId>> {
     use std::io::{Error, ErrorKind};
 
-    use super::super::identity::TeamId;
+    use super::super::identity::SignerId;
 
     match status {
-        TrustStatus::Trusted(subject) => TeamId::try_from(subject)
+        TrustStatus::Trusted(subject) => SignerId::try_from(subject)
             .map(Some)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e)),
         TrustStatus::Unsigned | TrustStatus::Untrusted(_) => Ok(None),
@@ -237,7 +237,7 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     let image = process::image_path(pid)?;
     Ok(ClientIdentity {
         hash: HashDigest::of_file(&image)?,
-        team_id: signer::publisher_of(&image)?,
+        signer: signer::publisher_of(&image)?,
     })
 }
 

@@ -35,7 +35,7 @@ pub use handshake::fuzz_api as handshake_fuzz;
 pub use handshake::{
     client_handshake, server_handshake, validate_label, BrowserLabel, DEFAULT_LABEL,
 };
-pub use identity::{ClientIdentity, HashDigest, TeamId};
+pub use identity::{ClientIdentity, HashDigest, SignerId};
 pub use lockfile::{listen_and_publish, LockFile, PublishOutcome, LOCK_FILENAME};
 #[cfg(unix)]
 pub use peercred::checked_pid;

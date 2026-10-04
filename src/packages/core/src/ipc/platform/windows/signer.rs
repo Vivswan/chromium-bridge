@@ -24,7 +24,7 @@ use windows_sys::Win32::Security::WinTrust::{
     WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
 };
 
-use super::super::super::identity::TeamId;
+use super::super::super::identity::SignerId;
 use super::{publisher_anchor, TrustStatus};
 
 /// The publisher anchor of the image at `image`, `None` when the image is
@@ -33,7 +33,7 @@ use super::{publisher_anchor, TrustStatus};
 /// anchors to pair with), not on the bridge accept path, which hashes the
 /// image alone. Revocation is not checked (`WTD_REVOKE_NONE`); the threat
 /// model's residual list owns why.
-pub(crate) fn publisher_of(image: &Path) -> io::Result<Option<TeamId>> {
+pub(crate) fn publisher_of(image: &Path) -> io::Result<Option<SignerId>> {
     let session = TrustSession::verify(image)?;
     let status = TrustStatus::classify(session.status, || session.signer_subject())?;
     if let TrustStatus::Untrusted(code) = &status {

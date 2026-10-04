@@ -18,7 +18,7 @@
 | `chromium-bridge revoke` | enrollment | Deletes the enrollment key; a pinning extension then fails closed. |
 | `chromium-bridge enclave-status [--json]` | read-only | Prints the enrollment state and key fingerprint. |
 | `chromium-bridge presence-selftest` | diagnostic | Raises one user-presence prompt and reports the result, without a browser. |
-| `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --team-id <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
+| `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
 | `chromium-bridge revoke-client --name <label>` | trusted clients | Removes a client; a live broker drops it immediately. |
 | `chromium-bridge list-clients` | read-only | Prints the trusted-client allowlist. |
 | `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release. |
@@ -60,7 +60,12 @@ If a registration is missing or stale for a browser you use, that browser cannot
 
 The CLI below registers the native-messaging host from a terminal through one engine (`registration.rs`). It needs nothing but the host binary itself, on desktops, headless machines, and CI alike.
 
-`chromium-bridge doctor --fix` (re-)registers the binary you invoke it from as the native-messaging host: for each targeted browser it writes the `com.vivswan.chromium_bridge.host.json` manifest where that browser looks for it. The repair is idempotent re-registration, so on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one. It never builds, downloads, or copies anything; the manifest points at this binary's own resolved path (through a small per-browser wrapper script on macOS/Linux, which bakes in `--native-host --label <browser>` because Chrome's manifest format has no `args` field). It refuses to overwrite a manifest it cannot verify this project wrote.
+`chromium-bridge doctor --fix` (re-)registers the binary you invoke it from as the native-messaging host: for each targeted browser it writes the `com.vivswan.chromium_bridge.host.json` manifest where that browser looks for it.
+
+- **Idempotent re-registration:** on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one.
+- **Nothing built, downloaded, or copied:** the manifest points at this binary's own resolved path, through a small per-browser wrapper script on macOS/Linux.
+- **That wrapper** bakes in `--native-host --label <browser>`, because Chrome's manifest format has no `args` field.
+- **Refuses to overwrite** a manifest it cannot verify this project wrote.
 
 Selecting browsers:
 
@@ -74,7 +79,16 @@ chromium-bridge doctor --fix --manifest-dir DIR   # exact NativeMessagingHosts d
 chromium-bridge doctor --list                     # read-only: detection + registration state
 ```
 
-Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "Detected" means the browser is actually installed, as far as a cheap local check can tell. On macOS that check is the application bundle under `/Applications` or `~/Applications` - a leftover per-user config directory alone (uninstalled browsers keep those forever, and some dev tools create them) does not count, and a freshly installed browser counts before its first run. On Linux and Windows the check is the per-user config (profile) directory, the best cheap signal there. A browser installed somewhere non-standard on macOS reads as "not detected"; it can still be registered explicitly with `--browser <key>` or `--manifest-dir`. Plain `doctor`'s summary counts only detected browsers, so a healthy explicit registration for a non-standard install keeps the summary below "OK" even though the bridge works - the per-browser lines tell the real story. When nothing is detected, `--fix` refuses and asks for an explicit selection instead of guessing.
+Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "Detected" means the browser is actually installed, as far as a cheap local check can tell:
+
+| Platform | The detection check | What it means |
+| --- | --- | --- |
+| macOS | the application bundle under `/Applications` or `~/Applications` | a leftover per-user config directory alone does not count (uninstalled browsers keep those forever, and some dev tools create them); a freshly installed browser counts before its first run |
+| Linux, Windows | the per-user config (profile) directory | the best cheap signal there |
+
+- **A non-standard install on macOS** reads as "not detected"; it can still be registered explicitly with `--browser <key>` or `--manifest-dir`.
+- **Plain `doctor` counts only detected browsers,** so a healthy explicit registration for a non-standard install keeps the summary below "OK" even though the bridge works - the per-browser lines tell the real story.
+- **Nothing detected:** `--fix` refuses and asks for an explicit selection instead of guessing.
 
 `chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`): the per-browser manifests and the wrapper scripts. Re-pass any `--manifest-dir` you registered. Before deleting a manifest it verifies the file's content is ours (our host id and description marker); anything else is reported and left in place, and so is anything it cannot read and verify. It never touches this binary, your browsers, or the loaded extension.
 
@@ -101,17 +115,17 @@ By default (unenrolled), any process that spawns the server is served, and every
 ```text
 chromium-bridge pair-client --name claude-code --this-parent
 chromium-bridge pair-client --name codex --hash <sha256-hex>
-chromium-bridge pair-client --name claude-desktop --team-id <apple-team-id>
+chromium-bridge pair-client --name claude-desktop --signer <signer-id>
 chromium-bridge list-clients
 chromium-bridge revoke-client --name codex
 ```
 
-- `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust). Unix only: on Windows the server keys a harness on the creator of its stdin pipe, which a console command has none of, so pair with `--hash` or `--team-id` using the values the server logs at startup while unenrolled.
-- Authorization keys on the attested anchor (a signing Team ID where the client is signed, an image hash otherwise); the `--name` is a label for logs and revocation, never the authorization key.
+- `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust). Unix only: on Windows the server keys a harness on the creator of its stdin pipe, which a console command has none of, so pair with `--hash` or `--signer` using the values the server logs at startup while unenrolled.
+- Authorization keys on the attested anchor, never the `--name` label, which labels logs and revocation. What each platform measures is on the [trust boundaries page](security/trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20).
 - Hash anchors change when the client updates; re-run `pair-client` with the same name to replace the entry (the re-pair path).
 - Adding a client is a capability grant, so it is presence-gated: Touch ID on an enrolled Mac, an interactive terminal confirmation otherwise. Revoking is friction-free by design; a live broker drops the revoked client and refuses its re-attach.
 
-Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. On Windows the measured identity is the image file's hash plus its Authenticode publisher, which fills the Team ID slot (see [SECURITY.md](../.github/SECURITY.md#platform-support)).
+Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. The Windows measurement is in [SECURITY.md](../.github/SECURITY.md#platform-support).
 
 ## Kill switch (kill / unkill)
 
@@ -122,7 +136,14 @@ Once the allowlist exists, anything unmatched fails closed, including an identit
 - The state is persisted (in `trust.json`, next to the lock file) and survives restarts, reconnects, and reboots.
 - The extension's options page shows the state; engaging the switch works from any surface, but releasing it does not (a web page cannot see or touch any of it).
 
-Nothing releases the switch on its own. Release is a CLI act: `chromium-bridge unkill` from a terminal (the extension's release toggle was retired; a release request from the extension is refused and audited), and releasing demands proof of user presence: on an enrolled Mac this is a Secure Enclave Touch ID tap, and where no Enclave key exists `unkill` asks you to type an explicit confirmation on a real terminal, and refuses outright when its stdin is a pipe, so no script or background program can quietly reopen the bridge through the CLI. Every release attempt is audited with the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at the presence gate, or refused by an unwritable record after presence passed.
+Nothing releases the switch on its own. Release is a CLI act, `chromium-bridge unkill` from a terminal, and it demands proof of user presence. The extension's release toggle was retired; a release request from the extension is refused and audited.
+
+| Machine | The proof `unkill` demands |
+| --- | --- |
+| an enrolled Mac | a Secure Enclave Touch ID tap |
+| no Enclave key | an explicit confirmation typed on a real terminal; a piped stdin is refused outright, so no script or background program can quietly reopen the bridge through the CLI |
+
+Every release attempt is audited with the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at the presence gate, or refused by an unwritable record after presence passed.
 
 If either command reports that the trust record is unreadable, see the recovery section in [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record); until then, everything keeps failing closed.
 
@@ -140,13 +161,29 @@ chromium-bridge policy history [--json]           # read-only: superseded revisi
 chromium-bridge policy rollback --revision <n> [--json]
 ```
 
-**Field flags.** `set` and `restrict` share one flag per policy field, spelled as the kebab-case of its camelCase wire name: `--cdp-mode`, `--file-upload`, `--handle-dialog`, `--page-eval`, `--confirm-high-risk-click`, `--confirm-page-eval`, `--touch-id-confirm`, `--confirm-tab-close`, `--warn-precise-snapshot`, `--eval-mask`, `--host-reverify-ms`, `--confirm-grace-ms`, `--click-toast-timeout-ms`, `--eval-toast-timeout-ms`, and `--disabled-tools`. Boolean flags take
-`on|off`; the four `*-ms` flags take a non-negative integer;
-`--disabled-tools` takes a comma-separated tool list that states the WHOLE disabled set (keep the tools already in it when adding one; empty entries are dropped, so `--disabled-tools ""` is the empty set - a full clear, which on the `set` lane is a relaxation and costs the tap like any other). Because the list travels comma-joined, a tool name containing a comma or surrounding whitespace cannot ride this transport faithfully: every write seam refuses such a name outright rather than signing a silently mangled list. Parsing is strict: an unknown subcommand, a stray argument, a repeated flag, or a malformed value is an error, never a guess, and `set`/`restrict` demand at least one field flag.
+**Field flags.** `set` and `restrict` share one flag per policy field, spelled as the kebab-case of its camelCase wire name: `--cdp-mode`, `--file-upload`, `--handle-dialog`, `--page-eval`, `--confirm-high-risk-click`, `--confirm-page-eval`, `--touch-id-confirm`, `--confirm-tab-close`, `--warn-precise-snapshot`, `--eval-mask`, `--host-reverify-ms`, `--confirm-grace-ms`, `--click-toast-timeout-ms`, `--eval-toast-timeout-ms`, and `--disabled-tools`.
 
-**The two lanes are deliberately asymmetric.** `policy set` is the grant lane: it folds the edits over the current baseline (untouched fields carry baseline values, never effective ones), embeds the touched-field set in the document, and signs the exact document bytes with the Secure Enclave enrollment key - the Touch ID tap IS the signature. Where no enrollment key exists (non-macOS, an unenrolled Mac), the CLI refuses UP FRONT, before any prompt could appear: the CLI's grant path exists only as that signature and never constructs an interactive floor, because a floor-gated CLI grant would quietly create a baseline-writing path on every platform the CLI ships to. `policy restrict` is the free lane: no prompt, no signature, and the seam's direction check refuses any edit that would relax the effective policy, so a scripted or forged restriction is at worst a denial of service against your own bridge.
+| Flag kind | Value |
+| --- | --- |
+| boolean flags | `on` or `off` |
+| the four `*-ms` flags | a non-negative integer |
+| `--disabled-tools` | a comma-separated tool list that states the WHOLE disabled set (keep the tools already in it when adding one) |
 
-**Rollback never replays.** `policy rollback --revision <n>` re-derives that revision's effective policy, diffs it against the current one, and applies the difference as a FRESH write: a rollback that only tightens rides the free restrict lane with no prompt; one that relaxes anything is one fresh Touch ID tap, exactly like any other grant. The old signed artifact is never written back - a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
+- **`--disabled-tools ""` is the empty set:** empty entries are dropped, so this is a full clear, which on the `set` lane is a relaxation and costs the tap like any other.
+- **A tool name containing a comma or surrounding whitespace** cannot ride the comma-joined transport faithfully: every write seam refuses such a name outright rather than signing a silently mangled list.
+- **Parsing is strict:** an unknown subcommand, a stray argument, a repeated flag, or a malformed value is an error, never a guess, and `set`/`restrict` demand at least one field flag.
+
+**The two lanes are deliberately asymmetric.**
+
+- **`policy set` is the grant lane:** it folds the edits over the current baseline (untouched fields carry baseline values, never effective ones), embeds the touched-field set in the document, and signs the exact document bytes with the Secure Enclave enrollment key. The Touch ID tap IS the signature.
+- **No enrollment key, no grant:** on non-macOS or an unenrolled Mac the CLI refuses UP FRONT, before any prompt could appear. The CLI's grant path exists only as that signature and never constructs an interactive floor, because a floor-gated CLI grant would quietly create a baseline-writing path on every platform the CLI ships to.
+- **`policy restrict` is the free lane:** no prompt, no signature, and the seam's direction check refuses any edit that would relax the effective policy, so a scripted or forged restriction is at worst a denial of service against your own bridge.
+
+**Rollback never replays.** `policy rollback --revision <n>` re-derives that revision's effective policy, diffs it against the current one, and applies the difference as a FRESH write.
+
+- **A rollback that only tightens** rides the free restrict lane with no prompt.
+- **One that relaxes anything** is one fresh Touch ID tap, exactly like any other grant.
+- **The old signed artifact is never written back:** a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
 
 **`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).
 

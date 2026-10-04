@@ -186,7 +186,7 @@ clients:
   revoke_confirm: "Revoke trusted client \"$1\"? A live connection is dropped immediately."
   revoke_failed: "Revoke failed: $1"
   anchor_hash: "hash"
-  anchor_team: "Team ID"
+  anchor_signer: "Signer"
 
 kill:
   desc: "Engage cuts every client off from every browser immediately, even mid-action. The state survives restarts."

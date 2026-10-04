@@ -184,7 +184,7 @@ clients:
   revoke_confirm: "撤销受信任客户端\"$1\"? 其当前连接会被立即断开。"
   revoke_failed: "撤销失败: $1"
   anchor_hash: "哈希"
-  anchor_team: "Team ID"
+  anchor_signer: "签名者"
 
 kill:
   desc: "启用后, 所有客户端与所有浏览器的连接会被立即切断, 进行中的操作也不例外。该状态在重启后仍然保持。"

@@ -1,7 +1,7 @@
 //! The argv boundary. [`parse`] reads argv exactly once into a typed
 //! [`Command`], and no handler sees argv again. The newtypes a subcommand
-//! carries (`BrowserLabel`, `HashDigest`, `TeamId`, `Ms`, `Browser`) are
-//! parsed here; values with their own trust boundary (a client name, a tool
+//! carries (`BrowserLabel`, `HashDigest`, `SignerId`, `ClientName`, `Ms`,
+//! `Browser`) are parsed here; values with their own trust boundary (a tool
 //! list) are validated at the seam that stores them.
 
 use std::path::PathBuf;
@@ -9,9 +9,10 @@ use std::path::PathBuf;
 use clap::builder::ArgGroup;
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, Parser, Subcommand};
 
+use crate::allowlist::ClientName;
 use crate::audit::DEFAULT_AUDIT_LIMIT;
 use crate::browsers::Browser;
-use crate::ipc::{BrowserLabel, HashDigest, TeamId};
+use crate::ipc::{BrowserLabel, HashDigest, SignerId};
 use crate::policy::{FieldKind, Ms, PolicyField, PolicyOverlay};
 use crate::registration::known_keys;
 
@@ -158,7 +159,7 @@ impl From<DoctorFlags> for DoctorCommand {
 /// `pair-client`: the label to trust and exactly one anchor.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PairClientArgs {
-    pub name: String,
+    pub name: ClientName,
     pub anchor: AnchorSpec,
 }
 
@@ -167,8 +168,8 @@ pub struct PairClientArgs {
 pub enum AnchorSpec {
     /// Pin an explicit attested image hash.
     Hash(HashDigest),
-    /// Pin an explicit macOS signing Team ID.
-    TeamId(TeamId),
+    /// Pin an explicit code signer.
+    Signer(SignerId),
     /// Measure this invocation's parent process and pin its hash, so a user
     /// can enroll the client they launched `pair-client` from.
     ThisParent,
@@ -179,15 +180,15 @@ pub enum AnchorSpec {
 #[derive(Args)]
 #[command(group(ArgGroup::new("anchor").required(true).multiple(false)))]
 struct PairClientFlags {
-    /// The label to file the client under
-    #[arg(long, value_name = "LABEL")]
-    name: String,
+    /// The label to file the client under (1-32 chars of [A-Za-z0-9._-], starting alphanumeric)
+    #[arg(long, value_parser = |s: &str| ClientName::try_from(s), value_name = "LABEL")]
+    name: ClientName,
     /// Pin this attested image hash (hex; upper case is lowercased)
     #[arg(long, group = "anchor", value_parser = hash_digest, value_name = "HEX")]
     hash: Option<HashDigest>,
-    /// Pin this signing identity: a macOS Team ID, or a Windows Authenticode publisher subject
-    #[arg(long, group = "anchor", value_parser = |id: &str| TeamId::try_from(id), value_name = "ID")]
-    team_id: Option<TeamId>,
+    /// Pin this code signer: an Apple Team ID on macOS, an Authenticode publisher subject on Windows
+    #[arg(long, group = "anchor", value_parser = |id: &str| SignerId::try_from(id), value_name = "ID")]
+    signer: Option<SignerId>,
     /// Measure the process that launched this command and pin its hash
     #[arg(long, group = "anchor")]
     this_parent: bool,
@@ -195,9 +196,9 @@ struct PairClientFlags {
 
 impl From<PairClientFlags> for PairClientArgs {
     fn from(flags: PairClientFlags) -> Self {
-        let anchor = match (flags.hash, flags.team_id) {
+        let anchor = match (flags.hash, flags.signer) {
             (Some(hash), _) => AnchorSpec::Hash(hash),
-            (None, Some(team_id)) => AnchorSpec::TeamId(team_id),
+            (None, Some(signer)) => AnchorSpec::Signer(signer),
             (None, None) => {
                 debug_assert!(flags.this_parent, "clap requires exactly one anchor flag");
                 AnchorSpec::ThisParent
@@ -597,23 +598,23 @@ mod tests {
             (
                 vec!["pair-client", "--name", "codex", "--hash", &hash],
                 Command::PairClient(PairClientArgs {
-                    name: "codex".into(),
+                    name: ClientName::try_from("codex").unwrap(),
                     anchor: AnchorSpec::Hash(
                         HashDigest::try_from(hash.to_ascii_lowercase()).unwrap(),
                     ),
                 }),
             ),
             (
-                vec!["pair-client", "--name", "x", "--team-id", "ABC123"],
+                vec!["pair-client", "--name", "x", "--signer", "ABC123"],
                 Command::PairClient(PairClientArgs {
-                    name: "x".into(),
-                    anchor: AnchorSpec::TeamId(TeamId::try_from("ABC123").unwrap()),
+                    name: ClientName::try_from("x").unwrap(),
+                    anchor: AnchorSpec::Signer(SignerId::try_from("ABC123").unwrap()),
                 }),
             ),
             (
                 vec!["pair-client", "--name", "pytest", "--this-parent"],
                 Command::PairClient(PairClientArgs {
-                    name: "pytest".into(),
+                    name: ClientName::try_from("pytest").unwrap(),
                     anchor: AnchorSpec::ThisParent,
                 }),
             ),
@@ -758,7 +759,11 @@ mod tests {
                 ValueValidation,
             ),
             (
-                &["pair-client", "--name", "x", "--team-id", ""],
+                &["pair-client", "--name", "x", "--signer", ""],
+                ValueValidation,
+            ),
+            (
+                &["pair-client", "--name", "bad name!", "--this-parent"],
                 ValueValidation,
             ),
             (&["revoke-client"], MissingRequiredArgument),
