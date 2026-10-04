@@ -25,7 +25,7 @@ The CLI needs nothing but the binary, on desktops, headless machines, and CI ali
 
 4. **Load the extension.** The release archive contains `extension/dist/`; load it via `chrome://extensions`, Developer mode, "Load unpacked" (in a source checkout, build it first and load `build/extension/chrome-mv3`). Restart the browser.
 
-5. **On macOS, pair.** Run `chromium-bridge pair` (Touch ID prompts and the key's fingerprint is printed), then approve that fingerprint on the extension's options page. On macOS the extension requires this enrollment unconditionally (ADR-0032 phase 5 retired the old `requireEnrollment` opt-out) and refuses to act until the pin is in place. Linux and Windows have no Secure Enclave and skip this step.
+5. **On macOS, pair.** Run `chromium-bridge pair` (Touch ID prompts and the key's fingerprint is printed), then approve that fingerprint on the extension's options page. On macOS the extension requires this enrollment unconditionally (ADR-0032 phase 5 retired the old `requireEnrollment` opt-out) and refuses to act until the pin is in place. Pairing today needs a build codesigned with an application identifier: the plain release binary cannot mint the Enclave key, and the WebAuthn presence track removes that requirement. Linux and Windows have no Secure Enclave and skip this step.
 
 6. **Connect your MCP client** to the binary's absolute path. For Claude Code:
 

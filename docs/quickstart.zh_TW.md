@@ -42,8 +42,9 @@ CLI 只需要二進位檔本身, 在桌面機器、無介面機器和 CI 上都�
 5. **在 macOS 上配對。** 執行 `chromium-bridge pair` (Touch ID 彈出, 並印
    出金鑰指紋), 然後在擴充功能的選項頁核准該指紋。macOS 上擴充功能無條件
    要求完成此註冊 (ADR-0032 第 5 階段移除了舊的 `requireEnrollment` 開關),
-   在釘選完成之前拒絕執行任何操作。Linux 和 Windows 沒有 Secure Enclave,
-   跳過這一步。
+   在釘選完成之前拒絕執行任何操作。目前配對需要一個帶應用程式識別碼簽署的
+   建置: 未簽署的發布二進位檔無法建立 Enclave 金鑰, WebAuthn 在場驗證軌道
+   將取消這一要求。Linux 和 Windows 沒有 Secure Enclave, 跳過這一步。
 
 6. **接上 MCP 用戶端**, 指向二進位檔的絕對路徑。以 Claude Code 為例:
 

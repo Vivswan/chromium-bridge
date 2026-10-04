@@ -42,8 +42,9 @@ CLI 只需要二进制本身, 在桌面机器、无界面机器和 CI 上都一�
 5. **在 macOS 上配对。** 运行 `chromium-bridge pair` (Touch ID 弹出, 并打
    印密钥指纹), 然后在扩展的选项页批准该指纹。macOS 上扩展无条件要求完成
    此注册 (ADR-0032 第 5 阶段移除了旧的 `requireEnrollment` 开关), 在钉定
-   完成之前拒绝执行任何操作。Linux 和 Windows 没有 Secure Enclave, 跳过这
-   一步。
+   完成之前拒绝执行任何操作。目前配对需要一个带应用标识符签名的构建: 未签
+   名的发布二进制无法创建 Enclave 密钥, WebAuthn 在场验证轨道将取消这一要
+   求。Linux 和 Windows 没有 Secure Enclave, 跳过这一步。
 
 6. **接入 MCP 客户端**, 指向二进制的绝对路径。以 Claude Code 为例:
 
