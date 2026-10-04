@@ -7,7 +7,8 @@
 
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
-import { attachPort, auditEvent, resetAuditForTests } from "@/lib/background/audit-log";
+import { auditEvent, collaborator, resetAuditForTests } from "@/lib/background/audit-log";
+import { attach } from "./fake-connection";
 
 beforeEach(() => {
   fakeBrowser.reset();
@@ -17,7 +18,7 @@ beforeEach(() => {
 describe("audit forwarding derives from the kind alone", () => {
   test("a confirm event always goes to the host frame", () => {
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       return true;
     });
@@ -35,7 +36,7 @@ describe("audit forwarding derives from the kind alone", () => {
 
   test("local-only kinds are never forwarded", () => {
     const frames: unknown[] = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame);
       return true;
     });

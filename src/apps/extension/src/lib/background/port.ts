@@ -2,7 +2,6 @@
 // and Chrome kills the host process whenever the port closes, so we reconnect
 // automatically on startup and after any disconnect.
 
-import { isKillStatusFrame } from "@chromium-bridge/shared/enclave";
 import { parseBridgeReq } from "@chromium-bridge/shared/envelope";
 import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
 import type { Browser } from "wxt/browser";
@@ -11,17 +10,23 @@ import { maskErrorMessage } from "../shared/masking";
 import * as auditLog from "./audit-log";
 import * as clients from "./clients";
 import * as presence from "./confirm/presence";
+import type { Connection, PortCollaborator } from "./connection";
 import { dispatch } from "./dispatch";
-import {
-  attachPort,
-  detachPort,
-  enrollmentGate,
-  handleEnclaveFrame,
-  isEnclaveFrame,
-  onPortConnected,
-} from "./enrollment";
+import * as enrollment from "./enrollment";
 import * as kill from "./kill";
 import * as policySync from "./policy-sync";
+
+/** Every module bound to the native link. A connect hands the fresh Connection to all of them, a teardown detaches
+ * all of them in the same synchronous transition, and an inbound control frame goes to the first whose onFrame
+ * claims it. */
+export const collaborators: readonly PortCollaborator[] = [
+  enrollment.collaborator,
+  clients.collaborator,
+  kill.collaborator,
+  auditLog.collaborator,
+  presence.collaborator,
+  policySync.collaborator,
+];
 
 // The native link is in exactly one of these states. One value, not a
 // port/flag/timer trio: a nullable port beside a boolean could contradict
@@ -30,14 +35,20 @@ import * as policySync from "./policy-sync";
 // below consumes the previous state, so a replaced port can never linger
 // behind a state that reads down.
 type NativeLink =
-  | { state: "connected"; port: Browser.runtime.Port }
+  | { state: "connected"; port: Browser.runtime.Port; conn: Connection }
   | { state: "reconnect-scheduled"; timer: ReturnType<typeof setTimeout> }
   | { state: "down" };
 
 let link: NativeLink = { state: "down" };
+let connects = 0;
 
 export function isNativeConnected(): boolean {
   return link.state === "connected";
+}
+
+/** The one currency check: a Connection is live while the link still holds that exact object. */
+function isLive(conn: Connection): boolean {
+  return link.state === "connected" && link.conn === conn;
 }
 
 /** Consume the current link and leave it down: cancel a scheduled
@@ -50,17 +61,11 @@ function teardownLink(): void {
   link = { state: "down" };
   if (prev.state === "reconnect-scheduled") clearTimeout(prev.timer);
   if (prev.state === "connected") {
-    // The collaborator attachments belong to the port being consumed:
-    // detach them in the same synchronous transition. Left attached, a
-    // frame Chrome already queued on the old port could still reach a
-    // surface that acts on it (a presence proof approving a confirmation
-    // while the link reads down).
-    detachPort();
-    clients.detachPort();
-    kill.detachPort();
-    auditLog.detachPort();
-    presence.detachPort();
-    policySync.detachPort();
+    // Detach in the same synchronous transition that consumes the port. Left
+    // attached, a frame Chrome already queued on the old port could still
+    // reach a surface that acts on it (a presence proof approving a
+    // confirmation while the link reads down).
+    for (const c of collaborators) c.onDetach();
     try {
       prev.port.disconnect();
     } catch {
@@ -76,28 +81,21 @@ export function connectNative() {
   teardownLink();
   try {
     const port = browser.runtime.connectNative(NATIVE_HOST_ID);
-    link = { state: "connected", port };
-    console.log("[bb] native host connected");
-    port.onMessage.addListener((msg) => onNativeMessage(port, msg));
-    port.onDisconnect.addListener(onNativeDisconnect);
-    // Hand the enrollment ceremony (ADR-0021), the trusted-client admin
-    // exchange (ADR-0025), the kill-switch/audit surfaces (ADR-0030), and
-    // the per-action presence gate (ADR-0031) the fresh port. Enrollment
+    const conn = mintConnection(port);
+    link = { state: "connected", port, conn };
+    console.log("[bb] native host connected", conn.generation);
+    port.onMessage.addListener((msg) => onNativeMessage(conn, msg));
+    port.onDisconnect.addListener(() => onNativeDisconnect(conn));
+    for (const c of collaborators) c.onAttach(conn);
+    // Pull the kill state on every connect: this is what clears a stale
+    // "killed" mirror after a CLI unkill that happened while the SW slept
+    // (the host pushes transitions and bad startup states, but the alive
+    // direction is deliberately pull-based). The reply routes through the
+    // kill collaborator like any other kill_status_result. Enrollment then
     // decides whether this connect needs a pairing challenge or a pending
     // host-key deletion.
-    attachPort(postFrame);
-    clients.attachPort(postFrame);
-    kill.attachPort(postFrame);
-    auditLog.attachPort(postFrame);
-    presence.attachPort(postFrame);
-    policySync.attachPort(postFrame);
-    // Pull the kill state on every connect (ADR-0030): this is what clears a
-    // stale "killed" mirror after a CLI unkill that happened while the SW
-    // slept (the host pushes transitions and bad startup states, but the
-    // alive direction is deliberately pull-based). The result routes through
-    // handleKillFrame like any other kill_status_result.
     void kill.requestKillStatus();
-    void onPortConnected();
+    void enrollment.onPortConnected();
   } catch (e) {
     teardownLink();
     console.error("[bb] connectNative threw", e);
@@ -105,22 +103,29 @@ export function connectNative() {
   }
 }
 
-// Raw frame sender for enclave control frames (they are not BridgeResps).
-function postFrame(frame: object): boolean {
-  if (link.state !== "connected") return false;
-  try {
-    link.port.postMessage(frame);
-    return true;
-  } catch (e) {
-    console.warn("[bb] postFrame failed", e);
-    return false;
-  }
+/** The Connection for one connect. post is bound to this exact port and refuses once the link no longer holds this
+ * connection, so a module that kept the Connection across an await cannot write to a successor's pipe. */
+function mintConnection(port: Browser.runtime.Port): Connection {
+  const conn: Connection = {
+    generation: ++connects,
+    post(frame) {
+      if (!isLive(conn)) return false;
+      try {
+        port.postMessage(frame);
+        return true;
+      } catch (e) {
+        console.warn("[bb] post failed", e);
+        return false;
+      }
+    },
+  };
+  return conn;
 }
 
-function onNativeDisconnect(p: Browser.runtime.Port) {
-  // Only the CURRENT port may take the link down: the disconnect of a port
-  // a re-entrant connect already replaced must not tear down the live one.
-  if (link.state !== "connected" || link.port !== p) return;
+function onNativeDisconnect(conn: Connection) {
+  // Only the CURRENT connection may take the link down: the disconnect of a
+  // port a re-entrant connect already replaced must not tear down the live one.
+  if (!isLive(conn)) return;
   teardownLink();
   const err = browser.runtime.lastError;
   console.warn("[bb] native host disconnected:", err?.message || "unknown");
@@ -140,49 +145,22 @@ function scheduleReconnect() {
   };
 }
 
-function onNativeMessage(p: Browser.runtime.Port, msg: unknown) {
-  // Same identity gate as the disconnect path: a frame from a port this
-  // link no longer holds (a re-entrant connect consumed it) is dropped
-  // before the demux, so nothing queued on a dead port can reach a surface
-  // that would act on it.
-  if (link.state !== "connected" || link.port !== p) {
+function onNativeMessage(conn: Connection, msg: unknown) {
+  // Same identity gate as the disconnect path: a frame from a connection this
+  // link no longer holds (a re-entrant connect consumed it) is dropped before
+  // the demux, so nothing queued on a dead port can reach a surface that
+  // would act on it.
+  if (!isLive(conn)) {
     console.warn("[bb] dropping frame from a stale native port");
     return;
   }
-  // Enclave control frames (ADR-0021/0025) are ceremony traffic between the
-  // extension and the host itself; they carry `type`, not `op`, and are never
-  // dispatched as bridge ops.
-  if (isEnclaveFrame(msg)) {
-    void handleEnclaveFrame(msg);
-    return;
-  }
-  // Trusted-client admin results (ADR-0025), correlated back to the options
-  // page's outstanding request. Same trust posture as the enclave frames.
-  if (clients.isAdminFrame(msg)) {
-    clients.handleAdminFrame(msg);
-    return;
-  }
-  // Kill-switch state (ADR-0030): the reply to a kill control frame, or the
-  // host's unsolicited startup/transition push. Either way it updates the
-  // SW-only mirror the request gate reads.
-  if (isKillStatusFrame(msg)) {
-    void kill.handleKillFrame(msg);
-    return;
-  }
-  // Per-action presence answers (ADR-0031): the signed approval (or refusal)
-  // for the confirmation round the presence provider has outstanding.
-  if (presence.isPresenceFrame(msg)) {
-    presence.handlePresenceFrame(msg);
-    return;
-  }
-  // Policy and language pushes (ADR-0032): host-handled control frames,
-  // routed BEFORE the request parse and the gates below - a killed bridge
-  // still processes policy pushes (control-plane mode, decision 6), and the
-  // dispatch barrier these pushes feed must be able to open on the very
-  // connection it is gating.
-  if (policySync.isPolicyFrame(msg)) {
-    void policySync.handlePolicyFrame(msg);
-    return;
+  // Control frames (ceremony, admin results, kill state, presence answers,
+  // policy pushes) carry `type`, not `op`, and go to the one collaborator
+  // that claims them BEFORE the request parse and the gates below: a killed
+  // or unenrolled bridge still consumes pushes, and the dispatch barrier the
+  // policy pushes feed must be able to open on the very connection it gates.
+  for (const c of collaborators) {
+    if (c.onFrame?.(msg)) return;
   }
   // Everything else must be a well-formed BridgeReq: envelope shape, a known
   // op, and args that satisfy that op's validator (see parseBridgeReq). This
@@ -191,38 +169,44 @@ function onNativeMessage(p: Browser.runtime.Port, msg: unknown) {
   const parsed = parseBridgeReq(msg);
   if (!parsed.ok) {
     console.warn("[bb] refusing bridge request:", parsed.error);
-    if (parsed.id !== undefined) sendResponse(parsed.id, false, undefined, parsed.error);
+    if (parsed.id !== undefined) sendResponse(conn, parsed.id, false, undefined, parsed.error);
     return;
   }
   const req = parsed.req;
-  // Fail closed (ADR-0021): while enrollment is required and unsatisfied,
-  // every bridge request is refused right here and never reaches dispatch().
-  // The dispatch kickoff is passed INTO the gate so it starts inside the
-  // gate's serialized critical section: a revoke or compromise mark can then
-  // never land between "gate said allowed" and "dispatch began".
-  enrollmentGate(() => {
-    dispatch(req).then(
-      (data) => sendResponse(req.id, true, data),
-      // A rejection message can embed page-derived data (a CDP evaluate
-      // exception carries the page's error description), so this egress is
-      // masked like any other.
-      (err) => sendResponse(req.id, false, undefined, maskErrorMessage(err)),
+  // Fail closed: while enrollment is required and unsatisfied, every bridge
+  // request is refused right here and never reaches dispatch(). The dispatch
+  // kickoff is passed INTO the gate so it starts inside the gate's serialized
+  // critical section: a revoke or compromise mark can then never land between
+  // "gate said allowed" and "dispatch began".
+  enrollment
+    .enrollmentGate(() => {
+      dispatch(req).then(
+        (data) => sendResponse(conn, req.id, true, data),
+        // A rejection message can embed page-derived data (a CDP evaluate
+        // exception carries the page's error description), so this egress is
+        // masked like any other.
+        (err) => sendResponse(conn, req.id, false, undefined, maskErrorMessage(err)),
+      );
+    })
+    .then(
+      (gate) => {
+        if (!gate.allowed) sendResponse(conn, req.id, false, undefined, gate.reason);
+      },
+      // Gate errors are ambiguity, and ambiguity refuses.
+      (err) =>
+        sendResponse(conn, req.id, false, undefined, `enrollment gate error: ${String(err)}`),
     );
-  }).then(
-    (gate) => {
-      if (!gate.allowed) sendResponse(req.id, false, undefined, gate.reason);
-    },
-    // Gate errors are ambiguity, and ambiguity refuses.
-    (err) => sendResponse(req.id, false, undefined, `enrollment gate error: ${String(err)}`),
-  );
 }
 
-function sendResponse(id: number | string, ok: boolean, data?: unknown, error?: string) {
-  if (link.state !== "connected") return; // host gone; nothing to do
-  try {
-    link.port.postMessage({ id, ok, data, error: ok ? undefined : error });
-  } catch (e) {
-    // Port likely closed; the disconnect handler will reconnect.
-    console.warn("[bb] postMessage failed", e);
-  }
+/** A response rides the connection its request arrived on. Chrome spawns a fresh host per port, so once that
+ * connection is replaced the host that asked is gone and Connection.post drops the reply instead of handing a
+ * stranger an id it never issued. */
+function sendResponse(
+  conn: Connection,
+  id: number | string,
+  ok: boolean,
+  data?: unknown,
+  error?: string,
+) {
+  conn.post({ id, ok, data, error: ok ? undefined : error });
 }

@@ -16,8 +16,7 @@ import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { auditEvent, readRing, resetAuditForTests } from "@/lib/background/audit-log";
 import {
-  attachPort,
-  detachPort,
+  collaborator,
   engageKill,
   getKillMirror,
   handleKillFrame,
@@ -28,6 +27,7 @@ import {
   resetKillForTests,
 } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
+import { attach } from "./fake-connection";
 
 const EXT_ID = "test-ext-id";
 
@@ -147,7 +147,7 @@ describe("kill mirror updates from host frames only", () => {
     // enforces on - could not adopt it. Reporting ok:true with the stale
     // mirror would tell the caller (options page, panic path) that the
     // transition took when the gate is still enforcing the old state.
-    attachPort(() => true);
+    attach(collaborator);
     const view = requestKillStatus();
     const spy = vi
       .spyOn(fakeBrowser.storage.local, "set")
@@ -192,11 +192,11 @@ describe("kill frame boundaries", () => {
   });
 
   test("a status request never arms the engage re-post", async () => {
-    attachPort(() => true);
+    attach(collaborator);
     const view = requestKillStatus();
-    detachPort(); // fails the pending exchange; the frame was already posted
-    const frames: KillControlFrame[] = [];
-    attachPort((frame) => {
+    collaborator.onDetach(); // fails the pending exchange; the frame was already posted
+    const frames: object[] = [];
+    attach(collaborator, (frame) => {
       frames.push(frame);
       return true;
     });

@@ -14,8 +14,7 @@ import {
 } from "@/lib/background/enclave-verify";
 import {
   approvePending,
-  attachPort,
-  detachPort,
+  collaborator,
   enrollmentGate,
   getEnrollmentStatus,
   handleEnclaveFrame,
@@ -28,6 +27,7 @@ import {
 } from "@/lib/background/enrollment";
 import * as policySync from "@/lib/background/policy-sync";
 import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
+import { attach } from "./fake-connection";
 
 /** Assert the status is in `state` and narrow to that arm's fields. */
 function inState<S extends EnrollmentStatus["state"]>(
@@ -186,15 +186,15 @@ beforeEach(() => {
   mockOs = "mac";
   store = installBrowserMock();
   posted = [];
-  detachPort(); // clear any leftover outstanding challenge from a prior test
-  attachPort((frame) => {
+  collaborator.onDetach(); // clear any leftover outstanding challenge from a prior test
+  attach(collaborator, (frame) => {
     posted.push(frame as Record<string, unknown>);
     return true;
   });
 });
 
 afterEach(() => {
-  detachPort();
+  collaborator.onDetach();
 });
 
 function lastChallenge(): { nonce: string; context: string } {
@@ -424,8 +424,8 @@ describe("ceremony state machine", () => {
     await onPortConnected();
     const { nonce, context } = lastChallenge();
     const frame = await proofFrame(key, nonce, context);
-    detachPort(); // port drop / SW death clears the outstanding nonce
-    attachPort((f) => {
+    collaborator.onDetach(); // port drop / SW death clears the outstanding nonce
+    attach(collaborator, (f) => {
       posted.push(f as Record<string, unknown>);
       return true;
     });
@@ -579,13 +579,13 @@ describe("ceremony state machine", () => {
     await pairAndPin(oldKey);
     // Revoke while the native port is down: the deletion request cannot be
     // sent, so only the durable flag records it.
-    detachPort();
+    collaborator.onDetach();
     expect((await revokePin()).ok).toBe(true);
     expect((await getEnrollmentStatus()).hostRevokePending).toBe(true);
     // `chromium-bridge pair --reset` ran out of band and minted a NEW enclave
     // key. The reconnect still resends the stale revoke (the accepted pre-pin
     // window, ADR-0025) but must not challenge (pairing is paused).
-    attachPort((f) => {
+    attach(collaborator, (f) => {
       posted.push(f as Record<string, unknown>);
       return true;
     });
@@ -629,7 +629,7 @@ describe("ceremony state machine", () => {
   test("an abandoned re-pair ceremony does not lose the pending deletion", async () => {
     const key = await genKey();
     await pairAndPin(key);
-    detachPort();
+    collaborator.onDetach();
     expect((await revokePin()).ok).toBe(true);
     // Pair clicked while the port is still down: the ceremony cannot even
     // start. The deletion request must survive the attempt - only a PINNED
@@ -637,7 +637,7 @@ describe("ceremony state machine", () => {
     // with nothing left to request its removal.
     expect((await startPairing()).ok).toBe(false);
     expect((await getEnrollmentStatus()).hostRevokePending).toBe(true);
-    attachPort((f) => {
+    attach(collaborator, (f) => {
       posted.push(f as Record<string, unknown>);
       return true;
     });
@@ -1089,7 +1089,7 @@ describe("policy dispatch barrier wiring (ADR-0032)", () => {
     const key = await genKey();
     await pairAndPin(key);
     store.bridgePolicyCutover = true;
-    policySync.attachPort(() => true);
+    attach(policySync.collaborator);
     const bytes = new TextEncoder().encode(
       JSON.stringify({
         v: 1,

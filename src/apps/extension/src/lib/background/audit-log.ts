@@ -27,6 +27,7 @@ import {
 } from "@chromium-bridge/shared/enclave";
 import type { AuditEventWire } from "@chromium-bridge/shared/envelope-wire.gen";
 import { browser } from "wxt/browser";
+import type { Connection, PortCollaborator } from "./connection";
 
 const AUDIT_RING_KEY = "auditRing";
 
@@ -40,17 +41,16 @@ const AUDIT_RING_MAX = 200;
  * local-display only. */
 const FORWARDED_KINDS: ReadonlySet<AuditEventKind> = new Set(AUDIT_FORWARDED_KINDS);
 
-// The port sender, registered by port.ts while a port is up (same shape as
-// clients.ts / kill.ts).
-let postFrame: ((frame: object) => boolean) | null = null;
+let conn: Connection | null = null;
 
-export function attachPort(post: (frame: object) => boolean): void {
-  postFrame = post;
-}
-
-export function detachPort(): void {
-  postFrame = null;
-}
+export const collaborator: PortCollaborator = {
+  onAttach(c) {
+    conn = c;
+  },
+  onDetach() {
+    conn = null;
+  },
+};
 
 // Serialize appends: concurrent read-modify-write of the ring would lose
 // entries.
@@ -103,7 +103,7 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
       // field would compile and only fail at the host's parser. Named keys
       // keep the pin two-way; an undefined value is dropped by the port's
       // JSON serialization, exactly like an omitted key.
-      postFrame?.({
+      conn?.post({
         type: "audit_event",
         kind,
         outcome: fields.outcome,
@@ -131,6 +131,6 @@ export async function readRing(): Promise<AuditEntry[]> {
 
 /** Tests only. */
 export function resetAuditForTests(): void {
-  postFrame = null;
+  conn = null;
   appendChain = Promise.resolve();
 }

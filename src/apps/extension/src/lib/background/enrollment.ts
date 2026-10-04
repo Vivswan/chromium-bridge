@@ -1,6 +1,6 @@
-// The enrollment ceremony state machine, the extension half of ADR-0021. port.ts hands it the port (attachPort)
-// and every enclave control frame, messages.ts routes the options/popup actions; this module never imports
-// port.ts, so there is no cycle. State is derived from storage on every read: nothing survives an MV3
+// The enrollment ceremony state machine, the extension half of the pairing design. port.ts drives `collaborator`
+// (the connection, then every enclave control frame), messages.ts routes the options/popup actions; this module
+// never imports port.ts, so there is no cycle. State is derived from storage on every read: nothing survives an MV3
 // service-worker restart in memory.
 //
 //   unpaired     no pin; traffic refused. Each connect issues a pairing challenge unless paused: one enclave_error
@@ -30,6 +30,7 @@ import type { EnrollmentStatus, RuntimeResponse } from "@chromium-bridge/shared/
 import { browser } from "wxt/browser";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
+import type { Connection, PortCollaborator } from "./connection";
 import { getEffectivePolicy } from "./effective-policy";
 import * as pinStore from "./enclave-pin";
 import {
@@ -45,27 +46,31 @@ import { hardenStorageAccess } from "./trusted-storage";
 // ---- frame plumbing ---------------------------------------------------------
 
 /** True for the five enclave control frame tags (ENCLAVE_FRAME_TYPES: the
- * ADR-0021 ceremony trio - challenge/proof/error - plus the ADR-0025
- * revoke/revoked pair). Bridge requests carry `op` and never a top-level
- * `type`, so nothing legitimate collides. */
+ * ceremony trio - challenge/proof/error - plus the revoke/revoked pair).
+ * Bridge requests carry `op` and never a top-level `type`, so nothing
+ * legitimate collides. */
 export function isEnclaveFrame(msg: unknown): msg is EnclaveInboundFrame {
   return EnclaveInboundFrameSchema.safeParse(msg).success;
 }
 
-// The port sender, registered by port.ts while a port is up. Null = not
-// connected.
-let postFrame: ((frame: object) => boolean) | null = null;
+let conn: Connection | null = null;
 
-export function attachPort(post: (frame: object) => boolean): void {
-  postFrame = post;
-}
-
-export function detachPort(): void {
-  postFrame = null;
-  // The host process died with the port; its proof can never arrive, and the
-  // nonce must not outlive the challenge it was issued for.
-  clearOutstanding();
-}
+export const collaborator: PortCollaborator = {
+  onAttach(c) {
+    conn = c;
+  },
+  onDetach() {
+    conn = null;
+    // The host process died with the port; its proof can never arrive, and
+    // the nonce must not outlive the challenge it was issued for.
+    clearOutstanding();
+  },
+  onFrame(msg) {
+    if (!isEnclaveFrame(msg)) return false;
+    void handleEnclaveFrame(msg);
+    return true;
+  },
+};
 
 // ---- transition serialization -------------------------------------------------
 
@@ -112,7 +117,7 @@ function clearOutstanding(): void {
 async function issueChallenge(
   mode: "pair" | "verify",
 ): Promise<RuntimeResponse<"enroll_pair" | "enroll_verify">> {
-  if (!postFrame) return { ok: false, error: "native host not connected" };
+  if (!conn) return { ok: false, error: "native host not connected" };
   if (outstanding) return { ok: false, error: "a challenge is already outstanding" };
   const nonce = generateNonce();
   const context = `ext:${browser.runtime.id}:${mode}`;
@@ -131,7 +136,7 @@ async function issueChallenge(
     mode,
     timer,
   };
-  if (!postFrame({ type: "enclave_challenge", nonce, context } satisfies EnclaveChallengeWire)) {
+  if (!conn.post({ type: "enclave_challenge", nonce, context } satisfies EnclaveChallengeWire)) {
     clearOutstanding();
     return { ok: false, error: "failed to send the challenge to the native host" };
   }
@@ -282,9 +287,10 @@ export function onPortConnected(): Promise<void> {
  * ceremony must leave the deletion pending, or the old key would outlive the
  * revoke with nothing left to request its removal. */
 async function maybeSendPendingHostRevoke(): Promise<void> {
-  if (!postFrame) return;
+  const live = conn;
+  if (!live) return;
   if (!(await pinStore.getHostRevokePending())) return;
-  if (postFrame({ type: "enclave_revoke" } satisfies EnclaveRevokeWire)) {
+  if (live.post({ type: "enclave_revoke" } satisfies EnclaveRevokeWire)) {
     console.log("[bb] requested host enrollment-key deletion (pending ack)");
   }
 }

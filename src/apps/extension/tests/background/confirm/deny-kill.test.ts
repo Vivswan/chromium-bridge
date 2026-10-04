@@ -24,13 +24,13 @@ import {
   resolveConfirm,
 } from "@/lib/background/confirm/service";
 import {
-  attachPort,
-  detachPort,
+  collaborator,
   handleKillFrame,
   requestKillStatus,
   resetKillForTests,
 } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
+import { attach } from "../fake-connection";
 
 const EXT_ID = "test-ext-id";
 
@@ -121,7 +121,7 @@ describe("confirm_deny_kill", () => {
     // impossible. If the deny were reordered after the engage, this
     // resolveConfirm(true) would succeed and the test would fail loudly.
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       expect(resolveConfirm(id, true)).toEqual({
         ok: false,
@@ -151,7 +151,7 @@ describe("confirm_deny_kill", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
 
-    attachPort(() => true); // engage posted; the host has not answered yet
+    attach(collaborator); // engage posted; the host has not answered yet
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await expect(first).resolves.toBe(false);
     // The queued request drains through the latch without ever presenting a
@@ -190,7 +190,7 @@ describe("confirm_deny_kill", () => {
     const shown = presented[0];
     expect(shown && isHardwareGated(shown.payload)).toBe(true);
 
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await expect(verdict).resolves.toBe(false);
     expect(shown!.dismissed).toBe(true);
@@ -205,7 +205,7 @@ describe("confirm_deny_kill", () => {
   test("the engage is not refused while another kill exchange holds the slot, and the latch holds until the host confirms", async () => {
     const presented = fakeProvider(installConfirmationProvider);
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       return true;
     });
@@ -259,7 +259,7 @@ describe("confirm_deny_kill", () => {
     // Decision start: the epoch is captured BEFORE the decision's first
     // await (the caller-side routing probe stands in for it here).
     const decisionEpoch = currentPanicEpoch();
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {}); // the panic lands mid-await
     const verdict = confirmWithUser({ ...WINDOW_REQ(), panicEpoch: decisionEpoch });
     await vi.advanceTimersByTimeAsync(0);
@@ -275,7 +275,7 @@ describe("confirm_deny_kill", () => {
     // deny it.
     const presented = fakeProvider(installConfirmationProvider);
     const decisionEpoch = currentPanicEpoch();
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
@@ -296,7 +296,7 @@ describe("confirm_deny_kill", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(presented).toHaveLength(1);
     const bEpoch = currentPanicEpoch(); // B's decision start, pre-panic
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await expect(a).resolves.toBe(false);
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
@@ -326,7 +326,7 @@ describe("confirm_deny_kill", () => {
     // confirmation presents against an open gate.
     const presented = fakeProvider(installConfirmationProvider);
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       return true;
     });
@@ -360,7 +360,7 @@ describe("confirm_deny_kill", () => {
 
   test("an engage TIMEOUT leaves the latch down: the posted frame may still apply", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    attachPort(() => true); // the post succeeds; the host never answers
+    attach(collaborator); // the post succeeds; the host never answers
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     // Past the request budget: the exchange reports ok:false (timed out),
     // but the frame is ON the pipe and the host may still apply it. A lift
@@ -372,7 +372,7 @@ describe("confirm_deny_kill", () => {
 
   test("an engage SEND FAILURE lifts the latch: nothing is in flight", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    attachPort(() => false); // the post itself fails
+    attach(collaborator, () => false); // the post itself fails
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await vi.advanceTimersByTimeAsync(0);
     // Nothing reached the pipe: the mirror tells the user the truth and
@@ -390,7 +390,7 @@ describe("confirm_deny_kill", () => {
     // panic 2's engage posts fine and is still in flight when that stale
     // lift runs.
     let posts = 0;
-    attachPort(() => {
+    attach(collaborator, () => {
       posts += 1;
       return posts > 1;
     });
@@ -425,7 +425,7 @@ describe("confirm_deny_kill", () => {
     // answer arriving next (a host-side release racing the brake) would
     // otherwise lift the latch with the engage still queued behind it.
     const presented = fakeProvider(installConfirmationProvider);
-    attachPort(() => true);
+    attach(collaborator);
     void requestKillStatus(); // pre-panic exchange occupies the slot
     const preKilled = handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     route({ type: "confirm_deny_kill" }, confirmSender, () => {}); // same tick
@@ -454,10 +454,10 @@ describe("confirm_deny_kill", () => {
     // the port - the host may have applied it before dying. Maybe-sent is
     // not never-sent: the latch stays down.
     const presented = fakeProvider(installConfirmationProvider);
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await vi.advanceTimersByTimeAsync(0);
-    detachPort();
+    collaborator.onDetach();
     await vi.advanceTimersByTimeAsync(0);
     await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
@@ -467,12 +467,12 @@ describe("confirm_deny_kill", () => {
     // The engage was posted and the host died before any refusing frame
     // arrived: the reconnect must re-assert the brake, so a dying host
     // cannot swallow an acknowledged kill.
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await vi.advanceTimersByTimeAsync(0);
-    detachPort();
+    collaborator.onDetach();
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       return true;
     });
@@ -482,7 +482,7 @@ describe("confirm_deny_kill", () => {
     // must NOT re-post - the engage is settled.
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     const afterConfirm: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       afterConfirm.push(frame as Record<string, unknown>);
       return true;
     });
@@ -495,7 +495,7 @@ describe("confirm_deny_kill", () => {
     // send failure must leave the latch down until the kill settles.
     const presented = fakeProvider(installConfirmationProvider);
     let posts = 0;
-    attachPort(() => {
+    attach(collaborator, () => {
       posts += 1;
       return posts === 1; // panic 1 reaches the pipe; panic 2's post fails
     });
@@ -515,7 +515,7 @@ describe("confirm_deny_kill", () => {
     // latch instead of denying confirmations until the SW dies.
     const presented = fakeProvider(installConfirmationProvider);
     let posts = 0;
-    attachPort(() => {
+    attach(collaborator, () => {
       posts += 1;
       return posts === 1;
     });
@@ -546,7 +546,7 @@ describe("confirm_deny_kill", () => {
     // (the host recovering, no release ever having happened) would lift the
     // latch without any presence-gated act.
     const presented = fakeProvider(installConfirmationProvider);
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await vi.advanceTimersByTimeAsync(0);
     await handleKillFrame({ type: "kill_status_result", ok: false }); // engage failed host-side
@@ -570,13 +570,13 @@ describe("confirm_deny_kill", () => {
     // ok:false is not proof the kill took, so the at-least-once re-post
     // must stay armed: a host that failed the kill write and then died
     // would otherwise swallow the brake.
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await vi.advanceTimersByTimeAsync(0);
     await handleKillFrame({ type: "kill_status_result", ok: false });
-    detachPort();
+    collaborator.onDetach();
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       return true;
     });
@@ -585,7 +585,7 @@ describe("confirm_deny_kill", () => {
 
   test("with nothing pending it still engages (capability reduction)", async () => {
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       return true;
     });
@@ -600,7 +600,7 @@ describe("confirm_deny_kill", () => {
     const id = presented[0]!.payload.id;
 
     const frames: Array<Record<string, unknown>> = [];
-    attachPort((frame) => {
+    attach(collaborator, (frame) => {
       frames.push(frame as Record<string, unknown>);
       return true;
     });
@@ -658,7 +658,7 @@ describe("audit correlation id (cid)", () => {
 
     // The panic latch: deny-and-kill settles the active one and drains the
     // queue without ever presenting a second surface.
-    attachPort(() => true);
+    attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await expect(first).resolves.toBe(false);
     await expect(queued).resolves.toBe(false);

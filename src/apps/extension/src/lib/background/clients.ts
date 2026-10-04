@@ -4,10 +4,10 @@
 // request to the native host as a control frame (client_list /
 // client_revoke) and correlates the host's result frame back to the caller.
 //
-// port.ts hands this module the native-messaging port (attachPort) and every
-// admin result frame; messages.ts routes the options-page actions here. This
-// module never imports port.ts, so there is no import cycle - the same shape
-// as enrollment.ts.
+// port.ts drives `collaborator` (the connection, then every admin result
+// frame); messages.ts routes the options-page actions here. This module never
+// imports port.ts, so there is no import cycle - the same shape as
+// enrollment.ts.
 //
 // Fail-closed posture (inherits the #61 timeout rule): every request carries
 // a deadline, and an unanswered request resolves to a refusal, never a hang.
@@ -22,6 +22,7 @@ import {
 } from "@chromium-bridge/shared/enclave";
 import type { ClientListWire, ClientRevokeWire } from "@chromium-bridge/shared/envelope-wire.gen";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import type { Connection, PortCollaborator } from "./connection";
 
 /** How long the host has to answer an admin control frame before the request
  * fails closed. Generous for a local round-trip; nothing here can raise a
@@ -32,24 +33,28 @@ const ADMIN_REQUEST_TIMEOUT_MS = 10_000;
 type ClientListView = RuntimeResponse<"get_clients">;
 type RevokeClientView = RuntimeResponse<"revoke_client">;
 
-/** True for the two ADR-0025 admin result frame tags. */
+/** True for the two admin result frame tags. */
 export function isAdminFrame(msg: unknown): msg is AdminInboundFrame {
   return AdminInboundFrameSchema.safeParse(msg).success;
 }
 
-// The port sender, registered by port.ts while a port is up. Null = not
-// connected.
-let postFrame: ((frame: object) => boolean) | null = null;
+let conn: Connection | null = null;
 
-export function attachPort(post: (frame: object) => boolean): void {
-  postFrame = post;
-}
-
-export function detachPort(): void {
-  postFrame = null;
-  // The host died with the port; its replies can never arrive.
-  failPending("native host disconnected");
-}
+export const collaborator: PortCollaborator = {
+  onAttach(c) {
+    conn = c;
+  },
+  onDetach() {
+    conn = null;
+    // The host died with the port; its replies can never arrive.
+    failPending("native host disconnected");
+  },
+  onFrame(msg) {
+    if (!isAdminFrame(msg)) return false;
+    handleAdminFrame(msg);
+    return true;
+  },
+};
 
 interface Pending<T> {
   resolve: (v: T) => void;
@@ -74,7 +79,8 @@ function failPending(reason: string): void {
 
 /** Ask the host for the trusted-client allowlist. */
 export function requestClientList(): Promise<ClientListView> {
-  if (!postFrame) return Promise.resolve({ ok: false, error: "native host not connected" });
+  const live = conn;
+  if (!live) return Promise.resolve({ ok: false, error: "native host not connected" });
   if (pendingList) {
     return Promise.resolve({ ok: false, error: "a client-list request is already in flight" });
   }
@@ -84,7 +90,7 @@ export function requestClientList(): Promise<ClientListView> {
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, ADMIN_REQUEST_TIMEOUT_MS);
     pendingList = { resolve, timer };
-    if (!postFrame?.({ type: "client_list" } satisfies ClientListWire)) {
+    if (!live.post({ type: "client_list" } satisfies ClientListWire)) {
       clearTimeout(timer);
       pendingList = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });
@@ -97,7 +103,8 @@ export function requestClientList(): Promise<ClientListView> {
  * that client's connections (ADR-0025). The name was already validated by the
  * runtime-message schema; the host re-validates it at its own boundary. */
 export function revokeTrustedClient(name: string): Promise<RevokeClientView> {
-  if (!postFrame) return Promise.resolve({ ok: false, error: "native host not connected" });
+  const live = conn;
+  if (!live) return Promise.resolve({ ok: false, error: "native host not connected" });
   if (pendingRevoke) {
     return Promise.resolve({ ok: false, error: "a revoke request is already in flight" });
   }
@@ -107,7 +114,7 @@ export function revokeTrustedClient(name: string): Promise<RevokeClientView> {
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, ADMIN_REQUEST_TIMEOUT_MS);
     pendingRevoke = { resolve, timer };
-    if (!postFrame?.({ type: "client_revoke", name } satisfies ClientRevokeWire)) {
+    if (!live.post({ type: "client_revoke", name } satisfies ClientRevokeWire)) {
       clearTimeout(timer);
       pendingRevoke = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });
