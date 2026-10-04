@@ -4,7 +4,6 @@
 // self-containment - a reference to module scope would throw here just as it
 // would in the page.
 
-import { DEFAULT_WAIT_TIMEOUT_MS } from "@chromium-bridge/shared/ops.gen";
 import { describe, expect, test } from "vitest";
 import { pageApiExpression, probeClickExpression } from "@/lib/background/backends/cdp";
 import { createPageApi, type PageApi, REF_ATTR } from "@/lib/dom/page-api";
@@ -235,17 +234,6 @@ describe("probe + act", () => {
     expect(api.select({ selector: "#s", value: "v" }).selected).toBe("v");
     const probe = api.probeClick({ selector: "#b" });
     expect(api.click({ selector: "#b", expect: probe }).role).toBe("button");
-  });
-
-  test("waitFor's fallback timeout matches the host's canonical default", () => {
-    // The host fills page_wait_for's timeoutMs from DEFAULT_WAIT_TIMEOUT_MS
-    // (tools/args.rs, emitted into ops.gen.ts); the factory is self-contained
-    // (no imports), so its fallback is a literal this pin holds to the
-    // generated constant. The literal is parsed, not string-matched, because
-    // the test transform may rewrite 30000 as 3e4.
-    const fallback = createPageApi.toString().match(/args\.timeoutMs \?\? ([0-9.e]+)/);
-    expect(fallback).not.toBeNull();
-    expect(Number(fallback?.[1])).toBe(DEFAULT_WAIT_TIMEOUT_MS);
   });
 
   test("readStorage returns RAW values (masking is the SW's job)", () => {

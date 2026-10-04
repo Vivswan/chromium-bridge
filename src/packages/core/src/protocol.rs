@@ -102,16 +102,16 @@ pub fn nm_write_frame<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
 pub struct JsonRpc {
     pub jsonrpc: Option<String>,
     /// `id` is present for requests/responses, absent for notifications.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
     // For responses only:
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RpcError>,
 }
 
@@ -119,7 +119,7 @@ pub struct JsonRpc {
 pub struct RpcError {
     pub code: i32,
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
@@ -277,7 +277,7 @@ pub enum Handshake {
     },
     Response {
         mac: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
 }
@@ -295,10 +295,10 @@ pub struct HarnessId {
     /// The parent's attested image hash (macOS cdhash / Linux exe SHA256).
     pub hash: crate::ipc::HashDigest,
     /// The parent's macOS signing Team ID, when Team-ID signed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub team_id: Option<crate::ipc::TeamId>,
     /// Self-asserted human label (claude-code/copilot/codex/...); logs only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -318,7 +318,7 @@ pub enum AttachRequest {
     /// (absent only when the relay could not measure its parent, which the
     /// broker treats as unmeasured -> fail closed once enrolled).
     Client {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         harness: Option<HarnessId>,
     },
 }
@@ -374,7 +374,7 @@ pub struct BridgeReq {
     /// resolves the tool call's `browser` argument against its connection
     /// registry and stamps the outcome here, so the envelope records which
     /// browser was addressed. Omitted when unset (older peers, tests).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub browser: Option<String>,
 }
 
@@ -388,9 +388,9 @@ pub struct BridgeResp {
     /// anything else coming back is a protocol violation.
     pub id: u64,
     pub ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 

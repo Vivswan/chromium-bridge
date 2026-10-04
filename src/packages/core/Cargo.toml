@@ -65,7 +65,7 @@ chromium-bridge-core = { path = ".", features = ["envelope-schema"] }
 p256.workspace = true
 proc-macro2.workspace = true
 proptest.workspace = true
-syn.workspace = true
+syn = { workspace = true, features = ["visit"] }
 
 # `loom` model-checks the broker's ref-count concurrency (src/packages/core/src/broker.rs).
 # It is only built under `--cfg loom`, which swaps the ref-count's Mutex/Condvar

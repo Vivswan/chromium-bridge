@@ -17,7 +17,6 @@ use chromium_bridge_core::protocol::{
     BRIDGE_PROTOCOL_VERSION, MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION,
     MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
 };
-use chromium_bridge_core::tools::args::DEFAULT_WAIT_TIMEOUT_MS;
 use chromium_bridge_core::tools::{all, capabilities};
 use serde_json::{json, Value};
 
@@ -76,7 +75,6 @@ fn main() -> Result<(), serde_json::Error> {
             "pinnedExtensionId": PINNED_EXTENSION_ID,
         },
         "tools": tools,
-        "defaultWaitTimeoutMs": DEFAULT_WAIT_TIMEOUT_MS,
         "errors": errors,
         "capabilities": capabilities,
     });

@@ -92,7 +92,7 @@ fn mcp_read_skips_blank_lines_without_recursing() {
 #[test]
 fn bridge_envelope_roundtrip() {
     let command = BridgeCommand::PageClick(ElementTargetArgs {
-        element_ref: Some("e3".into()),
+        r#ref: Some("e3".into()),
         selector: None,
     });
     let req = BridgeReq {
