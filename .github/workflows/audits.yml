@@ -33,10 +33,6 @@ jobs:
           # not drift underneath us. Bump deliberately.
           tool: cargo-deny@0.20.2
       - run: cargo deny check
-      # The shipped-graph bans (dev-dependencies excluded, so the dev-only p256
-      # can be banned outright): moon's check-gen-isolation, run raw here
-      # because this job has cargo-deny and no moon.
-      - run: cargo deny --config deny.shipped.toml check bans
       # The fuzz crate is its own workspace, excluded from the root one, so
       # the root pass above never sees its lockfile - gate it separately with
       # its own config (the shipped gate stays strict; see the fuzz deny.toml).

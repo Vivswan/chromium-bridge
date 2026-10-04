@@ -74,6 +74,7 @@ tasks:
       - '~:check-fuzz-workspace'
       - '~:check-gen'
       - '~:check-envelope'
+      - '~:check-gen-isolation'
       - '~:check-toolchain'
       - '~:check-hasher'
       - '~:check-ignored'
@@ -516,15 +517,39 @@ tasks:
       cache: false # in the ci gate: gates are never cached
 
   check-gen-isolation:
-    # The root deny.toml keeps dev-dependencies in its graph for their
-    # advisories, so the ban on the dev-only p256 needs this second config
-    # over the shipped (dev-free) graph. Needs cargo-deny like `audit`, so it
-    # runs beside it (CI: audits.yml), not in the `ci` aggregate.
-    description: 'Gen-only tooling (p256) stays out of the shipped binary dependency graph (needs cargo-deny)'
-    command: 'cargo deny --config deny.shipped.toml check bans'
+    # Gen-only tooling must stay out of the shipped binary's graph, and only `cargo tree -e normal` sees that
+    # graph: the core's self dev-dependency switches the envelope-schema feature on workspace-wide, so
+    # cargo-deny (even with dev-dependencies excluded) sees a core -> schemars edge that never links.
+    #   p256, ts-rs  -> refused anywhere in the graph
+    #   schemars     -> allowed only through rmcp (its runtime tool-schema model)
+    description: 'Gen-only tooling (p256, ts-rs; schemars outside rmcp) stays out of the shipped binary dependency graph'
+    script: |
+      set -eu
+      tree="$(cargo tree -e normal -p chromium-bridge --locked)"
+      for crate in p256 ts-rs; do
+        if printf '%s\n' "$tree" | grep -q " $crate v"; then
+          echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
+          exit 1
+        fi
+      done
+      # rmcp must be schemars's only direct dependent (depth 1 of the inverse tree). An inverse tree that
+      # does not resolve (two schemars majors: the leak itself) fails here instead of passing silently.
+      if printf '%s\n' "$tree" | grep -q " schemars v"; then
+        inverse="$(cargo tree -e normal -p chromium-bridge --locked -i schemars --prefix depth)"
+        if ! printf '%s\n' "$inverse" | grep -q '^0schemars '; then
+          echo "could not resolve the schemars inverse tree:" >&2
+          printf '%s\n' "$inverse" >&2
+          exit 1
+        fi
+        if printf '%s\n' "$inverse" | grep -E '^1[^0-9]' | grep -qv '^1rmcp '; then
+          echo "schemars reached the chromium-bridge binary graph outside rmcp:" >&2
+          printf '%s\n' "$inverse" >&2
+          exit 1
+        fi
+      fi
     toolchains: ['system']
     options:
-      cache: false # a check task: gates are never cached
+      cache: false # in the ci gate: gates are never cached
 
   # ----- Touch ID runbooks (macOS, USER-RUN) ---------------------------------
 

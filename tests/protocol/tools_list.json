@@ -1,0 +1,493 @@
+[
+  {
+    "description": "List the browsers currently connected to the bridge. Returns each browser's label and its open-tab count. When more than one browser is connected, every other tool needs a `browser` argument set to one of these labels.",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "list_browsers"
+  },
+  {
+    "description": "List all open browser tabs. Returns id, title, url, and which is active.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "tab_list"
+  },
+  {
+    "description": "Bring a tab to the foreground (make it active).",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "tabId": {
+          "description": "Tab id from tab_list",
+          "type": "integer"
+        }
+      },
+      "required": ["tabId"],
+      "type": "object"
+    },
+    "name": "tab_focus"
+  },
+  {
+    "description": "Open a URL in a new tab. The host domain must be in the user's allowlist.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Absolute URL to open",
+          "type": "string"
+        }
+      },
+      "required": ["url"],
+      "type": "object"
+    },
+    "name": "tab_open"
+  },
+  {
+    "description": "Close an http(s) tab after the user approves it in the extension's confirmation window.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "tabId": {
+          "description": "Tab id from tab_list",
+          "type": "integer"
+        }
+      },
+      "required": ["tabId"],
+      "type": "object"
+    },
+    "name": "tab_close"
+  },
+  {
+    "description": "Capture the active tab's interactive elements as an accessibility-style tree. Each node has a stable `ref` (e.g. \"e3\"), a role, an accessible name, and a fallback CSS selector. Use the `ref` in page_click/page_fill when possible.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_snapshot"
+  },
+  {
+    "description": "Click an element on the active tab. Prefer passing `ref` (from page_snapshot); fall back to `selector`. Clicking a submit button or a link triggers a user-confirmation prompt.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Element ref from page_snapshot, e.g. \"e3\"",
+          "type": "string"
+        },
+        "selector": {
+          "description": "CSS selector fallback",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_click"
+  },
+  {
+    "description": "Type a value into a form field on the active tab. Prefer `ref`; fall back to `selector`. Password fields are masked in logs/history.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Element ref from page_snapshot",
+          "type": "string"
+        },
+        "selector": {
+          "description": "CSS selector fallback",
+          "type": "string"
+        },
+        "value": {
+          "description": "Text to type into the field",
+          "type": "string"
+        }
+      },
+      "required": ["value"],
+      "type": "object"
+    },
+    "name": "page_fill"
+  },
+  {
+    "description": "Return the visible text content of the active tab (sensitive fields masked).",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_text"
+  },
+  {
+    "description": "Capture the visible viewport of the active tab as a PNG (base64).",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_screenshot"
+  },
+  {
+    "description": "Scroll the active tab. Pass `direction` (up|down|top|bottom) or `pixels`.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "direction": {
+          "description": "One of: up, down, top, bottom",
+          "type": "string"
+        },
+        "pixels": {
+          "description": "Number of pixels to scroll (positive = down)",
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_scroll"
+  },
+  {
+    "description": "Wait until a condition is met on the active tab, or until timeout. One of: `selector` exists, `text` appears, or `nav` waits for page load completion.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "nav": {
+          "description": "Wait for a navigation event",
+          "type": "boolean"
+        },
+        "selector": {
+          "description": "Wait for this selector to match an element",
+          "type": "string"
+        },
+        "text": {
+          "description": "Wait for this text to appear in the page",
+          "type": "string"
+        },
+        "timeoutMs": {
+          "description": "Max wait in ms (default 30000)",
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_wait_for"
+  },
+  {
+    "description": "HIGH RISK - execute arbitrary JavaScript on the active tab. EVERY call shows the user the full code in a confirmation prompt and waits for approval; there is no silent same-origin grace window for eval, so every page_eval re-prompts. The return value is masked (JWT / long hex / long numbers / token-like strings) by default. This is the most powerful tool: prefer page_click / page_fill / page_snapshot whenever possible, and only use page_eval when those cannot achieve the goal (custom events, reading framework state, SPA routing, canvas/WebGL, etc.). Code runs in the page's global scope, wrapped as `async`, so you can `await` and `return` a value. Async results are awaited. Errors are returned as {name, message}.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "code": {
+          "description": "JavaScript code to execute",
+          "type": "string"
+        }
+      },
+      "required": ["code"],
+      "type": "object"
+    },
+    "name": "page_eval"
+  },
+  {
+    "description": "Like page_snapshot, but uses Chrome's debugger (CDP Accessibility.getFullAXTree) to capture the AUTHORITATIVE accessibility tree - accurate for shadow DOM and complex ARIA where the content-script approximation misses. The user is warned first (a brief on-page notice); Chrome then shows a 'Started debugging this browser' banner on all tabs for ~1 second while the snapshot is taken, then it disappears. Cannot run on chrome:// / web store pages, or tabs with DevTools open. Refs use a 'p' prefix (p1, p2...) and work with page_click / page_fill unchanged. Use this when page_snapshot misses elements or roles look wrong.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "frameId": {
+          "description": "Optional: limit to a specific frame's tree",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_snapshot_precise"
+  },
+  {
+    "description": "Read cookies for the active tab (or a url/domain you specify). Includes httpOnly cookies (the main reason to use this over document.cookie). Scoped to hosts in the user's allowlist - unauthorized hosts silently return nothing. Read-only; there is no cookie_set (writing httpOnly cookies is a session-fixation risk). Values are masked (JWT / long hex / long numbers) before being returned. If you omit url/domain/name, cookies for the active tab's URL are returned.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "domain": {
+          "description": "Match this domain and its subdomains",
+          "type": "string"
+        },
+        "name": {
+          "description": "Exact cookie name to match",
+          "type": "string"
+        },
+        "url": {
+          "description": "Return cookies that would be sent to this URL",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "cookie_get"
+  },
+  {
+    "description": "Read the page's localStorage or sessionStorage (where frameworks like Auth0 / NextAuth / Firebase store tokens). Must run on the active tab; same-origin only (cross-origin iframes are not readable). Pass `key` to fetch one entry, or omit it to dump all entries (capped at 500). Values are ALWAYS masked (JWT / long hex / long numbers) - this masking is not toggleable. Read-only.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "key": {
+          "description": "Specific key to read; omit for all entries",
+          "type": "string"
+        },
+        "type": {
+          "description": "\"local\" (default) or \"session\"",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "storage_get"
+  },
+  {
+    "description": "Navigate the active tab to an http(s) URL. The host domain must be in the user's allowlist. This loads in the CURRENT tab (use tab_open to open a new tab instead).",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Absolute http(s) URL to load in the active tab",
+          "type": "string"
+        }
+      },
+      "required": ["url"],
+      "type": "object"
+    },
+    "name": "page_navigate"
+  },
+  {
+    "description": "Navigate the active tab back one step in its session history (the browser Back button). Errors if there is nothing to go back to.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_back"
+  },
+  {
+    "description": "Navigate the active tab forward one step in its session history (the browser Forward button). Errors if there is nothing to go forward to.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_forward"
+  },
+  {
+    "description": "Reload the active tab (the browser Reload button).",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_reload"
+  },
+  {
+    "description": "Send a keyboard key or combo to the active tab, e.g. \"Enter\", \"Escape\", or \"Control+A\". Dispatched as a synthetic keyboard event to the focused element, so page JavaScript handlers see it; the event is not trusted, so it may not trigger a native default action such as submitting a form (use page_click on the submit control for that). Every press shows a user-confirmation prompt (in the extension's own window), because a keypress can submit or trigger an action.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "keys": {
+          "description": "A single key or combo, e.g. \"Enter\", \"Escape\", \"Tab\", \"a\", or \"Control+A\". Modifiers: Control, Shift, Alt, Meta.",
+          "type": "string"
+        }
+      },
+      "required": ["keys"],
+      "type": "object"
+    },
+    "name": "page_press"
+  },
+  {
+    "description": "Move the pointer over an element on the active tab (dispatches pointerover / mouseover / mouseenter / mousemove), revealing hover menus or tooltips. Prefer `ref` (from page_snapshot); fall back to `selector`.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Element ref from page_snapshot, e.g. \"e3\"",
+          "type": "string"
+        },
+        "selector": {
+          "description": "CSS selector fallback",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "page_hover"
+  },
+  {
+    "description": "Choose an option in a <select> drop-down on the active tab. Prefer `ref` (from page_snapshot); fall back to `selector`. `value` matches an option by its value attribute, or by its visible text when no value matches. Fires input and change events so frameworks react. Shows a user-confirmation prompt (in the extension's own window), because it changes form state.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Element ref from page_snapshot for the <select>",
+          "type": "string"
+        },
+        "selector": {
+          "description": "CSS selector fallback for the <select>",
+          "type": "string"
+        },
+        "value": {
+          "description": "Option to choose: its value attribute, or its visible text",
+          "type": "string"
+        }
+      },
+      "required": ["value"],
+      "type": "object"
+    },
+    "name": "page_select"
+  },
+  {
+    "description": "Return recent console output from the active tab, captured via Chrome's debugger. Includes browser-logged entries (network, security, and deprecation warnings, which the debugger replays on attach) plus any console.* calls and uncaught errors during the short capture window; console.* output produced before this call is generally not available. Values are masked (JWT / long hex / long numbers / token-like strings), because console lines can carry tokens. Attaching briefly shows the 'Started debugging this browser' banner. `limit` caps the number of entries returned (default 100).",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max entries to return (default 100)",
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "console_get"
+  },
+  {
+    "description": "Respond to a JavaScript dialog (alert / confirm / prompt) on the active tab: `action` is \"accept\" or \"dismiss\", with optional `promptText` for a prompt(). Uses Chrome's debugger (CDP Page.handleJavaScriptDialog). HIGH RISK, because accepting a dialog can confirm a destructive action, so this tool is OFF by default and must be enabled in the extension settings. A dialog blocks the page, so the confirmation cannot be shown in-page; the settings opt-in is the gate. Chrome needs the debugger attached when the dialog opens for it to be handleable (turn on CDP mode), otherwise the dialog may not be capturable.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "\"accept\" or \"dismiss\"",
+          "type": "string"
+        },
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "promptText": {
+          "description": "Text to enter for a prompt() before accepting",
+          "type": "string"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "page_handle_dialog"
+  },
+  {
+    "description": "CRITICAL RISK - attach a LOCAL file from the user's disk to a file input (<input type=file>) on the active tab so the page can upload it. `selector` targets the file input; `path` is the absolute local file path. This can exfiltrate private local files to a web page, so it is OFF by default (enable in the extension settings) and EVERY call shows a user-confirmation prompt (in the extension's own window) displaying the exact file path before it proceeds. Uses Chrome's debugger (CDP DOM.setFileInputFiles); the 'Started debugging this browser' banner flashes while it runs. Do not use this unless the user explicitly asked to upload that specific file.",
+    "inputSchema": {
+      "properties": {
+        "browser": {
+          "description": "Optional: which connected browser to run this on - a label from list_browsers. Required when more than one browser is connected.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute local filesystem path of the file to attach",
+          "type": "string"
+        },
+        "selector": {
+          "description": "CSS selector for the <input type=file> element",
+          "type": "string"
+        }
+      },
+      "required": ["selector", "path"],
+      "type": "object"
+    },
+    "name": "page_upload"
+  }
+]

@@ -29,7 +29,7 @@ tokio.workspace = true
 # the CI double-derivation diff (scripts/check-envelope-parity.ts). Off by
 # default and enabled by no binary; the schemars instance in shipped builds
 # comes from rmcp (its runtime tool-schema model, ADR-0034), never from this
-# feature - the cargo-deny ban in deny.toml (schemars only via rmcp) enforces it.
+# feature - check-gen-isolation enforces exactly that split.
 envelope-schema = ["dep:schemars"]
 # Fuzz-only surface: re-exports private internals (the handshake verifier, the
 # registration ownership markers) for the cargo-fuzz workspace (the `fuzz/`

@@ -83,9 +83,10 @@ def copy_of_binary(name):
 
 
 def pair(*args, env=None):
-    """Pair a trusted client through the CLI presence floor."""
+    """Pair a trusted client through the CLI presence floor, inside the
+    isolated runtime dir only."""
     h.require_isolated(env)
-    h.pair_client_interactive(*args, env=env)
+    h.run_with_cli_presence(["pair-client", *args], env=env)
 
 
 class AdversarialCase(BridgeCase):
@@ -378,7 +379,7 @@ class KillSwitch(AdversarialCase):
         BRIDGE_KILLED and keeps the connection, the browser leg is severed, a
         fresh host is control-plane only, and a relay gets the same refusal."""
         srv, c, nh = self.enrolled_broker()
-        self.addCleanup(h.unkill_interactive, check=False)
+        self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         self.assertRoundTrip(c, nh, 60)
         subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         rev = h.read_revocation()
@@ -391,7 +392,7 @@ class KillSwitch(AdversarialCase):
         self.assertEqual(nm_read(nh2), {"type": "kill_status_result", "ok": True, "killed": True},
                          "a fresh host is control-plane only")
         self.assertFalse(nh2.ready.is_set(), "the fresh host never handshakes the bridge")
-        c2 = self.legacy_client(self.relay())
+        c2 = self.legacy_client(self.instance())
         self.assertEqual(c2.call("tab_list", {}, _id=63), tool_error(63, "BRIDGE_KILLED", h.BRIDGE_KILLED),
                          "a relayed harness gets the same typed refusal")
 
@@ -410,7 +411,7 @@ class KillSwitch(AdversarialCase):
         self.assertEqual(self.bounded("the call on an unreadable record", srv.stdout.readline, 10), "",
                          "the live broker drops the harness")
         self.assertRefusedToStart(self.server(wait=False))
-        unkill = h.unkill_interactive(check=False)
+        unkill = h.run_with_cli_presence(["unkill"], check=False)
         self.assertEqual(unkill.returncode, 1, unkill.stderr)
         self.assertIn("fail open", unkill.stderr)
         errored = [rec for rec in h.audit_records()
@@ -428,7 +429,7 @@ class KillSwitch(AdversarialCase):
         phrase typed on a pty releases, audited with its rung."""
         self.skip_if_enrolled()
         self.skip_unless_unix("the pty-driven confirmation")
-        self.addCleanup(h.unkill_interactive, check=False)
+        self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         h.remove_lock()
         already = len(h.audit_records())
         subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -437,10 +438,10 @@ class KillSwitch(AdversarialCase):
         self.assertEqual(piped.returncode, 1, piped.stderr)
         self.assertIn("not a terminal", piped.stderr)
         self.assertIs(h.read_revocation()["killed"], True, "engaged after the piped attempt")
-        wrong = h.unkill_interactive(phrase="yes", check=False)
+        wrong = h.run_with_cli_presence(["unkill"], phrase="yes", check=False)
         self.assertEqual(wrong.returncode, 1, wrong.stderr)
         self.assertIs(h.read_revocation()["killed"], True, "engaged after the declined prompt")
-        ok = h.unkill_interactive()
+        ok = h.run_with_cli_presence(["unkill"])
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertIs(h.read_revocation()["killed"], False)
         releases = [rec for rec in h.audit_records()[already:] if rec["event_kind"] == "kill_release"]

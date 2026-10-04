@@ -132,7 +132,7 @@ class ChaosCase(BridgeCase):
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
-        h.pair_client_interactive("--name", "pytest", "--this-parent")
+        h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"])
         broker = self.server()
         cb = self.mcp_ready(broker)
         nh = self.host()
@@ -290,9 +290,7 @@ class Coexistence(ChaosCase):
         for rnd in range(1, 4):
             with self.subTest(round=rnd):
                 h.remove_lock()
-                servers = [h.start_server() for _ in range(6)]
-                for s in servers:
-                    self.addCleanup(h.reap, s)
+                servers = [self.instance() for _ in range(6)]
                 deadline = time.time() + 20
                 lf = None
                 while time.time() < deadline:
@@ -321,7 +319,7 @@ class Coexistence(ChaosCase):
         # No subTest: the cycles share one broker and host, and a timed-out
         # round trip leaves a reader on the host that would desync the next.
         for cycle in range(4):
-            batch = [self.relay() for _ in range(3)]
+            batch = [self.instance() for _ in range(3)]
             time.sleep(0.6)
             self.assertEqual([s.poll() for s in batch], [None] * 3, f"cycle {cycle}: relays attached and coexist")
             self.assertIsNone(broker.poll(), f"cycle {cycle}: the broker survives the attach")
@@ -351,7 +349,7 @@ class Enforcement(ChaosCase):
         self.assertEqual(self.bounded("the revoked call", broker.stdout.readline, 10), "",
                          "the revoked harness gets EOF")
         self.assertExits(broker, 8, "the broker for the revoked harness exits")
-        h.pair_client_interactive("--name", "pytest", "--this-parent")
+        h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"])
         broker2 = self.server()
         self.assertRoundTrip(self.mcp_ready(broker2), self.host(), "C10-after", 1002)
 
@@ -360,7 +358,7 @@ class Enforcement(ChaosCase):
         and typed (the severed leg, not a 120 s timeout), refuses the next call
         with BRIDGE_KILLED, and a release restores the same broker."""
         broker, cb, nh = self.enrolled_broker()
-        self.addCleanup(h.unkill_interactive, check=False)
+        self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         self.assertRoundTrip(cb, nh, "C12-before", 1100)
         self.in_flight(cb, nh, 1101)
         subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -368,7 +366,7 @@ class Enforcement(ChaosCase):
                          tool_error(1101, "CONNECTION_LOST", h.CONNECTION_LOST))
         self.assertEqual(self.bounded("the next call", lambda: cb.call("tab_list", {}, _id=1102), 10),
                          tool_error(1102, "BRIDGE_KILLED", h.BRIDGE_KILLED))
-        h.unkill_interactive()
+        h.run_with_cli_presence(["unkill"])
         self.assertRoundTrip(cb, self.host(), "C12-after", 1103)
 
     def test_c13_audit_sink_failure_never_fails_the_decision(self):
@@ -376,7 +374,7 @@ class Enforcement(ChaosCase):
         tool calls flow, a kill engages and refuses typed; once the sink heals
         the trail resumes and carries a dropped counter for the gap."""
         broker, cb, nh = self.enrolled_broker()
-        self.addCleanup(h.unkill_interactive, check=False)
+        self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         audit_path = h.runtime_file("audit.log")
         self.addCleanup(self._rmdir, audit_path)
         try:
@@ -388,10 +386,10 @@ class Enforcement(ChaosCase):
         kill = subprocess.run([h.BIN, "kill"], capture_output=True, text=True)
         self.assertEqual(kill.returncode, 0, kill.stderr)
         self.assertEqual(cb.call("tab_list", {}, _id=1201), tool_error(1201, "BRIDGE_KILLED", h.BRIDGE_KILLED))
-        h.unkill_interactive()
+        h.run_with_cli_presence(["unkill"])
         os.rmdir(audit_path)
         subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        h.unkill_interactive()
+        h.run_with_cli_presence(["unkill"])
         cb.call("tab_list", {}, _id=1202)
         deadline = time.time() + 5
         records = []

@@ -89,8 +89,7 @@ winreg = "0.56"
 # double-derivation diff against the extension's Zod validators. OUR gen
 # feature stays out of default and release builds; note that rmcp compiles
 # its own schemars dependency into the shipped binary for its runtime tool
-# schemas (ADR-0034) - deny.toml bans schemars outside rmcp, and
-# deny.shipped.toml bans p256 from the shipped graph (moon check-gen-isolation).
+# schemas (ADR-0034) - check-gen-isolation pins that rmcp is the only path.
 schemars = "1"
 # The version is stated alongside the path so the dependency is not a
 # version-less wildcard: `cargo deny check bans` (wildcards = "deny") treats

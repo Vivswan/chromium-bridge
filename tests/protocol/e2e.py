@@ -32,17 +32,6 @@ def setUpModule():
     h.isolate("bb-e2e-")
 
 
-BROWSER_ARG = {
-    "type": "string",
-    "description": "Optional: which connected browser to run this on - a label from "
-                   "list_browsers. Required when more than one browser is connected.",
-}
-PAGE_EVAL_SCHEMA = {
-    "type": "object",
-    "properties": {"browser": BROWSER_ARG,
-                   "code": {"type": "string", "description": "JavaScript code to execute"}},
-    "required": ["code"],
-}
 # The user-facing warnings a tool description must keep carrying.
 DESCRIPTION_WARNINGS = [
     ("page_eval", "HIGH RISK"),
@@ -76,16 +65,14 @@ class E2ECase(BridgeCase):
 
 class ModernEra(E2ECase):
     def test_discover_and_the_tool_catalogue(self):
-        """The discover result and the catalogue are the contract a stateless
-        client reads; a tool's risk warning is the user's only notice."""
+        """The discover result and the full catalogue (every name, description,
+        and schema) are the contract a stateless client reads; a tool's risk
+        warning is the user's only notice."""
         c = McpClient(self.server())
         self.assertEqual(normalized(c.discover(_id=1)), rpc_result(1, h.DISCOVER_RESULT))
-        tools = self.assertToolsList(c.modern_tools_list(_id=2), 2, h.TOOLS_LIST_ENVELOPE)
-        self.assertEqual([sorted(t) for t in tools], [["description", "inputSchema", "name"]] * len(tools))
-        self.assertEqual([(bool(t["description"]), t["inputSchema"]["type"]) for t in tools],
-                         [(True, "object")] * len(tools), "every tool has a description and an object schema")
-        by_name = {t["name"]: t for t in tools}
-        self.assertEqual(by_name["page_eval"]["inputSchema"], PAGE_EVAL_SCHEMA)
+        self.assertToolsList(c.modern_tools_list(_id=2), 2, h.TOOLS_LIST_ENVELOPE)
+        # The literal pins the text; these name the warnings a client must keep seeing.
+        by_name = {t["name"]: t for t in h.TOOLS}
         for name, needle in DESCRIPTION_WARNINGS:
             with self.subTest(tool=name, warning=needle):
                 self.assertIn(needle.lower(), by_name[name]["description"].lower())
@@ -264,8 +251,8 @@ class ControlFrames(E2ECase):
         trusted-client store, never forwarded; a stray result frame is dropped."""
         self.skip_if_enrolled()
         env = self.private_runtime("bb-e2e-admin-")
-        h.pair_client_interactive("--name", "pytest", "--this-parent", env=env)
-        h.pair_client_interactive("--name", "codex", "--hash", "aa" * 32, env=env)
+        h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"], env=env)
+        h.run_with_cli_presence(["pair-client", "--name", "codex", "--hash", "aa" * 32], env=env)
         mcp = self.server(env=env)
         nh = self.host(env=env)
         nm_write(nh, {"type": "client_list"})
@@ -287,8 +274,7 @@ class ControlFrames(E2ECase):
         env = self.private_runtime("bb-e2e-policy-")
         mcp = self.server(env=env)
         nh = self.host(env=env)
-        absent = {"type": "policy_current", "ok": False, "reason": "absent",
-                  "error": "no policy baseline on this host"}
+        absent = {"type": "policy_current", "ok": False, "error": "no policy baseline on this host"}
         self.assertEqual(nm_read_raw(nh), absent)
         self.assertEqual(nm_read_raw(nh), {"type": "lang_current", "value": "en", "seq": 0})
         c = self.legacy_client(mcp)
@@ -338,7 +324,7 @@ class KillSwitch(E2ECase):
         nm_write(nh2, {"type": "kill_status"})
         self.assertEqual(nm_read(nh2), killed, "the refused release left the switch engaged")
 
-        h.unkill_interactive()
+        h.run_with_cli_presence(["unkill"])
         self.bounded("drain the control-plane host", lambda: list(iter(lambda: nm_read(nh2), None)), 8)
         self.assertExits(nh2, 8, "the control-plane host exits after the release")
         self.assertRoundTrip(c, self.host(), 82, "Recovered")
@@ -400,7 +386,7 @@ class Broker(E2ECase):
         """A second instance does not take over: the first keeps the lock as
         broker, the second attaches as a relay, and both serve their stdio."""
         first = self.server()
-        second = self.relay()
+        second = self.instance()
         time.sleep(1.0)
         self.assertEqual((first.poll(), second.poll()), (None, None), "both stay alive")
         still = h.wait_lock(first, timeout=2)
@@ -414,7 +400,7 @@ class Broker(E2ECase):
         """A broker and a relay attached to one browser both route through the
         shared session to the single host."""
         first = self.server()
-        second = self.relay()
+        second = self.instance()
         time.sleep(1.0)
         self.assertIsNone(second.poll(), "relay attached")
         nh = self.host()
@@ -434,7 +420,7 @@ class Broker(E2ECase):
         self.assertFalse(os.path.exists(h.LOCK), "the lone broker removed its lock")
 
         first = self.server()
-        second = self.relay()
+        second = self.instance()
         time.sleep(1.0)
         self.assertIsNone(second.poll(), "relay attached")
         first.stdin.close()
@@ -451,9 +437,7 @@ class Broker(E2ECase):
         """Several instances starting at once settle to one lock owner plus
         relays, all alive, each able to drive the one attached browser."""
         h.remove_lock()
-        servers = [h.start_server() for _ in range(3)]
-        for s in servers:
-            self.addCleanup(h.reap, s)
+        servers = [self.instance() for _ in range(3)]
         deadline = time.time() + 15
         lf = None
         while time.time() < deadline:

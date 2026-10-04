@@ -203,14 +203,12 @@ DISCOVER_RESULT = {
 }
 # The whole modern tools/list result once its `tools` array is taken out.
 TOOLS_LIST_ENVELOPE = {"resultType": "complete", **CACHE_FIELDS}
-# The catalogue a client sees, in the served order.
-TOOL_NAMES = [
-    "list_browsers", "tab_list", "tab_focus", "tab_open", "tab_close", "page_snapshot",
-    "page_click", "page_fill", "page_text", "page_screenshot", "page_scroll", "page_wait_for",
-    "page_eval", "page_snapshot_precise", "cookie_get", "storage_get", "page_navigate",
-    "page_back", "page_forward", "page_reload", "page_press", "page_hover", "page_select",
-    "console_get", "page_handle_dialog", "page_upload",
-]
+# The whole catalogue a client sees, in the served order: tools_list.json is
+# the binary's tools/list captured once into a literal, so a changed tool
+# (name, description, schema) fails here and the literal is re-pinned by hand.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools_list.json")) as _f:
+    TOOLS = json.load(_f)
+TOOL_NAMES = [t["name"] for t in TOOLS]
 
 
 def legacy_init_result(version=LEGACY_VERSION):
@@ -668,15 +666,6 @@ def run_with_cli_presence(args, phrase="release", check=True, timeout=15, env=No
     return result
 
 
-def unkill_interactive(phrase="release", check=True, env=None):
-    return run_with_cli_presence(["unkill"], phrase=phrase, check=check, env=env)
-
-
-def pair_client_interactive(*args, phrase="release", check=True, env=None):
-    return run_with_cli_presence(["pair-client", *args], phrase=phrase,
-                                 check=check, env=env)
-
-
 def runtime_file(name):
     """A file in the isolated runtime dir beside the lock (audit.log,
     clients.json, revocation.json)."""
@@ -738,9 +727,9 @@ class BridgeCase(unittest.TestCase):
             self.assertIsNotNone(proc.lock, f"the server wrote its lock file; stderr: {server_stderr(proc)}")
         return proc
 
-    def relay(self, env=None):
-        """A second instance started against the live broker (its lock left in
-        place), which attaches as a relay; reaped at cleanup."""
+    def instance(self, env=None):
+        """Another instance started against whatever lock exists (a relay to a
+        live broker, or one racer among concurrent starts); reaped at cleanup."""
         proc = start_server(env=env)
         self.addCleanup(reap, proc)
         return proc
@@ -801,12 +790,9 @@ class BridgeCase(unittest.TestCase):
         return value
 
     def assertToolsList(self, reply, _id, envelope):
-        """The whole tools/list reply: the catalogue in order, and `envelope`
-        as everything else in the result. Returns the tools."""
-        tools = reply["result"].pop("tools")
-        self.assertEqual([t["name"] for t in tools], TOOL_NAMES)
-        self.assertEqual(reply, rpc_result(_id, envelope))
-        return tools
+        """The whole tools/list reply: the full catalogue literal plus
+        `envelope` as everything else in the result."""
+        self.assertEqual(reply, rpc_result(_id, {**envelope, "tools": TOOLS}))
 
     def assertRefusedToStart(self, proc, needle=None):
         """`proc` never became the broker: no lock, exit status 1, and (when

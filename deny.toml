@@ -28,14 +28,6 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# schemars may reach the binary only through rmcp's runtime tool-schema model,
-# never through our own gen-only envelope-schema feature (off by default,
-# enabled by no binary). The other gen-only crate, p256, is a dev-dependency
-# this graph must keep for its advisories, so its ban lives in
-# deny.shipped.toml, whose graph excludes dev-dependencies.
-deny = [
-  { crate = "schemars", wrappers = ["rmcp"], reason = "runtime tool schemas come from rmcp; our envelope-schema gen feature stays out of shipped builds" },
-]
 
 [sources]
 unknown-registry = "deny"
