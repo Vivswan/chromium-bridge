@@ -18,3 +18,7 @@ extend-ignore-re = [
 iif = "iif"
 # UDID = Apple's unique device identifier (provisioning profiles, ADR-0026).
 udid = "udid"
+
+[default.extend-identifiers]
+# security-framework 3.7.0 misspells its own method; we must call it as spelled.
+copy_guest_with_attribues = "copy_guest_with_attribues"
