@@ -39,3 +39,11 @@ export function jsonVersion(path: string): string {
   if (typeof parsed.version !== "string") die(`no "version" string in ${path}`);
   return parsed.version;
 }
+
+// For git spawned in a scratch repository by a test. A pre-commit hook exports GIT_DIR and GIT_INDEX_FILE, so
+// an inheriting child acts on the repository under commit (the first hook run of the check-ignored tests
+// rewrote that index with scratch files). The real gates keep the inherited env on purpose: a partial commit
+// (`git commit --only`) is judged on the hook's temporary index, not the ordinary one.
+export const gitEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+);
