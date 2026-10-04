@@ -423,19 +423,28 @@ mod tests {
         (records, refused)
     }
 
+    /// Persisted shapes the ladder rule binds without an `impl Record`, by path under `src/`. The audit
+    /// trail is one JSON line per event with its own version stamp: the shared whole-file `load` and
+    /// lock-holding atomic `write` do not fit an append-only log that must never take the runtime lock,
+    /// so nothing in the module marks it and the scan names it here.
+    const LINE_RECORD_MODULES: [&str; 1] = ["audit.rs"];
+
     fn record_impls_in_source() -> (BTreeSet<String>, Vec<String>) {
-        fn walk(dir: &Path, types: &mut BTreeSet<String>, refused: &mut Vec<String>) {
+        fn walk(src: &Path, dir: &Path, types: &mut BTreeSet<String>, refused: &mut Vec<String>) {
             for entry in fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
-                    walk(&path, types, refused);
+                    walk(src, &path, types, refused);
                     continue;
                 }
                 if path.extension().is_none_or(|e| e != "rs") {
                     continue;
                 }
                 let (records, found) = scan_module(&fs::read_to_string(&path).unwrap());
-                if records.is_empty() {
+                let named = path
+                    .strip_prefix(src)
+                    .is_ok_and(|rel| LINE_RECORD_MODULES.iter().any(|m| Path::new(m) == rel));
+                if records.is_empty() && !named {
                     continue;
                 }
                 types.extend(records);
@@ -446,12 +455,15 @@ mod tests {
                 );
             }
         }
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for module in LINE_RECORD_MODULES {
+            assert!(
+                src.join(module).is_file(),
+                "{module}: named for the scan but not under src/"
+            );
+        }
         let (mut types, mut refused) = (BTreeSet::new(), Vec::new());
-        walk(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-            &mut types,
-            &mut refused,
-        );
+        walk(&src, &src, &mut types, &mut refused);
         (types, refused)
     }
 

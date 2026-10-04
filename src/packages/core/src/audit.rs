@@ -119,34 +119,36 @@ pub enum Surface {
 /// One audit record: one line of `audit.log`. Every field beyond the first
 /// three is optional so one flat shape covers every kind without inventing a
 /// nested schema per event; `deny_unknown_fields` keeps reads strict.
+///
+/// A line reads back in one spelling only, with no `serde(default)`: a line missing `v` or `ts_ms` is
+/// unrecognized, never a record at the epoch. The record matrix in runtime_record.rs scans this module
+/// for reader-side compat attributes as it does every record file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditRecord {
     /// Schema version; see [`AUDIT_VERSION`]. Stamped by [`record`].
-    #[serde(default)]
     pub v: u32,
     /// Milliseconds since the Unix epoch. Stamped by [`record`].
-    #[serde(default)]
     pub ts_ms: u64,
     /// Named `event_kind` on the wire: the stderr JSON line wraps this record in log.rs's
     /// `"kind":"audit"` envelope, and a field named `kind` here would be shadowed by it.
     pub event_kind: AuditKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub surface: Option<Surface>,
     /// Short outcome word: `ok`, `refused`, `error`, `unenrolled`, ...
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     /// Tool name, for [`AuditKind::ToolCall`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
     /// Stable taxonomy code (`ERROR_SPECS` in error.rs), when the event has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     /// The client name / browser label the event concerns.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Bounded free-text detail (a reason, an anchor kind).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Confirmation-correlation id for the extension `confirm_*` kinds (ADR-0030): minted once per confirmation and
     /// stamped on the `confirm_shown` record AND its later verdict, so a reader joins a
@@ -157,19 +159,19 @@ pub struct AuditRecord {
     /// denial that never reached a surface -> a fresh cid matching no confirm_shown row
     /// cid-less denial                     -> would fall to the subject fallback and could close an unrelated row
     /// ```
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cid: Option<String>,
     /// Per-call request id, for [`AuditKind::ToolCall`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub req: Option<u64>,
     /// Browser-connection generation, for [`AuditKind::ToolCall`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub conn: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dur_ms: Option<u64>,
     /// How many records were dropped (write failures) since the previous
     /// successfully written record in this process.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dropped: Option<u64>,
 }
 
@@ -640,14 +642,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_record_refuses_bad_versions_and_garbage() {
-        assert!(parse_record("not json").is_none());
-        assert!(parse_record(r#"{"v":99,"ts_ms":1,"event_kind":"tool_call"}"#).is_none());
-        assert!(parse_record(r#"{"v":1,"ts_ms":1,"event_kind":"tool_call"}"#).is_some());
-        assert!(
-            parse_record(r#"{"v":1,"ts_ms":1,"event_kind":"made_up_kind"}"#).is_none(),
-            "an unknown kind must not parse"
-        );
+    fn parse_record_reads_a_complete_line_or_nothing() {
+        // A line without ts_ms once read back as a record at the epoch instead of an unrecognized
+        // entry. Every stamped field must be present; an absent optional field is None, which is
+        // what the writer's skip_serializing_if left out.
+        let mut complete = AuditRecord::new(AuditKind::ToolCall);
+        complete.v = AUDIT_VERSION;
+        complete.ts_ms = 1;
+        let cases: [(&str, &str, Option<AuditRecord>); 6] = [
+            (
+                "stamped fields only",
+                r#"{"v":1,"ts_ms":1,"event_kind":"tool_call"}"#,
+                Some(complete),
+            ),
+            ("ts_ms missing", r#"{"v":1,"event_kind":"tool_call"}"#, None),
+            ("v missing", r#"{"ts_ms":1,"event_kind":"tool_call"}"#, None),
+            (
+                "newer version",
+                r#"{"v":99,"ts_ms":1,"event_kind":"tool_call"}"#,
+                None,
+            ),
+            (
+                "unknown kind",
+                r#"{"v":1,"ts_ms":1,"event_kind":"made_up_kind"}"#,
+                None,
+            ),
+            ("not json", "not json", None),
+        ];
+        for (case, line, expected) in cases {
+            assert_eq!(parse_record(line), expected, "{case}");
+        }
     }
 
     #[test]
