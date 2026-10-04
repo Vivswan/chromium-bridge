@@ -376,8 +376,7 @@ fn wire_types_reject_unknown_fields() {
         json!({ "id": 1, "op": "tab_list", "args": {}, "extra": 1 })
     )
     .is_err());
-    // The deleted request-level tab target is an unknown field now: a tab
-    // target lives in the tool's args, and no writer ever emitted it here.
+    // A tab target rides in the tool's args, never on the envelope.
     assert!(serde_json::from_value::<BridgeReq>(
         json!({ "id": 1, "op": "tab_list", "tabId": 3, "args": {} })
     )
