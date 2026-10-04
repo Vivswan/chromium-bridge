@@ -7,7 +7,7 @@ This page keeps the security rules whose reason the code cannot show: for each t
 | Rule | Rejected design | Why |
 | --- | --- | --- |
 | Admission keys on the attested anchor (signing Team ID or image hash); the client name is a log label only | Admit by the self-asserted client name (`CHROMIUM_BRIDGE_CLIENT_NAME`) | A name is a string any process can put in an environment variable; the anchor is what the kernel and the Security framework testify to about the running image |
-| A client whose image is Team-ID signed is paired on its Team ID anchor; a hash anchor is for unsigned or ad-hoc builds and for Linux | Pin the exact image hash for every client | A free Apple Development certificate re-signs about weekly and every re-sign changes the `cdhash`, so a hash anchor on such a client needs a re-pair each week; a control that nags weekly gets disabled |
+| A Team-ID-signed client is paired with an explicit `pair-client --team-id` anchor (`--this-parent` always pins the image hash); a hash anchor is for unsigned or ad-hoc builds and for Linux | Pin the exact image hash for every client | A free Apple Development certificate re-signs about weekly and changes the `cdhash` each time, so a hash anchor would need a weekly re-pair; a control that nags weekly gets disabled |
 | The first process to spawn the server is never enrolled automatically | Trust on first use | A silent first-use grant hands the slot to whichever process races first; enrollment is the user's act |
 | No `clients.json` and no enrollment latch means admission is not enforced, logged at ERROR on every start; a damaged or unreadable file refuses everyone, and so does an absent file once the latch is set | Read a damaged or deleted file as "unenrolled" | A load failure read as unenrolled fails open |
 | Revoking the last client leaves an empty file that admits nobody | Delete the file when the last entry goes | An absent file is how a first install starts; "the user revoked every client" must read as locked, never as reset |
@@ -16,7 +16,7 @@ This page keeps the security rules whose reason the code cannot show: for each t
 
 | Rule | Rejected design | Why |
 | --- | --- | --- |
-| A bridge peer is accepted only if it runs the same binary as the acceptor | An env-configurable list of trusted image hashes | A list a same-user process can set through the environment lets it append its impostor's hash; "the same binary as me" is unforgeable by construction and needs no configuration |
+| Where attestation is compiled in, a bridge peer is accepted only if it runs the same binary as the acceptor; the per-OS state is the table in [trust-boundaries.md](./trust-boundaries.md) | An env-configurable list of trusted image hashes | A list a same-user process can set through the environment lets it append its impostor's hash; "the same binary as me" is unforgeable by construction and needs no configuration |
 | Self identity is measured at startup, before bind, accept, or dial | Measure self lazily on first use | A later replacement of the binary file cannot redefine "self" and then be accepted as a matching peer |
 
 ## Revocation and the kill switch

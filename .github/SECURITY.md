@@ -213,7 +213,7 @@ Known gaps, stated plainly:
 
 ### Dependency supply chain
 
-Dependency review is fully automated; there is no manual per-crate audit step. A single maintainer cannot read the Tauri or rmcp dependency trees line by line, and a gate that is always satisfied by an exemption asserts little.
+Dependency review is fully automated; there is no manual per-crate audit step. A single maintainer cannot read the rmcp dependency tree line by line, and a gate that is always satisfied by an exemption asserts little.
 
 | Layer | Runs | Catches |
 |-------|------|---------|
