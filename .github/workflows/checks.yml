@@ -18,18 +18,48 @@ on:
 permissions:
   contents: read
 
+env:
+  # The CI image tag the Linux jobs run in (container-image.yml publishes :latest and :<input hash> from
+  # main; the package must be public, since these jobs hold no packages:read). `latest` rather than the
+  # hash: a PR that moves a pin would otherwise wait for an image that only its own merge can publish, and
+  # inside the image `proto install` and rustup pick the moved pin up anyway. Empty runs every Linux job on
+  # the bare runner, where setup-moon provisions the same toolchain.
+  CI_IMAGE_TAG: latest
+
 jobs:
+  # The image's own user cannot write the runner-owned workspace, hence root.
+  image:
+    name: CI image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      container: ${{ steps.container.outputs.container }}
+    steps:
+      - id: container
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -n "$CI_IMAGE_TAG" ]; then
+            printf 'container={"image":"ghcr.io/%s-ci:%s","options":"--user root"}\n' "${REPOSITORY,,}" "$CI_IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          fi
+
   # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) loopback-TCP
   # code; neither is visible to the Linux build, which alone runs fmt (platform-independent) and the
   # fuzz-workspace check.
   rust:
     name: Rust (${{ matrix.os }})
+    needs: image
     runs-on: ${{ matrix.os }}
+    container: ${{ fromJSON(matrix.container || '""') }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        include:
+          - os: ubuntu-latest
+            container: ${{ needs.image.outputs.container }}
+          - os: macos-14
+          - os: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,7 +84,9 @@ jobs:
   # Built once; the suites that drive the binary download it (.github/actions/release-binary).
   build-release:
     name: Release binary (Linux)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,7 +104,9 @@ jobs:
   # aggregate, and there is no threshold. Gating comes later, deliberately, if the numbers prove stable.
   coverage:
     name: Coverage (cargo-llvm-cov, informational)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     continue-on-error: true
     steps:
@@ -90,7 +124,9 @@ jobs:
 
   extension:
     name: Extension (typecheck, lint, format, test, build)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,7 +145,9 @@ jobs:
   # asymmetries. check-gen rewrites the generated modules, so it runs alone before the readers.
   contract:
     name: Contract (gen idempotency, envelope asymmetry gate)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -127,7 +165,9 @@ jobs:
   # and the compose subset. check-docs-policy imports the settings schema, hence the install.
   hygiene:
     name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,7 +184,9 @@ jobs:
   # _typos.toml (the local gate keeps its `moon run typos`).
   tooling:
     name: Tooling hygiene (cargo-machete)
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,6 +201,7 @@ jobs:
           tool: cargo-machete@0.9.2
       - run: moon run machete
 
+  # Needs no toolchain, only the binary, so it stays on the bare runner.
   linux-install:
     name: Linux registration (doctor --fix / uninstall, isolated XDG directories)
     needs: build-release
@@ -265,8 +308,9 @@ jobs:
   # for it) and check-uv (a missing uv fails the run loudly anyway).
   protocol:
     name: Protocol suite (${{ matrix.suite }}, Python)
-    needs: build-release
+    needs: [image, build-release]
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -286,8 +330,9 @@ jobs:
 
   interop:
     name: MCP SDK v2 client interop (bun)
-    needs: build-release
+    needs: [image, build-release]
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -311,7 +356,9 @@ jobs:
   # site leg, which runs .github/actions/site-build.
   web:
     name: web app builds
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
