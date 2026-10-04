@@ -4,14 +4,19 @@ The test suites span two languages: `protocol/` (python) and the TypeScript suit
 
 | Suite | File | Runtime | Why this language |
 |-------|------|---------|-------------------|
-| **Protocol** | `protocol/e2e.py` | `uv run` (stdlib only) | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the TCP bridge) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
+| **Protocol** | `protocol/e2e.py`, `protocol/adversarial.py`, `protocol/chaos.py` (shared `protocol/harness.py`) | `uv run` + stdlib `unittest` | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the TCP bridge) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
 | **DOM** | `browser/dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `build/extension/chrome-mv3` content script into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
 | **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `build/extension/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
 | **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
 | **SDK interop** | `interop/sdk-client.test.ts` | `bun test` (`moon run test-interop`) | Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2, pinned to the modern era (no legacy fallback): proves a real third-party 2026-07-28 client negotiates, lists, and calls against the served protocol. No browser: the empty-bridge `tools/call` asserts the typed in-result error. |
 | **Harness smoke** | `harness/run.ts` | `bun` + harness CLIs (`moon run harness-smoke`) | Real agent-harness CLIs (Claude Code, Codex) connect to the stdio MCP server via ISOLATED config dirs, with every frame captured; prints the opening-method canary that decides when legacy-era support can be deleted. The `*-live-fakellm` entries drive a FULL model-driven tool call through each CLI against a local fake LLM backend (`harness/fake-llm.ts`) - zero credentials, zero model spend. Nightly workflow: the `harness-smoke` job in `nightly.yml`. |
 
-The two browser suites are TypeScript run under bun (matching the extension). The protocol suite stays Python on purpose - rewriting it in TS/JS would remove the independent-implementation value and add nothing. It runs via [`uv`](https://docs.astral.sh/uv/), which provisions the exact interpreter pinned in the repo-root `.python-version` - the same version locally and in CI (an unpinned PATH `python3` once let a 3.12/3.14 `subprocess` difference slip through). Two properties are deliberate and must stay: the suite is **stdlib-only** (never add dependencies - the no-deps independence is part of the testing strategy, and uv is here to pin the interpreter, not to open the door to packages), and it runs with `uv run --no-project --isolated`, staying a plain script that no stray project or virtualenv can leak into.
+The two browser suites are TypeScript under bun, matching the extension. The protocol suites stay Python on purpose: a rewrite in TS would remove the independent-implementation value and add nothing. How they run:
+
+- **Stdlib `unittest`, discovered.** Each suite is a module of `TestCase` classes run with `python -m unittest discover`, so a new test cannot be left out of a hand-kept list. `protocol/harness.py` holds the shared isolation, spawners, wire helpers, and whole-reply expectations.
+- **Under [`uv`](https://docs.astral.sh/uv/)**, which provisions the interpreter pinned in the repo-root `.python-version`, the same locally and in CI (an unpinned PATH `python3` once let a 3.12/3.14 `subprocess` difference slip through).
+- **Stdlib-only; never add dependencies.** The no-deps independence is part of the strategy, and uv pins the interpreter without opening the door to packages. `uv run --no-project --isolated` keeps the run a plain script that no stray project or virtualenv can leak into.
+- **Isolated runtime dir.** Every server a suite spawns runs in a private per-run `XDG_RUNTIME_DIR`, removed at exit on every path, so the lock, socket, and pairing state never touch the developer's real bridge.
 
 The protocol suites and the integration test's MCP leg track the MCP 2026-07-28 migration: modern-era cases speak the stateless protocol (per-request `_meta` protocol-version + client-capabilities keys, `server/discover` discovery), while bare requests on initialize-opened connections still exercise the temporary legacy era (pinned at the `2025-06-18` shapes) until it is removed.
 
@@ -38,8 +43,9 @@ bun browser/run_all.ts
 CHROME_BIN="/path/to/chrome" bun browser/run_all.ts   # override Chrome location
 
 # Individually:
-uv run --no-project --isolated protocol/e2e.py   # protocol - no browser needed
-# (or: moon run test-e2e / test-adversarial / test-chaos - CI's protocol matrix)
+moon run test-e2e            # protocol - no browser needed (also test-adversarial, test-chaos: CI's protocol matrix)
+uv run --no-project --isolated python -m unittest discover -s protocol -p e2e.py -v   # the same suite by hand
+uv run --no-project --isolated python -m unittest discover -s protocol -p e2e.py -k KillSwitch   # one class or test
 bun run --cwd browser test:dom              # DOM      - bun + Chrome
 bun run --cwd browser test:smoke            # smoke    - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
 bun run --cwd browser test:security         # security - bun + Chrome
@@ -64,7 +70,9 @@ moon run typecheck     # tsc --noEmit (CI gates this)
 
 `integration_e2e.ts` closes the one seam the others can't: the **real** MCP server ↔ **real** extension round-trip over native messaging. It spawns the release binary as the MCP server, launches Chrome (puppeteer) with a unique copy of the extension, registers a native-messaging host manifest, and drives a `tab_list` call all the way to `chrome.tabs.query` and back.
 
-On macOS the manifest goes inside the throwaway `--user-data-dir` profile, which Chrome for Testing and Chromium resolve for user-level host manifests (the fixed `~/Library/.../Google/Chrome/NativeMessagingHosts` directory is not read under a custom profile dir; verified with Chrome for Testing 151 and Chromium 1663645), so a real installation's registration is never touched. On Windows the registration is an HKCU registry value shared by every Chrome instance of the account; the test backs it up and restores it.
+On macOS the manifest goes inside the throwaway `--user-data-dir` profile, which Chrome for Testing and Chromium resolve for user-level host manifests (the fixed `~/Library/.../Google/Chrome/NativeMessagingHosts` directory is not read under a custom profile dir; verified with Chrome for Testing 151 and Chromium 1663645), so a real installation's registration is never touched.
+
+On Windows the registration is an HKCU registry value shared by every Chrome instance of the account; the test backs it up and restores it.
 
 ```sh
 BB_REAL_E2E=1 bun browser/integration_e2e.ts     # macOS/Linux shell
@@ -72,7 +80,8 @@ $env:BB_REAL_E2E='1'; node browser/integration_e2e.ts  # Windows PowerShell, Nod
 ```
 
 - **Opt-in** (skips unless `BB_REAL_E2E=1`), **Windows-only** since the `requireEnrollment` opt-out was retired, and pops a non-headless window. Not in the default suite or CI. Use Chrome for Testing or Chromium: official Google Chrome 137+ ignores `--load-extension`.
-- **macOS is skipped by the preflight, deliberately**: enrollment is mandatory (the `requireEnrollment` opt-out the test wrote is gone), so on a Mac the enrollment gate is unconditional and satisfying it takes a genuine pairing ceremony (interactive Touch ID) a throwaway profile cannot perform - the bridge would refuse `tab_list` at the gate. This is intentional fail-closed behavior, not a break; browser suites on a Mac that need bridge ops past the gate now require genuine pairing. On Windows the browser's platform probe reports no Secure Enclave, enrollment is unavailable rather than unsatisfied, and the round-trip still runs.
+- **macOS is skipped by the preflight, deliberately**: enrollment is mandatory (the `requireEnrollment` opt-out the test wrote is gone), so on a Mac the enrollment gate is unconditional and satisfying it takes a genuine pairing ceremony (interactive Touch ID) a throwaway profile cannot perform - the bridge would refuse `tab_list` at the gate.
+- That is fail-closed behavior, not a break: browser suites on a Mac that need bridge ops past the gate now require genuine pairing. On Windows the browser's platform probe reports no Secure Enclave, enrollment is unavailable rather than unsatisfied, and the round-trip still runs.
 - On Windows it proves the round-trip (native host connects, `tab_list` returns real structured `chrome.tabs` data). One **extra** assertion - that the reply came from *our* throwaway profile - only holds when the launch is isolated. Set `CHROME_BIN` to the Chrome for Testing/Chromium executable.
 
 (Historical note: the smoke test's comment claimed Chrome *forbids* `nativeMessaging` under automated launches - that was a misdiagnosis of a puppeteer `worker.evaluate` quirk. This test demonstrates it works.)

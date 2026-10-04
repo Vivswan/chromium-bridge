@@ -297,28 +297,30 @@ tasks:
         exit 1
       fi
 
+  # The three protocol suites are stdlib unittest modules under tests/protocol
+  # (discovery, so a new test cannot be forgotten); --no-project because the
+  # harness is stdlib-only by design (its independence from our code and from
+  # any package is the point) - never add dependencies to it.
   test-e2e:
-    # --no-project: the harness is stdlib-only by design (its independence from our code and from any
-    # package is the point); never add dependencies to it.
     description: 'Protocol-layer e2e tests (drives the real release binary)'
     deps:
       - '~:check-uv'
       - '~:build-release'
-    command: 'uv run --no-project --isolated tests/protocol/e2e.py'
+    command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p e2e.py -v'
 
   test-adversarial:
     description: "Adversarial break-in suite (CI's protocol matrix; drives the real release binary)"
     deps:
       - '~:check-uv'
       - '~:build-release'
-    command: 'uv run --no-project --isolated tests/protocol/adversarial.py'
+    command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p adversarial.py -v'
 
   test-chaos:
     description: "Fault-injection chaos suite (CI's protocol matrix; drives the real release binary)"
     deps:
       - '~:check-uv'
       - '~:build-release'
-    command: 'uv run --no-project --isolated tests/protocol/chaos.py'
+    command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p chaos.py -v'
 
   # ----- contract codegen (the Rust core is the single source) --------------
 

@@ -1,467 +1,184 @@
-#!/usr/bin/env python3
 """Adversarial break-in regression suite for chromium-bridge.
 
-This is the socket-level attacker's view of the bridge. It drives the real
-release binary as subprocesses (reusing tests/protocol/e2e.py's harness) and tries to
-break in the way a hostile same-user process would: connect straight to the
-bridge socket, replay/forge the handshake, flood the protocol readers, and
-read the per-run secret out of any diagnostic output.
+The socket-level attacker's view: a hostile same-user process that connects
+straight to the bridge socket, replays or forges the handshake, floods the
+protocol readers, spoofs a trusted-client name, or reads the per-run secret
+out of diagnostics. Every case drives the real release binary inside a private
+runtime dir (harness.isolate); the drift answer each test pins is its first
+docstring line.
 
-CENTRAL FACT (why this suite proves what it proves): the MCP server attests a
-peer's executable identity BEFORE the HMAC handshake and before forwarding any
-byte (src/packages/core/src/broker.rs admit(), called from accept_loop:
-peer-UID -> attest_peer -> handshake). A
-foreign peer is therefore dropped at attestation with a clean EOF, before it
-can attempt replay/MAC/hex/capability tricks. So the black-box attacks here
-prove ATTESTATION robustly; the protocol-level parser/MAC defenses that sit
-BEHIND attestation are proven by the Rust unit/proptests referenced inline
-(src/packages/core/src/ipc/, src/packages/core/src/protocol.rs) rather than
-faked through a path an attacker can never reach.
+Central fact: the broker attests a peer's executable identity BEFORE the HMAC
+handshake and before forwarding any byte (src/packages/core/src/broker.rs
+admit(): peer-UID -> attest_peer -> handshake). A foreign peer is dropped at
+attestation with a clean EOF, so the black-box attacks here prove attestation;
+the parser and MAC defenses behind it are proven by the Rust unit tests,
+proptests, and fuzz targets they name below, never faked through a path an
+attacker cannot reach.
 
-Attack matrix (live MUST-BLOCK vs annotated residual):
-  A1  rogue python3 socket peer                 LIVE  dropped at attestation
-  A2  byte-identical binary copy                LIVE  ACCEPTED (accepted residual)
-  A3  binary-swap-after-launch                  LIVE  python rejected; genuine OK
-  A8  blank-line flood on MCP stdin leg         LIVE  server still responds
-  A9  over-64MB line on MCP + NM legs           LIVE  bounded rejection, survives
-  A11 no open TCP port                          LIVE  UNIX listener only
-  A12 secret confidentiality                    LIVE  secret never leaks; redacted
-  A14 enrolled + non-allowlisted harness        LIVE  refused, fail closed
-  A15 enrolled + spoofed client NAME            LIVE  name is not authz; refused
-  A16 enrolled + genuinely paired harness       LIVE  admitted; drives the bridge
-  A23 junk _meta protocolVersion values         LIVE  -32022 strings, -32602 malformed
-  A24 bare server/discover opener + flood       LIVE  bare opener dropped; valid flood served
-  A25 1 MB protocolVersion string               LIVE  -32022, echo not amplified, no crash
-  A4/A5 replay / forged-MAC                      REF  subsumed by attestation (+unit)
-  A6/A7 hex / serde parser abuse                 REF  Rust hex_fuzz + serde proptests
-  A10 cross-uid connect                          NOTE root/manual; 0700 dir is gate
-  A13 native-messaging manifest substitution    XFAIL isolated-browser proof not written; note only
+Attack matrix (LIVE = asserted here; REF = covered elsewhere, named):
 
-SAFETY (load-bearing): every subprocess runs inside a per-run mkdtemp
-XDG_RUNTIME_DIR (+ XDG_CONFIG_HOME, + HOME on macOS) so the server's lock,
-socket, and takeover logic can NEVER touch the developer's real MCP server,
-runtime dir, or browser. isolate() asserts this as a hard precondition and
-every spawn helper re-checks it and REFUSES to run otherwise.
+  A1   rogue python3 socket peer                 LIVE  dropped at attestation
+  A2   byte-identical binary copy                LIVE  ACCEPTED (the accepted residual)
+  A3   binary swap after launch                  LIVE  python rejected; genuine OK or fail closed
+  A8   blank-line flood on the MCP stdin leg     LIVE  server still responds
+  A9   over-64MB line on the MCP and NM legs     LIVE  bounded rejection, survives
+  A11  no open TCP port                          LIVE  UNIX listener only
+  A12  secret confidentiality                    LIVE  never leaks; doctor redacts
+  A14  enrolled + non-allowlisted harness        LIVE  refused, fail closed
+  A15  enrolled + spoofed client NAME            LIVE  name is not authz; refused
+  A16  enrolled + genuinely paired harness       LIVE  admitted; drives the bridge
+  A17  revoke-client vs a live broker            LIVE  dropped, no re-attach
+  A18  revoke from the extension surface         LIVE  host-mediated, epoch bumped
+  A19  deleting clients.json alone               LIVE  tampering, not a reset
+  A20  kill switch vs a live broker              LIVE  typed refusal at every surface
+  A21  corrupt revocation record                 LIVE  everything fails closed
+  A22  unkill without user presence              LIVE  refused and audited
+  A23  junk _meta protocolVersion values         LIVE  -32022 strings, -32602 malformed
+  A24  bare discover opener + hostile flood      LIVE  opener dropped; flood served
+  A25  1 MB protocolVersion string               LIVE  -32022, echo not amplified
+  A4   replay a captured HMAC response           REF   unreachable past A1; ipc/handshake.rs
+                                                       verify_mac_* and handshake_round_trip_over_socketpair
+  A5   forged or garbage MAC                     REF   same drop; verify_mac is constant time
+  A6   hex-decoder abuse                         REF   ipc/handshake.rs hex_decode tests + hex_fuzz
+  A7   serde/parser abuse on arbitrary bytes     REF   protocol.rs proptests + the fuzz targets
+  A10  cross-uid connect                         REF   needs a second uid; the 0700 runtime dir
+                                                       and the peer-UID check in broker.rs admit()
+  A13  native-messaging manifest substitution    REF   browser-gated: a substituted host fails
+                                                       pairing only through the extension's
+                                                       enrollment pin; needs an isolated browser
 
-Run:
-    python3 tests/protocol/adversarial.py
-Exits 0 when every LIVE MUST-BLOCK check passes, 1 otherwise. Builds the
-release binary via tests/protocol/e2e.py's ensure_binary if missing.
+Run: `moon run test-adversarial` (or `python -m unittest discover -s tests/protocol -p adversarial.py -v`).
 """
 import json
 import os
-import platform
 import shutil
-import socket
 import struct
 import subprocess
 import sys
-import tempfile
-import threading
-import time
+import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import e2e  # noqa: E402  (path set above; reuse the e2e harness verbatim)
-
-# Per-run isolation root, set by isolate(). No server may start until it is.
-_RUNDIR = None
-
-_passed = 0
-_failed = 0
+import harness as h
+from harness import (BridgeCase, McpClient, Served, nm_read, nm_write, normalized, rpc_error,
+                     rpc_result, tool_error, tool_result)
 
 
-def check(cond, label):
-    global _passed, _failed
-    if cond:
-        _passed += 1
-        print(f"  PASS  {label}")
-    else:
-        _failed += 1
-        print(f"  FAIL  {label}")
-    return bool(cond)
+def setUpModule():
+    h.ensure_binary()
+    h.isolate("bb-adversarial-")
 
 
-def note(label):
-    """An informational line for an annotated (non-live) attack: it records
-    what the attack is and where its real coverage lives, without pass/failing."""
-    print(f"  NOTE  {label}")
+TAB = [{"id": 7, "title": "Adversarial Tab", "url": "https://x", "active": True}]
+FORWARDED_TAB_LIST = {"op": "tab_list", "args": {}, "browser": "default"}
+MISSING_META = "request _meta is missing or has malformed required fields: "
+MISSING_BOTH = MISSING_META + f"{h.META_VERSION_KEY}, {h.META_CAPS_KEY}"
+ALLOWLIST_REFUSAL = "not in the trusted-client allowlist"
 
 
-# ---------------------------------------------------------------------------
-# Mandatory isolation
-# ---------------------------------------------------------------------------
-
-def isolate():
-    """Point every future subprocess at a private, empty runtime dir, and prove
-    it. Without this the server would bind the real lock/socket and its takeover
-    logic would SIGTERM the developer's real MCP server. This MUST run before
-    any server starts; the spawn helpers below re-assert it."""
-    global _RUNDIR
-    rundir = tempfile.mkdtemp(prefix="bb-adversarial-")
-    os.environ["XDG_RUNTIME_DIR"] = rundir
-    os.environ["XDG_CONFIG_HOME"] = os.path.join(rundir, "config")
-    # macOS's runtime_dir() prefers XDG_RUNTIME_DIR, but doctor's manifest path
-    # and any HOME fallback must be isolated too.
-    if sys.platform == "darwin":
-        os.environ["HOME"] = rundir
-    # The lock lives at <XDG_RUNTIME_DIR>/chromium-bridge/run.lock on every unix
-    # (src/packages/core/src/ipc/lockfile.rs runtime_dir). Recompute it and
-    # steer e2e's helpers at it.
-    lock = os.path.join(rundir, "chromium-bridge", "run.lock")
-    e2e.LOCK = lock
-
-    # Hard precondition: refuse to run if isolation did not take. The
-    # XDG_RUNTIME_DIR check is the load-bearing one -- runtime_dir() in
-    # src/packages/core/src/ipc/lockfile.rs prefers XDG_RUNTIME_DIR on both
-    # macOS and Linux, so pinning it to our fresh temp dir fully controls
-    # where the lock/socket land. The
-    # containment checks use resolved-path commonpath, not a lexical prefix, so
-    # a symlinked temp root (/var -> /private/var on macOS) cannot fool them.
-    if not (rundir and os.path.isdir(rundir) and _within(rundir, tempfile.gettempdir())):
-        sys.exit("REFUSING TO RUN: isolation dir is not a fresh temp dir")
-    if os.environ.get("XDG_RUNTIME_DIR") != rundir:
-        sys.exit("REFUSING TO RUN: XDG_RUNTIME_DIR is not the isolation dir")
-    if not _within(e2e.LOCK, rundir):
-        sys.exit("REFUSING TO RUN: lock path escaped the isolation dir")
-    _RUNDIR = rundir
-    print(f"[isolation] per-run runtime dir: {rundir}")
-    print(f"[isolation] lock path:           {e2e.LOCK}")
-    return rundir
+def copy_of_binary(name):
+    """A byte-identical copy of the release binary in the isolated dir."""
+    path = os.path.join(h.RUNDIR, name)
+    shutil.copy2(h.BIN, path)
+    os.chmod(path, 0o755)
+    return path
 
 
-def _within(child, parent):
-    """True when `child` resolves inside `parent`. Uses realpath + commonpath so
-    it survives symlinked temp roots and cannot be fooled by a lexical prefix
-    (e.g. /tmp/bb vs /tmp/bb-evil)."""
-    try:
-        p = os.path.realpath(parent)
-        return os.path.commonpath([os.path.realpath(child), p]) == p
-    except ValueError:
-        return False
+def pair(*args, env=None):
+    """Pair a trusted client through the CLI presence floor."""
+    h.require_isolated(env)
+    h.pair_client_interactive(*args, env=env)
 
 
-def _require_isolated():
-    """Every spawn and every lock touch re-checks isolation and refuses to
-    proceed without it, so a bug in the setup order -- or a test invoked in
-    isolation -- can never let a server bind the real lock/socket or let the
-    takeover logic SIGTERM the developer's real MCP server."""
-    if not (_RUNDIR
-            and os.environ.get("XDG_RUNTIME_DIR") == _RUNDIR
-            and _within(e2e.LOCK, _RUNDIR)):
-        raise RuntimeError("REFUSING TO SPAWN: XDG isolation precondition not met")
+class AdversarialCase(BridgeCase):
+    def assertRoundTrip(self, c, nh, _id):
+        served = Served(nh, TAB)
+        r = c.call("tab_list", {}, _id=_id)
+        self.assertEqual(served.request(), FORWARDED_TAB_LIST)
+        self.assertEqual(r, tool_result(_id, TAB))
+
+    def enrolled_broker(self):
+        """This interpreter paired as a trusted client, with a serving broker
+        and an attached browser; enrollment is reset at cleanup."""
+        self.skip_if_enrolled()
+        self.skip_unless_unix("harness attestation")
+        h.reset_enrollment()
+        self.addCleanup(h.reset_enrollment)
+        pair("--name", "pytest", "--this-parent")
+        srv = self.server()
+        c = self.legacy_client(srv)
+        nh = self.host()
+        return srv, c, nh
 
 
-# ---------------------------------------------------------------------------
-# Spawn helpers (isolation-guarded)
-# ---------------------------------------------------------------------------
+class Attestation(AdversarialCase):
+    def test_a1_rogue_python_peer_is_dropped_at_attestation(self):
+        """A raw same-user process gets a clean EOF with no challenge, the
+        server logs the identity mismatch, and no handshake ever started."""
+        self.skip_unless_unix("executable attestation")
+        srv = self.server()
+        self.assertEqual(h.foreign_peer_outcome(srv.lock), b"", "no challenge sent to the foreign peer")
+        h.reap(srv)
+        err = h.server_stderr(srv)
+        self.assertIn("peer executable identity mismatch", err)
+        self.assertNotIn("bridge handshake failed", err, "the peer never reached the handshake")
 
-def start_server(bin_path=None):
-    """Start an MCP server subprocess and drain its stderr into a list so a
-    flood test cannot deadlock on a full stderr pipe. Reuses e2e.BIN by default;
-    a copy path is used by the binary-swap attacks."""
-    _require_isolated()
-    proc = subprocess.Popen([bin_path or e2e.BIN], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8")
-    proc.err_lines = []
-    proc.err_thread = threading.Thread(
-        target=lambda: [proc.err_lines.append(ln) for ln in proc.stderr], daemon=True)
-    proc.err_thread.start()
-    return proc
+    def test_a2_byte_identical_copy_is_accepted(self):
+        """The accepted residual: identical bytes are the genuine binary to
+        attestation, so a copy attaches and drives a full round trip."""
+        self.skip_unless_unix("executable attestation")
+        srv = self.server()
+        c = self.legacy_client(srv)
+        nh = self.host(bin_path=copy_of_binary("evil-copy"))
+        self.assertRoundTrip(c, nh, 5)
 
-
-def server_stderr(proc):
-    """The server's captured stderr so far. Joins the drain thread only after
-    the server has exited (the pipe has hit EOF); on a live server it returns
-    the snapshot drained so far without blocking, so callers may poll it."""
-    if proc.poll() is not None:
-        proc.err_thread.join(timeout=2)
-    return "".join(proc.err_lines)
-
-
-def start_host_from(bin_path):
-    """Spawn `<bin_path> --native-host`, the way Chrome does, capturing stderr
-    lines and signalling `ready` when it logs the completed bridge handshake.
-    Mirrors e2e.start_bridge_host but takes an arbitrary path (for copies) and
-    keeps the stderr lines for assertions."""
-    _require_isolated()
-    nh = subprocess.Popen([bin_path, "--native-host"], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    nh.ready = threading.Event()
-    nh.err_lines = []
-
-    def drain():
-        for line in nh.stderr:
-            nh.err_lines.append(line)
-            if b"bridge handshake complete" in line:
-                nh.ready.set()
-
-    threading.Thread(target=drain, daemon=True).start()
-    return nh
-
-
-def host_stderr(nh):
-    return b"".join(nh.err_lines).decode("utf-8", "replace")
-
-
-def _call_with_timeout(fn, seconds):
-    """Run `fn` on a daemon thread and give up after `seconds`. The flood/oversize
-    tests read blocking pipes; if a regression stops the server producing output,
-    we want the check to FAIL promptly rather than hang the CI job. Returns
-    (finished, value); re-raises any exception `fn` raised."""
-    box = {}
-
-    def run():
-        try:
-            box["v"] = fn()
-        except Exception as e:  # surfaced to the caller below
-            box["e"] = e
-
-    t = threading.Thread(target=run, daemon=True)
-    t.start()
-    t.join(seconds)
-    if t.is_alive():
-        return (False, None)
-    if "e" in box:
-        raise box["e"]
-    return (True, box.get("v"))
-
-
-def _reap(proc):
-    if proc is None:
-        return
-    try:
-        if proc.stdin and not proc.stdin.closed:
-            proc.stdin.close()
-    except Exception:
-        pass
-    if proc.poll() is None:
-        try:
-            proc.wait(timeout=3)
-        except Exception:
-            proc.kill()
-            try:
-                proc.wait(timeout=3)
-            except Exception:
-                pass
-
-
-def _rm_lock():
-    # Guard here too: every attack begins by clearing the lock, so this is the
-    # single chokepoint that proves isolation before a test touches bridge state.
-    _require_isolated()
-    try:
-        os.remove(e2e.LOCK)
-    except FileNotFoundError:
-        pass
-
-
-def _tab_list_responder(req):
-    assert req["op"] == "tab_list", f"unexpected op {req['op']}"
-    return {"id": req["id"], "ok": True,
-            "data": [{"id": 7, "title": "Adversarial Tab", "url": "https://x", "active": True}]}
-
-
-# ---------------------------------------------------------------------------
-# A1 - rogue same-user python3 socket peer -> dropped at attestation
-# ---------------------------------------------------------------------------
-
-def a1_rogue_python_peer():
-    print("\n[A1] rogue same-user python3 socket peer (LIVE, must drop at attestation)")
-    if os.name == "nt":
-        note("A1 skipped: attestation is Unix-only (Windows keeps loopback TCP)")
-        return
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A1 server up, lock written in isolated dir")
-        # A raw python process is not the chromium-bridge binary. Server-side
-        # attestation must drop it BEFORE any challenge byte: recv sees EOF.
-        s = e2e.connect_bridge(lf)
-        s.settimeout(3)
-        try:
-            data = s.recv(4096)
-        except socket.timeout:
-            data = b"__no_eof__"
-        check(data == b"", "A1 signal 1: clean EOF, no challenge sent to the foreign peer")
-        s.close()
-        srv.stdin.close()
-        srv.wait(timeout=5)
-        err = server_stderr(srv)
-        check("peer executable identity mismatch" in err,
-              "A1 signal 2: stderr logs the executable-identity mismatch")
-        # No round-trip is possible past attestation, so no session/handshake
-        # was ever established for this peer.
-        check("bridge handshake failed" not in err,
-              "A1 signal 3: peer never reached the handshake stage")
-    finally:
-        _reap(srv)
-
-
-# ---------------------------------------------------------------------------
-# A2 - byte-identical binary copy -> ACCEPTED (documented residual)
-# ---------------------------------------------------------------------------
-
-def a2_same_binary_copy():
-    print("\n[A2] byte-identical binary copy (LIVE, documented residual: must be ACCEPTED)")
-    if os.name == "nt":
-        note("A2 skipped: attestation is Unix-only")
-        return
-    _rm_lock()
-    evil = os.path.join(_RUNDIR, "evil-copy")
-    shutil.copy2(e2e.BIN, evil)
-    os.chmod(evil, 0o755)
-    srv = start_server()
-    nh = None
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A2 server up")
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        nh = start_host_from(evil)
-        accepted = nh.ready.wait(6)
-        check(accepted,
-              "A2 byte-identical copy is ACCEPTED (DR threat #4: identical bytes = genuine)")
-        if accepted:
-            served = []
-            t = threading.Thread(
-                target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
-            t.start()
-            r = c.call("tab_list", {}, _id=5)
-            t.join(timeout=3)
-            data = json.loads(r["result"]["content"][0]["text"])
-            check(bool(served) and data[0]["title"] == "Adversarial Tab",
-                  "A2 the copy drove a full tab_list round-trip (the residual is real, not theoretical)")
-    finally:
-        _reap(nh)
-        _reap(srv)
-
-
-# ---------------------------------------------------------------------------
-# A3 - binary-swap-after-launch: identity is pinned at startup, not re-read
-# ---------------------------------------------------------------------------
-
-def a3_binary_swap_after_launch():
-    print("\n[A3] binary-swap-after-launch (LIVE: swap on-disk file, attestation must hold)")
-    if os.name == "nt":
-        note("A3 skipped: attestation is Unix-only")
-        return
-    _rm_lock()
-    server_a = os.path.join(_RUNDIR, "server-a")
-    shutil.copy2(e2e.BIN, server_a)
-    os.chmod(server_a, 0o755)
-    srv = start_server(bin_path=server_a)
-    nh = None
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A3 server started from copy A")
-        # Replace the on-disk file at path A with different bytes AFTER launch.
-        # Use os.replace (rename): a running executable's file cannot be written
-        # in place on Linux (ETXTBSY), but the inode can be swapped out. The
-        # server's own identity was cached at startup, so this must not change
-        # what it accepts.
-        blob = os.path.join(_RUNDIR, "swap-b.tmp")
+    def test_a3_binary_swap_after_launch_grants_no_bypass(self):
+        """Identity is pinned at startup: swapping the on-disk file still
+        rejects a python peer. Linux (identity = the original inode's bytes)
+        keeps admitting a genuine host from a new path; macOS (SecCode checks
+        the running image against its file) fails closed to new peers."""
+        self.skip_unless_unix("executable attestation")
+        server_a = copy_of_binary("server-a")
+        srv = self.server(bin_path=server_a)
+        # A rename swaps the inode under the running server (an in-place
+        # write would be ETXTBSY on Linux).
+        blob = os.path.join(h.RUNDIR, "swap-b.tmp")
         with open(blob, "wb") as f:
             f.write(os.urandom(4096))
         os.replace(blob, server_a)
-        # (a) A rogue python peer is STILL rejected after the swap.
-        s = e2e.connect_bridge(lf)
-        s.settimeout(3)
-        try:
-            data = s.recv(4096)
-        except socket.timeout:
-            data = b"__no_eof__"
-        check(data == b"", "A3(a) rogue python peer still gets clean EOF after the on-disk swap")
-        s.close()
-        # (b) The security invariant is that the swap grants NO bypass. How the
-        # genuine-liveness side lands differs by platform, and both are correct:
-        #   - Linux: peer identity is the SHA256 of /proc/<pid>/exe, which follows
-        #     the original (now-unlinked) inode, and self was cached at startup.
-        #     A genuine host from a NEW path STILL attests: identity is pinned to
-        #     the startup bytes, not to path A.
-        #   - macOS: the Security framework validates the running image against
-        #     its on-disk file, so overwriting path A makes the server itself
-        #     FAIL CLOSED to new peers (SecCode tamper detection). That refuses
-        #     service; it never silently accepts. Still no bypass.
-        genuine_c = os.path.join(_RUNDIR, "genuine-c")
-        shutil.copy2(e2e.BIN, genuine_c)
-        os.chmod(genuine_c, 0o755)
-        nh = start_host_from(genuine_c)
+        self.assertEqual(h.foreign_peer_outcome(srv.lock), b"", "python peer still dropped after the swap")
+        nh = self.host(bin_path=copy_of_binary("genuine-c"), ready=False)
         attested = nh.ready.wait(6)
         if sys.platform.startswith("linux"):
-            check(attested,
-                  "A3(b/linux) genuine host from a new path still attests (identity pinned to startup inode, not path A)")
+            self.assertTrue(attested, "a genuine host from a new path still attests")
         else:
-            check(not attested,
-                  "A3(b/macos) on-disk swap makes the server fail CLOSED to new peers (tamper detected, never a silent accept)")
-            check("server attestation failed" in host_stderr(nh),
-                  "A3(b/macos) the new host reports the server tamper (SecCode validity), proving fail-closed")
-        _reap(nh)
-        srv.stdin.close()
-        srv.wait(timeout=5)
-        err = server_stderr(srv)
-        check("peer executable identity mismatch" in err,
-              "A3(a) stderr logged the python mismatch (attestation still enforced post-swap)")
-    finally:
-        _reap(nh)
-        _reap(srv)
+            self.assertFalse(attested, "the server fails closed to new peers after the swap")
+            self.assertIn("server attestation failed", h.host_stderr(nh))
+        h.reap(nh)
+        h.reap(srv)
+        self.assertIn("peer executable identity mismatch", h.server_stderr(srv))
 
 
-# ---------------------------------------------------------------------------
-# A8 - blank-line flood on the MCP stdin leg -> server still responds
-# ---------------------------------------------------------------------------
-
-def a8_blank_line_flood():
-    print("\n[A8] blank-line flood on MCP stdin leg (LIVE: mcp_read de-recursed, must not overflow)")
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A8 server up")
-        # ~200k blank lines: the old recursive skip grew the stack once per line
-        # and aborted under panic=abort. The de-recursed reader (69b7648) skips
-        # them in constant stack, then answers the first real line.
+class Floods(AdversarialCase):
+    def test_a8_blank_line_flood_on_the_mcp_leg(self):
+        """200k blank lines are skipped in constant stack (the recursive skip
+        once aborted under panic=abort) and the next real line is answered."""
+        srv = self.server()
         srv.stdin.write("\n" * 200_000)
         srv.stdin.flush()
-        c = e2e.McpClient(srv)
-        done, init = _call_with_timeout(c.initialize, 15)
-        # "2025-06-18" is hard-coded here (and in A9 below) on purpose: this
-        # suite is a deliberately independent black-box check. c.initialize
-        # sends no _meta protocolVersion key, so it exercises the TEMPORARY
-        # legacy shim, which must keep answering "2025-06-18" verbatim. The
-        # canonical modern version is "2026-07-28" (MCP_PROTOCOL_VERSION in
-        # src/packages/core/src/protocol.rs), pinned live by A23-A25 below;
-        # a re-pin there must update all of these literals by hand.
-        check(done and init and init.get("result", {}).get("protocolVersion") == "2025-06-18",
-              "A8 server still answers initialize after a 200k blank-line flood")
-        check(srv.poll() is None, "A8 server process survived (not aborted)")
-    finally:
-        _reap(srv)
+        c = McpClient(srv)
+        init = self.bounded("initialize after the flood", c.initialize, 15)
+        self.assertEqual(normalized(init), rpc_result(1, h.legacy_init_result()))
+        self.assertIsNone(srv.poll(), "the server survived")
 
-
-# ---------------------------------------------------------------------------
-# A9 - over-64MB line on both reachable legs -> bounded rejection, survives
-# ---------------------------------------------------------------------------
-
-def a9_oversize_line_mcp_leg():
-    print("\n[A9-mcp] over-64MB line on MCP stdin leg (LIVE: bounded reject, server survives)")
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A9-mcp server up")
-        # One line just over the 64 MB MCP_MAX_LINE cap, then a valid initialize.
-        # The server rejects the giant line with InvalidData (does not buffer it
-        # whole), logs it, and keeps looping -> the later initialize still works.
-        huge = "x" * (64 * 1024 * 1024 + 2)
-        srv.stdin.write(huge + "\n")
+    def test_a9_oversize_line_on_the_mcp_leg(self):
+        """A line over the 64 MB cap is rejected without buffering it whole,
+        logged, and the reader keeps looping: the next initialize is served."""
+        srv = self.server()
+        srv.stdin.write("x" * (64 * 1024 * 1024 + 2) + "\n")
         srv.stdin.flush()
-        c = e2e.McpClient(srv)
+        c = McpClient(srv)
         c.send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                           "clientInfo": {"name": "adv", "version": "0.1"}}})
+                "params": {"protocolVersion": h.LEGACY_VERSION, "capabilities": {},
+                           "clientInfo": {"name": "e2e", "version": "0.1"}}})
 
         def read_until_init():
             for _ in range(12):
@@ -470,1188 +187,334 @@ def a9_oversize_line_mcp_leg():
                     return r
             return None
 
-        done, got = _call_with_timeout(read_until_init, 20)
-        check(done and got is not None and got.get("result", {}).get("protocolVersion") == "2025-06-18",
-              "A9-mcp server survived the >64MB line and still answered initialize")
-        check(srv.poll() is None, "A9-mcp server not aborted")
-        srv.stdin.close()
-        srv.wait(timeout=5)
-        err = server_stderr(srv)
-        check("exceeds the line-length cap" in err or "parse error" in err,
-              "A9-mcp stderr shows a bounded rejection, not a crash")
-        check(srv.returncode == 0, "A9-mcp server exited cleanly (no abort signal)")
-    finally:
-        _reap(srv)
+        init = self.bounded("initialize after the oversize line", read_until_init, 20)
+        self.assertEqual(normalized(init), rpc_result(1, h.legacy_init_result()))
+        self.assertIsNone(srv.poll(), "the server was not aborted")
+        h.reap(srv)
+        self.assertIn("exceeds the line-length cap", h.server_stderr(srv))
+        self.assertEqual(srv.returncode, 0, "a clean exit, no abort signal")
 
-
-def a9_oversize_frame_nm_leg():
-    print("\n[A9-nm] over-64MB native-messaging frame on the host leg (LIVE: bounded reject)")
-    if os.name == "nt":
-        note("A9-nm skipped: native host leg exercised on Unix")
-        return
-    _rm_lock()
-    srv = start_server()
-    nh = None
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A9-nm server up")
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        nh = start_host_from(e2e.BIN)
-        check(nh.ready.wait(6), "A9-nm genuine host attested and connected")
-        # A ~4 GB length prefix trips the 64 MB inbound clamp in nm_read_frame
-        # before any allocation. The host rejects it (InvalidData) and exits;
-        # the server is a separate process and must keep serving.
+    def test_a9_oversize_frame_on_the_nm_leg(self):
+        """A ~4 GB length prefix trips the inbound clamp before any allocation:
+        the host rejects it and exits, the server keeps serving."""
+        self.skip_unless_unix("the native host leg")
+        srv = self.server()
+        c = self.legacy_client(srv)
+        nh = self.host()
         nh.stdin.write(struct.pack("<I", 0xFFFFFFFF))
         nh.stdin.flush()
-        nh.wait(timeout=5)
-        check(nh.returncode is not None,
-              "A9-nm host rejected the oversize frame and exited (did not OOM)")
-        check("frame too large" in host_stderr(nh),
-              "A9-nm host logged the bounded native-messaging rejection")
-        pong = c.ping(_id=77)
-        check(pong.get("result") == {},
-              "A9-nm server survived the NM-leg overflow (still answers ping)")
-    finally:
-        _reap(nh)
-        _reap(srv)
+        self.assertExits(nh, 5, "the host rejected the oversize frame (no OOM)")
+        self.assertIn("frame too large", h.host_stderr(nh))
+        self.assertEqual(c.ping(_id=77), rpc_result(77, {}), "the server survived the NM-leg overflow")
+
+    def test_a25_oversized_version_string(self):
+        """A 1 MB version string (under the line cap) is refused per request
+        with -32022 echoing it verbatim, never amplified, with no crash."""
+        srv = self.server()
+        c = McpClient(srv)
+        big = "9" * (1024 * 1024)
+        r = self.bounded("1 MB version reply", lambda: c.modern_tools_list(_id=300, version=big), 20)
+        self.assertEqual(r, h.unsupported_version(300, big))
+        init = self.bounded("initialize afterwards", c.initialize, 10)
+        self.assertEqual(normalized(init), rpc_result(1, h.legacy_init_result()))
+        self.assertIsNone(srv.poll(), "no crash, no OOM")
 
 
-# ---------------------------------------------------------------------------
-# A11 - no open TCP port: only the UNIX-domain listener exists
-# ---------------------------------------------------------------------------
-
-def a11_no_tcp_port():
-    print("\n[A11] no open TCP port (LIVE: bridge is a filesystem socket, no network surface)")
-    if os.name == "nt":
-        note("A11 skipped: Windows intentionally uses a loopback TCP socket")
-        return
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A11 server up")
+class Surface(AdversarialCase):
+    def test_a11_no_tcp_port(self):
+        """The bridge is a filesystem socket: the listener enumerator finds the
+        server's UNIX socket and no TCP listener. A missing or failing
+        enumerator is a failure, never a vacuous pass."""
+        self.skip_unless_unix("the UNIX-domain listener")
+        srv = self.server()
         pid = srv.pid
-        sock_name = os.path.basename(lf["endpoint"])  # run.sock
-        is_linux = sys.platform.startswith("linux")
-        # A11 is a LIVE MUST-BLOCK, so a missing or failed inspection tool is a
-        # FAIL, never a silent pass: without a working listener enumerator we
-        # cannot assert the negative (no TCP), and an empty stdout from a broken
-        # command would make the "no pid" check pass vacuously. We therefore
-        # require the tool to exist AND exit 0, and we require the UNIX listener
-        # to be POSITIVELY found -- that positive check is what proves the
-        # command actually produced meaningful output.
-        if is_linux:
-            if not check(shutil.which("ss") is not None,
-                         "A11 ss present (required on the Linux CI gate)"):
-                return
+        if sys.platform.startswith("linux"):
+            self.assertIsNotNone(shutil.which("ss"), "ss is required on the Linux gate")
             tcp = subprocess.run(["ss", "-Hltnp"], capture_output=True, text=True)
             unix = subprocess.run(["ss", "-Hlxnp"], capture_output=True, text=True)
-            check(tcp.returncode == 0 and unix.returncode == 0,
-                  "A11 ss commands succeeded (output is trustworthy)")
-            pid_tcp = f"pid={pid}," in tcp.stdout or f"pid={pid})" in tcp.stdout
-            pid_unix = f"pid={pid}," in unix.stdout or f"pid={pid})" in unix.stdout
-            check(pid_unix,
-                  "A11 ss -lxnp POSITIVELY shows the UNIX-domain listener for the server pid")
-            check(not pid_tcp,
-                  "A11 ss -ltnp shows NO TCP listener owned by the server pid")
-        else:  # macOS local: lsof is the equivalent enumerator
-            if not check(shutil.which("lsof") is not None,
-                         "A11 lsof present (required for the macOS check)"):
-                return
-            files = subprocess.run(["lsof", "-nP", "-p", str(pid)], capture_output=True, text=True)
-            check(files.returncode == 0, "A11 lsof succeeded (output is trustworthy)")
-            has_unix = any(sock_name in ln or "\tunix\t" in ln or " unix " in ln
-                           for ln in files.stdout.splitlines() if "unix" in ln.lower())
-            check(has_unix,
-                  "A11 lsof POSITIVELY shows the server holds a UNIX-domain socket")
-            has_tcp_listen = any("TCP" in ln and "LISTEN" in ln for ln in files.stdout.splitlines())
-            check(not has_tcp_listen, "A11 lsof shows NO TCP LISTEN for the server pid")
-            note("A11 macOS path uses lsof; the Linux CI gate uses ss as specified")
-    finally:
-        _reap(srv)
-
-
-# ---------------------------------------------------------------------------
-# A12 - secret confidentiality: the per-run secret never leaks; doctor redacts
-# ---------------------------------------------------------------------------
-
-def a12_secret_confidentiality():
-    print("\n[A12] secret confidentiality (LIVE: secret never printed; doctor redacts)")
-    if os.name == "nt":
-        note("A12 running without attestation round-trip on Windows")
-    _rm_lock()
-    prev_log = os.environ.get("BB_LOG")
-    os.environ["BB_LOG"] = "debug"  # maximum verbosity for the leak hunt
-    srv = start_server()
-    nh = None
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A12 server up")
-        secret = lf["secret"]
-        check(len(secret) == 32 and all(ch in "0123456789abcdef" for ch in secret),
-              "A12 isolated lock secret is a 32-char hex token")
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        r = None
-        if os.name != "nt":
-            nh = start_host_from(e2e.BIN)
-            if check(nh.ready.wait(6), "A12 verbose attested round-trip established"):
-                served = []
-                t = threading.Thread(
-                    target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
-                t.start()
-                r = c.call("tab_list", {}, _id=5)
-                t.join(timeout=3)
-        _require_isolated()  # doctor reads the lock + probes the socket: keep it isolated
-        doc = subprocess.run([e2e.BIN, "doctor"], capture_output=True, text=True)
-        _reap(nh)
-        srv.stdin.close()
-        srv.wait(timeout=5)
-        if nh is not None:
-            # The leak hunt is only as strong as its verbosity: BB_LOG=debug is
-            # hand-typed above, and log.rs falls back SILENTLY to info on an
-            # unset or unknown var, so a renamed variable would quietly turn
-            # this into an info-level hunt. Demand observable debug output: the
-            # native host emits [DEBUG] lines on its clean shutdown. Poll
-            # BEFORE building `captured` below - the stderr drain thread may
-            # still be flushing after the process exits, and the secret hunt
-            # must see those late lines too.
-            deadline = time.time() + 3
-            while "[DEBUG] [" not in host_stderr(nh) and time.time() < deadline:
-                time.sleep(0.05)
-            check("[DEBUG] [" in host_stderr(nh),
-                  "A12 BB_LOG=debug is live: a [DEBUG] line appears in the captured stderr")
-        captured = "".join([
-            server_stderr(srv),
-            host_stderr(nh) if nh is not None else "",
-            doc.stdout, doc.stderr,
-            json.dumps(r) if r is not None else "",
-        ])
-        check(secret not in captured,
-              "A12 secret NEVER appears in any captured stdout/stderr (server/host/doctor/response)")
-        check("<redacted," in doc.stdout and "chars>" in doc.stdout,
-              "A12 doctor prints the secret in redacted form")
-        check(secret not in doc.stdout, "A12 doctor stdout omits the raw secret")
-    finally:
-        _reap(nh)
-        _reap(srv)
-        if prev_log is None:
-            os.environ.pop("BB_LOG", None)
+            self.assertEqual((tcp.returncode, unix.returncode), (0, 0))
+            owned = lambda out: f"pid={pid}," in out or f"pid={pid})" in out  # noqa: E731
+            self.assertEqual((owned(unix.stdout), owned(tcp.stdout)), (True, False),
+                             "a UNIX listener for the pid and no TCP listener")
         else:
-            os.environ["BB_LOG"] = prev_log
+            self.assertIsNotNone(shutil.which("lsof"), "lsof is required on macOS")
+            files = subprocess.run(["lsof", "-nP", "-p", str(pid)], capture_output=True, text=True)
+            self.assertEqual(files.returncode, 0, files.stderr)
+            lines = files.stdout.splitlines()
+            has_unix = any("unix" in ln.lower() for ln in lines)
+            has_tcp_listen = any("TCP" in ln and "LISTEN" in ln for ln in lines)
+            self.assertEqual((has_unix, has_tcp_listen), (True, False),
+                             "a UNIX socket for the pid and no TCP LISTEN")
+
+    def test_a12_secret_never_leaks(self):
+        """Under maximum log verbosity the per-run secret appears in no stdout
+        or stderr (server, host, doctor, tool reply), and doctor redacts it."""
+        env = dict(os.environ, BB_LOG="debug")
+        srv = self.server(env=env)
+        secret = srv.lock["secret"]
+        self.assertRegex(secret, r"^[0-9a-f]{32}$")
+        c = self.legacy_client(srv)
+        reply = ""
+        nh = None
+        if os.name != "nt":
+            nh = self.host(env=env)
+            served = Served(nh, TAB)
+            reply = json.dumps(c.call("tab_list", {}, _id=5))
+            served.request()
+        doc = subprocess.run([h.BIN, "doctor"], capture_output=True, text=True, env=env)
+        h.reap(nh)
+        h.reap(srv)
+        host_err = h.host_stderr(nh) if nh is not None else ""
+        if nh is not None:
+            # log.rs falls back silently to info on an unknown variable, so a
+            # renamed BB_LOG would quietly weaken the hunt: demand a debug line.
+            self.assertIn("[DEBUG] [", host_err, "BB_LOG=debug is live")
+        captured = "".join([h.server_stderr(srv), host_err, doc.stdout, doc.stderr, reply])
+        self.assertNotIn(secret, captured, "the secret appears in no captured output")
+        self.assertRegex(doc.stdout, r"<redacted, \d+ chars>", "doctor prints the secret redacted")
 
 
-# ---------------------------------------------------------------------------
-# Annotated / referenced attacks (not re-implemented here)
-# ---------------------------------------------------------------------------
+class Admission(AdversarialCase):
+    def test_a14_non_allowlisted_harness_is_refused(self):
+        """Once any client is paired, admission is enforced: a harness that is
+        not on the allowlist never becomes the broker and exits 1."""
+        self.skip_if_enrolled()
+        self.skip_unless_unix("harness attestation")
+        h.reset_enrollment()
+        self.addCleanup(h.reset_enrollment)
+        pair("--name", "decoy", "--hash", "00" * 20)
+        self.assertRefusedToStart(self.server(wait=False), ALLOWLIST_REFUSAL)
 
-def annotated_matrix():
-    print("\n[annotated] attacks whose real coverage lives elsewhere")
-    note("A4 replay a captured HMAC response: unreachable black-box (dropped at "
-         "attestation, A1). MAC/nonce logic proven by "
-         "src/packages/core/src/ipc/handshake.rs "
-         "verify_mac_accepts_correct_and_rejects_wrong + "
-         "handshake_round_trip_over_socketpair.")
-    note("A5 forged/garbage MAC: same attestation drop; MAC verification is "
-         "constant-time in src/packages/core/src/ipc/handshake.rs verify_mac "
-         "(Mac::verify_slice).")
-    note("A6 hex-decoder abuse (odd length, non-hex, mid-codepoint UTF-8): "
-         "proven by src/packages/core/src/ipc/handshake.rs hex_decode tests + "
-         "hex_fuzz::never_panics proptest.")
-    note("A7 serde/parser abuse on arbitrary bytes: proven by "
-         "src/packages/core/src/protocol.rs "
-         "proptests (nm_read/mcp_read/bridge_read never_panics + size guards).")
-    note("A10 cross-uid connect: needs a second uid (root/manual). The 0700 "
-         "runtime dir + peer-UID accept check "
-         "(src/packages/core/src/broker.rs admit()) is the gate; "
-         "not automatable single-user in CI.")
-    note("A13 native-messaging manifest substitution: browser-gated and a "
-         "DOCUMENTED RESIDUAL until the enrollment ceremony (task #13) lands. "
-         "See a13_manifest_substitution_xfail below.")
-
-
-# ---------------------------------------------------------------------------
-# A14/A15/A16 - trusted-client allowlist admission (ADR-0024)
-# ---------------------------------------------------------------------------
-
-def _clients_path():
-    return os.path.join(os.path.dirname(e2e.LOCK), "clients.json")
-
-
-def _revocation_path():
-    return os.path.join(os.path.dirname(e2e.LOCK), "revocation.json")
-
-
-def _rm_clients():
-    """Reset the enrollment state between tests: remove clients.json AND the
-    revocation record. Removing only clients.json is no longer a reset -- the
-    revocation record's enrollment latch turns that into detectable tampering
-    (ADR-0025, proven live by A19) -- so a full reset must drop both, which is
-    exactly the documented two-file same-user residual."""
-    _require_isolated()
-    for path in (_clients_path(), _revocation_path()):
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-
-
-def _pair_client(*args):
-    """Run `chromium-bridge pair-client ...` under the isolation env. Pairing
-    GRANTS harness capability and is presence-gated (ADR-0031), so it is
-    driven through the CLI presence floor on a pty (see
-    e2e.run_with_cli_presence for the headless-vs-Touch-ID nuance)."""
-    _require_isolated()
-    e2e.pair_client_interactive(*args)
-
-
-def _skip_if_enrolled(case):
-    """Mirror e2e.py's enrolled-machine guard: the LIVE cases below drive
-    pair-client / unkill through the CLI presence floor on a pty, but on a Mac
-    with an enrolled Secure Enclave key the presence ladder reaches the
-    HARDWARE rung first and would raise a real Touch ID prompt the typed
-    phrase cannot satisfy (repo rule: automated tests never raise real
-    prompts). e2e.enclave_key_present is fail-safe (indeterminate -> skip)
-    and always False off macOS, so Linux/Windows coverage is unaffected. The
-    hardware path is covered by `just touchid-gates`."""
-    if e2e.enclave_key_present():
-        note(f"{case} skipped: real enclave key present, would raise a live prompt")
-        return True
-    return False
-
-
-def a14_non_allowlisted_harness_refused():
-    print("\n[A14] enrolled + non-allowlisted harness (LIVE, must REFUSE / fail closed)")
-    if _skip_if_enrolled("A14"):
-        return
-    if os.name == "nt":
-        note("A14 skipped: harness attestation is Unix-only (Windows secret-only)")
-        return
-    _rm_lock()
-    _rm_clients()
-    try:
-        # Enroll a DECOY that does not match this python interpreter. Admission
-        # is now ENFORCED, so our python-parented server must be refused.
-        _pair_client("--name", "decoy", "--hash", "00" * 20)
-        srv = start_server()
-        try:
-            lf = e2e.wait_lock(srv, timeout=3)
-            check(lf is None, "A14 refused harness never became the broker (no lock)")
-            srv.wait(timeout=5)
-            check(srv.returncode == 1, "A14 refused server exits non-zero (fail closed)")
-            err = server_stderr(srv)
-            check("not in the trusted-client allowlist" in err,
-                  "A14 stderr names the allowlist refusal")
-        finally:
-            _reap(srv)
-    finally:
-        _rm_clients()
-
-
-def a15_spoofed_client_name_is_not_authz():
-    print("\n[A15] enrolled + spoofed client NAME (LIVE, name is not the authz key)")
-    if _skip_if_enrolled("A15"):
-        return
-    if os.name == "nt":
-        note("A15 skipped: harness attestation is Unix-only")
-        return
-    _rm_lock()
-    _rm_clients()
-    try:
-        # Enroll a decoy under the name "trusted". The attacker then claims that
-        # exact NAME via the env var. Authorization keys on the attested hash,
-        # not the self-asserted name, so admission must still be refused.
-        # BB_LOG is pinned to info: the name assertion below reads the refusal
-        # audit line, which an ambient BB_LOG=warn/error would suppress.
-        _pair_client("--name", "trusted", "--hash", "11" * 20)
+    def test_a15_spoofed_client_name_is_not_authorization(self):
+        """Authorization keys on the attested hash: claiming a paired client's
+        NAME through the env var is refused, and the refusal audit line shows
+        the spoofed name reached the server."""
+        self.skip_if_enrolled()
+        self.skip_unless_unix("harness attestation")
+        h.reset_enrollment()
+        self.addCleanup(h.reset_enrollment)
+        pair("--name", "trusted", "--hash", "11" * 20)
+        # BB_LOG pinned to info: an ambient warn/error level would hide the audit line.
         env = dict(os.environ, CHROMIUM_BRIDGE_CLIENT_NAME="trusted", BB_LOG="info")
-        srv = subprocess.Popen([e2e.BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
-        srv.err_lines = []
-        srv.err_thread = threading.Thread(
-            target=lambda: [srv.err_lines.append(ln) for ln in srv.stderr], daemon=True)
-        srv.err_thread.start()
-        try:
-            lf = e2e.wait_lock(srv, timeout=3)
-            check(lf is None, "A15 a matching NAME does not admit a non-matching hash")
-            srv.wait(timeout=5)
-            check(srv.returncode == 1, "A15 refused despite the spoofed name (fail closed)")
-            # The refusal must be a live name-spoof, not a vacuous one: the
-            # env var name is hand-typed above, and a renamed
-            # CLIENT_NAME_ENV (src/packages/core/src/mcp_server.rs) would leave this
-            # test green while no name ever reached the server. The refusal
-            # audit line carries the self-asserted name, so demand it.
-            err = server_stderr(srv)
-            check("name=trusted" in err or '"name":"trusted"' in err,
-                  "A15 the spoofed name reached the server via the env var "
-                  "(refusal audit line carries name=trusted)")
-        finally:
-            _reap(srv)
-    finally:
-        _rm_clients()
+        srv = self.server(env=env, wait=False)
+        self.assertRefusedToStart(srv, ALLOWLIST_REFUSAL)
+        self.assertIn("name=trusted", h.server_stderr(srv))
+
+    def test_a16_paired_harness_is_admitted_and_serves(self):
+        """Enrollment must not brick a genuinely trusted client: this
+        interpreter, paired by its attested identity, becomes the broker and
+        drives the browser."""
+        srv, c, nh = self.enrolled_broker()
+        self.assertRoundTrip(c, nh, 42)
 
 
-def a16_paired_harness_is_admitted():
-    print("\n[A16] enrolled + genuinely paired harness (LIVE, must be ADMITTED and serve)")
-    if _skip_if_enrolled("A16"):
-        return
-    if os.name == "nt":
-        note("A16 skipped: harness attestation is Unix-only")
-        return
-    _rm_lock()
-    _rm_clients()
-    nh = None
-    srv = None
-    try:
-        # Pair THIS python (the server's parent) by its real attested identity.
-        # A server it spawns must now be admitted -- enrollment must not brick a
-        # genuinely trusted client, and the allowlist gates on the real hash.
-        _pair_client("--name", "pytest", "--this-parent")
-        srv = start_server()
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A16 paired harness IS admitted and becomes the broker")
-        if lf is None:
-            return
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        nh = e2e.start_bridge_host()
-        e2e.wait_host_ready(nh)
-        served = []
-        t = threading.Thread(
-            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
-        t.start()
-        r = c.call("tab_list", {}, _id=42)
-        t.join(timeout=3)
-        check(bool(served), "A16 a tool call round-trips through the admitted broker")
-        content = json.loads(r["result"]["content"][0]["text"])
-        check(content[0]["title"] == "Adversarial Tab",
-              "A16 the paired client actually drives the browser")
-    finally:
-        if nh is not None and nh.poll() is None:
-            nh.kill()
-            try:
-                nh.wait(timeout=3)
-            except Exception:
-                pass
-        _reap(srv)
-        _rm_clients()
-
-
-# ---------------------------------------------------------------------------
-# A17/A18/A19 - any-side revocation epoch (ADR-0025)
-# ---------------------------------------------------------------------------
-
-def _read_revocation():
-    with open(_revocation_path()) as f:
-        return json.load(f)
-
-
-def a17_revoke_reaches_the_live_broker():
-    print("\n[A17] revoke-client vs a LIVE broker (LIVE: dropped + no re-attach)")
-    if _skip_if_enrolled("A17"):
-        return
-    if os.name == "nt":
-        note("A17 skipped: harness attestation is Unix-only")
-        return
-    _rm_lock()
-    _rm_clients()
-    srv = None
-    nh = None
-    try:
-        # Pair this python and stand up a serving broker (the A16 shape).
-        _pair_client("--name", "pytest", "--this-parent")
-        srv = start_server()
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A17 paired harness is admitted and becomes the broker")
-        if lf is None:
-            return
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        nh = e2e.start_bridge_host()
-        e2e.wait_host_ready(nh)
-        served = []
-        t = threading.Thread(
-            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
-        t.start()
-        c.call("tab_list", {}, _id=50)
-        t.join(timeout=3)
-        check(bool(served), "A17 the paired client drives the bridge before the revoke")
-
-        # Revoke from the CLI surface. The allowlist rewrite and the epoch
-        # bump land in one critical section (ADR-0025).
-        subprocess.run([e2e.BIN, "revoke-client", "--name", "pytest"], check=True,
+class Revocation(AdversarialCase):
+    def test_a17_revoke_reaches_the_live_broker(self):
+        """revoke-client bumps the epoch with the allowlist in one critical
+        section; the live broker drops the revoked harness on its next request
+        (EOF, no service), exits, and a re-attach is refused."""
+        srv, c, nh = self.enrolled_broker()
+        self.assertRoundTrip(c, nh, 50)
+        subprocess.run([h.BIN, "revoke-client", "--name", "pytest"], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        rev = _read_revocation()
-        check(rev["epoch"] > 0 and rev["clients_epoch"] == rev["epoch"],
-              "A17 the revocation epoch was bumped with the clients marker")
-
-        # The live broker must refuse the next request: the per-request epoch
-        # guard re-decides against the fresh allowlist and drops the (own)
-        # harness. Observed as EOF on the server's stdout, never a response.
+        rev = h.read_revocation()
+        self.assertGreater(rev["epoch"], 0)
+        self.assertEqual(rev["clients_epoch"], rev["epoch"], "the epoch moved with the allowlist")
         c.send({"jsonrpc": "2.0", "id": 51, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
-        finished, line = _call_with_timeout(lambda: srv.stdout.readline(), 10)
-        check(finished and line == "",
-              "A17 the revoked harness's next call gets EOF (fail closed), not service")
-        srv.wait(timeout=5)
-        check(srv.returncode is not None, "A17 the broker for the revoked harness exits")
+        self.assertEqual(self.bounded("the revoked call", srv.stdout.readline, 10), "",
+                         "the revoked harness gets EOF, not service")
+        self.assertExits(srv, 5, "the broker for the revoked harness exits")
+        self.assertRefusedToStart(self.server(wait=False), ALLOWLIST_REFUSAL)
 
-        # Re-attach is refused immediately: a fresh instance spawned by the
-        # same (now revoked) harness must fail closed, not become a broker.
-        srv2 = start_server()
-        try:
-            lf2 = e2e.wait_lock(srv2, timeout=3)
-            check(lf2 is None, "A17 a revoked client cannot re-attach or rebind")
-            srv2.wait(timeout=5)
-            check(srv2.returncode == 1, "A17 re-attach fails closed (exit 1)")
-            check("not in the trusted-client allowlist" in server_stderr(srv2),
-                  "A17 stderr names the allowlist refusal")
-        finally:
-            _reap(srv2)
-    finally:
-        if nh is not None and nh.poll() is None:
-            nh.kill()
-            try:
-                nh.wait(timeout=3)
-            except Exception:
-                pass
-        _reap(srv)
-        _rm_clients()
+    def test_a18_revoke_from_the_extension_surface(self):
+        """client_list and client_revoke are answered by the host; the revoke
+        rewrites the allowlist, bumps the epoch, leaves the surviving client
+        serving, and a ghost name is ok:false, never a guess."""
+        self.skip_if_enrolled()
+        self.skip_unless_unix("harness attestation")
+        h.reset_enrollment()
+        self.addCleanup(h.reset_enrollment)
+        pair("--name", "pytest", "--this-parent")
+        pair("--name", "victim", "--hash", "22" * 32)
+        srv = self.server()
+        c = self.legacy_client(srv)
+        nh = self.host()
+        nm_write(nh, {"type": "client_list"})
+        reply = nm_read(nh)
+        clients = reply.pop("clients")
+        self.assertEqual(reply, {"type": "client_list_result", "ok": True, "enrolled": True})
+        self.assertEqual(sorted(cl["name"] for cl in clients), ["pytest", "victim"])
+        before = h.read_revocation()["epoch"]
+        nm_write(nh, {"type": "client_revoke", "name": "victim"})
+        self.assertEqual(nm_read(nh), {"type": "client_revoke_result", "ok": True})
+        with open(h.runtime_file("clients.json")) as f:
+            self.assertEqual([cl["name"] for cl in json.load(f)["clients"]], ["pytest"])
+        self.assertGreater(h.read_revocation()["epoch"], before)
+        self.assertRoundTrip(c, nh, 60)
+        nm_write(nh, {"type": "client_revoke", "name": "ghost"})
+        self.assertEqual(nm_read(nh), {"type": "client_revoke_result", "ok": False,
+                                       "error": "no trusted client named 'ghost'"})
 
-
-def a18_extension_surface_revoke_via_host_control_frames():
-    print("\n[A18] extension-surface revoke (LIVE: client_revoke via the native host)")
-    if _skip_if_enrolled("A18"):
-        return
-    if os.name == "nt":
-        note("A18 skipped: harness attestation is Unix-only")
-        return
-    _rm_lock()
-    _rm_clients()
-    srv = None
-    nh = None
-    try:
-        # Two trusted clients: this python, and a victim entry the "extension"
-        # will revoke through the host-handled admin control frames.
-        _pair_client("--name", "pytest", "--this-parent")
-        _pair_client("--name", "victim", "--hash", "22" * 32)
-        srv = start_server()
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A18 broker up with two trusted clients")
-        if lf is None:
-            return
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        nh = e2e.start_bridge_host()
-        e2e.wait_host_ready(nh)
-
-        # client_list is answered by the HOST itself, never forwarded.
-        e2e.nm_write(nh, {"type": "client_list"})
-        reply = e2e.nm_read(nh)
-        check(reply is not None and reply.get("type") == "client_list_result"
-              and reply.get("ok") is True and reply.get("enrolled") is True,
-              "A18 client_list answered locally with the enrolled list")
-        names = sorted(cl["name"] for cl in reply.get("clients", []))
-        check(names == ["pytest", "victim"], "A18 the list names both trusted clients")
-
-        # Revoke the victim from the extension surface.
-        before = _read_revocation()["epoch"]
-        e2e.nm_write(nh, {"type": "client_revoke", "name": "victim"})
-        reply = e2e.nm_read(nh)
-        check(reply is not None and reply.get("type") == "client_revoke_result"
-              and reply.get("ok") is True,
-              "A18 client_revoke acknowledged ok")
-        with open(_clients_path()) as f:
-            names = [cl["name"] for cl in json.load(f)["clients"]]
-        check(names == ["pytest"], "A18 the allowlist no longer contains the victim")
-        check(_read_revocation()["epoch"] > before,
-              "A18 the revocation epoch was bumped by the host-mediated revoke")
-
-        # The surviving trusted client still drives the bridge: the revoke
-        # reached enforcement without collateral damage.
-        served = []
-        t = threading.Thread(
-            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
-        t.start()
-        r = c.call("tab_list", {}, _id=60)
-        t.join(timeout=3)
-        check(bool(served), "A18 the still-trusted client keeps serving after the revoke")
-        content = json.loads(r["result"]["content"][0]["text"])
-        check(content[0]["title"] == "Adversarial Tab", "A18 round trip intact")
-
-        # Revoking a ghost fails cleanly with ok:false, never a guess.
-        e2e.nm_write(nh, {"type": "client_revoke", "name": "ghost"})
-        reply = e2e.nm_read(nh)
-        check(reply is not None and reply.get("type") == "client_revoke_result"
-              and reply.get("ok") is False,
-              "A18 revoking an unknown client reports ok:false")
-        nh.kill()
-        nh.wait(timeout=3)
-        nh = None
-    finally:
-        if nh is not None and nh.poll() is None:
-            nh.kill()
-            try:
-                nh.wait(timeout=3)
-            except Exception:
-                pass
-        _reap(srv)
-        _rm_clients()
+    def test_a19_deleting_the_allowlist_is_tampering_not_a_reset(self):
+        """Deleting clients.json alone trips the revocation record's enrollment
+        latch (fail closed); deleting both files is the documented same-user
+        revert to the open bootstrap, which is ERROR-logged, never silent."""
+        self.skip_if_enrolled()
+        self.skip_unless_unix("harness attestation")
+        h.reset_enrollment()
+        self.addCleanup(h.reset_enrollment)
+        pair("--name", "pytest", "--this-parent")
+        os.remove(h.runtime_file("clients.json"))
+        self.assertRefusedToStart(self.server(wait=False), "tampering")
+        h.reset_enrollment()
+        srv = self.server()
+        self.assertIn("harness admission is NOT enforced", h.server_stderr(srv))
 
 
-def a19_deleting_the_allowlist_is_tampering_not_a_reset():
-    print("\n[A19] clients.json deletion (LIVE: detected via the enrollment latch)")
-    if _skip_if_enrolled("A19"):
-        return
-    if os.name == "nt":
-        note("A19 skipped: harness attestation is Unix-only")
-        return
-    _rm_lock()
-    _rm_clients()
-    try:
-        # Enroll, then simulate the ADR-0024 residual: a same-user deletion of
-        # clients.json alone. Without the revocation record's enrollment latch
-        # (ADR-0025) this would silently revert the bridge to the open,
-        # unenrolled bootstrap; the latch must fail it closed instead.
-        _pair_client("--name", "pytest", "--this-parent")
-        os.remove(_clients_path())
-        srv = start_server()
-        try:
-            lf = e2e.wait_lock(srv, timeout=3)
-            check(lf is None, "A19 deletion does not revert to the open bootstrap")
-            srv.wait(timeout=5)
-            check(srv.returncode == 1, "A19 the server fails closed (exit 1)")
-            err = server_stderr(srv)
-            check("tampering" in err,
-                  "A19 stderr names the deletion as tampering")
-        finally:
-            _reap(srv)
+class KillSwitch(AdversarialCase):
+    def test_a20_kill_reaches_every_enforcement_point(self):
+        """With a paired, driving client: the live broker refuses with typed
+        BRIDGE_KILLED and keeps the connection, the browser leg is severed, a
+        fresh host is control-plane only, and a relay gets the same refusal."""
+        srv, c, nh = self.enrolled_broker()
+        self.addCleanup(h.unkill_interactive, check=False)
+        self.assertRoundTrip(c, nh, 60)
+        subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        rev = h.read_revocation()
+        self.assertEqual((rev["killed"], rev["kill_epoch"]), (True, rev["epoch"]),
+                         "the kill landed with its epoch bump in one record")
+        self.assertEqual(c.call("tab_list", {}, _id=61), tool_error(61, "BRIDGE_KILLED", h.BRIDGE_KILLED))
+        self.assertEqual(c.ping(_id=62), rpc_result(62, {}), "the harness connection carries refusals")
+        self.assertExits(nh, 8, "the connected browser host is severed")
+        nh2 = self.host(ready=False)
+        self.assertEqual(nm_read(nh2), {"type": "kill_status_result", "ok": True, "killed": True},
+                         "a fresh host is control-plane only")
+        self.assertFalse(nh2.ready.is_set(), "the fresh host never handshakes the bridge")
+        c2 = self.legacy_client(self.relay())
+        self.assertEqual(c2.call("tab_list", {}, _id=63), tool_error(63, "BRIDGE_KILLED", h.BRIDGE_KILLED),
+                         "a relayed harness gets the same typed refusal")
 
-        # Residual, named honestly and pinned by this check: deleting BOTH
-        # files (the allowlist and the revocation record) is the full
-        # same-user revert to bootstrap. No user-space marker survives a
-        # writer who can delete any file we can write; see ADR-0025.
-        _rm_clients()
-        srv = start_server()
-        try:
-            lf = e2e.wait_lock(srv, timeout=5)
-            check(lf is not None,
-                  "A19 two-file deletion reverts to the unenrolled bootstrap "
-                  "(the documented same-user residual)")
-            err_seen = any("harness admission is NOT enforced" in ln
-                           for ln in srv.err_lines)
-            check(err_seen, "A19 the bootstrap posture is ERROR-logged, not silent")
-        finally:
-            _reap(srv)
-    finally:
-        _rm_clients()
-
-
-def a20_kill_reaches_every_enforcement_point():
-    """ADR-0030: with a PAIRED, admitted, actively-driving client, engaging the
-    kill switch must (1) turn the live broker's dispatch into typed
-    BRIDGE_KILLED refusals without dropping the harness (the refusal must be
-    deliverable), (2) sever the connected browser leg, (3) keep a fresh host
-    off the bridge entirely (control-plane only), and (4) refuse tool calls
-    from a freshly attached RELAY too (the second-instance path shares the
-    dispatcher). Note on the broker's browser-attach refusal: it is not
-    black-box reachable here, because the host itself refuses to dial while
-    killed (the layers are redundant by design); it is pinned by code review
-    and the broker unit tests."""
-    print("\n[A20] kill switch vs a LIVE broker (LIVE: typed refusal at every surface)")
-    if _skip_if_enrolled("A20"):
-        return
-    if os.name == "nt":
-        note("A20 skipped: harness attestation is Unix-only")
-        return
-    _rm_lock()
-    _rm_clients()
-    srv = None
-    srv2 = None
-    nh = None
-    nh2 = None
-    try:
-        _pair_client("--name", "pytest", "--this-parent")
-        srv = start_server()
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A20 paired harness becomes the broker")
-        if lf is None:
-            return
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        nh = e2e.start_bridge_host()
-        e2e.wait_host_ready(nh)
-        served = []
-        t = threading.Thread(
-            target=lambda: served.append(e2e.serve_bridge_req(nh, _tab_list_responder)))
-        t.start()
-        c.call("tab_list", {}, _id=60)
-        t.join(timeout=3)
-        check(bool(served), "A20 the bridge works before the kill")
-
-        subprocess.run([e2e.BIN, "kill"], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        rev = _read_revocation()
-        check(rev["killed"] is True and rev["kill_epoch"] == rev["epoch"],
-              "A20 the kill landed with its epoch bump in one record")
-
-        # (1) The live broker refuses with the stable code and KEEPS the
-        # harness connection up (a response arrives; no EOF).
-        r = c.call("tab_list", {}, _id=61)
-        text = r["result"]["content"][0]["text"]
-        check(r["result"].get("isError") is True and "BRIDGE_KILLED" in text,
-              "A20 dispatch refuses with the typed BRIDGE_KILLED error")
-        r = c.ping(_id=62)
-        check("result" in r, "A20 the harness connection survives to carry refusals")
-
-        # (2) The browser leg is severed within a watcher tick. Keep the
-        # handle either way: the finally block only kills a still-running
-        # host, so a failed severing is cleaned up, not leaked.
-        try:
-            nh.wait(timeout=8)
-        except Exception:
-            pass
-        check(nh.poll() is not None, "A20 the connected browser host is severed")
-
-        # (3) A fresh host never reaches the bridge while killed.
-        nh2 = e2e.start_bridge_host()
-        frame = e2e.nm_read(nh2)
-        check(frame is not None and frame.get("type") == "kill_status_result"
-              and frame.get("killed") is True,
-              "A20 a fresh host is control-plane only (announces killed)")
-        check(not nh2.ready.is_set(), "A20 the fresh host never handshakes the bridge")
-
-        # (4) A relay (second instance) attaches -- admission is a revocation
-        # decision, not a kill decision -- but its calls are refused the same
-        # typed way by the shared dispatcher.
-        srv2 = start_server()
-        c2 = e2e.McpClient(srv2)
-        c2.initialize()
-        c2.initialized()
-        r = c2.call("tab_list", {}, _id=63)
-        text = r["result"]["content"][0]["text"]
-        check(r["result"].get("isError") is True and "BRIDGE_KILLED" in text,
-              "A20 a relayed harness gets the same typed refusal")
-    finally:
-        for host in (nh, nh2):
-            if host is not None and host.poll() is None:
-                host.kill()
-                try:
-                    host.wait(timeout=3)
-                except Exception:
-                    pass
-        _reap(srv2)
-        _reap(srv)
-        e2e.unkill_interactive(check=False)
-        _rm_clients()
-
-
-def a21_corrupt_kill_marker_fails_closed():
-    """ADR-0030: with the revocation record corrupt, the kill/latch state is
-    unknowable, and EVERYTHING must fail closed: a live broker drops its
-    harness (the per-request guard reads the record first), a fresh instance
-    refuses to start, `unkill` refuses (releasing from an unknown state would
-    fail open) while the attempt still lands in the audit trail
-    (outcome=error, with the auth rung that passed), and `doctor` reports the
-    unreadable state non-zero."""
-    print("\n[A21] corrupt revocation record (LIVE: kill state unknown -> refuse everything)")
-    if _skip_if_enrolled("A21"):
-        return
-    if os.name == "nt":
-        note("A21 skipped: harness attestation is Unix-only")
-        return
-    _rm_lock()
-    _rm_clients()
-    srv = None
-    try:
-        _pair_client("--name", "pytest", "--this-parent")
-        srv = start_server()
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A21 broker up before the corruption")
-        if lf is None:
-            return
-        c = e2e.McpClient(srv)
-        c.initialize()
-        c.initialized()
-        # Drain the pipe before corrupting: the guard runs on EVERY inbound
-        # message, and `initialized` is fire-and-forget, so corrupting while
-        # it is still unprocessed drops the connection before the tools/call
-        # below is even written (a BrokenPipeError instead of the EOF).
-        c.ping(_id=69)
-
-        with open(_revocation_path(), "w") as f:
+    def test_a21_corrupt_revocation_record_fails_everything_closed(self):
+        """An unreadable record makes the kill state unknowable: the live broker
+        drops its harness, a fresh instance refuses to start, unkill refuses
+        (audited as an error with its presence rung), doctor reports it."""
+        srv, c, nh = self.enrolled_broker()
+        # Drain the fire-and-forget initialized notification before corrupting:
+        # the guard runs on every inbound message.
+        self.assertEqual(c.ping(_id=69), rpc_result(69, {}))
+        with open(h.runtime_file("revocation.json"), "w") as f:
             f.write("{ this is not json")
-
-        # The live broker: the per-request guard reads the record before any
-        # dispatch and fails the connection closed (EOF, no service).
         c.send({"jsonrpc": "2.0", "id": 70, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
-        finished, line = _call_with_timeout(lambda: srv.stdout.readline(), 10)
-        check(finished and line == "",
-              "A21 the live broker drops the harness on an unreadable record")
+        self.assertEqual(self.bounded("the call on an unreadable record", srv.stdout.readline, 10), "",
+                         "the live broker drops the harness")
+        self.assertRefusedToStart(self.server(wait=False))
+        unkill = h.unkill_interactive(check=False)
+        self.assertEqual(unkill.returncode, 1, unkill.stderr)
+        self.assertIn("fail open", unkill.stderr)
+        errored = [rec for rec in h.audit_records()
+                   if rec["event_kind"] == "kill_release" and rec.get("outcome") == "error"]
+        self.assertEqual(len(errored), 1, "the errored release attempt is audited once")
+        self.assertIn("auth=cli_confirm", errored[0]["detail"])
+        self.assertIn("write refused", errored[0]["detail"])
+        doc = subprocess.run([h.BIN, "doctor"], capture_output=True, text=True)
+        self.assertEqual(doc.returncode, 1, doc.stdout)
+        self.assertIn("UNREADABLE", doc.stdout)
 
-        # A fresh instance refuses to serve at all.
-        srv2 = start_server()
-        try:
-            lf2 = e2e.wait_lock(srv2, timeout=3)
-            check(lf2 is None, "A21 a fresh instance refuses to start")
-            srv2.wait(timeout=5)
-            check(srv2.returncode == 1, "A21 the refusal is fail-closed (exit 1)")
-        finally:
-            _reap(srv2)
-
-        # unkill refuses: releasing from an unknown state would fail open.
-        # Driven interactively (pty + the exact phrase), so the refusal being
-        # tested is the unreadable RECORD, not the presence floor.
-        unkill = e2e.unkill_interactive(check=False)
-        check(unkill.returncode == 1 and "fail open" in unkill.stderr,
-              "A21 `unkill` refuses on an unreadable record")
-
-        # The presence-passing-but-write-refused attempt is DURABLY audited
-        # (ADR-0030: every release attempt leaves a trace), with the error
-        # outcome and the auth rung that vouched for it. The audit file is
-        # separate from the corrupt revocation record, so the trail survives.
-        audit_path = os.path.join(os.path.dirname(e2e.LOCK), "audit.log")
-        records = []
-        with open(audit_path) as f:
-            records = [json.loads(ln) for ln in f if ln.strip()]
-        errored = [r for r in records if r.get("event_kind") == "kill_release"
-                   and r.get("outcome") == "error"]
-        check(bool(errored),
-              "A21 the errored-after-presence release attempt is audited")
-        detail = errored[-1].get("detail", "")
-        check("auth=cli_confirm" in detail and "write refused" in detail,
-              "A21 the errored release names its auth rung and the write error")
-
-        # doctor reports it, non-zero.
-        doc = subprocess.run([e2e.BIN, "doctor"], capture_output=True, text=True)
-        check(doc.returncode == 1 and "UNREADABLE" in doc.stdout,
-              "A21 `doctor` surfaces the unreadable kill state")
-    finally:
-        _reap(srv)
-        _rm_clients()
+    def test_a22_unkill_demands_user_presence(self):
+        """Releasing the kill switch needs the presence floor: a piped stdin and
+        a wrong phrase are refused and audited with the presence reason; the
+        phrase typed on a pty releases, audited with its rung."""
+        self.skip_if_enrolled()
+        self.skip_unless_unix("the pty-driven confirmation")
+        self.addCleanup(h.unkill_interactive, check=False)
+        h.remove_lock()
+        already = len(h.audit_records())
+        subprocess.run([h.BIN, "kill"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.assertIs(h.read_revocation()["killed"], True)
+        piped = subprocess.run([h.BIN, "unkill"], input="release\n", capture_output=True, text=True)
+        self.assertEqual(piped.returncode, 1, piped.stderr)
+        self.assertIn("not a terminal", piped.stderr)
+        self.assertIs(h.read_revocation()["killed"], True, "engaged after the piped attempt")
+        wrong = h.unkill_interactive(phrase="yes", check=False)
+        self.assertEqual(wrong.returncode, 1, wrong.stderr)
+        self.assertIs(h.read_revocation()["killed"], True, "engaged after the declined prompt")
+        ok = h.unkill_interactive()
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIs(h.read_revocation()["killed"], False)
+        releases = [rec for rec in h.audit_records()[already:] if rec["event_kind"] == "kill_release"]
+        self.assertEqual([rec["outcome"] for rec in releases], ["refused", "refused", "ok"])
+        for rec in releases[:2]:
+            self.assertIn("presence", rec["detail"], "the refusal names the presence gate")
+        self.assertIn("auth=cli_confirm", releases[2]["detail"])
 
 
-def a22_unkill_requires_interactive_user_presence():
-    """ADR-0030: releasing the kill switch needs the user-presence floor; with no enrolled key that
-    floor is the CLI's terminal check (an enrolled Mac reaches Touch ID first, hence the skip).
+class Versions(AdversarialCase):
+    """Stateless 2026-07-28 negotiation abuse. A connection opens with a legacy
+    initialize or a well-formed stateless request; anything else is dropped.
+    Post-open: an unsupported string version is -32022, malformed or incomplete
+    _meta is -32602, and a bare request is served only on an initialize-opened
+    connection."""
 
-      piped stdin / wrong phrase        -> refused, audited with the presence reason
-      phrase typed on a pty             -> released; step (4) does so through e2e.run_with_cli_presence
-      same-user pty or revocation.json  -> the conceded residual, named in src/packages/core/src/presence/mod.rs
-    """
-    print("\n[A22] unkill demands user presence (LIVE: piped/declined refused, typed releases)")
-    if _skip_if_enrolled("A22"):
-        return
-    if os.name == "nt":
-        note("A22 skipped: the pty-driven confirmation is Unix-only")
-        return
-    _rm_lock()
-    audit_path = os.path.join(os.path.dirname(e2e.LOCK), "audit.log")
-    try:
-        os.remove(audit_path)
-    except FileNotFoundError:
-        pass
-    try:
-        subprocess.run([e2e.BIN, "kill"], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        check(_read_revocation()["killed"] is True, "A22 the switch is engaged")
+    JUNK_STRINGS = ["", "1999-01-01", "2026-07-28-rc1"]
+    JUNK_NON_STRINGS = [("number", 7), ("boolean", True), ("null", None),
+                        ("object", {"v": "2026-07-28"}), ("array", ["2026-07-28"])]
 
-        # (1) A piped stdin is refused outright, exact phrase and all.
-        piped = subprocess.run([e2e.BIN, "unkill"], input="release\n",
-                               capture_output=True, text=True)
-        check(piped.returncode == 1 and "not a terminal" in piped.stderr,
-              "A22 a piped `unkill` is refused (no silent script release)")
-        check(_read_revocation()["killed"] is True,
-              "A22 the switch stays engaged after the piped attempt")
+    def test_a23_junk_meta_protocol_version_values(self):
+        """Every junk version is a per-request verdict that leaves the
+        connection usable; the first one even serves as the opener."""
+        srv = self.server()
+        c = McpClient(srv)
+        # No subTest: every request rides one connection, and a timed-out read
+        # leaves a reader that would swallow the next reply.
+        for i, bad in enumerate(self.JUNK_STRINGS):
+            r = self.bounded(f"reply for {bad!r}", lambda: c.modern_tools_list(_id=100 + i, version=bad), 10)
+            self.assertEqual(r, h.unsupported_version(100 + i, bad), f"version {bad!r}")
+        for i, (kind, bad) in enumerate(self.JUNK_NON_STRINGS):
+            r = self.bounded(f"reply for {kind}", lambda: c.modern_tools_list(_id=110 + i, version=bad), 10)
+            self.assertEqual(r, rpc_error(110 + i, -32602, MISSING_META + h.META_VERSION_KEY), f"version as {kind}")
+        # The legacy version IN _meta is a legitimate per-request era selection.
+        r = self.bounded("legacy version in _meta", lambda: c.modern_tools_list(_id=130, version=h.LEGACY_VERSION), 10)
+        self.assertToolsList(r, 130, {})
+        c.send({"jsonrpc": "2.0", "id": 140, "method": "tools/list", "params": {"_meta": {}}})
+        self.assertEqual(self.bounded("empty _meta", c.recv, 10), rpc_error(140, -32602, MISSING_BOTH))
+        self.assertToolsList(self.bounded("positive control", lambda: c.modern_tools_list(_id=150), 10),
+                             150, h.TOOLS_LIST_ENVELOPE)
+        self.assertEqual(normalized(self.bounded("legacy initialize", c.initialize, 10)),
+                         rpc_result(1, h.legacy_init_result()))
+        self.assertIsNone(srv.poll(), "the server survived the junk versions")
 
-        # (2) An interactive session typing the wrong phrase is refused.
-        wrong = e2e.unkill_interactive(phrase="yes", check=False)
-        check(wrong.returncode == 1, "A22 the wrong phrase is refused")
-        check(_read_revocation()["killed"] is True,
-              "A22 the switch stays engaged after the declined prompt")
+    def test_a24_bare_discover_opener_and_hostile_flood(self):
+        """A bare server/discover as the first request drops the connection (no
+        era can be established); 40 rounds of valid discovers interleaved with
+        junk versions wedge nothing: every reply keeps its full shape and the
+        connection is still modern-opened afterwards."""
+        srv = self.server()
+        McpClient(srv).send({"jsonrpc": "2.0", "id": 1, "method": "server/discover"})
+        self.assertEqual(h.read_reply_or_eof(srv), "", "the bare opener gets no reply")
+        self.assertExits(srv, 5, "the server dropped the connection")
 
-        # (3) Both refusals are visible in the trail, with their reasons.
-        with open(audit_path) as f:
-            records = [json.loads(ln) for ln in f if ln.strip()]
-        refused = [r for r in records if r.get("event_kind") == "kill_release"
-                   and r.get("outcome") == "refused"]
-        check(len(refused) == 2, "A22 both refused releases are audited")
-        details = " | ".join(r.get("detail", "") for r in refused)
-        check("presence" in details,
-              "A22 the refusals name the presence gate that stopped them")
-
-        # (4) The typed phrase on a real terminal releases, and the audit
-        # record names the rung that authorized it.
-        ok = e2e.unkill_interactive()
-        check(ok.returncode == 0, "A22 the typed confirmation releases")
-        check(_read_revocation()["killed"] is False, "A22 the switch is off")
-        with open(audit_path) as f:
-            records = [json.loads(ln) for ln in f if ln.strip()]
-        released = [r for r in records if r.get("event_kind") == "kill_release"
-                    and r.get("outcome") == "ok"]
-        check(bool(released) and "auth=cli_confirm" in released[-1].get("detail", ""),
-              "A22 the release is audited with auth=cli_confirm")
-    finally:
-        e2e.unkill_interactive(check=False)
-
-
-# ---------------------------------------------------------------------------
-# A23/A24/A25 - stateless MCP 2026-07-28 version negotiation abuse
-# ---------------------------------------------------------------------------
-# A connection OPENS with either a legacy initialize or a well-formed stateless request (params._meta carrying
-# the version AND the client capabilities); anything else is dropped fail-closed (the rmcp opener rule).
-#   post-open, unsupported STRING version   -> -32022
-#   malformed or incomplete _meta           -> -32602
-#   bare request (legacy shape)             -> served only on an initialize-opened connection
-# Version strings and error codes are hard-coded on purpose: an independent black-box check against
-# src/packages/core/src/protocol.rs.
-
-_META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
-_META_CAPS_KEY = "io.modelcontextprotocol/clientCapabilities"
-# rmcp's full supported set (ADR-0034 keeps the SDK default): discover's
-# supportedVersions and every -32022 error's data.supported.
-_SUPPORTED_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18",
-                       "2025-11-25", "2026-07-28"]
-
-
-def _meta_tools_list(c, _id, version_value):
-    """Send a tools/list whose params._meta carries `version_value` verbatim
-    (plus the required clientCapabilities, so the value under test hits the
-    VERSION gate rather than the metadata-completeness gate)."""
-    c.send({"jsonrpc": "2.0", "id": _id, "method": "tools/list",
-            "params": {"_meta": {_META_VERSION_KEY: version_value,
-                                 _META_CAPS_KEY: {}}}})
-
-
-def _recv_checked(c, _id, seconds, label):
-    """One guarded read: the reply for `_id`, or None after a FAILed check.
-    A timed-out _call_with_timeout leaves its daemon thread parked on the
-    shared stdout readline, where it will steal a later reply and silently
-    desync every read after it - so on timeout (or a mismatched id) the caller
-    must BAIL OUT of the case, not keep reading. A successful read returns
-    silently (no PASS line, deliberately asymmetric with check): A24 makes 80
-    of these, and the aggregate checks after its loop are the signal."""
-    done, r = _call_with_timeout(c.recv, seconds)
-    if not (done and isinstance(r, dict) and r.get("id") == _id):
-        check(False, label)
-        return None
-    return r
-
-
-def a23_junk_meta_protocol_version():
-    print("\n[A23] junk _meta protocolVersion values "
-          "(LIVE: -32022 strings, -32602 malformed; connection stays usable)")
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A23 server up")
-        c = e2e.McpClient(srv)
-        # UNSUPPORTED STRING versions: a PER-REQUEST -32022 whose data
-        # echoes the full supported list and the raw requested value; none
-        # may wedge or kill the connection. The first one doubles as the
-        # connection's opener - rmcp answers the version error itself and
-        # keeps the connection (pinned here: junk-version openers do not
-        # drop, unlike malformed-metadata openers).
-        for i, bad in enumerate(["", "1999-01-01", "2026-07-28-rc1"]):
-            _id = 100 + i
-            _meta_tools_list(c, _id, bad)
-            r = _recv_checked(c, _id, 10,
-                              f"A23 wrong string {bad!r}: a well-formed reply arrived")
-            if r is None:
-                return  # stream desynced; nothing below would be meaningful
-            err = r.get("error")
-            err = err if isinstance(err, dict) else {}
-            check(err.get("code") == -32022,
-                  f"A23 _meta version {bad!r} -> JSON-RPC error -32022")
-            data = err.get("data")
-            data = data if isinstance(data, dict) else {}
-            check(data.get("supported") == _SUPPORTED_VERSIONS
-                  and "requested" in data and data["requested"] == bad,
-                  f"A23 {bad!r}: error data carries the supported list and the "
-                  "raw requested value")
-        # NON-STRING versions cannot be read as a version claim at all:
-        # malformed stateless metadata, refused -32602 (invalid params)
-        # naming the field - never -32022, never a silent legacy routing.
-        junk = [(7, "number"), (True, "boolean"), (None, "null"),
-                ({"v": "2026-07-28"}, "object"), (["2026-07-28"], "array")]
-        for i, (bad, kind) in enumerate(junk):
-            _id = 110 + i
-            _meta_tools_list(c, _id, bad)
-            r = _recv_checked(c, _id, 10, f"A23 {kind}: a well-formed reply arrived")
-            if r is None:
-                return
-            err = r.get("error")
-            err = err if isinstance(err, dict) else {}
-            check(err.get("code") == -32602
-                  and _META_VERSION_KEY in str(err.get("message", "")),
-                  f"A23 _meta version as {kind} -> -32602 naming the field")
-        # The LEGACY version string IN _meta is not junk: rmcp serves every
-        # revision it implements, so this is a legitimate per-request era
-        # selection answered in the legacy result shape - a changed contract
-        # from the original design, which planned to refuse it (ADR-0034
-        # records the deviation).
-        _meta_tools_list(c, 130, "2025-06-18")
-        r = _recv_checked(c, 130, 10,
-                          "A23 legacy version in _meta: a well-formed reply arrived")
-        if r is None:
-            return
-        res = r.get("result")
-        res = res if isinstance(res, dict) else {}
-        check("error" not in r and isinstance(res.get("tools"), list)
-              and all(k not in res for k in ("resultType", "ttlMs",
-                                             "cacheScope", "_meta")),
-              "A23 '2025-06-18' in _meta is served the legacy result shape "
-              "(per-request era selection)")
-        # Era-boundary probe: _meta PRESENT but empty. Modern-era metadata
-        # with both required fields missing -> -32602, never a silent legacy
-        # routing (this connection was opened statelessly).
-        c.send({"jsonrpc": "2.0", "id": 140, "method": "tools/list",
-                "params": {"_meta": {}}})
-        r = _recv_checked(c, 140, 10, "A23 empty _meta object: a well-formed reply arrived")
-        if r is None:
-            return
-        err = r.get("error")
-        err = err if isinstance(err, dict) else {}
-        check(err.get("code") == -32602,
-              "A23 empty _meta -> -32602 (not served, not legacy-routed)")
-        # Positive control on the SAME connection: the correct version IS
-        # served - proving the rejections above are per-request verdicts,
-        # not a blanket refusal of any request carrying _meta - and the
-        # modern tools/list result has the stateless envelope fields (no
-        # serverInfo _meta: that rides only the discover result).
-        _meta_tools_list(c, 150, "2026-07-28")
-        r = _recv_checked(c, 150, 10, "A23 correct version: a well-formed reply arrived")
-        if r is None:
-            return
-        res = r.get("result")
-        res = res if isinstance(res, dict) else {}
-        check("error" not in r and isinstance(res.get("tools"), list),
-              "A23 the correct version is served on the same connection (positive control)")
-        check(res.get("resultType") == "complete" and "ttlMs" in res
-              and "cacheScope" in res and "_meta" not in res,
-              "A23 modern tools/list result carries resultType/ttlMs/cacheScope, no _meta")
-        # And the errors were per-request: a legacy initialize still serves.
-        done, init = _call_with_timeout(c.initialize, 10)
-        check(done and init is not None
-              and init.get("result", {}).get("protocolVersion") == "2025-06-18",
-              "A23 a subsequent legacy initialize on the same connection still works")
-        check(srv.poll() is None, "A23 server process survived the junk versions")
-    finally:
-        _reap(srv)
-
-
-def a24_discover_flood_statelessness():
-    print("\n[A24] bare server/discover opener + hostile flood "
-          "(LIVE: bare opener dropped fail-closed; valid flood served, never era-wedged)")
-    # Part 1: server/discover has NO bare-request form (ADR-0034 cut the
-    # planned leniency; rmcp wins). As a connection's FIRST request a bare
-    # probe cannot open either era, so the connection is dropped without a
-    # reply and the stdio server exits: fail closed, never guess a peer's
-    # era. A probing client learns the supported set from a well-formed
-    # discover or from any -32022's data.supported instead.
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A24 server up (bare-opener probe)")
-        c = e2e.McpClient(srv)
-        c.send({"jsonrpc": "2.0", "id": 1, "method": "server/discover"})
-        done, line = _call_with_timeout(srv.stdout.readline, 10)
-        check(done and line == "",
-              "A24 a bare server/discover opener gets no reply (connection dropped)")
-        try:
-            srv.wait(timeout=5)
-            exited = True
-        except subprocess.TimeoutExpired:
-            exited = False
-        check(exited, "A24 the server exited with the dropped connection (fail closed)")
-    finally:
-        _reap(srv)
-    # Part 2: a hostile mix on one properly opened connection - 40 rounds of
-    # well-formed discovers interleaved with junk-version requests - must
-    # never wedge the connection into either era: every discover carries the
-    # full documented shape, every junk gets its own -32022, and afterwards
-    # bare requests are still refused (the modern opener grants no legacy
-    # leniency) while a legacy initialize still serves.
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A24 server up (flood)")
-        c = e2e.McpClient(srv)
-        rounds = 40
-        ok_discover = 0
-        ok_junk = 0
-        for i in range(rounds):
+        srv = self.server()
+        c = McpClient(srv)
+        # No subTest: one connection, so a timed-out read must end the case.
+        for i in range(40):
             _id = 200 + 2 * i
-            c.send({"jsonrpc": "2.0", "id": _id, "method": "server/discover",
-                    "params": {"_meta": {_META_VERSION_KEY: "2026-07-28",
-                                         _META_CAPS_KEY: {}}}})
-            r = _recv_checked(c, _id, 10, f"A24 discover #{i}: a well-formed reply arrived")
-            if r is None:
-                return
-            res = r.get("result")
-            res = res if isinstance(res, dict) else {}
-            caps = res.get("capabilities")
-            meta = res.get("_meta")
-            if (res.get("resultType") == "complete"
-                    and res.get("supportedVersions") == _SUPPORTED_VERSIONS
-                    and res.get("ttlMs") == 3600000
-                    and res.get("cacheScope") == "private"
-                    and isinstance(caps, dict) and isinstance(caps.get("tools"), dict)
-                    and isinstance(meta, dict)
-                    and "io.modelcontextprotocol/serverInfo" in meta):
-                ok_discover += 1
-            _meta_tools_list(c, _id + 1, f"1999-01-{(i % 28) + 1:02d}")
-            r = _recv_checked(c, _id + 1, 10, f"A24 junk #{i}: a well-formed reply arrived")
-            if r is None:
-                return
-            if (r.get("error") or {}).get("code") == -32022:
-                ok_junk += 1
-        check(ok_discover == rounds,
-              f"A24 all {rounds} well-formed discover results carry the full shape "
-              "(complete, supported set, ttlMs, cacheScope, tools capability, serverInfo)")
-        check(ok_junk == rounds,
-              f"A24 all {rounds} interleaved junk versions answered -32022 (per-request)")
-        # The flood latched nothing modern-ward either: a bare request on
-        # this statelessly opened connection is refused, not legacy-served.
-        c.send({"jsonrpc": "2.0", "id": 290, "method": "ping"})
-        r = _recv_checked(c, 290, 10, "A24 bare ping: a well-formed reply arrived")
-        if r is None:
-            return
-        check((r.get("error") or {}).get("code") == -32602,
-              "A24 a bare ping after a modern opener is -32602 (no legacy leniency)")
-        # ...and an unknown method in the modern era is -32601, as in the legacy era.
-        c.send({"jsonrpc": "2.0", "id": 291, "method": "no/such_method",
-                "params": {"_meta": {_META_VERSION_KEY: "2026-07-28",
-                                     _META_CAPS_KEY: {}}}})
-        r = _recv_checked(c, 291, 10, "A24 modern unknown method: a well-formed reply arrived")
-        if r is None:
-            return
-        err = r.get("error")
-        check(isinstance(err, dict) and err.get("code") == -32601,
-              "A24 an unknown method in the modern era is -32601")
-        # ping itself is legacy vocabulary: carried WITH modern _meta it is
-        # method-not-found (measured; the legacy era keeps answering it).
-        c.send({"jsonrpc": "2.0", "id": 292, "method": "ping",
-                "params": {"_meta": {_META_VERSION_KEY: "2026-07-28",
-                                     _META_CAPS_KEY: {}}}})
-        r = _recv_checked(c, 292, 10, "A24 modern ping: a well-formed reply arrived")
-        if r is None:
-            return
-        check((r.get("error") or {}).get("code") == -32601,
-              "A24 a modern-_meta ping is -32601 (ping is legacy vocabulary)")
-        # The flood latched nothing: a legacy initialize is still served.
-        done, init = _call_with_timeout(c.initialize, 10)
-        check(done and init is not None
-              and init.get("result", {}).get("protocolVersion") == "2025-06-18",
-              "A24 legacy initialize still served after the discover flood")
-        check(srv.poll() is None, "A24 server process survived the flood")
-    finally:
-        _reap(srv)
-
-
-def a25_oversized_version_string():
-    print("\n[A25] 1 MB protocolVersion string (LIVE: -32022, echo not amplified, no crash)")
-    _rm_lock()
-    srv = start_server()
-    try:
-        lf = e2e.wait_lock(srv)
-        check(lf is not None, "A25 server up")
-        c = e2e.McpClient(srv)
-        # A well-formed request whose version value is a 1 MB string: far
-        # under the 64 MB line cap (that clamp is A9's job), so the reader
-        # accepts the line and the VERSION CHECK must reject it - a
-        # per-request -32022 echoing the raw value, never an allocation
-        # blowup or abort.
-        big = "9" * (1024 * 1024)
-        _meta_tools_list(c, 300, big)
-        r = _recv_checked(c, 300, 20, "A25 oversized version: a well-formed reply arrived")
-        if r is None:
-            return
-        err = r.get("error")
-        err = err if isinstance(err, dict) else {}
-        check(err.get("code") == -32022,
-              "A25 the 1 MB version string is refused with -32022")
-        data = err.get("data")
-        data = data if isinstance(data, dict) else {}
-        check(data.get("supported") == _SUPPORTED_VERSIONS,
-              "A25 error data names the supported list")
-        # data.requested is the VERBATIM value (rmcp bounds nothing but the
-        # 64 MB line cap; a recorded 1:1 reflection residual in ADR-0034 and
-        # the core's connection tests). What this pins is that the echo
-        # never AMPLIFIES the input - if rmcp starts truncating, this still
-        # passes and the residual note can be retired.
-        req = data.get("requested")
-        check(isinstance(req, str) and len(req) <= len(big),
-              "A25 data.requested is the verbatim value or a bounded truncation (never amplified)")
-        done, init = _call_with_timeout(c.initialize, 10)
-        check(done and init is not None
-              and init.get("result", {}).get("protocolVersion") == "2025-06-18",
-              "A25 the connection still serves a legacy initialize afterwards")
-        check(srv.poll() is None, "A25 server process survived (no crash, no OOM)")
-    finally:
-        _reap(srv)
-
-
-def a13_manifest_substitution_xfail():
-    print("\n[A13] native-messaging manifest substitution (XFAIL until enrollment #13)")
-    # A same-user process can repoint the NM manifest at another host binary or add its own extension id to
-    # allowed_origins, and nothing on disk stops it: the manifest is 0644 in the browser's NativeMessagingHosts
-    # dir and the 0700 install dir still grants its owner write access. A substituted host fails pairing only
-    # through the extension's enrollment pin (src/apps/extension/src/lib/background/enrollment.ts); proving that
-    # end to end needs an ISOLATED throwaway browser loading the extension, which this suite never starts.
-    note("A13 intentionally not implemented here (browser + enrollment gated). "
-         "Documented residual; becomes MUST-BLOCK after task #13.")
-
-
-# ---------------------------------------------------------------------------
-
-def main():
-    if os.name == "nt":
-        print("adversarial suite targets the Unix attestation surface; "
-              "most checks are Unix-only.")
-    e2e.ensure_binary()          # build with the real environment if needed
-    rundir = isolate()           # then lock every subprocess into the private dir
-    print(f"binary: {e2e.BIN}")
-    print(f"platform: {platform.system()} {platform.machine()}")
-    try:
-        a1_rogue_python_peer()
-        a2_same_binary_copy()
-        a3_binary_swap_after_launch()
-        a8_blank_line_flood()
-        a9_oversize_line_mcp_leg()
-        a9_oversize_frame_nm_leg()
-        a11_no_tcp_port()
-        a12_secret_confidentiality()
-        a14_non_allowlisted_harness_refused()
-        a15_spoofed_client_name_is_not_authz()
-        a16_paired_harness_is_admitted()
-        a17_revoke_reaches_the_live_broker()
-        a18_extension_surface_revoke_via_host_control_frames()
-        a19_deleting_the_allowlist_is_tampering_not_a_reset()
-        a20_kill_reaches_every_enforcement_point()
-        a21_corrupt_kill_marker_fails_closed()
-        a22_unkill_requires_interactive_user_presence()
-        a23_junk_meta_protocol_version()
-        a24_discover_flood_statelessness()
-        a25_oversized_version_string()
-        annotated_matrix()
-        a13_manifest_substitution_xfail()
-    finally:
-        shutil.rmtree(rundir, ignore_errors=True)
-    print(f"\n{'=' * 44}\n{_passed} passed, {_failed} failed")
-    sys.exit(0 if _failed == 0 else 1)
+            self.assertEqual(normalized(self.bounded(f"discover #{i}", lambda: c.discover(_id=_id), 10)),
+                             rpc_result(_id, h.DISCOVER_RESULT), f"round {i}")
+            junk = f"1999-01-{(i % 28) + 1:02d}"
+            self.assertEqual(self.bounded(f"junk #{i}", lambda: c.modern_tools_list(_id=_id + 1, version=junk), 10),
+                             h.unsupported_version(_id + 1, junk), f"round {i}")
+        self.assertEqual(self.bounded("bare ping", lambda: c.ping(_id=290), 10),
+                         rpc_error(290, -32602, MISSING_BOTH), "no legacy leniency after a modern opener")
+        self.assertEqual(self.bounded("modern unknown method", lambda: c.modern_send("no/such_method", _id=291), 10),
+                         rpc_error(291, -32601, "no/such_method"))
+        self.assertEqual(self.bounded("modern ping", lambda: c.modern_send("ping", _id=292), 10),
+                         rpc_error(292, -32601, "ping"), "ping is legacy vocabulary")
+        self.assertEqual(normalized(self.bounded("legacy initialize", c.initialize, 10)),
+                         rpc_result(1, h.legacy_init_result()))
+        self.assertIsNone(srv.poll(), "the server survived the flood")
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main(verbosity=2)
