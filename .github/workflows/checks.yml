@@ -19,8 +19,41 @@ permissions:
   contents: read
 
 jobs:
+  # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) loopback-TCP
+  # code; neither is visible to the Linux build, which alone runs fmt (platform-independent) and the
+  # fuzz-workspace check.
   rust:
-    name: Rust (fmt, clippy, test, build)
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
+      - uses: ./.github/actions/setup-moon
+        with:
+          rust: "true"
+      - if: runner.os == 'Linux'
+        run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - if: runner.os == 'Linux'
+        run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # The fuzz crate is excluded from the root workspace, so nothing above compiles it, and its targets
+      # rotted unnoticed once (nightly-fuzz.yml is the only job that runs them). --locked because nothing
+      # else exercises the fuzz workspace's own Cargo.lock.
+      - if: runner.os == 'Linux'
+        run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
+
+  # Built once; the suites that drive the binary download it (.github/actions/release-binary).
+  build-release:
+    name: Release binary (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -30,49 +63,10 @@ jobs:
       - uses: ./.github/actions/setup-moon
         with:
           rust: "true"
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-      - run: cargo build --release
-      - run: cargo doc --workspace --no-deps --document-private-items
-        env:
-          RUSTDOCFLAGS: -D warnings
-      # The fuzz crate is excluded from the root workspace, so nothing above compiles it, and its targets
-      # rotted unnoticed once (nightly-fuzz.yml is the only job that runs them). --locked because nothing
-      # else exercises the fuzz workspace's own Cargo.lock.
-      - run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
-
-  # The enclave/attestation code is cfg(target_os = "macos") and invisible to the ubuntu jobs; without this
-  # job it would only ever be compiled at release time.
-  rust-macos:
-    name: Rust (clippy, test) on macOS
-    runs-on: macos-14
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: moon run build-release
+      - uses: ./.github/actions/release-binary
         with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: ./.github/actions/setup-moon
-        with:
-          rust: "true"
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-
-  # Same platform-gap reasoning for the cfg(windows) loopback-TCP code.
-  rust-windows:
-    name: Rust (build, clippy, test) on Windows
-    runs-on: windows-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: ./.github/actions/setup-moon
-        with:
-          rust: "true"
-      - run: cargo build --all-targets
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+          mode: upload
 
   # Informational only: continue-on-error keeps a coverage-tooling failure from failing the all-green
   # aggregate, and there is no threshold. Gating comes later, deliberately, if the numbers prove stable.
@@ -128,8 +122,11 @@ jobs:
       - run: moon run check-gen
       - run: moon run check-envelope check-gen-isolation
 
-  version-consistency:
-    name: Version and extension ID consistency
+  # Every bun-side check that needs no build: version and extension-ID parity, the pin cross-checks, CJK
+  # containment, the typography mirror of the managed ci.yml gate, the nightly drivers' tests, docs parity,
+  # and the compose subset. check-docs-policy imports the settings schema, hence the install.
+  hygiene:
+    name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -137,7 +134,11 @@ jobs:
         with:
           fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
       - uses: ./.github/actions/setup-moon
-      - run: moon run check-version check-extension-id check-toolchain check-hasher check-ignored
+      - run: bun install --frozen-lockfile
+      - run: >-
+          moon run check-version check-extension-id check-toolchain check-hasher check-ignored
+          check-cjk check-typography check-fuzz-smoke check-harness-driver
+          check-docs-literals check-docs-policy check-compose
 
   # typos is not here: the managed ci.yml's standard-checks job runs the fleet's typos action over the same
   # _typos.toml (the local gate keeps its `moon run typos`).
@@ -160,16 +161,16 @@ jobs:
 
   linux-install:
     name: Linux registration (doctor --fix / uninstall, isolated XDG directories)
+    needs: build-release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: ./.github/actions/setup-moon
+      - uses: ./.github/actions/release-binary
         with:
-          rust: "true"
-      - run: cargo build --release
+          mode: download
       - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
         run: |
           tmp="$(mktemp -d)"
@@ -259,56 +260,42 @@ jobs:
             test ! -e "$tmp/data/chromium-bridge/run-host-$b.sh"
           done
 
-  e2e:
-    name: Protocol e2e (Python)
+  # The suites hardcode target/release/chromium-bridge and build it only when missing, so the downloaded
+  # binary is the one they drive. --upstream none skips the task's build-release dep (the artifact stands in
+  # for it) and check-uv (a missing uv fails the run loudly anyway).
+  protocol:
+    name: Protocol suite (${{ matrix.suite }}, Python)
+    needs: build-release
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [e2e, adversarial, chaos]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
       - uses: ./.github/actions/setup-moon
+      - uses: ./.github/actions/release-binary
         with:
-          rust: "true"
-      - run: moon run test-e2e
-
-  adversarial:
-    name: Adversarial break-in (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: ./.github/actions/setup-moon
-        with:
-          rust: "true"
-      - run: moon run test-adversarial
-
-  chaos:
-    name: Fault-injection chaos (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: ./.github/actions/setup-moon
-        with:
-          rust: "true"
-      - run: moon run test-chaos
+          mode: download
+      - env:
+          SUITE: ${{ matrix.suite }}
+        run: moon run "test-${SUITE}" --upstream none
 
   interop:
     name: MCP SDK v2 client interop (bun)
+    needs: build-release
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-moon
+      - uses: ./.github/actions/release-binary
         with:
-          rust: "true"
+          mode: download
       - run: bun install --frozen-lockfile
-      - run: cargo build --release
       # moon does not resolve runInCI:false tasks when CI=true, and test-interop, test-browser, and
       # harness-smoke keep that flag so affected-only `moon ci` runs never need the release binary or a
       # browser; CI invokes those suites' commands directly (here, browser.yml, nightly.yml).
@@ -395,37 +382,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: moon run web:build web:test
 
-  cjk:
-    name: CJK containment (zh text only in locale files)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: ./.github/actions/setup-moon
-      # check-typography mirrors the managed ci.yml's typography gate so the local tooling cannot rot
-      # unnoticed; the fuzz-smoke and harness drivers feed nightly jobs, so their tests ride in the gate.
-      - run: moon run check-cjk check-typography check-fuzz-smoke check-harness-driver
-
   # The cargo deny pass gates merges: a new advisory lands as a red PR check, not a silent scheduled failure.
   # nightly.yml calls the same reusable workflow daily. A job calling a reusable workflow fails if any called
   # job fails, so this single job aggregates the audit legs for all-green.
   audits:
     name: Security audits
     uses: ./.github/workflows/audits.yml
-
-  # The living docs' hand-stated identifiers, protocol versions, env vars, tool tables, and settings defaults
-  # are diffed against the canonical Rust/TS sources.
-  docs-parity:
-    name: Docs parity (literals, tool tables, settings defaults)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: ./.github/actions/setup-moon
-      # check-docs-policy imports the settings schema and the generated catalogue, hence the install.
-      - run: bun install --frozen-lockfile
-      - run: moon run check-docs-literals check-docs-policy check-compose
