@@ -188,7 +188,7 @@ Podman rootless maps the host user to container root, so `compose.podman.yaml` a
 
 ```sh
 env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
-# from a linked worktree, add COMPOSE_GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
+# from a linked worktree, use the launcher instead: bun scripts/compose-run.ts shell
 ```
 
 The isolation guard's container exception is stated once, in the Safety section of [`tests/README.md`](../tests/README.md#-safety---never-point-browser-tests-at-your-daily-chrome).

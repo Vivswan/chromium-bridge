@@ -2,11 +2,13 @@
 # privilege, socket, or host network. Keys stay within the Compose Specification subset both
 # `docker compose` and `podman compose` implement (scripts/check-compose-compat.ts gates it).
 #
-# Compose reads three values from the environment that only the host knows; scripts/compose-run.ts
+# Compose reads these values from the environment; only the host knows them, and scripts/compose-run.ts
 # (behind the moon tasks) supplies them:
-#   UID, GID          -> the caller's ids, so files written on the bind mount are theirs
-#   COMPOSE_GIT_DIR   -> a linked worktree's git common dir, mounted read-only at its own absolute
-#                        path because the worktree's .git file names it by that path
+#   UID, GID             -> the caller's ids, so files written on the bind mount are theirs
+#   COMPOSE_GIT_DIR      -> the git common dir, mounted read-only at /work-git (a linked worktree keeps
+#                           it outside the checkout)
+#   COMPOSE_GIT_POINTER  -> in a linked worktree, a file naming that mount point, covering the host's
+#                           .git file whose path git in the container could not resolve
 # Podman rootless adds compose.podman.yaml.
 
 # One project name, so every checkout and worktree of the repository shares the named volumes.
@@ -23,10 +25,19 @@ x-ci: &ci
   shm_size: 1gb
   volumes:
     - ./:/work:z
-    # Long form: an interpolated mount keeps its options as fields a variable cannot reach.
+    # Long form: an interpolated mount keeps its options as fields a variable cannot reach. The host
+    # path is the source only; the target is fixed, so a Windows path never becomes a Linux mount point.
     - type: bind
       source: ${COMPOSE_GIT_DIR:-./.git}
-      target: ${COMPOSE_GIT_DIR:-/work/.git}
+      target: /work-git
+      read_only: true
+      bind:
+        selinux: z
+    # In a linked worktree the launcher's pointer file names the git dir by its mount point above and
+    # covers the host's .git file; in a plain checkout this mounts .git over itself.
+    - type: bind
+      source: ${COMPOSE_GIT_POINTER:-./.git}
+      target: /work/.git
       read_only: true
       bind:
         selinux: z

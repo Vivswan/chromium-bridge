@@ -105,6 +105,15 @@ describe("nonPortableKeys", () => {
       }),
       'compose.services.ci.volumes[0].bind.selinux: Invalid option: expected one of "z"|"Z"',
     ],
+    [
+      "bind options on a named volume, which docker compose drops with only a warning",
+      withService({
+        volumes: [
+          { type: "volume", source: "bun-cache", target: "/cache", bind: { selinux: "z" } },
+        ],
+      }),
+      'compose.services.ci.volumes[0]: Unrecognized key: "bind"',
+    ],
   ])("rejects %s, naming the path", (_name, doc, finding) => {
     expect(nonPortableKeys(doc)).toEqual([finding]);
   });

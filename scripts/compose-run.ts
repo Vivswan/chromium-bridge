@@ -1,16 +1,18 @@
 #!/usr/bin/env bun
 // Runs one compose.yaml service, supplying what only the host knows: the engine (podman adds its
-// user-namespace override file), the caller's uid and gid, and a linked worktree's git common dir,
-// which must be mounted at its own absolute path for git inside the container to resolve the
-// worktree's .git file.
+// user-namespace override file), the caller's uid and gid, and the git common dir, which a linked
+// worktree keeps outside the checkout. A worktree's .git file names that dir by a HOST path, and
+// moon runs git with GIT_DIR cleared, so the container gets a pointer file bind-mounted over
+// /work/.git that names the dir by its fixed mount point, /work-git, instead.
 //
 //   bun scripts/compose-run.ts ci|browser|shell [command [args...]]
 //
 // bash and zsh refuse `UID=...` in a shell, so the ids are set here, not in the moon task.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { die, repoRoot } from "./lib.ts";
 
 const [service, ...command] = process.argv.slice(2);
@@ -20,44 +22,45 @@ const engine = process.env.CONTAINER_ENGINE ?? "docker";
 const composeFiles = ["-f", "compose.yaml"];
 if (engine === "podman") composeFiles.push("-f", "compose.podman.yaml");
 
-const gitCommonDir = realpathSync(
-  execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  }).trim(),
-);
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   UID: String(process.getuid?.() ?? 1000),
   GID: String(process.getgid?.() ?? 1000),
+  COMPOSE_GIT_DIR: execFileSync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { cwd: repoRoot, encoding: "utf8" },
+  ).trim(),
 };
-// A plain checkout's .git is already inside the bind mount; only a linked worktree needs the common
-// dir mounted separately, and only one whose .git file names it by absolute path resolves from /work
-// (`git worktree add --relative-paths` writes a pointer that would resolve relative to /work instead).
+
+// The pointer's text is `gitdir: <path>`; git itself tolerates a CRLF ending, so trim() does too.
 const dotGit = join(repoRoot, ".git");
-if (gitCommonDir !== realpathSync(dotGit)) {
-  if (statSync(dotGit).isFile()) {
-    const pointer = readFileSync(dotGit, "utf8")
+const scratch = statSync(dotGit).isFile() ? mkdtempSync(join(tmpdir(), "compose-run-")) : null;
+if (scratch) {
+  const worktree = basename(
+    readFileSync(dotGit, "utf8")
       .replace(/^gitdir:\s*/, "")
-      .trim();
-    if (!isAbsolute(pointer)) {
-      die(
-        `this worktree's .git file points at '${pointer}', a relative path the container cannot resolve; use a worktree created without --relative-paths`,
-      );
-    }
-  }
-  env.COMPOSE_GIT_DIR = gitCommonDir;
+      .trim(),
+  );
+  const pointer = join(scratch, "git-pointer");
+  writeFileSync(pointer, `gitdir: /work-git/worktrees/${worktree}\n`);
+  env.COMPOSE_GIT_POINTER = pointer;
 }
 
-function compose(...args: string[]): void {
+function compose(...args: string[]): number {
   const run = spawnSync(engine, ["compose", ...composeFiles, ...args], {
     cwd: repoRoot,
     stdio: "inherit",
     env,
   });
-  if (run.error) die(`could not start ${engine}: ${run.error.message}`, 2);
-  if (run.status !== 0) process.exit(run.status ?? 1);
+  if (run.error) {
+    console.error(`error: could not start ${engine}: ${run.error.message}`);
+    return 2;
+  }
+  return run.status ?? 1;
 }
 
-compose("build", service);
-compose("run", "--rm", service, ...command);
+let status = compose("build", service);
+if (status === 0) status = compose("run", "--rm", service, ...command);
+if (scratch) rmSync(scratch, { recursive: true, force: true });
+process.exit(status);

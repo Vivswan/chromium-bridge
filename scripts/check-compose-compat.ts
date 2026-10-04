@@ -60,18 +60,32 @@ const shortMount = z.string().superRefine((mount, ctx) => {
   }
 });
 
-const longMount = extensible({
-  type: z.enum(["bind", "volume"]),
+// `bind:` options belong to bind mounts alone; on a named volume docker compose only warns and drops
+// them, so a typo there would pass silently. Here it is a finding.
+const bindMount = extensible({
+  type: z.literal("bind"),
   source: z.string(),
   target: z.string(),
   read_only: z.boolean().optional(),
   bind: extensible({ selinux: z.enum(["z", "Z"]).optional() }).optional(),
 });
+const volumeMount = extensible({
+  type: z.literal("volume"),
+  source: z.string(),
+  target: z.string(),
+  read_only: z.boolean().optional(),
+});
 
 // Dispatched by shape rather than a zod union, so a finding names the failing field instead of the
 // union's generic "Invalid input".
 const mount = z.unknown().superRefine((value, ctx) => {
-  const result = (typeof value === "string" ? shortMount : longMount).safeParse(value);
+  const schema =
+    typeof value === "string"
+      ? shortMount
+      : isMapping(value) && value.type === "volume"
+        ? volumeMount
+        : bindMount;
+  const result = schema.safeParse(value);
   if (result.success) return;
   for (const issue of result.error.issues) ctx.addIssue({ ...issue, path: [...issue.path] });
 });

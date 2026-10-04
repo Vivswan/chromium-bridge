@@ -20,6 +20,13 @@ on:
 permissions:
   contents: read
 
+# Runs serialize, so no other run of this workflow pushes between a run's head check and its own push.
+# GitHub keeps one pending run per group: a push superseded before its run starts is cancelled, and its
+# content tag is published by a manual dispatch if ever needed.
+concurrency:
+  group: container-image
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Build and push the CI image
@@ -37,10 +44,26 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
-        # GHCR coordinates are lowercase; the owner's login and the repository name need not be.
+        # GHCR coordinates are lowercase; the owner's login and the repository name need not be. The
+        # tag hashes the per-file checksums, so each input is framed by its name and bytes cannot move
+        # across file boundaries unnoticed.
         run: |
           echo "name=ghcr.io/${OWNER,,}/${REPO,,}-ci" >> "$GITHUB_OUTPUT"
-          echo "tag=$(cat Containerfile .dockerignore .prototools rust-toolchain.toml .github/workflows/checks.yml scripts/container-entrypoint.sh | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(sha256sum Containerfile .dockerignore .prototools rust-toolchain.toml .github/workflows/checks.yml scripts/container-entrypoint.sh | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - name: Is this commit still the head of main
+        id: latest
+        # A re-run or a late finish of an older main commit must not move `latest` backward.
+        run: |
+          head="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::notice::latest not moved: ${GITHUB_REF} is not main"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [ "$head" != "$GITHUB_SHA" ]; then
+            echo "::notice::latest not moved: ${GITHUB_SHA} is no longer the head of main (${head})"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -55,6 +78,6 @@ jobs:
           push: true
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
-            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', steps.image.outputs.name) || '' }}
+            ${{ steps.latest.outputs.publish == 'true' && format('{0}:latest', steps.image.outputs.name) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
