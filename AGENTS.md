@@ -28,6 +28,7 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 - `.bun-version` is managed by sync; pin another version in a repo-owned workflow's version input, not in the dotfile.
 - Python with uv: `uv sync`, `uv run <command>` (metadata and dependencies in `pyproject.toml`)
 - Rust with cargo: `cargo build`, `cargo test`, `cargo clippy` (crate layout and dependencies in `Cargo.toml`)
+- Unsafe Rust: one operation per `unsafe` block, a `// SAFETY:` comment above each stating the invariant it relies on, and unsafe kept behind a safe API; the `[workspace.lints]` floor in the root `Cargo.toml` denies the first two and any undocumented public `unsafe fn`.
 
 ## Repository-specific guidance
 
