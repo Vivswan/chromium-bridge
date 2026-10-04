@@ -26,14 +26,13 @@
 
 import {
   KEY_ID_HEX,
-  LangCurrentFrameSchema,
   PolicyCurrentFrameSchema,
   type PolicyInboundFrame,
   PolicyInboundFrameSchema,
   type StoredPolicyState,
   StoredPolicyStateSchema,
 } from "@chromium-bridge/shared/enclave";
-import type { LangSetWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import { LangCurrentFrameSchema, type LangSetWire } from "@chromium-bridge/shared/envelope.gen";
 import {
   PolicyDocSchema,
   type PolicyValues,

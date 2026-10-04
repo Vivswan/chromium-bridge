@@ -1,13 +1,23 @@
-// The fail-closed generation rules (G1-G5) of scripts/gen-envelope.ts,
-// exercised against schemas that would otherwise turn into WEAKER Zod
+// The fail-closed generation rules (G1-G7, A1-A2) of scripts/gen-envelope.ts,
+// exercised against inputs that would otherwise turn into WEAKER Zod
 // validators than the Rust contract: objects without an explicit type,
 // unconstrained arrays, keywords the generator does not model, undiscriminated
-// oneOf, unresolved $refs. Every one of these must abort generation, never
+// oneOf, unresolved $refs, an unplanned Rust frame, an asymmetry entry on a
+// node it cannot apply to. Every one of these must abort generation, never
 // emit. The happy paths mirror the real schemars output shapes, and the
 // emitted source spellings are pinned so the generated file stays stable.
 
 import { describe, expect, test } from "bun:test";
-import { convert, prepare, splitFlattenedCommand } from "./gen-envelope";
+import { z } from "zod";
+import {
+  applyAsymmetries,
+  assertFramePlan,
+  assertGeneratedMatches,
+  convert,
+  prepare,
+  splitFlattenedCommand,
+  splitTaggedUnionSchema,
+} from "./gen-envelope";
 
 const strictObject = (properties: Record<string, unknown>, required: string[]) => ({
   type: "object",
@@ -214,7 +224,7 @@ describe("the emitted source spellings are pinned (keeps the generated file stab
     );
   });
 
-  test("arrays, unions, bounds, the empty object and the any-schema", () => {
+  test("arrays, unions, bounds, the empty object and the any-schema (unknown, so consumers narrow)", () => {
     expect(convert(prepare({ type: "array", items: strictObject({}, []) }, "$"), "t")).toBe(
       "z.array(z.object({}).strict())",
     );
@@ -226,7 +236,7 @@ describe("the emitted source spellings are pinned (keeps the generated file stab
     expect(convert(prepare({ type: "number", format: "int64", maximum: 10 }, "$"), "t")).toBe(
       "z.number().int().lte(10)",
     );
-    expect(convert(prepare({}, "$"), "t")).toBe("z.any()");
+    expect(convert(prepare({}, "$"), "t")).toBe("z.unknown()");
   });
 
   test("the override substitutes a named schema for the matched node", () => {
@@ -290,7 +300,7 @@ describe("splitFlattenedCommand (G6)", () => {
     expect(commands.get("tab_focus")).toEqual(tabFocusArgs);
     // The envelope then converts exactly as the untyped request always did.
     expect(convert(prepare(envelope, "$"), "BridgeReqWireSchema")).toBe(
-      'z.object({ "args": z.any(), "browser": z.union([z.string(), z.null()]).optional(), ' +
+      'z.object({ "args": z.unknown(), "browser": z.union([z.string(), z.null()]).optional(), ' +
         '"id": z.number().int().gte(0), "op": z.string() }).strict()',
     );
   });
@@ -349,6 +359,312 @@ describe("splitFlattenedCommand (G6)", () => {
     ).toThrow("beside the command members");
     expect(() => splitFlattenedCommand(withBranch(branch("tab_list", noArgs)), "$")).toThrow(
       "repeats op",
+    );
+  });
+});
+
+describe("prepare models string enums (G5 placement)", () => {
+  test("a string enum survives and emits z.enum; anything else is refused", () => {
+    const kind = { type: "string", enum: ["hash", "team_id"] };
+    expect(prepare(kind, "$")).toEqual(kind);
+    expect(convert(prepare(kind, "$"), "t")).toBe('z.enum(["hash", "team_id"])');
+    for (const bad of [
+      { type: "string", enum: [] },
+      { type: "string", enum: ["a", "a"] },
+      { type: "string", enum: ["a", 1] },
+      { type: "integer", enum: ["a"] },
+      { type: "string", enum: ["a"], const: "a" },
+    ]) {
+      expect(() => prepare(bad, "$")).toThrow("G5");
+    }
+  });
+});
+
+// The asymmetry pass: the table's changes applied at their paths, the reader rules everywhere, and every way
+// an entry can fail to apply (A1). The fixtures are the prepared shapes the Rust readers have today.
+describe("applyAsymmetries", () => {
+  const reader = strictObject(
+    {
+      id: { type: "integer", format: "uint64", minimum: 0 },
+      error: { type: ["string", "null"] },
+      label: { type: "string" },
+      anchor: {
+        anyOf: [
+          strictObject({ kind: { type: "string", const: "hash" }, value: { type: "string" } }, [
+            "kind",
+            "value",
+          ]),
+          strictObject({ kind: { type: "string", const: "team_id" }, value: { type: "string" } }, [
+            "kind",
+            "value",
+          ]),
+        ],
+      },
+      overlay: {
+        anyOf: [strictObject({ cdpMode: { type: ["boolean", "null"] } }, []), { type: "null" }],
+      },
+    },
+    ["id", "anchor"],
+  );
+  const entry = (changes: unknown) =>
+    ({ direction: "narrow", reason: "r", changes, probes: {} }) as Parameters<
+      typeof applyAsymmetries
+    >[2][string];
+
+  test("the reader rules: null arms dropped everywhere, objects loose on a control frame only", () => {
+    const loose = applyAsymmetries(reader, "t", {}, true).schema;
+    expect(convert(loose, "t")).toBe(
+      'z.object({ "id": z.number().int().gte(0), "error": z.string().optional(), "label": z.string().optional(), ' +
+        '"anchor": z.union([z.object({ "kind": z.literal("hash"), "value": z.string() }).catchall(z.unknown()), ' +
+        'z.object({ "kind": z.literal("team_id"), "value": z.string() }).catchall(z.unknown())]), ' +
+        '"overlay": z.object({ "cdpMode": z.boolean().optional() }).catchall(z.unknown()).optional() }).catchall(z.unknown())',
+    );
+    const strict = applyAsymmetries(reader, "t", {}, false).schema;
+    expect(convert(strict, "t")).toContain('"error": z.string().optional()');
+    expect(convert(strict, "t")).not.toContain("catchall");
+  });
+
+  test("the changes, each at its path, and the emitted spellings", () => {
+    const { schema, replacements } = applyAsymmetries(
+      reader,
+      "t",
+      {
+        "$.properties.id": entry([{ change: "string-arm" }]),
+        "$.properties.label": entry([
+          { change: "string", minLength: 1, maxLength: 32, pattern: "^[a-z/]+$" },
+        ]),
+        "$.properties.anchor": entry([{ change: "tag-union-as-enum-object" }]),
+        "$.properties.anchor.properties.value": entry([{ change: "string", minLength: 1 }]),
+        "$.properties.overlay": entry([
+          { change: "generated-schema", symbol: "OverlaySchema", from: "./policy.gen" },
+        ]),
+      },
+      true,
+    );
+    expect(convert(schema, "t")).toBe(
+      'z.object({ "id": z.union([z.number().int().gte(0), z.string()]), "error": z.string().optional(), ' +
+        '"label": z.string().min(1).max(32).regex(/^[a-z\\/]+$/).optional(), ' +
+        '"anchor": z.object({ "kind": z.enum(["hash", "team_id"]), "value": z.string().min(1) }).catchall(z.unknown()), ' +
+        '"overlay": OverlaySchema.optional() }).catchall(z.unknown())',
+    );
+    // The replacement keeps the Rust node (post null-arm drop) for the A2 cross-check.
+    expect(replacements).toEqual([
+      {
+        path: "$.properties.overlay",
+        symbol: "OverlaySchema",
+        from: "./policy.gen",
+        rust: strictObject({ cdpMode: { type: ["boolean", "null"] } }, []),
+      },
+    ]);
+  });
+
+  // A1: every way an entry fails to apply aborts generation, naming the path.
+  const refused: readonly [string, Record<string, unknown>, string][] = [
+    [
+      "a path the schema lacks",
+      { "$.properties.ghost": entry([{ change: "string" }]) },
+      "does not have",
+    ],
+    [
+      "a string change on a non-string node",
+      { "$.properties.id": entry([{ change: "string" }]) },
+      "A1",
+    ],
+    [
+      "a string-arm on a non-numeric node",
+      { "$.properties.label": entry([{ change: "string-arm" }]) },
+      "A1",
+    ],
+    [
+      "a tag-union flatten on a plain node",
+      { "$.properties.label": entry([{ change: "tag-union-as-enum-object" }]) },
+      "A1",
+    ],
+    [
+      "a second change on a generated-schema replacement",
+      {
+        "$.properties.overlay": entry([
+          { change: "generated-schema", symbol: "S", from: "./x" },
+          { change: "string" },
+        ]),
+      },
+      "already a generated-schema replacement",
+    ],
+  ];
+  test.each(refused)("%s is refused", (_, entries, message) => {
+    expect(() =>
+      applyAsymmetries(reader, "t", entries as Parameters<typeof applyAsymmetries>[2], true),
+    ).toThrow(message);
+  });
+
+  test("a tag union whose variants disagree on the content field is refused", () => {
+    const mismatched = strictObject(
+      {
+        anchor: {
+          anyOf: [
+            strictObject({ kind: { type: "string", const: "a" }, value: { type: "string" } }, [
+              "kind",
+              "value",
+            ]),
+            strictObject({ kind: { type: "string", const: "b" }, value: { type: "integer" } }, [
+              "kind",
+              "value",
+            ]),
+          ],
+        },
+      },
+      ["anchor"],
+    );
+    expect(() =>
+      applyAsymmetries(
+        mismatched,
+        "t",
+        { "$.properties.anchor": entry([{ change: "tag-union-as-enum-object" }]) },
+        true,
+      ),
+    ).toThrow("one content field with one schema");
+  });
+  test("a required nullable property and nullable array items keep null; only an optional property drops it", () => {
+    const reader = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        values: { type: "array", items: { type: ["string", "null"] } },
+        label: { type: ["string", "null"] },
+        note: { type: ["string", "null"] },
+      },
+      required: ["values", "label"],
+    };
+    expect(convert(applyAsymmetries(reader, "t", {}, false).schema, "t")).toBe(
+      'z.object({ "values": z.array(z.union([z.string(), z.null()])), "label": z.union([z.string(), z.null()]), ' +
+        '"note": z.string().optional() }).strict()',
+    );
+  });
+});
+
+describe("assertFramePlan (G7)", () => {
+  const variant = (tag: string, extra: Record<string, unknown> = {}) => ({
+    type: "object",
+    properties: { type: { type: "string", const: tag }, ...extra },
+  });
+  test("an unplanned Rust frame, a planned frame the enum lost, and a bare tag with fields are refused", () => {
+    const planned = new Map(
+      [
+        "enclave_challenge",
+        "enclave_proof",
+        "enclave_error",
+        "enclave_revoke",
+        "enclave_revoked",
+        "presence_challenge",
+        "presence_proof",
+        "presence_error",
+      ].map((tag) => [tag, variant(tag)]),
+    );
+    expect(() => assertFramePlan("enclave", planned)).not.toThrow();
+    expect(() =>
+      assertFramePlan("enclave", new Map([...planned, ["enclave_new", variant("enclave_new")]])),
+    ).toThrow("unplanned frame enclave_new");
+    const lost = new Map(planned);
+    lost.delete("enclave_error");
+    expect(() => assertFramePlan("enclave", lost)).toThrow("has no such frame");
+    const grown = new Map([
+      ...planned,
+      ["enclave_revoked", variant("enclave_revoked", { reason: { type: "string" } })],
+    ]);
+    expect(() => assertFramePlan("enclave", grown)).toThrow(
+      "bare tag enclave_revoked carries fields reason",
+    );
+  });
+});
+
+describe("assertGeneratedMatches (A2)", () => {
+  const replacement = (rust: unknown) => ({
+    path: "$.properties.overlay",
+    symbol: "S",
+    from: "./x",
+    rust,
+  });
+  const rustOverlay = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      cdpMode: { type: ["boolean", "null"] },
+      confirmGraceMs: { type: ["integer", "null"], minimum: 0 },
+    },
+  };
+  test("same fields and base types pass; a missing field or a changed type is refused", () => {
+    const matching = z.strictObject({
+      cdpMode: z.boolean().optional(),
+      confirmGraceMs: z.int().nonnegative().optional(),
+    });
+    expect(() => assertGeneratedMatches(replacement(rustOverlay), matching)).not.toThrow();
+    const missing = z.strictObject({ cdpMode: z.boolean().optional() });
+    expect(() => assertGeneratedMatches(replacement(rustOverlay), missing)).toThrow(
+      "has fields [cdpMode]",
+    );
+    const retyped = z.strictObject({
+      cdpMode: z.boolean().optional(),
+      confirmGraceMs: z.string().optional(),
+    });
+    expect(() => assertGeneratedMatches(replacement(rustOverlay), retyped)).toThrow(
+      "says string but the Rust node says integer",
+    );
+    // The any-schema has nothing to hold the generated schema to.
+    expect(() => assertGeneratedMatches(replacement({}), missing)).not.toThrow();
+  });
+  test("a loose replacement of a strict Rust node is refused", () => {
+    const rust = {
+      type: "object",
+      additionalProperties: false,
+      properties: { cdpMode: { type: ["boolean", "null"] } },
+    };
+    const replacement = { path: "$.properties.overlay", symbol: "S", from: "./x", rust };
+    expect(() =>
+      assertGeneratedMatches(replacement, z.strictObject({ cdpMode: z.boolean().optional() })),
+    ).not.toThrow();
+    expect(() =>
+      assertGeneratedMatches(replacement, z.looseObject({ cdpMode: z.boolean().optional() })),
+    ).toThrow("admits unknown fields where the Rust node refuses them");
+  });
+});
+
+describe("splitTaggedUnionSchema", () => {
+  const variantA = {
+    type: "object",
+    properties: { type: { type: "string", const: "a" }, x: { $ref: "#/$defs/X" } },
+    required: ["type"],
+  };
+  const variantB = {
+    type: "object",
+    properties: { type: { type: "string", const: "b" } },
+    required: ["type"],
+  };
+  const defs = { X: { type: "string" } };
+  const withX = (x: unknown) => ({
+    oneOf: [{ ...variantA, properties: { ...variantA.properties, x } }, variantB],
+    $defs: defs,
+  });
+  const partX = (schema: unknown) =>
+    (splitTaggedUnionSchema(schema).get("a") as { properties: { x: unknown } }).properties.x;
+
+  test("splits per tag and inlines $defs indirection (an annotation beside the $ref is dropped)", () => {
+    const parts = splitTaggedUnionSchema({ oneOf: [variantA, variantB], $defs: defs });
+    expect([...parts.keys()]).toEqual(["a", "b"]);
+    expect(partX({ oneOf: [variantA, variantB], $defs: defs })).toEqual({ type: "string" });
+    expect(partX(withX({ $ref: "#/$defs/X", description: "doc" }))).toEqual({ type: "string" });
+  });
+
+  test("refuses non-unions, tagless variants, duplicate tags, and a $ref with constraint siblings", () => {
+    expect(() => splitTaggedUnionSchema({ type: "object" })).toThrow("oneOf");
+    expect(() => splitTaggedUnionSchema({ oneOf: [{ type: "object", properties: {} }] })).toThrow(
+      "type",
+    );
+    expect(() => splitTaggedUnionSchema({ oneOf: [variantB, variantB] })).toThrow("duplicate");
+    expect(() => splitTaggedUnionSchema(withX({ $ref: "#/$defs/X", minLength: 1 }))).toThrow(
+      "siblings",
+    );
+    expect(() => splitTaggedUnionSchema(withX({ $ref: "#/$defs/Missing" }))).toThrow(
+      "unresolvable",
     );
   });
 });

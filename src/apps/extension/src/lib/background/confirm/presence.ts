@@ -26,12 +26,14 @@
 
 import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
 import {
-  PresenceErrorFrameSchema,
   type PresenceInboundFrame,
   PresenceInboundFrameSchema,
-  PresenceProofFrameSchema,
 } from "@chromium-bridge/shared/enclave";
-import type { PresenceChallengeWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import {
+  type PresenceChallengeWire,
+  PresenceErrorFrameSchema,
+  PresenceProofFrameSchema,
+} from "@chromium-bridge/shared/envelope.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { browser } from "wxt/browser";
 import type { Connection, PortCollaborator } from "../connection";

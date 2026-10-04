@@ -5,9 +5,9 @@
 // silence and never an undeclared shape.
 
 import { z } from "zod";
-
 import { ConfirmPayloadSchema } from "./confirm";
-import { AuditEntrySchema, KillMirrorSchema, TrustedClientSchema } from "./enclave";
+import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
+import { TrustedClientSchema } from "./envelope.gen";
 import { UI_LANGUAGES } from "./settings";
 
 /** The answer to a message the sender was not allowed to issue, a message the

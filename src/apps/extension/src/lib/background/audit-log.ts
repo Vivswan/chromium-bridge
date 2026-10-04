@@ -25,7 +25,7 @@ import {
   AuditEntrySchema,
   type AuditEventKind,
 } from "@chromium-bridge/shared/enclave";
-import type { AuditEventWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import type { AuditEventWire } from "@chromium-bridge/shared/envelope.gen";
 import { browser } from "wxt/browser";
 import type { Connection, PortCollaborator } from "./connection";
 

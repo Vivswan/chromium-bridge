@@ -345,7 +345,7 @@ tasks:
         src/packages/shared/src/protocol.gen.ts \
         src/packages/shared/src/enclave.gen.ts \
         src/packages/shared/src/enclave-fixture.gen.ts \
-        src/packages/shared/src/envelope-wire.gen.ts \
+        src/packages/shared/src/envelope.gen.ts \
         src/packages/shared/src/audit.gen.ts \
         src/packages/shared/src/policy.gen.ts
 
@@ -374,13 +374,15 @@ tasks:
       bun test scripts/gen-envelope.test.ts
 
   check-envelope:
-    # Base freshness of the generated schemas is check-gen's job; the bun test covers the classifier-coverage
-    # rule against tables a live run cannot mutate (writer-only tag classified, pin gone stale).
-    description: 'Envelope asymmetry gate: hand-written Zod layer stays within the pinned parser asymmetries'
+    # The generated enforced validators differ from their faithful bases exactly as the asymmetry table declares
+    # (every entry's probes, both reader rules), the inbound classifiers match the generated reader plan, and the
+    # hand-written refinements stay pinned. Base freshness is check-gen's job; the bun test covers the gate's
+    # rules against tables a live run cannot mutate.
+    description: 'Envelope asymmetry gate: generated validators match the asymmetry table, classifiers match the reader plan'
     script: |
       set -e
-      bun scripts/check-envelope-parity.ts
-      bun test scripts/check-envelope-parity.test.ts
+      bun scripts/check-envelope.ts
+      bun test scripts/check-envelope.test.ts
 
   check-gen-isolation:
     # Gen-only tooling must stay out of the shipped binary's graph, and only `cargo tree -e normal` sees that

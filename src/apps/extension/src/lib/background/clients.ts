@@ -14,13 +14,13 @@
 // One request of each kind may be outstanding at a time; the host replies in
 // order on a single pipe, so this stays trivially correlatable without ids.
 
+import { type AdminInboundFrame, AdminInboundFrameSchema } from "@chromium-bridge/shared/enclave";
 import {
-  type AdminInboundFrame,
-  AdminInboundFrameSchema,
   ClientListResultSchema,
+  type ClientListWire,
   ClientRevokeResultSchema,
-} from "@chromium-bridge/shared/enclave";
-import type { ClientListWire, ClientRevokeWire } from "@chromium-bridge/shared/envelope-wire.gen";
+  type ClientRevokeWire,
+} from "@chromium-bridge/shared/envelope.gen";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import type { Connection, PortCollaborator } from "./connection";
 

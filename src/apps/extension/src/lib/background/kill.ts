@@ -21,9 +21,12 @@ import {
   isKillStatusFrame,
   type KillMirror,
   KillMirrorSchema,
-  type KillStatusResult,
 } from "@chromium-bridge/shared/enclave";
-import type { KillEngageWire, KillStatusWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import type {
+  KillEngageWire,
+  KillStatusResult,
+  KillStatusWire,
+} from "@chromium-bridge/shared/envelope.gen";
 import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
@@ -102,7 +105,7 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 
 // ---- port plumbing (mirrors clients.ts) --------------------------------------
 
-/** Closed over the GENERATED wire types (envelope-wire.gen.ts <- protocol/control.rs), so a typo'd frame type is a
+/** Closed over the GENERATED wire types (envelope.gen.ts <- protocol/control.rs), so a typo'd frame type is a
  * compile error rather than an op the engage-arming switch in request() silently misses. Inbound kill_status_result
  * frames are classified by isKillStatusFrame in the collaborator; nothing malformed reaches handleKillFrame.
  *   kill_release  -> deliberately absent: the host refuses it from the extension; release lives in the CLI */

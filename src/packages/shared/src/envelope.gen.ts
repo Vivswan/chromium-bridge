@@ -1,25 +1,25 @@
 // GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
-// protocol/control.rs;
-// AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
-// policy::PolicyOverlay) by scripts/gen-envelope.ts -
-// DO NOT EDIT. Edit the Rust types, then run `moon run gen`.
+// protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
+// policy::PolicyOverlay) by scripts/gen-envelope.ts - DO NOT EDIT. Edit the Rust types or
+// src/packages/shared/src/envelope-asymmetries.ts, then run `moon run gen`.
 //
-// The FAITHFUL base wire schemas: strict objects (deny_unknown_fields ->
-// .strict()), required fields required, no defaults (see the fail-closed
-// generation rules G1-G6 in scripts/gen-envelope.ts). The extension never
-// runs the host->extension bases directly: envelope.ts and enclave.ts layer
-// the deliberate parser asymmetries on top - each pinned by
-// scripts/check-envelope-parity.ts (`moon run check-envelope`) and exercised
-// in tests/envelope-wire.gen.test.ts. The extension->host writer schemas
-// below exist for their inferred types only (constructor-site `satisfies`);
-// the enforcing reader for those frames is the Rust serde parser.
+// Per envelope and per host->extension control frame: the FAITHFUL base (*WireSchema: strict objects,
+// required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts) and the ENFORCED validator
+// the extension runs, which is the base plus exactly the asymmetry table (direction and reason per entry in
+// envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts, `moon run check-envelope`). The
+// policy_current reader is completed by the ok-split refinement in enclave.ts. The extension->host writer
+// schemas exist for their inferred types only (constructor-site `satisfies`); the enforcing reader for those
+// frames is the Rust serde parser.
 
 import { z } from "zod";
+import { OpArgsSchema } from "./ops.gen";
+import { PolicyOverlaySchema } from "./policy.gen";
 
-// The request envelope (BridgeReq) and the response envelope (BridgeResp).
+// The request envelope (BridgeReq) and the response envelope (BridgeResp): the faithful bases, then the
+// enforced validators the extension runs (the base plus the asymmetry table; strict like the host).
 export const BridgeReqWireSchema = z
   .object({
-    "args": z.any(),
+    "args": z.unknown(),
     "browser": z.union([z.string(), z.null()]).optional(),
     "id": z.number().int().gte(0),
     "op": z.string(),
@@ -28,15 +28,41 @@ export const BridgeReqWireSchema = z
 
 export const BridgeRespWireSchema = z
   .object({
-    "data": z.any().optional(),
+    "data": z.unknown().optional(),
     "error": z.union([z.string(), z.null()]).optional(),
     "id": z.number().int().gte(0),
     "ok": z.boolean(),
   })
   .strict();
 
-// One trusted-client entry (allowlist::ClientEntry), embedded in
-// client_list_result's `clients` array.
+export const BridgeReqSchema = z
+  .object({
+    "args": OpArgsSchema,
+    "browser": z
+      .string()
+      .min(1)
+      .max(32)
+      .regex(/^[A-Za-z0-9._-]+$/)
+      .optional(),
+    "id": z.union([z.number().int().gte(0), z.string()]),
+    "op": z.string().min(1),
+  })
+  .strict();
+
+export type BridgeReqEnvelope = z.infer<typeof BridgeReqSchema>;
+
+export const BridgeRespSchema = z
+  .object({
+    "data": z.unknown().optional(),
+    "error": z.string().optional(),
+    "id": z.union([z.number().int().gte(0), z.string()]),
+    "ok": z.boolean(),
+  })
+  .strict();
+
+export type BridgeResp = z.infer<typeof BridgeRespSchema>;
+
+// One trusted-client entry (allowlist::ClientEntry), embedded in client_list_result's `clients` array.
 export const ClientEntryWireSchema = z
   .object({
     "added_unix": z.number().int().gte(0),
@@ -48,7 +74,20 @@ export const ClientEntryWireSchema = z
   })
   .strict();
 
-// The host->extension control frames (ADR-0021/0025/0030/0031/0032).
+export const TrustedClientSchema = z
+  .object({
+    "added_unix": z.number().int().gte(0),
+    "anchor": z
+      .object({ "kind": z.enum(["hash", "team_id"]), "value": z.string().min(1) })
+      .catchall(z.unknown()),
+    "name": z.string().min(1),
+  })
+  .catchall(z.unknown());
+
+export type TrustedClient = z.infer<typeof TrustedClientSchema>;
+
+// The host->extension control frames: the faithful base, then the enforced reader (the base plus the
+// asymmetry table, read loose under its loose-frames rule).
 export const EnclaveProofWireSchema = z
   .object({
     "key_id": z.string(),
@@ -58,9 +97,26 @@ export const EnclaveProofWireSchema = z
   })
   .strict();
 
+export const EnclaveProofFrameSchema = z
+  .object({
+    "key_id": z.string().min(1),
+    "pubkey": z.string().min(1),
+    "sig": z.string().min(1),
+    "type": z.literal("enclave_proof"),
+  })
+  .catchall(z.unknown());
+
+export type EnclaveProofFrame = z.infer<typeof EnclaveProofFrameSchema>;
+
 export const EnclaveErrorWireSchema = z
   .object({ "reason": z.string(), "type": z.literal("enclave_error") })
   .strict();
+
+export const EnclaveErrorFrameSchema = z
+  .object({ "reason": z.string(), "type": z.literal("enclave_error") })
+  .catchall(z.unknown());
+
+export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
 
 export const PresenceProofWireSchema = z
   .object({
@@ -71,9 +127,26 @@ export const PresenceProofWireSchema = z
   })
   .strict();
 
+export const PresenceProofFrameSchema = z
+  .object({
+    "key_id": z.string().min(1),
+    "pubkey": z.string().min(1),
+    "sig": z.string().min(1),
+    "type": z.literal("presence_proof"),
+  })
+  .catchall(z.unknown());
+
+export type PresenceProofFrame = z.infer<typeof PresenceProofFrameSchema>;
+
 export const PresenceErrorWireSchema = z
   .object({ "reason": z.string(), "type": z.literal("presence_error") })
   .strict();
+
+export const PresenceErrorFrameSchema = z
+  .object({ "reason": z.string(), "type": z.literal("presence_error") })
+  .catchall(z.unknown());
+
+export type PresenceErrorFrame = z.infer<typeof PresenceErrorFrameSchema>;
 
 export const ClientListResultWireSchema = z
   .object({
@@ -85,6 +158,18 @@ export const ClientListResultWireSchema = z
   })
   .strict();
 
+export const ClientListResultSchema = z
+  .object({
+    "clients": z.array(TrustedClientSchema),
+    "enrolled": z.boolean(),
+    "error": z.string().optional(),
+    "ok": z.boolean(),
+    "type": z.literal("client_list_result"),
+  })
+  .catchall(z.unknown());
+
+export type ClientListResult = z.infer<typeof ClientListResultSchema>;
+
 export const ClientRevokeResultWireSchema = z
   .object({
     "error": z.union([z.string(), z.null()]).optional(),
@@ -92,6 +177,16 @@ export const ClientRevokeResultWireSchema = z
     "type": z.literal("client_revoke_result"),
   })
   .strict();
+
+export const ClientRevokeResultSchema = z
+  .object({
+    "error": z.string().optional(),
+    "ok": z.boolean(),
+    "type": z.literal("client_revoke_result"),
+  })
+  .catchall(z.unknown());
+
+export type ClientRevokeResult = z.infer<typeof ClientRevokeResultSchema>;
 
 export const KillStatusResultWireSchema = z
   .object({
@@ -101,6 +196,17 @@ export const KillStatusResultWireSchema = z
     "type": z.literal("kill_status_result"),
   })
   .strict();
+
+export const KillStatusResultSchema = z
+  .object({
+    "error": z.string().optional(),
+    "killed": z.boolean().optional(),
+    "ok": z.boolean(),
+    "type": z.literal("kill_status_result"),
+  })
+  .catchall(z.unknown());
+
+export type KillStatusResult = z.infer<typeof KillStatusResultSchema>;
 
 export const PolicyCurrentWireSchema = z
   .object({
@@ -136,6 +242,19 @@ export const PolicyCurrentWireSchema = z
   })
   .strict();
 
+export const PolicyCurrentFrameShapeSchema = z
+  .object({
+    "baseline": z.string().min(1).optional(),
+    "error": z.string().optional(),
+    "ok": z.boolean(),
+    "overlay": PolicyOverlaySchema.optional(),
+    "sig": z.string().min(1).optional(),
+    "type": z.literal("policy_current"),
+  })
+  .catchall(z.unknown());
+
+export type PolicyCurrentFrameShape = z.infer<typeof PolicyCurrentFrameShapeSchema>;
+
 export const LangCurrentWireSchema = z
   .object({
     "seq": z.number().int().gte(0),
@@ -144,19 +263,33 @@ export const LangCurrentWireSchema = z
   })
   .strict();
 
-// Which control-frame tags have a generated base schema above.
-// scripts/check-envelope-parity.ts cross-checks this against its per-frame
-// coverage plan, so a frame cannot silently drop out of generation.
+export const LangCurrentFrameSchema = z
+  .object({
+    "seq": z.number().int().gte(0),
+    "type": z.literal("lang_current"),
+    "value": z.string(),
+  })
+  .catchall(z.unknown());
+
+export type LangCurrentFrame = z.infer<typeof LangCurrentFrameSchema>;
+
+// Which control-frame tags have a generated reader above, and which are bare classification tags.
+// scripts/check-envelope.ts holds the extension's inbound classifiers to these.
 export const GENERATED_WIRE_FRAMES = {
   enclave: ["enclave_proof", "enclave_error", "presence_proof", "presence_error"],
   admin: ["client_list_result", "client_revoke_result", "kill_status_result"],
   policy: ["policy_current", "lang_current"],
 } as const;
 
-// The extension->host writer frames (the extension constructs these; the
-// enforcing reader is the Rust serde parser). Emitted for their inferred
-// types: constructor sites claim conformance with `satisfies`, so a
-// drifted field or tag is a compile error. Never used as runtime parsers.
+export const BARE_TAG_FRAMES = {
+  enclave: ["enclave_revoked"],
+  admin: [],
+  policy: [],
+} as const;
+
+// The extension->host writer frames (the extension constructs these; the enforcing reader is the Rust
+// serde parser). Emitted for their inferred types: constructor sites claim conformance with `satisfies`,
+// so a drifted field or tag is a compile error. Never used as runtime parsers.
 export const EnclaveChallengeWireSchema = z
   .object({
     "context": z.union([z.string(), z.null()]).optional(),
@@ -232,9 +365,6 @@ export const LangGetWireSchema = z.object({ "type": z.literal("lang_get") }).str
 export type LangGetWire = z.infer<typeof LangGetWireSchema>;
 
 // Which extension->host frames have a generated writer schema above.
-// scripts/check-envelope-parity.ts cross-checks this against its
-// "rust-parsed" plans, so a writer frame cannot silently drop out of
-// generation either.
 export const GENERATED_WRITER_FRAMES = {
   enclave: ["enclave_challenge", "enclave_revoke", "presence_challenge"],
   admin: [

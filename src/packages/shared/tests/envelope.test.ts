@@ -4,7 +4,8 @@
 // sends. This is the proof that the runtime validation fails closed.
 
 import { describe, expect, test } from "bun:test";
-import { BridgeRespSchema, parseBridgeReq } from "../src/envelope";
+import { parseBridgeReq } from "../src/envelope";
+import { BridgeRespSchema } from "../src/envelope.gen";
 
 function refusal(msg: unknown): { id?: number | string; error: string } {
   const parsed = parseBridgeReq(msg);
@@ -59,8 +60,8 @@ describe("parseBridgeReq refuses malformed envelopes", () => {
   });
 
   test("an id the schema rejects is never echoed back on the refusal", () => {
-    // A fractional or unsafe-integer id fails BridgeIdSchema, so echoing it
-    // would make the refusal response itself malformed.
+    // A fractional or unsafe-integer id fails the envelope's own id schema, so
+    // echoing it would make the refusal response itself malformed.
     expect(refusal({ id: 1.5, op: "tab_list", args: {}, extra: 1 }).id).toBeUndefined();
     expect(refusal({ id: 2 ** 60, op: "tab_list", args: {} }).id).toBeUndefined();
   });
