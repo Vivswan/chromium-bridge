@@ -230,7 +230,7 @@ fn admin_control_serde_roundtrips() {
         enrolled: true,
         clients: vec![ClientEntry {
             name: "claude-code".into(),
-            anchor: Anchor::TeamId("TEAMID0001".into()),
+            anchor: Anchor::TeamId(crate::ipc::TeamId::try_from("TEAMID0001").unwrap()),
             added_unix: 42,
         }],
         error: None,

@@ -291,10 +291,10 @@ pub enum Handshake {
 #[serde(deny_unknown_fields)]
 pub struct HarnessId {
     /// The parent's attested image hash (macOS cdhash / Linux exe SHA256).
-    pub hash: String,
+    pub hash: crate::ipc::HashDigest,
     /// The parent's macOS signing Team ID, when Team-ID signed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team_id: Option<String>,
+    pub team_id: Option<crate::ipc::TeamId>,
     /// Self-asserted human label (claude-code/copilot/codex/...); logs only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

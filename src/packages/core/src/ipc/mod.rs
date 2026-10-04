@@ -23,36 +23,12 @@
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod attest;
 mod handshake;
+mod identity;
 mod lockfile;
 mod peercred;
 mod platform;
 mod rand;
 mod socket;
-
-/// A harness's kernel-attested code identity, the input to the trusted-client
-/// allowlist decision ([`crate::allowlist`]). `hash` is the attested image
-/// hash (macOS `cdhash`, Linux `/proc/<pid>/exe` SHA256), always present.
-/// `team_id` is the macOS signing Team ID, present only for a Team-ID-signed
-/// image (always `None` on Linux and for ad-hoc / unsigned builds). Defined
-/// here (not in the Unix-only `attest` module) so it is nameable on every
-/// platform, including the Windows build where no attestation exists.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientIdentity {
-    pub hash: String,
-    pub team_id: Option<String>,
-}
-
-impl From<&crate::protocol::HarnessId> for ClientIdentity {
-    /// The allowlist-input projection of an attested harness identity. Drops
-    /// `name` deliberately: it is a self-asserted log label, never an
-    /// authorization key (ADR-0024).
-    fn from(h: &crate::protocol::HarnessId) -> Self {
-        ClientIdentity {
-            hash: h.hash.clone(),
-            team_id: h.team_id.clone(),
-        }
-    }
-}
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use attest::attest_parent;
@@ -63,6 +39,7 @@ pub use handshake::fuzz_api as handshake_fuzz;
 pub use handshake::{
     client_handshake, server_handshake, validate_label, BrowserLabel, DEFAULT_LABEL,
 };
+pub use identity::{ClientIdentity, HashDigest, TeamId};
 pub use lockfile::{listen_and_publish, LockFile, PublishOutcome};
 #[cfg(unix)]
 pub use peercred::checked_pid;
