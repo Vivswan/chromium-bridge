@@ -107,7 +107,9 @@ The full task menu, by area:
 
 ## moon: the canonical command interface
 
-Every task has one definition with declared inputs: the repo-wide tasks and runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`, `extension`, `web`) live in a `moon.yml` next to their code, and CI runs the same tasks (the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` for every step except the raw cargo verbs of the Rust OS matrix).
+Every task has one definition with declared inputs: the repo-wide tasks and runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`, `extension`, `web`) live in a `moon.yml` next to their code.
+
+CI runs the same tasks: the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` wherever a task exists for the step. The Rust OS matrix keeps raw cargo verbs, and the `runInCI: false` suites such as `test-interop` are invoked directly, since moon does not resolve them when `CI=true`.
 
 **Gates are never cached.** Every task is uncached by the workspace default (`taskOptions.cache: false` in `.moon/tasks/all.yml`): a gate that a cache hit can satisfy is not a gate, because a wrong hash would let unverified code land, and moon cannot hash gitignored inputs like the generated `.wxt/tsconfig.json`, while a mistaken `hasher.ignorePattern` would silently drop tracked files from every hash.
 
@@ -141,7 +143,9 @@ uv is pinned only in `.prototools`, and python is owned by uv exactly as before:
 
 `checks.yml` defines each concern once: a Rust OS matrix (ubuntu, macOS, Windows), one `build-release` job whose binary the protocol matrix (`e2e`, `adversarial`, `chaos`), `interop`, and `linux-install` download as an artifact, and the browser suites through the reusable `browser.yml` (input `chrome-version`), which `nightly.yml` calls too.
 
-Linux jobs that need the toolchain run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main). The workflow-level `CI_IMAGE_TAG` is the one switch; an empty value runs them on the bare runner with the same composite action.
+The Linux jobs run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main); the workflow-level `CI_IMAGE_TAG` is the one switch, and an empty value runs every job on the bare runner with the same composite action.
+
+Three jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), and the browser job (Chrome from `setup-chrome`).
 
 ## Working on the extension
 
@@ -168,7 +172,7 @@ bun tests/browser/run_all.ts                           # builds the extension, t
 CHROME_BIN=/path/to/isolated/chrome bun tests/browser/run_all.ts
 ```
 
-Without an isolated `CHROME_BIN` the runner skips; `BB_REQUIRE_BROWSER=1` or a named `BB_BROWSER_CANARY_DIR` turns that skip into a failure, and the runner requires every suite's RAN marker before it reports green ([`tests/README.md`](../tests/README.md#-safety---never-point-browser-tests-at-your-daily-chrome)).
+Without an isolated `CHROME_BIN` the runner skips; the two CI switches that make a skip or a vacuous suite fail are stated once, in the Safety section of [`tests/README.md`](../tests/README.md#-safety---never-point-browser-tests-at-your-daily-chrome).
 
 ## Running the gate and the browser suites in a container
 
