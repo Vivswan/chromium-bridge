@@ -267,14 +267,6 @@ const OVERLAY_FIELD: Reconciliation = {
 const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconciliation>>> = {
   request: {
     "$.properties.id": ID_FIELD,
-    // serde's Option<i64> also accepts an explicit null where Zod's
-    // .optional() only accepts absence (our writers never emit null:
-    // skip_serializing_if); the Zod side adds the JS-safe integer bounds.
-    "$.properties.tabId": {
-      rust: { type: ["integer", "null"], format: "int64" },
-      zod: { type: "integer", minimum: -JS_SAFE, maximum: JS_SAFE },
-      canonical: { type: "integer" },
-    },
     // The Zod side rejects the empty op early; the Rust side leaves op
     // validation to the catalogue lookup.
     "$.properties.op": {

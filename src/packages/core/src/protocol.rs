@@ -342,7 +342,7 @@ pub enum AttachReply {
 }
 
 /// A request from the MCP server to the extension, newline-delimited JSON over the bridge socket:
-/// `{ id, op, args, tabId?, browser? }`. The whole frame fails the parse when any part is outside the contract, so
+/// `{ id, op, args, browser? }`. The whole frame fails the parse when any part is outside the contract, so
 /// a frame the reader accepts is a known tool with schema-valid arguments and nothing else on the envelope.
 ///
 /// ```text
@@ -370,10 +370,6 @@ pub struct BridgeReq {
     /// `op` and `args` fields.
     #[serde(flatten)]
     pub command: BridgeCommand,
-    /// Optional target tab, `tabId` on the wire (the contract and the
-    /// extension use camelCase envelope fields).
-    #[serde(default, rename = "tabId", skip_serializing_if = "Option::is_none")]
-    pub tab_id: Option<i64>,
     /// The label of the browser this request was routed to. The MCP server
     /// resolves the tool call's `browser` argument against its connection
     /// registry and stamps the outcome here, so the envelope records which

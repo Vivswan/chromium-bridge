@@ -20,7 +20,6 @@ const JS_SAFE = Number.MAX_SAFE_INTEGER;
 // What schemars emits for the field today (Rust side)...
 const RUST = {
   id: { type: "integer", format: "uint64", minimum: 0 },
-  tabId: { type: ["integer", "null"], format: "int64" },
   op: { type: "string" },
   browser: { type: ["string", "null"] },
   error: { type: ["string", "null"] },
@@ -30,7 +29,6 @@ const ZOD = {
   id: {
     anyOf: [{ type: "integer", minimum: -JS_SAFE, maximum: JS_SAFE }, { type: "string" }],
   },
-  tabId: { type: "integer", minimum: -JS_SAFE, maximum: JS_SAFE },
   op: { type: "string", minLength: 1 },
   browser: { type: "string", minLength: 1, maxLength: 32, pattern: "^[A-Za-z0-9._-]+$" },
   error: { type: "string" },
@@ -106,8 +104,8 @@ describe("normalizeEnvelopeSchema", () => {
   test("R4: today's real derivations reconcile field by field", () => {
     expect(
       diffSchemas(
-        rustReq({ id: RUST.id, tabId: RUST.tabId, op: RUST.op, browser: RUST.browser }),
-        zodReq({ id: ZOD.id, tabId: ZOD.tabId, op: ZOD.op, browser: ZOD.browser }),
+        rustReq({ id: RUST.id, op: RUST.op, browser: RUST.browser }),
+        zodReq({ id: ZOD.id, op: ZOD.op, browser: ZOD.browser }),
       ),
     ).toEqual([]);
     expect(
@@ -127,8 +125,8 @@ describe("normalizeEnvelopeSchema", () => {
     expect(() => zodReq({ op: RUST.op })).toThrow("approved zod form");
     // Rust's id widening into Zod's integer-or-string union.
     expect(() => rustReq({ id: ZOD.id })).toThrow("approved rust form");
-    // Rust's tabId dropping nullability for Zod's bounded integer.
-    expect(() => rustReq({ tabId: ZOD.tabId })).toThrow("approved rust form");
+    // Rust's browser dropping its null arm for Zod's grammar-checked string.
+    expect(() => rustReq({ browser: ZOD.browser })).toThrow("approved rust form");
   });
 
   test("R4 mutation: a changed integer width on id is refused", () => {
@@ -156,7 +154,9 @@ describe("normalizeEnvelopeSchema", () => {
   });
 
   test("R4 mutation: changed bounds and patterns are refused", () => {
-    expect(() => rustReq({ tabId: { type: "integer", minimum: 0 } })).toThrow("approved rust form");
+    expect(() => rustReq({ browser: { type: ["string", "null"], maxLength: 64 } })).toThrow(
+      "approved rust form",
+    );
     expect(() => zodReq({ browser: { ...ZOD.browser, maxLength: 64 } })).toThrow(
       "approved zod form",
     );
@@ -191,10 +191,10 @@ describe("normalizeEnvelopeSchema", () => {
         zodResp({ ok: { type: "boolean" } }),
       ),
     ).not.toEqual([]);
-    // Kind-scoped: tabId has no entry (and no refusal) on the response side.
-    expect(diffSchemas(rustResp({ tabId: RUST.tabId }), zodResp({ tabId: ZOD.tabId }))).not.toEqual(
-      [],
-    );
+    // Kind-scoped: browser has no entry (and no refusal) on the response side.
+    expect(
+      diffSchemas(rustResp({ browser: RUST.browser }), zodResp({ browser: ZOD.browser })),
+    ).not.toEqual([]);
     // A property present on one side only is always a difference.
     expect(
       diffSchemas(zodReq({ id: ZOD.id, extra: { type: "string" } }), zodReq({ id: ZOD.id })),

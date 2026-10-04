@@ -265,7 +265,6 @@ describe("splitFlattenedCommand (G6)", () => {
     properties: {
       browser: { type: ["string", "null"] },
       id: { type: "integer", format: "uint64", minimum: 0 },
-      tabId: { type: ["integer", "null"], format: "int64" },
     },
     oneOf: [branch("tab_list", noArgs), branch("tab_focus", tabFocusArgs)],
     required: ["id"],
@@ -283,7 +282,6 @@ describe("splitFlattenedCommand (G6)", () => {
         browser: { type: ["string", "null"] },
         id: { type: "integer", format: "uint64", minimum: 0 },
         op: { type: "string" },
-        tabId: { type: ["integer", "null"], format: "int64" },
       },
       required: ["id", "args", "op"],
       additionalProperties: false,
@@ -293,8 +291,7 @@ describe("splitFlattenedCommand (G6)", () => {
     // The envelope then converts exactly as the untyped request always did.
     expect(convert(prepare(envelope, "$"), "BridgeReqWireSchema")).toBe(
       'z.object({ "args": z.any(), "browser": z.union([z.string(), z.null()]).optional(), ' +
-        '"id": z.number().int().gte(0), "op": z.string(), ' +
-        '"tabId": z.union([z.number().int(), z.null()]).optional() }).strict()',
+        '"id": z.number().int().gte(0), "op": z.string() }).strict()',
     );
   });
 
@@ -322,7 +319,7 @@ describe("splitFlattenedCommand (G6)", () => {
       splitFlattenedCommand(
         withBranch({
           type: "object",
-          properties: { op: { type: "string", const: "x" }, args: noArgs, tabId: {} },
+          properties: { op: { type: "string", const: "x" }, args: noArgs, extra: {} },
           required: ["op", "args"],
         }),
         "$",

@@ -17,12 +17,13 @@
 
 import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/ops.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { browser } from "wxt/browser";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
 import { presenceRoutingEnabled } from "./confirm/presence";
 import { confirmWithUser } from "./confirm/service";
-import { resolveTargetTab } from "./tabs";
+import { activeTab } from "./tabs";
 
 interface GetDocumentResult {
   root?: { nodeId?: number; documentURL?: string };
@@ -32,7 +33,6 @@ interface QuerySelectorResult {
 }
 
 export async function pageUpload(
-  maybeTabId: number | undefined,
   args: OpArgs,
   policy: PolicyValues,
   panicEpoch: number,
@@ -61,7 +61,7 @@ export async function pageUpload(
     throw new Error(`page_upload needs an ABSOLUTE path, got: ${path}`);
   }
 
-  const tab = await resolveTargetTab(maybeTabId);
+  const tab = await activeTab();
   await ensureAllowed(tab.url);
   if (!isDebuggable(tab.url)) {
     throw new Error(
@@ -94,7 +94,7 @@ export async function pageUpload(
   // Re-fetch it and fail closed if the origin is no longer the one the user
   // approved uploading to.
   {
-    const current = await resolveTargetTab(tabId);
+    const current = await browser.tabs.get(tabId);
     const originNow = current.url ? new URL(current.url).origin : "";
     const originApproved = tab.url ? new URL(tab.url).origin : "";
     if (originNow !== originApproved || !isDebuggable(current.url)) {

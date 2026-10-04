@@ -22,12 +22,12 @@ import { selectBackend } from "./page-backend";
 import { decide } from "./policy";
 import { snapshotPrecise } from "./precise";
 import {
+  activeTab,
   pageBack,
   pageForward,
   pageNavigate,
   pageReload,
   type ResolvedTab,
-  resolveTargetTab,
   tabClose,
   tabFocus,
   tabList,
@@ -144,7 +144,7 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
     //   extension-owned surface) -> re-validate the tab -> backend act
     //   (content script or CDP per cdpMode, ADR-0017) -> egress masking.
     // Policy never lives in a backend, so it cannot drift between them.
-    const tab = await resolveTargetTab(req.tabId);
+    const tab = await activeTab();
     await ensureAllowed(tab.url);
     const backend = selectBackend(policy.cdpMode === true);
     const preflight = await preflightPageOp(req.op, req.args, tab, backend, policy, panicEpoch);
@@ -192,19 +192,19 @@ async function dispatchSw(req: SwReq, policy: PolicyValues, panicEpoch: number):
       return await pageReload();
     case "page_snapshot_precise":
       // Handled in SW via browser.debugger; does NOT go through content.js.
-      return await snapshotPrecise(req.tabId, req.args, policy);
+      return await snapshotPrecise(req.args, policy);
     case "cookie_get":
       // browser.cookies API is only available in SW context.
-      return await cookieGet(req.tabId, req.args);
+      return await cookieGet(req.args);
     case "console_get":
       // browser.debugger (CDP Runtime/Log); SW-only, does NOT go through content.js.
-      return await consoleGet(req.tabId, req.args);
+      return await consoleGet(req.args);
     case "page_handle_dialog":
       // browser.debugger (CDP Page.handleJavaScriptDialog); SW-only.
-      return await handleDialog(req.tabId, req.args, policy);
+      return await handleDialog(req.args, policy);
     case "page_upload":
       // browser.debugger (CDP DOM.setFileInputFiles); SW-only. OFF by default.
-      return await pageUpload(req.tabId, req.args, policy, panicEpoch);
+      return await pageUpload(req.args, policy, panicEpoch);
     default:
       return unreachable(req);
   }

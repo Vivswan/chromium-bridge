@@ -23,7 +23,7 @@ import { type BridgeCommand, isOpName, OP_ARG_SCHEMAS, OpArgsSchema } from "./op
 // (see BridgeReq::id in src/packages/core/src/protocol.rs).
 export const BridgeIdSchema = z.union([z.int(), z.string()]);
 
-// The request envelope (BridgeReq on the wire): { id, op, tabId?, browser?, args }.
+// The request envelope (BridgeReq on the wire): { id, op, browser?, args }.
 // The generated base contributes the shape and the strict envelope (unknown
 // top-level fields rejected); every override below is a pinned asymmetry.
 export const BridgeReqSchema = BridgeReqWireSchema.extend({
@@ -33,10 +33,6 @@ export const BridgeReqSchema = BridgeReqWireSchema.extend({
   // validation to the catalogue lookup. The per-op narrowing happens against
   // OP_ARG_SCHEMAS in parseBridgeReq.
   op: z.string().min(1),
-  // ASYMMETRY (tabId): no null arm (serde's Option accepts an explicit null;
-  // our writers omit absent fields) and JS-safe bounds. When omitted, the
-  // handler resolves the active tab.
-  tabId: z.int().optional(),
   // ASYMMETRY (browser): no null arm, and the browser-label grammar enforced
   // early. The label of the browser connection the MCP server routed this
   // request to - informational for the extension: each native-messaging port
@@ -78,7 +74,7 @@ export type BridgeResp = z.infer<typeof BridgeRespSchema>;
 // A fully validated request: the generated per-op command union intersected
 // with the envelope fields. The intersection distributes over the union, so
 // consumers narrow on `op` and get exactly the args that tool accepts.
-export type BridgeReq = BridgeCommand & { id: number | string; tabId?: number; browser?: string };
+export type BridgeReq = BridgeCommand & { id: number | string; browser?: string };
 
 export type ParseBridgeReqResult =
   | { ok: true; req: BridgeReq }

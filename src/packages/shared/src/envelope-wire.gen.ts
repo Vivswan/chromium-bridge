@@ -23,7 +23,6 @@ export const BridgeReqWireSchema = z
     "browser": z.union([z.string(), z.null()]).optional(),
     "id": z.number().int().gte(0),
     "op": z.string(),
-    "tabId": z.union([z.number().int(), z.null()]).optional(),
   })
   .strict();
 
