@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { collaborators } from "@/lib/background/port";
 
-const CONTROL_TAGS = Object.values(GENERATED_WIRE_FRAMES).flat();
+// The host->extension control tags from the generated wire table, plus the server's `cancel` signal (generated
+// beside the envelopes, not in the control table), which the dispatch collaborator owns.
+const CONTROL_TAGS = [...Object.values(GENERATED_WIRE_FRAMES).flat(), "cancel"];
 
 beforeEach(() => {
   fakeBrowser.reset();

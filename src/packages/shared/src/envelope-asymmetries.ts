@@ -189,6 +189,9 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
   response: {
     "$.properties.id": ID_STRING_ARM,
   },
+  cancel: {
+    "$.properties.id": ID_STRING_ARM,
+  },
   enclave_proof: {
     "$.properties.sig": PROOF_MATERIAL,
     "$.properties.key_id": PROOF_MATERIAL,

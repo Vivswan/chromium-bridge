@@ -34,7 +34,14 @@ import {
   READER_RULES,
 } from "../src/packages/shared/src/envelope-asymmetries";
 import { WEBAUTHN_FRAME_TYPES } from "../src/packages/shared/src/webauthn";
-import { BARE_TAG_FRAMES, GROUPS, type Group, READER_FRAMES, WRITER_FRAMES } from "./gen-envelope";
+import {
+  BARE_TAG_FRAMES,
+  GROUPS,
+  type Group,
+  READER_FRAMES,
+  SIGNAL_FRAMES,
+  WRITER_FRAMES,
+} from "./gen-envelope";
 
 type Frame = Record<string, unknown>;
 
@@ -64,6 +71,7 @@ function exported(name: string): z.ZodType {
 const FRAMES: Readonly<Record<string, FrameArms>> = {
   request: [{ id: 1, op: "tab_list", browser: "brave", args: {} }],
   response: [{ id: 1, ok: true, data: { any: "thing" }, error: "reason" }],
+  cancel: [{ type: "cancel", id: 1 }],
   enclave_proof: [{ type: "enclave_proof", sig: "s", key_id: "k", pubkey: "p" }],
   enclave_error: [{ type: "enclave_error", reason: "denied" }],
   presence_proof: [{ type: "presence_proof", sig: "s", key_id: "k", pubkey: "p" }],
@@ -154,6 +162,17 @@ export function readerPairs(): Readonly<Record<string, ReaderPair>> {
       loose: false,
     },
   };
+  // The signal frames are strict like the envelopes (their writer is the server, see SIGNAL_FRAMES).
+  for (const [tag, names] of Object.entries(SIGNAL_FRAMES)) {
+    const frames = FRAMES[tag];
+    if (frames === undefined) throw new Error(`check-envelope: no representative frame for ${tag}`);
+    pairs[tag] = {
+      base: exported(names.wire),
+      enforced: exported(names.enforced),
+      frames,
+      loose: false,
+    };
+  }
   for (const group of GROUPS) {
     for (const [tag, names] of Object.entries(READER_FRAMES[group])) {
       const frames = FRAMES[tag];

@@ -1,8 +1,8 @@
 //! Session state owned by the MCP server process: the registry of authenticated native-host connections (one per
 //! browser) and the pending-request table that correlates each `BridgeResp` to its `BridgeReq` by id.
 //!
-//! If no host is connected (Chrome closed, SW recycled), [`Session::call`] waits up to 12s for one to attach; the
-//! extension re-calls `connectNative` on its own.
+//! If no host is connected (Chrome closed, SW recycled), [`Session::call`] waits up to [`CONNECT_WAIT`] (bounded
+//! by the caller's deadline) for one to attach; the extension re-calls `connectNative` on its own.
 //!
 //! Connections are keyed by browser label (from the handshake `Response`, trusted only after the HMAC verifies;
 //! a missing label maps to [`DEFAULT_LABEL`]). A new dial-in under the SAME label replaces that connection;
@@ -10,13 +10,17 @@
 //!
 //! Every connection carries a monotonic `generation` (global across labels), and a pending request is bound to
 //! the generation it was sent under at insert, under the registry lock, immediately before the write, so an
-//! unbound in-flight entry is unrepresentable.
+//! unbound in-flight entry is unrepresentable. The pending entry is the one record of "no reply yet": the reader
+//! removes it when it delivers the reply, and the [`InFlight`] guard removes it on Drop, sending `cancel` through
+//! whatever connection holds the label by then. Nothing else removes an entry: a disconnect or the kill sweep only
+//! WAKES the caller ([`Delivery::Severed`]), so a request stranded by a host restart is still cancelled on the
+//! reconnected host, which reaches the same service worker.
 //!
 //! ```text
 //! reader for generation G exits  -> clears its label's slot ONLY if it still holds G; a newer host that attached
 //!                                   in the race window is left alone
-//! same reader                    -> drops every pending sender tagged G, so those callers fail fast with
-//!                                   `CallError::Disconnected` instead of waiting out the 120s timeout
+//! same reader                    -> wakes every caller whose request went out on G, so they fail fast with
+//!                                   `CallError::Disconnected` instead of waiting out their deadline
 //! ```
 
 use std::collections::HashMap;
@@ -24,13 +28,13 @@ use std::io::{BufReader, BufWriter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::error::CallError;
 use crate::ipc::{self, BrowserLabel};
-use crate::protocol::{bridge_read, bridge_write, BridgeReq, ParsedResp};
+use crate::protocol::{bridge_read, bridge_write, BridgeReq, BridgeSignal, ParsedResp};
 use crate::tools::BridgeCommand;
 
 /// The label assigned to a connection whose handshake carried no label.
@@ -44,6 +48,11 @@ pub use crate::ipc::DEFAULT_LABEL;
 /// beyond the cap is refused. Enforced atomically at the single insert point
 /// (see [`Session::attach_browser`]).
 pub(crate) const MAX_BROWSERS: usize = 16;
+
+/// How long [`Session::call`] waits for the first host when none is attached: the extension's service worker
+/// reconnects on a ~2 s timer, so right after an MCP client spawns a fresh server the first tool call can arrive
+/// before any host has re-attached. Only the empty registry waits.
+const CONNECT_WAIT: Duration = Duration::from_secs(12);
 
 /// A connection generation. Non-zero by construction: minting refuses a
 /// wrapped-to-zero counter value ([`Session::attach_authenticated`]), so no
@@ -76,19 +85,28 @@ struct Conn {
 }
 
 /// Pending request callbacks keyed by `BridgeReq.id`. Each entry carries the
-/// generation it was sent under - by construction: [`Session::try_call`]
+/// generation it was sent under - by construction: [`Session::send`]
 /// inserts the entry already bound, under the registry lock, immediately
-/// before the write, so there is no unsent state a drain or a delivery check
-/// could mishandle. A disconnecting reader drops exactly the callers that
-/// belonged to its (now-dead) connection.
-type Pending = Arc<Mutex<HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)>>>;
+/// before the write, so there is no unsent state a severance or a delivery
+/// check could mishandle. A disconnecting reader wakes exactly the callers
+/// that belonged to its (now-dead) connection.
+type Pending = Arc<Mutex<HashMap<u64, (Generation, mpsc::Sender<Delivery>)>>>;
+
+/// What a waiting caller receives: the reply, or the news that its connection is gone. Severance travels
+/// through the channel instead of dropping the sender so the pending entry survives for the guard's Drop
+/// (module docs).
+#[derive(Debug)]
+enum Delivery {
+    Reply(ParsedResp),
+    Severed,
+}
 
 /// A reader thread's verdict on one inbound response: deliver it to its
 /// waiting caller, refuse it because the pending entry belongs to a different
 /// connection ([`RoutedResp::Foreign`] carries the owning generation), or no
 /// caller is waiting on that id at all.
 enum RoutedResp {
-    Deliver(mpsc::Sender<ParsedResp>),
+    Deliver(mpsc::Sender<Delivery>),
     Foreign(Generation),
     Unknown,
 }
@@ -102,36 +120,36 @@ fn should_clear_conn(current: Option<Generation>, my_gen: Generation) -> bool {
     current == Some(my_gen)
 }
 
-/// Remove and return every pending entry whose generation is `my_gen`.
-/// Dropping the returned senders wakes those callers immediately with a closed
-/// channel (surfaced as [`CallError::Disconnected`]). Entries bound to any
-/// other generation - other still-live connections - are left in the map.
-/// Factored out so the drain policy is unit-testable without sockets.
-fn drain_pending_for_generation(
-    pending: &mut HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)>,
+/// Wake every caller whose request went out on `my_gen` with [`Delivery::Severed`], surfaced as
+/// [`CallError::Disconnected`] at once instead of a wait to the deadline. The entries stay: each caller's guard
+/// removes its own on Drop and cancels through whatever connection holds the label by then. Entries bound to
+/// any other generation - other still-live connections - are untouched. Returns how many were woken; factored
+/// out so the policy is unit-testable without sockets.
+fn sever_pending_for_generation(
+    pending: &HashMap<u64, (Generation, mpsc::Sender<Delivery>)>,
     my_gen: Generation,
-) -> Vec<mpsc::Sender<ParsedResp>> {
-    let ids: Vec<u64> = pending
-        .iter()
-        .filter(|(_, (generation, _))| *generation == my_gen)
-        .map(|(id, _)| *id)
-        .collect();
-    ids.into_iter()
-        .filter_map(|id| pending.remove(&id).map(|(_, tx)| tx))
-        .collect()
+) -> usize {
+    pending
+        .values()
+        .filter(|(generation, _)| *generation == my_gen)
+        .map(|(_, tx)| {
+            // A caller that already stopped listening needs no waking.
+            let _ = tx.send(Delivery::Severed);
+        })
+        .count()
 }
 
-/// Remove and return every pending sender. The kill sweep uses this because a
-/// kill is global, and every entry is in flight by construction (inserted
-/// already bound, immediately before its write): that includes entries whose
-/// generation is no longer in the registry (their connection was replaced by
-/// a same-label reconnect, or their reader already cleaned up) - the replaced
-/// connection's reader may still be alive on a cloned fd and could otherwise
-/// deliver a late response after the sweep.
-fn drain_pending_all(
-    pending: &mut HashMap<u64, (Generation, mpsc::Sender<ParsedResp>)>,
-) -> Vec<mpsc::Sender<ParsedResp>> {
-    pending.drain().map(|(_, (_, tx))| tx).collect()
+/// Wake every caller. The kill sweep uses this because a kill is global, and every entry is in flight by
+/// construction (inserted already bound, immediately before its write): that includes entries whose generation
+/// is no longer in the registry (their connection was replaced by a same-label reconnect, or their reader
+/// already cleaned up).
+fn sever_pending_all(pending: &HashMap<u64, (Generation, mpsc::Sender<Delivery>)>) -> usize {
+    pending
+        .values()
+        .map(|(_, tx)| {
+            let _ = tx.send(Delivery::Severed);
+        })
+        .count()
 }
 
 /// Pick the connection a request runs over; `available` are the live labels, `want` the request's optional
@@ -324,7 +342,8 @@ impl Session {
                 // compatible with the conns -> pending order.
                 //   pending entry sent over THIS connection (generation match)  -> delivered
                 //   pending entry owned by another generation                   -> protocol violation; this connection is dropped
-                //   no pending entry (unknown id, or its caller already timed out) -> logged; the connection stays
+                //   no pending entry (its caller gave up and sent `cancel`, or
+                //   the id was never issued)                                    -> dropped and logged; the connection stays
                 let routed = {
                     let Ok(mut pending_guard) = pending.lock() else {
                         // Poisoned pending map: no delivery can be trusted;
@@ -351,7 +370,9 @@ impl Session {
                 };
                 match routed {
                     RoutedResp::Deliver(tx) => {
-                        let _ = tx.send(resp);
+                        // A caller that already gave up (its guard removed nothing: the entry was ours to
+                        // remove) needs no delivery.
+                        let _ = tx.send(Delivery::Reply(resp));
                     }
                     RoutedResp::Foreign(owner) => {
                         log_warn!(
@@ -363,18 +384,24 @@ impl Session {
                         break;
                     }
                     RoutedResp::Unknown => {
-                        log_warn!("session", "no pending caller for id {}", resp.id);
+                        log_warn!(
+                            "session",
+                            "dropping late reply for id {} from '{label}': no caller is waiting (cancelled or never issued)",
+                            resp.id
+                        );
                     }
                 }
             }
 
-            // Reader ended (disconnect / error). Lock order conns THEN pending, as in `try_call`.
+            // Reader ended (disconnect / error). Lock order conns THEN pending, as in `send`.
             //   clear this label's slot ONLY if it still holds our generation  -> a newer host may have replaced us
             //                                                                    in the race window; clobbering it
             //                                                                    would fail `call` on a healthy connection
-            //   drop every pending sender tagged with our generation           -> those callers fail fast with
-            //                                                                    `Disconnected` instead of the 120s timeout
-            let drained = {
+            //   wake every caller whose request went out on our generation      -> they fail fast with `Disconnected`
+            //                                                                    instead of waiting out their deadline,
+            //                                                                    and their guards cancel through a
+            //                                                                    replacement connection if one attached
+            {
                 // A poisoned lock here means another thread panicked while
                 // holding it; skip the half we cannot trust (and say so) --
                 // any caller whose entry survives fails via its timeout.
@@ -396,8 +423,8 @@ impl Session {
                     }
                 }
                 match pending.lock() {
-                    Ok(mut pending_guard) => {
-                        drain_pending_for_generation(&mut pending_guard, my_gen)
+                    Ok(pending_guard) => {
+                        sever_pending_for_generation(&pending_guard, my_gen);
                     }
                     Err(_) => {
                         log_error!(
@@ -405,12 +432,9 @@ impl Session {
                             "pending-call lock poisoned during '{label}' cleanup \
                              (generation {my_gen})"
                         );
-                        Vec::new()
                     }
                 }
-            };
-            // Senders drop here (locks already released), unblocking callers.
-            drop(drained);
+            }
         });
         true
     }
@@ -441,8 +465,9 @@ impl Session {
     ///
     /// ```text
     /// late-waking reader           -> its slot is gone or re-occupied (generation guard), so its cleanup is a no-op
-    /// EVERY pending entry drained  -> a replaced connection's lingering reader could otherwise answer after the
-    ///                                 sweep (`drain_pending_all`); the callers get `CallError::Disconnected`
+    /// EVERY caller woken           -> `sever_pending_all`, including callers of a replaced connection whose
+    ///                                 lingering reader could otherwise answer after the sweep; each gets
+    ///                                 `CallError::Disconnected` and its guard finds no connection left to cancel on
     /// response claimed pre-sweep   -> a call that completed before the kill, not one that survived it
     /// ```
     pub(crate) fn shutdown_all_browsers(&self) -> usize {
@@ -466,22 +491,19 @@ impl Session {
             }
         }
         // Bookkeeping under the same conns -> pending lock order the readers
-        // and `try_call` use, so the three paths serialize instead of racing.
+        // and `send` use, so the three paths serialize instead of racing.
         let severed: Vec<Conn> = conns_guard.drain().map(|(_, conn)| conn).collect();
-        let drained: Vec<mpsc::Sender<ParsedResp>> = {
-            let mut pending_guard = self
+        {
+            let pending_guard = self
                 .pending
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            drain_pending_all(&mut pending_guard)
-        };
+            sever_pending_all(&pending_guard);
+        }
         drop(conns_guard);
         let count = severed.len();
-        // Locks released: dropping the writers closes our socket handles;
-        // dropping the senders wakes the in-flight callers immediately with
-        // `Disconnected` (drained, not left to ride out timeouts).
+        // Locks released: dropping the writers closes our socket handles.
         drop(severed);
-        drop(drained);
         count
     }
 
@@ -502,51 +524,51 @@ impl Session {
         Some((label, generation.get()))
     }
 
-    /// Send a command to the addressed browser's extension and wait for the
-    /// correlated response. `browser` is the tool call's optional `browser`
-    /// argument; see [`resolve_target`] for how it picks a connection.
-    /// Returns the response data on success, or a typed [`CallError`].
-    pub fn call(&self, command: BridgeCommand, browser: Option<&str>) -> Result<Value, CallError> {
-        // Wait briefly for the first host: the extension's service worker reconnects on a ~2s timer, so right after
-        // the MCP client spawns a fresh server the first tool call can arrive before any host has re-attached. Only
-        // the empty registry waits: once a browser is attached, an unknown or ambiguous target is a real error the
-        // caller should see immediately, and a poisoned lock reads as non-empty so try_call surfaces the failure as
-        // a typed error.
-        let registry_empty = || self.conns.lock().is_ok_and(|g| g.is_empty());
-        if registry_empty() {
-            // checked_add: an unrepresentable deadline (Instant near its
-            // upper bound) skips the wait rather than panicking.
-            if let Some(deadline) =
-                std::time::Instant::now().checked_add(std::time::Duration::from_secs(12))
-            {
-                while std::time::Instant::now() < deadline {
-                    if !registry_empty() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                }
-            }
-        }
-
-        // Generous response timeout: the extension may need to prompt the
-        // user (Toast) for high-risk actions, which can take a while.
-        self.try_call(command, browser, Duration::from_secs(120))
-    }
-
-    /// Like [`Self::call`], but with no startup wait (an empty registry fails
-    /// immediately with [`CallError::NotConnected`]) and a caller-chosen
-    /// response timeout. Used by enumeration (`list_browsers`), which must
-    /// stay responsive when a browser is wedged: one dead connection may cost
-    /// at most `timeout`, never the interactive 120s, and never a connect
-    /// wait.
-    pub fn try_call(
+    /// Send a command to the addressed browser's extension and wait for the correlated response until `deadline`.
+    /// `browser` is the tool call's optional `browser` argument; see [`resolve_target`] for how it picks a
+    /// connection. The deadline is the caller's: it bounds the connect wait and the reply wait together, and when
+    /// it passes the request is abandoned with a `cancel` to the extension ([`InFlight`]).
+    pub fn call(
         &self,
         command: BridgeCommand,
         browser: Option<&str>,
-        timeout: Duration,
+        deadline: Instant,
     ) -> Result<Value, CallError> {
+        // Only the empty registry waits (see CONNECT_WAIT): once a browser is attached, an unknown or ambiguous
+        // target is a real error the caller should see immediately, and a poisoned lock reads as non-empty so
+        // `send` surfaces the failure as a typed error.
+        let registry_empty = || self.conns.lock().is_ok_and(|g| g.is_empty());
+        if registry_empty() {
+            // checked_add: an unrepresentable connect deadline (Instant near its upper bound) skips the wait
+            // rather than panicking.
+            let connect_deadline = Instant::now()
+                .checked_add(CONNECT_WAIT)
+                .map_or(deadline, |until| until.min(deadline));
+            // Each sleep is bounded by what is left, so the wait ends at the budget, never a tick past it.
+            loop {
+                let remaining = connect_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() || !registry_empty() {
+                    break;
+                }
+                thread::sleep(remaining.min(Duration::from_millis(150)));
+            }
+        }
+        self.send(command, browser, deadline)?.wait()
+    }
+
+    /// Put a command on the wire to the addressed browser and hand back the guard that owns the wait until
+    /// `deadline`. Fails immediately on an empty registry ([`CallError::NotConnected`]), so an enumeration
+    /// over several browsers never waits for a connect, and on a deadline already passed
+    /// ([`CallError::Timeout`] with a zero budget): a request the caller will not wait for must not start a
+    /// browser action the cancel could only interrupt, never undo.
+    pub fn send(
+        &self,
+        command: BridgeCommand,
+        browser: Option<&str>,
+        deadline: Instant,
+    ) -> Result<InFlight<'_>, CallError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = mpsc::channel::<ParsedResp>();
+        let (tx, rx) = mpsc::channel::<Delivery>();
 
         // Resolve, register the pending entry, and send under the registry lock, so the chosen connection cannot be
         // swapped between the decision and the write. The entry is inserted ALREADY BOUND to the connection's
@@ -554,66 +576,134 @@ impl Session {
         // cannot beat the registration because the request is not on the wire until after the insert.
         //   lock order     -> conns mutex THEN pending mutex, matching the reader-cleanup path, so no deadlock
         //   poisoned lock  -> refuse the call with a typed internal error instead of acting on suspect state
-        {
-            let Ok(mut guard) = self.conns.lock() else {
-                return Err(CallError::Internal("browser registry lock poisoned".into()));
-            };
-            let labels: Vec<&str> = guard.keys().map(BrowserLabel::as_str).collect();
-            let label = resolve_target(&labels, browser)?;
-            // Borrow<str>: probe the validated key set with the plain string
-            // resolve_target picked from it.
-            let Some(conn) = guard.get_mut(label.as_str()) else {
-                // Unreachable in practice: resolve_target picked the label
-                // from this very map under the same lock. Refuse rather than
-                // panic if that invariant is ever broken.
-                return Err(CallError::Internal(
-                    "resolved browser label vanished from the registry".into(),
-                ));
-            };
-            let generation = conn.generation;
-            match self.pending.lock() {
-                Ok(mut pending_guard) => {
-                    pending_guard.insert(id, (generation, tx));
-                }
-                Err(_) => {
-                    // Do not send a request whose response could never be
-                    // routed back (no entry would be waiting for it).
-                    return Err(CallError::Internal("pending-call lock poisoned".into()));
-                }
-            }
-            let req = BridgeReq {
-                id,
-                command,
-                browser: Some(label),
-            };
-            if let Err(e) = bridge_write(&mut conn.writer, &req) {
-                self.remove_pending(id);
-                return Err(CallError::Write(e));
-            }
+        let Ok(mut guard) = self.conns.lock() else {
+            return Err(CallError::Internal("browser registry lock poisoned".into()));
+        };
+        let labels: Vec<&str> = guard.keys().map(BrowserLabel::as_str).collect();
+        let label = resolve_target(&labels, browser)?;
+        // Borrow<str>: probe the validated key set with the plain string
+        // resolve_target picked from it.
+        let Some(conn) = guard.get_mut(label.as_str()) else {
+            // Unreachable in practice: resolve_target picked the label
+            // from this very map under the same lock. Refuse rather than
+            // panic if that invariant is ever broken.
+            return Err(CallError::Internal(
+                "resolved browser label vanished from the registry".into(),
+            ));
+        };
+        let generation = conn.generation;
+        let Ok(mut pending_guard) = self.pending.lock() else {
+            // Do not send a request whose response could never be
+            // routed back (no entry would be waiting for it).
+            return Err(CallError::Internal("pending-call lock poisoned".into()));
+        };
+        // Routing errors first: a budget that ran out while no browser was attached is reported as the
+        // missing browser (actionable), not as a zero timeout. The clock is read with both locks held,
+        // right before the insert and the write: a write stalled on another connection can hold either
+        // lock past this request's deadline, and a request the caller will not wait for must not start.
+        let sent = Instant::now();
+        if deadline <= sent {
+            return Err(CallError::Timeout(Duration::ZERO));
         }
-
-        // Wait for the response. The boundary parse already reduced it to
-        // exactly success-with-data or failure-with-error, so there is no
-        // flag-and-optionals mixture left to re-interpret here.
-        match rx.recv_timeout(timeout) {
-            Ok(resp) => resp.outcome.map_err(CallError::Extension),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.remove_pending(id);
-                Err(CallError::Timeout(timeout))
+        pending_guard.insert(id, (generation, tx));
+        drop(pending_guard);
+        let req = BridgeReq {
+            id,
+            command,
+            browser: Some(label.clone()),
+        };
+        if let Err(e) = bridge_write(&mut conn.writer, &req) {
+            // Nothing reached the extension, so there is nothing to cancel: the entry just goes. A poisoned
+            // pending lock is condemned state; every path that could act on the entry refuses first.
+            if let Ok(mut pending_guard) = self.pending.lock() {
+                pending_guard.remove(&id);
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                self.remove_pending(id);
+            return Err(CallError::Write(e));
+        }
+        Ok(InFlight {
+            session: self,
+            id,
+            label,
+            sent,
+            deadline,
+            rx,
+        })
+    }
+}
+
+/// A request on the wire, owned by its caller until the reply or the deadline. Dropping it before the reply
+/// arrived sends `cancel` for its id to the browser the request was routed to, so the extension stops working
+/// on it and the two sides agree the id is dead; dropping it after the reply sends nothing.
+///
+/// The pending entry is the one record of which case this is (module docs): the reader removes it when it
+/// delivers the reply, so Drop cancels exactly when it still finds the entry. The cancel goes to the
+/// connection that holds the label NOW: Chrome spawns a host process per port, but the extension's service
+/// worker (which runs the op and keys its in-flight table by id) outlives a reconnect, so after a same-label
+/// reconnect the new connection is the only way to reach it. A different browser that took the label ignores
+/// the unknown id.
+///
+/// ```text
+/// reply delivered         -> wait() returns it; Drop finds no entry, sends nothing
+/// deadline passed         -> Timeout; Drop removes the entry and sends cancel to the label's connection
+/// connection severed      -> Disconnected (reader exit or kill sweep); Drop removes the entry and cancels
+///                            through the connection now holding the label, if any: after a host restart that
+///                            is the new host, and it reaches the same service worker
+/// label gone              -> nothing to write to; the op ends on its own in the extension
+/// ```
+#[must_use = "dropping the guard abandons the request and sends cancel"]
+pub struct InFlight<'s> {
+    session: &'s Session,
+    id: u64,
+    label: String,
+    sent: Instant,
+    deadline: Instant,
+    rx: mpsc::Receiver<Delivery>,
+}
+
+impl InFlight<'_> {
+    /// Wait for the reply until the deadline the request was sent with. The boundary parse already reduced
+    /// the response to exactly success-with-data or failure-with-error, so there is no flag-and-optionals
+    /// mixture left to interpret.
+    pub fn wait(self) -> Result<Value, CallError> {
+        match self
+            .rx
+            .recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
+        {
+            Ok(Delivery::Reply(resp)) => resp.outcome.map_err(CallError::Extension),
+            Ok(Delivery::Severed) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 Err(CallError::Disconnected)
             }
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(CallError::Timeout(
+                self.deadline.saturating_duration_since(self.sent),
+            )),
         }
     }
+}
 
-    /// Best-effort removal of a pending entry (error/timeout cleanup). If the
-    /// pending lock is poisoned the entry is left behind: the map is already
-    /// condemned state and every path that could act on it refuses first.
-    fn remove_pending(&self, id: u64) {
-        if let Ok(mut pending_guard) = self.pending.lock() {
-            pending_guard.remove(&id);
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        // conns THEN pending, the order every path keeps. A poisoned lock means another thread panicked mid-mutation:
+        // condemned state nothing acts on, so the cancel is skipped.
+        let Ok(mut conns) = self.session.conns.lock() else {
+            return;
+        };
+        let still_pending = match self.session.pending.lock() {
+            Ok(mut pending) => pending.remove(&self.id).is_some(),
+            Err(_) => return,
+        };
+        if !still_pending {
+            return;
+        }
+        let Some(conn) = conns.get_mut(self.label.as_str()) else {
+            return;
+        };
+        if let Err(e) = bridge_write(&mut conn.writer, &BridgeSignal::Cancel { id: self.id }) {
+            log_warn!(
+                "session",
+                "could not send cancel for id {} to '{}': {e}",
+                self.id,
+                self.label
+            );
         }
     }
 }

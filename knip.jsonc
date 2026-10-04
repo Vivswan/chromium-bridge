@@ -42,7 +42,8 @@
     // The e2e and the runner that chains the suites are launched by name from
     // moon tasks; the other suites are package scripts knip reads itself.
     "tests/browser": {
-      "entry": ["*.test.ts", "integration_e2e.ts", "run_all.ts"],
+      // fake_host.ts is spawned by Chrome through the profile's exec wrapper, never imported.
+      "entry": ["*.test.ts", "integration_e2e.ts", "run_all.ts", "fake_host.ts"],
       "project": ["**/*.ts"]
     },
     "tests/interop": {

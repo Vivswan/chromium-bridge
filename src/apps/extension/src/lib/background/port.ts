@@ -4,6 +4,7 @@
 
 import { parseBridgeReq } from "@chromium-bridge/shared/envelope";
 import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
+import { unreachable } from "@chromium-bridge/shared/util";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskErrorMessage } from "../shared/masking";
@@ -12,7 +13,7 @@ import * as auditLog from "./audit-log";
 import * as clients from "./clients";
 import * as presence from "./confirm/presence";
 import type { Connection, PortCollaborator } from "./connection";
-import { dispatch } from "./dispatch";
+import { collaborator as cancelSignals, dispatch } from "./dispatch";
 import * as enrollment from "./enrollment";
 import { inLife } from "./in-life";
 import * as kill from "./kill";
@@ -26,6 +27,7 @@ export const collaborators: readonly PortCollaborator[] = [
   presence.collaborator,
   policySync.collaborator,
   webauthn.collaborator,
+  cancelSignals,
 ];
 
 // The native link is in exactly one of these states. One value, not a
@@ -172,29 +174,27 @@ function onNativeMessage(conn: Connection, msg: unknown) {
     return;
   }
   const req = parsed.req;
-  // Fail closed: while enrollment is required and unsatisfied, every bridge
-  // request is refused right here and never reaches dispatch(). The dispatch
-  // kickoff is passed INTO the gate so it starts inside the gate's serialized
-  // critical section: a revoke or compromise mark can then never land between
-  // "gate said allowed" and "dispatch began".
-  enrollment
-    .enrollmentGate(() => {
-      dispatch(req).then(
-        (data) => sendResponse(conn, req.id, true, data),
-        // A rejection message can embed page-derived data (a CDP evaluate
-        // exception carries the page's error description), so this egress is
-        // masked like any other.
-        (err) => sendResponse(conn, req.id, false, undefined, maskErrorMessage(err)),
-      );
-    })
-    .then(
-      (gate) => {
-        if (!gate.allowed) sendResponse(conn, req.id, false, undefined, gate.reason);
-      },
-      // Gate errors are ambiguity, and ambiguity refuses.
-      (err) =>
-        sendResponse(conn, req.id, false, undefined, `enrollment gate error: ${String(err)}`),
-    );
+  // Fail closed: while enrollment is required and unsatisfied, every bridge request is refused and its op
+  // never starts. dispatch.ts owns the request from here: it registers the id for a server `cancel` at once,
+  // runs the gate, starts the op inside the gate's serialized critical section (a revoke or compromise mark
+  // can never land between "gate said allowed" and the op), and resolves one outcome. A cancelled request
+  // posts nothing: the server stopped waiting for that id. dispatch never rejects, so nothing is dropped here.
+  void dispatch(req, enrollment.enrollmentGate).then((done) => {
+    switch (done.outcome) {
+      case "ok":
+        sendResponse(conn, req.id, true, done.data);
+        break;
+      case "error":
+        // A failure message can embed page-derived data (a CDP evaluate exception carries the page's error
+        // description), so this egress is masked like any other.
+        sendResponse(conn, req.id, false, undefined, maskErrorMessage(done.error));
+        break;
+      case "cancelled":
+        break;
+      default:
+        unreachable(done);
+    }
+  });
 }
 
 /** A response rides the connection its request arrived on. Chrome spawns a fresh host per port, so once that

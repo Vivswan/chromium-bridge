@@ -10,6 +10,7 @@
     "test:dom": "bun dom_test.ts",
     "test:smoke": "bun ext_test.ts",
     "test:security": "bun security_browser_test.ts",
+    "test:cancel": "bun cancel_test.ts",
     "test:webauthn": "bun webauthn_test.ts"
   },
   "dependencies": {

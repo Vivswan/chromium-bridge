@@ -219,11 +219,13 @@ fn execute_tool_call(session: &Session, name: &str, args: JsonObject) -> tools::
     // closed on an engaged switch AND on an unreadable record; the harness connection stays up so
     // the typed refusal is delivered. The host-side policy gate runs alongside it: defense in depth
     // for the honest-host path, an unreadable store denying all.
+    //   deadline unrepresentable (Instant near its bound) -> `started` itself: the call times out at once
     let (route, out) = route_and_dispatch(
         session,
         ToolCall::parse(name, args),
         crate::kill::check(),
         crate::policy::gating::check,
+        started.checked_add(tools::CALL_BUDGET).unwrap_or(started),
     );
     let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::ToolCall);
     rec.req = Some(req_id);
@@ -250,7 +252,8 @@ fn next_request_id() -> u64 {
 /// Route and dispatch one tool call from its SINGLE boundary parse: the audit route and the dispatch both consume
 /// that one [`ToolCall`], so the trail can never record a default route for a call the parse refused. The kill
 /// verdict arrives computed and the policy gate injected so the fail-closed matrix is unit-testable without the
-/// runtime directory or the audit sink (both live in [`execute_tool_call`]).
+/// runtime directory or the audit sink (both live in [`execute_tool_call`]). `deadline` is the call's whole
+/// budget; the dispatch hands it to the session, which cancels the browser op when it passes.
 ///
 /// ```text
 /// route re-read after the dispatch -> a host may connect during the call's startup wait
@@ -262,6 +265,7 @@ fn route_and_dispatch(
     call: Result<ToolCall, CallError>,
     kill: Result<(), CallError>,
     policy: impl FnOnce(&Tool) -> Result<(), CallError>,
+    deadline: std::time::Instant,
 ) -> (Option<(String, u64)>, tools::Outcome) {
     let addressed: Option<Option<String>> =
         call.as_ref().ok().map(|c| c.browser().map(str::to_owned));
@@ -277,7 +281,7 @@ fn route_and_dispatch(
             Err(e) => tools::error_outcome(&e),
             Ok(call) => match policy(&call.tool()) {
                 Err(e) => tools::error_outcome(&e),
-                Ok(()) => tools::dispatch(session, call),
+                Ok(()) => tools::dispatch(session, call, deadline),
             },
         },
     };
@@ -404,6 +408,11 @@ mod tests {
         ToolCall::parse(name, serde_json::from_value(args).unwrap())
     }
 
+    /// The deadline execute_tool_call hands every dispatch.
+    fn budget() -> std::time::Instant {
+        std::time::Instant::now() + tools::CALL_BUDGET
+    }
+
     #[test]
     fn a_refused_parse_is_typed_and_skips_dispatch() {
         // A malformed `browser`, an unknown tool, and args outside the struct
@@ -418,8 +427,13 @@ mod tests {
             ("tab_focus", json!({})),
             ("tab_list", json!({ "junk": 1 })),
         ] {
-            let (_route, out) =
-                route_and_dispatch(&session, call(name, args.clone()), Ok(()), |_| Ok(()));
+            let (_route, out) = route_and_dispatch(
+                &session,
+                call(name, args.clone()),
+                Ok(()),
+                |_| Ok(()),
+                budget(),
+            );
             assert!(out.is_error(), "{name} {args}");
             assert_eq!(out.error_code(), Some("INVALID_ARGUMENT"), "{name} {args}");
         }
@@ -447,6 +461,7 @@ mod tests {
             call("tab_list", json!({ "browser": 123 })),
             Ok(()),
             |_| Ok(()),
+            budget(),
         );
         assert_eq!(route, None, "a refused parse must not invent a route");
         assert!(out.is_error());
@@ -459,6 +474,7 @@ mod tests {
             call("tab_list", json!({ "browser": "chrome" })),
             Ok(()),
             |_| Err(CallError::Killed),
+            budget(),
         );
         assert_eq!(route.map(|(l, _)| l), Some("chrome".to_string()));
         assert!(out.is_error());
@@ -479,6 +495,7 @@ mod tests {
             call("tab_list", json!({})),
             Err(CallError::Killed),
             |_| Ok(()),
+            budget(),
         );
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("BRIDGE_KILLED"));
@@ -504,6 +521,7 @@ mod tests {
                     reason: crate::error::ToolDisabledReason::GrantOff("pageEvalEnabled"),
                 })
             },
+            budget(),
         );
         assert!(out.is_error());
         assert_eq!(out.error_code(), Some("TOOL_DISABLED"));

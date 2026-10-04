@@ -4,12 +4,12 @@
 // DO NOT EDIT. Edit the Rust types or
 // src/packages/shared/src/envelope-asymmetries.ts, then run `moon run gen`.
 //
-// Per envelope and per host->extension control frame: the FAITHFUL base (*WireSchema: strict objects,
-// required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts) and the ENFORCED validator
-// the extension runs, which is the base plus exactly the asymmetry table (direction and reason per entry in
-// envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts, `moon run check-envelope`). The
-// extension->host writer schemas exist for their inferred types only (constructor-site `satisfies`); the
-// enforcing reader for those frames is the Rust serde parser.
+// Per envelope, per server->extension signal frame, and per host->extension control frame: the FAITHFUL base
+// (*WireSchema: strict objects, required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts)
+// and the ENFORCED validator the extension runs, which is the base plus exactly the asymmetry table
+// (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
+// `moon run check-envelope`). The extension->host writer schemas exist for their inferred types only
+// (constructor-site `satisfies`); the enforcing reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 import { OpArgsSchema } from "./ops.gen";
@@ -61,6 +61,18 @@ export const BridgeRespSchema = z
   .strict();
 
 export type BridgeResp = z.infer<typeof BridgeRespSchema>;
+
+// The server->extension signal frames (BridgeSignal), one strict reader per variant: the faithful base,
+// then the enforced validator the extension runs.
+export const BridgeCancelWireSchema = z
+  .object({ "id": z.number().int().gte(0), "type": z.literal("cancel") })
+  .strict();
+
+export const BridgeCancelSchema = z
+  .object({ "id": z.union([z.number().int().gte(0), z.string()]), "type": z.literal("cancel") })
+  .strict();
+
+export type BridgeCancel = z.infer<typeof BridgeCancelSchema>;
 
 // One trusted-client entry (allowlist::ClientEntry), embedded in client_list_result's `clients` array.
 export const ClientEntryWireSchema = z

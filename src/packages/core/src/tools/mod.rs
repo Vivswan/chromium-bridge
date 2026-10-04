@@ -7,15 +7,26 @@ pub mod args;
 mod capabilities;
 mod catalogue;
 
+use std::time::{Duration, Instant};
+
 use serde_json::{json, Value};
 
 use crate::error::CallError;
-use crate::session::Session;
+use crate::session::{InFlight, Session};
 
 pub use capabilities::{capabilities, Capability, CapabilityId};
 pub use catalogue::{
     all, BridgeCommand, Confirmation, Dispatch, Permission, ResultKind, Risk, Scope, Tool, ToolId,
 };
+
+/// How long one tool call may take end to end, connect wait and browser round-trip included. Generous because
+/// the extension may hold the call open on a confirmation prompt for a high-risk action; the MCP layer turns
+/// it into the deadline every [`dispatch`] receives, and the session cancels the browser op when it passes.
+pub const CALL_BUDGET: Duration = Duration::from_secs(120);
+
+/// The per-browser bound inside `list_browsers`: one wedged browser costs at most this, never the whole
+/// [`CALL_BUDGET`], so it can never starve discovery of the healthy ones.
+const ENUMERATION_BUDGET: Duration = Duration::from_secs(5);
 
 /// One MCP `tools/call` after [`ToolCall::parse`], the only constructor:
 /// what reaches [`dispatch`] is a catalogue tool with schema-valid arguments.
@@ -107,13 +118,14 @@ impl Outcome {
 
 /// Run a parsed tool call and shape its result into the MCP content blocks
 /// and the isError flag; errors are tool-level, never RPC-level. The record's
-/// [`Dispatch`] decides where the call runs and how its data is rendered.
-pub fn dispatch(session: &Session, call: ToolCall) -> Outcome {
+/// [`Dispatch`] decides where the call runs and how its data is rendered;
+/// `deadline` is when the caller stops waiting, whichever way the call runs.
+pub fn dispatch(session: &Session, call: ToolCall, deadline: Instant) -> Outcome {
     let tool = call.tool();
     let ToolCall { command, browser } = call;
     let result = match tool.dispatch {
-        Dispatch::ServerLocal(handler) => handler(session),
-        Dispatch::Bridge { .. } => session.call(command, browser.as_deref()),
+        Dispatch::ServerLocal(handler) => handler(session, deadline),
+        Dispatch::Bridge { .. } => session.call(command, browser.as_deref(), deadline),
     };
     let data = match result {
         Ok(data) => data,
@@ -158,21 +170,25 @@ pub(crate) fn error_outcome(e: &CallError) -> Outcome {
 /// live, authenticated connection, enriched with that browser's open-tab count
 /// (a routed `tab_list` round-trip per browser). A browser that fails to
 /// answer stays in the list with `tabCount: null` and its error text - being
-/// slow or broken should not hide it from enumeration. The per-browser
-/// round-trip uses a short enumeration timeout (and no connect-wait), so one
-/// wedged browser costs seconds, not the interactive 120s, and can never
-/// starve discovery of the healthy ones. No browsers connected is a normal,
-/// empty result, not an error.
-fn list_browsers(session: &Session) -> Result<Value, CallError> {
+/// slow or broken should not hide it from enumeration. Each round-trip gets
+/// [`ENUMERATION_BUDGET`] within the call's deadline and no connect wait. No
+/// browsers connected is a normal, empty result, not an error.
+fn list_browsers(session: &Session, deadline: Instant) -> Result<Value, CallError> {
     let labels = session.labels();
     let browsers: Vec<Value> = labels
         .into_iter()
         .map(|label| {
-            match session.try_call(
-                BridgeCommand::TabList(args::NoArgs {}),
-                Some(&label),
-                std::time::Duration::from_secs(5),
-            ) {
+            let per_browser = Instant::now()
+                .checked_add(ENUMERATION_BUDGET)
+                .map_or(deadline, |until| until.min(deadline));
+            match session
+                .send(
+                    BridgeCommand::TabList(args::NoArgs {}),
+                    Some(&label),
+                    per_browser,
+                )
+                .and_then(InFlight::wait)
+            {
                 Ok(data) => {
                     // tab_list returns an array of tabs; anything else counts
                     // as unknown rather than 0.
@@ -364,7 +380,7 @@ mod tests {
         // and returns the (empty) registry at once.
         let session = Session::new();
         let call = ToolCall::parse("list_browsers", Map::new()).unwrap();
-        let out = dispatch(&session, call);
+        let out = dispatch(&session, call, Instant::now() + CALL_BUDGET);
         assert!(!out.is_error());
         assert_eq!(
             out.content()[0]["text"].as_str().unwrap(),
