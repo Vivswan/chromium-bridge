@@ -1,5 +1,5 @@
-// Reduces the Rust (schemars, the contract per ADR-0028) and Zod (z.toJSONSchema) envelope schemas to one canonical
-// form for the asymmetry gate (scripts/check-envelope-parity.ts), so any diff left is the hand-written layer
+// Reduces the Rust (schemars; the Rust wire types are the contract) and Zod (z.toJSONSchema) envelope schemas to one
+// canonical form for the asymmetry gate (scripts/check-envelope-parity.ts), so any diff left is the hand-written layer
 // (envelope.ts, enclave.ts) drifting from its generated base; a mismatch is fixed in one of the two parsers, never here.
 // Every deliberate asymmetry is PINNED per origin in RECONCILED_FIELDS, refused loudly when a node does not deep-equal
 // its approved form or a pin goes unvisited (assertPinsConsumed), so drift cannot be compared away.
@@ -9,13 +9,14 @@
 //   R2 any-schema, everywhere        -> `true` and `{}` both canonicalize to `{}`
 //   R3 args narrowing, request only  -> rust must be exactly the any-schema (validated per-op downstream); zod an
 //                                       object schema (the OpArgs union, enforced by ops.gen.test.ts); anything else refused
-//   R4 reconciled fields             -> an entry in RECONCILED_FIELDS: exact rust form, exact zod form, canonical replacement
+//   R4 reconciled fields             -> an entry in RECONCILED_FIELDS: exact rust form, exact zod form, canonical
+//                                       replacement, and the direction the extension moves in (see Reconciliation)
 //   R5 control frames only           -> every rust object node must carry additionalProperties: false (serde's
 //                                       deny_unknown_fields; the host refuses unknown fields on security frames) and every
-//                                       zod node the documented looseObject (decisions come from validated fields plus
-//                                       cryptographic verification, see enclave.ts), except STRICT_ZOD_NODES, which stay
-//                                       strict on both sides (an unknown overlay field is a policy claim nobody owns,
-//                                       ADR-0032 decision 4); each origin's exact form is required, then erased
+//                                       zod node the documented looseObject (FRAME_LOOSENESS says why that widening is
+//                                       safe), except STRICT_ZOD_NODES, which stay strict on both sides (an unknown
+//                                       overlay field is a policy claim nobody owns); each origin's exact form is
+//                                       required, then erased
 //
 // Not exported from the package index: contract-check infrastructure, not API.
 
@@ -37,9 +38,9 @@ const REF_SIBLING_ANNOTATION_KEYS = new Set(["$comment", "title", "description",
 /** Which envelope a schema describes; selects the path-scoped rules. */
 export type EnvelopeKind = "request" | "response" | ControlFrameKind;
 
-/** The control frames under the gate (ADR-0021/0025/0030/0031/0032): one
- * kind per `type` tag, extracted from the internally-tagged EnclaveControl /
- * AdminControl / PolicyControl enum schemas by splitTaggedUnionSchema.
+/** The control frames under the gate: one kind per `type` tag, extracted
+ * from the internally-tagged EnclaveControl / AdminControl / PolicyControl
+ * enum schemas by splitTaggedUnionSchema.
  * Host->extension frames are diffed against their Zod mirrors;
  * extension->host frames are normalized rust-side only, so the R5
  * strictness walk still refuses a variant that loses deny_unknown_fields
@@ -84,18 +85,54 @@ export type SchemaOrigin = "rust" | "zod";
 
 type JsonObject = { [key: string]: unknown };
 
-// One deliberate parser asymmetry (R4): the node at this path must
-// deep-equal its origin's approved form (post-R1/R2, children normalized)
-// and is then replaced by `canonical`; anything else is refused loudly.
-type Reconciliation = { rust: JsonObject; zod: JsonObject; canonical: JsonObject };
+/** Which way an asymmetry moves the extension's acceptance relative to the Rust parser. The parsers decide, not
+ * their schemas: the Rust side is serde's Deserialize (a `schemars(with = "String")` newtype still refuses there),
+ * the Zod side the extension's parse at the boundary (the wrapped validator, and for the request the per-op step of
+ * parseBridgeReq, whose op set R6 holds equal to the Rust command enum).
+ *
+ *   narrow -> every value the Zod side accepts, the Rust parser accepts too (the extension only refuses earlier)
+ *   widen  -> the Zod side accepts at least one value the Rust parser refuses; the reason says why that is safe */
+export type AsymmetryDirection = "widen" | "narrow";
+
+/** One deliberate parser asymmetry (R4): the node at this path must deep-equal its origin's approved form (post-R1/R2,
+ * children normalized) and is then replaced by `canonical`; anything else is refused loudly. The reason is the one
+ * sentence a reviewer reads in the gate's asymmetry table: for a widen, why accepting more than the host is safe; for
+ * a narrow, what the extension refuses early. */
+export type Reconciliation = {
+  direction: AsymmetryDirection;
+  reason: string;
+  rust: JsonObject;
+  zod: JsonObject;
+  canonical: JsonObject;
+};
+
+type ReconciliationTable = Readonly<Record<string, Readonly<Record<string, Reconciliation>>>>;
+type ReconciledFields = Record<EnvelopeKind, Readonly<Record<string, Reconciliation>>>;
+
+/** Declare the reconciliation table, refusing a blank reason at module load (the gate's start): a direction alone
+ * tells a reviewer nothing about why a widening is safe. A missing reason is already a type error. */
+export function declareReconciledFields<T extends ReconciliationTable>(table: T): T {
+  for (const [kind, fields] of Object.entries(table)) {
+    for (const [path, { direction, reason }] of Object.entries(fields)) {
+      if (reason.trim() === "") {
+        throw new Error(
+          `normalize: ${kind} ${path} is a ${direction} with no reason; every reconciliation says why in one sentence`,
+        );
+      }
+    }
+  }
+  return table;
+}
 
 const JS_SAFE = Number.MAX_SAFE_INTEGER;
 
-// The correlation id. The server is the sole assigner (a monotonic u64
-// counter, so schemars claims uint64 >= 0); the extension accepts
-// integer-or-string for forward compatibility but hardens the integer arm
-// to the JS-safe range (see BridgeReq::id in protocol.rs and envelope.ts).
+// The correlation id: BridgeReq::id / BridgeResp::id (protocol.rs) against BridgeIdSchema (envelope.ts).
 const ID_FIELD: Reconciliation = {
+  direction: "widen",
+  reason:
+    "Two widenings the host closes itself: a string arm kept for forward compatibility, and a signed " +
+    "JS-safe integer where the host's u64 refuses a negative; the host is the only assigner of ids and " +
+    "refuses both in its own parse.",
   rust: { type: "integer", format: "uint64", minimum: 0 },
   zod: {
     anyOf: [{ type: "integer", minimum: -JS_SAFE, maximum: JS_SAFE }, { type: "string" }],
@@ -103,29 +140,43 @@ const ID_FIELD: Reconciliation = {
   canonical: { type: "integer" },
 };
 
-// serde's Option<String> null-arm (writers omit absent fields:
-// skip_serializing_if) where Zod's .optional() only accepts absence.
+const NULL_ARM_DROPPED =
+  "serde's Option null arm is dropped: every writer omits an absent field (skip_serializing_if), " +
+  "so only absence is accepted.";
+
 const OPTIONAL_STRING: Reconciliation = {
+  direction: "narrow",
+  reason: NULL_ARM_DROPPED,
   rust: { type: ["string", "null"] },
   zod: { type: "string" },
   canonical: { type: "string" },
 };
 
-// Same null-arm asymmetry for Option<bool> (kill_status_result.killed).
 const OPTIONAL_BOOL: Reconciliation = {
+  direction: "narrow",
+  reason: NULL_ARM_DROPPED,
   rust: { type: ["boolean", "null"] },
   zod: { type: "boolean" },
   canonical: { type: "boolean" },
 };
 
-// The Zod side refuses the empty string early on fields the host always
-// sends non-empty (base64/hex key material, validated client labels); the
-// Rust side leaves that to the consumer (signature verification, label
-// validation) - the same split as the request's op field.
+const EMPTY_REFUSED_EARLY =
+  "The empty string is refused early on key material the host produces itself (signature, key id, " +
+  "public key); the host leaves that to signature verification.";
+
 const NONEMPTY_STRING: Reconciliation = {
+  direction: "narrow",
+  reason: EMPTY_REFUSED_EARLY,
   rust: { type: "string" },
   zod: { type: "string", minLength: 1 },
   canonical: { type: "string" },
+};
+
+const CLIENT_LABEL: Reconciliation = {
+  ...NONEMPTY_STRING,
+  reason:
+    "A blank client label fails the frame early; the host validates labels when it pairs a client, not when " +
+    "it loads the allowlist it forwards, so this line is the extension's own.",
 };
 
 // The signed-statement frames enclave_proof and presence_proof share one
@@ -136,12 +187,15 @@ const PROOF_FIELDS: Readonly<Record<string, Reconciliation>> = {
   "$.properties.pubkey": NONEMPTY_STRING,
 };
 
-// allowlist::Anchor is serde adjacently-tagged, so schemars emits one
-// object variant per kind with a pinned `const`; the Zod mirror spells the
-// same instance set as a single object with a two-value kind enum (plus
-// the non-empty guard on value). Both accept exactly the same wire values
-// modulo the asymmetries pinned here and the R5 looseness.
+// allowlist::Anchor is serde adjacently-tagged, so schemars emits one object variant per kind with a pinned `const`
+// over the newtype values (HashDigest / TeamId, `schemars(with = "String")`, validated in Deserialize); the Zod mirror
+// spells the instance set as a single object with a two-value kind enum.
 const ANCHOR_FIELD: Reconciliation = {
+  direction: "widen",
+  reason:
+    "The extension only displays the anchor, so this single object with a kind enum skips the HashDigest " +
+    "grammar (lowercase hex, 20 or 32 bytes) the host's parse enforces (TeamId is non-empty on both sides); " +
+    "admission is decided by the host, whose own parse refuses a malformed value when it loads the allowlist.",
   rust: {
     oneOf: [
       {
@@ -171,18 +225,23 @@ const ANCHOR_FIELD: Reconciliation = {
   },
 };
 
-// A required u64 (lang_current.seq, client added_unix): both parsers must read
-// the same number, so the Zod side stops at the JS-safe bound.
+// A required u64 (lang_current.seq, client added_unix).
 const JS_SAFE_U64_FIELD: Reconciliation = {
+  direction: "narrow",
+  reason:
+    "A u64 held to the JS-safe non-negative range: above 2^53 - 1 a JS number cannot represent every " +
+    "integer, so two consecutive host values could read equal here.",
   rust: { type: "integer", format: "uint64", minimum: 0 },
   zod: { type: "integer", minimum: 0, maximum: JS_SAFE },
   canonical: { type: "integer", minimum: 0 },
 };
 
-// Option<String> signed-artifact material (policy_current.baseline/sig): the
-// serde null arm dropped like OPTIONAL_STRING, plus the NONEMPTY_STRING
-// early refusal on the base64 artifacts the host only ever sends whole.
+// Option<String> signed-artifact material (policy_current.baseline / sig).
 const OPTIONAL_NONEMPTY_STRING: Reconciliation = {
+  direction: "narrow",
+  reason:
+    "The Option null arm is dropped (writers omit absent fields) and the empty string is refused early on a " +
+    "signed artifact the host only ever sends whole.",
   rust: { type: ["string", "null"] },
   zod: { type: "string", minLength: 1 },
   canonical: { type: "string" },
@@ -190,13 +249,14 @@ const OPTIONAL_NONEMPTY_STRING: Reconciliation = {
 
 // policy_current.overlay: Option<PolicyOverlay> on the Rust side (a null arm around the strict all-optional object);
 // the Zod side is the GENERATED PolicyOverlaySchema (policy.gen.ts). The overlay is also the one STRICT_ZOD_NODES
-// exception to R5: strict on both sides (ADR-0032 decision 4).
+// exception to R5: strict on both sides.
 //
-//   ms fields                    -> Zod adds the JS-safe upper bound; Rust has none in the schema
+//   ms fields                    -> both sides JS-safe: Zod by bound, the host through its Ms parser
 //   disabledTools caps           -> pinned here as literals (DISABLED_TOOL_NAME_MAX_BYTES 128, DISABLED_TOOLS_MAX_ENTRIES
 //                                   256); Rust enforces them in PolicyDoc::validate and at the restrict seam, not Deserialize
-//   Zod maxLength 128 vs bytes   -> Zod counts UTF-16 code units, Rust bytes, so Zod is LOOSER on non-ASCII names (128
-//                                   U+00E9 pass Zod, 256 bytes fail Rust); the host validates every doc it stores or loads
+//   Zod maxLength 128 vs bytes   -> Zod counts UTF-16 code units, Rust bytes, so Zod is LOOSER than PolicyDoc::validate on
+//                                   non-ASCII names (128 U+00E9 pass Zod, 256 bytes fail Rust); the host validates every
+//                                   doc it stores or loads
 const OVERLAY_BOOL_FIELDS = [
   "cdpMode",
   "fileUploadEnabled",
@@ -247,6 +307,11 @@ function overlayProperties(origin: SchemaOrigin | "canonical"): JsonObject {
 }
 
 const OVERLAY_FIELD: Reconciliation = {
+  direction: "narrow",
+  reason:
+    "No null arm around the overlay or any of its fields (writers omit absent fields), ms bounds matching the " +
+    "host's JS-safe Ms parser, and the disabledTools caps applied at parse time where the host applies them in " +
+    "PolicyDoc::validate.",
   rust: {
     anyOf: [{ type: "object", properties: overlayProperties("rust") }, { type: "null" }],
   },
@@ -254,19 +319,23 @@ const OVERLAY_FIELD: Reconciliation = {
   canonical: { type: "object", properties: overlayProperties("canonical") },
 };
 
-const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconciliation>>> = {
+const RECONCILED_FIELDS: ReconciledFields = declareReconciledFields({
   request: {
     "$.properties.id": ID_FIELD,
-    // The Zod side rejects the empty op early; the Rust side leaves op
-    // validation to the catalogue lookup.
     "$.properties.op": {
+      direction: "narrow",
+      reason:
+        "The empty op is refused early; an unknown op is refused on both sides (the Rust command enum, the " +
+        "catalogue lookup in parseBridgeReq, held to one op set by R6), so this row covers the empty string only.",
       rust: { type: "string" },
       zod: { type: "string", minLength: 1 },
       canonical: { type: "string" },
     },
-    // Option null-arm on the Rust side; the Zod side enforces the browser
-    // label grammar (see BROWSER_LABEL in envelope.ts).
     "$.properties.browser": {
+      direction: "narrow",
+      reason:
+        "The Option null arm is dropped and the browser-label grammar is enforced early; the host only " +
+        "ever stamps a validated label.",
       rust: { type: ["string", "null"] },
       zod: { type: "string", minLength: 1, maxLength: 32, pattern: "^[A-Za-z0-9._-]+$" },
       canonical: { type: "string" },
@@ -274,7 +343,6 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
   },
   response: {
     "$.properties.id": ID_FIELD,
-    // Option null-arm on the Rust side only (writers omit absent errors).
     "$.properties.error": OPTIONAL_STRING,
   },
   enclave_proof: PROOF_FIELDS,
@@ -288,7 +356,7 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
   enclave_revoked: {},
   client_list_result: {
     "$.properties.error": OPTIONAL_STRING,
-    "$.properties.clients.items.properties.name": NONEMPTY_STRING,
+    "$.properties.clients.items.properties.name": CLIENT_LABEL,
     "$.properties.clients.items.properties.anchor": ANCHOR_FIELD,
     "$.properties.clients.items.properties.added_unix": JS_SAFE_U64_FIELD,
   },
@@ -322,17 +390,43 @@ const RECONCILED_FIELDS: Record<EnvelopeKind, Readonly<Record<string, Reconcilia
   policy_get: {},
   lang_get: {},
   lang_set: {},
-};
+} satisfies ReconciledFields);
 
 // The R5 strict-nested exception (see the module doc): at these zod-side
 // paths the wrapped validator must keep additionalProperties: false - the
 // nested document payloads the extension consumes field-by-field, where an
 // unknown field is a policy claim the catalogue does not own and must fail
-// the frame (ADR-0032 decision 4). Pinned per kind and path so looseness
-// can neither creep in here nor strictness anywhere else.
+// the frame. Pinned per kind and path so looseness can neither creep in
+// here nor strictness anywhere else.
 const STRICT_ZOD_NODES: Readonly<Partial<Record<ControlFrameKind, ReadonlySet<string>>>> = {
   policy_current: new Set(["$.properties.overlay"]),
 };
+
+/** One row of the gate's asymmetry table. */
+export type AsymmetryRow = { scope: string; direction: AsymmetryDirection; reason: string };
+
+/** The R5 widening itself, so the gate's asymmetry table shows it beside the per-field entries: the extension reads
+ * every control frame loose (enclave.ts) where the host refuses unknown fields. */
+export const FRAME_LOOSENESS: AsymmetryRow = {
+  scope: "control frames, every zod object node except STRICT_ZOD_NODES",
+  direction: "widen",
+  reason:
+    "The host may add fields; the extension acts only on the fields it validated (and, for signed statements, " +
+    "verifies in enclave-verify.ts), never on a frame merely having the right shape, so an unknown field is " +
+    "ignored rather than fatal.",
+};
+
+/** Every pinned asymmetry as one row (scope, direction, reason), in table order, for the gate's output. */
+export function listAsymmetries(): readonly AsymmetryRow[] {
+  const rows: AsymmetryRow[] = Object.entries(RECONCILED_FIELDS).flatMap(([kind, fields]) =>
+    Object.entries(fields).map(([path, { direction, reason }]) => ({
+      scope: `${kind} ${path}`,
+      direction,
+      reason,
+    })),
+  );
+  return [...rows, FRAME_LOOSENESS];
+}
 
 const ARGS_PATH = "$.properties.args";
 
