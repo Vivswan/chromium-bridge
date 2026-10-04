@@ -101,6 +101,7 @@ dependencies = [
  "base64",
  "core-foundation",
  "futures",
+ "getrandom 0.4.3",
  "hex",
  "hmac",
  "libc",

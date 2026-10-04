@@ -21,6 +21,10 @@ publish = false
 # Without the default `simd-unsafe` feature: the scalar engine is all the
 # core needs for 65-byte keys and signatures.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
+# OS CSPRNG for the per-run secret and the handshake nonces: getentropy on
+# macOS, the getrandom syscall on Linux, ProcessPrng on Windows. `std` for
+# the conversion into io::Error.
+getrandom = { version = "0.4", features = ["std"] }
 hmac = "0.13"
 libc = "0.2.186"
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,

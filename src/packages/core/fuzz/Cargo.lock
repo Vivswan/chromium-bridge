@@ -84,6 +84,7 @@ dependencies = [
  "base64",
  "core-foundation",
  "futures",
+ "getrandom",
  "hex",
  "hmac",
  "libc",
