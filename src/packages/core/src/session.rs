@@ -434,10 +434,9 @@ impl Session {
         labels
     }
 
-    /// Sever every live browser connection (the kill switch's teeth on the browser leg, ADR-0030) and do the
+    /// Sever every live browser connection (the kill switch's teeth on the browser leg) and do the
     /// registry bookkeeping synchronously here, not in the reader threads: on macOS a reader blocked in `recv(2)`
-    /// is not reliably woken by `shutdown(2)` (observed live under load: still parked in `__recvfrom` 90 seconds
-    /// after the sweep). Idempotent, so the broker's watcher may call it every tick while killed; returns how many
+    /// is not reliably woken by `shutdown(2)`. Idempotent, so the broker's watcher may call it every tick while killed; returns how many
     /// connections THIS call severed.
     ///
     /// ```text
@@ -480,7 +479,7 @@ impl Session {
         let count = severed.len();
         // Locks released: dropping the writers closes our socket handles;
         // dropping the senders wakes the in-flight callers immediately with
-        // `Disconnected` (ADR-0030: drained, not left to ride out timeouts).
+        // `Disconnected` (drained, not left to ride out timeouts).
         drop(severed);
         drop(drained);
         count

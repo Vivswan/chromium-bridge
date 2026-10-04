@@ -147,30 +147,63 @@ describe("scanFiles", () => {
   });
 });
 
-// The shell contract the moon task relies on (`set -e` stops on a non-zero exit): over a git tree with
-// one tracked, covered file carrying a tag the CLI exits 1 and names the line; with the tag gone the
-// same tree exits 0. The red run is the control for the green one. The test's own git children run
-// under gitEnv(), so this file can itself run inside the pre-commit hook without touching its index.
-test("the CLI exits 1 on a tracked covered tag and 0 once it is gone", () => {
+// Once per covered file class, the red run is the control for the green one. The bare `*.rs` pathspecs
+// reach nested files only because git's `*` crosses `/`, which nothing else here checks. The git children
+// run under gitEnv(), so this file can itself run inside the pre-commit hook without touching its index.
+const coveredPaths: ReadonlyArray<readonly [path: string, comment: string]> = [
+  ["docs/guide.md", "#"],
+  ["scripts/tool.ts", "//"],
+  ["tests/interop/client.test.ts", "//"],
+  ["src/packages/core/src/policy/store.rs", "//"],
+  ["src/packages/core/Cargo.toml", "#"],
+  ["tests/protocol/e2e.py", "#"],
+];
+
+function writeAndStageFile(root: string, rel: string, lines: string[]): void {
+  const env = gitEnv();
+  const file = join(root, rel);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${lines.join("\n")}\n`);
+  execFileSync("git", ["-C", root, "add", rel], { stdio: "pipe", env });
+}
+
+test.each(coveredPaths)(
+  "the CLI exits 1 on a tracked tag in %s and 0 once it is gone",
+  (rel, comment) => {
+    const root = scratch();
+    const env = gitEnv();
+    execFileSync("git", ["-C", root, "init", "-q"], { stdio: "pipe", env });
+    writeAndStageFile(root, rel, [
+      `${comment} Guide`,
+      "",
+      `${comment} The gate refuses (ADR-0032 decision 4).`,
+    ]);
+
+    const red = spawnSync("bun", [script, root], { encoding: "utf8", env });
+    expect({ status: red.status, stdout: red.stdout }).toEqual({ status: 1, stdout: "" });
+    expect(red.stderr).toContain(`${rel}:3: design record number: ${comment} The gate refuses`);
+
+    writeAndStageFile(root, rel, [
+      `${comment} Guide`,
+      "",
+      `${comment} The gate refuses until the push verified.`,
+    ]);
+    const green = spawnSync("bun", [script, root], { encoding: "utf8", env });
+    expect({ status: green.status, stderr: green.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(green.stdout).toMatch(/^check-planning-refs: 1 file\(s\) clean/);
+  },
+);
+
+// The negative control for the cases above: the pathspecs select, they do not scan the whole tree, so a
+// tag in an unlisted class is invisible and the red runs above come from the roots reaching their files.
+test("a tag in a file class no pathspec names is not scanned", () => {
   const root = scratch();
   const env = gitEnv();
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", root, ...args], { stdio: "pipe", env });
-  git("init", "-q");
-  mkdirSync(join(root, "docs"));
-  const page = join(root, "docs", "guide.md");
-  writeFileSync(page, "# Guide\n\nThe gate refuses (ADR-0032 decision 4).\n");
-  git("add", "docs/guide.md");
-
-  const red = spawnSync("bun", [script, root], { encoding: "utf8", env });
-  expect({ status: red.status, stdout: red.stdout }).toEqual({ status: 1, stdout: "" });
-  expect(red.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
-
-  writeFileSync(page, "# Guide\n\nThe gate refuses until this connection's push verified.\n");
-  git("add", "docs/guide.md");
-  const green = spawnSync("bun", [script, root], { encoding: "utf8", env });
-  expect({ status: green.status, stderr: green.stderr }).toEqual({ status: 0, stderr: "" });
-  expect(green.stdout).toMatch(/^check-planning-refs: 1 file\(s\) clean/);
+  execFileSync("git", ["-C", root, "init", "-q"], { stdio: "pipe", env });
+  writeAndStageFile(root, "notes/scratch.txt", ["The gate refuses (ADR-0032 decision 4)."]);
+  const run = spawnSync("bun", [script, root], { encoding: "utf8", env });
+  expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: "" });
+  expect(run.stdout).toMatch(/^check-planning-refs: 0 file\(s\) clean/);
 });
 
 // A git hook exports GIT_DIR and GIT_INDEX_FILE. The CLI, given an explicit root, must still read THAT

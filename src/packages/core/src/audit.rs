@@ -1,4 +1,4 @@
-//! The audit trail (ADR-0030): one structured record per security-relevant decision, recorded AFTER the decision
+//! The audit trail: one structured record per security-relevant decision, recorded AFTER the decision
 //! is applied, so [`record`] never fails and a full disk or an unwritable file cannot become a denial of service
 //! against enforcement itself. Never call [`record`] while holding the runtime lock: audit I/O stays outside
 //! every critical section.
@@ -45,7 +45,7 @@ const AUDIT_MAX_FIELD: usize = 512;
 
 /// Events recorded (and thus parsed back) by this binary. `snake_case` on the
 /// wire. The `confirm_*` and `enroll_*` kinds originate in the extension and
-/// arrive over the ADR-0030 `audit_event` control frame; everything else is
+/// arrive over the `audit_event` control frame; everything else is
 /// recorded by the host-side surface that made the decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,15 +75,15 @@ pub enum AuditKind {
     KillEngage,
     /// The global kill switch was released.
     KillRelease,
-    /// Host: one per-action user-presence signing round (ADR-0031) - the
+    /// Host: one per-action user-presence signing round - the
     /// Secure Enclave signature behind a `page_eval`/`page_upload`
     /// confirmation. `ok` means the user tapped and the proof was returned;
     /// `refused` covers everything else (cancelled prompt, keychain refusal,
     /// kill switch, busy). Host-recorded only: the extension cannot forge it
     /// through the `audit_event` frame.
     PresenceSign,
-    /// Host: one policy write through `policy::set_signed` / `policy::restrict`
-    /// (ADR-0032) - `ok` names the presence rung that authorized a grant
+    /// Host: one policy write through `policy::set_signed` / `policy::restrict`:
+    /// `ok` names the presence rung that authorized a grant
     /// (`auth=none` for a free restriction) and the touched fields; `refused`
     /// is a signing refusal or a keyless signature-only surface. Host-recorded
     /// only, NOT in [`EXTENSION_AUDIT_KINDS`]: the browser leg must not be
@@ -148,7 +148,7 @@ pub struct AuditRecord {
     /// Bounded free-text detail (a reason, an anchor kind).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// Confirmation-correlation id for the extension `confirm_*` kinds (ADR-0030): minted once per confirmation and
+    /// Confirmation-correlation id for the extension `confirm_*` kinds: minted once per confirmation and
     /// stamped on the `confirm_shown` record AND its later verdict, so a reader joins a
     /// verdict to exactly its own shown row instead of guessing by tool/origin. Distinct from `req`, the host-side
     /// per-tool-call `u64`.
@@ -347,8 +347,8 @@ fn serde_variant_name<T: Serialize>(v: &T) -> String {
     }
 }
 
-/// The audit kinds an extension-forwarded `audit_event` frame may carry
-/// (ADR-0030). Everything else is host-side and must not be forgeable from
+/// The audit kinds an extension-forwarded `audit_event` frame may carry.
+/// Everything else is host-side and must not be forgeable from
 /// the browser leg: the extension reports its own user-facing decisions, not
 /// admissions or revocations the host already records itself.
 ///

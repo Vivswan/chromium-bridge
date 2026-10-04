@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 // The identity constants this resolver stamps into every registration.
-// `crate::identity` is the single definition site (ADR-0028); re-exported
+// `crate::identity` is the single definition site; re-exported
 // here under the resolver's vocabulary so registration/doctor keep one
 // import for "which host, which extension, which paths".
 pub use crate::identity::{NATIVE_HOST_ID as HOST_ID, PINNED_EXTENSION_ID};

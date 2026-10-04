@@ -58,11 +58,11 @@ pub enum CallError {
     #[error("{0}")]
     Extension(String),
 
-    /// The host-side policy gate refused the call before any bridge traffic
-    /// (ADR-0032 decision 4): a capability grant that gates the tool is off in
+    /// The host-side policy gate refused the call before any bridge traffic:
+    /// a capability grant that gates the tool is off in
     /// the effective policy, the tool is in the policy's `disabledTools`, or
-    /// the policy store was unreadable and the gate failed closed (deny-all,
-    /// decision 5). Defense in depth for the honest-host path - the extension
+    /// the policy store was unreadable and the gate failed closed (deny-all).
+    /// Defense in depth for the honest-host path - the extension
     /// enforces the same policy at its own trust boundary. `tool` is the
     /// refused op; `reason` names which gate fired.
     #[error("tool '{tool}' is disabled by host policy: {reason}")]
@@ -71,7 +71,7 @@ pub enum CallError {
         reason: ToolDisabledReason,
     },
 
-    /// The global kill switch is engaged (ADR-0030): every tool call is
+    /// The global kill switch is engaged: every tool call is
     /// refused until a trusted surface explicitly releases it. Never
     /// retry-until-cleared territory for a client: the state changes only by
     /// an explicit human act.
@@ -99,7 +99,7 @@ pub enum CallError {
     Internal(String),
 }
 
-/// Why the host-side policy gate refused a tool call (ADR-0032 decision 4).
+/// Why the host-side policy gate refused a tool call.
 /// All three reasons share the stable `TOOL_DISABLED` code; the reason only
 /// shapes the model-facing message, so it can name which gate fired without
 /// minting a new taxonomy code.
@@ -111,7 +111,7 @@ pub enum ToolDisabledReason {
     /// The tool's op name is in the effective policy's `disabledTools`.
     InDisabledList,
     /// The host policy store is present but unreadable or corrupt, so the gate
-    /// fails closed and refuses every tool (decision 5). Field 0 is the read
+    /// fails closed and refuses every tool. Field 0 is the read
     /// error.
     StoreUnreadable(String),
 }
@@ -234,7 +234,7 @@ macro_rules! error_taxonomy {
             };)*
         }
 
-        /// The canonical cross-process error taxonomy (ADR-0028), generated into `src/packages/shared/src/errors.gen.ts`:
+        /// The canonical cross-process error taxonomy, generated into `src/packages/shared/src/errors.gen.ts`:
         /// one table, so a side that starts assigning a code cannot invent one the other has never heard of.
         ///
         /// ```text

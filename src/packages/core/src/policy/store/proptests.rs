@@ -14,7 +14,7 @@ fn arb_revision() -> impl Strategy<Value = u64> {
 }
 
 proptest! {
-    /// Monotonicity with no wraparound (ADR-0032): a store observed at
+    /// Monotonicity with no wraparound: a store observed at
     /// baseline revision r mints exactly r + 1, still JS-safe, and the
     /// bound itself refuses (`RevisionOverflow`) instead of wrapping,
     /// saturating, or panicking.

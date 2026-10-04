@@ -4,7 +4,7 @@
 //! rmcp owns the protocol semantics (lifecycle, version gate, `-32022`,
 //! method-not-found, envelope stamping); this handler owns what is genuinely
 //! ours: the tool catalogue and the guarded execution path every tool call
-//! must take - the global kill switch (ADR-0030), the audit record, and the
+//! must take - the global kill switch, the audit record, and the
 //! single-parse routing of `route_and_dispatch`.
 
 use std::sync::{Arc, OnceLock};
@@ -24,8 +24,8 @@ use crate::tools::{self, Tool, ToolCall};
 
 /// The server implementation identity advertised where the protocol carries
 /// it: the legacy `initialize` result's `serverInfo` and the modern
-/// `server/discover` result's `_meta` (discover-only; ADR-0034 records the
-/// SHOULD-gap on other results).
+/// `server/discover` result's `_meta` (discover-only: other results carry no
+/// identity, a known gap against the spec's SHOULD).
 fn implementation() -> Implementation {
     Implementation::new("chromium-bridge", env!("CARGO_PKG_VERSION"))
 }
@@ -111,8 +111,7 @@ impl ServerHandler for BridgeHandler {
     /// modern, defers to that computed fallback.
     /// The supported set stays rmcp's default - every revision the SDK
     /// implements - on purpose: pre-2026 harnesses keep negotiating their
-    /// own revision via `initialize` until they migrate (ADR-0034 records
-    /// the compatibility decision).
+    /// own revision via `initialize` until they migrate.
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28)
@@ -306,8 +305,7 @@ mod tests {
             .max_by(|a, b| a.as_str().cmp(b.as_str()))
             .map(ProtocolVersion::as_str);
         assert_eq!(newest, Some(crate::protocol::MCP_PROTOCOL_VERSION));
-        // The legacy revision our pre-2026 harnesses negotiate stays served
-        // (the ADR-0034 compatibility decision).
+        // The legacy revision our pre-2026 harnesses negotiate stays served.
         assert!(ProtocolVersion::KNOWN_VERSIONS
             .iter()
             .any(|v| v.as_str() == "2025-06-18"));

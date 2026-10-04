@@ -453,7 +453,7 @@ fn wire_types_reject_unknown_fields() {
         }
     ));
 
-    // Admin control frames (ADR-0025): every variant rejects an
+    // Admin control frames: every variant rejects an
     // unexpected field, with positive controls.
     for (bad, good) in [
         (
@@ -482,7 +482,7 @@ fn wire_types_reject_unknown_fields() {
         assert!(serde_json::from_value::<AdminControl>(good).is_ok());
     }
 
-    // Policy control frames (ADR-0032): every variant rejects an
+    // Policy control frames: every variant rejects an
     // unexpected field, with positive controls.
     for (bad, good) in [
         (

@@ -578,7 +578,7 @@ tasks:
       bun test scripts/check-docs-policy.test.ts
 
   check-planning-refs:
-    description: 'No planning references (retired design-record numbers, decision/finding/phase tags, audit codes) in the covered TypeScript, docs, and web sources'
+    description: 'No planning references (retired design-record numbers, decision/finding/phase tags, audit codes) in the covered sources (TypeScript, Rust, TOML, Python, shell, docs, web)'
     script: |
       set -e
       bun scripts/check-planning-refs.ts

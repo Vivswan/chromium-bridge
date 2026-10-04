@@ -1,5 +1,5 @@
-//! The MCP protocol layer, built on the official `rmcp` SDK (ADR-0034) rather than a hand-rolled dialect: the
-//! many-eyes library ADR-0023 prefers over bespoke protocol code. MCP 2026-07-28 is stateless (no mandatory
+//! The MCP protocol layer, built on the official `rmcp` SDK rather than a hand-rolled dialect: a
+//! many-eyes library over bespoke protocol code. MCP 2026-07-28 is stateless (no mandatory
 //! `initialize`; each request may claim its revision in `params._meta`; clients discover the server via
 //! `server/discover`), and rmcp owns that whole surface, including the `-32022` unsupported-version refusal
 //! and legacy `initialize` negotiation for pre-2026 harnesses.

@@ -74,7 +74,7 @@ fn two_relays_racing_attach_and_detach_never_underflow() {
     });
 }
 
-/// ADR-0025: the revocation-sweep registry must be empty by the time the
+/// The revocation-sweep registry must be empty by the time the
 /// broker's teardown decision latches, so no relay stream outlives the
 /// socket it hangs off. The code guarantees it by ordering: a relay's
 /// [`RelayAdmission`](super::RelayAdmission) deregisters BEFORE it

@@ -174,7 +174,7 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-// ---- The write seams (ADR-0032 decisions 3 and 5) ----------------------------
+// ---- The write seams: the signed grant and the free restriction --------------
 
 /// Why a policy write did not happen. Every variant leaves the store
 /// untouched.
@@ -189,7 +189,7 @@ pub enum PolicyWriteError {
     /// already audited.
     Refused(String),
     /// No enclave signing key exists and the surface's grant path is
-    /// signature-only (ADR-0032 decision 5). Promptless, audited.
+    /// signature-only. Promptless, audited.
     NoSigningKey,
     /// `restrict` found no baseline: there is nothing to restrict.
     NoBaseline,
@@ -240,14 +240,14 @@ impl std::fmt::Display for PolicyWriteError {
     }
 }
 
-/// Write a new signed policy baseline (ADR-0032 decision 3), the one grant path every editing surface shares;
+/// Write a new signed policy baseline, the one grant path every editing surface shares;
 /// `restrict` is the free lane. The Enclave signing over the document bytes IS the Touch ID approval
 /// ([`crate::presence::sign_policy_as_presence`]), so this seam never takes a pre-made attestation and cannot
-/// double-prompt; everything is validated BEFORE the prompt so a malformed request never raises a sheet (ADR-0031).
+/// double-prompt; everything is validated BEFORE the prompt so a malformed request never raises a sheet.
 /// ```text
 /// hardware refused       -> terminal, never downgraded to a softer prompt
 /// hardware unavailable   -> refused (`NoSigningKey`): the grant path exists only as the signature, so a keyless
-///                           machine has no baseline-writing path on any platform (decision 5)
+///                           machine has no baseline-writing path on any platform
 /// retained overlay       -> survives minus its entries on the `touched` fields, which the tap covers
 ///                           (the touched set travels inside the signed bytes)
 /// ```
@@ -292,7 +292,7 @@ pub fn set_signed(
             }
             // With no store, the anchor for "what does this write relax" is
             // the deny baseline: it is what the extension enforces in the
-            // no-stored-policy state (ADR-0032 decision 4), so a first
+            // no-stored-policy state, so a first
             // write's grants are relaxations against it and must be named in
             // `touched`.
             None => (None, PolicyValues::default(), PolicyValues::default()),
@@ -451,7 +451,7 @@ fn commit_signed_baseline(
         Ok(inner) => inner,
         Err(e) => Err(PolicyWriteError::Io(e)),
     };
-    // Log-after-decide (ADR-0030): the write is done (or refused) and the
+    // Log-after-decide: the write is done (or refused) and the
     // lock is released. Fifteen wire names fit well inside audit.rs's
     // per-field truncation bound.
     let record = crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
@@ -525,7 +525,7 @@ fn write_baseline_locked(
     Ok(())
 }
 
-/// Apply an unsigned restriction overlay (ADR-0032 decision 3's free lane).
+/// Apply an unsigned restriction overlay, the free lane.
 /// Takes no attestation and can never prompt, by construction: restrictions
 /// only remove capability, and failing closed is the direction every
 /// forgery is allowed to point. The given overlay merges over the stored
@@ -619,7 +619,7 @@ fn bump_policy_epoch_locked(lock: &ipc::RuntimeLockToken) {
     }
 }
 
-/// Clear the signed baseline (ADR-0032 decision 3's key disposal): a baseline signed by a deleted enrollment key must
+/// Clear the signed baseline on key disposal: a baseline signed by a deleted enrollment key must
 /// not outlive the key. The superseded record goes onto the history ring first, where the document survives as an
 /// unsigned draft to re-sign after re-pairing (the overlay travels inside that record because the store type
 /// cannot represent an overlay with no baseline).
