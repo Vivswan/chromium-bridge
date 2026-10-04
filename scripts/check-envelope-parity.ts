@@ -150,25 +150,23 @@ export const FRAME_REFINEMENTS: Readonly<
   Partial<Record<ControlFrameKind, readonly RefinementPin[]>>
 > = {
   // The policy_current ok-split (enclave.ts): PolicyStatus::into_frame (protocol/control.rs) emits exactly two
-  // flat shapes, and `reason` explains only the failure arm, so a reason must never be able to ride a frame
-  // that also claims success.
-  //   ok: true   -> requires `baseline`, never carries `reason` or `error`
+  // flat shapes, so a field of one arm must never be able to ride a frame of the other.
+  //   ok: true   -> requires `baseline`, never carries `error`
   //   ok: false  -> requires `error`, never carries `baseline`, `sig`, or `overlay`
   policy_current: [
     {
       name: "ok-split",
       refuses: [
-        { type: "policy_current", ok: true, baseline: "e30=", reason: "absent" },
         { type: "policy_current", ok: true, baseline: "e30=", error: "boom" },
         { type: "policy_current", ok: true },
         { type: "policy_current", ok: false, baseline: "e30=", error: "boom" },
         { type: "policy_current", ok: false, sig: "c2ln", error: "boom" },
         { type: "policy_current", ok: false, overlay: {}, error: "boom" },
-        { type: "policy_current", ok: false, reason: "absent" },
+        { type: "policy_current", ok: false },
       ],
       accepts: [
         { type: "policy_current", ok: true, baseline: "e30=", sig: "c2ln", overlay: {} },
-        { type: "policy_current", ok: false, reason: "absent", error: "no policy baseline" },
+        { type: "policy_current", ok: false, error: "no policy baseline" },
       ],
     },
   ],

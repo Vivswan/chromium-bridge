@@ -190,37 +190,6 @@ impl KillStatus {
     }
 }
 
-/// Why the host has no usable policy to report: the structured `reason` on a
-/// `policy_current { ok: false }` frame.
-///
-/// ```text
-/// absent                    -> a capable host that genuinely has no baseline yet
-/// damaged, unreadable       -> the store is present but unusable; the extension keeps the posture it already
-///                              has (the deny baseline pre-cutover, its stored effective policy after)
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicyUnavailableReason {
-    /// No policy baseline exists on this host yet (the pre-cutover state).
-    Absent,
-    /// A baseline exists but is unparsable, or its overlay relaxes it: the
-    /// store is present but its content is damaged or tampered.
-    Damaged,
-    /// The store could not be read (an I/O error distinct from absence).
-    Unreadable,
-}
-
-impl PolicyUnavailableReason {
-    /// The camelCase wire token, matching the extension's pinned enum. Single
-    /// words, so camelCase is the lowercase spelling.
-    pub fn wire(self) -> &'static str {
-        match self {
-            PolicyUnavailableReason::Absent => "absent",
-            PolicyUnavailableReason::Damaged => "damaged",
-            PolicyUnavailableReason::Unreadable => "unreadable",
-        }
-    }
-}
-
 /// The policy state the host reports, the [`KillStatus`] discipline applied to the policy push: every
 /// producer builds one of these and lets [`into_frame`](PolicyStatus::into_frame) flatten it onto the wire
 /// frame, so an `ok: false` carrying a baseline, a `sig` with no baseline, or an `ok: true` with an error
@@ -236,20 +205,14 @@ pub enum PolicyStatus {
         sig_b64: Option<String>,
         overlay: Option<crate::policy::PolicyOverlay>,
     },
-    /// No usable policy: `ok: false` with an error, a structured `reason` (`None` only when the frame
-    /// answers a malformed request rather than reporting a store state), and NO baseline claim, so the
-    /// extension keeps its deny baseline rather than trusting bytes nobody vouched for.
-    Unavailable {
-        reason: Option<PolicyUnavailableReason>,
-        error: String,
-    },
+    /// No usable policy: `ok: false` with an error and NO baseline claim, so the extension keeps its deny
+    /// baseline rather than trusting bytes nobody vouched for.
+    Unavailable { error: String },
 }
 
 impl PolicyStatus {
-    /// The pinned `policy_current` wire frame for this state: `baseline` is
-    /// present exactly when the store was readable, `error` and the structured
-    /// `reason` exactly when not, and a `sig` never appears without its
-    /// `baseline`.
+    /// The pinned `policy_current` wire frame for this state: `baseline` is present exactly when the store
+    /// was readable, `error` exactly when not, and a `sig` never appears without its `baseline`.
     pub fn into_frame(self) -> PolicyControl {
         match self {
             PolicyStatus::Present {
@@ -261,15 +224,13 @@ impl PolicyStatus {
                 baseline: Some(baseline_b64),
                 sig: sig_b64,
                 overlay,
-                reason: None,
                 error: None,
             },
-            PolicyStatus::Unavailable { reason, error } => PolicyControl::PolicyCurrent {
+            PolicyStatus::Unavailable { error } => PolicyControl::PolicyCurrent {
                 ok: false,
                 baseline: None,
                 sig: None,
                 overlay: None,
-                reason: reason.map(|r| r.wire().to_string()),
                 error: Some(error),
             },
         }
@@ -307,10 +268,6 @@ pub enum PolicyControl {
         /// fails the whole frame parse, fail closed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         overlay: Option<crate::policy::PolicyOverlay>,
-        /// Why no policy is available, when `ok: false`: the [`PolicyUnavailableReason`] wire token, absent on
-        /// `ok: true`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -402,8 +359,6 @@ impl HostControlTag {
             )),
             HostControlTag::PolicyGet => MalformedReply::Send(Box::new(
                 PolicyStatus::Unavailable {
-                    // A malformed REQUEST is not a store-availability state, so it carries no structured reason.
-                    reason: None,
                     error: "malformed policy_get frame".into(),
                 }
                 .into_frame()

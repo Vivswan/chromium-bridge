@@ -24,7 +24,7 @@ use crate::enclave::EnrollmentKey;
 use crate::ipc;
 use crate::protocol::control::{
     classify_nm_frame, host_control_type, AdminControl, EnclaveControl, FrameDisposition,
-    HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus, PolicyUnavailableReason,
+    HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::revocation::{Revocation, REVOCATION_POLL};
@@ -234,16 +234,13 @@ fn policy_current_reply() -> PolicyControl {
                 overlay: store.overlay,
             },
             Err(e) => PolicyStatus::Unavailable {
-                reason: Some(PolicyUnavailableReason::Damaged),
                 error: format!("policy store damaged: {e}"),
             },
         },
         Ok(None) => PolicyStatus::Unavailable {
-            reason: Some(PolicyUnavailableReason::Absent),
             error: "no policy baseline on this host".into(),
         },
         Err(e) => PolicyStatus::Unavailable {
-            reason: Some(PolicyUnavailableReason::Unreadable),
             error: format!("policy store unreadable: {e}"),
         },
     };

@@ -196,27 +196,6 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
 }
 
 #[test]
-fn policy_get_answers_ok_false_when_no_store_exists() {
-    // Fail closed (ADR-0032 decision 4/5): an absent store answers
-    // ok:false with an error and no baseline claim, so the extension keeps
-    // its deny baseline rather than trusting bytes nobody vouched for.
-    let _dir = scratch_runtime_dir("native-host-policy-get-absent");
-    let reply = policy_current_reply();
-    let PolicyControl::PolicyCurrent {
-        ok: false,
-        baseline: None,
-        sig: None,
-        reason: Some(reason),
-        error: Some(_),
-        ..
-    } = reply
-    else {
-        panic!("absent store must answer ok:false with no baseline: {reply:?}");
-    };
-    assert_eq!(reason, "absent");
-}
-
-#[test]
 fn policy_get_answers_the_signed_baseline_from_the_store() {
     let _dir = scratch_runtime_dir("native-host-policy-get-present");
     let _reset = crate::presence::policy_test_hook::ResetOnDrop;
@@ -251,95 +230,61 @@ fn policy_get_answers_the_signed_baseline_from_the_store() {
 }
 
 #[test]
-fn policy_get_answers_ok_false_on_a_damaged_or_tampered_store() {
-    // ADR-0032 decision 5: an unreadable OR MALFORMED store answers
-    // ok:false - the push must agree with the dispatch gate's deny-all
-    // reading of the same state, never vouch ok:true for bytes the gate
-    // refuses.
-    let _dir = scratch_runtime_dir("native-host-policy-get-damaged");
-    // Envelope parses, baseline bytes are garbage.
-    let garbage = crate::policy::PolicyStore {
-        version: 1,
-        baseline_b64: crate::enclave::base64_encode(b"not a policy doc"),
-        sig_b64: None,
-        key_id: None,
-        overlay: None,
+fn policy_get_answers_ok_false_without_a_usable_store() {
+    // Fail closed: every store state the dispatch gate reads as deny-all answers ok:false with an error and
+    // no baseline claim, so the extension keeps its deny baseline rather than trusting bytes nobody vouched
+    // for. The push must agree with the gate's reading, never vouch ok:true for bytes the gate refuses.
+    fn store(baseline: &[u8], overlay: Option<crate::policy::PolicyOverlay>) -> Vec<u8> {
+        serde_json::to_vec(&crate::policy::PolicyStore {
+            version: 1,
+            baseline_b64: crate::enclave::base64_encode(baseline),
+            sig_b64: None,
+            key_id: None,
+            overlay,
+        })
+        .unwrap()
+    }
+    let default_doc = serde_json::to_vec(&crate::policy::PolicyDoc::default()).unwrap();
+    let relaxing = crate::policy::PolicyOverlay {
+        page_eval_enabled: Some(true),
+        ..Default::default()
     };
-    std::fs::write(
-        crate::policy::PolicyStore::path(),
-        serde_json::to_vec(&garbage).unwrap(),
-    )
-    .unwrap();
-    let reply = policy_current_reply();
-    let PolicyControl::PolicyCurrent {
-        ok: false,
-        baseline: None,
-        sig: None,
-        reason: Some(reason),
-        error: Some(_),
-        ..
-    } = reply
-    else {
-        panic!("a damaged baseline must answer ok:false: {reply:?}");
-    };
-    assert_eq!(reason, "damaged");
-    // Valid baseline, tampered overlay relaxing it (direction-invalid).
-    let doc = crate::policy::PolicyDoc::default();
-    let tampered = crate::policy::PolicyStore {
-        version: 1,
-        baseline_b64: crate::enclave::base64_encode(&serde_json::to_vec(&doc).unwrap()),
-        sig_b64: None,
-        key_id: None,
-        overlay: Some(crate::policy::PolicyOverlay {
-            page_eval_enabled: Some(true),
-            ..Default::default()
-        }),
-    };
-    std::fs::write(
-        crate::policy::PolicyStore::path(),
-        serde_json::to_vec(&tampered).unwrap(),
-    )
-    .unwrap();
-    let reply = policy_current_reply();
-    let PolicyControl::PolicyCurrent {
-        ok: false,
-        baseline: None,
-        sig: None,
-        reason: Some(reason),
-        error: Some(e),
-        ..
-    } = reply
-    else {
-        panic!("a tampered overlay must answer ok:false: {reply:?}");
-    };
-    assert!(e.contains("damaged"));
-    assert_eq!(reason, "damaged");
-}
-
-#[test]
-fn policy_get_answers_ok_false_unreadable_on_a_damaged_store_envelope() {
-    // ADR-0032 D-P4-2: a store whose ENVELOPE cannot be read (wrong
-    // version here, an I/O failure in general) is distinct from an absent
-    // or a content-damaged store - it answers reason=unreadable, so the
-    // extension keeps its deny baseline and never mistakes it for the
-    // absent state.
-    let _dir = scratch_runtime_dir("native-host-policy-get-unreadable");
-    std::fs::write(
-        crate::policy::PolicyStore::path(),
-        br#"{"version":99,"baseline_b64":"e30="}"#,
-    )
-    .unwrap();
-    let reply = policy_current_reply();
-    let PolicyControl::PolicyCurrent {
-        ok: false,
-        reason: Some(reason),
-        error: Some(_),
-        ..
-    } = reply
-    else {
-        panic!("an unreadable store envelope must answer ok:false: {reply:?}");
-    };
-    assert_eq!(reason, "unreadable");
+    let cases: [(&str, Option<Vec<u8>>, &str); 4] = [
+        ("absent store", None, "no policy baseline"),
+        (
+            "garbage baseline bytes",
+            Some(store(b"not a policy doc", None)),
+            "policy store damaged",
+        ),
+        (
+            "overlay relaxing the baseline",
+            Some(store(&default_doc, Some(relaxing))),
+            "policy store damaged",
+        ),
+        (
+            "unreadable envelope (unknown version)",
+            Some(br#"{"version":99,"baseline_b64":"e30="}"#.to_vec()),
+            "policy store unreadable",
+        ),
+    ];
+    for (case, bytes, error_prefix) in cases {
+        let _dir = scratch_runtime_dir("native-host-policy-get-unusable");
+        if let Some(bytes) = bytes {
+            std::fs::write(crate::policy::PolicyStore::path(), bytes).unwrap();
+        }
+        let reply = policy_current_reply();
+        let PolicyControl::PolicyCurrent {
+            ok: false,
+            baseline: None,
+            sig: None,
+            overlay: None,
+            error: Some(error),
+        } = reply
+        else {
+            panic!("{case}: must answer ok:false with no baseline claim: {reply:?}");
+        };
+        assert!(error.starts_with(error_prefix), "{case}: {error}");
+    }
 }
 
 #[test]

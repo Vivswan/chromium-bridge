@@ -560,7 +560,6 @@ fn policy_current_serializes_exactly_its_pinned_key_set() {
         baseline: Some("YmFzZQ==".into()),
         sig: Some("c2ln".into()),
         overlay: Some(crate::policy::PolicyOverlay::default()),
-        reason: Some("absent".into()),
         error: Some("e".into()),
     };
     let value = serde_json::to_value(&frame).unwrap();
@@ -570,73 +569,49 @@ fn policy_current_serializes_exactly_its_pinned_key_set() {
         .keys()
         .map(String::as_str)
         .collect();
-    let expected: BTreeSet<&str> = [
-        "type", "ok", "baseline", "sig", "overlay", "reason", "error",
-    ]
-    .into_iter()
-    .collect();
+    let expected: BTreeSet<&str> = ["type", "ok", "baseline", "sig", "overlay", "error"]
+        .into_iter()
+        .collect();
     assert_eq!(keys, expected);
 }
 
 #[test]
-fn policy_status_into_frame_forbids_illegal_mixtures() {
-    // The KillStatus discipline for policy_current: the typed intermediate emits only the two flat shapes
-    // the contract means, so a sig without a baseline, a baseline on an ok:false, or an ok:true with an
-    // error is unconstructible past this point.
-    let signed = (PolicyStatus::Present {
-        baseline_b64: "YmFzZQ==".into(),
-        sig_b64: Some("c2ln".into()),
-        overlay: None,
-    })
-    .into_frame();
-    assert!(
-        matches!(
-            signed,
-            PolicyControl::PolicyCurrent {
-                ok: true,
-                baseline: Some(_),
-                sig: Some(_),
-                error: None,
-                ..
+fn policy_status_maps_onto_the_pinned_wire_shapes() {
+    // The wire contract the extension's ok-split refinement enforces (shared/src/enclave.ts): the typed
+    // state is the only producer, and its flattening is pinned byte for byte, so a baseline travels iff
+    // `ok`, `error` iff not, and a `sig` never without its baseline.
+    assert_eq!(
+        serde_json::to_value(
+            PolicyStatus::Present {
+                baseline_b64: "YmFzZQ==".into(),
+                sig_b64: Some("c2ln".into()),
+                overlay: None,
             }
-        ),
-        "present must be ok:true with baseline and no error: {signed:?}"
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "policy_current", "ok": true, "baseline": "YmFzZQ==", "sig": "c2ln" })
     );
-    // An unsigned baseline: still ok:true with a baseline, sig
-    // absent - never a sig without its baseline.
-    let unsigned = (PolicyStatus::Present {
-        baseline_b64: "YmFzZQ==".into(),
-        sig_b64: None,
-        overlay: None,
-    })
-    .into_frame();
-    assert!(
-        matches!(
-            unsigned,
-            PolicyControl::PolicyCurrent {
-                ok: true,
-                baseline: Some(_),
-                sig: None,
-                ..
+    assert_eq!(
+        serde_json::to_value(
+            PolicyStatus::Present {
+                baseline_b64: "YmFzZQ==".into(),
+                sig_b64: None,
+                overlay: Some(crate::policy::PolicyOverlay::default()),
             }
-        ),
-        "unsigned present must carry the baseline and no sig: {unsigned:?}"
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "policy_current", "ok": true, "baseline": "YmFzZQ==", "overlay": {} })
     );
-    let unavailable = (PolicyStatus::Unavailable {
-        reason: Some(PolicyUnavailableReason::Absent),
-        error: "no policy baseline".into(),
-    })
-    .into_frame();
-    let PolicyControl::PolicyCurrent {
-        ok: false,
-        baseline: None,
-        sig: None,
-        overlay: None,
-        reason: Some(r),
-        error: Some(_),
-    } = unavailable
-    else {
-        panic!("unavailable must be ok:false with no baseline claim: {unavailable:?}");
-    };
-    assert_eq!(r, "absent");
+    assert_eq!(
+        serde_json::to_value(
+            PolicyStatus::Unavailable {
+                error: "no policy baseline".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "policy_current", "ok": false, "error": "no policy baseline" })
+    );
 }
