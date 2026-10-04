@@ -5,7 +5,7 @@
 // could drift).
 //
 // Policy:
-// - storage_get: ALWAYS masked (silent read of Web Storage - ADR-0010),
+// - storage_get: ALWAYS masked (a silent read of Web Storage),
 //   independent of the eval mask toggle.
 // - page_eval: masked unless the user opted out (evalMask=false). EVERY
 //   field of an eval result passes the gate - the success value and the
@@ -28,8 +28,8 @@ export async function maskOpResult(
     case "storage_get":
       return maskStorageResult(result);
     case "page_eval": {
-      // Dispatch threads its per-request policy snapshot in (ADR-0032
-      // decision 4); the REQUIRED parameter is what holds the invariant
+      // Dispatch threads its per-request policy snapshot in; the REQUIRED
+      // parameter is what holds the one-snapshot-per-decision invariant
       // (tests start their own decisions via withFreshPolicy).
       return policy.evalMask !== false ? maskSensitive(result) : result;
     }
@@ -39,9 +39,9 @@ export async function maskOpResult(
 }
 
 function maskStorageResult(raw: unknown): unknown {
-  // Parse before masking (the ADR-0010 gate): a result outside the three
-  // known storage_get shapes is REFUSED, never passed through raw - a drifted
-  // shape must fail closed instead of carrying unmasked values to the host.
+  // Parse before masking: a result outside the three known storage_get shapes
+  // is REFUSED, never passed through raw - a drifted shape must fail closed
+  // instead of carrying unmasked values to the host.
   const parsed = StorageReadResultSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error("storage_get result does not match a known shape - refusing to egress it");

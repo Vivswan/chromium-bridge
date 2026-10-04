@@ -194,7 +194,7 @@ jobs:
       - run: >-
           moon run check-version check-extension-id check-toolchain check-hasher check-ignored
           check-cjk check-typography check-fuzz-smoke check-harness-driver
-          check-docs-literals check-docs-policy check-compose
+          check-docs-literals check-docs-policy check-compose check-planning-refs
 
   # typos is not here: the managed ci.yml's standard-checks job runs the fleet's typos action over the same
   # _typos.toml (the local gate keeps its `moon run typos`).

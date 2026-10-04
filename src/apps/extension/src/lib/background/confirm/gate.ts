@@ -51,11 +51,11 @@ export function bindOrigin(preflight: PreflightResult, expectOrigin: string): Pa
     : { expectOrigin };
 }
 
-// Same-origin, same-kind confirmation grace window for CLICKS only (ADR-0006
-// tiering): keyed per-tab as well, so approving on one tab never silently
-// suppresses the confirm on another same-origin tab. page_press, page_select,
-// page_eval, tab_close, and page_upload always reconfirm. Lives in SW memory:
-// a SW recycle simply re-prompts, which errs closed.
+// Same-origin, same-kind confirmation grace window for CLICKS only: keyed
+// per-tab as well, so approving on one tab never silently suppresses the
+// confirm on another same-origin tab. page_press, page_select, page_eval,
+// tab_close, and page_upload always reconfirm. Lives in SW memory: a SW recycle
+// simply re-prompts, which errs closed.
 let lastConfirmed: { key: string | null; until: number } = { key: null, until: 0 };
 
 function originOf(url: string | undefined): string {
@@ -77,8 +77,8 @@ export function resetClickGraceWindow(): void {
  * policy gate is off). Ops with no gate return an empty preflight, and every result still has to pass
  * through bindOrigin before a backend accepts it.
  *
- * `policy` and `panicEpoch` are REQUIRED so the one-snapshot-per-decision invariant (ADR-0032 decision 4)
- * is held by the signature: dispatch captures both at the decision's true start, BEFORE its first await.
+ * `policy` and `panicEpoch` are REQUIRED so the one-snapshot-per-decision invariant is held by the
+ * signature: dispatch captures both at the decision's true start, BEFORE its first await.
  *   policy push landing mid-confirmation  -> cannot alter this decision's gates, grace window, or timeouts; applies from the next decision
  *   deny-kill crossing the decision        -> every confirmation raised below denies on the epoch mismatch
  */
@@ -95,8 +95,8 @@ export async function preflightPageOp(
       const probe = await backend.probeClick(args, tab);
       const preflight: PreflightResult = { clickExpect: probe };
       if (!isHighRiskClick(probe)) return preflight;
-      // The confirmation gate can be disabled in policy. This is dangerous
-      // (ADR-0006) but offered as an explicit opt-in.
+      // The confirmation gate can be disabled in policy. This is dangerous but
+      // offered as an explicit opt-in.
       if (policy.confirmHighRiskClick === false) return preflight;
       const actionDesc = describeAction(probe, "click");
       const key = `${tab.id}:${originOf(tab.url)}:${actionDesc}`;
@@ -163,11 +163,11 @@ export async function preflightPageOp(
       if (TOOL_GRANTS.page_eval.some((grant) => policy[grant] !== true)) {
         throw new Error("page_eval disabled in settings");
       }
-      // Confirm EVERY call, showing the full code, unless the eval
-      // confirmation is off in policy (confirmPageEval=false). page_eval is
-      // DELIBERATELY excluded from the grace window (ADR-0008): there is no
-      // silent-eval window. NOTE: disabling confirmPageEval removes
-      // ADR-0008's guardrail - arbitrary JS then runs with no prompt.
+      // Confirm EVERY call, showing the full code, unless the eval confirmation
+      // is off in policy (confirmPageEval=false). page_eval is DELIBERATELY
+      // excluded from the grace window: there is no silent-eval window. NOTE:
+      // disabling confirmPageEval removes that guardrail - arbitrary JS then
+      // runs with no prompt.
       if (policy.confirmPageEval === false) return {};
       const approved = await confirmWithUser({
         kind: "eval",
@@ -175,10 +175,10 @@ export async function preflightPageOp(
         tabTitle: tab.title || "",
         detail: code,
         timeoutMs: policy.evalToastTimeoutMs,
-        // The hardware-routing verdict is part of THIS decision's snapshot
-        // (ADR-0032 decision 4): computed here and carried in the request,
-        // so a policy push landing while the confirmation waits in the
-        // queue cannot re-route it at presentation time.
+        // The hardware-routing verdict is part of THIS decision's snapshot:
+        // computed here and carried in the request, so a policy push landing
+        // while the confirmation waits in the queue cannot re-route it at
+        // presentation time.
         presenceRouting: await presenceRoutingEnabled(policy),
         panicEpoch,
       });

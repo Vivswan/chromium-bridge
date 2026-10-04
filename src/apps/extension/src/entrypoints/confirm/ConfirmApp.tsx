@@ -11,12 +11,12 @@ import { useI18n } from "@/hooks/useI18n";
 import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
 
-// The confirmation window (ADR-0027): an extension-owned page a guarded page
-// cannot reach, read, or click. It fetches the pending payload by the id in
-// its URL, renders WHAT is being approved (text only), and reports the
-// verdict via confirm_resolve - which the router accepts only from this exact
-// document. Escape / closing the window / timeout all deny; Allow arms after
-// a short delay so stray input cannot approve.
+// The confirmation window: an extension-owned page a guarded page cannot reach,
+// read, or click. It fetches the pending payload by the id in its URL, renders
+// WHAT is being approved (text only), and reports the verdict via
+// confirm_resolve - which the router accepts only from this exact document.
+// Escape / closing the window / timeout all deny; Allow arms after a short
+// delay so stray input cannot approve.
 //
 // Control Tower restyle: the security behavior above is untouched. The exact
 // payload is the ONLY contained surface; Deny is the filled, easy default.
@@ -61,11 +61,11 @@ const TOOL_NAME = {
   upload: "page_upload",
 } as const satisfies Record<Exclude<ConfirmKind, "policy_relax">, OpName>;
 
-// ADR-0032: the policy_relax detail carries the relaxing fields' WIRE
-// names, one per line; this map renders each beside its localized label.
-// `satisfies` pins the map to the generated field catalogue, so a policy
-// field added in the Rust core breaks this at compile time instead of
-// showing an unlabeled wire name in the approval window.
+// The policy_relax detail carries the relaxing fields' WIRE names, one per
+// line; this map renders each beside its localized label. `satisfies` pins the
+// map to the generated field catalogue, so a policy field added in the Rust
+// core breaks this at compile time instead of showing an unlabeled wire name in
+// the approval window.
 const POLICY_FIELD_LABEL = {
   cdpMode: "confirm.pf_cdpMode",
   fileUploadEnabled: "confirm.pf_fileUploadEnabled",
@@ -242,15 +242,15 @@ export function ConfirmApp() {
   }
 
   const warnKey = WARNING_KEY[payload.kind];
-  // ADR-0031: a hardware-gated confirmation renders display-only. Approval
-  // is the Touch ID tap on the host's system prompt (the service refuses a
-  // window-side approval); Deny stays - removing capability is friction-free.
-  // The payload union confines `hardware` to the eval/upload arms; the shared
-  // narrowing helper is the one reader.
+  // A hardware-gated confirmation renders display-only. Approval is the Touch
+  // ID tap on the host's system prompt (the service refuses a window-side
+  // approval); Deny stays - removing capability is friction-free. The payload
+  // union confines `hardware` to the eval/upload arms; the shared narrowing
+  // helper is the one reader.
   const hardware = isHardwareGated(payload);
-  // ADR-0032: an unsigned policy relaxation on an unpinned extension.
-  // No page is involved (origin/tabTitle are ""), the chip names the wire
-  // frame instead of a tool, and the host segment renders unattested.
+  // An unsigned policy relaxation on an unpinned extension. No page is involved
+  // (origin/tabTitle are ""), the chip names the wire frame instead of a tool,
+  // and the host segment renders unattested.
   const policyRelax = payload.kind === "policy_relax";
   // The headline names the TARGET site plainly (the requester is the paired
   // MCP client, which this payload cannot attest - so the copy asks about
@@ -372,9 +372,9 @@ export function ConfirmApp() {
       </p>
 
       {/* Footer, OUTSIDE the scroll region like the actions above it: the
-          request-id/timestamp line plus the compact panic exit (ADR-0030's
-          one-action brake, present on every surface). Engage only, never
-          release; last in DOM order so Deny keeps the default focus. It
+          request-id/timestamp line plus the compact panic exit (the kill
+          switch's one-action brake, present on every surface). Engage only,
+          never release; last in DOM order so Deny keeps the default focus. It
           denies this request first and then severs everything - both are
           capability reduction, so it stays available in hardware mode too. */}
       <div className="flex items-center gap-2 border-t border-edge pt-2 font-mono text-[10px] text-text-3">

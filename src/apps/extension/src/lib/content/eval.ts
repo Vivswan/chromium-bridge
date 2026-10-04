@@ -1,9 +1,9 @@
 // page_eval, content-script leg (cdpMode off): execute arbitrary JS in the
-// page's global scope and return a safely-serialized result. The settings
-// gate (pageEvalEnabled) and the user confirmation run in the SERVICE WORKER
-// (confirm/gate.ts, on the extension-owned surface - ADR-0027) before this
-// message ever arrives, and the result is masked SW-side on egress
-// (background/egress.ts); this module only executes and serializes.
+// page's global scope and return a safely-serialized result. The settings gate
+// (pageEvalEnabled) and the user confirmation run in the SERVICE WORKER
+// (confirm/gate.ts, on the extension-owned surface) before this message ever
+// arrives, and the result is masked SW-side on egress (background/egress.ts);
+// this module only executes and serializes.
 
 import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
 import { truncate } from "./util";

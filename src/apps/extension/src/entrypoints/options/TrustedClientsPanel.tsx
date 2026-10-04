@@ -4,13 +4,13 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
 
-// The ADR-0025 trusted-client panel: the MCP-client harnesses this machine's
-// bridge admits (ADR-0024), with a revoke per entry. Revoking takes effect
-// immediately at the enforcement point: the allowlist is rewritten and the
-// revocation epoch bumped in one critical section, so a live broker drops the
-// client's connections and refuses its re-attach. The list lives host-side;
-// reads and revokes go through the SW router to the native host, so this
-// panel shows a not-connected state when no host is up.
+// The trusted-client panel: the MCP-client harnesses this machine's bridge
+// admits, with a revoke per entry. Revoking takes effect immediately at the
+// enforcement point: the allowlist is rewritten and the revocation epoch bumped
+// in one critical section, so a live broker drops the client's connections and
+// refuses its re-attach. The list lives host-side; reads and revokes go through
+// the SW router to the native host, so this panel shows a not-connected state
+// when no host is up.
 export function TrustedClientsPanel() {
   const { t } = useI18n();
   const [view, setView] = useState<RuntimeResponse<"get_clients"> | null>(null);

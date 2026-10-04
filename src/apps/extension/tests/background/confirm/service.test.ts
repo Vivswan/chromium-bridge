@@ -255,8 +255,8 @@ describe("getPendingConfirm", () => {
 
 describe("presence routing (the verdict travels in the request)", () => {
   // The routing decision is computed by the CALLER at decision time from its
-  // per-request policy snapshot and carried in the ConfirmRequest (ADR-0032
-  // decision 4): providerFor consults nothing live, so neither a policy push
+  // per-request policy snapshot and carried in the ConfirmRequest (one snapshot
+  // per decision): providerFor consults nothing live, so neither a policy push
   // nor a provider/predicate reinstall during the queue wait can re-route an
   // in-flight confirmation - the old paired-predicate race is gone with the
   // predicate itself.

@@ -49,23 +49,22 @@ export default defineBackground(() => {
   // module load) so importing lib modules stays side-effect-free.
   registerRuntimeMessageRouter();
 
-  // CDP mode (ADR-0017): tear down debugger sessions when a tab closes, when
-  // Chrome detaches us, or when the effective cdpMode grant goes away.
+  // CDP mode: tear down debugger sessions when a tab closes, when Chrome
+  // detaches us, or when the effective cdpMode grant goes away.
   installCdpLifecycleListeners();
 
-  // The off-DOM confirmation surface (ADR-0027). Without a provider the
-  // confirmation service denies everything, so install it before any bridge
-  // traffic can arrive. The Enclave user-presence provider (ADR-0031) rides
-  // on top of it for the "eval"/"upload" kinds: whether a given confirmation
-  // routes to it is decided by the caller at decision time (ConfirmRequest's
-  // presenceRouting, from the per-request policy snapshot); the window
-  // displays what is being approved, the Touch ID tap (a verified host
-  // signature) approves.
+  // The off-DOM confirmation surface. Without a provider the confirmation
+  // service denies everything, so install it before any bridge traffic can
+  // arrive. The Enclave user-presence provider rides on top of it for the
+  // "eval"/"upload" kinds: whether a given confirmation routes to it is
+  // decided by the caller at decision time (ConfirmRequest's presenceRouting,
+  // from the per-request policy snapshot); the window displays what is being
+  // approved, the Touch ID tap (a verified host signature) approves.
   const windowProvider = new ExtensionWindowProvider();
   installConfirmationProvider(windowProvider);
   installPresenceProvider(new EnclavePresenceProvider(windowProvider));
 
-  // ADR-0032 decision 3: on an UNPINNED extension, an unsigned
+  // On an UNPINNED extension nothing can verify a signature, so an unsigned
   // policy push that would relax the enforced effective policy is applied
   // only after an explicit approval in the confirmation window above.
   // Registered after the provider so a consultation always has a surface;

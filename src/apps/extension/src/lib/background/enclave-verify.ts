@@ -1,7 +1,7 @@
-// WebCrypto verification for the Secure Enclave enrollment ceremony
-// (ADR-0021). Pure module: no chrome.* usage, so bun unit-tests it with
-// self-checking offline vectors, and the generated golden vectors
-// (enclave-fixture.gen.ts) replay Rust-signed proofs through it.
+// WebCrypto verification for the Secure Enclave enrollment ceremony. Pure
+// module: no chrome.* usage, so bun unit-tests it with self-checking offline
+// vectors, and the generated golden vectors (enclave-fixture.gen.ts) replay
+// Rust-signed proofs through it.
 //
 // The wire contract is owned by the host
 // (src/packages/core/src/protocol/control.rs, EnclaveControl).
@@ -11,11 +11,11 @@
 //   UTF8(CHALLENGE_DOMAIN) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
 //
 // `pubkey` is base64 of the PUBKEY_LEN-byte X9.63 uncompressed point
-// (0x04||X||Y) and `key_id` is the lowercase-hex SHA-256 of those bytes
-// (also the fingerprint the user compares against `chromium-bridge pair`
-// output). The domains, bounds, and lengths are the GENERATED constants
-// from the Rust enclave module (enclave.gen.ts, ADR-0028); this module owns
-// only the verification logic.
+// (0x04||X||Y) and `key_id` is the lowercase-hex SHA-256 of those bytes (also
+// the fingerprint the user compares against `chromium-bridge pair` output). The
+// domains, bounds, and lengths are the GENERATED constants from the Rust
+// enclave module (enclave.gen.ts); this module owns only the verification
+// logic.
 
 import {
   CHALLENGE_DOMAIN,
@@ -71,8 +71,8 @@ export function buildChallengeMessage(nonce: string, context?: string): Uint8Arr
   return buildDomainMessage(CHALLENGE_DOMAIN, nonce, context);
 }
 
-/** Build the exact byte string a PER-ACTION presence approval signs
- * (ADR-0031): the same NUL-separated shape, under PRESENCE_DOMAIN. */
+/** Build the exact byte string a PER-ACTION presence approval signs: the same
+ * NUL-separated shape, under PRESENCE_DOMAIN. */
 export function buildPresenceMessage(nonce: string, context?: string): Uint8Array {
   return buildDomainMessage(PRESENCE_DOMAIN, nonce, context);
 }
@@ -94,14 +94,14 @@ function buildDomainMessage(domain: string, nonce: string, context?: string): Ui
   return msg;
 }
 
-/** Build the exact byte string a POLICY baseline signature covers (ADR-0032
- * decision 3): UTF8(POLICY_DOMAIN) || 0x00 || the exact document bytes. The
- * document bytes are opaque here - no bounds, no NUL rule, no
- * canonicalization - because the domain prefix is fixed and NUL-free, which
- * already makes the three signing domains mutually non-replayable, and the
- * whole design is "sign the exact bytes, verify the exact bytes". This
- * deliberately does NOT reuse buildDomainMessage: the policy message has one
- * separator and one payload, not the nonce/context pair. */
+/** Build the exact byte string a POLICY baseline signature covers:
+ * UTF8(POLICY_DOMAIN) || 0x00 || the exact document bytes. The document bytes
+ * are opaque here - no bounds, no NUL rule, no canonicalization - because the
+ * domain prefix is fixed and NUL-free, which already makes the three signing
+ * domains mutually non-replayable, and the whole design is "sign the exact
+ * bytes, verify the exact bytes". This deliberately does NOT reuse
+ * buildDomainMessage: the policy message has one separator and one payload, not
+ * the nonce/context pair. */
 export function buildPolicyMessage(docBytes: Uint8Array): Uint8Array {
   const domainB = utf8.encode(POLICY_DOMAIN);
   const msg = new Uint8Array(domainB.length + 1 + docBytes.length);
@@ -111,13 +111,12 @@ export function buildPolicyMessage(docBytes: Uint8Array): Uint8Array {
   return msg;
 }
 
-/** Policy-baseline verification (ADR-0032 decision 3): the signature over
- * the exact decoded baseline bytes is verified against the PINNED key only.
- * Unlike the proof frames there is no frame-supplied key identity to refuse
- * early - the policy frames deliberately carry none the extension honors -
- * so the pinned bytes are simply what gets imported. The caller treats a
- * failure as host-substitution evidence (marks compromised), never a mere
- * refusal. */
+/** Policy-baseline verification: the signature over the exact decoded baseline
+ * bytes is verified against the PINNED key only. Unlike the proof frames there
+ * is no frame-supplied key identity to refuse early - the policy frames
+ * deliberately carry none the extension honors - so the pinned bytes are simply
+ * what gets imported. The caller treats a failure as host-substitution evidence
+ * (marks compromised), never a mere refusal. */
 export async function verifyPolicySignatureAgainstPin(
   sigB64: string,
   docBytes: Uint8Array,
@@ -262,9 +261,9 @@ export async function verifyProofAgainstPin(
   );
 }
 
-/** Per-action presence verification (ADR-0031): identical pin-only rules,
- * over the PRESENCE domain. A presence approval that fails this check is a
- * denial AND host-substitution evidence (the caller marks compromised). */
+/** Per-action presence verification: identical pin-only rules, over the
+ * PRESENCE domain. A presence approval that fails this check is a denial AND
+ * host-substitution evidence (the caller marks compromised). */
 export async function verifyPresenceProofAgainstPin(
   proof: ProofFields,
   nonce: string,

@@ -586,19 +586,18 @@ async function testText(page: Page): Promise<void> {
   check(resp.text.includes("Test Fixture"), "page_text includes page heading");
 }
 
-/** Run a page_eval op. Since ADR-0027 the content leg no longer confirms (the
- * SW gate does, off-DOM), so there is no in-page toast to approve - the eval
- * runs and returns directly. Kept as a named helper so the eval tests read
- * clearly. */
+/** Run a page_eval op. The content leg does not confirm (the SW gate does,
+ * off-DOM), so there is no in-page toast to approve - the eval runs and returns
+ * directly. Kept as a named helper so the eval tests read clearly. */
 function invokeWithEvalApproval(page: Page, op: string, args: any, timeoutMs = 8000): Promise<any> {
   return invoke(page, op, args, timeoutMs);
 }
 
 // ── test: page_eval (content leg returns RAW) ──────────────────────────────
-// Since ADR-0027 masking moved to the service worker's egress (egress.ts); the
-// content leg executes and serializes ONLY. So the content result is the RAW
-// value here; the mask is applied in the SW before it leaves the extension
-// (covered by src/apps/extension/tests/background/egress.test.ts and the real-browser
+// Masking happens in the service worker's egress (egress.ts); the content leg
+// executes and serializes ONLY. So the content result is the RAW value here;
+// the mask is applied in the SW before it leaves the extension (covered by
+// src/apps/extension/tests/background/egress.test.ts and the real-browser
 // security proof). This test pins that the content leg returns the raw value.
 async function testEvalRaw(page: Page): Promise<void> {
   console.log("\n[test] page_eval - content leg returns RAW (SW masks on egress)");
@@ -652,10 +651,10 @@ async function testEvalErrorAndSerialize(page: Page): Promise<void> {
 }
 
 // ── test: storage_get (content leg returns RAW) ────────────────────────────
-// Like page_eval, storage_get masking moved to the SW egress (ADR-0027,
-// always-on per ADR-0010). The content leg returns RAW values; the SW masks
-// them before they leave (covered by egress.test.ts). This test pins the raw
-// read + the DOM-side shape (found/missing, session vs local).
+// Like page_eval, storage_get is masked at the SW egress (always on, never a
+// toggle). The content leg returns RAW values; the SW masks them before they
+// leave (covered by egress.test.ts). This test pins the raw read + the DOM-side
+// shape (found/missing, session vs local).
 async function testStorageGet(page: Page): Promise<void> {
   console.log("\n[test] storage_get - content leg returns RAW (SW masks on egress)");
   await freshLoad(page);
@@ -695,7 +694,7 @@ async function testWaitForNav(page: Page): Promise<void> {
   check(resp.readyState === "complete", "nav wait sees complete readyState");
 }
 
-// ── test: high-risk click injects NO in-page toast (ADR-0027) ──────────────
+// ── test: high-risk click injects NO in-page toast (off-DOM surface) ───────
 // The high-risk confirmation moved OFF the page-reachable DOM to an
 // extension-owned window; the risk decision + confirmation run in the service
 // worker BEFORE the op reaches the content leg. So the content leg receives a
@@ -703,7 +702,7 @@ async function testWaitForNav(page: Page): Promise<void> {
 // the page. (The off-DOM confirmation + the click's approved-target binding
 // are proven by tests/browser/security_browser_test.ts and the SW-side gate.test.ts.)
 async function testNoInPageToast(page: Page): Promise<void> {
-  console.log("\n[test] high-risk click injects NO in-page toast (off-DOM, ADR-0027)");
+  console.log("\n[test] high-risk click injects NO in-page toast (off-DOM surface)");
   await freshLoad(page);
   const snap = await invoke(page, "page_snapshot", {});
   const go = snap.nodes.find((n: any) => n.selector?.includes("#go"));

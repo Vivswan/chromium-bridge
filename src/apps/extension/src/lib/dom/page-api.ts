@@ -503,7 +503,7 @@ export function createPageApi(refAttr: string): PageApi {
 
     readStorage(args) {
       // RAW values on purpose: the SW masks them before egress (always-on for
-      // storage_get, independent of the eval mask toggle - ADR-0010).
+      // storage_get, independent of the eval mask toggle).
       const type = args.type === "session" ? "session" : "local";
       const key = args.key;
       let store: Storage;

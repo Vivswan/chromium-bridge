@@ -1,0 +1,237 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { findPlanningRefs, gitEnv, scanFiles } from "./check-planning-refs";
+
+const script = join(dirname(fileURLToPath(import.meta.url)), "check-planning-refs.ts");
+const scratchDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function scratch(): string {
+  const dir = mkdtempSync(join(tmpdir(), "check-planning-refs-"));
+  scratchDirs.push(dir);
+  return dir;
+}
+
+// Every tag shape the scrub removed, as it stood in the tree, each caught by exactly the pattern named
+// for it. A regex rewrite that lets one shape through fails here, not in the next sweep.
+describe("findPlanningRefs", () => {
+  const planted: ReadonlyArray<readonly [text: string, pattern: string]> = [
+    [
+      "// ONE policy snapshot for the whole decision (ADR-0032 decision 4):",
+      "design record number",
+    ],
+    ["// Mirrors the retired ADR text verbatim.", "bare design record word"],
+    ["// see docs/adr/0034-mcp-stateless.md", "retired records directory"],
+    ["// Sequence-suppressed (decision 7): only a strictly newer push applies", "decision tag"],
+    ["// Plus the decision-4 in-flight rule at vitest granularity", "decision tag"],
+    ['describe("the scope-stamped ratchet (findings 1 and 2)", () => {});', "finding tag"],
+    ["// Amended at Phase 3 implementation: the ratchet is not enforced", "phase tag"],
+    ["// It must not count as the panic's phase-1 refusal", "phase tag"],
+    ['  "a fresh key to recover (E2F-1)."', "audit code"],
+    ['  "re-pair to recover (U1)";', "parenthesized audit code"],
+    [
+      "// Exact shape, not toMatchObject (CS-5): the blocked arm must carry NO",
+      "parenthesized audit code",
+    ],
+    [
+      'test("H1: known-A -> revoke -> re-pair A retains the ratchet", () => {});',
+      "audit code in a test title",
+    ],
+    [
+      'describe("policy consumption hardening (durable prior pin H1, F2 latch, F3/H4 undo)", () => {});',
+      "audit code in a test title",
+    ],
+    [
+      'test("dispatch refuses from its OWN single read when blocked (the barrier race, SFX-1a)", () => {});',
+      "audit code in a test title",
+    ],
+    [
+      'test("U1 backstop: a pinned-scope record is refused at the write", () => {});',
+      "audit code in a test title",
+    ],
+    ['test.each(cases)("H1: %s survives a restart", () => {});', "audit code in a test title"],
+    ['it.skip("CS-5: exact shape of the blocked arm", () => {});', "audit code in a test title"],
+    ['describe.only("F2 latch", () => {});', "audit code in a test title"],
+    ['test.todo("U1 backstop at the write");', "audit code in a test title"],
+    [
+      'test.concurrent("S4: the barrier refuses first", async () => {});',
+      "audit code in a test title",
+    ],
+    [
+      'test.each(cases.map((c) => [c, resolve("tmp/x")]))("H1 survives $name", () => {});',
+      "audit code in a test title",
+    ],
+    ['test.each([["a)", "(b"]])("CS-5 keeps the shape", () => {});', "audit code in a test title"],
+  ];
+
+  test.each(planted)("flags %j as %s with its line", (text, pattern) => {
+    expect(findPlanningRefs("x.ts", `// clean line\n${text}\n`)).toEqual([
+      { path: "x.ts", line: 2, pattern, text: text.trim() },
+    ]);
+  });
+
+  test("a wrapped test call and an apostrophe inside the title hide nothing", () => {
+    const wrapped = [
+      "test(",
+      '  "the host\'s durable prior pin H1 survives a restart",',
+      "  async () => {});",
+    ].join("\n");
+    expect(findPlanningRefs("x.ts", wrapped)).toEqual([
+      {
+        path: "x.ts",
+        line: 2,
+        pattern: "audit code in a test title",
+        text: '"the host\'s durable prior pin H1 survives a restart",',
+      },
+    ]);
+  });
+
+  // Shapes a text scanner misreads and a parser does not: a comment with an apostrophe inside the
+  // `.each` argument, and a title template whose hole holds another template.
+  test("comments inside .each arguments and nested templates in a title hide nothing", () => {
+    const text = [
+      "test.each([",
+      "  // the worker's refusal",
+      "  [undefined],",
+      '])("H1 survives", () => {});',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the template is the fixture under test
+      "test(`${file ? `lang-${file}` : file} H1 survives`, () => {});",
+    ].join("\n");
+    expect(findPlanningRefs("x.ts", text).map((h) => h.line)).toEqual([4, 5]);
+  });
+
+  test("a file the parser rejects is a hit at the failing line, not a crash", () => {
+    expect(findPlanningRefs("x.ts", "export const a = 1;\ntest(\n")).toEqual([
+      { path: "x.ts", line: 3, pattern: "cannot parse (Unexpected token)", text: "" },
+    ]);
+  });
+
+  test("the reasons that replaced the tags, and look-alike prose, are clean", () => {
+    const text = [
+      "// ONE policy snapshot for the whole decision, never a live re-read mid-decision:",
+      "// a decision never re-reads live policy; the final decision stands",
+      "// findings are listed in the PR body; two-phase commit is not used here",
+      "// F12: open DevTools. H1: page heading. A hash like 0xF2 is not a code. (S) marks a site.",
+      '// The UI calls it ("H1" means a page heading).',
+      'test("pressing F12 opens DevTools", () => {});',
+      "// adr is also a filename stem in /usr/share/dict, which this never scans",
+    ].join("\n");
+    expect(findPlanningRefs("x.ts", text)).toEqual([]);
+  });
+
+  test("the gate's own source is clean under its own patterns, so widening COVERED to scripts/ cannot trip on it", () => {
+    expect(findPlanningRefs("check-planning-refs.ts", readFileSync(script, "utf8"))).toEqual([]);
+  });
+});
+
+describe("scanFiles", () => {
+  test("reports a planted tag with its path and line, and nothing for a clean file", () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "clean.ts"), "// states the rule itself\nexport const a = 1;\n");
+    writeFileSync(join(dir, "tagged.ts"), "export const b = 2;\n// per ADR-0032 decision 3\n");
+    expect(scanFiles(dir, ["clean.ts", "tagged.ts"])).toEqual([
+      {
+        path: "tagged.ts",
+        line: 2,
+        pattern: "design record number",
+        text: "// per ADR-0032 decision 3",
+      },
+    ]);
+  });
+});
+
+// The shell contract the moon task relies on (`set -e` stops on a non-zero exit): over a git tree with
+// one tracked, covered file carrying a tag the CLI exits 1 and names the line; with the tag gone the
+// same tree exits 0. The red run is the control for the green one. The test's own git children run
+// under gitEnv(), so this file can itself run inside the pre-commit hook without touching its index.
+test("the CLI exits 1 on a tracked covered tag and 0 once it is gone", () => {
+  const root = scratch();
+  const env = gitEnv();
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { stdio: "pipe", env });
+  git("init", "-q");
+  mkdirSync(join(root, "docs"));
+  const page = join(root, "docs", "guide.md");
+  writeFileSync(page, "# Guide\n\nThe gate refuses (ADR-0032 decision 4).\n");
+  git("add", "docs/guide.md");
+
+  const red = spawnSync("bun", [script, root], { encoding: "utf8", env });
+  expect({ status: red.status, stdout: red.stdout }).toEqual({ status: 1, stdout: "" });
+  expect(red.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
+
+  writeFileSync(page, "# Guide\n\nThe gate refuses until this connection's push verified.\n");
+  git("add", "docs/guide.md");
+  const green = spawnSync("bun", [script, root], { encoding: "utf8", env });
+  expect({ status: green.status, stderr: green.stderr }).toEqual({ status: 0, stderr: "" });
+  expect(green.stdout).toMatch(/^check-planning-refs: 1 file\(s\) clean/);
+});
+
+// A git hook exports GIT_DIR and GIT_INDEX_FILE. The CLI, given an explicit root, must still read THAT
+// root's index and leave the hook's repository untouched: the first hook run of an earlier form of this
+// file staged a planted page into the real index. Here the hook's repository is a second scratch repo and
+// the CLI inherits its variables unstripped, so the isolation under test is the script's own. Under a hook
+// the STAGED content is judged: the page is tagged in the index and clean in the working tree, so the
+// hook run exits 1 while the same tree outside a hook exits 0.
+test("under a hook an explicit root is judged by its own staged content, not the hook's repository", () => {
+  const target = scratch();
+  const setup = gitEnv();
+  execFileSync("git", ["-C", target, "init", "-q"], { stdio: "pipe", env: setup });
+  mkdirSync(join(target, "docs"));
+  const page = join(target, "docs", "guide.md");
+  writeFileSync(page, "# Guide\n\nThe gate refuses (ADR-0032 decision 4).\n");
+  execFileSync("git", ["-C", target, "add", "docs/guide.md"], { stdio: "pipe", env: setup });
+  writeFileSync(page, "# Guide\n\nThe gate refuses until this connection's push verified.\n");
+
+  const hookRepo = scratch();
+  execFileSync("git", ["-C", hookRepo, "init", "-q"], { stdio: "pipe", env: setup });
+  const hookGitDir = join(hookRepo, ".git");
+  const hookIndex = join(hookGitDir, "index");
+  const headBefore = readFileSync(join(hookGitDir, "HEAD"), "utf8");
+
+  const hooked = spawnSync("bun", [script, target], {
+    encoding: "utf8",
+    env: { ...setup, GIT_DIR: hookGitDir, GIT_INDEX_FILE: hookIndex },
+  });
+  expect({ status: hooked.status, stdout: hooked.stdout }).toEqual({ status: 1, stdout: "" });
+  expect(hooked.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
+  expect({
+    hookIndexExists: existsSync(hookIndex),
+    head: readFileSync(join(hookGitDir, "HEAD"), "utf8"),
+  }).toEqual({ hookIndexExists: false, head: headBefore });
+
+  const plain = spawnSync("bun", [script, target], { encoding: "utf8", env: setup });
+  expect({ status: plain.status, stderr: plain.stderr }).toEqual({ status: 0, stderr: "" });
+
+  // git's own pre-commit hook exports GIT_INDEX_FILE without GIT_DIR in an ordinary checkout, so that
+  // variable alone must already select the staged content.
+  const plainHook = spawnSync("bun", [script, target], {
+    encoding: "utf8",
+    env: { ...setup, GIT_INDEX_FILE: hookIndex },
+  });
+  expect(plainHook.status).toBe(1);
+  expect(plainHook.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
+});
+
+// `git cat-file --batch` reads one request per line, so a tracked path with a newline in it would turn
+// into two requests and shift every later answer onto the wrong path. The scan refuses such a path.
+test("a tracked path containing a newline fails the staged scan instead of misreading it", () => {
+  const root = scratch();
+  const env = gitEnv();
+  execFileSync("git", ["-C", root, "init", "-q"], { stdio: "pipe", env });
+  mkdirSync(join(root, "docs"));
+  const odd = "docs/a.md\nb.md";
+  writeFileSync(join(root, "docs", "a.md"), "clean\n");
+  writeFileSync(join(root, "docs", "b.md"), "clean\n");
+  writeFileSync(join(root, odd), "tagged (ADR-0032 decision 4)\n");
+  execFileSync("git", ["-C", root, "add", "docs/a.md", "docs/b.md", odd], { stdio: "pipe", env });
+  expect(() => scanFiles(root, ["docs/a.md", odd, "docs/b.md"], "index", env)).toThrow(
+    /a tracked path with a newline cannot be scanned/,
+  );
+});

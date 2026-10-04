@@ -12,9 +12,9 @@
 
 import { type Confirmation, isOpName, type Risk, TOOL_META } from "@chromium-bridge/shared/ops.gen";
 
-/** How a call must be confirmed, as one value: "required over no channel"
- * (and its inverse) are unrepresentable. Since ADR-0027 every confirmation
- * shows on the extension-owned surface, so that is the only channel. */
+/** How a call must be confirmed, as one value: "required over no channel" (and
+ * its inverse) are unrepresentable. Every confirmation shows on the
+ * extension-owned surface, so that is the only channel. */
 export type PolicyConfirmation = { required: false } | { required: true; channel: "extension-ui" };
 
 /** Why a call was refused, as a closed union. Refusal behavior downstream

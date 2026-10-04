@@ -1,13 +1,12 @@
 // The shared-language enum exists on both sides of the process boundary as
-// hand-kept copies (ADR-0032 decision 7): language is browser-owned
-// (decision 1), so it is NOT generated into the Rust core the way the policy
-// schema is. UI_LANGUAGES in settings.ts is the TS-side canonical list (the
-// settings schema, the runtime-message enum, and the pickers all derive from
-// it); the host's copy lives in src/packages/core/src/lang.rs. A Rust test
-// pins lang.rs against its own const; this test closes the cross-language
-// gap by reading the lang.rs source and comparing the literals, so a value
-// added or renamed on one side fails CI instead of silently desyncing the
-// sync lane.
+// hand-kept copies: language is browser-owned, so it is NOT generated into the
+// Rust core the way the policy schema is. UI_LANGUAGES in settings.ts is the
+// TS-side canonical list (the settings schema, the runtime-message enum, and
+// the pickers all derive from it); the host's copy lives in
+// src/packages/core/src/lang.rs. A Rust test pins lang.rs against its own
+// const; this test closes the cross-language gap by reading the lang.rs source
+// and comparing the literals, so a value added or renamed on one side fails CI
+// instead of silently desyncing the sync lane.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -25,7 +24,7 @@ function rustStringList(body: string): string[] {
   return [...body.matchAll(/"([^"]*)"/g)].map((m) => m[1] ?? "");
 }
 
-describe("shared language enum parity (ADR-0032 decision 7)", () => {
+describe("shared language enum parity across the hand-kept TS and Rust copies", () => {
   test("the settings schema accepts exactly the canonical UI_LANGUAGES", () => {
     for (const value of UI_LANGUAGES) {
       expect(SettingsSchema.shape.uiLanguage.safeParse(value).success).toBe(true);

@@ -7,7 +7,7 @@
 // does not replay historical console.* calls - so this is honest about only
 // surfacing what the debugger reports at call time. Values are masked before
 // they leave the extension (console lines can carry tokens). Mirrors the
-// transient-attach shape of precise.ts (ADR-0009 / ADR-0017).
+// transient-attach shape of precise.ts.
 
 import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
 import type { Browser } from "wxt/browser";

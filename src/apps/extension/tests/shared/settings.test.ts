@@ -4,7 +4,7 @@ import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getSetting } from "@/lib/shared/settings";
 
 describe("DEFAULTS", () => {
-  test("has exactly the browser-owned keys and values (ADR-0032 Phase 5)", () => {
+  test("has exactly the browser-owned keys and values", () => {
     // The 15 policy fields are host-owned (policy.gen.ts) and requireEnrollment
     // is retired; only the browser-owned settings remain here. A key appearing
     // in this list again means the browser-owned split regressed.

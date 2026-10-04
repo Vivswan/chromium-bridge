@@ -1,7 +1,7 @@
 /**
- * Security browser proofs (ADR-0027): the runtime verification the Vitest + fakeBrowser suite cannot do, run
- * against an ISOLATED Chrome for Testing. Native messaging is NOT exercised (no host is registered or
- * connected; integration_e2e.ts drives the real chain).
+ * Security browser proofs of the off-DOM confirmation surface: the runtime verification the Vitest
+ * + fakeBrowser suite cannot do, run against an ISOLATED Chrome for Testing. Native messaging is
+ * NOT exercised (no host is registered or connected; integration_e2e.ts drives the real chain).
  *
  *   1  pinned manifest key honored              -> our extension loads at the ID the native host's allowed_origins pins
  *   2  trust-state isolation, our side          -> our real storage.local ACCEPTS setAccessLevel(TRUSTED_CONTEXTS) and

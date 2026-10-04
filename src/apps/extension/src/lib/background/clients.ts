@@ -1,8 +1,8 @@
-// The extension half of the ADR-0025 trusted-client admin exchange: the
-// options page asks (via the runtime message router) for the host's
-// trusted-client allowlist, or revokes one entry, and this module relays the
-// request to the native host as a control frame (client_list /
-// client_revoke) and correlates the host's result frame back to the caller.
+// The extension half of the trusted-client admin exchange: the options page
+// asks (via the runtime message router) for the host's trusted-client
+// allowlist, or revokes one entry, and this module relays the request to the
+// native host as a control frame (client_list / client_revoke) and correlates
+// the host's result frame back to the caller.
 //
 // port.ts drives `collaborator` (the connection, then every admin result
 // frame); messages.ts routes the options-page actions here. This module never
@@ -26,8 +26,8 @@ import type { Connection, PortCollaborator } from "./connection";
 
 /** How long the host has to answer an admin control frame before the request
  * fails closed. Generous for a local round-trip; nothing here can raise a
- * presence prompt (deletion and listing are deliberately not presence-gated,
- * see ADR-0021/0025). */
+ * presence prompt (deletion and listing only remove or show capability, so
+ * they are deliberately not presence-gated). */
 const ADMIN_REQUEST_TIMEOUT_MS = 10_000;
 
 type ClientListView = RuntimeResponse<"get_clients">;
@@ -98,10 +98,10 @@ export function requestClientList(): Promise<ClientListView> {
   });
 }
 
-/** Revoke one trusted client by name. The host rewrites the allowlist and
- * bumps the revocation epoch in one critical section, so a live broker drops
- * that client's connections (ADR-0025). The name was already validated by the
- * runtime-message schema; the host re-validates it at its own boundary. */
+/** Revoke one trusted client by name. The host rewrites the allowlist and bumps
+ * the revocation epoch in one critical section, so a live broker drops that
+ * client's connections. The name was already validated by the runtime-message
+ * schema; the host re-validates it at its own boundary. */
 export function revokeTrustedClient(name: string): Promise<RevokeClientView> {
   const live = conn;
   if (!live) return Promise.resolve({ ok: false, error: "native host not connected" });

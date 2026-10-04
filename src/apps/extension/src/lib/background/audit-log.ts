@@ -1,10 +1,10 @@
-// The extension-side audit ring (ADR-0030): a bounded, display-only record of
-// the extension's own user-facing security decisions - confirmations shown /
+// The extension-side audit ring: a bounded, display-only record of the
+// extension's own user-facing security decisions - confirmations shown /
 // allowed / denied, enrollment approvals, revocations and kill toggles issued
-// from the options page - kept in the extension-context-only trusted storage (trusted-storage.ts; content
-// scripts excluded) for the read-only
-// options panel, and forwarded (best-effort) to the native host so the
-// decisions land in the host's durable 0600 audit file too.
+// from the options page - kept in the extension-context-only trusted storage
+// (trusted-storage.ts; content scripts excluded) for the read-only options
+// panel, and forwarded (best-effort) to the native host so the decisions land
+// in the host's durable 0600 audit file too.
 //
 // Strictly observational, never load-bearing: recording happens AFTER the
 // decision it describes, every failure is swallowed (a full ring or a dead
@@ -61,9 +61,9 @@ export interface AuditFields {
   tool?: string;
   name?: string;
   detail?: string;
-  /** Per-confirmation correlation id (ADR-0030): set on a confirm_shown and
-   * its later verdict so the audit panel joins them exactly. Spread onto both
-   * the stored ring entry and the forwarded host frame. */
+  /** Per-confirmation correlation id: set on a confirm_shown and its later
+   * verdict so the audit panel joins them exactly. Spread onto both the stored
+   * ring entry and the forwarded host frame. */
   cid?: string;
 }
 

@@ -101,7 +101,7 @@ export async function pageReload() {
 
 // Name + color of the tab group chromium-bridge collects its tabs into, so the
 // AI's tabs are visually separated from the user's and can be collapsed/closed
-// as a unit. See ADR-0018.
+// as a unit.
 const WORKSPACE_TITLE = "Chromium Bridge";
 const WORKSPACE_COLOR = "blue";
 
@@ -140,10 +140,10 @@ async function addToWorkspaceGroup(
 
 export async function tabClose(tabId: number, policy: PolicyValues, panicEpoch: number) {
   // ONE policy snapshot and ONE decision-start panic epoch for the whole
-  // decision (ADR-0032 decision 4): dispatch captures both at the
-  // decision's true start, before its first await, and threads them in; the
-  // REQUIRED parameters are what hold the invariant (tests start their own
-  // decisions via withFreshPolicy plus currentPanicEpoch()).
+  // decision, never a live re-read: dispatch captures both at the decision's
+  // true start, before its first await, and threads them in; the REQUIRED
+  // parameters are what hold the invariant (tests start their own decisions via
+  // withFreshPolicy plus currentPanicEpoch()).
   const tab = await browser.tabs.get(tabId);
   // The "Close tab?" confirmation can be turned off (confirmTabClose=false) for
   // hands-off automation; on by default.
@@ -158,8 +158,8 @@ async function confirmTabClose(tab: Browser.tabs.Tab, policy: PolicyValues, pani
   if (!tab?.id) throw new Error("tab not found");
   // Scope stays: only http(s) tabs on allowlisted origins may be closed. The
   // confirmation itself no longer needs the page (it shows on the
-  // extension-owned surface, ADR-0027), but closing tabs outside the approved
-  // origins would widen the tool beyond what the user granted.
+  // extension-owned surface), but closing tabs outside the approved origins
+  // would widen the tool beyond what the user granted.
   if (!tab.url || !/^https?:\/\//i.test(tab.url)) {
     throw new Error("tab_close can only close http(s) tabs");
   }

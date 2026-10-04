@@ -13,12 +13,11 @@
  * pinned extension id; otherwise it derives the id from the throwaway path.
  *
  * OPT-IN, Windows + Chrome for Testing (or Chromium). Pops a non-headless
- * window. macOS is SKIPPED since ADR-0032 phase 5: enrollment is
- * unconditionally required there and needs an interactive Touch ID pairing a
- * throwaway profile cannot perform (the macOS host-manifest plumbing below
- * is kept for the day a pairing harness exists). On Windows the HKCU
- * registry value is backed up and restored. Not part of the default suite or
- * CI.
+ * window. macOS is SKIPPED: enrollment is unconditionally required there and
+ * needs an interactive Touch ID pairing a throwaway profile cannot perform (the
+ * macOS host-manifest plumbing below is kept for the day a pairing harness
+ * exists). On Windows the HKCU registry value is backed up and restored. Not
+ * part of the default suite or CI.
  *
  * Run:  BB_REAL_E2E=1 node tests/browser/integration_e2e.ts
  */
@@ -70,15 +69,14 @@ if (process.platform !== "darwin" && !IS_WINDOWS) {
   process.exit(0);
 }
 if (process.platform === "darwin") {
-  // ADR-0032 Phase 5 retired the requireEnrollment opt-out this suite used
-  // to write into the throwaway profile: enrollment is unconditionally
-  // required on macOS, and satisfying it takes a real pairing ceremony
-  // (interactive Touch ID) a throwaway profile cannot perform - the bridge
-  // would refuse tab_list at the enrollment gate. Windows keeps working
-  // because the browser's own platform probe reports no Secure Enclave
-  // there, so enrollment is unavailable rather than unsatisfied.
+  // There is no requireEnrollment opt-out to write into the throwaway profile:
+  // enrollment is unconditionally required on macOS, and satisfying it takes a
+  // real pairing ceremony (interactive Touch ID) a throwaway profile cannot
+  // perform - the bridge would refuse tab_list at the enrollment gate. Windows
+  // keeps working because the browser's own platform probe reports no Secure
+  // Enclave there, so enrollment is unavailable rather than unsatisfied.
   console.log(
-    "SKIP: on macOS the enrollment gate is unconditional since ADR-0032 phase 5 and needs " +
+    "SKIP: on macOS the enrollment gate is unconditional and needs " +
       "an interactive Touch ID pairing this throwaway profile cannot perform; run the real " +
       "e2e on Windows (see tests/README.md).",
   );
@@ -271,12 +269,11 @@ async function main(): Promise<void> {
       );
     }
 
-    // The enrollment gate (ADR-0021) refuses bridge ops on macOS until a
-    // host key is paired and pinned; the requireEnrollment opt-out this
-    // suite once wrote was retired with ADR-0032 Phase 5, which is why the
-    // preflight above skips macOS outright. Here (Windows) the browser's
-    // own platform probe reports no Secure Enclave, enrollment is
-    // unavailable rather than unsatisfied, and the gate does not block.
+    // The enrollment gate refuses bridge ops on macOS until a host key is
+    // paired and pinned, with no requireEnrollment opt-out, which is why the
+    // preflight above skips macOS outright. Here (Windows) the browser's own
+    // platform probe reports no Secure Enclave, enrollment is unavailable
+    // rather than unsatisfied, and the gate does not block.
     const workerTarget = browser.targets().find((target) => target.url() === expectedWorkerUrl);
     const worker = await workerTarget!.worker();
     if (!worker) throw new Error("could not attach to the extension service worker");

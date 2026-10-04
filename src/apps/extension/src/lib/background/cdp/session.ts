@@ -3,8 +3,8 @@
 // The promisified attach/detach/send primitives (and the NON_DEBUGGABLE /
 // isDebuggable URL filter) were previously private to background/precise.ts.
 // They live here now so both precise.ts and the CDP page backend share one
-// implementation (see ADR-0017). `evaluate` runs code in the page's MAIN world
-// via Runtime.evaluate - this is what lets CDP mode bypass page CSP.
+// implementation. `evaluate` runs code in the page's MAIN world via
+// Runtime.evaluate - this is what lets CDP mode bypass page CSP.
 
 // The subset of the CDP payloads we read (not the full protocol).
 import { browser } from "wxt/browser";
@@ -115,7 +115,7 @@ export class CdpSession {
 
   // Attach the debugger to this tab. Idempotent: a no-op if already attached.
   // The banner ("Started debugging this browser") stays up until detach - by
-  // design in CDP mode (ADR-0017), the registry keeps sessions attached.
+  // design in CDP mode, the registry keeps sessions attached.
   //
   // Concurrent attaches share the one in-flight promise. Without this, two
   // page ops racing on a fresh tab each issue browser.debugger.attach; the

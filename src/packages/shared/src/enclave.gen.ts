@@ -8,9 +8,9 @@
 // (NUL-separated domain || nonce || context, ECDSA P-256/SHA-256) is pinned
 // separately by the golden vectors in enclave-fixture.gen.ts.
 
-// Domain-separation prefixes: enrollment challenge signatures (ADR-0021) and
-// per-action user-presence signatures (ADR-0031) sign under distinct domains,
-// so the two statement types can never be replayed as one another.
+// Domain-separation prefixes: enrollment challenge signatures and per-action
+// user-presence signatures sign under distinct domains, so the two statement
+// types can never be replayed as one another.
 export const CHALLENGE_DOMAIN = "chromium-bridge-enclave-v1";
 export const PRESENCE_DOMAIN = "chromium-bridge-presence-v1";
 

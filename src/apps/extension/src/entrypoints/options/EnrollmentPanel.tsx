@@ -7,9 +7,9 @@ import { useI18n } from "@/hooks/useI18n";
 import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
 
-// The ADR-0021 pairing ceremony panel. Event-driven: the enclave-* storage
-// keys change when a proof/error frame lands in the background, so this
-// refreshes on storage.onChanged instead of the old 2s poll. Every action
+// The pairing ceremony panel. Event-driven: the enclave-* storage keys change
+// when a proof/error frame lands in the background, so this refreshes on
+// storage.onChanged instead of the old 2s poll. Every action
 // (pair/verify/approve/reject/revoke) also refreshes on return.
 //
 // Control Tower: open rows, no card chrome. The pending fingerprint renders
@@ -150,10 +150,9 @@ export function EnrollmentPanel() {
       )}
 
       {st.state === "unpaired" && (
-        // Enrollment is required (ADR-0032 retired the opt-out), so the
-        // unpaired state on a capable platform always blocks the bridge: the
-        // page's recovery hero, amber (waiting on you), with the unblocking
-        // action right here.
+        // Enrollment is required, there is no opt-out, so the unpaired state on
+        // a capable platform always blocks the bridge: the page's recovery
+        // hero, amber (waiting on you), with the unblocking action right here.
         <div className="rounded-lg border border-pending-edge bg-pending-dim px-3.5 py-3">
           <div className="flex items-center gap-2 text-[13px] font-semibold">
             <span className="status-dot pending" />

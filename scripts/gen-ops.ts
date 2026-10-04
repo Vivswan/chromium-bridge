@@ -439,7 +439,7 @@ const auditOut = `// GENERATED from the Rust core (src/packages/core/src/audit.r
 // list, then run \`moon run gen\`.
 //
 // The audit kinds the host accepts over the extension's audit_event control
-// frame (audit::extension_kind, ADR-0030). The extension's forwarding set
+// frame (audit::extension_kind). The extension's forwarding set
 // (background/audit-log.ts) and the forwarded prefix of its audit-ring
 // vocabulary (shared/enclave.ts AUDIT_EVENT_KINDS) build on this, so the two
 // sides of the forwarding boundary cannot drift apart.
@@ -656,9 +656,9 @@ const enclaveOut = `// GENERATED from the Rust core (src/packages/core/src/encla
 // (NUL-separated domain || nonce || context, ECDSA P-256/SHA-256) is pinned
 // separately by the golden vectors in enclave-fixture.gen.ts.
 
-// Domain-separation prefixes: enrollment challenge signatures (ADR-0021) and
-// per-action user-presence signatures (ADR-0031) sign under distinct domains,
-// so the two statement types can never be replayed as one another.
+// Domain-separation prefixes: enrollment challenge signatures and per-action
+// user-presence signatures sign under distinct domains, so the two statement
+// types can never be replayed as one another.
 export const CHALLENGE_DOMAIN = ${emitAsciiString(enclave.challengeDomain)};
 export const PRESENCE_DOMAIN = ${emitAsciiString(enclave.presenceDomain)};
 
@@ -766,12 +766,12 @@ ${vectorItems}
   ],
 };
 
-// The POLICY_DOMAIN vectors (ADR-0032 decision 3): signed policy baselines
-// over the same fixture key. Each message is the Rust policy_message
-// (POLICY_DOMAIN || 0x00 || the exact document bytes), docB64 is those exact
-// bytes as the wire \`baseline\` carries them, and the document strict-parses
-// under the generated PolicyDocSchema. The extension's policy golden test
-// replays the full verify-then-parse path through WebCrypto.
+// The POLICY_DOMAIN vectors: signed policy baselines over the same fixture key.
+// Each message is the Rust policy_message (POLICY_DOMAIN || 0x00 || the exact
+// document bytes), docB64 is those exact bytes as the wire \`baseline\` carries
+// them, and the document strict-parses under the generated PolicyDocSchema. The
+// extension's policy golden test replays the full verify-then-parse path
+// through WebCrypto.
 
 export interface PolicyGoldenVector {
   /** Base64 of the exact signed document bytes (the wire \`baseline\`). */

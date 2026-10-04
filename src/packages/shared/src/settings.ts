@@ -12,26 +12,25 @@
 
 import { z } from "zod";
 
-// The canonical TS-side list of accepted uiLanguage values (ADR-0032
-// decision 7). Language stays browser-owned (decision 1), so this list is
-// NOT generated from the Rust core; the host's hand-kept copy
-// (src/packages/core/src/lang.rs UI_LANGUAGES) is pinned against this one by
-// tests/lang-parity.test.ts. Everything TS-side (the settings schema below,
-// the runtime-message enum, the pickers) derives from here.
+// The canonical TS-side list of accepted uiLanguage values. Language stays
+// browser-owned, so this list is NOT generated from the Rust core; the host's
+// hand-kept copy (src/packages/core/src/lang.rs UI_LANGUAGES) is pinned against
+// this one by tests/lang-parity.test.ts. Everything TS-side (the settings
+// schema below, the runtime-message enum, the pickers) derives from here.
 export const UI_LANGUAGES = ["auto", "en", "zh_CN", "zh_TW"] as const;
 
 export type UiLanguageValue = (typeof UI_LANGUAGES)[number];
 
 export const SettingsSchema = z.object({
   allowAllSites: z.boolean().default(false),
-  // Collect tab_open tabs into a "Chromium Bridge" group. See ADR-0018.
+  // Collect tab_open tabs into a "Chromium Bridge" group.
   groupTabs: z.boolean().default(true),
-  // The extension UI's display language (ADR-0027 i18n). Defaults to "en":
-  // English is the canonical language on every surface, and Chinese is an
-  // explicit choice, never an inherited one. "auto" (opt-in) resolves from
-  // the browser UI language (zh -> zh_CN, zh-Hant/TW/HK/MO -> zh_TW, else
-  // en). Distinct from Chrome's own default_locale: this is the user's
-  // explicit choice for in-extension UI.
+  // The extension UI's display language. Defaults to "en": English is the
+  // canonical language on every surface, and Chinese is an explicit choice,
+  // never an inherited one. "auto" (opt-in) resolves from the browser UI
+  // language (zh -> zh_CN, zh-Hant/TW/HK/MO -> zh_TW, else en). Distinct from
+  // Chrome's own default_locale: this is the user's explicit choice for
+  // in-extension UI.
   uiLanguage: z.enum(UI_LANGUAGES).default("en"),
 });
 

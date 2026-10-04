@@ -1,10 +1,10 @@
-// CdpBackend - the page backend used when cdpMode is on (ADR-0017). Every
-// page-level op runs through a persistent CdpSession (browser.debugger) in
-// the page's MAIN world via Runtime.evaluate, which bypasses page CSP. The
-// DOM work is the SAME shared page API the content script uses
-// (lib/dom/page-api.ts): the self-contained factory is stringified and
-// applied in the page, so the two backends cannot drift. Allowlist,
-// confirmation, and masking policy run in dispatch.ts around this backend.
+// CdpBackend - the page backend used when cdpMode is on. Every page-level op
+// runs through a persistent CdpSession (browser.debugger) in the page's MAIN
+// world via Runtime.evaluate, which bypasses page CSP. The DOM work is the SAME
+// shared page API the content script uses (lib/dom/page-api.ts): the
+// self-contained factory is stringified and applied in the page, so the two
+// backends cannot drift. Allowlist, confirmation, and masking policy run in
+// dispatch.ts around this backend.
 
 import { ClickProbeSchema } from "@chromium-bridge/shared/content-msg";
 import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
