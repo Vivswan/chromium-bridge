@@ -10,7 +10,7 @@
 //!   enclave-status: user-run subcommands (health report + registration
 //!   repair, and the enrollment ceremony, ADR-0021).
 
-use chromium_bridge_core::cli::{parse, print_help, Command};
+use chromium_bridge_core::cli::{native_host_label, parse, print_help, Command};
 use chromium_bridge_core::{
     allowlist, audit, doctor, enclave, kill, mcp_server, native_host, policy, registration,
 };
@@ -18,7 +18,16 @@ use chromium_bridge_core::{
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let code = match parse(&args) {
-        Command::NativeHost => native_host::run(),
+        // The label is resolved here so the host never reads argv itself. A
+        // malformed label refuses to start: better no bridge than one filed
+        // under a mangled identity.
+        Command::NativeHost => match native_host_label(&args) {
+            Ok(label) => native_host::run(label),
+            Err(e) => {
+                eprintln!("native-host: {e}");
+                1
+            }
+        },
         Command::Help => {
             print_help();
             0
