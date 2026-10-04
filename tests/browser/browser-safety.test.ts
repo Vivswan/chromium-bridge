@@ -3,19 +3,31 @@
 // runs as a real subprocess with CHROME_BIN unset, so this file is safe to run anywhere (CI runs it
 // in the browser job next to the suites it guards).
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isolatedBrowser, ranMarkerBody, suiteExitCode, writeRanMarker } from "./browser-safety";
+
+// Every scratch dir this file creates, removed when the file is done whatever
+// its tests did; nothing is left for the OS temp cleaner.
+const scratchDirs: string[] = [];
+const scratchDir = (prefix: string): string => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  scratchDirs.push(dir);
+  return dir;
+};
+afterAll(() => {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
+});
 
 describe("isolatedBrowser", () => {
   // External facts the guard rests on: Chrome for Testing reports "Google Chrome for Testing <ver>",
   // Debian's chromium reports "Chromium <ver> built on Debian ...", and the engines leave a marker
   // file in every container (/.dockerenv for Docker, /run/.containerenv for Podman). Each case runs a
   // stub browser that prints one such line, with the marker present or absent.
-  const dir = mkdtempSync(join(tmpdir(), "bb-isolated-"));
+  const dir = scratchDir("bb-isolated-");
   const marker = join(dir, "containerenv");
   writeFileSync(marker, "");
   const absentMarker = join(dir, "no-such-marker");
@@ -91,7 +103,7 @@ describe("suiteExitCode", () => {
 
 describe("writeRanMarker", () => {
   test("writes the per-suite marker with the pass/fail summary", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bb-canary-"));
+    const dir = scratchDir("bb-canary-");
     const marker = writeRanMarker("ext_test", 9, 0, dir);
     expect(marker).toBe(join(dir, "ext_test"));
     expect(readFileSync(marker as string, "utf8")).toBe(`${ranMarkerBody("ext_test", 9, 0)}\n`);
@@ -129,7 +141,7 @@ describe("guard skip vs canary (real subprocess)", () => {
   };
 
   test("a local skip exits 0 and leaves no RAN marker behind", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bb-canary-"));
+    const dir = scratchDir("bb-canary-");
     const out = execFileSync(process.execPath, [stubFor(dir)], {
       encoding: "utf8",
       env: { ...baseEnv(), BB_BROWSER_CANARY_DIR: dir },
@@ -139,7 +151,7 @@ describe("guard skip vs canary (real subprocess)", () => {
   });
 
   test("BB_REQUIRE_BROWSER=1 turns the same skip into a hard failure", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bb-canary-"));
+    const dir = scratchDir("bb-canary-");
     let status = 0;
     try {
       execFileSync(process.execPath, [stubFor(dir)], {
@@ -155,7 +167,7 @@ describe("guard skip vs canary (real subprocess)", () => {
 
   test("a suite that reaches its end writes the marker the CI step requires", () => {
     // Same stub without the guard: finishSuite alone must drop the marker.
-    const dir = mkdtempSync(join(tmpdir(), "bb-canary-"));
+    const dir = scratchDir("bb-canary-");
     const stub = join(dir, "finish_only.ts");
     const safety = join(import.meta.dir, "browser-safety.ts");
     writeFileSync(

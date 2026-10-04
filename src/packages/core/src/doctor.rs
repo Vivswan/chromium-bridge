@@ -539,8 +539,17 @@ mod tests {
     fn probe_detects_open_and_closed_sockets() {
         use std::os::unix::net::UnixListener;
 
+        // The scratch dir goes with the guard, so a failing assertion leaves
+        // nothing in the OS temp dir.
+        struct RemoveOnDrop(std::path::PathBuf);
+        impl Drop for RemoveOnDrop {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
         // A live Unix-domain listener: probe must succeed.
         let dir = std::env::temp_dir().join(format!("bb-doctor-probe-{}", std::process::id()));
+        let _cleanup = RemoveOnDrop(dir.clone());
         let _ = std::fs::create_dir_all(&dir);
         let sock = dir.join("run.sock");
         let _ = std::fs::remove_file(&sock);
