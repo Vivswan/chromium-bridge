@@ -52,7 +52,9 @@ jobs:
           REPO: ${{ github.event.repository.name }}
         # GHCR coordinates are lowercase; the owner's login and the repository name need not be. The
         # tag hashes the per-file checksums, so each input is framed by its name and bytes cannot move
-        # across file boundaries unnoticed. The proto pin is the Containerfile's one build arg.
+        # across file boundaries unnoticed. The proto pin is the Containerfile's one build arg; shell: bash
+        # for its pipefail, or the pipe through sed would turn a refused pin into a green step.
+        shell: bash
         run: |
           {
             echo "name=ghcr.io/${OWNER,,}/${REPO,,}-ci"

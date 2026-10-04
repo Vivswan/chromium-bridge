@@ -1,11 +1,11 @@
 // What would drift silently: the one-owner rule across two files of different grammars, which neither
 // proto nor Docker enforces for us. proto reads .prototools alone, Docker reads the Containerfile alone
-// (and silently lets the last of two ARG lines win), so only this reader can refuse a tool pinned in both
-// files, twice in one, or in an indented form the other parser accepts. The fixtures are hand-written
-// shapes of those inputs.
+// and silently lets the last of two ARG lines win, so only this reader can refuse a tool pinned in both
+// files, twice in the Containerfile, or in an indented form the other parser accepts. The fixtures are
+// hand-written shapes of those inputs.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPin } from "./pin.ts";
@@ -29,8 +29,9 @@ const containerfile = [
 
 interface Case {
   name: string;
-  prototools?: string[];
-  containerfile?: string[];
+  // undefined: the file is absent.
+  prototools?: string[] | undefined;
+  containerfile?: string[] | undefined;
   tool: string;
   outcome: { pin: string } | { error: RegExp };
 }
@@ -43,22 +44,22 @@ const cases: Case[] = [
     outcome: { pin: "0.9.2" },
   },
   {
-    name: "an indented key and an indented ARG are pins, as TOML and Docker read them",
+    name: "an indented key is a pin, as TOML reads it",
     prototools: ['  proto = "0.58.2"'],
+    tool: "proto",
+    outcome: { pin: "0.58.2" },
+  },
+  {
+    name: "an indented ARG is a pin, as Docker reads it",
     containerfile: ["  ARG CARGO_MACHETE_VERSION=0.9.2"],
     tool: "cargo-machete",
     outcome: { pin: "0.9.2" },
   },
   {
-    name: "a tool-named key under a table is not a pin, even with the table header indented",
-    prototools: [
-      ...prototools.slice(0, 4),
-      "  [settings]",
-      "  [plugins]",
-      'cargo-machete = "https://example.com/plugin.wasm"',
-    ],
-    tool: "cargo-machete",
-    outcome: { pin: "0.9.2" },
+    name: "a tool-named key directly under [settings] is not a pin",
+    prototools: ['proto = "0.58.2"', "[settings]", 'bun = "9.9.9"'],
+    tool: "bun",
+    outcome: { error: /pinned in neither/ },
   },
   {
     name: "a tool pinned in both files has two owners",
@@ -73,12 +74,30 @@ const cases: Case[] = [
     outcome: { error: /more than once.*0\.9\.2, 0\.9\.1/ },
   },
   {
-    name: "a second key line is a duplicate",
+    name: "a second key line is refused by the TOML parser",
     prototools: ['proto = "0.58.2"', 'proto = "0.1.0"'],
     tool: "proto",
-    outcome: { error: /more than once.*0\.58\.2, 0\.1\.0/ },
+    outcome: { error: /not valid TOML.*redefine key 'proto'/ },
+  },
+  {
+    name: "a second key line, indented, is refused by the TOML parser",
+    prototools: ['proto = "0.58.2"', '  proto = "0.1.0"'],
+    tool: "proto",
+    outcome: { error: /not valid TOML.*redefine key 'proto'/ },
+  },
+  {
+    name: "a key pinned to a non-string is refused",
+    prototools: ["proto = 1"],
+    tool: "proto",
+    outcome: { error: /non-string/ },
   },
   { name: "a tool pinned nowhere", tool: "node", outcome: { error: /pinned in neither/ } },
+  {
+    name: "a commented-out key is not a pin",
+    prototools: ['# proto = "9.9.9"'],
+    tool: "proto",
+    outcome: { error: /pinned in neither/ },
+  },
   {
     name: "a commented-out ARG is not a pin",
     containerfile: ["# ARG CARGO_MACHETE_VERSION=0.9.2"],
@@ -86,30 +105,28 @@ const cases: Case[] = [
     outcome: { error: /pinned in neither/ },
   },
   {
-    name: "an unreadable owner file is refused, not read as empty",
+    name: "an absent .prototools is refused, not read as empty",
     prototools: undefined,
-    containerfile,
     tool: "cargo-machete",
     outcome: { error: /cannot read \.prototools/ },
   },
   {
-    name: "a tool name that is not a tool name",
-    tool: "../etc",
-    outcome: { error: /not a tool name/ },
+    name: "an absent Containerfile is refused, not read as empty",
+    containerfile: undefined,
+    tool: "proto",
+    outcome: { error: /cannot read Containerfile/ },
   },
 ];
+
+function write(root: string, file: string, lines: string[] | undefined): void {
+  if (lines) writeFileSync(join(root, file), `${lines.join("\n")}\n`);
+}
 
 describe("readPin: one owner per pin across .prototools and the Containerfile", () => {
   test.each(cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
     const root = mkdtempSync(join(scratch, "case-"));
-    mkdirSync(root, { recursive: true });
-    if (!("prototools" in c) || c.prototools !== undefined) {
-      writeFileSync(join(root, ".prototools"), `${(c.prototools ?? prototools).join("\n")}\n`);
-    }
-    writeFileSync(
-      join(root, "Containerfile"),
-      `${(c.containerfile ?? containerfile).join("\n")}\n`,
-    );
+    write(root, ".prototools", "prototools" in c ? c.prototools : prototools);
+    write(root, "Containerfile", "containerfile" in c ? c.containerfile : containerfile);
     if ("pin" in c.outcome) {
       expect(readPin(c.tool, root)).toBe(c.outcome.pin);
     } else {

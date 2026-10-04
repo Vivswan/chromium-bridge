@@ -1,14 +1,16 @@
 #!/usr/bin/env bun
 // The one reader of a toolchain pin for the consumers that run before proto exists (the setup-moon
-// composite on a bare runner, the container-image workflow computing the image's build args) and for
-// checks.yml's tooling job. Each tool is pinned in exactly one of two owner files, and a pin found in
-// both, twice, or nowhere is refused instead of one consumer quietly picking a copy.
+// composite on a bare runner, the container-image workflow computing the image's build arg, the compose
+// launcher building the image locally) and for checks.yml's tooling job. Each tool is pinned in exactly
+// one of two owner files, and a pin found in both, twice, or nowhere is refused instead of one consumer
+// quietly picking a copy.
 //
 //   .prototools    proto = "0.58.2"                  -> bun scripts/pin.ts proto
 //   Containerfile  ARG CARGO_MACHETE_VERSION=0.9.2    -> bun scripts/pin.ts cargo-machete
 //
-// Leading whitespace is legal before a TOML key or table header and before a Dockerfile instruction,
-// so the scan allows it everywhere, or an indented duplicate would slip past the one-owner check.
+// .prototools goes through Bun's TOML parser, which already refuses a repeated key (indented or not) and
+// keeps a key under [settings] out of the root. The Containerfile is scanned as text because Docker lets
+// the last of two ARG lines win silently, indented or not, and only a raw count can see the first.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,17 +26,17 @@ function owned(root: string, file: (typeof ownerFiles)[number]): string {
   }
 }
 
-// Keys above the first table only: a tool-named key under [settings] or [plugins] is not a pin, matching
-// proto's reading of the file.
 function prototoolsPins(text: string, tool: string): string[] {
-  const key = new RegExp(`^\\s*${tool}\\s*=\\s*"([^"]+)"`);
-  const pins: string[] = [];
-  for (const line of text.split("\n")) {
-    if (/^\s*\[/.test(line)) break;
-    const match = line.match(key);
-    if (match?.[1]) pins.push(match[1]);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = Bun.TOML.parse(text) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`pin: .prototools is not valid TOML (${(error as Error).message})`);
   }
-  return pins;
+  if (!(tool in parsed)) return [];
+  const value = parsed[tool];
+  if (typeof value !== "string") throw new Error(`pin: .prototools pins ${tool} to a non-string`);
+  return [value];
 }
 
 function containerfilePins(text: string, tool: string): string[] {
@@ -46,8 +48,6 @@ function containerfilePins(text: string, tool: string): string[] {
     .filter((pin): pin is string => pin !== undefined);
 }
 
-/** The repository's pinned version of `tool`, from whichever owner file carries it. Throws when the
- * pin is absent, repeated, or carried by both files. */
 export function readPin(tool: string, root = repoRoot): string {
   if (!/^[a-z][a-z0-9-]*$/.test(tool)) throw new Error(`pin: not a tool name: ${tool}`);
   const pins = [

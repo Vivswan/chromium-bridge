@@ -209,8 +209,10 @@ jobs:
         with:
           cargo: "true"
       # The Containerfile owns the pin (ARG CARGO_MACHETE_VERSION); the image already carries that version,
-      # and the bare runner installs the same one.
+      # and the bare runner installs the same one. shell: bash for its pipefail: the default run shell
+      # would let the pipe through sed turn a refused pin into a green step.
       - id: pin
+        shell: bash
         run: bun scripts/pin.ts cargo-machete | sed 's/^/machete=/' >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:

@@ -34,6 +34,12 @@ const env: NodeJS.ProcessEnv = {
   ).trim(),
 };
 
+// The Containerfile's one build arg: proto's pin is .prototools's and no script runs inside the build, so the
+// launcher reads it, as container-image.yml does for the published image. A flag rather than compose.yaml
+// build.args: the portable compose subset (check-compose) has no args key. Read before the scratch dir
+// below exists, so a refused pin leaves nothing behind.
+const protoPin = readPin("proto");
+
 // The pointer's text is `gitdir: <path>`; git itself tolerates a CRLF ending, so trim() does too.
 const dotGit = join(repoRoot, ".git");
 const scratch = statSync(dotGit).isFile() ? mkdtempSync(join(tmpdir(), "compose-run-")) : null;
@@ -61,10 +67,7 @@ function compose(...args: string[]): number {
   return run.status ?? 1;
 }
 
-// The Containerfile's one build arg: proto's pin is .prototools's and no script runs inside the build, so the
-// launcher reads it, as container-image.yml does for the published image. A flag rather than compose.yaml
-// build.args: the portable compose subset (check-compose) has no args key.
-let status = compose("build", "--build-arg", `PROTO_VERSION=${readPin("proto")}`, service);
+let status = compose("build", "--build-arg", `PROTO_VERSION=${protoPin}`, service);
 if (status === 0) status = compose("run", "--rm", service, ...command);
 if (scratch) rmSync(scratch, { recursive: true, force: true });
 process.exit(status);
