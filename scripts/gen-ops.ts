@@ -213,9 +213,9 @@ type BooleanPolicyField = {
 // must be true in the effective policy for the tool to run. The background
 // enforcement (confirm/gate.ts, upload.ts, dialog.ts) indexes this table, so
 // a gated tool cannot gain an enforcement gate the policy contract does not
-// carry. The host additionally gates every debugger-backed tool on cdpMode
-// (Tool::required_grants); the extension's CDP attach enforces that grant
-// itself.
+// carry. The extension's handlers check only the tool's own grants; the host
+// is the cdpMode gate (Tool::required_grants adds it for every debugger-backed
+// tool).
 export const TOOL_GRANTS = {
 ${grants}
 } as const satisfies Readonly<Record<OpName, readonly BooleanPolicyField[]>>;
