@@ -46,9 +46,9 @@ If a change touches permissions, credential access, confirmation, allowlist, mas
 - update the [tool risk matrix](docs/security/tool-risk-matrix.md) and, if a trust boundary moves, the [threat model](docs/security/threat-model.md);
 - add a negative test proving the boundary still holds.
 
-## Decisions: ADR vs RFC
+## Decisions and RFCs
 
-- **Decision rationale** lives in `docs/security/rationale.md` (what was decided, what was rejected, why); decision *history* lives in PR and commit history, not in a separate record.
+- **Security rationale** lives in `docs/security/rationale.md`: for each trust boundary, what was decided, what was rejected, and why. Every other decision's history is the PR that landed it and its linked issue; there is no separate decision record.
 - **RFC** (open a discussion/issue) proposes a *significant change* before building it: a write capability, a new protocol version, a new browser platform, enterprise policy.
 
 The RFC flow, in order:
@@ -56,7 +56,7 @@ The RFC flow, in order:
 1. open the RFC as a discussion or issue;
 2. discuss; the RFC is accepted or rejected;
 3. implement;
-4. an ADR records the outcome.
+4. the PR that lands it records the decision, and updates `docs/security/rationale.md` when it changes a security boundary.
 
 ## Tracking work & tech debt
 

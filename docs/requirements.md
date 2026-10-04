@@ -83,11 +83,11 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 - `page_fill(ref|selector, value)`: fill a form field; uses native setters so frameworks (React/Vue) see the change; password field values are masked in logs
 - `page_scroll(direction|pixels)`: scroll
 - `page_wait_for(selector|text|nav, timeoutMs)`: wait for a selector/text, or wait for the page load to finish
-- `page_eval(code)`: **high-risk**: executes arbitrary JS. Every call shows an enlarged Toast with the full code; same-origin 60s grace window; return values are masked by default (JWT/long hex/long digit runs/sensitive keywords), and masking can be turned off in the popup. Runs via `new Function` in the global scope, supporting await/return
+- `page_eval(code)`: **high-risk**: executes arbitrary JS. Every call confirms in the extension-owned window showing the full code, with no grace window; return values are masked by default (JWT/long hex/long digit runs/sensitive keywords) under the host-owned `evalMask` policy field. Runs via `new Function` in the global scope, supporting await/return
 
 ### FR-4 Security controls
 - **FR-4.1 Domain allowlist**: on the first operation against a new origin, the extension opens a popup requesting authorization; granting it also requests that domain's host permission via `chrome.permissions.request`. The allowlist is stored in `chrome.storage.local` and revocable from the popup
-- **FR-4.2 High-risk Toast**: submit clicks and link navigation trigger an in-page Toast; a 30-second timeout rejects; after approval, same-origin actions of the same kind get a 60-second grace window
+- **FR-4.2 High-risk confirmation**: submit clicks and link navigation confirm in the extension-owned window; an unanswered prompt denies on timeout; after approval, same-origin actions of the same kind skip the prompt for the `confirmGraceMs` window (default 60 s)
 - **FR-4.3 host authentication**: the native messaging manifest's `allowed_origins` hardcodes the extension ID; the bridge socket authenticates with a per-run secret + a lock file in the user directory (Unix mode 0600)
 - **FR-4.4 Masking**: `page_text` masks `<input type=password>` and long digit runs; `page_fill` masks password field values when echoing arguments
 
@@ -104,7 +104,7 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 | **NFR-2 Resources** | release binary < 1MB; resident MCP server memory < 20MB |
 | **NFR-3 Zero runtime dependencies** | The user's machine needs Rust only at compile time; no Python/Node/any runtime at run time; no native dependencies beyond libc |
 | **NFR-4 Robustness** | Recovers the connection automatically after the SW's 5-minute restart, a native host crash, or a Chrome restart |
-| **NFR-5 Auditability** | Every security-relevant decision (authorization, confirmation, rejection) has an ADR; extension permission declarations are minimal |
+| **NFR-5 Auditability** | Every security-relevant decision (authorization, confirmation, rejection) has its reason in `security/rationale.md` and its history in the PR that landed it; extension permission declarations are minimal |
 | **NFR-6 PATH independence** | The host manifest uses absolute paths; no dependency on the user's shell PATH (known constraint: the user's PATH lacks `/opt/homebrew/bin`) |
 
 ## 6. Scope boundaries

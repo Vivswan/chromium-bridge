@@ -33,5 +33,5 @@ This directory is the **single source of truth** for the chromium-bridge project
 
 - **First time using the project** -> `quickstart.md`
 - **First time learning the project** -> `requirements.md` -> `architecture.md`
-- **Changing a design decision** -> read its row in `security/rationale.md` and the commit that made it (`git log -S`), then decide whether to overturn it
+- **Changing a design decision** -> for a security boundary, read its row in `security/rationale.md`; for anything else, read the PR that landed it (`git log -S`, then the linked issue); then decide whether to overturn it
 - **Changing anything security-relevant** -> `../.github/SECURITY.md` (the review bar) and `security/`
