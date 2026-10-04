@@ -6,8 +6,8 @@ name: Set up moon
 description: Installs proto, moon, and the tools pinned in .prototools; optionally the pinned Rust toolchain with a cargo cache.
 
 inputs:
-  rust:
-    description: Also install the Rust toolchain pinned in rust-toolchain.toml and restore the cargo cache.
+  cargo:
+    description: Also prepare for cargo, the rust-toolchain.toml profile and components via setup-rust-toolchain plus the cargo cache; proto installs the bare pinned toolchain either way.
     required: false
     default: "false"
 
@@ -36,11 +36,11 @@ runs:
     - if: steps.present.outputs.toolchain == 'preinstalled'
       shell: bash
       run: proto install
-    - if: inputs.rust == 'true'
+    - if: inputs.cargo == 'true'
       uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         cache: false
-    - if: inputs.rust == 'true'
+    - if: inputs.cargo == 'true'
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         # The fuzz crate is its own cargo workspace with its own target/ (root [workspace].exclude).

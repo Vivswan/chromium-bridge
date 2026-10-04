@@ -1,27 +1,28 @@
 #!/usr/bin/env bun
 // The browser suite runner: the one definition behind CI (.github/workflows/browser.yml), the container
-// (scripts/container-browser-suites.sh via `moon run test-browser`), and a local run. It builds the
-// extension bundle, runs the three suites against CHROME_BIN, then requires each suite's RAN marker.
+// (scripts/container-browser-suites.sh via `moon run test-browser`), and a local run.
 //
 // SAFETY: the suites launch CHROME_BIN non-headless with --load-extension, which can capture and close a
 // real browser session, so the shared guard decides once here: an isolated browser or a SKIP, which
 // BB_REQUIRE_BROWSER=1 (CI, the container) turns into a failure.
 //
 // The canary: each suite exits 0 only after finishSuite() wrote "<suite>: N passed, M failed" into
-// BB_BROWSER_CANARY_DIR. A missing marker means the suite finished no real browser run (a guard skip
-// upstream of its checks) and a zero-pass marker means it ran vacuously; both fail the run even when every
-// suite exited 0, so no drift in the guard's env var spelling can green a run on silent skips.
+// BB_BROWSER_CANARY_DIR. A missing marker means the suite finished no real browser run and a zero-pass
+// marker means it ran vacuously; both fail the run even when every suite exited 0. A caller that names
+// the canary dir has asked for that proof, so for it a skip is a failure too, whatever the guard's
+// strict-mode variable is spelled: two switches, either one alone keeps a silent skip from going green.
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertIsolatedBrowserOrSkip } from "./browser-safety";
+import { assertIsolatedBrowserOrSkip, isolatedBrowserOrNull } from "./browser-safety";
 
 const SUITES = ["dom_test", "ext_test", "security_browser_test"] as const;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
+const callerDir = process.env.BB_BROWSER_CANARY_DIR;
 
 function run(cmd: string[], env: Record<string, string>): boolean {
   const proc = Bun.spawnSync(cmd, {
@@ -33,6 +34,16 @@ function run(cmd: string[], env: Record<string, string>): boolean {
   return proc.exitCode === 0;
 }
 
+function isolatedBrowserForCanary(dir: string): string {
+  const bin = isolatedBrowserOrNull();
+  if (bin) return bin;
+  console.error(
+    `FAIL: ${dir} was named for the RAN markers, so the suites must run, but CHROME_BIN` +
+      ` (${process.env.CHROME_BIN ?? "unset"}) does not identify as an isolated browser`,
+  );
+  process.exit(1);
+}
+
 console.log("=== browser suites ===");
 console.log("(1/3) build the extension bundle");
 if (!run(["bun", "run", "--cwd", join(repo, "src/apps/extension"), "build"], {})) {
@@ -42,12 +53,11 @@ if (!run(["bun", "run", "--cwd", join(repo, "src/apps/extension"), "build"], {})
 
 console.log("");
 console.log("(2/3) isolated browser");
-const chromeBin = assertIsolatedBrowserOrSkip();
+const chromeBin = callerDir ? isolatedBrowserForCanary(callerDir) : assertIsolatedBrowserOrSkip();
 console.log(`  ${chromeBin}`);
 
-// A caller may name the canary dir to read the markers afterwards (compose.yaml does), so only this run's
-// markers are cleared there: a marker from an earlier run must not vouch for this one.
-const callerDir = process.env.BB_BROWSER_CANARY_DIR;
+// Only this run's markers are cleared in a caller-owned dir (compose.yaml reads them afterwards): a marker
+// from an earlier run must not vouch for this one.
 const canaryDir = callerDir ?? mkdtempSync(join(tmpdir(), "browser-canary-"));
 for (const suite of SUITES) rmSync(join(canaryDir, suite), { force: true });
 

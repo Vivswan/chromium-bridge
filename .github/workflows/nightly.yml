@@ -66,7 +66,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-moon
         with:
-          rust: "true"
+          cargo: "true"
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
           tool: cargo-mutants
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-moon
         with:
-          rust: "true"
+          cargo: "true"
       - run: cargo build --release
       # Latest on purpose, not pinned: the whole point of this canary is to
       # observe what CURRENT harness releases send. Best-effort: a harness
