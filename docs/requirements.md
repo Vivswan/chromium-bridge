@@ -118,7 +118,7 @@ Acceptance: after adding chromium-bridge to the client's MCP server configuratio
 ### 6.2 Not in v0.1, later phases
 - **Phase two**:
   - `page_snapshot_precise`: debugger-fallback precise snapshot (flashes the infobar; the user must be told)
-  - `page_eval`: high-risk confirmation channel (enlarged Toast + same-origin 60s grace window + configurable masking). **Done**
+  - `page_eval`: high-risk confirmation in the extension-owned window on every call, no grace window, `evalMask` masking of the result. **Done**
   - `page_snapshot_precise`: debugger precise snapshot (notification Toast + infobar flash + p-prefixed refs). **Done**
 - **Phase three**:
   - `cookie_get` / `storage_get` (read-only, limited to allowlisted domains, masked output). **Done**
