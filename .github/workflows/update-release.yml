@@ -60,12 +60,9 @@ jobs:
           # Pin to the tag release-please just published: this run's own sha
           # IS that commit today, but the tag is what users verify against.
           ref: ${{ inputs.tag }}
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: ./.github/actions/setup-moon
         with:
-          cache: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
+          cargo: "true"
 
       - name: Verify tag matches Cargo version
         shell: bash

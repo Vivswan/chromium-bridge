@@ -128,7 +128,7 @@ Cache trust, and the one edge that must never be narrowed: the Rust core is the 
 
 ## Toolchain pinning (proto)
 
-`.prototools` pins proto itself, bun, moon, node, rust, and uv; `proto install` provisions them all. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every job: it parses proto's own version from `.prototools` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, then runs `proto install`.
+`.prototools` pins proto itself, bun, moon, node, rust, and uv; `proto install` provisions them all. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it parses proto's own version from `.prototools` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, then runs `proto install`.
 
 The CI image (`Containerfile`) runs the same `proto install` at build time. Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
 
