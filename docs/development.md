@@ -13,7 +13,9 @@ proto install    # provisions bun, moon, node, uv at the pinned versions (rustup
 bun install      # workspace deps + wires the git hooks (lefthook)
 ```
 
-Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`). CI pins cargo-machete in checks.yml; typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision), so a local version skew can at worst surface a finding early.
+Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete can also come from `cargo install`).
+
+The `Containerfile` pins cargo-machete (`ARG CARGO_MACHETE_VERSION`), and checks.yml installs that version on a bare runner through `scripts/pin.sh`. typos and actionlint run through the managed ci.yml's fleet actions, which follow the platform's own pins (a template-sync decision), so a local version skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
 |------|----------|-------|
@@ -128,9 +130,16 @@ Cache trust, and the one edge that must never be narrowed: the Rust core is the 
 
 ## Toolchain pinning (proto)
 
-`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it parses proto's own version from `.prototools` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, runs `proto install`, and on request installs rust with `setup-rust-toolchain`.
+`.prototools` pins proto itself, bun, moon, node, and uv; `proto install` provisions them all, and rust comes from `rust-toolchain.toml` through rustup alone. CI provisions the same way through one composite action, `.github/actions/setup-moon`, used by every repo-owned job that needs a toolchain: it reads proto's own version through `scripts/pin.sh` (the one pin `moonrepo/setup-toolchain` cannot read), lets that action install proto, runs `proto install`, and on request installs rust with `setup-rust-toolchain`.
 
-The CI image (`Containerfile`) runs the same `proto install` at build time. Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+The CI image (`Containerfile`) runs the same `proto install` at build time, after the same `scripts/pin.sh proto`. Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+
+`scripts/pin.sh <tool>` is the one reader of a pin needed before bun or proto exist. It scans both owner files together and fails when a tool is pinned in both, twice, or nowhere:
+
+| Tools | Owner file | Line shape |
+|-------|------------|------------|
+| proto, bun, moon, node, uv | `.prototools` | `tool = "x.y.z"` |
+| cargo-machete and the other image-only tools | `Containerfile` | `ARG <TOOL>_VERSION=x.y.z` |
 
 One pin also lives in a second file, and `moon run check-toolchain` (part of the gate and of CI's hygiene job) fails if the copies disagree, or if `.prototools` ever pins rust or enables proto's rust or python plugin:
 
@@ -144,7 +153,7 @@ uv is pinned only in `.prototools`, and python is owned by uv exactly as before:
 
 The Linux jobs run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main); the workflow-level `CI_IMAGE_TAG` is the one switch, and an empty value runs every job on the bare runner with the same composite action.
 
-Four jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), the browser job (Chrome from `setup-chrome`), and, until the republished image carries iproute2 for `ss`, the protocol matrix.
+Three jobs stay on the bare runner regardless: `build-release` (so the binary links against the runner's older glibc and runs in both environments), `linux-install` (needs only that binary), and the browser job (Chrome from `setup-chrome`).
 
 ## Working on the extension
 
@@ -180,7 +189,7 @@ The container is the isolation: it carries every gate tool at the repository's p
 | Task | Runs inside the container |
 |------|---------------------------|
 | `moon run ci-container` | `moon run ci` |
-| `moon run test-browser-container` | `xvfb-run -a moon run test-browser` (`scripts/container-browser-suites.sh`) with `BB_REQUIRE_BROWSER=1` and `BB_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, so a skipped or vacuous suite fails as in CI and the RAN markers stay readable on the host |
+| `moon run test-browser-container` | `xvfb-run -a moon run test-browser` with `BB_REQUIRE_BROWSER=1` and `BB_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, so a skipped or vacuous suite fails as in CI and the RAN markers stay readable on the host |
 | `moon run shell-container` | an interactive `bash` at `/work` |
 
 Docker is the default engine; `CONTAINER_ENGINE=podman moon run ci-container` switches. The first run builds the image (minutes, once); the checkout is bind-mounted at `/work`, so a build lands in the gitignored `build/` on the host like a native one.

@@ -12,7 +12,7 @@ on:
       - .dockerignore
       - .prototools
       - rust-toolchain.toml
-      - .github/workflows/checks.yml
+      - scripts/pin.sh
       - scripts/container-entrypoint.sh
       - .github/workflows/container-image.yml
   workflow_dispatch:
@@ -49,7 +49,7 @@ jobs:
         # across file boundaries unnoticed.
         run: |
           echo "name=ghcr.io/${OWNER,,}/${REPO,,}-ci" >> "$GITHUB_OUTPUT"
-          echo "tag=$(sha256sum Containerfile .dockerignore .prototools rust-toolchain.toml .github/workflows/checks.yml scripts/container-entrypoint.sh | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(sha256sum Containerfile .dockerignore .prototools rust-toolchain.toml scripts/pin.sh scripts/container-entrypoint.sh | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
       - name: Is this commit still the head of main
         id: latest
         # A re-run or a late finish of an older main commit must not move `latest` backward.

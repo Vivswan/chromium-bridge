@@ -211,10 +211,15 @@ jobs:
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
+      # The Containerfile owns the pin (ARG CARGO_MACHETE_VERSION); the image already carries that version,
+      # and the bare runner installs the same one.
+      - id: pin
+        run: |
+          machete="$(scripts/pin.sh cargo-machete)"
+          echo "machete=$machete" >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
-          # The Containerfile reads this pin for the CI image; keep it in the `tool:` input of this step.
-          tool: cargo-machete@0.9.2
+          tool: cargo-machete@${{ steps.pin.outputs.machete }}
       - run: moon run machete
 
   # Needs no toolchain, only the binary, so it stays on the bare runner.
@@ -319,12 +324,12 @@ jobs:
 
   # The suites hardcode target/release/chromium-bridge and build it only when missing, so the downloaded
   # binary is the one they drive. --upstream none skips the task's build-release dep (the artifact stands in
-  # for it) and check-uv (a missing uv fails the run loudly anyway). On the bare runner until the published
-  # image is rebuilt with iproute2: adversarial.py's A11 enumerates listeners with `ss`.
+  # for it) and check-uv (a missing uv fails the run loudly anyway).
   protocol:
     name: Protocol suite (${{ matrix.suite }}, Python)
-    needs: build-release
+    needs: [image, build-release]
     runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
     timeout-minutes: 20
     strategy:
       fail-fast: false

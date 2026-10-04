@@ -1,8 +1,8 @@
 # proto's own version is the one pin moonrepo/setup-toolchain cannot read from .prototools (it looks in
-# .moon/toolchains.yml). rust is rustup's alone: proto's rust plugin registers a toolchain without a rustc,
-# which makes setup-rust-toolchain believe rust-toolchain.toml is already installed. The CI image
-# (Containerfile) already carries proto and moon, so `proto install` there only catches a pin that moved
-# after the image was published.
+# .moon/toolchains.yml), so scripts/pin.sh supplies it. rust is rustup's alone: proto's rust plugin
+# registers a toolchain without a rustc, which makes setup-rust-toolchain believe rust-toolchain.toml is
+# already installed. The CI image (Containerfile) already carries proto and moon, so `proto install` there
+# only catches a pin that moved after the image was published.
 name: Set up moon
 description: Installs proto, moon, and the tools pinned in .prototools; optionally rust from rust-toolchain.toml with the cargo cache.
 
@@ -22,11 +22,7 @@ runs:
           echo "toolchain=preinstalled" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        proto="$(sed -nE 's/^proto[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' .prototools)"
-        if [ "$(printf '%s\n' "$proto" | grep -c .)" != 1 ]; then
-          echo "::error::.prototools must pin proto exactly once"
-          exit 1
-        fi
+        proto="$(scripts/pin.sh proto)"
         echo "toolchain=missing" >> "$GITHUB_OUTPUT"
         echo "proto=$proto" >> "$GITHUB_OUTPUT"
     - if: steps.present.outputs.toolchain == 'missing'
