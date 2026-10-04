@@ -67,8 +67,8 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 # the Secure Enclave via security-framework, never with a software key.
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 # The runtime-record matrix test (src/packages/core/src/runtime_record.rs) parses the crate's own record
-# modules for serde attributes and inherent items; `span-locations` gives the refusal its line. Dev-only,
-# both already in serde_derive's tree.
+# modules for serde attributes and inherent items; `span-locations` gives the refusal its line. Dev-only:
+# a dev-dependency never enters the shipped graph.
 syn = { version = "2", features = ["full"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 # Secure Enclave enrollment key (src/packages/core/src/enclave.rs). The vetted

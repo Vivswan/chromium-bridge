@@ -197,6 +197,9 @@ mod tests {
     use std::fmt::Debug;
     use std::path::Path;
 
+    use syn::ext::IdentExt;
+    use syn::spanned::Spanned;
+
     use super::*;
     use crate::allowlist::{Allowlist, Anchor, ClientEntry};
     use crate::enclave::{base64_encode, HostConfig};
@@ -315,14 +318,19 @@ mod tests {
     fn scan_module(source: &str) -> (Vec<String>, Vec<String>) {
         const METHODS: [&str; 6] = ["load", "decode", "encode", "write", "remove", "path"];
         const COMPAT: [&str; 3] = ["default", "alias", "rename"];
-        fn line(span: proc_macro2::Span) -> usize {
-            span.start().line
+        // Every name goes through here: `r#load`, `impl r#Record` and `#[r#cfg_attr]` spell the same items.
+        fn name(path: &syn::Path) -> String {
+            path.segments
+                .last()
+                .map(|s| s.ident.unraw().to_string())
+                .unwrap_or_default()
         }
         fn skip_value(meta: &syn::meta::ParseNestedMeta) -> syn::Result<()> {
             if meta.input.peek(syn::Token![=]) {
                 meta.value()?.parse::<syn::Expr>()?;
             } else if meta.input.peek(syn::token::Paren) {
-                meta.parse_nested_meta(|inner| skip_value(&inner))?;
+                // A whole group, not nested metas: `all()` and `rename(serialize = ..)` carry no key of ours.
+                meta.input.parse::<proc_macro2::TokenTree>()?;
             }
             Ok(())
         }
@@ -330,23 +338,23 @@ mod tests {
             meta: &syn::meta::ParseNestedMeta,
             refused: &mut Vec<String>,
         ) -> syn::Result<()> {
-            if let Some(key) = meta
-                .path
-                .get_ident()
-                .filter(|key| COMPAT.contains(&key.to_string().as_str()))
-            {
-                refused.push(format!("{}: #[serde({key})]", line(key.span())));
+            let key = name(&meta.path);
+            if COMPAT.contains(&key.as_str()) {
+                refused.push(format!(
+                    "{}: #[serde({key})]",
+                    meta.path.span().start().line
+                ));
             }
             skip_value(meta)
         }
         fn serde_attrs(attrs: &[syn::Attribute], refused: &mut Vec<String>) {
             for attr in attrs {
-                if attr.path().is_ident("serde") {
+                if name(attr.path()) == "serde" {
                     attr.parse_nested_meta(|meta| serde_item(&meta, refused))
                         .unwrap();
-                } else if attr.path().is_ident("cfg_attr") {
+                } else if name(attr.path()) == "cfg_attr" {
                     attr.parse_nested_meta(|meta| {
-                        if meta.path.is_ident("serde") {
+                        if name(&meta.path) == "serde" {
                             meta.parse_nested_meta(|inner| serde_item(&inner, refused))
                         } else {
                             skip_value(&meta)
@@ -378,10 +386,10 @@ mod tests {
                 } else if let syn::Item::Impl(imp) = item {
                     match &imp.trait_ {
                         Some((_, path, _)) => {
-                            let is_record =
-                                path.segments.last().is_some_and(|s| s.ident == "Record");
-                            if let (true, syn::Type::Path(ty)) = (is_record, &*imp.self_ty) {
-                                records.push(ty.path.segments.last().unwrap().ident.to_string());
+                            if let (true, syn::Type::Path(ty)) =
+                                (name(path) == "Record", &*imp.self_ty)
+                            {
+                                records.push(name(&ty.path));
                             }
                         }
                         None => inherent_items(&imp.items, refused),
@@ -392,13 +400,16 @@ mod tests {
         fn inherent_items(items: &[syn::ImplItem], refused: &mut Vec<String>) {
             for item in items {
                 if let syn::ImplItem::Fn(f) = item {
-                    let name = &f.sig.ident;
+                    let name = f.sig.ident.unraw();
                     if METHODS.contains(&name.to_string().as_str()) {
-                        refused.push(format!("{}: inherent fn {name}", line(name.span())));
+                        refused.push(format!("{}: inherent fn {name}", name.span().start().line));
                     }
                 } else if let syn::ImplItem::Const(c) = item {
-                    if c.ident == "VERSION" {
-                        refused.push(format!("{}: inherent const VERSION", line(c.ident.span())));
+                    if c.ident.unraw() == "VERSION" {
+                        refused.push(format!(
+                            "{}: inherent const VERSION",
+                            c.ident.span().start().line
+                        ));
                     }
                 }
             }
@@ -412,8 +423,6 @@ mod tests {
         (records, refused)
     }
 
-    /// Every `Record` impl under the crate's `src/`, and every refusal from [`scan_module`] in a module that
-    /// holds one, prefixed with the file path.
     fn record_impls_in_source() -> (BTreeSet<String>, Vec<String>) {
         fn walk(dir: &Path, types: &mut BTreeSet<String>, refused: &mut Vec<String>) {
             for entry in fs::read_dir(dir).unwrap() {
@@ -522,11 +531,11 @@ mod tests {
         );
     }
 
-    /// The scanner's controls: a parse that yields nothing, or a refusal that no longer matches, would keep
-    /// the matrix green while saying nothing about the crate.
+    /// The scanner's controls. The matrix's census catches a scan that finds no records, but a scan that
+    /// finds the records and refuses nothing keeps it green while saying nothing about the crate.
     #[test]
     fn record_module_scan_refuses_and_allows_the_right_items() {
-        let cases: [(&str, &str, &[&str], &[&str]); 7] = [
+        let cases: [(&str, &str, &[&str], &[&str]); 9] = [
             (
                 "field default",
                 "struct R {\n    #[serde(default)]\n    a: u64,\n}",
@@ -556,6 +565,18 @@ mod tests {
                 "impl R {\n    fn load() {}\n    const VERSION: usize = 1;\n}\nfn load() {}\nimpl Other for R {\n    fn load() {}\n}",
                 &[],
                 &["2: inherent fn load", "3: inherent const VERSION"],
+            ),
+            (
+                "raw identifiers spell the same shadows",
+                "impl R {\n    fn r#load() {}\n    const r#VERSION: usize = 1;\n}",
+                &[],
+                &["2: inherent fn load", "3: inherent const VERSION"],
+            ),
+            (
+                "raw spellings of the trait, the type and the attribute names",
+                "impl r#Record for r#A {}\nstruct A {\n    #[r#cfg_attr(all(), r#serde(alias = \"legacy\"))]\n    a: u64,\n}",
+                &["A"],
+                &["3: #[serde(alias)]"],
             ),
             (
                 "record impls by any path, in nested modules too",
