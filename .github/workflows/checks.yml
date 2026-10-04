@@ -544,8 +544,10 @@ jobs:
       # Same rationale for the fuzz-smoke driver: its failure-report writer
       # feeds the nightly fuzz job's issue filing, so its tests run in the
       # gate even though the fuzzing itself is nightly-only.
-      - name: Fuzz-smoke driver tests
-        run: bun test scripts/fuzz-smoke.test.ts
+      - name: Fuzz-smoke and harness-smoke driver tests
+        run: |
+          bun test scripts/fuzz-smoke.test.ts
+          bun test tests/harness/run.test.ts
 
   # The cargo deny pass gates merges: a new advisory lands as a red PR check,
   # not a silent scheduled failure. nightly.yml calls the same reusable

@@ -723,11 +723,11 @@ mod tests {
         // cdhash: the point of anchoring on Team ID across a weekly re-sign.
         let l = list_of(vec![ClientEntry {
             name: "claude-code".into(),
-            anchor: Anchor::TeamId("3ZMH96L4V9".into()),
+            anchor: Anchor::TeamId("TEAMID0001".into()),
             added_unix: 0,
         }]);
         assert_eq!(
-            decide(Some(&l), Some(&id("hash-after-resign", Some("3ZMH96L4V9")))),
+            decide(Some(&l), Some(&id("hash-after-resign", Some("TEAMID0001")))),
             Decision::Admit {
                 name: "claude-code".into()
             }
@@ -796,7 +796,7 @@ mod tests {
         };
         let team_entry = ClientEntry {
             name: "claude-code".into(),
-            anchor: Anchor::TeamId("3ZMH96L4V9".into()),
+            anchor: Anchor::TeamId("TEAMID0001".into()),
             added_unix: 7,
         };
         let list = list_of(vec![hash_entry.clone(), team_entry.clone()]);
@@ -977,7 +977,7 @@ mod tests {
         // Positive control: the exact shape still parses.
         assert!(serde_json::from_value::<Anchor>(serde_json::json!({
             "kind": "team_id",
-            "value": "3ZMH96L4V9"
+            "value": "TEAMID0001"
         }))
         .is_ok());
     }

@@ -78,6 +78,7 @@ tasks:
       - '~:check-cjk'
       - '~:check-typography'
       - '~:check-fuzz-smoke'
+      - '~:check-harness-driver'
       - '~:check-fuzz-workspace'
       - '~:check-gen'
       - '~:check-envelope'
@@ -298,6 +299,7 @@ tasks:
       - 'shared:test'
       - 'extension:test'
       - 'web:test'
+      - '~:check-harness-driver'
     toolchains: ['system']
     options:
       cache: false
@@ -353,6 +355,13 @@ tasks:
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
+
+  check-harness-driver:
+    description: 'Unit test for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository)'
+    command: 'bun test tests/harness/run.test.ts'
+    toolchains: ['system']
+    options:
+      cache: false # a check task: gates are never cached
 
   check-fuzz-workspace:
     description: >-
@@ -856,7 +865,7 @@ tasks:
     # Needs the claude and codex CLIs on PATH, so nightly.yml's harness-smoke job installs them and runs
     # `bun tests/harness/run.ts` directly: moon does not resolve runInCI:false tasks when CI=true. Each
     # harness's opening method is logged as the ADR-0034 canary for retiring the legacy-initialize shim;
-    # extra flags pass through (`moon run harness-smoke -- --mint-seeds`).
+    # extra flags pass through (`moon run harness-smoke -- --mint-seeds <dir outside the repo>`).
     description: >-
       Agent-harness interop smoke: real harness CLIs connect to the stdio MCP server and run a
       fake-LLM live tool call (logs the ADR-0034 opening-method canary)

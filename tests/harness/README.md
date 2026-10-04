@@ -5,13 +5,20 @@ Proves REAL agent-harness CLIs (Claude Code, Codex) can connect to the bridge's 
 ## Run
 
 ```sh
-moon run harness-smoke                 # or: bun tests/harness/run.ts
-bun tests/harness/run.ts --mint-seeds  # also mint captured frames as fuzz seeds
+moon run harness-smoke                                 # or: bun tests/harness/run.ts
+bun tests/harness/run.ts --mint-seeds ~/scratch/seeds  # also mint captured frames as fuzz seeds, OUTSIDE the repo
 ```
 
 - Harnesses whose CLI is not on PATH are skipped with a message. `BB_HARNESS_<NAME>_BIN` (e.g. `BB_HARNESS_CLAUDE_BIN`) pins a specific executable; by default the driver skips terminal-mux proxy shims (cmux) on PATH, which break stdio MCP health checks.
 - Captures land in `build/harness-captures/<harness>.ndjson` (gitignored) plus a `summary.json`; CI's nightly.yml `harness-smoke` job uploads the directory as an artifact.
-- `--mint-seeds` copies deduplicated captured frames into `src/packages/core/fuzz/seeds/mcp_jsonrpc/` with descriptive names (`harness-claude-initialize`, ...) - a real-world corpus for the fuzzer. Review and commit the new seeds deliberately.
+- `--mint-seeds <dir>` copies deduplicated captured frames into `<dir>` as `harness-<harness>-<method>` files. The path is required and must lie outside the repository; one inside it exits 2 before any harness runs:
+
+```text
+$ bun tests/harness/run.ts --mint-seeds src/packages/core/fuzz/seeds/mcp_jsonrpc
+error: refusing to write captured frames inside the repository: /repo/src/packages/core/fuzz/seeds/mcp_jsonrpc
+```
+
+- A capture is measured from a real client, so minted frames are reference material only. The committed corpus in `src/packages/core/fuzz/seeds/mcp_jsonrpc/` is hand-authored: write a seed with the same wire shape and synthetic `clientInfo`, never copy a capture.
 
 ## The ADR-0034 canary
 
@@ -35,7 +42,12 @@ The suite prints one `CANARY` line per harness naming the OPENING method it sent
 
 ## Live tool-call probes (fake LLM backend)
 
-The `claude-live-fakellm` and `codex-live-fakellm` entries run whenever the CLI is installed - no API key, no opt-in, because no credential and no real model is involved. `tests/harness/fake-llm.ts` plays the model on an ephemeral 127.0.0.1 port (Anthropic Messages API for `claude -p` via `ANTHROPIC_BASE_URL` + a dummy key; OpenAI Responses API for `codex exec` via `model_providers` base_url overrides - codex 0.146+ refuses `wire_api = "chat"`), so a REAL harness run performs a full prompt -> tool call -> tool result -> final text loop deterministically.
+The `claude-live-fakellm` and `codex-live-fakellm` entries run whenever the CLI is installed - no API key, no opt-in, because no credential and no real model is involved. `tests/harness/fake-llm.ts` plays the model on an ephemeral 127.0.0.1 port, so a REAL harness run performs a full prompt -> tool call -> tool result -> final text loop deterministically.
+
+| Harness | API the fake backend speaks | How the CLI is pointed at it |
+| --- | --- | --- |
+| `claude -p` | Anthropic Messages API | `ANTHROPIC_BASE_URL` plus a dummy key |
+| `codex exec` | OpenAI Responses API | `model_providers` base_url overrides; codex 0.146+ refuses `wire_api = "chat"` |
 
 The canned scenario is content-addressed, not turn-counted: a request carrying a tool result gets final text; a request advertising the bridge's `tab_list` gets a call to it (under whatever name the harness advertised: `mcp__chromium-bridge__tab_list` for claude, the `mcp__chromium_bridge` namespace for codex); anything else (title generation, token counting) gets a trivial reply. `GET /_test/requests` serves everything the backend saw for the driver's assertions.
 
@@ -45,7 +57,12 @@ Each probe asserts three points and fails closed on any of them:
 2. the tee shim captured the resulting `tools/call` frame, in the same protocol era as the harness's opening method;
 3. the tool result fed back to the model echoed the scenario's invocation id and carried the bridge's typed `Error [NOT_CONNECTED]` text - no browser is attached, so that IS the expected outcome (the 12s connect-wait makes this the slow step).
 
-The fake backend binds 127.0.0.1 only. Two artifacts land next to the captures for red-night forensics: `<entry>.fake-llm.log` (the backend's stderr/stdout) and `<entry>.fake-llm-requests.json` (every request body the backend saw, so a harness release that changes shape explains itself). A side effect worth knowing: `--mint-seeds` now mints real `tools/call` frames into the fuzz corpus, which the health-check probes never produced.
+The fake backend binds 127.0.0.1 only. Two artifacts land next to the captures for red-night forensics:
+
+- `<entry>.fake-llm.log`: the backend's stderr/stdout.
+- `<entry>.fake-llm-requests.json`: every request body the backend saw, so a harness release that changes shape explains itself.
+
+A side effect worth knowing: `--mint-seeds <dir>` now mints real `tools/call` frames, which the health-check probes never produced.
 
 ## Adding a harness
 

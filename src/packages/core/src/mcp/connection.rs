@@ -351,12 +351,12 @@ mod tests {
     /// revision and the reply carries our identity.
     #[test]
     fn legacy_initialize_negotiates_the_requested_revision() {
-        // 2025-11-25 is the real-world canary: Claude Code 2.1.226 opens
-        // with it. rmcp echoes any supported LEGACY requested revision
-        // (2026-07-28+ has no initialize handshake and negotiates down to
-        // the newest legacy one). The string
-        // request id (spec-legal, rarer than numeric) also exercises the
-        // seam's reply-id equality check on the non-numeric arm.
+        // 2025-11-25 is the newest revision a shipped modern client still
+        // opens with via initialize. rmcp echoes any supported LEGACY
+        // requested revision (2026-07-28+ has no initialize handshake and
+        // negotiates down to the newest legacy one). The string request id
+        // (spec-legal, rarer than numeric) also exercises the seam's
+        // reply-id equality check on the non-numeric arm.
         for requested in ["2025-06-18", "2025-11-25"] {
             let mut conn = open();
             let reply = request(
