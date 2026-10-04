@@ -27,8 +27,9 @@ use windows_sys::Win32::Foundation::{
     WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED,
-    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    CreateFileW, GetFileType, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE,
+    FILE_FLAG_OVERLAPPED, FILE_TYPE_PIPE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+    SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
@@ -125,6 +126,37 @@ impl PipeListener {
             }
         }
     }
+}
+
+/// The pid of the process that created this process's stdin pipe: the harness
+/// that spawned the server. Every spawner (CreatePipe, libuv, Rust's own
+/// Command) opens both ends of a child's stdio pipe itself before handing one
+/// across, so the kernel's client and server pids agree and name the creator;
+/// anything else (a console or file on stdin, a pipe end passed on from
+/// another process) fails closed.
+pub(crate) fn stdin_pipe_creator() -> io::Result<u32> {
+    let stdin = io::stdin().as_raw_handle();
+    // SAFETY: the handle is this process's live stdin; the call only reads
+    // its type.
+    if unsafe { GetFileType(stdin) } != FILE_TYPE_PIPE {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "stdin is not a pipe; the harness cannot be attested",
+        ));
+    }
+    let mut client = 0u32;
+    // SAFETY: `stdin` is an open pipe handle; `client` is a live local for the
+    // write.
+    if unsafe { GetNamedPipeClientProcessId(stdin, &mut client) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut server = 0u32;
+    // SAFETY: as above, for the server end's pid.
+    if unsafe { GetNamedPipeServerProcessId(stdin, &mut server) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    super::pipe_creator(client, server, std::process::id())
+        .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e))
 }
 
 /// Wait for a client to open `instance`.
@@ -525,6 +557,57 @@ mod tests {
         let mut reply = [0u8; 5];
         client.read_exact(&mut reply).unwrap();
         assert_eq!(&reply, b"pong\n");
+    }
+
+    /// Set in the child this test spawns of itself; the parent role is the
+    /// test run without it.
+    const STDIN_PEER_CHILD: &str = "CHROMIUM_BRIDGE_TEST_STDIN_PEER_CHILD";
+
+    #[test]
+    fn the_stdin_pipe_creator_is_the_process_that_spawned_us() {
+        // External fact the harness measurement rests on: a child's stdin pipe,
+        // created by its spawner (here Rust's Command), reports the spawner's
+        // pid on both ends, even though the child only inherited one end; and
+        // GetNamedPipe{Client,Server}ProcessId answer for an anonymous pipe.
+        // The test re-runs itself as that child, which also attests its
+        // harness end to end: the spawner is this same binary, so the measured
+        // hash must equal the child's own identity.
+        if std::env::var_os(STDIN_PEER_CHILD).is_some() {
+            use super::super::super::super::attest::{attest_parent, ensure_own_identity};
+
+            println!("stdin-pipe-creator={}", stdin_pipe_creator().unwrap());
+            let harness = attest_parent().unwrap();
+            assert_eq!(harness.hash.as_str(), ensure_own_identity().unwrap());
+            println!("attest-parent=own-image");
+            return;
+        }
+        let me = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(me)
+            .args([
+                "--exact",
+                "ipc::platform::windows::pipe::tests::the_stdin_pipe_creator_is_the_process_that_spawned_us",
+                "--nocapture",
+            ])
+            .env(STDIN_PEER_CHILD, "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // libtest prefixes the first child line with "test <name> ... " when it
+        // runs single-threaded, so the markers are searched within a line.
+        let reported = stdout
+            .lines()
+            .find_map(|line| line.split_once("stdin-pipe-creator="))
+            .unwrap_or_else(|| panic!("child reports the creator pid:\n{stdout}"))
+            .1
+            .trim();
+        assert_eq!(reported, std::process::id().to_string());
+        assert!(
+            stdout.contains("attest-parent=own-image"),
+            "child attests its harness:\n{stdout}"
+        );
+        assert!(output.status.success(), "child test run passes");
     }
 
     #[test]

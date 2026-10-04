@@ -99,7 +99,6 @@ windows-sys = { version = "0.59", features = [
   "Win32_Security_Cryptography_Sip",
   "Win32_Security_WinTrust",
   "Win32_Storage_FileSystem",
-  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_IO",
   "Win32_System_Pipes",
   "Win32_System_Threading",

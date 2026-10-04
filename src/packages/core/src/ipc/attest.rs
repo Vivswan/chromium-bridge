@@ -50,26 +50,27 @@ pub fn ensure_own_identity() -> io::Result<&'static str> {
     own_identity().map(HashDigest::as_str)
 }
 
-/// Measure our **parent process**, the harness (MCP client) that spawned this MCP-server-mode instance: the input to
-/// the trusted-client allowlist ([`crate::allowlist`]). stdin is an anonymous pipe with no kernel peer credentials, so
-/// the attestable peer is the spawner the OS recorded as our parent, not the pipe's writer.
+/// Measure our **harness**, the MCP client that spawned this MCP-server-mode instance: the input to the trusted-client
+/// allowlist ([`crate::allowlist`]). stdin is an anonymous pipe with no kernel peer credentials, so on Unix the
+/// attestable peer is the spawner `getppid` names; on Windows it is the process that created our stdin pipe, since a
+/// Windows launcher can record any process it can open as the parent.
 ///
 /// ```text
-/// real parent already dead  -> Unix: measures the reaper (commonly pid 1); Windows: the recorded pid, gone or reused.
-///                              Refused by an enforced allowlist unless it names that binary; unenrolled admission
-///                              ignores the identity (allowlist::decide)
-/// who writes our stdin      -> unproven: the pipe's write end can be inherited or passed on, and no user-space
-///                              mechanism attests an anonymous pipe
+/// real parent already dead  -> Unix: measures the reaper (commonly pid 1), refused by an enforced allowlist unless it
+///                              names that binary; unenrolled admission ignores the identity (allowlist::decide)
+/// who writes our stdin      -> Unix: unproven, the pipe's write end can be inherited or passed on; Windows: the pipe's
+///                              creator, unless a same-user process duplicates a harness's pipe end into a child it
+///                              launches
 /// pid-keyed measurement     -> the same pid-reuse race as attest_pid; on macOS pid_client_identity still validates
 ///                              the running image via SecCodeCheckValidity
 /// ```
 pub fn attest_parent() -> io::Result<ClientIdentity> {
-    os::pid_client_identity(parent_pid()?)
+    os::pid_client_identity(harness_pid()?)
 }
 
-/// The pid the OS records as this process's parent: `getppid`, which cannot
-/// fail, on Unix; a process-snapshot lookup on Windows.
-fn parent_pid() -> io::Result<u32> {
+/// The pid of the process measured as our harness: `getppid` (which cannot
+/// fail) on Unix, the creator of our stdin pipe on Windows.
+fn harness_pid() -> io::Result<u32> {
     #[cfg(unix)]
     {
         u32::try_from(crate::sys::parent_pid())
@@ -77,7 +78,7 @@ fn parent_pid() -> io::Result<u32> {
     }
     #[cfg(windows)]
     {
-        os::parent_pid()
+        os::harness_pid()
     }
 }
 
@@ -198,6 +199,10 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
+    /// On Windows the harness is the creator of our stdin pipe, which the test
+    /// runner's stdin need not be; the Windows resolution is pinned by
+    /// `platform::windows::pipe`'s self-spawning test instead.
+    #[cfg(unix)]
     #[test]
     fn attest_parent_measures_the_spawning_process() {
         // The parent here is the test runner (cargo / a shell), a real signed or ad-hoc-signed image: an external

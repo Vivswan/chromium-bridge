@@ -116,6 +116,22 @@ pub fn user_only_sddl(sid: &SidString) -> String {
     format!("D:P(A;;GA;;;{})", sid.0)
 }
 
+/// The process that created a pipe, from the pids the kernel recorded for its
+/// two ends. A spawner opens both ends of a child's stdio pipe itself, so they
+/// agree and name it; ends opened by different processes mean the pipe was
+/// handed on, and an end we opened ourselves cannot be the harness's.
+pub fn pipe_creator(client: u32, server: u32, me: u32) -> Result<u32, String> {
+    if client != server {
+        return Err(format!(
+            "stdin pipe ends belong to different processes ({client} and {server}); the harness cannot be attested"
+        ));
+    }
+    if client == me {
+        return Err("stdin pipe was created by this process".to_string());
+    }
+    Ok(client)
+}
+
 /// `WinVerifyTrust`'s verdict on an image, folded to the outcomes the publisher
 /// anchor distinguishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,7 +202,7 @@ mod identity {
 
     use super::super::super::identity::{ClientIdentity, HashDigest};
     use super::super::super::socket::BridgeStream;
-    use super::{process, signer};
+    use super::{pipe, process, signer};
 
     /// Error message for an unmeasurable self identity, used by
     /// [`super::super::super::attest`].
@@ -219,9 +235,13 @@ mod identity {
         })
     }
 
-    /// The pid Windows recorded as this process's parent at creation.
-    pub(crate) fn parent_pid() -> io::Result<u32> {
-        process::parent_pid()
+    /// The pid of the process to measure as this server's harness: the creator
+    /// of our stdin pipe. The recorded parent would be the obvious choice, but
+    /// a Windows launcher can name any process it can open as the parent
+    /// (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`), while the pipe it writes us
+    /// through is its own.
+    pub(crate) fn harness_pid() -> io::Result<u32> {
+        pipe::stdin_pipe_creator()
     }
 }
 
@@ -263,6 +283,20 @@ mod tests {
             PipeName::try_from(long.as_str()).is_err(),
             "over the length cap"
         );
+    }
+
+    #[test]
+    fn the_pipe_creator_is_the_one_process_behind_both_ends() {
+        // The harness measurement keys on this fold: a spawner opens both ends
+        // of its child's stdin pipe, so agreeing pids name it; an end handed on
+        // from another process, or one this process opened, must not attest
+        // anyone (the Windows wording of the stdin-writer residual).
+        assert_eq!(pipe_creator(4100, 4100, 7), Ok(4100));
+        assert!(
+            pipe_creator(4100, 4200, 7).is_err(),
+            "ends from two processes"
+        );
+        assert!(pipe_creator(7, 7, 7).is_err(), "our own pipe");
     }
 
     #[test]

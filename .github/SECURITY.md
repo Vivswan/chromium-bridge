@@ -101,7 +101,7 @@ What differs on Windows:
 
 - The runtime directory is normally `%LOCALAPPDATA%\chromium-bridge`, falling back to the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset; the temp directory is not guaranteed per-user.
 - The image is measured by re-opening its path, so a running image renamed and replaced at its path is a residual the [threat model](../docs/security/threat-model.md#residual-risks-accepted-tracked) records.
-- The parent pid Windows records is caller-selectable at `CreateProcess`, so a same-user launcher can start the server under a paired harness's pid; the threat model records that residual too.
+- The parent pid Windows records is caller-selectable at `CreateProcess`, so the harness is measured as the creator of the server's stdin pipe instead; a console, or pipe ends opened by two different processes, fails closed, and the threat model records what remains.
 - The publisher is read from the embedded Authenticode signature with no revocation check; a catalog-signed image (most of Windows itself) anchors by hash alone.
 - The full scoping is in the [threat model](../docs/security/threat-model.md) and [trust boundaries](../docs/security/trust-boundaries.md) docs.
 
