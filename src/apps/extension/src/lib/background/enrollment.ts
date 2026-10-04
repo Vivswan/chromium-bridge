@@ -27,6 +27,7 @@ import {
   type EnclaveRevokeWire,
 } from "@chromium-bridge/shared/envelope.gen";
 import type { EnrollmentStatus, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
@@ -39,6 +40,7 @@ import {
   verifyPairingProof,
   verifyProofAgainstPin,
 } from "./enclave-verify";
+import { inLife } from "./in-life";
 import { killGate } from "./kill";
 import { onPinPinned, onPinRevoked, policyDispatchGate } from "./policy-sync";
 import { hardenStorageAccess } from "./trusted-storage";
@@ -53,14 +55,14 @@ export function isEnclaveFrame(msg: unknown): msg is EnclaveInboundFrame {
   return EnclaveInboundFrameSchema.safeParse(msg).success;
 }
 
-let conn: Connection | null = null;
+const conn = inLife<Connection | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
-    conn = c;
+    conn.value = c;
   },
   onDetach() {
-    conn = null;
+    conn.value = null;
     // The host process died with the port; its proof can never arrive, and
     // the nonce must not outlive the challenge it was issued for.
     clearOutstanding();
@@ -74,20 +76,10 @@ export const collaborator: PortCollaborator = {
 
 // ---- transition serialization -------------------------------------------------
 
-// Every state transition (inbound proof/error, user action, connect hook)
-// runs through this queue. Several options tabs, the popup, and the port all
-// call in concurrently, and an interleaved revoke/approve must not resurrect
-// a pin, so each transition re-checks its preconditions inside the queue.
-let transitionChain: Promise<unknown> = Promise.resolve();
-
-function serialized<T>(fn: () => Promise<T>): Promise<T> {
-  const next = transitionChain.then(fn, fn);
-  transitionChain = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  return next;
-}
+// Every state transition (inbound proof/error, user action, connect hook) runs on this lane. Several options tabs,
+// the popup, and the port all call in concurrently, and an interleaved revoke/approve must not resurrect a pin, so
+// each transition re-checks its preconditions inside the lane.
+const transitions = inLife(() => pLimit(1));
 
 // ---- outstanding challenge --------------------------------------------------
 
@@ -102,27 +94,28 @@ interface Outstanding {
   timer: ReturnType<typeof setTimeout>;
 }
 
-let outstanding: Outstanding | null = null;
+const outstanding = inLife<Outstanding | null>(() => null);
 
 // Generous because answering a challenge blocks on the macOS presence prompt.
 const CHALLENGE_TIMEOUT_MS = 120_000;
 
 function clearOutstanding(): void {
-  if (outstanding) {
-    clearTimeout(outstanding.timer);
-    outstanding = null;
+  if (outstanding.value) {
+    clearTimeout(outstanding.value.timer);
+    outstanding.value = null;
   }
 }
 
 async function issueChallenge(
   mode: "pair" | "verify",
 ): Promise<RuntimeResponse<"enroll_pair" | "enroll_verify">> {
-  if (!conn) return { ok: false, error: "native host not connected" };
-  if (outstanding) return { ok: false, error: "a challenge is already outstanding" };
+  const live = conn.value;
+  if (!live) return { ok: false, error: "native host not connected" };
+  if (outstanding.value) return { ok: false, error: "a challenge is already outstanding" };
   const nonce = generateNonce();
   const context = `ext:${browser.runtime.id}:${mode}`;
   const timer = setTimeout(() => {
-    outstanding = null;
+    outstanding.value = null;
     void pinStore
       .setLastError(
         `no answer to the ${mode} challenge within ${CHALLENGE_TIMEOUT_MS / 1000}s ` +
@@ -130,13 +123,13 @@ async function issueChallenge(
       )
       .then(updateBadge);
   }, CHALLENGE_TIMEOUT_MS);
-  outstanding = {
+  outstanding.value = {
     nonce,
     context,
     mode,
     timer,
   };
-  if (!conn.post({ type: "enclave_challenge", nonce, context } satisfies EnclaveChallengeWire)) {
+  if (!live.post({ type: "enclave_challenge", nonce, context } satisfies EnclaveChallengeWire)) {
     clearOutstanding();
     return { ok: false, error: "failed to send the challenge to the native host" };
   }
@@ -176,7 +169,7 @@ export type Gate = { allowed: true } | { allowed: false; reason: string };
 export async function enrollmentGate(onAllowed?: () => void): Promise<Gate> {
   const first = await readGateState();
   if (!first.allowed) return first;
-  return serialized(async () => {
+  return transitions.value(async () => {
     const gate = await readGateState();
     if (gate.allowed) onAllowed?.();
     return gate;
@@ -253,7 +246,7 @@ async function readGateState(): Promise<Gate> {
  * challenged (a challenge is a Touch ID prompt, and MV3 reconnects every few
  * minutes). While unpaired it drives the ceremony forward. */
 export function onPortConnected(): Promise<void> {
-  return serialized(async () => {
+  return transitions.value(async () => {
     // Do not read or act on trust state until it is confined to the extension (trusted-storage.ts): the same
     // reasoning as the gate. If hardening failed, do nothing - the gate is already blocking every request, so
     // there is no ceremony to drive.
@@ -285,7 +278,7 @@ export function onPortConnected(): Promise<void> {
  * deletion pending, or the old key would outlive the revoke with nothing left
  * to request its removal. */
 async function maybeSendPendingHostRevoke(): Promise<void> {
-  const live = conn;
+  const live = conn.value;
   if (!live) return;
   if (!(await pinStore.getHostRevokePending())) return;
   if (live.post({ type: "enclave_revoke" } satisfies EnclaveRevokeWire)) {
@@ -376,7 +369,7 @@ function unknownReasonHelp(raw: string | null): string {
 }
 
 export function handleEnclaveFrame(msg: EnclaveInboundFrame): Promise<void> {
-  return serialized(async () => {
+  return transitions.value(async () => {
     if (msg.type === "enclave_proof") return handleProof(msg);
     if (msg.type === "enclave_error") return handleError(msg);
     if (msg.type === "enclave_revoked") return handleRevoked();
@@ -408,7 +401,7 @@ async function handleRevoked(): Promise<void> {
 }
 
 async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
-  const current = outstanding;
+  const current = outstanding.value;
   // Single use: the challenge is consumed even by a proof that fails to
   // verify. A retry needs a fresh nonce.
   clearOutstanding();
@@ -479,7 +472,7 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
 }
 
 async function handleError(frame: EnclaveInboundFrame): Promise<void> {
-  const current = outstanding;
+  const current = outstanding.value;
   clearOutstanding();
   // Parse with the wire schema the envelope-parity gate declares for
   // enclave_error (`reason` is required). A frame that fails it (raw = null)
@@ -511,7 +504,7 @@ async function handleError(frame: EnclaveInboundFrame): Promise<void> {
 // ---- user actions (routed from messages.ts) -------------------------------------
 
 export function startPairing(): Promise<RuntimeResponse<"enroll_pair">> {
-  return serialized(async () => {
+  return transitions.value(async () => {
     if (!(await platformCanEnroll())) {
       return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
     }
@@ -532,7 +525,7 @@ export function startPairing(): Promise<RuntimeResponse<"enroll_pair">> {
 }
 
 export function verifyPinnedNow(): Promise<RuntimeResponse<"enroll_verify">> {
-  return serialized(async () => {
+  return transitions.value(async () => {
     if (!(await platformCanEnroll())) {
       return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
     }
@@ -545,7 +538,7 @@ export function verifyPinnedNow(): Promise<RuntimeResponse<"enroll_verify">> {
 }
 
 export function approvePending(): Promise<RuntimeResponse<"enroll_approve">> {
-  return serialized(async () => {
+  return transitions.value(async () => {
     const pending = await pinStore.getPending();
     if (!pending) return { ok: false, error: "no pairing awaiting approval" };
     // A pin or fail-closed mark that landed since this approval was clicked
@@ -576,7 +569,7 @@ export function approvePending(): Promise<RuntimeResponse<"enroll_approve">> {
 }
 
 export function rejectPending(): Promise<RuntimeResponse<"enroll_reject">> {
-  return serialized(async () => {
+  return transitions.value(async () => {
     // A stale reject (the pending record is gone, e.g. already approved in
     // another tab) must not pretend it revoked anything.
     if (!(await pinStore.getPending())) return { ok: false, error: "no pairing awaiting approval" };
@@ -600,7 +593,7 @@ export function rejectPending(): Promise<RuntimeResponse<"enroll_reject">> {
  * auto-restart afterwards (paused), so revoking never triggers a surprise Touch
  * ID prompt; the user starts the next ceremony from the options page. */
 export function revokePin(): Promise<RuntimeResponse<"enroll_revoke">> {
-  return serialized(async () => {
+  return transitions.value(async () => {
     clearOutstanding();
     // Read the pin BEFORE clearing the store: its keyId is the prior identity
     // onPinRevoked persists durably, and the next re-pair decides key-novelty
@@ -686,20 +679,20 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
 // Only clear the badge when we set it, so a pending allowlist "!" badge is
 // not stomped. (While enrollment blocks the bridge no allowlist prompt can
 // arise, since nothing reaches dispatch.)
-let badgeShown = false;
+const badgeShown = inLife(() => false);
 
 async function updateBadge(): Promise<void> {
   if (!browser.action) return;
   const st = await getEnrollmentStatus();
   try {
     if (st.blocked) {
-      badgeShown = true;
+      badgeShown.value = true;
       await browser.action.setBadgeText({ text: st.state === "pending" ? "PAIR" : "!" });
       await browser.action.setBadgeBackgroundColor({
         color: st.state === "pending" ? BADGE_PENDING_COLOR : BADGE_DANGER_COLOR,
       });
-    } else if (badgeShown) {
-      badgeShown = false;
+    } else if (badgeShown.value) {
+      badgeShown.value = false;
       await browser.action.setBadgeText({ text: "" });
     }
   } catch (e) {

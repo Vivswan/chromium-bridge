@@ -26,8 +26,10 @@ import {
   type AuditEventKind,
 } from "@chromium-bridge/shared/enclave";
 import type { AuditEventWire } from "@chromium-bridge/shared/envelope.gen";
+import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import type { Connection, PortCollaborator } from "./connection";
+import { inLife } from "./in-life";
 
 const AUDIT_RING_KEY = "auditRing";
 
@@ -41,20 +43,19 @@ const AUDIT_RING_MAX = 200;
  * local-display only. */
 const FORWARDED_KINDS: ReadonlySet<AuditEventKind> = new Set(AUDIT_FORWARDED_KINDS);
 
-let conn: Connection | null = null;
+const conn = inLife<Connection | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
-    conn = c;
+    conn.value = c;
   },
   onDetach() {
-    conn = null;
+    conn.value = null;
   },
 };
 
-// Serialize appends: concurrent read-modify-write of the ring would lose
-// entries.
-let appendChain: Promise<unknown> = Promise.resolve();
+// Appends run one at a time: a concurrent read-modify-write of the ring would lose entries.
+const appends = inLife(() => pLimit(1));
 
 export interface AuditFields {
   outcome?: string;
@@ -82,15 +83,15 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
     return;
   }
   const entry: AuditEntry = parsed.data;
-  appendChain = appendChain
-    .then(async () => {
+  void appends
+    .value(async () => {
       const ring = await readRing();
       ring.push(entry);
       await browser.storage.local.set({ [AUDIT_RING_KEY]: ring.slice(-AUDIT_RING_MAX) });
     })
     .catch((e) => {
-      // Drop-on-failure, loudly: the decision already happened and must not
-      // be re-litigated because its bookkeeping failed.
+      // Drop-on-failure, loudly: the decision already happened and must not be re-litigated because its
+      // bookkeeping failed.
       console.warn("[bb] audit ring append failed; event dropped from the ring", e);
     });
   if (FORWARDED_KINDS.has(kind)) {
@@ -103,7 +104,7 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
       // field would compile and only fail at the host's parser. Named keys
       // keep the pin two-way; an undefined value is dropped by the port's
       // JSON serialization, exactly like an omitted key.
-      conn?.post({
+      conn.value?.post({
         type: "audit_event",
         kind,
         outcome: fields.outcome,
@@ -131,6 +132,6 @@ export async function readRing(): Promise<AuditEntry[]> {
 
 /** Tests only. */
 export function resetAuditForTests(): void {
-  conn = null;
-  appendChain = Promise.resolve();
+  conn.reset();
+  appends.reset();
 }

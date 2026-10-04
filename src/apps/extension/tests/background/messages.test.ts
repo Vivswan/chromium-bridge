@@ -15,7 +15,6 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";
-import { resetPanicForTests } from "@/lib/background/confirm/service";
 import { resetKillForTests } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
 
@@ -87,7 +86,6 @@ beforeEach(() => {
 afterEach(() => {
   // confirm_deny_kill latches confirmations to auto-deny and arms the kill
   // exchange; neither may leak into the next case.
-  resetPanicForTests();
   resetKillForTests();
 });
 

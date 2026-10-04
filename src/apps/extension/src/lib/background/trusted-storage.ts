@@ -13,15 +13,16 @@
 // planted pin achieves.
 
 import { browser } from "wxt/browser";
+import { inLife } from "./in-life";
 
 export type Hardening = { ok: true } | { ok: false; reason: string };
 
-let hardening: Promise<Hardening> | null = null;
+const hardening = inLife<Promise<Hardening> | null>(() => null);
 
 /** Apply (once per SW life) and report the storage access restriction. */
 export function hardenStorageAccess(): Promise<Hardening> {
-  hardening ??= applyRestriction();
-  return hardening;
+  hardening.value ??= applyRestriction();
+  return hardening.value;
 }
 
 async function applyRestriction(): Promise<Hardening> {
@@ -40,5 +41,5 @@ async function applyRestriction(): Promise<Hardening> {
 
 /** Tests only: forget the memoized result so a suite can drive both paths. */
 export function resetStorageHardeningForTests(): void {
-  hardening = null;
+  hardening.reset();
 }

@@ -16,11 +16,8 @@ import type { Presentation } from "@/lib/background/confirm/service";
 import {
   confirmWithUser,
   currentPanicEpoch,
-  denyAllConfirmations,
   installConfirmationProvider,
   installPresenceProvider,
-  releasePanicDeny,
-  resetPanicForTests,
   resolveConfirm,
 } from "@/lib/background/confirm/service";
 import {
@@ -96,7 +93,6 @@ beforeEach(() => {
   (fakeBrowser.runtime as unknown as Record<string, unknown>).id = EXT_ID;
   resetKillForTests();
   resetAuditForTests();
-  resetPanicForTests();
   vi.useFakeTimers();
 });
 
@@ -104,7 +100,6 @@ afterEach(async () => {
   await vi.runAllTimersAsync();
   vi.useRealTimers();
   resetKillForTests();
-  resetPanicForTests();
 });
 
 describe("confirm_deny_kill", () => {
@@ -385,9 +380,8 @@ describe("confirm_deny_kill", () => {
 
   test("a stale release from an earlier panic cannot lift a newer panic's latch", async () => {
     const presented = fakeProvider(installConfirmationProvider);
-    // Panic 1's engage fails to SEND (scheduling its epoch-scoped lift);
-    // panic 2's engage posts fine and is still in flight when that stale
-    // lift runs.
+    // Panic 1's engage fails to SEND, which on its own leaves nothing latched; panic 2's engage posts fine and is
+    // still in flight. Panic 1's failure must not clear the latch panic 2 armed.
     let posts = 0;
     attach(collaborator, () => {
       posts += 1;
@@ -396,24 +390,8 @@ describe("confirm_deny_kill", () => {
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await vi.advanceTimersByTimeAsync(0);
-    // Panic 1's send-failure release has run by now; it must be a no-op
-    // against panic 2's still-armed latch.
     await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
     expect(presented).toHaveLength(0);
-  });
-
-  test("releasePanicDeny is epoch-scoped (unit)", async () => {
-    const first = denyAllConfirmations();
-    const second = denyAllConfirmations();
-    releasePanicDeny(first); // stale: must not lift the newer latch
-    await expect(confirmWithUser(WINDOW_REQ())).resolves.toBe(false);
-    releasePanicDeny(second);
-    const presented = fakeProvider(installConfirmationProvider);
-    const later = confirmWithUser(WINDOW_REQ());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(presented).toHaveLength(1);
-    resolveConfirm(presented[0]!.payload.id, false);
-    await expect(later).resolves.toBe(false);
   });
 
   test("a pre-panic killed frame mid-write cannot serve as the panic's refusal proof", async () => {
@@ -486,6 +464,60 @@ describe("confirm_deny_kill", () => {
       return true;
     });
     expect(afterConfirm).toEqual([]);
+  });
+
+  test("a later panic's engage stays re-postable when an earlier engage's killed reply commits after its post", async () => {
+    // Panic A's engage is on the pipe and its killed reply has ARRIVED (mirror write in flight) when panic B posts
+    // its own engage. A's reply then commits: it confirms A, and it proves nothing about B, which was posted after it
+    // arrived. A reconnect must still re-post B; a brake that remembered one watermark for both forgot B here.
+    attach(collaborator);
+    route({ type: "confirm_deny_kill" }, confirmSender, () => {}); // panic A
+    const aReply = handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    route({ type: "confirm_deny_kill" }, confirmSender, () => {}); // panic B, posted uncorrelated
+    await aReply;
+    await vi.advanceTimersByTimeAsync(0);
+    collaborator.onDetach();
+    const frames: Array<Record<string, unknown>> = [];
+    attach(collaborator, (frame) => {
+      frames.push(frame as Record<string, unknown>);
+      return true;
+    });
+    expect(frames).toEqual([{ type: "kill_engage" }]);
+
+    // B's own reply settles it: no further re-post.
+    await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    collaborator.onDetach();
+    const afterConfirm: Array<Record<string, unknown>> = [];
+    attach(collaborator, (frame) => {
+      afterConfirm.push(frame as Record<string, unknown>);
+      return true;
+    });
+    expect(afterConfirm).toEqual([]);
+  });
+
+  test("a re-posted engage stays re-postable when the first host's killed reply commits after the re-post", async () => {
+    // The same late-commit class on the reconnect path: the engage's killed reply has ARRIVED (mirror write in
+    // flight) when the port drops and a fresh host receives the re-post. The old host's reply confirms the old post
+    // only; the re-post is unconfirmed, so a further reconnect must re-post again.
+    attach(collaborator);
+    route({ type: "confirm_deny_kill" }, confirmSender, () => {});
+    const reply = handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    collaborator.onDetach();
+    const second: Array<Record<string, unknown>> = [];
+    attach(collaborator, (frame) => {
+      second.push(frame as Record<string, unknown>);
+      return true;
+    });
+    expect(second).toEqual([{ type: "kill_engage" }]);
+    await reply;
+    await vi.advanceTimersByTimeAsync(0);
+    collaborator.onDetach();
+    const third: Array<Record<string, unknown>> = [];
+    attach(collaborator, (frame) => {
+      third.push(frame as Record<string, unknown>);
+      return true;
+    });
+    expect(third).toEqual([{ type: "kill_engage" }]);
   });
 
   test("a failed second panic cannot lift while the first panic's engage is outstanding", async () => {

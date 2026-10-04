@@ -23,6 +23,7 @@ import {
 } from "@chromium-bridge/shared/envelope.gen";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import type { Connection, PortCollaborator } from "./connection";
+import { inLife } from "./in-life";
 
 /** How long the host has to answer an admin control frame before the request
  * fails closed. Generous for a local round-trip; nothing here can raise a
@@ -38,14 +39,14 @@ export function isAdminFrame(msg: unknown): msg is AdminInboundFrame {
   return AdminInboundFrameSchema.safeParse(msg).success;
 }
 
-let conn: Connection | null = null;
+const conn = inLife<Connection | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
-    conn = c;
+    conn.value = c;
   },
   onDetach() {
-    conn = null;
+    conn.value = null;
     // The host died with the port; its replies can never arrive.
     failPending("native host disconnected");
   },
@@ -61,38 +62,38 @@ interface Pending<T> {
   timer: ReturnType<typeof setTimeout>;
 }
 
-let pendingList: Pending<ClientListView> | null = null;
-let pendingRevoke: Pending<RevokeClientView> | null = null;
+const pendingList = inLife<Pending<ClientListView> | null>(() => null);
+const pendingRevoke = inLife<Pending<RevokeClientView> | null>(() => null);
 
 function failPending(reason: string): void {
-  if (pendingList) {
-    clearTimeout(pendingList.timer);
-    pendingList.resolve({ ok: false, error: reason });
-    pendingList = null;
+  if (pendingList.value) {
+    clearTimeout(pendingList.value.timer);
+    pendingList.value.resolve({ ok: false, error: reason });
+    pendingList.value = null;
   }
-  if (pendingRevoke) {
-    clearTimeout(pendingRevoke.timer);
-    pendingRevoke.resolve({ ok: false, error: reason });
-    pendingRevoke = null;
+  if (pendingRevoke.value) {
+    clearTimeout(pendingRevoke.value.timer);
+    pendingRevoke.value.resolve({ ok: false, error: reason });
+    pendingRevoke.value = null;
   }
 }
 
 /** Ask the host for the trusted-client allowlist. */
 export function requestClientList(): Promise<ClientListView> {
-  const live = conn;
+  const live = conn.value;
   if (!live) return Promise.resolve({ ok: false, error: "native host not connected" });
-  if (pendingList) {
+  if (pendingList.value) {
     return Promise.resolve({ ok: false, error: "a client-list request is already in flight" });
   }
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      pendingList = null;
+      pendingList.value = null;
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, ADMIN_REQUEST_TIMEOUT_MS);
-    pendingList = { resolve, timer };
+    pendingList.value = { resolve, timer };
     if (!live.post({ type: "client_list" } satisfies ClientListWire)) {
       clearTimeout(timer);
-      pendingList = null;
+      pendingList.value = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });
     }
   });
@@ -103,20 +104,20 @@ export function requestClientList(): Promise<ClientListView> {
  * client's connections. The name was already validated by the runtime-message
  * schema; the host re-validates it at its own boundary. */
 export function revokeTrustedClient(name: string): Promise<RevokeClientView> {
-  const live = conn;
+  const live = conn.value;
   if (!live) return Promise.resolve({ ok: false, error: "native host not connected" });
-  if (pendingRevoke) {
+  if (pendingRevoke.value) {
     return Promise.resolve({ ok: false, error: "a revoke request is already in flight" });
   }
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      pendingRevoke = null;
+      pendingRevoke.value = null;
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, ADMIN_REQUEST_TIMEOUT_MS);
-    pendingRevoke = { resolve, timer };
+    pendingRevoke.value = { resolve, timer };
     if (!live.post({ type: "client_revoke", name } satisfies ClientRevokeWire)) {
       clearTimeout(timer);
-      pendingRevoke = null;
+      pendingRevoke.value = null;
       resolve({ ok: false, error: "failed to send the request to the native host" });
     }
   });
@@ -127,12 +128,12 @@ export function revokeTrustedClient(name: string): Promise<RevokeClientView> {
  * filter somehow missed) are dropped without touching any state. */
 export function handleAdminFrame(msg: AdminInboundFrame): void {
   if (msg.type === "client_list_result") {
-    const current = pendingList;
+    const current = pendingList.value;
     if (!current) {
       console.warn("[bb] dropping unsolicited client_list_result");
       return;
     }
-    pendingList = null;
+    pendingList.value = null;
     clearTimeout(current.timer);
     const parsed = ClientListResultSchema.safeParse(msg);
     if (!parsed.success) {
@@ -144,12 +145,12 @@ export function handleAdminFrame(msg: AdminInboundFrame): void {
     return;
   }
   // client_revoke_result
-  const current = pendingRevoke;
+  const current = pendingRevoke.value;
   if (!current) {
     console.warn("[bb] dropping unsolicited client_revoke_result");
     return;
   }
-  pendingRevoke = null;
+  pendingRevoke.value = null;
   clearTimeout(current.timer);
   const parsed = ClientRevokeResultSchema.safeParse(msg);
   if (!parsed.success) {

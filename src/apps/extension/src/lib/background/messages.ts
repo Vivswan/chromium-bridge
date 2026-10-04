@@ -32,12 +32,7 @@ import {
 } from "./allowlist-store";
 import { readRing } from "./audit-log";
 import { requestClientList, revokeTrustedClient } from "./clients";
-import {
-  denyAllConfirmations,
-  getPendingConfirm,
-  releasePanicDeny,
-  resolveConfirm,
-} from "./confirm/service";
+import { denyAllConfirmations, getPendingConfirm, resolveConfirm } from "./confirm/service";
 import {
   approvePending,
   getEnrollmentStatus,
@@ -46,13 +41,7 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
-import {
-  engageKill,
-  engageKillSwitch,
-  engageOutstanding,
-  requestKillStatus,
-  whenKillRevivesAfterRefusal,
-} from "./kill";
+import { engageKill, panicEngage, requestKillStatus } from "./kill";
 import { chooseLanguage } from "./policy-sync";
 import { isNativeConnected } from "./port";
 
@@ -122,35 +111,15 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   confirm_deny_kill: denyAndKill,
 };
 
-// The confirm window's panic exit: deny everything pending, then engage the
-// kill switch, as ONE worker-side step. denyAllConfirmations settles the
-// in-flight op false synchronously and latches new arrivals to auto-deny
-// before the kill frame is posted, so nothing races through while the brake
-// is in flight; and the deny tears the confirm window down, so a second send
-// from that dying document could be lost.
-//   engageKillSwitch, not engageKill  -> an in-flight status query cannot get the brake refused
-//   stale id                          -> changes nothing; whatever is pending is denied and the engage still goes out
-//   deny                              -> always accepted (capability reduction); hardware payloads refuse only APPROVALS
+// The confirm window's panic exit, ONE worker-side step. Deny first: the deny settles the in-flight op and tears the
+// window down, so by the time the engage is on the pipe nothing can approve it (deny-kill.test.ts asserts that
+// inside the post) and no second send from the dying document is needed. The latch and what lifts it are brake.ts.
+//   panicEngage, not engageKill  -> an in-flight status query cannot get the brake refused
+//   stale id                     -> changes nothing; whatever is pending is denied and the engage still goes out
 function denyAndKill(): Promise<RuntimeResponse<"confirm_deny_kill">> {
-  const panicEpoch = denyAllConfirmations();
-  // The latch lifts on exactly two proofs, epoch-scoped so a stale release
-  // from an EARLIER panic cannot lift this one. The stored kill mirror is never
-  // consulted: at panic time it can read a stale "killed" while a pending
-  // release is about to write "alive" with this engage still queued behind it.
-  //   alive AFTER a refusing state applied (host frames, pipe order)  -> this engage, or an equivalent cross-surface kill, landed;
-  //                                                                      only a presence-gated release produces that alive
-  //   engage never reached the pipe AND no other engage outstanding   -> nothing is in flight; the kill mirror tells the user the truth
-  //   timeout                                                         -> neither proof (the frame may still apply); the latch stays down
-  // Residual: a host silent forever leaves confirmations denying until the
-  // worker restarts, the fail-closed "kill everything".
-  void whenKillRevivesAfterRefusal().then(() => releasePanicDeny(panicEpoch));
-  return engageKillSwitch().then((r) => {
-    if (!r.ok && r.sent === false && !engageOutstanding()) {
-      releasePanicDeny(panicEpoch);
-      console.error("[bb] confirm-window kill engage failed", r.error);
-    } else if (!r.ok) {
-      console.error("[bb] confirm-window kill engage unconfirmed", r.error);
-    }
+  denyAllConfirmations();
+  return panicEngage().then((r) => {
+    if (!r.ok) console.error("[bb] confirm-window kill engage unconfirmed", r.error);
     return r;
   });
 }

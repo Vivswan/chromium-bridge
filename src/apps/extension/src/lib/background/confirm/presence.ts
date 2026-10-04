@@ -40,10 +40,11 @@ import type { Connection, PortCollaborator } from "../connection";
 import { getCompromised, getPin, setCompromised } from "../enclave-pin";
 import { generateNonce, hexEncode, verifyPresenceProofAgainstPin } from "../enclave-verify";
 import { platformCanEnroll } from "../enrollment";
+import { inLife } from "../in-life";
 import type { ConfirmationProvider, Presentation } from "./service";
 
 /** The live connection, or null while the link is down; compared by identity per Connection in ../connection.ts. */
-let conn: Connection | null = null;
+const conn = inLife<Connection | null>(() => null);
 
 /** One outstanding presence round. Single-flight by construction: the slot
  * is claimed SYNCHRONOUSLY (before any await), so a second same-tick round
@@ -69,15 +70,15 @@ type PendingRound =
       conn: Connection;
       settle: (approved: boolean) => void;
     };
-let pending: PendingRound | null = null;
+const pending = inLife<PendingRound | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
-    conn = c;
+    conn.value = c;
   },
   /** Port gone: the outstanding round can never complete - deny it. */
   onDetach() {
-    conn = null;
+    conn.value = null;
     cancelPending("native port disconnected");
   },
   onFrame(msg) {
@@ -88,8 +89,8 @@ export const collaborator: PortCollaborator = {
 };
 
 function cancelPending(why: string): void {
-  const round = pending;
-  pending = null;
+  const round = pending.value;
+  pending.value = null;
   if (round) {
     console.warn("[bb] presence round cancelled:", why);
     round.settle(false);
@@ -105,13 +106,13 @@ export function isPresenceFrame(msg: unknown): msg is PresenceInboundFrame {
  * no round outstanding is dropped (a late answer to a cancelled round, or a
  * confused host); the nonce it would have answered is already burned. */
 export function handlePresenceFrame(msg: unknown): void {
-  const round = pending;
+  const round = pending.value;
   if (!round) {
     console.warn("[bb] dropping presence frame with no round outstanding");
     return;
   }
   // Claim the round before any await: exactly one answer per round.
-  pending = null;
+  pending.value = null;
   if (round.stage === "preparing") {
     // An answer arrived before this round's challenge was even sent: nothing
     // can validly answer it, so deny. The setup still in flight notices its
@@ -165,7 +166,7 @@ export function handlePresenceFrame(msg: unknown): void {
     // both holes: if the live connection is no longer the exact object this
     // challenge was sent on, the op can no longer proceed on it, so a
     // stale-but-valid approval must not stand.
-    if (conn !== round.conn) {
+    if (conn.value !== round.conn) {
       console.warn("[bb] native port changed before the presence verdict; denying");
       round.settle(false);
       return;
@@ -224,13 +225,13 @@ export async function presenceRoutingEnabled(policy: PolicyValues): Promise<bool
  * would overwrite the first - orphaning its settle and letting its answer
  * verify against the wrong nonce. */
 function runRound(payload: ConfirmPayload): Promise<boolean> {
-  if (pending) {
+  if (pending.value) {
     // A second concurrent round should be impossible (the service
     // serializes); refuse it rather than corrupt the outstanding one.
     console.warn("[bb] refusing concurrent presence round");
     return Promise.resolve(false);
   }
-  const live = conn;
+  const live = conn.value;
   if (!live) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
     const claim: PendingRound = {
@@ -239,7 +240,7 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
       conn: live,
       settle: resolve,
     };
-    pending = claim;
+    pending.value = claim;
     // The round object THIS setup currently owns - advanced at the
     // preparing -> challenged transition, so the catch below can tell "my
     // round is still outstanding" from "the slot now holds someone ELSE's
@@ -247,7 +248,7 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
     let mine: PendingRound = claim;
     void (async () => {
       if (!(await presenceCapable())) {
-        if (pending === mine) pending = null;
+        if (pending.value === mine) pending.value = null;
         resolve(false);
         return;
       }
@@ -255,11 +256,11 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
       // The awaits above are a window where the claim can be settled out
       // from under us (a detach, a premature frame): only its owner may
       // advance it, and a settled claim must not send a challenge.
-      if (pending !== mine) return;
+      if (pending.value !== mine) return;
       // Defense in depth beside the verdict-time identity check: if the
       // connection this round was minted on is no longer the live one, the
       // challenge would go out on a stale connection - cancel the round instead.
-      if (conn !== live) {
+      if (conn.value !== live) {
         cancelPending("native port changed before the challenge was sent");
         return;
       }
@@ -270,7 +271,7 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
         conn: live,
         settle: resolve,
       };
-      pending = mine;
+      pending.value = mine;
       if (
         !live.post({
           type: "presence_challenge",
@@ -286,7 +287,7 @@ function runRound(payload: ConfirmPayload): Promise<boolean> {
       // since claimed the slot, a stale rejection landing here must leave
       // that successor untouched; the resolve backstop is idempotent.
       console.error("[bb] presence round setup failed; denying", e);
-      if (pending === mine) cancelPending("presence round setup failed");
+      if (pending.value === mine) cancelPending("presence round setup failed");
       resolve(false);
     });
   });
@@ -330,6 +331,6 @@ export class EnclavePresenceProvider implements ConfirmationProvider {
 
 /** Tests only: forget the connection and any outstanding round. */
 export function resetPresenceForTests(): void {
-  conn = null;
-  pending = null;
+  conn.reset();
+  pending.reset();
 }

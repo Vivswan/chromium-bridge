@@ -559,7 +559,7 @@ describe("the scope-stamped ratchet: pin transitions and same-key replay", () =>
     // Validate-before-prompt: the push can never commit (the pinned-anchor
     // preservation rule), so the user is never asked to burn an approval gesture on it,
     // and the refusal reaches the audit ring instead of dying as a throw
-    // swallowed by frameChain's silent catch.
+    // swallowed by handlePolicyFrame's silent catch.
     expect(consulted).not.toHaveBeenCalled();
     expect(
       auditCalls.events.some(
@@ -898,7 +898,7 @@ describe("policy consumption hardening: durable prior pin, sticky latch, ownersh
 
   test("an undo that itself fails still refuses and audits the race", async () => {
     // The undo is best-effort; the REFUSAL is not. If the restore throws and the
-    // exception escapes, frameChain's catch swallows it and the policy_refused
+    // exception escapes, handlePolicyFrame's catch swallows it and the policy_refused
     // audit never fires - the race would go unrecorded.
     const signer = await makeSigner();
     pinState.pin = { keyId: signer.keyId, pubkeyB64: signer.pubkeyB64, pinnedAt: 1 };

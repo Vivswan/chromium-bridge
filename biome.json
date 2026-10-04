@@ -31,6 +31,12 @@
       "arrowParentheses": "always"
     }
   },
+  "plugins": [
+    {
+      "path": "./src/apps/extension/lint/module-scope-let.grit",
+      "includes": ["**/extension/src/lib/background/**"]
+    }
+  ],
   "linter": {
     "enabled": true,
     "domains": {

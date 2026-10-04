@@ -5,6 +5,7 @@
 
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { AllowlistSchema, type PendingApproval } from "@chromium-bridge/shared/storage";
+import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import {
   globToPermissionPattern,
@@ -15,6 +16,7 @@ import {
 } from "../shared/allowlist";
 import { getSetting } from "../shared/settings";
 import { BADGE_PENDING_COLOR } from "../shared/theme-colors";
+import { inLife } from "./in-life";
 
 const STORAGE_KEY = "allowlist";
 
@@ -100,20 +102,15 @@ interface PendingResolver {
 // records out of the popup, and the next sync sweeps them from storage.
 const pendingAllowRequests = new Map<string, PendingResolver>();
 
-// Mirror writes are serialized (the audit-log idiom) so two same-tick
-// mutations cannot land their storage snapshots out of order; each step
-// snapshots the map at write time, so the last write reflects the newest
-// state.
-let mirrorChain: Promise<void> = Promise.resolve();
-/** Re-derive the persisted popup record and the badge from the resolver map
- * (the single source of truth). Exported so SW startup can call it once with
- * an EMPTY map: that sweeps a ghost record a previous worker life left in
- * storage - whether it is the current shape (its resolver died with the
- * worker) or an old/unparsable shape (which would otherwise leave the badge
- * stuck at "!" and let the popup's Allow request a host permission for an
- * origin the SW then refuses). */
+// Mirror writes run one at a time so two same-tick mutations cannot land their storage snapshots out of order; each
+// step snapshots the map at write time, so the last write reflects the newest state.
+const mirrorWrites = inLife(() => pLimit(1));
+/** Re-derive the persisted popup record and the badge from the resolver map (the single source of truth). Exported so
+ * SW startup can call it once with an EMPTY map: that sweeps a ghost record a previous worker life left in storage,
+ * whether the current shape (its resolver died with the worker) or an old/unparsable one (which would otherwise leave
+ * the badge stuck at "!" and let the popup's Allow request a host permission for an origin the SW then refuses). */
 export function syncPendingMirror(): Promise<void> {
-  mirrorChain = mirrorChain.then(async () => {
+  return mirrorWrites.value(async () => {
     try {
       const pending: PendingApproval[] = [...pendingAllowRequests.entries()].map(([id, p]) => ({
         id,
@@ -135,7 +132,6 @@ export function syncPendingMirror(): Promise<void> {
       console.warn("[bb] pending-approval mirror update failed", e);
     }
   });
-  return mirrorChain;
 }
 
 /** Claim one outstanding approval - SYNCHRONOUSLY, before any await, so the

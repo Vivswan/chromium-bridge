@@ -1,11 +1,11 @@
 // The extension half of the kill switch: a service-worker-only mirror of the host's kill state, and the
 // control-frame plumbing that reads and toggles it.
 //
-// The host's revocation record is the AUTHORITY; the mirror only lets the extension's own gate refuse ops locally
-// while killed (defense in depth, and correct UI even if the SW slept through the transition) and lets the options
-// page render the state. It is written ONLY from the host's kill_status_result frames, never from a runtime
-// message: the router relays get_kill/set_kill to the host, which decides and answers with the resulting state,
-// and the storage is confined to trusted contexts (trusted-storage.ts), so a page can neither read nor plant it.
+// The host's trust record is the AUTHORITY; the mirror only lets the extension's own gate refuse ops locally while
+// killed (defense in depth, and correct UI even if the SW slept through the transition) and lets the options page
+// render the state. It is written ONLY from the host's kill_status_result frames, never from a runtime message: the
+// router relays get_kill/set_kill to the host, which decides and answers with the resulting state, and the storage is
+// confined to trusted contexts (trusted-storage.ts), so a page can neither read nor plant it.
 //
 // Gate verdict per stored value; fail closed on everything but a positive "alive":
 //   absent           -> allowed (never heard from a host; a fresh install must not be bricked, the host enforces)
@@ -16,6 +16,7 @@
 //
 // port.ts drives `collaborator` (the connection, then every kill_status_result frame); messages.ts routes the
 // options-page actions here. Unsolicited results update the mirror; solicited ones also resolve the pending request.
+// The panic brake, its latch, and the re-post watermark are brake.ts.
 
 import {
   isKillStatusFrame,
@@ -27,10 +28,12 @@ import type {
   KillStatusResult,
   KillStatusWire,
 } from "@chromium-bridge/shared/envelope.gen";
-import { unreachable } from "@chromium-bridge/shared/util";
+import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
+import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";
 import type { Connection, PortCollaborator } from "./connection";
+import { inLife } from "./in-life";
 
 const KILL_MIRROR_KEY = "bridgeKillMirror";
 
@@ -40,8 +43,7 @@ const KILL_REQUEST_TIMEOUT_MS = 10_000;
 
 export type KillGate = { allowed: true } | { allowed: false; reason: string };
 
-/** The mirror's verdict for the request gate. Pure over the stored value so
- * the fail-closed matrix is unit-testable. */
+/** The mirror's verdict for the request gate. Pure over the stored value so the fail-closed matrix is unit-testable. */
 export function killGateFromStored(value: unknown): KillGate {
   if (value === undefined) return { allowed: true };
   const parsed = KillMirrorSchema.safeParse(value);
@@ -74,8 +76,7 @@ export function killGateFromStored(value: unknown): KillGate {
   }
 }
 
-/** Read the mirror and gate on it. Consulted by the enrollment gate before
- * every dispatched bridge request. */
+/** Read the mirror and gate on it. Consulted by the enrollment gate before every dispatched bridge request. */
 export async function killGate(): Promise<KillGate> {
   const { [KILL_MIRROR_KEY]: value } = await browser.storage.local.get(KILL_MIRROR_KEY);
   return killGateFromStored(value);
@@ -90,11 +91,9 @@ export async function getKillMirror(): Promise<KillMirror | null> {
 
 async function setMirror(state: KillMirror["state"]): Promise<void> {
   const previous = await getKillMirror();
-  // Unchanged state writes nothing: `at` means "when the mirror last
-  // CHANGED", and an idempotent rewrite would retrigger every
-  // storage.onChanged consumer (the options panel refreshes on the mirror
-  // and queries the host, whose reply lands here - rewriting unchanged
-  // state would close that loop into an infinite query cycle).
+  // An unchanged state writes nothing: `at` means "when the mirror last CHANGED", and the options panel refreshes on
+  // every storage.onChanged and queries the host, whose reply lands here, so an idempotent rewrite would close that
+  // loop into an infinite query cycle.
   if (previous?.state === state) return;
   await browser.storage.local.set({
     [KILL_MIRROR_KEY]: { state, at: Date.now() } satisfies KillMirror,
@@ -105,32 +104,28 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 
 // ---- port plumbing (mirrors clients.ts) --------------------------------------
 
-/** Closed over the GENERATED wire types (envelope.gen.ts <- protocol/control.rs), so a typo'd frame type is a
- * compile error rather than an op the engage-arming switch in request() silently misses. Inbound kill_status_result
- * frames are classified by isKillStatusFrame in the collaborator; nothing malformed reaches handleKillFrame.
- *   kill_release  -> deliberately absent: the host refuses it from the extension; release lives in the CLI */
+/** Closed over the GENERATED wire types (envelope.gen.ts <- protocol/control.rs), so a typo'd frame type is a compile
+ * error rather than a frame the host drops. kill_release is deliberately absent: the host refuses it from the
+ * extension; release lives in the CLI. */
 export type KillControlFrame = KillStatusWire | KillEngageWire;
 
-let conn: Connection | null = null;
+const ENGAGE = { type: "kill_engage" } satisfies KillControlFrame;
+
+const conn = inLife<Connection | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
-    conn = c;
-    // At-least-once for the panic brake: an engage handed to a port that died UNCONFIRMED (no authoritative killed
-    // frame arrived) is re-asserted on the fresh host, so a dying host cannot drop the brake silently. Host-side it
-    // is idempotent (re-engaging re-bumps the epoch) and audited.
-    //   user released in the gap  -> the re-assert re-kills; visible friction beats a lost kill
-    //   the SW dies too           -> the flag is module state, so the brake is lost after restart (nothing durable re-arms)
-    if (unconfirmedEngageSeq !== null) {
+    conn.value = c;
+    // At-least-once for the brake: an engage the previous host never confirmed is re-asserted on the fresh one, so a
+    // dying host cannot drop it silently (host-side it is idempotent and audited). A failed re-post leaves it
+    // outstanding, so the next attach retries; the SW's own death loses it, since nothing durable re-arms.
+    if (engageOutstanding()) {
       auditEvent("kill_engaged", { outcome: "requested" });
-      if (c.post({ type: "kill_engage" } satisfies KillControlFrame)) {
-        unconfirmedEngageSeq = frameArrivals;
-      }
-      // A failed re-post keeps the flag armed: the next attach retries.
+      if (c.post(ENGAGE)) advance({ type: "engage-posted" });
     }
   },
   onDetach() {
-    conn = null;
+    conn.value = null;
     failPending("native host disconnected");
   },
   onFrame(msg) {
@@ -142,15 +137,11 @@ export const collaborator: PortCollaborator = {
 
 export interface KillView {
   ok: boolean;
-  /** Whether the request frame was handed to the host's port. false means
-   * nothing was ever put on the pipe; ABSENT or true means the frame may
-   * still be applied by the host even when `ok` is false (a timeout, a
-   * disconnect after the post, a failed mirror write), so consumers
-   * deciding "is the exchange dead?" must treat only an explicit false as
-   * dead (fail closed). */
+  /** Whether the request frame was handed to the host's port. false means nothing was ever put on the pipe; ABSENT
+   * or true means the frame may still be applied by the host even when `ok` is false (a timeout, a disconnect after
+   * the post, a failed mirror write). */
   sent?: boolean;
-  /** The resulting/last-known state ("alive" | "killed" | "unknown"), plus
-   * when the mirror last changed. */
+  /** The resulting/last-known state ("alive" | "killed" | "unknown"), plus when the mirror last changed. */
   state?: KillMirror["state"];
   at?: number;
   error?: string;
@@ -161,225 +152,124 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
 }
 
-let pending: Pending | null = null;
+const pending = inLife<Pending | null>(() => null);
 
 function failPending(reason: string): void {
-  if (pending) {
-    clearTimeout(pending.timer);
-    // sent:true - a pending exchange only exists once its frame was handed
-    // to the port (a failed post clears the slot synchronously), so a
-    // disconnect here is AMBIGUOUS: the host may have applied the frame
-    // before dying. Reporting sent:false would let the panic path treat a
-    // maybe-applied engage as never-sent and lift the latch.
-    pending.resolve({ ok: false, sent: true, error: reason });
-    pending = null;
+  const current = pending.value;
+  if (!current) return;
+  clearTimeout(current.timer);
+  // sent:true - a pending exchange only exists once its frame was handed to the port (a failed post clears the slot
+  // synchronously), so the host may have applied the frame before the disconnect.
+  current.resolve({ ok: false, sent: true, error: reason });
+  pending.value = null;
+}
+
+/** The send outcome plus the last-known mirror. Never rejects: a view that could not read storage still settles,
+ * as ok:false, so no caller (the options page, the panic path) is stranded on a failed read. */
+async function mirrorView(ok: boolean, sent: boolean, error?: string): Promise<KillView> {
+  try {
+    const mirror = await getKillMirror();
+    return { ok, sent, state: mirror?.state, at: mirror?.at, error };
+  } catch {
+    return { ok: false, sent, error: "kill state storage is unreadable" };
   }
 }
 
-async function mirrorView(ok: boolean, sent: boolean, error?: string): Promise<KillView> {
-  const mirror = await getKillMirror();
-  return { ok, sent, state: mirror?.state, at: mirror?.at, error };
-}
-
-/** One kill request (status query or engage) over the port. One request
- * outstanding at a time; the host replies in order on a single pipe. */
+/** One kill request (status query or engage) over the port. One request outstanding at a time; the host replies in
+ * order on a single pipe. `posted` is known in the same synchronous turn so the caller can anchor the brake at it. */
 function request(
   frame: KillControlFrame,
   timeoutMs: number = KILL_REQUEST_TIMEOUT_MS,
-): Promise<KillView> {
-  const live = conn;
+): { posted: boolean; view: Promise<KillView> } {
+  const live = conn.value;
   if (!live) {
-    return mirrorView(false, false, "native host not connected");
+    return { posted: false, view: mirrorView(false, false, "native host not connected") };
   }
-  if (pending) {
-    return Promise.resolve({
-      ok: false,
-      sent: false,
-      error: "a kill-switch request is already in flight",
-    });
+  if (pending.value) {
+    return {
+      posted: false,
+      view: Promise.resolve({
+        ok: false,
+        sent: false,
+        error: "a kill-switch request is already in flight",
+      }),
+    };
   }
-  return new Promise((resolve) => {
+  let posted = false;
+  const view = new Promise<KillView>((resolve) => {
     const timer = setTimeout(() => {
-      pending = null;
-      // sent:true - the frame is on the pipe and the host may still apply
-      // it; a timeout is silence, not proof of death.
+      pending.value = null;
+      // sent:true - the frame is on the pipe and the host may still apply it; a timeout is silence, not proof of death.
       void mirrorView(false, true, "no reply from the native host (timed out)").then(resolve);
     }, timeoutMs);
-    pending = { resolve, timer };
-    if (!live.post(frame)) {
+    pending.value = { resolve, timer };
+    posted = live.post(frame);
+    if (!posted) {
       clearTimeout(timer);
-      pending = null;
+      pending.value = null;
       void mirrorView(false, false, "failed to send the request to the native host").then(resolve);
-    } else {
-      // Exhaustive over the closed union: adding another control frame
-      // forces a decision here about whether it arms the re-post.
-      switch (frame.type) {
-        case "kill_engage":
-          // Arm the at-least-once re-post (see collaborator.onAttach) for EVERY engage
-          // that actually reached the pipe, whichever surface posted it.
-          // Armed only on success, in the same synchronous turn as the post,
-          // so the flag being set always means "a real engage is
-          // outstanding".
-          unconfirmedEngageSeq = frameArrivals;
-          break;
-        case "kill_status":
-          break;
-        default:
-          unreachable(frame);
-      }
     }
   });
+  return { posted, view };
 }
 
-/** The options page's status read: last-known mirror plus a live host query
- * when the port is up (which also refreshes the mirror). */
+/** The options page's status read: last-known mirror plus a live host query when the port is up (which also
+ * refreshes the mirror). */
 export function requestKillStatus(): Promise<KillView> {
-  return request({ type: "kill_status" });
+  return request({ type: "kill_status" }).view;
 }
 
-// ---- panic-latch support (the confirm window's deny-and-kill engage) ---------
-
-// Arrival counter for inbound kill_status_result frames, stamped in
-// handleKillFrame BEFORE the serialized processing chain: SW storage writes
-// interleave at awaits, so "processed after the panic subscribed" is NOT the
-// same as "arrived after the panic subscribed" - a pre-panic frame whose
-// mirror write was still in flight when the panic landed would otherwise
-// masquerade as post-panic evidence.
-let frameArrivals = 0;
-
-// The single panic waiter; a newer panic REPLACES the older one (its promise never settles, and its epoch-scoped
-// release in the router would be a no-op anyway), which also keeps waiters from accumulating in one SW lifetime.
-//
-// Frame-driven ONLY: at panic time the stored mirror can read a stale "killed" while a pending release is about to
-// write "alive" with the panic's own engage still queued behind it. Only frames that ARRIVED after the subscribe
-// count (afterSeq); the subscribe and the engage post share one synchronous turn, so that is counting from the post.
-//   refusal: an authoritative "killed" arrives   -> the engage (or an equivalent cross-surface kill) provably applied
-//   release: a LATER authoritative "alive"        -> only a presence-gated release produces it; confirmations may resume
-//   "unknown"                                     -> not a refusal: it also covers the engage failing host-side (ok:false)
-//
-// Residual: a cross-surface kill push already in flight when the panic lands can count as the refusal one frame early,
-// and a repeat panic anchored at an EARLIER outstanding engage can lift on a release landing before its own engage
-// settles. Both need a presence-gated release racing the brake; no page, content script, or MCP client can mint
-// either frame (router sender gate, server-leg control-frame drop). A replaced host binary could forge them, but
-// that same-user boundary already owns the bridge; see docs/security/trust-boundaries.md.
-let panicWaiter: { afterSeq: number; sawRefusal: boolean; resolve: () => void } | null = null;
-
-// The watermark of a panic engage that was handed to a port but has not yet
-// been CONFIRMED by an authoritative "killed" frame that arrived after it.
-// collaborator.onAttach re-posts while this is armed (at-least-once, see there); only
-// a killed arrival after the watermark disarms it ("unknown" may mean the
-// engage failed host-side and applied nothing).
-let unconfirmedEngageSeq: number | null = null;
-
-/** Resolves once the kill state - via host frames alone - has authoritatively
- * read killed (the engage applied) and then alive again (an explicit,
- * presence-gated release). May never resolve in a session where the engage
- * never lands or the switch is never released - the caller pairs it with the
- * exchange's send-failure path, and an unresolved waiter just leaves the
- * panic latch denying confirmations, which is the fail-closed posture. */
-export function whenKillRevivesAfterRefusal(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    // Anchor at the OUTSTANDING engage's post when one is in flight: that engage IS the brake this panic wants
-    // (its own post may even fail), so frames after ITS post are valid settlement evidence. Otherwise a refusal
-    // that arrived before this subscribe would be ignored and a send-failure panic could deny confirmations
-    // forever, past the explicit release. With nothing outstanding, the subscribe and this panic's engage post
-    // share one synchronous turn, so counting from here counts from the post.
-    const afterSeq = unconfirmedEngageSeq ?? frameArrivals;
-    panicWaiter = { afterSeq, sawRefusal: false, resolve };
-  });
-}
-
-/** Advance the panic waiter on one authoritative, mirror-committed state.
- * `seq` is the frame's ARRIVAL stamp; frames that predate the waiter's
- * subscription are ignored (they prove nothing about the panic's engage). */
-function advancePanicWaiter(state: KillMirror["state"], seq: number): void {
-  if (state === "killed" && unconfirmedEngageSeq !== null && seq > unconfirmedEngageSeq) {
-    // The brake (or an equivalent kill) provably applied after the engage was posted: nothing to re-assert on
-    // reconnect. Only "killed" disarms; "unknown" also covers the host answering ok:false (the kill write FAILED),
-    // and disarming on it would let a dying-then-recovering host swallow the brake.
-    unconfirmedEngageSeq = null;
-  }
-  if (!panicWaiter || seq <= panicWaiter.afterSeq) return;
-  if (state === "killed") {
-    panicWaiter.sawRefusal = true;
-    return;
-  }
-  if (state === "alive" && panicWaiter.sawRefusal) {
-    const waiter = panicWaiter;
-    panicWaiter = null;
-    waiter.resolve();
-  }
-  // "unknown" advances nothing: it is not proof the engage applied (the host may have failed to WRITE the kill),
-  // and counting it as the refusal would let a later plain alive read lift the latch with no presence-gated release.
-  // The gate refuses on the unknown mirror regardless, so waiting stays fail closed.
-}
-
-/** Engage the switch - the ONLY transition this extension can request (the host
- * refuses kill_release from the extension, so no release lane exists here;
- * release lives behind `chromium-bridge unkill`'s presence gate). The host
- * performs the transition (and audits it, surface=extension); the mirror adopts
- * the host's answer. The caller was already gated: the router accepts set_kill
- * only from extension pages, and its schema pins `on` to `true`, so a page can
- * NEVER reach this and a release cannot even be expressed. */
+/** Engage the switch, the ONLY transition this extension can request: the host refuses kill_release from the
+ * extension, so release lives behind `chromium-bridge unkill`'s presence gate. The host performs the transition (and
+ * audits it, surface=extension); the mirror adopts the host's answer. The router accepts set_kill only from extension
+ * pages and its schema pins `on` to true, so a page can neither reach this nor express a release. */
 export function engageKill(): Promise<KillView> {
   // Local ring only: the host records the authoritative kill_engage.
   auditEvent("kill_engaged", { outcome: "requested" });
-  return request({ type: "kill_engage" });
+  const { posted, view } = request(ENGAGE);
+  if (posted) advance({ type: "engage-posted" });
+  return view;
 }
 
-/** The panic engage (the confirm window's deny-and-kill): never refused because another kill exchange
- * (the startup status query, an options-page read) holds the single request slot. With the slot free this is
- * engageKill(); with it occupied the engage is posted anyway, uncorrelated, which is safe because the control frames
- * carry no ids and the host applies them in arrival order on one pipe: the pending exchange settles with equally
- * authoritative state, and an engage racing a host-side release (CLI unkill) still lands AFTER it (final state: killed).
- *
- *   returned view    -> the SEND outcome plus the last-known mirror, never the engage's result (the mirror carries that)
- *   successful post  -> arms the at-least-once re-post (collaborator.onAttach); only a killed frame arriving after it disarms
- *   port down        -> ok: false; nothing can drive the browser through a dead port either */
-export function engageKillSwitch(): Promise<KillView> {
-  if (!pending) return engageKill();
+/** The confirm window's panic engage: never refused because another exchange (the startup status query, an
+ * options-page read) holds the single request slot.
+ *   slot free      -> engageKill's exchange under the brake's panic event; the view carries the host's answer
+ *   slot occupied  -> the engage is posted uncorrelated and the view is the SEND outcome plus the last-known mirror
+ * The uncorrelated post is safe because the control frames carry no ids and the host applies them in arrival order on
+ * one pipe: the pending exchange settles with equally authoritative state, and an engage racing a host-side release
+ * still lands after it. */
+export function panicEngage(): Promise<KillView> {
   auditEvent("kill_engaged", { outcome: "requested" });
-  if (!conn) return mirrorView(false, false, "native host not connected");
-  if (!conn.post({ type: "kill_engage" } satisfies KillControlFrame)) {
-    return mirrorView(false, false, "failed to send the request to the native host");
+  if (!pending.value) {
+    const { posted, view } = request(ENGAGE);
+    advance({ type: "panic", posted });
+    return view;
   }
-  // Armed only AFTER the successful post (same synchronous turn, so no
-  // frame can interleave): a set flag always means a real engage is on the
-  // pipe, which is what engageOutstanding's callers rely on.
-  unconfirmedEngageSeq = frameArrivals;
-  return mirrorView(true, true);
+  const live = conn.value;
+  const posted = live?.post(ENGAGE) ?? false;
+  advance({ type: "panic", posted });
+  if (posted) return mirrorView(true, true);
+  return mirrorView(
+    false,
+    false,
+    live ? "failed to send the request to the native host" : "native host not connected",
+  );
 }
 
-/** Whether a successfully posted engage is still unconfirmed - no
- * authoritative killed frame has arrived since it went out (on this port or
- * a reconnect's re-post). While true, one exchange's "my send failed"
- * proves nothing globally: some engage may still apply, so the panic latch
- * must not lift on that failure alone. */
-export function engageOutstanding(): boolean {
-  return unconfirmedEngageSeq !== null;
-}
+// Frames apply strictly in arrival order: SW event handlers interleave at awaits, and two overlapping handlers could
+// otherwise finish their storage writes in the wrong order and leave the mirror on the OLDER state.
+const frames = inLife(() => pLimit(1));
 
-// Frames are processed strictly in arrival order: SW event handlers
-// interleave at awaits, so two overlapping handleKillFrame calls could
-// otherwise finish their storage writes in the wrong order and leave the
-// mirror on the OLDER state (e.g. "alive" surviving a later "killed").
-let frameChain: Promise<void> = Promise.resolve();
-
-/** Route one inbound kill_status_result: update the mirror (every result is
- * authoritative, solicited or pushed), then resolve a pending request if one
- * was outstanding when the frame arrived. Serialized via the chain above;
- * the arrival stamp is taken HERE, before the chain, so the panic waiter
- * can tell pre-panic frames (stamped low, however late their storage write
- * completes) from genuinely post-panic evidence. */
+/** Route one inbound kill_status_result: update the mirror (every result is authoritative, solicited or pushed), then
+ * resolve a pending request if one was outstanding when the frame arrived. Stamped before the lane (brake.ts says
+ * why). */
 export function handleKillFrame(msg: KillStatusResult): Promise<void> {
-  frameArrivals += 1;
-  const seq = frameArrivals;
-  frameChain = frameChain
-    .then(() => handleOneKillFrame(msg, seq))
+  const seq = stampArrival();
+  return frames
+    .value(() => handleOneKillFrame(msg, seq))
     .catch((e) => {
       console.warn("[bb] kill frame handling failed", e);
     });
-  return frameChain;
 }
 
 async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<void> {
@@ -390,57 +280,41 @@ async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<v
   // Pushes and replies are not correlated (the control frames have no ids): a cross-surface push mid-request settles
   // the request one frame early with the push's state. Safe by construction: nothing enforcing reads the returned
   // view (the gate reads the mirror, which applies every frame in order) and the panel re-renders from the mirror.
-  const current = pending;
-  pending = null;
+  const current = pending.value;
+  pending.value = null;
   if (current) clearTimeout(current.timer);
 
-  // ok:false = the host cannot read its own state: unknown, which the gate
-  // refuses.
+  // ok:false = the host cannot read its own state: unknown, which the gate refuses.
   const state: KillMirror["state"] =
     msg.ok && typeof msg.killed === "boolean" ? (msg.killed ? "killed" : "alive") : "unknown";
   let stored = false;
   try {
     await setMirror(state);
     stored = true;
-    // Only after a successful write: the waiter's contract is "the STORED
-    // state now reads this" (what killGate enforces on), not "a frame
-    // claiming it was seen".
-    advancePanicWaiter(state, seq);
+    // Committed frames only (brake.ts, the frame event).
+    advance({ type: "frame", state, seq });
   } finally {
-    // The pending exchange must always settle, even when the mirror write
-    // throws - stranding the caller would leave its consumer (the panic
-    // path, the options page) hanging instead of failing closed. A failed
-    // write settles ok:false: reporting ok:true over the STALE mirror would
-    // hand the caller a state the gate is not actually enforcing.
+    // The pending exchange must always settle, even when the mirror write throws: stranding the caller would leave
+    // its consumer (the options page) hanging instead of failing closed. A failed write settles ok:false, since
+    // ok:true over the STALE mirror would hand the caller a state the gate is not actually enforcing.
     if (current) {
-      if (!stored) {
-        current.resolve({
-          ok: false,
-          sent: true,
-          error: "the kill-switch mirror could not be written; state unknown",
-        });
-      } else {
-        // mirrorView is itself a storage read, so its failure must not
-        // strand the caller either.
-        try {
-          current.resolve(await mirrorView(msg.ok, true, msg.error));
-        } catch {
-          current.resolve({ ok: false, sent: true, error: "kill state storage is unreadable" });
-        }
-      }
+      current.resolve(
+        stored
+          ? await mirrorView(msg.ok, true, msg.error)
+          : {
+              ok: false,
+              sent: true,
+              error: "the kill-switch mirror could not be written; state unknown",
+            },
+      );
     }
   }
 }
 
-/** Tests only: forget port + pending so suites can drive both paths. */
+/** Tests only: forget the port, the pending exchange, the frame lane, and the brake. */
 export function resetKillForTests(): void {
-  conn = null;
+  conn.reset();
   failPending("test reset");
-  pending = null;
-  frameChain = Promise.resolve();
-  panicWaiter = null;
-  unconfirmedEngageSeq = null;
-  // frameArrivals is deliberately NOT reset: it stays monotonic across
-  // resets so a stale still-running handler from a previous test (its seq
-  // stamped before the reset) can never outrank a new waiter's afterSeq.
+  frames.reset();
+  resetBrakeForTests();
 }
