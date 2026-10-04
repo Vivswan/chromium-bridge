@@ -86,22 +86,23 @@ The bridge auth gates, in order:
 
 ## Platform support
 
-The strong bridge guarantees hold on macOS and Linux only. Windows support is best-effort.
+The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind each differs per OS.
 
 | Mechanism | macOS and Linux | Windows |
 |-----------|-----------------|---------|
-| Transport | Unix-domain socket, no listening port, created 0600 inside a 0700 per-user directory | Loopback TCP socket any process on the machine can reach |
-| Peer-UID check | The server rejects any peer whose UID differs from its own | Not compiled in |
-| Executable attestation | Both ends kernel-attest that the other side is running this exact binary, before the HMAC handshake (Linux: SHA256 of `/proc/<pid>/exe`; macOS: the running image's code-directory hash) | Not compiled in |
-| HMAC challenge-response | One gate of four | The only gate |
-| Harness admission | Enforced on the attested identity | Unenforced (there is no attestation to key it on) |
+| Transport | Unix-domain socket, no listening port, created 0600 inside a 0700 per-user directory | Named pipe in the local pipe namespace, no listening port; every instance carries a security descriptor only the current user can open, and remote clients are rejected |
+| Same-user check | The server rejects any peer whose UID differs from its own | The kernel enforces the pipe's descriptor at open, before the connection exists |
+| Executable attestation | Both ends kernel-attest that the other side is running this exact binary, before the HMAC handshake (Linux: SHA256 of `/proc/<pid>/exe`; macOS: the running image's code-directory hash) | Both ends attest the other side before the HMAC handshake: the pid the kernel recorded for the pipe peer, then the SHA256 of the image file that pid runs (re-opened by path; see the residual below) |
+| HMAC challenge-response | One gate of four | One gate of four |
+| Harness admission | Enforced on the attested identity | Enforced on the attested identity: the image hash plus the Authenticode publisher (the signer's X.500 subject) in the Team ID slot |
 | Lock file (the per-run secret) | 0600 | No explicit restrictive mode; confidentiality rests on the default permissions of the per-user runtime directory |
 
-What that means on Windows:
+What differs on Windows:
 
-- The runtime directory is normally `%LOCALAPPDATA%\chromium-bridge`, falling back to the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset.
-- The non-abuse goal stated in the threat model (another program you are running must not be able to drive the bridge silently) does not hold: any same-user process that reads the lock file can authenticate.
-- The server logs a prominent warning at startup. Treat the bridge accordingly there.
+- The runtime directory is normally `%LOCALAPPDATA%\chromium-bridge`, falling back to the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset; the temp directory is not guaranteed per-user.
+- The image is measured by re-opening its path, so a running image renamed and replaced at its path is a residual the [threat model](../docs/security/threat-model.md#residual-risks-accepted-tracked) records.
+- The parent pid Windows records is caller-selectable at `CreateProcess`, so a same-user launcher can start the server under a paired harness's pid; the threat model records that residual too.
+- The publisher is read from the embedded Authenticode signature with no revocation check; a catalog-signed image (most of Windows itself) anchors by hash alone.
 - The full scoping is in the [threat model](../docs/security/threat-model.md) and [trust boundaries](../docs/security/trust-boundaries.md) docs.
 
 The Touch ID presence gates are macOS-only by nature; other platforms use the documented interactive fail-closed floors.
