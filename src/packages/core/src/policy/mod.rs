@@ -343,15 +343,15 @@ macro_rules! policy_fields {
         #[serde(deny_unknown_fields)]
         pub struct PolicyOverlay {
             $(
-                #[serde(rename = $bw, default, skip_serializing_if = "Option::is_none")]
+                #[serde(rename = $bw, skip_serializing_if = "Option::is_none")]
                 pub $bf: Option<bool>,
             )+
             $(
-                #[serde(rename = $mw, default, skip_serializing_if = "Option::is_none")]
+                #[serde(rename = $mw, skip_serializing_if = "Option::is_none")]
                 pub $mf: Option<Ms>,
             )+
             $(
-                #[serde(rename = $tw, default, skip_serializing_if = "Option::is_none")]
+                #[serde(rename = $tw, skip_serializing_if = "Option::is_none")]
                 pub $tf: Option<Vec<String>>,
             )+
         }
