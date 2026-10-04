@@ -23,7 +23,7 @@ The smoke and integration tests launch a **non-headless Chrome with `--load-exte
 - Inside a container (an engine marker file such as `/.dockerenv` or `/run/.containerenv` is present) the guard also accepts the distro Chromium the CI image carries; on the host it never does.
 - If `CHROME_BIN` is unset (or points at the standard `Google Chrome.app` / `chrome.exe`), the tests and `run_all.ts` **skip** instead of running - they will not touch your daily Chrome.
 - The tests only ever terminate the browser instance they launched - never a broad/pattern process kill.
-- In CI that local skip must never turn the required browser job silently green, so two variables harden it there (`browser-safety.ts`; unit tests in `browser-safety.test.ts`): `BB_REQUIRE_BROWSER=1` makes the skip a hard failure, and `BB_BROWSER_CANARY_DIR` makes every finished suite drop a RAN marker that a final job step requires - a suite that skipped, or passed zero checks, fails the job. Neither variable is needed locally.
+- In CI that local skip must never turn the required browser job silently green, so `browser.yml` sets two independent switches for `browser/run_all.ts` (`browser-safety.ts`; unit tests in `browser-safety.test.ts`): `BB_REQUIRE_BROWSER=1` makes the guard's skip a hard failure, and a named `BB_BROWSER_CANARY_DIR` makes the runner require every suite's RAN marker and fail on its own skip. Neither variable is needed locally.
 
 ```sh
 export CHROME_BIN="/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
@@ -32,16 +32,17 @@ export CHROME_BIN="/Applications/Google Chrome for Testing.app/Contents/MacOS/Go
 ## Running
 
 ```sh
-# Everything (builds the binary + extension first; skips browser tests if
-# Chrome is missing). This is what CI runs.
+# The three browser suites (builds the extension first; skips without an
+# isolated CHROME_BIN). CI's browser.yml and the container run this runner.
 bun browser/run_all.ts
 CHROME_BIN="/path/to/chrome" bun browser/run_all.ts   # override Chrome location
 
 # Individually:
 uv run --no-project --isolated protocol/e2e.py   # protocol - no browser needed
-# (or: moon run test-e2e / test-adversarial / test-chaos - CI's three python jobs)
-bun run --cwd browser test:dom              # DOM     - bun + Chrome
-bun run --cwd browser test:smoke            # smoke   - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
+# (or: moon run test-e2e / test-adversarial / test-chaos - CI's protocol matrix)
+bun run --cwd browser test:dom              # DOM      - bun + Chrome
+bun run --cwd browser test:smoke            # smoke    - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
+bun run --cwd browser test:security         # security - bun + Chrome
 ```
 
 The browser suites read the **built** bundle, so build the extension first (`bun run --cwd ../src/apps/extension build`); `run_all.ts` and `moon run test-browser` do this for you.
