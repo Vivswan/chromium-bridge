@@ -585,7 +585,6 @@ impl Session {
             let req = BridgeReq {
                 id,
                 command,
-                tab_id: None,
                 browser: Some(label),
             };
             if let Err(e) = bridge_write(&mut conn.writer, &req) {

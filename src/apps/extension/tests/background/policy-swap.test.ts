@@ -146,9 +146,12 @@ function autoProvider(approve: boolean) {
   return asked;
 }
 
+// The fake browser starts with no focused window, so the active-tab query
+// the page tools run finds nothing until a focused window holds the tab.
 async function makeTab(url = "https://example.com/x") {
   await fakeBrowser.storage.local.set({ allowAllSites: true });
-  const tab = await fakeBrowser.tabs.create({ url });
+  await fakeBrowser.windows.create({ focused: true });
+  const tab = await fakeBrowser.tabs.create({ url, active: true });
   if (tab.id == null) throw new Error("fake tab has no id");
   return tab as typeof tab & { id: number };
 }
@@ -181,16 +184,16 @@ describe("dispatch reads disabledTools from the snapshot", () => {
 
 describe("dispatch reads cdpMode from the snapshot", () => {
   test("grant: policy cdpMode=true selects the CDP backend", async () => {
-    const tab = await makeTab();
+    await makeTab();
     await armCutover({ cdpMode: true });
-    await dispatch({ id: 1, op: "page_snapshot", tabId: tab.id, args: {} } as BridgeReq);
+    await dispatch({ id: 1, op: "page_snapshot", args: {} } as BridgeReq);
     expect(backendSeam.cdpCalls).toEqual([true]);
   });
 
   test("deny: policy cdpMode=false selects the content-script backend", async () => {
-    const tab = await makeTab();
+    await makeTab();
     await armCutover({ cdpMode: false });
-    await dispatch({ id: 1, op: "page_snapshot", tabId: tab.id, args: {} } as BridgeReq);
+    await dispatch({ id: 1, op: "page_snapshot", args: {} } as BridgeReq);
     expect(backendSeam.cdpCalls).toEqual([false]);
   });
 });
@@ -448,7 +451,7 @@ describe("pageUpload reads fileUploadEnabled and its timeout from the snapshot",
   test("deny: policy false refuses", async () => {
     await armCutover({ fileUploadEnabled: false });
     await expect(
-      pageUpload(1, { selector: "#f", path: "/tmp/x" }, await freshValues(), currentPanicEpoch()),
+      pageUpload({ selector: "#f", path: "/tmp/x" }, await freshValues(), currentPanicEpoch()),
     ).rejects.toThrow("page_upload is disabled");
   });
 
@@ -456,22 +459,17 @@ describe("pageUpload reads fileUploadEnabled and its timeout from the snapshot",
     await armCutover({ fileUploadEnabled: true });
     // The missing selector fails AFTER the gate: proof the gate read policy.
     await expect(
-      pageUpload(1, { path: "/tmp/x" }, await freshValues(), currentPanicEpoch()),
+      pageUpload({ path: "/tmp/x" }, await freshValues(), currentPanicEpoch()),
     ).rejects.toThrow("page_upload needs `selector`");
   });
 
   test("the upload confirmation timeout comes from the snapshot", async () => {
     const asked = autoProvider(false);
-    const tab = await makeTab();
+    await makeTab();
     await armCutover({ fileUploadEnabled: true, clickToastTimeoutMs: 111_000 });
     const before = Date.now();
     await expect(
-      pageUpload(
-        tab.id,
-        { selector: "#f", path: "/tmp/x" },
-        await freshValues(),
-        currentPanicEpoch(),
-      ),
+      pageUpload({ selector: "#f", path: "/tmp/x" }, await freshValues(), currentPanicEpoch()),
     ).rejects.toThrow("user denied page_upload");
     expect((asked[0]?.deadline ?? 0) - before).toBeGreaterThanOrEqual(111_000);
   });
@@ -482,7 +480,7 @@ describe("pageUpload reads fileUploadEnabled and its timeout from the snapshot",
 describe("handleDialog reads handleDialogEnabled from the snapshot", () => {
   test("deny: policy false refuses", async () => {
     await armCutover({ handleDialogEnabled: false });
-    await expect(handleDialog(1, { action: "accept" }, await freshValues())).rejects.toThrow(
+    await expect(handleDialog({ action: "accept" }, await freshValues())).rejects.toThrow(
       "page_handle_dialog is disabled",
     );
   });
@@ -490,7 +488,7 @@ describe("handleDialog reads handleDialogEnabled from the snapshot", () => {
   test("grant: policy true passes the gate", async () => {
     await armCutover({ handleDialogEnabled: true });
     // The invalid action fails AFTER the gate: proof the gate read policy.
-    await expect(handleDialog(1, { action: "bogus" }, await freshValues())).rejects.toThrow(
+    await expect(handleDialog({ action: "bogus" }, await freshValues())).rejects.toThrow(
       'page_handle_dialog needs action "accept" or "dismiss"',
     );
   });
@@ -536,21 +534,21 @@ describe("snapshotPrecise reads warnPreciseSnapshot from the snapshot", () => {
   }
 
   test("deny: the policy warning toast is consulted (and a cancel honored)", async () => {
-    const tab = await makeTab();
+    await makeTab();
     await armCutover({ warnPreciseSnapshot: true });
     const attach = installDebuggerSpy();
     vi.spyOn(browser.tabs, "sendMessage").mockImplementation(async (_tabId, msg) => {
       if ((msg as { op?: string }).op === "ping") return { ok: true, data: { pong: true } };
       return { ok: true, data: { cancelled: true } }; // the user cancels
     });
-    await expect(snapshotPrecise(tab.id, {}, await freshValues())).resolves.toEqual({
+    await expect(snapshotPrecise({}, await freshValues())).resolves.toEqual({
       cancelled: true,
     });
     expect(attach).not.toHaveBeenCalled();
   });
 
   test("grant: the policy opt-out skips the toast", async () => {
-    const tab = await makeTab();
+    await makeTab();
     await armCutover({ warnPreciseSnapshot: false });
     installDebuggerSpy();
     const toasts: unknown[] = [];
@@ -560,9 +558,7 @@ describe("snapshotPrecise reads warnPreciseSnapshot from the snapshot", () => {
       return { ok: true, data: { cancelled: false } };
     });
     // Proceeds straight to the CDP attach (the sentinel), no toast shown.
-    await expect(snapshotPrecise(tab.id, {}, await freshValues())).rejects.toThrow(
-      "attach-sentinel",
-    );
+    await expect(snapshotPrecise({}, await freshValues())).rejects.toThrow("attach-sentinel");
     expect(toasts).toEqual([]);
   });
 });

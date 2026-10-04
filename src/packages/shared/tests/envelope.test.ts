@@ -4,7 +4,7 @@
 // sends. This is the proof that the runtime validation fails closed.
 
 import { describe, expect, test } from "bun:test";
-import { BridgeReqSchema, BridgeRespSchema, parseBridgeReq } from "../src/envelope";
+import { BridgeRespSchema, parseBridgeReq } from "../src/envelope";
 
 function refusal(msg: unknown): { id?: number | string; error: string } {
   const parsed = parseBridgeReq(msg);
@@ -22,8 +22,8 @@ describe("parseBridgeReq accepts what the host sends", () => {
     }
   });
 
-  test("optional envelope fields (tabId, browser) and empty args", () => {
-    const parsed = parseBridgeReq({ id: 2, op: "page_text", tabId: 3, browser: "brave", args: {} });
+  test("optional envelope field (browser) and empty args", () => {
+    const parsed = parseBridgeReq({ id: 2, op: "page_text", browser: "brave", args: {} });
     expect(parsed.ok).toBe(true);
   });
 
@@ -127,11 +127,5 @@ describe("envelope schemas", () => {
     expect(BridgeRespSchema.safeParse({ id: 1 }).success).toBe(false);
     expect(BridgeRespSchema.safeParse({ id: 1, ok: "yes" }).success).toBe(false);
     expect(BridgeRespSchema.safeParse({ id: 1, ok: true, extra: 1 }).success).toBe(false);
-  });
-
-  test("BridgeReqSchema rejects a fractional tabId", () => {
-    expect(BridgeReqSchema.safeParse({ id: 1, op: "tab_list", tabId: 1.5, args: {} }).success).toBe(
-      false,
-    );
   });
 });

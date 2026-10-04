@@ -61,7 +61,8 @@ describe("snapshotPrecise honors the toast", () => {
     // allowAllSites skips the allowlist prompt; warnPreciseSnapshot defaults
     // to true, so the toast IS consulted.
     await fakeBrowser.storage.local.set({ allowAllSites: true });
-    const tab = await fakeBrowser.tabs.create({ url: "https://example.com/x" });
+    await fakeBrowser.windows.create({ focused: true });
+    await fakeBrowser.tabs.create({ url: "https://example.com/x", active: true });
     const attach = vi.fn();
     // fakeBrowser ships no debugger API; install a spy so an attach attempt
     // is a visible assertion failure instead of a confusing TypeError.
@@ -71,9 +72,9 @@ describe("snapshotPrecise honors the toast", () => {
       // The user cancels the pre-attach notice.
       return { ok: true, data: { cancelled: true } };
     });
-    await expect(withFreshPolicy((policy) => snapshotPrecise(tab.id, {}, policy))).resolves.toEqual(
-      { cancelled: true },
-    );
+    await expect(withFreshPolicy((policy) => snapshotPrecise({}, policy))).resolves.toEqual({
+      cancelled: true,
+    });
     expect(attach).not.toHaveBeenCalled();
   });
 });

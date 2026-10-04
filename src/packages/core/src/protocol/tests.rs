@@ -98,7 +98,6 @@ fn bridge_envelope_roundtrip() {
     let req = BridgeReq {
         id: 7,
         command: command.clone(),
-        tab_id: Some(3),
         browser: Some("brave".into()),
     };
     let mut buf = Vec::new();
@@ -106,15 +105,12 @@ fn bridge_envelope_roundtrip() {
     // The wire form is the flat contract: the command's op and args beside
     // the envelope fields, camelCase names, no Rust field names.
     let wire: Value = serde_json::from_slice(&buf[..buf.len() - 1]).unwrap();
-    assert_eq!(wire["tabId"], 3);
-    assert!(wire.get("tab_id").is_none());
     assert_eq!(wire["op"], "page_click");
     assert_eq!(wire["args"], json!({ "ref": "e3" }));
     assert!(wire.get("command").is_none());
     let got: BridgeReq = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();
     assert_eq!(got.id, 7);
     assert_eq!(got.command, command);
-    assert_eq!(got.tab_id, Some(3));
     assert_eq!(got.browser.as_deref(), Some("brave"));
 
     // A request without the browser field (older peer) deserializes with
@@ -154,7 +150,7 @@ fn bridge_req_parse_refuses_exactly_what_the_extension_refuses() {
     for wire in [
         r#"{"id":1,"op":"tab_focus","args":{"tabId":7}}"#,
         r#"{"id":1,"op":"page_click","args":{}}"#,
-        r#"{"id":1,"op":"tab_list","args":{},"tabId":2,"browser":"brave"}"#,
+        r#"{"id":1,"op":"tab_list","args":{},"browser":"brave"}"#,
     ] {
         let got: BridgeReq = bridge_read(&mut Cursor::new(format!("{wire}\n")))
             .unwrap()
@@ -201,7 +197,6 @@ fn bridge_read_skips_blank_lines_without_recursing() {
         &BridgeReq {
             id: 9,
             command: BridgeCommand::TabList(NoArgs {}),
-            tab_id: None,
             browser: None,
         },
     )
@@ -381,17 +376,11 @@ fn wire_types_reject_unknown_fields() {
         json!({ "id": 1, "op": "tab_list", "args": {}, "extra": 1 })
     )
     .is_err());
-    // The pre-rename snake_case field is an unknown field now. Safe: no
-    // released peer ever emitted it (the field was always None/omitted),
-    // and a peer that does send it is out of contract.
-    assert!(serde_json::from_value::<BridgeReq>(
-        json!({ "id": 1, "op": "tab_list", "tab_id": 3, "args": {} })
-    )
-    .is_err());
+    // A tab target rides in the tool's args, never on the envelope.
     assert!(serde_json::from_value::<BridgeReq>(
         json!({ "id": 1, "op": "tab_list", "tabId": 3, "args": {} })
     )
-    .is_ok());
+    .is_err());
     // A string id is rejected on both envelopes: the server is the sole
     // assigner and only assigns integers; the contract's string arm is
     // forward-compat only (see the field docs on BridgeReq::id).
@@ -543,13 +532,12 @@ fn wire_types_reject_unknown_fields() {
 
 #[test]
 fn bridge_envelope_wire_keys_are_pinned() {
-    // These Rust types ARE the canonical envelope contract (ADR-0028);
-    // the extension's Zod validators are checked against them by the CI
-    // double-derivation diff (scripts/check-envelope-parity.ts). This
-    // test pins the exact wire field names locally, so a rename or an
-    // added field fails `cargo test` immediately (this is the test that
-    // would have caught tab_id-vs-tabId) instead of waiting for the
-    // cross-language diff.
+    // These Rust types ARE the canonical envelope contract; the extension's
+    // Zod validators are checked against them by the CI double-derivation
+    // diff (scripts/check-envelope-parity.ts). This test pins the exact wire
+    // field names locally, so a rename, an added field, or a snake_case Rust
+    // name leaking onto the wire fails `cargo test` immediately instead of
+    // waiting for the cross-language diff.
     fn wire_keys<T: Serialize>(v: &T) -> std::collections::BTreeSet<String> {
         serde_json::to_value(v)
             .unwrap()
@@ -566,12 +554,11 @@ fn bridge_envelope_wire_keys_are_pinned() {
     let req = BridgeReq {
         id: 1,
         command: BridgeCommand::TabList(NoArgs {}),
-        tab_id: Some(2),
         browser: Some("brave".into()),
     };
     assert_eq!(
         wire_keys(&req),
-        expected(&["args", "browser", "id", "op", "tabId"]),
+        expected(&["args", "browser", "id", "op"]),
         "BridgeReq wire fields changed - update the Zod validator \
          (src/packages/shared/src/envelope.ts) and bump BRIDGE_PROTOCOL_VERSION \
          if the change is incompatible"

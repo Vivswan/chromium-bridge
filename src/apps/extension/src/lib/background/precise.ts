@@ -16,7 +16,7 @@ import { withCdpAttach } from "./cdp/attach";
 // the CdpSession facade (ADR-0017); precise.ts reuses them rather than keeping
 // its own private copies.
 import { dbgSend, isDebuggable } from "./cdp/session";
-import { injectIfNeeded, resolveTargetTab } from "./tabs";
+import { activeTab, injectIfNeeded } from "./tabs";
 
 // The subset of the CDP payloads we actually read (not the full protocol).
 interface AXValueLike {
@@ -96,12 +96,8 @@ export function decodeToastReply(raw: unknown): ToastOutcome {
   return result.data.cancelled ? { kind: "cancelled" } : { kind: "proceed" };
 }
 
-export async function snapshotPrecise(
-  maybeTabId: number | undefined,
-  _args: OpArgs,
-  policy: PolicyValues,
-) {
-  const tab = await resolveTargetTab(maybeTabId);
+export async function snapshotPrecise(_args: OpArgs, policy: PolicyValues) {
+  const tab = await activeTab();
   await ensureAllowed(tab.url);
 
   if (!isDebuggable(tab.url)) {

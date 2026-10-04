@@ -9,15 +9,15 @@ import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskCookieValue } from "../shared/masking";
 import { ensureAllowed, ensureDomainAllowed } from "./allowlist-store";
-import { resolveTargetTab } from "./tabs";
+import { activeTab } from "./tabs";
 
-export async function cookieGet(maybeTabId: number | undefined, args: OpArgs) {
+export async function cookieGet(args: OpArgs) {
   // If the caller didn't pass url/domain, default to the active tab's URL so
   // "cookie_get {}" means "cookies for the page I'm looking at".
   let { url } = args || {};
   const { domain, name } = args || {};
   if (!url && !domain) {
-    const tab = await resolveTargetTab(maybeTabId);
+    const tab = await activeTab();
     await ensureAllowed(tab.url);
     url = tab.url;
   } else if (url) {

@@ -109,7 +109,6 @@ After attach, tool traffic is the `BridgeReq`/`BridgeResp` envelope pair (`src/p
 interface BridgeReq {
   id: number;        // monotonically increasing, pairs responses
   op: string;        // operation name, e.g. "tab_list", "page_click"
-  tabId?: number;    // target tab (optional; default = active tab)
   browser?: string;  // target browser label (required when several attached)
   args: unknown;     // operation arguments
 }

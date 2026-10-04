@@ -143,10 +143,9 @@ proptest! {
     fn bridge_req_roundtrip(
         id in any::<u64>(),
         command in arb_command(),
-        tab_id in prop::option::of(any::<i64>()),
         browser in prop::option::of(arb_string()),
     ) {
-        let req = BridgeReq { id, command, tab_id, browser };
+        let req = BridgeReq { id, command, browser };
         let mut buf = Vec::new();
         bridge_write(&mut buf, &req).unwrap();
         let got: BridgeReq = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();

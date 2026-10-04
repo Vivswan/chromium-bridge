@@ -20,13 +20,9 @@ import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
-import { resolveTargetTab } from "./tabs";
+import { activeTab } from "./tabs";
 
-export async function handleDialog(
-  maybeTabId: number | undefined,
-  args: OpArgs,
-  policy: PolicyValues,
-): Promise<unknown> {
+export async function handleDialog(args: OpArgs, policy: PolicyValues): Promise<unknown> {
   // ONE policy snapshot for the whole decision (ADR-0032 decision 4):
   // dispatch threads its per-request snapshot in; the REQUIRED parameter is
   // what holds the invariant (tests start their own decisions via
@@ -42,7 +38,7 @@ export async function handleDialog(
   if (action !== "accept" && action !== "dismiss") {
     throw new Error('page_handle_dialog needs action "accept" or "dismiss"');
   }
-  const tab = await resolveTargetTab(maybeTabId);
+  const tab = await activeTab();
   await ensureAllowed(tab.url);
   if (!isDebuggable(tab.url)) {
     throw new Error(

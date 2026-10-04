@@ -86,7 +86,7 @@ const WIRE_CASES: ReadonlyArray<{
     name: "BridgeReqWireSchema",
     schema: BridgeReqWireSchema,
     enforced: BridgeReqSchema,
-    valid: { id: 1, op: "tab_list", tabId: 3, browser: "brave", args: {} },
+    valid: { id: 1, op: "tab_list", browser: "brave", args: {} },
     required: ["id", "op", "args"],
     freeForm: ["args"],
     enforcedStringOk: ["id"],
@@ -370,12 +370,6 @@ describe("the asymmetry layer diverges from the wire base exactly as pinned", ()
 
   test("op: the enforced envelope refuses the empty string early", () => {
     const req = { id: 1, op: "", args: {} };
-    expect(BridgeReqWireSchema.safeParse(req).success).toBe(true);
-    expect(BridgeReqSchema.safeParse(req).success).toBe(false);
-  });
-
-  test("tabId: the enforced envelope drops the serde Option null arm", () => {
-    const req = { id: 1, op: "tab_list", tabId: null, args: {} };
     expect(BridgeReqWireSchema.safeParse(req).success).toBe(true);
     expect(BridgeReqSchema.safeParse(req).success).toBe(false);
   });

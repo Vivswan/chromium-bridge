@@ -16,7 +16,7 @@ import { maskString } from "../shared/masking";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
-import { resolveTargetTab } from "./tabs";
+import { activeTab } from "./tabs";
 
 // The subset of CDP payloads we read (not the full protocol).
 interface RemoteObject {
@@ -61,8 +61,8 @@ function previewArg(a: RemoteObject): string {
   return a.type || "";
 }
 
-export async function consoleGet(maybeTabId: number | undefined, args: OpArgs): Promise<unknown> {
-  const tab = await resolveTargetTab(maybeTabId);
+export async function consoleGet(args: OpArgs): Promise<unknown> {
+  const tab = await activeTab();
   await ensureAllowed(tab.url);
   if (!isDebuggable(tab.url)) {
     throw new Error(
