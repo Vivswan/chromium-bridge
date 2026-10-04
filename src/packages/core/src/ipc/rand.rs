@@ -14,13 +14,6 @@ pub(crate) fn generate_secret() -> io::Result<String> {
     Ok(hex::encode(buf))
 }
 
-/// The image-identity measurements in `ipc::platform` reach the hex encoder
-/// through this name; they are owned by another change and move to
-/// `hex::encode` directly with it.
-pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    hex::encode(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
