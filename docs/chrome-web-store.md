@@ -1,6 +1,6 @@
 # Publishing to the Chrome Web Store: decision checklist
 
-> This doc is a decision checklist, not a "we have decided to do this". Publishing would remove the biggest current adoption hurdle (manually loading an unpacked extension), but it is a product commitment: a developer account, a privacy policy, review risk, and one migration that affects the existing "pinned extension ID" design. Whether to publish is an RFC/ADR-level decision under GOVERNANCE (it touches distribution and the security boundary); open an issue/ADR to decide first, rather than going straight to a PR.
+> This doc is a decision checklist, not a "we have decided to do this". Publishing would remove the biggest current adoption hurdle (manually loading an unpacked extension), but it is a product commitment: a developer account, a privacy policy, review risk, and one migration that affects the existing "pinned extension ID" design. Whether to publish is an RFC-level decision under GOVERNANCE (it touches distribution and the security boundary); open an issue or RFC first, rather than going straight to a PR.
 
 ## The number one trap: publishing changes the pinned extension ID
 
@@ -57,14 +57,14 @@ Google's review will focus on the following items; prepare written justification
 - [ ] Wire the store ID into `allowed_origins` via `identity.rs` (see the number one trap).
 - [ ] Rewrite the README's "Load the extension" section to "Add from the Chrome Web
       Store", keeping unpacked as the developer/advanced path.
-- [ ] Update `docs/`, and add an ADR recording the decision (per GOVERNANCE,
+- [ ] Update `docs/`, and record the decision in the landing PR (per GOVERNANCE,
       distribution changes are major changes).
 - [ ] Optional: automate publishing with a CI step (`chrome-webstore-upload` or similar),
       or keep it manual.
 
 ## Conclusion / recommendation
 
-Publishing is the usability improvement with the largest single payoff, but it is a product commitment: the $5 account, a privacy policy, the review risk around `page_eval`/`chrome.debugger`, ongoing review latency, and the ID migration work above. Because it touches distribution and the security posture, it is an RFC/ADR-level decision under this project's [GOVERNANCE](../GOVERNANCE.md): open an issue and settle it in discussion first, then act, rather than a quick PR.
+Publishing is the usability improvement with the largest single payoff, but it is a product commitment: the $5 account, a privacy policy, the review risk around `page_eval`/`chrome.debugger`, ongoing review latency, and the ID migration work above. Because it touches distribution and the security posture, it is an RFC-level decision under this project's [GOVERNANCE](../GOVERNANCE.md): open an issue and settle it in discussion first, then act, rather than a quick PR.
 
 ## Related
 

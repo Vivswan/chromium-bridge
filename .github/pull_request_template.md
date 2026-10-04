@@ -35,5 +35,4 @@ masking, bridge auth, or `page_eval` (see [SECURITY.md](./SECURITY.md)):
 ## Housekeeping
 
 - [ ] CHANGELOG updated
-- [ ] ADR added / not needed
 - [ ] No unexplained `any` / `unwrap()` / new permission

@@ -136,7 +136,6 @@ settings:
   policy_managed_desc: "安全策略 (page_eval、上传、对话框、CDP 模式、各项确认、超时和逐工具禁用) 用 `chromium-bridge policy` 设置, 由已配对的主机密钥签名, 并由此扩展强制执行。本页不再编辑这些设置。"
   group_tabs_title: "归组桥接标签页"
   group_tabs_desc: "客户端打开的标签页会收进「Chromium Bridge」标签组, 让机器驱动的标签页保持可见。"
-  group_tabs_more: "ADR-0018。"
   allow_all_title: "允许所有站点"
   allow_all_desc: "跳过逐站点批准; 启用时还会触发浏览器的全站点数据权限提示。"
   allow_all_warn: "开启后, 客户端可以操作你登录过的每一个站点, 包括银行和邮箱。"

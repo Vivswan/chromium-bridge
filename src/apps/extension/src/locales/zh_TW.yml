@@ -136,7 +136,6 @@ settings:
   policy_managed_desc: "安全性原則 (page_eval、上傳、對話方塊、CDP 模式、各項確認、逾時和逐工具停用) 用 `chromium-bridge policy` 設定, 由已配對的主機金鑰簽署, 並由此擴充功能強制執行。本頁不再編輯這些設定。"
   group_tabs_title: "歸組橋接分頁"
   group_tabs_desc: "用戶端開啟的分頁會收進「Chromium Bridge」分頁群組, 讓機器驅動的分頁保持可見。"
-  group_tabs_more: "ADR-0018。"
   allow_all_title: "允許所有網站"
   allow_all_desc: "略過逐站核准; 啟用時還會觸發瀏覽器的全網站資料權限提示。"
   allow_all_warn: "開啟後, 用戶端可以操作你登入過的每一個網站, 包括銀行和電子郵件。"

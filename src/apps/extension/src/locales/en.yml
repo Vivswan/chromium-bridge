@@ -138,7 +138,6 @@ settings:
   policy_managed_desc: "The security policy - page_eval, uploads, dialogs, CDP mode, confirmations, timeouts, and per-tool disables - is set with `chromium-bridge policy`, signed by the paired host key, and enforced by this extension. This page no longer edits it."
   group_tabs_title: "Group bridge tabs"
   group_tabs_desc: "Client-opened tabs collect in a 'Chromium Bridge' tab group, so machine-driven tabs stay visible."
-  group_tabs_more: "ADR-0018."
   allow_all_title: "Allow all sites"
   allow_all_desc: "Skips per-site approval; enabling also triggers the browser's all-sites data permission prompt."
   allow_all_warn: "On, clients can drive every site you are logged in to, including banking and email."
