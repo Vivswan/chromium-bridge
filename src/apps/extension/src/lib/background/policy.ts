@@ -10,7 +10,7 @@
 // background/dispatch.ts so far. Wiring the rest is a separate, supervised
 // step.
 
-import { type Confirmation, isOpName, type Risk, TOOL_META } from "@chromium-bridge/shared";
+import { type Confirmation, isOpName, type Risk, TOOL_META } from "@chromium-bridge/shared/ops.gen";
 
 /** How a call must be confirmed, as one value: "required over no channel"
  * (and its inverse) are unrepresentable. Since ADR-0027 every confirmation

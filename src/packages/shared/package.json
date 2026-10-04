@@ -2,13 +2,11 @@
   "name": "@chromium-bridge/shared",
   "version": "0.0.0",
   "private": true,
-  "description": "Contract-derived types, Zod validators, and (from the extension rehaul onward) the i18n runtime, shared by the extension, the app UI, and tooling.",
+  "description": "Contract-derived types and Zod validators shared by the extension, the tests, and the tooling.",
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./protocol.gen": "./src/protocol.gen.ts",
-    "./testing": "./src/enclave-fixture.gen.ts"
+    "./*": "./src/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

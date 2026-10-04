@@ -13,7 +13,7 @@
 // in dispatch.ts + confirm/gate.ts + egress.ts; a backend only probes and
 // acts.
 
-import type { OpArgs } from "@chromium-bridge/shared";
+import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
 import type { ClickProbe } from "../dom/page-api";
 import type { PageOp } from "../shared/page-ops";
 import { CdpBackend } from "./backends/cdp";

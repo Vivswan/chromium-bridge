@@ -1,5 +1,6 @@
-import { ENCLAVE_FIXTURE_KEY_ID, POLICY_DEFAULTS } from "@chromium-bridge/shared";
-import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
+import { ENCLAVE_FIXTURE_KEY_ID } from "@chromium-bridge/shared/enclave.gen";
+import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
+import { POLICY_DEFAULTS } from "@chromium-bridge/shared/policy.gen";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import * as pinStore from "@/lib/background/enclave-pin";
@@ -14,7 +15,6 @@ import {
   approvePending,
   attachPort,
   detachPort,
-  type EnrollmentStatus,
   enrollmentGate,
   getEnrollmentStatus,
   handleEnclaveFrame,
@@ -27,6 +27,7 @@ import {
 } from "@/lib/background/enrollment";
 import * as policySync from "@/lib/background/policy-sync";
 import { resetStorageHardeningForTests } from "@/lib/background/trusted-storage";
+import type { EnrollmentStatus } from "@/lib/enrollment-status";
 
 /** Assert the status is in `state` and narrow to that arm's fields. */
 function inState<S extends EnrollmentStatus["state"]>(
@@ -38,7 +39,7 @@ function inState<S extends EnrollmentStatus["state"]>(
 }
 
 // Type-level pins for the SHARED EnrollmentStatus union (lib/enrollment-status.ts,
-// consumed verbatim by the popup/options views as EnrollmentStatusView): the
+// consumed verbatim by the popup/options views): the
 // invalid combinations are unrepresentable, not merely unproduced.
 function enrollmentStatusTypePins(): EnrollmentStatus[] {
   const base = { platformSupported: true } as const;

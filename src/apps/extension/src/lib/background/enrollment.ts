@@ -15,15 +15,17 @@
 // challenge is issued.
 
 import {
-  type EnclaveChallengeWire,
   EnclaveErrorFrameSchema,
   type EnclaveInboundFrame,
   EnclaveInboundFrameSchema,
+  type EnclavePin,
   EnclaveProofFrameSchema,
-  type EnclaveReasonCode,
-  type EnclaveRevokeWire,
-  isEnclaveReasonCode,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave";
+import { type EnclaveReasonCode, isEnclaveReasonCode } from "@chromium-bridge/shared/enclave.gen";
+import type {
+  EnclaveChallengeWire,
+  EnclaveRevokeWire,
+} from "@chromium-bridge/shared/envelope-wire.gen";
 import { browser } from "wxt/browser";
 import type { EnrollmentStatus } from "../enrollment-status";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
@@ -48,8 +50,6 @@ import {
 import { hardenStorageAccess } from "./trusted-storage";
 
 // ---- frame plumbing ---------------------------------------------------------
-
-export type { EnclaveInboundFrame };
 
 /** True for the five enclave control frame tags (ENCLAVE_FRAME_TYPES: the
  * ADR-0021 ceremony trio - challenge/proof/error - plus the ADR-0025
@@ -314,7 +314,7 @@ async function maybeSendPendingHostRevoke(): Promise<void> {
  * cryptographic mismatch (or a host that can no longer prove the key) fails
  * closed. Each re-verify raises a Touch ID prompt, which is why it is
  * opt-in. */
-async function maybePeriodicReverify(pin: pinStore.EnclavePin): Promise<void> {
+async function maybePeriodicReverify(pin: EnclavePin): Promise<void> {
   // A policy field (ADR-0032), read once: its own decision moment.
   const effective = await getEffectivePolicy();
   if (effective.state === "blocked") {
@@ -650,12 +650,6 @@ export function revokePin(): Promise<{ ok: boolean }> {
 }
 
 // ---- status for the popup/options UI ----------------------------------------------
-
-/** The SHARED status union (lib/enrollment-status.ts): one definition for
- * this producer and the popup/options consumers, discriminated on `state`
- * with the keyId/fingerprint coupling structural. Re-exported here so the
- * background world keeps its historical import path. */
-export type { EnrollmentStatus };
 
 export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
   const platformSupported = await platformCanEnroll();

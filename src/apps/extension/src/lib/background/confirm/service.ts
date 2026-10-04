@@ -5,7 +5,11 @@
 // messages only from the confirmation window itself; that gate is what makes the window's verdict count.
 //   service worker dies mid-request -> the in-flight request is lost, the op fails, nothing dangles
 
-import { type ConfirmKind, type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
+import {
+  type ConfirmKind,
+  type ConfirmPayload,
+  isHardwareGated,
+} from "@chromium-bridge/shared/confirm";
 import { auditEvent } from "../audit-log";
 
 /** The fields every confirmation request carries. */

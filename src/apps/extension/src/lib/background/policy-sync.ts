@@ -25,25 +25,27 @@
 // sends only `legacy_settings` and `lang_set`, each only on a connection whose host already pushed the matching frame.
 
 import {
-  foldPolicyOverlay,
   KEY_ID_HEX,
   LangCurrentFrameSchema,
-  type LangSetWire,
-  type LegacySettingsWire,
   PolicyCurrentFrameSchema,
-  PolicyDocSchema,
   PolicyInboundFrameSchema,
+  type StoredPolicyState,
+  StoredPolicyStateSchema,
+} from "@chromium-bridge/shared/enclave";
+import type { LangSetWire, LegacySettingsWire } from "@chromium-bridge/shared/envelope-wire.gen";
+import {
+  PolicyDocSchema,
   type PolicyValues,
   parseStoredPolicyValues,
+} from "@chromium-bridge/shared/policy.gen";
+import {
+  foldPolicyOverlay,
   policyValuesEqual,
   policyValuesFromDoc,
   relaxedPolicyFields,
-  type StoredPolicyState,
-  StoredPolicyStateSchema,
-  UI_LANGUAGES,
-  type UiLanguageValue,
-  unreachable,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/policy-compare";
+import { UI_LANGUAGES, type UiLanguageValue } from "@chromium-bridge/shared/settings";
+import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { auditEvent } from "./audit-log";
 import { getCompromised, getPin, setCompromised } from "./enclave-pin";

@@ -8,8 +8,9 @@
 // exact function the router's sender-gated confirm_resolve arm calls
 // (messages.ts pins the confirm-window-only gating in its own tests).
 
-import { type ConfirmPayload, POLICY_FIELDS } from "@chromium-bridge/shared";
-import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
+import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
+import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
+import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import type { Presentation } from "@/lib/background/confirm/service";

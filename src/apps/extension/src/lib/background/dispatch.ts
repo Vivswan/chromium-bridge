@@ -4,13 +4,10 @@
 // generated OpName union and, together with the server-answered ops, must
 // partition the catalogue exactly (enforced by the roster drift test).
 
-import {
-  type BridgeReq,
-  isOpName,
-  type OpName,
-  type PolicyValues,
-  unreachable,
-} from "@chromium-bridge/shared";
+import type { BridgeReq } from "@chromium-bridge/shared/envelope";
+import { isOpName, type OpName } from "@chromium-bridge/shared/ops.gen";
+import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { isPageOp } from "../shared/page-ops";
 import { ensureAllowed } from "./allowlist-store";

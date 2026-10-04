@@ -6,7 +6,7 @@
 // storage keys, which the listener watches), and a legacy toggle alone must
 // no longer rip down sessions the policy still grants.
 
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 

@@ -7,16 +7,16 @@
 // schemas, ratchet, storage - is real. Left to the isolated-browser suite (CHROME_BIN): that the ratchet and
 // cutover survive real SW death, and the decision 4 in-flight rule under a real mid-confirmation push.
 
+import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
+import { LEGACY_DEFAULTS } from "@chromium-bridge/shared/legacy-settings";
 import {
-  LEGACY_DEFAULTS,
   POLICY_DEFAULTS,
   POLICY_FIELDS,
   POLICY_REVISION_MAX,
   PolicyDocSchema,
   type PolicyValues,
-  policyValuesFromDoc,
-} from "@chromium-bridge/shared";
-import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/testing";
+} from "@chromium-bridge/shared/policy.gen";
+import { policyValuesFromDoc } from "@chromium-bridge/shared/policy-compare";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import {

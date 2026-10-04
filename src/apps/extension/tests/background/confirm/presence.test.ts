@@ -14,7 +14,7 @@
 //   - opted-out (touchIdConfirm=false) falls back to the window provider -
 //     still confirmed - and non-eval/upload kinds never route to hardware.
 
-import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
+import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getCompromised, setPin } from "@/lib/background/enclave-pin";

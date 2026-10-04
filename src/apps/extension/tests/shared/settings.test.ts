@@ -1,6 +1,7 @@
+import { DEFAULTS } from "@chromium-bridge/shared/settings";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
-import { DEFAULTS, getSetting } from "@/lib/shared/settings";
+import { getSetting } from "@/lib/shared/settings";
 
 describe("DEFAULTS", () => {
   test("has exactly the browser-owned keys and values (ADR-0032 Phase 5)", () => {

@@ -1,5 +1,5 @@
 // UI -> service worker request helper. The message shapes are the RuntimeMsg
-// union validated in the SW router (src/packages/shared/runtime-msg.ts); this is a
+// union validated in the SW router (src/packages/shared/src/runtime-msg.ts); this is a
 // thin promise wrapper the React views call. Every response is treated as
 // possibly-undefined (the SW may be asleep or refuse), so callers render the
 // empty/blocked state rather than hang.
@@ -13,12 +13,6 @@ export async function send<T = Record<string, unknown>>(msg: object): Promise<T 
     return undefined;
   }
 }
-
-/** The SW's answer to get_enrollment: the SHARED EnrollmentStatus union
- * (lib/enrollment-status.ts) - the same definition the background produces,
- * so the views cannot construct or over-guard field combinations the
- * background never sends. The old hand-written mirror here is gone. */
-export type { EnrollmentStatus as EnrollmentStatusView } from "./enrollment-status";
 
 /** The SW's answer to get_clients (ADR-0025), mirroring
  * lib/background/clients.ts ClientListView: success carries the list,

@@ -3,7 +3,7 @@
 // popup window; the isolated-browser suite proves the guarded page cannot
 // reach it.
 
-import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared";
+import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {

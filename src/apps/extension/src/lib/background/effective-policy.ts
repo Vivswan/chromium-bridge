@@ -22,8 +22,9 @@
 // mid-confirmation can never relax, or otherwise alter, an in-flight
 // decision. An accepted push applies from the next decision on.
 
-import type { PolicyValues } from "@chromium-bridge/shared";
-import { POLICY_FIELDS, salvageLegacySetting, unreachable } from "@chromium-bridge/shared";
+import { salvageLegacySetting } from "@chromium-bridge/shared/legacy-settings";
+import { POLICY_FIELDS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { getPolicyPosture, POLICY_CUTOVER_KEY } from "./policy-sync";
 

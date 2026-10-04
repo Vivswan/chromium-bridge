@@ -1,4 +1,4 @@
-import type { UiLanguageValue } from "@chromium-bridge/shared";
+import type { UiLanguageValue } from "@chromium-bridge/shared/settings";
 import type { PublicPath } from "wxt/browser";
 import { browser } from "wxt/browser";
 import type { GeneratedI18nStructure } from "#i18n";

@@ -2,7 +2,9 @@
 // and Chrome kills the host process whenever the port closes, so we reconnect
 // automatically on startup and after any disconnect.
 
-import { NATIVE_HOST_ID, parseBridgeReq } from "@chromium-bridge/shared";
+import { isKillStatusFrame } from "@chromium-bridge/shared/enclave";
+import { parseBridgeReq } from "@chromium-bridge/shared/envelope";
+import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskErrorMessage } from "../shared/masking";
@@ -163,7 +165,7 @@ function onNativeMessage(p: Browser.runtime.Port, msg: unknown) {
   // Kill-switch state (ADR-0030): the reply to a kill control frame, or the
   // host's unsolicited startup/transition push. Either way it updates the
   // SW-only mirror the request gate reads.
-  if (kill.isKillStatusFrame(msg)) {
+  if (isKillStatusFrame(msg)) {
     void kill.handleKillFrame(msg);
     return;
   }

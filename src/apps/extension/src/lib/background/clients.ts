@@ -18,13 +18,10 @@ import {
   type AdminInboundFrame,
   AdminInboundFrameSchema,
   ClientListResultSchema,
-  type ClientListWire,
   ClientRevokeResultSchema,
-  type ClientRevokeWire,
   type TrustedClient,
-} from "@chromium-bridge/shared";
-
-export type { TrustedClient };
+} from "@chromium-bridge/shared/enclave";
+import type { ClientListWire, ClientRevokeWire } from "@chromium-bridge/shared/envelope-wire.gen";
 
 /** How long the host has to answer an admin control frame before the request
  * fails closed. Generous for a local round-trip; nothing here can raise a

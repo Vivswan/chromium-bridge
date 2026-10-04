@@ -19,13 +19,13 @@
 // toggles, which the host audits authoritatively when it HANDLES them) stay
 // in the ring for the panel and are not forwarded.
 
+import { AUDIT_FORWARDED_KINDS } from "@chromium-bridge/shared/audit.gen";
 import {
-  AUDIT_FORWARDED_KINDS,
   type AuditEntry,
   AuditEntrySchema,
   type AuditEventKind,
-  type AuditEventWire,
-} from "@chromium-bridge/shared";
+} from "@chromium-bridge/shared/enclave";
+import type { AuditEventWire } from "@chromium-bridge/shared/envelope-wire.gen";
 import { browser } from "wxt/browser";
 
 const AUDIT_RING_KEY = "auditRing";

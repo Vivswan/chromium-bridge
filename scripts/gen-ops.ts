@@ -667,7 +667,7 @@ const fixtureOut = `// GENERATED from the Rust core (examples/emit_enclave_contr
 // replay. The key protects nothing and is deny-listed as an enrollment identity on both sides
 // (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
 //
-// Test-only data: import it via "@chromium-bridge/shared/testing", never from the production barrel.
+// Test-only data: production code never imports this module.
 
 export interface EnclaveGoldenVector {
   /** Which domain-separation prefix the message was built under. */

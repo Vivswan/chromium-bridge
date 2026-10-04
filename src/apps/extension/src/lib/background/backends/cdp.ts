@@ -6,7 +6,9 @@
 // applied in the page, so the two backends cannot drift. Allowlist,
 // confirmation, and masking policy run in dispatch.ts around this backend.
 
-import { ClickProbeSchema, type OpArgs, unreachable } from "@chromium-bridge/shared";
+import { ClickProbeSchema } from "@chromium-bridge/shared/content-msg";
+import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import { unreachable } from "@chromium-bridge/shared/util";
 import type { ClickProbe, PageApi } from "../../dom/page-api";
 import { createPageApi, REF_ATTR } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";

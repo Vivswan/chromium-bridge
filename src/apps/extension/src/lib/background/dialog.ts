@@ -15,7 +15,8 @@
 // and may not be capturable - Page.handleJavaScriptDialog then errors, which we
 // surface honestly.
 
-import type { OpArgs, PolicyValues } from "@chromium-bridge/shared";
+import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { TOOL_GATES } from "../shared/tool-gates";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
