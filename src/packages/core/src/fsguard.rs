@@ -5,13 +5,13 @@
 //! final component; nothing here covers them.
 //!
 //! ```text
-//! pre-planted symlink     -> opens pass `O_NOFOLLOW`; exclusive creates refuse any existing entry; dirs refuse a symlink leaf
+//! pre-planted symlink     -> opens pass `O_NOFOLLOW`; dirs refuse a symlink leaf
 //! pre-planted loose file  -> `OpenOptions::mode` applies only on create, so the mode is re-asserted on the open handle
 //!                            (no path re-traversal); a file that cannot be tightened fails the open
 //! ```
 //!
-//! The temp-file + rename choreography stays at its call sites (`ipc::write_private_atomic`, `registration::write_atomic`):
-//! `registration`'s outputs are deliberately world-readable wrappers and manifests the browser must read.
+//! Atomic replacement (`ipc::write_private_atomic`, `registration::write_atomic`) goes through `tempfile`, not these
+//! helpers: `registration`'s outputs are deliberately world-readable wrappers and manifests the browser must read.
 //! On non-Unix targets the hardening compiles to plain opens: no Unix modes, and the same-user boundary is not enforced
 //! there (SECURITY.md "Platform support").
 
@@ -56,21 +56,6 @@ fn open_private(opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> {
         f.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
     Ok(f)
-}
-
-/// Exclusively create `path` for writing, 0600 from the first instant.
-/// `create_new` (O_EXCL) fails on ANY pre-existing entry - a planted file or
-/// symlink is refused, never adopted or followed - so no re-assert is needed:
-/// the file cannot exist with a mode we did not give it.
-///
-/// Unix-only: its caller (`ipc::write_private_atomic`) takes a plain
-/// create-new/truncate open on Windows, where there are no Unix modes to pin.
-#[cfg(unix)]
-pub(crate) fn create_private_excl(path: &Path) -> io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true).mode(0o600);
-    opts.open(path)
 }
 
 /// Force owner-only (0600) permissions on an existing filesystem object that
@@ -176,23 +161,6 @@ mod tests {
                 mode_of(&planted)
             );
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn create_private_excl_is_0600_and_refuses_any_preexisting_entry() {
-        let dir = scratch("excl");
-        let fresh = dir.join("fresh");
-        create_private_excl(&fresh).unwrap();
-        assert_eq!(mode_of(&fresh), 0o600);
-        // An existing file is refused, never truncated or adopted.
-        assert!(create_private_excl(&fresh).is_err());
-        // A dangling symlink is refused too (O_EXCL treats it as existing),
-        // so the create can never land at the link's target.
-        let link = dir.join("link");
-        std::os::unix::fs::symlink(dir.join("nowhere"), &link).unwrap();
-        assert!(create_private_excl(&link).is_err());
-        assert!(!dir.join("nowhere").exists());
     }
 
     #[cfg(unix)]

@@ -6,8 +6,8 @@
 //!   credentials.
 //! - `macos`: Security-framework code-signing identity (cdhash via the
 //!   kernel audit token) + LOCAL_PEERPID peer credentials.
-//! - `windows`: process handles (liveness/terminate) + BCrypt randomness.
-//!   Windows has no image attestation (see SECURITY.md "Platform support").
+//! - `windows`: process handles (liveness/terminate). Windows has no image
+//!   attestation (see SECURITY.md "Platform support").
 //!
 //! Selection is at compile time via cfg (there is exactly one implementation
 //! per build, so a runtime trait object would add indirection for nothing).

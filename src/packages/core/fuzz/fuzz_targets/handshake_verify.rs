@@ -25,7 +25,6 @@ fuzz_target!(|input: Input| {
     // Helper leg: the verifier's building blocks over hostile fields.
     let msg = hs::handshake_mac_message(&input.nonce, input.label.as_deref());
     let _ = hs::verify_mac(&input.key, &msg, &input.provided_hex);
-    let _ = hs::hex_decode(&input.provided_hex);
     if let Some(label) = &input.label {
         let _ = validate_label(label);
     }

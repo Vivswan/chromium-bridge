@@ -723,78 +723,33 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Write `bytes` to `path` atomically: exclusive-create a temp file beside it
-/// (never following a planted symlink; a colliding name is retried, never
-/// deleted), set permissions, fsync, rename over the destination, then fsync
-/// the directory so the entry survives a crash. The final path is replaced,
-/// never written through (rename replaces even a symlink at the final
-/// component without following it).
+/// Write `bytes` to `path` atomically: a uniquely named temp file is created
+/// exclusively beside it (so a planted entry is never adopted or followed),
+/// given its mode, fsynced, and renamed over the destination; the directory
+/// is then fsynced so the entry survives a crash. The final path is replaced,
+/// never written through: rename replaces even a symlink at the final
+/// component without following it. On any failure the temp file is removed.
 fn write_atomic(path: &Path, bytes: &[u8], executable: bool) -> std::io::Result<()> {
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::other("target path has no file name"))?
-        .to_string_lossy()
-        .into_owned();
-
-    let mut tmp = None;
-    let mut file = None;
-    for attempt in 0..3u32 {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        let candidate = path.with_file_name(format!(
-            "{file_name}.tmp.{}.{nanos}.{attempt}",
-            std::process::id()
-        ));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(f) => {
-                tmp = Some(candidate);
-                file = Some(f);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("target path has no parent directory"))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if executable { 0o755 } else { 0o644 };
+        tmp.as_file()
+            .set_permissions(fs::Permissions::from_mode(mode))?;
     }
-    let (tmp, mut f) = match (tmp, file) {
-        (Some(t), Some(f)) => (t, f),
-        _ => {
-            return Err(std::io::Error::other(
-                "could not create a unique temp file next to the target",
-            ))
-        }
-    };
-
-    let result = (|| {
-        f.write_all(bytes)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = if executable { 0o755 } else { 0o644 };
-            f.set_permissions(fs::Permissions::from_mode(mode))?;
-        }
-        #[cfg(not(unix))]
-        let _ = executable;
-        f.sync_all()?;
-        drop(f);
-        fs::rename(&tmp, path)?;
-        // Sync the directory entry too, so a crash right after rename cannot
-        // lose the file. Directories cannot be fsynced on Windows.
-        #[cfg(unix)]
-        if let Some(parent) = path.parent() {
-            fs::File::open(parent)?.sync_all()?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
+    #[cfg(not(unix))]
+    let _ = executable;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path)?;
+    // Directories cannot be fsynced on Windows.
+    #[cfg(unix)]
+    fs::File::open(dir)?.sync_all()?;
+    Ok(())
 }
 
 // ---- Windows registry (compiles cross-OS; the real writes are cfg(windows)).

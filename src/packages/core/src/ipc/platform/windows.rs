@@ -1,13 +1,10 @@
-//! Windows mechanisms: process handles for liveness/terminate and BCrypt for
-//! OS randomness. Windows has no executable-image attestation (see
-//! SECURITY.md "Platform support"); the bridge falls back to secret-only
-//! authentication there.
+//! Windows mechanisms: process handles for liveness/terminate. Windows has
+//! no executable-image attestation (see SECURITY.md "Platform support"); the
+//! bridge falls back to secret-only authentication there.
 #![expect(
     unsafe_code,
-    reason = "audited FFI quarantine: process-handle and BCrypt calls, each behind a safe wrapper"
+    reason = "audited FFI quarantine: process-handle calls, each behind a safe wrapper"
 )]
-
-use std::io;
 
 pub mod windows_process {
     use std::ffi::c_void;
@@ -53,35 +50,4 @@ pub mod windows_process {
         // SAFETY: `handle` was opened above and is closed exactly once, here.
         unsafe { CloseHandle(handle) };
     }
-}
-
-pub(crate) fn fill_os_random(buf: &mut [u8]) -> io::Result<()> {
-    // BCryptGenRandom takes a u32 length; a silent `as` cast would under-fill
-    // any buffer past 4 GiB while still returning Ok, so refuse instead.
-    let len = u32::try_from(buf.len())
-        .map_err(|_| io::Error::other("buffer too large for BCryptGenRandom"))?;
-    // BCRYPT_USE_SYSTEM_PREFERRED_RNG lets BCryptGenRandom use the system
-    // RNG without opening and managing an algorithm-provider handle.
-    // SAFETY: `buf` is a live exclusive slice and `len` is exactly its length,
-    // so the write stays in bounds; the null algorithm handle is what the
-    // system-preferred-RNG flag requires.
-    let status =
-        unsafe { BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), len, 0x0000_0002) };
-    if status >= 0 {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "BCryptGenRandom failed (NTSTATUS {status:#010x})"
-        )))
-    }
-}
-
-#[link(name = "bcrypt")]
-extern "system" {
-    fn BCryptGenRandom(
-        algorithm: *mut std::ffi::c_void,
-        buffer: *mut u8,
-        buffer_len: u32,
-        flags: u32,
-    ) -> i32;
 }

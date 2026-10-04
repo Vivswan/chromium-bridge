@@ -55,4 +55,4 @@ pub use socket::{connect, BridgeListener, BridgeStream};
 pub(crate) use lockfile::{
     read_capped, runtime_dir, with_runtime_lock, write_private_atomic, RuntimeLockToken,
 };
-pub(crate) use rand::{generate_secret, hex_encode};
+pub(crate) use rand::generate_secret;
